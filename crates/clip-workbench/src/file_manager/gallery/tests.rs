@@ -108,6 +108,7 @@ pub(super) fn synthetic_directory(count: usize) -> Directory {
                 name: format!("{i:05}.png"),
                 directory: false,
                 regular_file: true,
+                typescript: false,
                 symlink: false,
                 hidden: false,
                 size: "".into(),

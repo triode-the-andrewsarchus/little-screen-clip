@@ -138,6 +138,18 @@ impl TextPreviewState {
                             );
                             self.measure_code_rows(ui, wrap_width, line_height, &code_font);
                             let anchored_offset = self.code_rows.offset(anchor_row) + anchor_inset;
+                            if let Some(line) = self.center_source_line.take() {
+                                let source = line
+                                    .saturating_sub(1)
+                                    .min(self.line_first_fragment.len().saturating_sub(1));
+                                let row =
+                                    self.line_first_fragment.get(source).copied().unwrap_or(0);
+                                self.scroll_to_offset = Some(
+                                    (self.code_rows.offset(row) + line_height / 2.0
+                                        - ui.available_height() / 2.0)
+                                        .max(0.0),
+                                );
+                            }
                             let requested_offset =
                                 self.scroll_to_offset.take().unwrap_or_else(|| {
                                     self.scroll_to_line

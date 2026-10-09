@@ -195,6 +195,8 @@ mod tests {
                 codec: "h264".into(),
                 size_bytes: 0,
                 frame_interval_ms: 40,
+                description: String::new(),
+                audio_description: String::new(),
             },
             path,
             child,

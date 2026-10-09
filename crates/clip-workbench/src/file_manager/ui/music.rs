@@ -116,7 +116,7 @@ impl FileManager {
         );
         self.music_toolbar(ui);
         self.music_previews.poll(ui.ctx());
-        let scroll = self.list_scroll(ui, 108.0);
+        let scroll = self.list_scroll(108.0);
         let Some(directory) = &self.directory else {
             ui.label("Loading folder…");
             return;

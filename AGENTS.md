@@ -92,6 +92,8 @@ Bundled CJK and monochrome emoji font assets live in `little-clip-render` and ar
 
 Raw text preview selection spans virtual 4 KiB source fragments. Store its endpoints as absolute UTF-8 source byte offsets and copy from the original content; egui's cross-Label selection inserts layout-dependent separators and drops endpoints that scroll out of view.
 
+File-list text strips share the text viewer's Syntect definitions and palette mapping. Stream whole-file summaries and generate dimension-specific rasters on bounded preview workers; resizing reuses the summary. Map source lines left to right, preserve indentation and empty-line density, and aggregate before rasterization. Hover excerpts are bounded, precolored source samples; previews retain ordinary row selection/opening and never consume wheel input. Keep lightweight text classification while retiring offscreen summaries so variable-height rows remain stable. Resolve `.ts` source-versus-video classification on workers and use it consistently for rows, automatic views, and viewer opening.
+
 ## Agent Maintenance & Self-Correction
 During final cleanup, consider whether the work revealed that this file is incomplete, incorrect, or obsolete.
 

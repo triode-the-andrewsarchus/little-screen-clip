@@ -158,7 +158,7 @@ impl FileManager {
                 } else if self.view == super::BrowserView::Videos {
                     self.video_ui(ui, colors);
                 } else {
-                    self.list_ui(ui, colors);
+                    self.list_ui(ui, colors, palette);
                 }
             });
     }
@@ -406,7 +406,7 @@ impl FileManager {
         }
     }
 
-    fn list_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+    fn list_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
         let width = ui.available_width();
         let name_width = (width - 245.0).max(width * 0.4);
         let (header, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
@@ -428,8 +428,10 @@ impl FileManager {
             colors.text_secondary,
         );
         ui.separator();
-        self.previews.poll(ui.ctx());
-        let scroll = self.list_scroll(ui, ROW_HEIGHT);
+        if self.previews.poll(ui.ctx()) {
+            self.rebuild_list_offsets();
+        }
+        let scroll = self.list_scroll(ROW_HEIGHT);
         let Some(directory) = &self.directory else {
             ui.label(if self.pending.is_some() {
                 "Loading folder…"
@@ -455,30 +457,35 @@ impl FileManager {
         let background = actions.background(ui, can_edit, selection_count > 0);
         let mut targets = Vec::new();
         let mut preview_paths = std::collections::BTreeSet::new();
-        let output = scroll.show_rows(ui, ROW_HEIGHT, self.visible.len(), |ui, range| {
-            for index in range {
-                let entry = &directory.entries[self.visible[index]];
-                let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
-                let response = file_row(ui, entry, marked, name_width, colors);
-                if !entry.directory && preview_paths.len() < 128 {
-                    preview_paths.insert(entry.path.clone());
-                    self.previews.show(
-                        ui,
-                        Rect::from_min_size(response.rect.min + vec2(6.0, 4.0), vec2(20.0, 20.0)),
-                        entry,
-                    );
-                } else if !entry.directory {
-                    Icon::Text.paint(
-                        ui.painter(),
-                        Rect::from_min_size(response.rect.min + vec2(6.0, 4.0), vec2(20.0, 20.0)),
-                        colors.text_secondary,
-                    );
+        let output = media_rows(ui, scroll, &self.list_offsets, |ui, index, rect| {
+            let entry = &directory.entries[self.visible[index]];
+            let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
+            let lines = if !entry.directory {
+                self.previews
+                    .listing(entry)
+                    .and_then(|ready| ready.data.document.as_ref())
+                    .map(|document| document.lines)
+            } else {
+                None
+            };
+            let response = file_row(ui, rect, entry, marked, name_width, lines, colors);
+            if !entry.directory && preview_paths.len() < 128 {
+                preview_paths.insert(entry.path.clone());
+                let line = self.previews.show_listing(ui, rect, entry, colors, palette);
+                if response.double_clicked() {
+                    self.text_start = line.map(|line| (entry.path.clone(), line));
                 }
-                if entry.directory && ui.is_enabled() {
-                    targets.push((response.rect.intersect(ui.clip_rect()), entry.path.clone()));
-                }
-                actions.row(ui, &response, entry, selected, can_edit, selection_count);
+            } else if !entry.directory {
+                Icon::Text.paint(
+                    ui.painter(),
+                    Rect::from_min_size(response.rect.min + vec2(6.0, 4.0), vec2(20.0, 20.0)),
+                    colors.text_secondary,
+                );
             }
+            if entry.directory && ui.is_enabled() {
+                targets.push((response.rect.intersect(ui.clip_rect()), entry.path.clone()));
+            }
+            actions.row(ui, &response, entry, selected, can_edit, selection_count);
         });
         self.previews.retain(&preview_paths);
         self.drop_targets.extend(targets);
@@ -524,7 +531,7 @@ impl FileManager {
         }
     }
 
-    fn list_scroll(&mut self, ui: &Ui, row_height: f32) -> egui::ScrollArea {
+    fn list_scroll(&mut self, row_height: f32) -> egui::ScrollArea {
         let mut scroll = egui::ScrollArea::vertical()
             .id_source("file_manager_listing")
             .auto_shrink([false, false]);
@@ -547,7 +554,10 @@ impl FileManager {
                 } else if self.view == super::BrowserView::Videos {
                     self.video_offsets[index]
                 } else {
-                    index as f32 * (row_height + ui.spacing().item_spacing.y)
+                    self.list_offsets
+                        .get(index)
+                        .copied()
+                        .unwrap_or(index as f32 * row_height)
                 });
             }
             self.reveal_selection = false;
@@ -729,7 +739,7 @@ fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
         Icon::Folder
     } else if little_clip_core::audio::is_audio_path(&entry.path) {
         Icon::Audio
-    } else if little_clip_core::is_video_path(&entry.path) {
+    } else if entry.is_video() {
         Icon::Film
     } else {
         Icon::Text
@@ -783,25 +793,29 @@ fn paint_text(ui: &Ui, rect: Rect, x: f32, width: f32, text: &str, color: Color3
 
 fn file_row(
     ui: &mut Ui,
+    rect: Rect,
     entry: &super::filesystem::Entry,
     selected: bool,
     name_width: f32,
+    lines: Option<u64>,
     colors: WorkbenchColors,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(
-        vec2(ui.available_width(), ROW_HEIGHT),
-        Sense::click_and_drag(),
-    );
-    let response = response.on_hover_text(format!(
-        "{}{}",
-        display_path(&entry.path),
-        entry
-            .warning
-            .as_ref()
-            .map(|warning| format!("\nMetadata unavailable: {warning}"))
-            .unwrap_or_default()
-    ));
+    let response = ui.allocate_rect(rect, Sense::click_and_drag());
+    let response = if rect.height() <= ROW_HEIGHT {
+        response.on_hover_text(format!(
+            "{}{}",
+            display_path(&entry.path),
+            entry
+                .warning
+                .as_ref()
+                .map(|warning| format!("\nMetadata unavailable: {warning}"))
+                .unwrap_or_default()
+        ))
+    } else {
+        response
+    };
     row_background(ui, rect, selected, response.hovered(), colors);
+    let rect = Rect::from_min_size(rect.min, vec2(rect.width(), ROW_HEIGHT));
     let icon = if entry.symlink {
         Icon::Link
     } else if entry.directory {
@@ -820,10 +834,20 @@ fn file_row(
         ui,
         rect,
         32.0,
-        name_width - 38.0,
+        name_width - 38.0 - if lines.is_some() { 108.0 } else { 0.0 },
         &entry.name,
         colors.text_primary,
     );
+    if let Some(lines) = lines {
+        paint_text(
+            ui,
+            rect,
+            name_width - 112.0,
+            104.0,
+            &format!("{lines} lines"),
+            colors.text_secondary,
+        );
+    }
     paint_text(
         ui,
         rect,
@@ -1010,7 +1034,7 @@ fn drop_files(
         })
 }
 
-// Music and video share the same variable-height row virtualization.
+// File, music, and video rows share variable-height virtualization.
 fn visible_media_rows(offsets: &[f32], offset: f32, height: f32) -> std::ops::Range<usize> {
     let first = offsets.partition_point(|y| *y <= offset).saturating_sub(1);
     let end = offsets

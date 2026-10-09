@@ -33,7 +33,7 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 /// Maps syntax highlighting hues into the fixed application palette harmonies.
-fn map_syntect_color_to_theme(
+pub(crate) fn map_syntect_color_to_theme(
     style_fg: syntect::highlighting::Color,
     palette: &AppPalette,
 ) -> Color32 {
@@ -93,8 +93,20 @@ fn map_syntect_color_to_theme(
     }
 }
 
-static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
-static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+pub(crate) static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
+    let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
+    for definition in [
+        include_str!("config.sublime-syntax"),
+        include_str!("typescript.sublime-syntax"),
+    ] {
+        match syntect::parsing::SyntaxDefinition::load_from_str(definition, true, None) {
+            Ok(syntax) => builder.add(syntax),
+            Err(error) => tracing::warn!(%error, "Could not load bundled syntax definition"),
+        }
+    }
+    builder.build()
+});
+pub(crate) static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 const MINIMAP_COLUMNS: usize = 96;
 const MINIMAP_WIDTH: f32 = 112.0;
@@ -493,6 +505,8 @@ pub struct TextPreviewState {
 
     // Scroll state
     pub scroll_to_line: Option<usize>,
+    /// One-based source line to center when opening from a file preview.
+    pub(crate) center_source_line: Option<usize>,
     /// Exact pixel offset requested by minimap navigation.
     scroll_to_offset: Option<f32>,
     code_fragments: Arc<Vec<CodeFragment>>,
@@ -599,6 +613,7 @@ impl TextPreviewState {
             focus_find_input: false,
             status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
+            center_source_line: None,
             scroll_to_offset: None,
             code_fragments: Arc::clone(&data.code_fragments),
             line_first_fragment: Arc::clone(&data.line_first_fragment),

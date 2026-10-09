@@ -13,6 +13,7 @@ pub(super) struct Entry {
     pub name: String,
     pub directory: bool,
     pub regular_file: bool,
+    pub typescript: bool,
     pub symlink: bool,
     pub hidden: bool,
     pub size: String,
@@ -24,7 +25,9 @@ pub(super) struct Entry {
 
 impl Entry {
     pub(super) fn is_video(&self) -> bool {
-        self.regular_file && little_clip_core::animation::is_video_path(&self.path)
+        self.regular_file
+            && !self.typescript
+            && little_clip_core::animation::is_video_path(&self.path)
     }
     pub(super) fn is_photo(&self) -> bool {
         self.regular_file
@@ -92,6 +95,7 @@ fn read_entry(child: std::fs::DirEntry) -> Entry {
     let entry_identity = link_metadata.as_ref().ok().map(identity);
     entry_identity.hash(&mut hasher);
     Entry {
+        typescript: regular_file && super::text_strip::is_typescript_source(&path),
         revision: hasher.finish(),
         identity: entry_identity,
         hidden: child.file_name().as_bytes().starts_with(b"."),

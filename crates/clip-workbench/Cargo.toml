@@ -34,6 +34,7 @@ png = "0.18.1"
 tiny-skia = { workspace = true }
 fontdue = { workspace = true }
 syntect = { workspace = true }
+unicode-width = "0.2.2"
 regex = { workspace = true }
 webp = "0.3.1"
 libwebp-sys = "0.9.6"

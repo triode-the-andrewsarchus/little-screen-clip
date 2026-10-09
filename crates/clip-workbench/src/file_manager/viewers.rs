@@ -60,6 +60,7 @@ pub(super) struct Viewers {
     config: AppConfig,
     gallery: Option<gallery::Collection>,
     video_start_seconds: f64,
+    text_start_line: Option<usize>,
 }
 impl Viewers {
     pub fn new(config: AppConfig) -> Self {
@@ -85,6 +86,7 @@ impl Viewers {
             return;
         }
         self.video_start_seconds = 0.0;
+        self.text_start_line = None;
         let source = path.clone();
         let config = self.config.clone();
         let (ticket, receiver) = BackgroundJobs::global()
@@ -101,6 +103,13 @@ impl Viewers {
         }
         self.open(path);
         self.video_start_seconds = seconds;
+    }
+    pub fn open_text_at(&mut self, path: PathBuf, line: usize) {
+        if self.active() {
+            return;
+        }
+        self.open(path);
+        self.text_start_line = Some(line);
     }
     fn poll(&mut self, ctx: &Context) {
         let Some(loading) = &self.loading else { return };
@@ -126,6 +135,12 @@ impl Viewers {
                 ))
             }
             Err(error) => self.error = Some(error),
+        }
+        if let Some(ViewerSession::Text(state)) = &mut self.session
+            && let Some(line) = self.text_start_line.take()
+        {
+            state.preview.view_mode = crate::text_preview::TextViewMode::Raw;
+            state.preview.center_source_line = Some(line);
         }
     }
     pub fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) -> bool {
@@ -271,7 +286,9 @@ enum Kind {
     External,
 }
 fn kind(path: &Path) -> Kind {
-    if little_clip_core::item::is_image_path(path) {
+    if super::text_strip::is_typescript_source(path) {
+        Kind::Text
+    } else if little_clip_core::item::is_image_path(path) {
         Kind::Image
     } else if little_clip_core::audio::is_audio_path(path) {
         Kind::Audio

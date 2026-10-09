@@ -13,6 +13,7 @@ mod previews;
 mod selection;
 mod shelf;
 mod text_editor;
+mod text_strip;
 mod transfers;
 mod video_timeline;
 mod viewers;
@@ -140,6 +141,7 @@ pub(crate) struct FileManager {
     was_modal: bool,
     shelf: shelf::Shelf,
     open_file: Option<PathBuf>,
+    text_start: Option<(PathBuf, usize)>,
     video_start: Option<(PathBuf, f64)>,
     previews: previews::EntryPreviews,
     gallery_previews: previews::EntryPreviews,
@@ -150,6 +152,7 @@ pub(crate) struct FileManager {
     video_previews: video_timeline::Previews,
     video_count: usize,
     video_offsets: Vec<f32>,
+    list_offsets: Vec<f32>,
     thumbnail_edge: f32,
     gallery_columns: usize,
     gallery_layout: gallery::Gallery,
@@ -198,6 +201,7 @@ impl FileManager {
             was_modal: false,
             shelf: shelf::Shelf::default(),
             open_file: None,
+            text_start: None,
             video_start: None,
             previews: previews::EntryPreviews::default(),
             gallery_previews: previews::EntryPreviews::default(),
@@ -208,6 +212,7 @@ impl FileManager {
             video_previews: Default::default(),
             video_count: 0,
             video_offsets: vec![0.0],
+            list_offsets: vec![0.0],
             thumbnail_edge: 160.0,
             gallery_columns: 1,
             gallery_layout: Default::default(),
@@ -362,6 +367,13 @@ impl FileManager {
     }
 
     fn commit(&mut self, directory: Directory, navigation: Navigation) {
+        if self
+            .directory
+            .as_ref()
+            .is_some_and(|previous| previous.path != directory.path)
+        {
+            self.previews.retain(&Default::default());
+        }
         if !matches!(navigation, Navigation::Refresh) {
             self.selection_revision = self.selection_revision.wrapping_add(1);
         }
@@ -424,6 +436,23 @@ impl FileManager {
             }
         }
         self.activate_media_view();
+        self.rebuild_list_offsets();
+    }
+
+    fn rebuild_list_offsets(&mut self) {
+        self.list_offsets.clear();
+        self.list_offsets.push(0.0);
+        if let Some(directory) = &self.directory {
+            for index in &self.visible {
+                let height = if self.previews.is_text(&directory.entries[*index]) {
+                    VIDEO_ROW_HEIGHT
+                } else {
+                    28.0
+                };
+                self.list_offsets
+                    .push(self.list_offsets.last().copied().unwrap_or(0.0) + height);
+            }
+        }
     }
 
     fn toggle_hidden(&mut self) {

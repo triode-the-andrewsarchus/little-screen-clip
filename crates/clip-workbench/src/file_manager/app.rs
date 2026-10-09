@@ -151,6 +151,7 @@ impl FileManagerApp {
         central_panel(ctx, |ui| {
             if self.viewers.active() {
                 self.browser.video_previews.clear();
+                self.browser.previews.retire();
                 if self.viewers.ui(ui, &self.palette) {
                     self.browser.refresh_after_transfer = true;
                     self.browser.restore_scroll = true;
@@ -158,6 +159,11 @@ impl FileManagerApp {
             } else {
                 self.browser.ui(ui, &self.palette);
                 if let Some(path) = self.browser.open_file.take() {
+                    let text_start = self
+                        .browser
+                        .text_start
+                        .take()
+                        .filter(|(source, _)| source == &path);
                     if little_clip_core::audio::is_audio_path(&path)
                         || little_clip_core::animation::is_video_path(&path)
                         || path.extension().is_some_and(|e| {
@@ -171,7 +177,9 @@ impl FileManagerApp {
                         .video_start
                         .take()
                         .filter(|(source, _)| source == &path);
-                    if let Some((_, seconds)) = start {
+                    if let Some((_, line)) = text_start {
+                        self.viewers.open_text_at(path, line);
+                    } else if let Some((_, seconds)) = start {
                         self.viewers.open_video_at(path, seconds);
                     } else {
                         let collection = self.browser.photo_collection(&path);

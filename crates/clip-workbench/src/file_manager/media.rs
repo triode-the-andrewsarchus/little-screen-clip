@@ -23,6 +23,7 @@ pub(in crate::file_manager) struct PreviewData {
     pub waveform_colors: Vec<[u8; 3]>,
     pub icon: Icon,
     pub music: Option<MusicMetadata>,
+    pub document: Option<std::sync::Arc<super::text_strip::Document>>,
 }
 
 impl PreviewData {
@@ -36,6 +37,7 @@ impl PreviewData {
             waveform: Vec::new(),
             waveform_colors: Vec::new(),
             music: None,
+            document: None,
         }
     }
 }

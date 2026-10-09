@@ -10,6 +10,9 @@ pub(super) struct EntryPreviews {
     cache: Previews,
     identities: BTreeMap<std::path::PathBuf, (u64, uuid::Uuid)>,
     gallery_sizes: BTreeMap<std::path::PathBuf, u32>,
+    text_rasters: Previews,
+    text_sizes: BTreeMap<uuid::Uuid, ((u32, u32, [[u8; 3]; 9]), uuid::Uuid)>,
+    text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
 impl EntryPreviews {
     pub fn music(
@@ -35,14 +38,243 @@ impl EntryPreviews {
         }
         *id
     }
-    pub fn poll(&mut self, ctx: &egui::Context) {
-        self.cache.poll(ctx);
+    pub fn poll(&mut self, ctx: &egui::Context) -> bool {
+        self.text_rasters.poll(ctx);
+        let changed = self.cache.poll(ctx);
+        if changed {
+            for (path, (revision, id)) in &self.identities {
+                if let Some(ready) = self.cache.get(*id) {
+                    self.text_status
+                        .insert(path.clone(), (*revision, ready.data.document.is_some()));
+                }
+            }
+        }
+        changed
     }
     pub fn retain(&mut self, visible: &BTreeSet<std::path::PathBuf>) {
+        if visible.is_empty() {
+            self.text_status.clear();
+        }
         self.identities.retain(|path, _| visible.contains(path));
         self.gallery_sizes.retain(|path, _| visible.contains(path));
         self.cache
             .retain(&self.identities.values().map(|(_, id)| *id).collect());
+        let ids: BTreeSet<_> = self.identities.values().map(|(_, id)| *id).collect();
+        self.text_sizes.retain(|id, _| ids.contains(id));
+        self.text_rasters
+            .retain(&self.text_sizes.values().map(|(_, id)| *id).collect());
+    }
+    pub fn is_text(&self, entry: &Entry) -> bool {
+        if !text_candidate(entry) {
+            return false;
+        }
+        let known = self
+            .text_status
+            .get(&entry.path)
+            .filter(|(revision, _)| *revision == entry.revision);
+        known.map_or_else(
+            || super::text_strip::known_text(&entry.path),
+            |(_, text)| *text,
+        )
+    }
+    /// Stop hidden preview work without changing this folder's row geometry.
+    pub fn retire(&mut self) {
+        self.cache.clear();
+        self.identities.clear();
+        self.gallery_sizes.clear();
+        self.text_rasters.clear();
+        self.text_sizes.clear();
+    }
+    pub fn listing(&mut self, entry: &Entry) -> Option<&super::shelf::preview::Ready> {
+        let id = self.identity(entry);
+        if self.cache.needs(id) {
+            self.cache.request(
+                id,
+                if text_candidate(entry) {
+                    Source::Text(entry.path.clone())
+                } else {
+                    Source::Payload(Payload::Files {
+                        paths: vec![entry.path.clone()],
+                        cut: false,
+                    })
+                },
+            );
+        }
+        self.cache.get(id)
+    }
+    pub fn show_listing(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: egui::Rect,
+        entry: &Entry,
+        colors: crate::ui_appearance::WorkbenchColors,
+        palette: &little_clip_core::palette::AppPalette,
+    ) -> Option<usize> {
+        if row.height() <= 28.0 {
+            self.show(
+                ui,
+                egui::Rect::from_min_size(row.min + egui::vec2(6.0, 4.0), egui::vec2(20.0, 20.0)),
+                entry,
+            );
+            return None;
+        }
+        let badge = self
+            .listing(entry)
+            .and_then(|ready| ready.data.document.as_ref())
+            .map(|document| document.badge.clone())
+            .unwrap_or_else(|| {
+                entry
+                    .path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .unwrap_or("TXT")
+                    .to_uppercase()
+            });
+        let icon = egui::Rect::from_min_size(
+            row.min + egui::vec2(6.0, 32.0),
+            egui::vec2(64.0, row.height() - 42.0),
+        );
+        crate::icons::Icon::Text.paint(
+            ui.painter(),
+            egui::Rect::from_center_size(
+                icon.center() - egui::vec2(0.0, 9.0),
+                egui::vec2(26.0, 26.0),
+            ),
+            colors.text_secondary,
+        );
+        ui.painter().text(
+            icon.center() + egui::vec2(0.0, 18.0),
+            egui::Align2::CENTER_CENTER,
+            badge,
+            egui::FontId::monospace(12.0),
+            colors.text_secondary,
+        );
+        let strip = egui::Rect::from_min_max(
+            egui::pos2(icon.right() + 8.0, icon.top()),
+            egui::pos2(row.right() - 6.0, icon.bottom()),
+        );
+        ui.painter().rect_filled(strip, 3.0, colors.recessed);
+        self.text_strip(ui, strip, entry, palette);
+        let clicked_line = ui
+            .ctx()
+            .pointer_interact_pos()
+            .filter(|point| ui.is_enabled() && strip.intersect(ui.clip_rect()).contains(*point))
+            .and_then(|point| {
+                self.listing(entry)
+                    .and_then(|ready| ready.data.document.as_ref())
+                    .map(|document| {
+                        let fraction = ((point.x - strip.left()) / strip.width()).clamp(0.0, 1.0);
+                        // Source lines progress horizontally, including blank lines.
+                        ((fraction as f64 * document.lines as f64).floor() as usize + 1)
+                            .min(document.lines as usize)
+                            .max(1)
+                    })
+            });
+        if ui.is_enabled()
+            && ui.ctx().pointer_hover_pos().is_some_and(|point| {
+                row.intersect(ui.clip_rect()).contains(point) && !strip.contains(point)
+            })
+        {
+            if let Some(document) = self
+                .listing(entry)
+                .and_then(|ready| ready.data.document.clone())
+            {
+                egui::show_tooltip_at_pointer(
+                    ui.ctx(),
+                    egui::Id::new(("text_strip_hover", &entry.path)),
+                    |ui| document.excerpt_ui(ui, 0.0, usize::MAX, palette),
+                );
+            }
+        }
+        clicked_line
+    }
+    pub fn text_strip(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        entry: &Entry,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
+        let id = self.identity(entry);
+        let Some(document) = self
+            .cache
+            .get(id)
+            .and_then(|ready| ready.data.document.clone())
+        else {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Loading text preview…",
+                egui::FontId::proportional(14.0),
+                ui.visuals().weak_text_color(),
+            );
+            return;
+        };
+        let width = (rect.width() * ui.ctx().pixels_per_point())
+            .ceil()
+            .clamp(1.0, 2048.0) as u32;
+        let height = (rect.height() * ui.ctx().pixels_per_point())
+            .ceil()
+            .clamp(1.0, 128.0) as u32;
+        let colors = super::text_strip::palette_colors(palette);
+        let key = (width, height, colors);
+        if self
+            .text_sizes
+            .get(&id)
+            .is_some_and(|(previous, _)| *previous != key)
+        {
+            if let Some((_, obsolete)) = self.text_sizes.remove(&id) {
+                self.text_rasters.invalidate(obsolete);
+            }
+        }
+        let (_, raster) = self
+            .text_sizes
+            .entry(id)
+            .or_insert_with(|| (key, uuid::Uuid::new_v4()));
+        if self.text_rasters.needs(*raster) {
+            self.text_rasters.request(
+                *raster,
+                Source::TextRaster {
+                    document: document.clone(),
+                    width,
+                    height,
+                    colors,
+                },
+            );
+        }
+        if let Some(texture) = self
+            .text_rasters
+            .get(*raster)
+            .and_then(|ready| ready.texture.as_ref())
+        {
+            ui.painter().image(
+                texture.id(),
+                rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+        let hovered = ui.is_enabled()
+            && ui
+                .ctx()
+                .pointer_hover_pos()
+                .is_some_and(|point| rect.intersect(ui.clip_rect()).contains(point));
+        if hovered {
+            let point = ui.ctx().pointer_hover_pos().unwrap_or(rect.min);
+            let fraction = ((point.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            ui.painter().line_segment(
+                [
+                    egui::pos2(point.x, rect.top()),
+                    egui::pos2(point.x, rect.bottom()),
+                ],
+                egui::Stroke::new(1.0_f32, ui.visuals().selection.stroke.color),
+            );
+            egui::show_tooltip_at_pointer(
+                ui.ctx(),
+                egui::Id::new(("text_strip_hover", id)),
+                |ui| document.excerpt_ui(ui, fraction, width as usize, palette),
+            );
+        }
     }
     pub fn show(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
         self.show_inner(ui, rect, entry, false);
@@ -182,9 +414,117 @@ impl EntryPreviews {
     }
 }
 
+fn text_candidate(entry: &Entry) -> bool {
+    entry.regular_file
+        && !entry.is_photo()
+        && !entry.is_video()
+        && !little_clip_core::audio::is_audio_path(&entry.path)
+        && !entry
+            .path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wait_for_preview(mut ready: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "preview worker did not complete"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn single_entry(folder: &std::path::Path) -> Entry {
+        let mut directory = super::super::filesystem::read_directory(
+            folder,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(directory.entries.len(), 1, "fixture must contain one file");
+        directory.entries.pop().unwrap()
+    }
+
+    #[test]
+    fn text_resize_reuses_analysis_and_retirement_preserves_row_classification() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.unknown");
+        std::fs::write(&path, "A walk in the garden.\n".repeat(150)).unwrap();
+        let entry = single_entry(dir.path());
+        let ctx = egui::Context::default();
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut previews = EntryPreviews::default();
+        previews.listing(&entry);
+        wait_for_preview(|| {
+            previews.poll(&ctx);
+            previews.listing(&entry).is_some()
+        });
+        assert!(previews.is_text(&entry));
+        let id = previews.identity(&entry);
+        let document = previews
+            .cache
+            .get(id)
+            .unwrap()
+            .data
+            .document
+            .clone()
+            .unwrap();
+        for width in [512.0, 256.0] {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    previews.text_strip(
+                        ui,
+                        egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(width, 66.0)),
+                        &entry,
+                        &palette,
+                    );
+                });
+            });
+            let raster = previews.text_sizes[&id].1;
+            wait_for_preview(|| {
+                previews.poll(&ctx);
+                previews.text_rasters.get(raster).is_some()
+            });
+            assert_eq!(
+                previews
+                    .text_rasters
+                    .get(raster)
+                    .unwrap()
+                    .texture
+                    .as_ref()
+                    .unwrap()
+                    .size()[0],
+                width as usize
+            );
+            assert!(std::sync::Arc::ptr_eq(
+                &document,
+                previews
+                    .cache
+                    .get(id)
+                    .unwrap()
+                    .data
+                    .document
+                    .as_ref()
+                    .unwrap()
+            ));
+        }
+        // Retain another visible file: release the heavy summary and raster,
+        // but keep this folder's row height stable when scrolling back.
+        previews.retain(&[dir.path().join("another.txt")].into_iter().collect());
+        assert!(previews.cache.get(id).is_none());
+        assert!(previews.text_sizes.is_empty());
+        assert!(previews.is_text(&entry));
+        previews.retire();
+        assert!(previews.is_text(&entry));
+        previews.retain(&Default::default());
+        assert!(!previews.is_text(&entry));
+    }
 
     #[test]
     fn changed_entry_replaces_its_preview_and_retired_entries_release_cached_data() {
@@ -195,13 +535,7 @@ mod tests {
         let mut previous_id = None;
         for text in ["initial", "updated with more bytes"] {
             std::fs::write(&path, text).unwrap();
-            let entry = super::super::filesystem::read_directory(
-                dir.path(),
-                &std::sync::atomic::AtomicBool::new(false),
-            )
-            .unwrap()
-            .entries
-            .remove(0);
+            let entry = single_entry(dir.path());
             let _ = ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     previews.show(

@@ -26,6 +26,13 @@ pub(in crate::file_manager) enum Source {
         orientation: u8,
     },
     Music(PathBuf),
+    Text(PathBuf),
+    TextRaster {
+        document: Arc<super::super::text_strip::Document>,
+        width: u32,
+        height: u32,
+        colors: [[u8; 3]; 9],
+    },
 }
 
 pub(in crate::file_manager) use super::super::media::PreviewData as Data;
@@ -77,10 +84,13 @@ impl Previews {
     pub fn request(&mut self, id: uuid::Uuid, source: Source) {
         let music = matches!(&source, Source::Music(_));
         let gallery = matches!(&source, Source::Gallery { .. });
+        let text = matches!(&source, Source::Text(_) | Source::TextRaster { .. });
         let executor = if gallery {
             gallery_preview_jobs()
         } else if music {
             music_preview_jobs()
+        } else if text {
+            text_preview_jobs()
         } else {
             BackgroundJobs::global()
         };
@@ -88,6 +98,8 @@ impl Previews {
             4
         } else if music {
             music_preview_workers()
+        } else if text {
+            4
         } else {
             1
         };
@@ -96,11 +108,7 @@ impl Previews {
         }
         let cancelled = Arc::new(AtomicBool::new(false));
         let token = cancelled.clone();
-        let deadline = if matches!(&source, Source::Music(_)) {
-            30
-        } else {
-            15
-        };
+        let deadline = if music || text { 30 } else { 15 };
         let (ticket, receiver) =
             executor.submit(Duration::from_secs(deadline), move || match source {
                 Source::Payload(payload) => payload_preview(&payload),
@@ -111,6 +119,30 @@ impl Previews {
                     orientation,
                 } => gallery_preview(&path, edge, orientation, &token),
                 Source::Music(path) => super::super::music::preview::load(&path, &token),
+                Source::Text(path) => {
+                    let mut data = Data::new(display_path(&path), "Text".into(), Icon::Text);
+                    match super::super::text_strip::load(&path, &token) {
+                        Ok(document) => {
+                            data.document = Some(document);
+                        }
+                        Err(error) => {
+                            data.detail = error;
+                        }
+                    }
+                    data
+                }
+                Source::TextRaster {
+                    document,
+                    width,
+                    height,
+                    colors,
+                } => {
+                    let mut data = Data::new(String::new(), String::new(), Icon::Text);
+                    data.image =
+                        super::super::text_strip::render(&document, width, height, colors, &token);
+                    data.document = Some(document);
+                    data
+                }
             });
         self.pending.insert(
             id,
@@ -122,7 +154,7 @@ impl Previews {
         );
     }
 
-    pub fn poll(&mut self, ctx: &egui::Context) {
+    pub fn poll(&mut self, ctx: &egui::Context) -> bool {
         let mut completed = Vec::new();
         self.pending.retain(|id, pending| {
             let result = match pending.receiver.try_recv() {
@@ -140,9 +172,11 @@ impl Previews {
         if !self.pending.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
+        let changed = !completed.is_empty();
         for (id, result) in completed {
             self.complete(ctx, id, result);
         }
+        changed
     }
 
     fn complete(&mut self, ctx: &egui::Context, id: uuid::Uuid, result: Result<Data, JobError>) {
@@ -162,12 +196,22 @@ impl Previews {
                     [image.width as usize, image.height as usize],
                     &image.premultiplied_rgba,
                 ),
-                egui::TextureOptions::LINEAR,
+                if data.document.is_some() {
+                    egui::TextureOptions::NEAREST
+                } else {
+                    egui::TextureOptions::LINEAR
+                },
             )
         });
         self.ready.insert(id, Ready { data, texture });
         ctx.request_repaint();
     }
+}
+
+fn text_preview_jobs() -> &'static BackgroundJobs {
+    static JOBS: std::sync::LazyLock<BackgroundJobs> =
+        std::sync::LazyLock::new(|| BackgroundJobs::new(4, 8));
+    &JOBS
 }
 
 fn gallery_preview_jobs() -> &'static BackgroundJobs {
@@ -465,30 +509,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parallel_music_admission_is_bounded_and_retirement_cancels_every_job() {
+    fn parallel_media_admission_is_bounded_and_retirement_cancels_every_job() {
         let dir = tempfile::tempdir().unwrap();
-        let mut previews = Previews::default();
-        for _ in 0..16 {
-            previews.request(
-                uuid::Uuid::new_v4(),
+        let text = dir.path().join("notes.txt");
+        std::fs::write(&text, "example\n").unwrap();
+        let document =
+            super::super::super::text_strip::load(&text, &AtomicBool::new(false)).unwrap();
+        let cases = [
+            (
                 Source::Music(dir.path().join("missing.wav")),
+                music_preview_workers(),
+            ),
+            (Source::Text(text), 4),
+            (
+                Source::TextRaster {
+                    document,
+                    width: 20,
+                    height: 20,
+                    colors: [[200; 3]; 9],
+                },
+                4,
+            ),
+        ];
+        for (source, limit) in cases {
+            let mut previews = Previews::default();
+            for _ in 0..16 {
+                previews.request(uuid::Uuid::new_v4(), source.clone());
+            }
+            assert_eq!(previews.pending.len(), limit);
+            let cancellation: Vec<_> = previews
+                .pending
+                .values()
+                .map(|pending| pending.cancelled.clone())
+                .collect();
+            previews.retain(&BTreeSet::new());
+            assert!(previews.pending.is_empty());
+            assert!(
+                cancellation
+                    .iter()
+                    .all(|token| token.load(Ordering::Relaxed))
             );
+            previews.poll(&egui::Context::default());
+            assert!(previews.ready.is_empty());
         }
-        assert_eq!(previews.pending.len(), music_preview_workers());
-        let cancellation: Vec<_> = previews
-            .pending
-            .values()
-            .map(|pending| pending.cancelled.clone())
-            .collect();
-        previews.retain(&BTreeSet::new());
-        assert!(previews.pending.is_empty());
-        assert!(
-            cancellation
-                .iter()
-                .all(|token| token.load(Ordering::Relaxed))
-        );
-        previews.poll(&egui::Context::default());
-        assert!(previews.ready.is_empty());
     }
 
     #[test]

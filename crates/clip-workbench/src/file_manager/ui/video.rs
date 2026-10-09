@@ -17,7 +17,7 @@ impl FileManager {
         });
         self.video_previews.poll(ui.ctx());
         self.previews.poll(ui.ctx());
-        let scroll = self.list_scroll(ui, super::super::VIDEO_ROW_HEIGHT);
+        let scroll = self.list_scroll(super::super::VIDEO_ROW_HEIGHT);
         let Some(directory) = &self.directory else {
             ui.label("Loading folder…");
             return;
