@@ -41,6 +41,8 @@ enum BrowserView {
     Videos,
 }
 
+const VIDEO_ROW_HEIGHT: f32 = 108.0;
+
 #[derive(Clone, Debug)]
 struct Location {
     path: PathBuf,
@@ -410,7 +412,7 @@ impl FileManager {
                 self.video_count += usize::from(video);
                 self.video_offsets.push(
                     self.video_offsets.last().copied().unwrap_or(0.0)
-                        + if video { 108.0 } else { 28.0 },
+                        + if video { VIDEO_ROW_HEIGHT } else { 28.0 },
                 );
                 if audio {
                     self.audio_entries.push(entry.path.clone());

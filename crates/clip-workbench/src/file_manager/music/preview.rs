@@ -24,7 +24,7 @@ pub(in crate::file_manager) fn load(path: &Path, cancelled: &AtomicBool) -> Data
             .map_or(0.0, |metadata| metadata.duration_ms as f32 / 1000.0);
         let ((mut metadata, image), result) = std::thread::scope(|scope| {
             let details =
-                scope.spawn(|| (metadata(path), super::super::media::media_frame(path, 0)));
+                scope.spawn(|| (metadata(path), super::super::media::media_frame(path, 0, 0)));
             let result = waveform(path, duration, 512, None, cancelled);
             details
                 .join()
@@ -158,7 +158,7 @@ mod tests {
                 let info = metadata(path);
                 let metadata_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let started = Instant::now();
-                let _cover = super::super::super::media::media_frame(path, 0);
+                let _cover = super::super::super::media::media_frame(path, 0, 0);
                 let cover_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let started = Instant::now();
                 let result = waveform(path, info.duration, 512, None, &AtomicBool::new(false));

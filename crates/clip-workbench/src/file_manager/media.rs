@@ -3,6 +3,8 @@ use crate::{file_source::FileSource, icons::Icon};
 use little_clip_core::ImageThumbnail;
 use std::time::Duration;
 
+mod video_details;
+
 #[derive(Default)]
 pub(in crate::file_manager) struct MusicMetadata {
     pub title: String,
@@ -41,19 +43,24 @@ impl PreviewData {
 pub(super) fn media_frame(
     path: &std::path::Path,
     stream: usize,
+    time_ms: u64,
 ) -> Option<little_clip_core::ImageThumbnail> {
-    let result = little_clip_core::process::CommandRequest::new("ffmpeg")
-        .args([
-            "-v",
-            "error",
-            "-threads",
-            "2",
-            "-filter_threads",
-            "1",
-            "-max_alloc",
-            "268435456",
-            "-i",
-        ])
+    let mut command = little_clip_core::process::CommandRequest::new("ffmpeg").args([
+        "-v",
+        "error",
+        "-threads",
+        "2",
+        "-filter_threads",
+        "1",
+        "-max_alloc",
+        "268435456",
+    ]);
+    if time_ms > 0 {
+        // Input-side seeking decodes only the GOP near the chosen thumbnail.
+        command = command.args(["-ss", &format!("{:.3}", time_ms as f64 / 1000.0)]);
+    }
+    let result = command
+        .arg("-i")
         .arg(path.as_os_str())
         .arg("-map")
         .arg(format!("0:v:{stream}"))
@@ -96,6 +103,8 @@ pub(super) struct VideoMetadata {
     pub(super) codec: String,
     pub(super) size_bytes: u64,
     pub(super) frame_interval_ms: u64,
+    pub(super) description: String,
+    pub(super) audio_description: String,
 }
 
 pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, String> {
@@ -104,10 +113,8 @@ pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, Str
         .args([
             "-v",
             "error",
-            "-select_streams",
-            "v",
             "-show_entries",
-            "stream=width,height,avg_frame_rate,codec_name:stream_disposition=attached_pic:format=duration,size",
+            "stream=codec_type,codec_name,profile,width,height,avg_frame_rate,r_frame_rate,bit_rate,channels,channel_layout:stream_disposition=attached_pic,default:stream_tags=BPS,BPS-eng,bps,bps-eng,DATE,date,YEAR,year,release_year,RELEASE_YEAR,release_date,RELEASE_DATE,date_released,DATE_RELEASED,originaldate,ORIGINALDATE:format=duration,size:format_tags=DATE,date,YEAR,year,release_year,RELEASE_YEAR,release_date,RELEASE_DATE,date_released,DATE_RELEASED,originaldate,ORIGINALDATE",
             "-of",
             "json",
         ])
@@ -125,6 +132,9 @@ pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, Str
     if FileSource::capture(path)? != source {
         return Err("Video changed while opening; open it again.".into());
     }
+    let (_, video) = selected_video_stream(&value)?;
+    let (description, audio_description) =
+        video_details::describe(&value, video, duration_ms, (width, height));
     Ok(VideoMetadata {
         source,
         dimensions: (width, height),
@@ -134,19 +144,12 @@ pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, Str
             .as_str()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0),
-        codec: value["streams"][stream]["codec_name"]
-            .as_str()
-            .unwrap_or_default()
-            .into(),
-        frame_interval_ms: value["streams"][stream]["avg_frame_rate"]
-            .as_str()
-            .and_then(|text| {
-                let (numerator, denominator) = text.split_once('/')?;
-                let fps = numerator.parse::<f64>().ok()? / denominator.parse::<f64>().ok()?;
-                (fps.is_finite() && fps > 0.0)
-                    .then(|| (1000.0 / fps).ceil().clamp(1.0, 60_000.0) as u64)
-            })
+        codec: video["codec_name"].as_str().unwrap_or_default().into(),
+        frame_interval_ms: video_details::frame_rate(video)
+            .map(|fps| (1000.0 / fps).ceil().clamp(1.0, 60_000.0) as u64)
             .unwrap_or(40),
+        description,
+        audio_description,
     })
 }
 
@@ -154,21 +157,23 @@ pub(in crate::file_manager) fn video_preview(
     path: &std::path::Path,
 ) -> Option<little_clip_core::ImageThumbnail> {
     let prepared = inspect_video(path).ok()?;
-    let image = media_frame(path, prepared.stream)?;
+    let mut image = media_frame(path, prepared.stream, 0)?;
+    let black = image
+        .premultiplied_rgba
+        .chunks_exact(4)
+        .all(|pixel| pixel[..3].iter().all(|component| *component <= 8));
+    if black && prepared.duration_ms > 0 {
+        if let Some(middle) = media_frame(path, prepared.stream, prepared.duration_ms / 2) {
+            image = middle;
+        }
+    }
     (FileSource::capture(path).ok()? == prepared.source).then_some(image)
 }
 
 // Core's preview metadata reader does not distinguish an attached cover from the
 // stream played here. Inspect one selected stream and pass its index to FFplay.
 fn stream_metadata(value: &serde_json::Value) -> Result<(usize, u32, u32, u64), String> {
-    let (index, stream) = value["streams"]
-        .as_array()
-        .and_then(|streams| {
-            streams.iter().enumerate().find(|(_, stream)| {
-                stream["disposition"]["attached_pic"].as_u64().unwrap_or(0) == 0
-            })
-        })
-        .ok_or("No ordinary video stream is available")?;
+    let (index, stream) = selected_video_stream(value)?;
     let width = stream["width"].as_u64().unwrap_or(0);
     let height = stream["height"].as_u64().unwrap_or(0);
     if width == 0 || height == 0 || width > 4096 || height > 4096 || width * height > 4096 * 2160 {
@@ -180,6 +185,17 @@ fn stream_metadata(value: &serde_json::Value) -> Result<(usize, u32, u32, u64), 
         .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
         .map_or(0, |seconds| (seconds * 1000.0) as u64);
     Ok((index, width as u32, height as u32, duration_ms))
+}
+
+fn selected_video_stream(value: &serde_json::Value) -> Result<(usize, &serde_json::Value), String> {
+    value["streams"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|stream| stream["codec_type"].as_str().unwrap_or("video") == "video")
+        .enumerate()
+        .find(|(_, stream)| stream["disposition"]["attached_pic"].as_u64().unwrap_or(0) == 0)
+        .ok_or_else(|| "No ordinary video stream is available".into())
 }
 
 #[cfg(test)]

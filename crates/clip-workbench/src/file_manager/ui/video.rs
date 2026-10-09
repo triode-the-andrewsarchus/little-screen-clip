@@ -6,14 +6,18 @@ impl FileManager {
     pub(super) fn video_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         ui.horizontal_wrapped(|ui| {
             ui.label("Hover to preview a frame; click the timeline to play there. Ctrl/Shift-click selects files.");
-            if ui.button("Refresh previews").clicked() { self.video_previews.clear(); }
+            if ui.button("Refresh previews").clicked() {
+                self.video_previews.clear();
+                self.previews.retain(&Default::default());
+            }
             if ui.button("Use automatic view").clicked() {
                 if let Some(location) = self.location_mut() { location.manual_view = None; }
                 self.activate_media_view();
             }
         });
         self.video_previews.poll(ui.ctx());
-        let scroll = self.list_scroll(ui, 108.0);
+        self.previews.poll(ui.ctx());
+        let scroll = self.list_scroll(ui, super::super::VIDEO_ROW_HEIGHT);
         let Some(directory) = &self.directory else {
             ui.label("Loading folder…");
             return;
@@ -29,6 +33,8 @@ impl FileManager {
             .filter(|entry| entry.is_video())
             .collect();
         self.video_previews.retain(&nearby);
+        self.previews
+            .retain(&nearby.iter().map(|entry| entry.path.clone()).collect());
         let selected = current_selection(&self.history, self.index);
         let can_edit = self.can_edit();
         let count = self.selection_count();
@@ -47,6 +53,11 @@ impl FileManager {
             );
             if entry.is_video() {
                 visible.push(entry);
+                self.previews.show(
+                    ui,
+                    Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(64.0, 64.0)),
+                    entry,
+                );
                 if ui.is_enabled() && self.pending.is_none() {
                     self.video_previews.request(
                         entry,
@@ -84,6 +95,8 @@ impl FileManager {
             }
         });
         self.video_previews.retain(&visible);
+        self.previews
+            .retain(&visible.iter().map(|entry| entry.path.clone()).collect());
         if !hovered {
             self.video_previews.clear_hover();
         }
@@ -136,31 +149,19 @@ fn video_card(
     colors: WorkbenchColors,
 ) -> Option<Rect> {
     let video = entry.is_video();
-    entry_icon(entry).paint(
-        ui.painter(),
-        Rect::from_min_size(
-            rect.min + vec2(6.0, 6.0),
-            if video {
-                vec2(64.0, 64.0)
-            } else {
-                vec2(20.0, 20.0)
-            },
-        ),
-        colors.text_secondary,
-    );
+    if !video {
+        entry_icon(entry).paint(
+            ui.painter(),
+            Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(20.0, 20.0)),
+            colors.text_secondary,
+        );
+    }
     let left = if video { 80.0 } else { 32.0 };
     let header = Rect::from_min_size(
         rect.min + vec2(left, 0.0),
-        vec2((rect.width() - left).max(1.0), 28.0),
+        vec2((rect.width() - left - 6.0).max(1.0), 24.0),
     );
-    paint_text(
-        ui,
-        header,
-        0.0,
-        (header.width() - if video { 175.0 } else { 0.0 }).max(1.0),
-        &entry.name,
-        colors.text_primary,
-    );
+    video_header(ui, header, entry, ready, colors);
     if !video {
         return None;
     }
@@ -171,20 +172,6 @@ fn video_card(
     ui.painter().rect_filled(timeline, 0.0, colors.recessed);
     match ready {
         Some(Ok(ready)) => {
-            let m = &ready.metadata;
-            paint_text(
-                ui,
-                header,
-                (header.width() - 175.0).max(0.0),
-                175.0,
-                &format!(
-                    "{}×{} · {:.1} s",
-                    m.dimensions.0,
-                    m.dimensions.1,
-                    m.duration_ms as f64 / 1000.0
-                ),
-                colors.text_secondary,
-            );
             if let Some(texture) = &ready.texture {
                 ui.painter().image(
                     texture.id(),
@@ -242,4 +229,55 @@ fn video_card(
         }
     }
     Some(timeline)
+}
+
+fn video_header(
+    ui: &Ui,
+    header: Rect,
+    entry: &Entry,
+    ready: Option<&Result<Ready, String>>,
+    colors: WorkbenchColors,
+) {
+    let details = ready.and_then(|ready| ready.as_ref().ok()).map(|ready| {
+        format!(
+            "{} · {}",
+            ready.metadata.description, ready.metadata.audio_description
+        )
+    });
+    let details_width = details.as_ref().map_or(0.0, |details| {
+        ui.painter()
+            .layout_no_wrap(
+                details.clone(),
+                FontId::proportional(14.0),
+                colors.text_secondary,
+            )
+            .size()
+            .x
+            .min(header.width() * 0.7)
+    });
+    let name_width = (header.width() - details_width - 12.0).max(0.0);
+    paint_text(
+        ui,
+        header,
+        0.0,
+        name_width,
+        &entry.name,
+        colors.text_primary,
+    );
+    if let Some(details) = details {
+        paint_text(
+            ui,
+            header,
+            header.width() - details_width,
+            details_width,
+            &details,
+            colors.text_secondary,
+        );
+        ui.interact(
+            header,
+            Id::new(("video_metadata", &entry.path)),
+            Sense::hover(),
+        )
+        .on_hover_text(format!("{}\n{}", entry.name, details));
+    }
 }

@@ -353,6 +353,8 @@ mod tests {
             codec: "h264".into(),
             size_bytes: 0,
             frame_interval_ms: 33,
+            description: String::new(),
+            audio_description: String::new(),
         });
         let pool = BackgroundJobs::new(1, 1);
         let (gate, wait) = mpsc::sync_channel::<()>(1);

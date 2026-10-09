@@ -148,7 +148,9 @@ impl EntryPreviews {
                 }
             });
         } else {
-            let icon = if gallery {
+            let icon = if entry.is_video() {
+                crate::icons::Icon::Film
+            } else if gallery {
                 crate::icons::Icon::Image
             } else {
                 crate::icons::Icon::Text
