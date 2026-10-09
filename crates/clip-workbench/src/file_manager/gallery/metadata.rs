@@ -30,16 +30,7 @@ impl Metadata {
 
 pub(super) fn probe(path: &Path, revision: u64) -> Result<Metadata, String> {
     let source = FileSource::capture(path)?;
-    let mut version = std::collections::hash_map::DefaultHasher::new();
-    super::super::filesystem::identity(&std::fs::metadata(path).map_err(|e| e.to_string())?)
-        .hash(&mut version);
-    Some(super::super::filesystem::identity(
-        &std::fs::symlink_metadata(path).map_err(|e| e.to_string())?,
-    ))
-    .hash(&mut version);
-    if version.finish() != revision {
-        return Err("Photo changed since enumeration".into());
-    }
+    super::super::filesystem::check_revision(path, revision)?;
     let cache = cache_path(path, revision);
     if let Some(value) = cache
         .as_ref()

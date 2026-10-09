@@ -163,7 +163,7 @@ mod tests {
             .collect();
         let config = AppConfig::default();
         let loaded = load(&paths[0], &config).unwrap();
-        let viewer = session(loaded, paths[0].clone(), &config);
+        let viewer = session(loaded, paths[0].clone(), &config, 0.0);
         (
             dir,
             Viewers {

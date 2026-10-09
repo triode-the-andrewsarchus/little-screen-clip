@@ -10,6 +10,7 @@ use crate::ui_ext;
 
 mod gallery;
 pub(super) mod music;
+mod video;
 
 const ROW_HEIGHT: f32 = 28.0;
 
@@ -154,6 +155,8 @@ impl FileManager {
                     self.gallery_ui(ui, colors, palette);
                 } else if self.view == super::BrowserView::Music {
                     self.music_ui(ui, colors);
+                } else if self.view == super::BrowserView::Videos {
+                    self.video_ui(ui, colors);
                 } else {
                     self.list_ui(ui, colors);
                 }
@@ -541,6 +544,8 @@ impl FileManager {
             }) {
                 scroll = scroll.vertical_scroll_offset(if self.view == super::BrowserView::Music {
                     self.music_offsets[index]
+                } else if self.view == super::BrowserView::Videos {
+                    self.video_offsets[index]
                 } else {
                     index as f32 * (row_height + ui.spacing().item_spacing.y)
                 });
@@ -729,6 +734,21 @@ fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
     } else {
         Icon::Text
     }
+}
+
+fn current_selection(
+    history: &[super::Location],
+    index: Option<usize>,
+) -> Option<&std::collections::BTreeSet<PathBuf>> {
+    index
+        .and_then(|index| history.get(index))
+        .map(|location| &location.selection)
+}
+
+fn media_row(ui: &mut Ui, rect: Rect, selected: bool, colors: WorkbenchColors) -> egui::Response {
+    let response = ui.allocate_rect(rect, Sense::click_and_drag());
+    row_background(ui, rect, selected, response.hovered(), colors);
+    response
 }
 
 fn row_background(ui: &Ui, rect: Rect, selected: bool, hovered: bool, colors: WorkbenchColors) {
@@ -988,4 +1008,31 @@ fn drop_files(
                 !ui.input(|i| i.modifiers.ctrl),
             )
         })
+}
+
+// Music and video share the same variable-height row virtualization.
+fn visible_media_rows(offsets: &[f32], offset: f32, height: f32) -> std::ops::Range<usize> {
+    let first = offsets.partition_point(|y| *y <= offset).saturating_sub(1);
+    let end = offsets
+        .partition_point(|y| *y <= offset + height)
+        .min(offsets.len().saturating_sub(1));
+    first..end
+}
+fn media_rows(
+    ui: &mut Ui,
+    scroll: egui::ScrollArea,
+    offsets: &[f32],
+    mut row: impl FnMut(&mut Ui, usize, Rect),
+) -> egui::scroll_area::ScrollAreaOutput<()> {
+    scroll.show_viewport(ui, |ui, viewport| {
+        ui.set_min_height(offsets.last().copied().unwrap_or(0.0));
+        let origin = ui.min_rect().min;
+        for index in visible_media_rows(offsets, viewport.min.y, viewport.height()) {
+            let rect = Rect::from_min_size(
+                origin + vec2(0.0, offsets[index]),
+                vec2(ui.available_width(), offsets[index + 1] - offsets[index]),
+            );
+            row(ui, index, rect);
+        }
+    })
 }

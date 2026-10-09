@@ -26,6 +26,8 @@ impl FileManager {
             && self.audio_entries.len() * 100 >= count * self.music_threshold as usize
         {
             BrowserView::Music
+        } else if count > 0 && self.video_count * 100 >= count * 75 {
+            BrowserView::Videos
         } else {
             BrowserView::List
         };
@@ -34,12 +36,10 @@ impl FileManager {
             .and_then(|l| l.manual_view)
             .unwrap_or(automatic);
         if self.view != view {
-            if view == BrowserView::List {
+            if matches!(view, BrowserView::List | BrowserView::Videos) {
                 self.music.stop();
             }
-            self.previews.retain(&Default::default());
-            self.gallery_previews.retain(&Default::default());
-            self.music_previews.retain(&Default::default());
+            self.retire_media_previews();
             if view == BrowserView::Music {
                 self.shelf.open = false;
             }
@@ -121,10 +121,7 @@ impl FileManager {
             ui.label("Loading folder…");
             return;
         };
-        let selected = self
-            .index
-            .and_then(|i| self.history.get(i))
-            .map(|l| &l.selection);
+        let selected = current_selection(&self.history, self.index);
         let mut actions = ListActions::default();
         let can_edit = self.can_edit();
         let count = self.selection_count();
@@ -133,73 +130,52 @@ impl FileManager {
         let mut paths = std::collections::BTreeSet::new();
         let mut play = None;
         let mut seek = None;
-        let output = scroll.show_viewport(ui, |ui, viewport| {
-            ui.set_min_height(self.music_offsets.last().copied().unwrap_or(0.0));
-            let origin = ui.min_rect().min;
-            let first = self
-                .music_offsets
-                .partition_point(|offset| *offset <= viewport.min.y)
-                .saturating_sub(1);
-            let end = self
-                .music_offsets
-                .partition_point(|offset| *offset <= viewport.max.y)
-                .min(self.visible.len());
-            for index in first..end {
-                let entry = &directory.entries[self.visible[index]];
-                let rect = Rect::from_min_size(
-                    origin + vec2(0.0, self.music_offsets[index]),
-                    vec2(
-                        ui.available_width(),
-                        self.music_offsets[index + 1] - self.music_offsets[index],
-                    ),
-                );
-                let mut response = ui.allocate_rect(rect, Sense::click_and_drag());
-                row_background(
+        let output = media_rows(ui, scroll, &self.music_offsets, |ui, index, rect| {
+            let entry = &directory.entries[self.visible[index]];
+            let mut response = media_row(
+                ui,
+                rect,
+                selected.is_some_and(|s| s.contains(&entry.path)),
+                colors,
+            );
+            let is_audio =
+                entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
+            let ready = if is_audio && paths.len() < 128 {
+                paths.insert(entry.path.clone());
+                self.music_previews.music(ui.ctx(), entry)
+            } else {
+                None
+            };
+            let range = self
+                .music_selection
+                .as_ref()
+                .filter(|range| range.path == entry.path && range.revision == entry.revision);
+            let wave = music_card(ui, rect, entry, ready, colors, range);
+            if let Some(ready) = ready {
+                response.clone().on_hover_text(&ready.data.detail);
+            }
+            let (engaged, time) = wave.map_or((false, None), |wave| {
+                interact_waveform(
                     ui,
-                    rect,
-                    selected.is_some_and(|s| s.contains(&entry.path)),
-                    response.hovered(),
+                    entry,
+                    wave,
+                    &mut response,
+                    &mut self.music_selection,
+                    &self.music,
                     colors,
-                );
-                let is_audio =
-                    entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
-                let ready = if is_audio && paths.len() < 128 {
-                    paths.insert(entry.path.clone());
-                    self.music_previews.music(ui.ctx(), entry)
-                } else {
-                    None
-                };
-                let range = self
-                    .music_selection
-                    .as_ref()
-                    .filter(|range| range.path == entry.path && range.revision == entry.revision);
-                let wave = music_card(ui, rect, entry, ready, colors, range);
-                if let Some(ready) = ready {
-                    response.clone().on_hover_text(&ready.data.detail);
-                }
-                let (engaged, time) = wave.map_or((false, None), |wave| {
-                    interact_waveform(
-                        ui,
-                        entry,
-                        wave,
-                        &mut response,
-                        &mut self.music_selection,
-                        &self.music,
-                        colors,
-                    )
-                });
-                if !engaged {
-                    actions.row(ui, &response, entry, selected, can_edit, count);
-                } else {
-                    actions.selection = Some((entry.path.clone(), false, false));
-                }
-                if entry.directory {
-                    targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
-                }
-                if let Some(time) = time {
-                    play = Some(entry.path.clone());
-                    seek = Some(time);
-                }
+                )
+            });
+            if !engaged {
+                actions.row(ui, &response, entry, selected, can_edit, count);
+            } else {
+                actions.selection = Some((entry.path.clone(), false, false));
+            }
+            if entry.directory {
+                targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
+            }
+            if let Some(time) = time {
+                play = Some(entry.path.clone());
+                seek = Some(time);
             }
         });
         self.music_previews.retain(&paths);

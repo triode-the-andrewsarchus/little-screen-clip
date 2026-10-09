@@ -104,3 +104,202 @@ Filled grid regions are a hard constraint, taking precedence over crop loss. Bat
 - Optimized production packing measures 7.5 ms for a 48-item visible chunk and 1.52 s for 10,000 synthetic aspect records serially.
 - Private rendered acceptance scrolls through 150 mixed square/landscape/portrait photos, with pixel coverage checks at 16 scroll positions. It passes all 18 observations in `/tmp/gapless-gallery-rendered-dark-final/report.json`. Two-pixel gutters are intentional; empty grid regions fail the check.
 - All-target Cargo checking, release build through `launch.sh`, formatting and diff whitespace checks pass. Architecture comparison against `pre-gapless-gallery` leaves clone count, maximum complexity and dependency cycles unchanged; flagged duplicate fragments were already present at the baseline.
+
+
+## Videos timeline view
+
+The shared view tabs include **Videos**, selected automatically when at least 75% of visible regular files are videos, unless a manual view was chosen. Each video has a horizontal timeline strip, filename, dimensions and duration. Folders and other files retain compact rows. Hover shows a timestamp and an aspect-preserving frame; clicking a strip opens playback at that position. Ctrl/Command/Shift-click selects files. Enter and double-click open from the beginning.
+
+### Resolution and decoding
+
+Columns follow the painted strip's **physical pixel width**, including desktop scale, without 256-column rounding or a 2,048-column cap. The bounded maximum is 16,384 columns. `[file_manager] video_timeline_decimation` accepts `1` (default), `2`, `4`, `8`, or `16`; invalid factors fall back to 1. Restart Files after changing it. Decimation reduces generation resolution while retaining the strip's display width.
+
+Four bounded background jobs process visible rows. Short videos (up to ten minutes) use patched Timelens ordinary-frame streaming, selecting frames before scaling and color conversion. Longer videos use the independent FFmpeg indexed helper: each requested column chooses the nearest indexed keyframe, and each distinct selected keyframe is decoded once. Decoder contexts own disjoint column ranges; counts now follow the workload policy below. Decoder draining preserves reordered/open-GOP pictures. Large H.264 and HEVC timelines, including cropped/portrait 4K, prefer CUDA with CPU retry; other tested codecs favor CPU. CUDA decoders share one device per file. Unsupported H.264 pixel formats are rejected before device creation.
+
+Sparse reads on Linux CIFS/SMB2 mounts use aligned, read-only direct I/O to avoid excess kernel read-ahead. Normal local files retain buffered caching. This changes no mount settings. A measured H.264 run fetched 290 MB instead of 1.21 GB, with the same selected pictures. The indexed helper writes lossless 64-pixel-high PPM strips through the existing bounded image reader. Missing helpers/indices or decoder errors use the previous Timelens/AV1 streaming fallback. Native attempts allow 30 seconds each, or 60 for 4K inputs; fallback allows 240 seconds within a 370-second task deadline. Cancellation kills/reaps read-only children.
+
+Long-video timelines approximate changes between keyframes. There is **no fixed low sample cap**: increasing width can select additional indexed frames. The rejected 48-sample implementation is not used. Persistent strips live in the existing artifact store under `video-timelines-v3`; source identity, selected stream and width determine the cache key.
+
+### Hover and lifecycle
+
+Hover owns one persistent Timelens decoder on an independent bounded queue. Pointer requests coalesce immediately without a hover pause; metadata is published before timeline completion. Recent keyframes are cached, raw frame transport avoids PNG round trips, and the latest completed picture stays visible with its actual timestamp while the next decodes. Supported HEVC hover uses GPU decode/scale and preview-sized downloads. Replaced source/revision/resolution results are rejected. Navigation, studio entry and scrolling retire read-only jobs and textures. Playback remains the existing owned FFplay session, using the same probed non-cover stream and killing/reaping its child on exit.
+
+### Measurements
+
+Optimized builds on this machine, 3,200 columns, four admitted jobs, three files per batch. These runs bypass Files' artifact cache; storage caches were not flushed. Folders are under `/mnt/rust/Jellyfin/Shows/` on CIFS. Timings include helper completion, excluding application painting.
+
+| Folder / encoding | Individual strips | Three-file batch | Warm hover median / p95 |
+| --- | --- | --- | --- |
+| AMV: short H.264 MKV | 2.47–3.77 s | 3.82 s | 6.62 / 10.34 ms |
+| Lazarus: HEVC MKV | 4.62–4.82 s | 4.98 s | 10.51 / 76.06 ms |
+| Umbrella Academy: H.264 MKV | 9.93–10.78 s | 10.83 s | 20.92 / 46.16 ms |
+| House of the Dragon: two AV1 MKV, one HEVC MP4 | 1.77 s AV1; 5.17 s MP4 | 5.32 s | 8.32 / 9.63 ms (AV1) |
+
+Cached reverse hover medians were 0.16–0.24 ms; cold startup was 98–636 ms. Individual uncached requests can exceed those medians. Previous 3,200-column Timelens measurements were 29.31 s for Lazarus, 48.54 s for the AV1 episode and 36.17 s for the HEVC MP4. Those earlier runs overlapped other inputs, so they establish the prior cost rather than an isolated speedup ratio. The CIFS identifier correction reduced the three H.264 production batch from 41.47 s to 10.83 s without changing samples.
+
+The requested Music reference on `/home/vega/Documents/type_testing/Ashes Against The Grain` measured eight-track cache rounds of 691.5, 675.0 and 675.1 ms; individual waveform-only times were 105–646 ms. Video generation is substantially faster than before, but remains slower than this audio baseline. Dense H.264 indices and large 4K inputs retain higher costs. The 29.6 GB, 9,382-second Project Hail Mary HEVC movie generated 3,200 columns in 19.73 s on the final production CUDA path (an earlier run took 25.92 s), compared with the prior 136.87 s at only 2,048 columns. Its CPU run took 50.74 s while overlapping a quality check; production therefore prefers CUDA for 4K HEVC. At 16× decimation its 200-column strip took 1.67 s; warm hover median/p95 was 92.13/138.46 ms, with cached reverse requests at 0.17 ms. Movie hover is responsive to coalesced requests but still exceeds one display frame for uncached pictures.
+
+### Build, licensing and validation
+
+`launch.sh build` and `launch.sh files` build both helpers as separate GPL-2.0-or-later executables. Timelens is pinned to commit `988c9f4773b25916aa404801c9e0f468f8052321`; its first build needs GitHub, Rust, GStreamer/GStreamer App development packages and suitable runtime codec plugins. The indexed helper requires a C compiler, pthreads, `pkg-config` and FFmpeg development libraries (`libavformat`, `libavcodec`, `libavutil`, `libswscale`); missing development libraries retain the fallback. FFprobe supplies metadata and FFplay playback. Overrides are `LITTLE_CLIP_TIMELENS` and `LITTLE_CLIP_VIDEO_STRIP`.
+
+`scripts/README.timelens.md` beside the build script and patch explains the GPL v2-or-later licensing boundary. The installed Timelens directory retains complete modified source, patch, README and license. `scripts/video_strip/README.md` explains the independent helper's license, corresponding source and rebuild instructions; these are copied beside its binary. Neither helper links into the application library.
+
+Reproduce with `scripts/video_preview_benchmark.py`, which follows production routing and defaults to 3,200 columns. `scripts/video_timeline_resolution_check.py --gpu` creates synthetic H.264/HEVC/AV1 luminance ramps: indexed CPU/CUDA preserve all 128 steps at 200/400/800/1,600/3,200 columns, and ordinary-frame Timelens preserves 126 at 1,024/2,048/3,200. Direct/buffered readers also produced byte-identical real H.264 MKV, HEVC MKV, AV1 MKV and HEVC MP4 strips.
+
+The private 4K Weston/Niri acceptance script verifies actual requested helper widths against painted strip pixels: a 3,134-pixel strip requests 3,134 columns at 1× and 196 at 16×. It also checks clean application closure. Targeted Rust tests cover bounded PPM decoding, configuration factors, and selected-stream/pixel-budget behavior. Release build, formatting, shell syntax, Python compilation and diff whitespace checks pass. Architecture comparison against `pre-indexed-video-helper` leaves maximum complexity, clone count and dependency cycles unchanged and reduces duplication slightly. Its remaining flag is an unchanged 13-line editor-environment fallback clone already present in that baseline.
+
+### io_uring and workload dispatch follow-up
+
+Compared the low-level [`io-uring`](https://github.com/tokio-rs/io-uring), [`tokio-uring`](https://github.com/tokio-rs/tokio-uring) and [`Monoio`](https://github.com/monoio-rs/monoio) crates. Chose `io-uring` 0.7.15: explicit queues fit the helper's existing thread-owned synchronous FFmpeg callbacks without adding an async runtime. The separate GPL helper now includes a Rust static library with bounded indexed/sequential read-ahead, aligned buffers and completion tracking. Each decoder owns 16 × 64 KiB buffers; pending buffers cannot be reused, and shutdown drains reads before freeing buffers or closing the borrowed descriptor. Setup/read errors fall back to synchronous reads. Corresponding Rust source, lockfile, vendored dependency sources/licenses and offline rebuild instructions are retained beside the installed helper.
+
+`--io-uring` enables this experiment directly; `LITTLE_CLIP_VIDEO_IO=uring` enables it for uncached Files strips. **Default remains synchronous** because trials did not show a consistent improvement. Buffered local caching and CIFS/SMB2 direct reads retain their existing storage-specific behavior.
+
+After FFprobe, dispatch uses codec, decoded pixel count, file bytes, duration, visible file count and available CPU parallelism. At most four file jobs are admitted, fewer on low-core machines. CPU workers divide a target budget capped at 16 cores, with a maximum of eight per heavy file or four per lighter file. Heavy means at least 512 MiB, 30 minutes or two million pixels. Large H.264 (at least two million pixels) and HEVC (at least four million pixels) prefer GPU decode. Pixel count includes cropped/portrait 4K inputs previously missed by a width-only check. Single GPU files use four contexts; concurrent GPU files use two each, bounded further by CPU availability. CPU fallback retains its independently chosen worker count. Short videos retain ordinary-frame Timelens streaming.
+
+Local fixtures are in `/home/vega/Videos/video-preview-tests-20261008/`: 11 complete files in six workload folders, **18,808,224,779 bytes**, below the 20,000,000,000-byte limit. They cover short H.264, two H.264 episodes, two HEVC episodes, mixed AV1 MKV/HEVC MP4, cropped 2862×2158 HEVC and full 3840×2160 HEVC. All local file SHA-256 values were reread and verified against the copy manifest. Source files were not modified. `scripts/copy_video_test_fixtures.py` provides budgeted, grouped, atomic no-overwrite copies and a manifest for future experiments.
+
+Worker sweeps and paired reader trials use 3,200 columns and compare output hashes across modes/counts. Local two-file CPU HEVC batches measured about 3.47 s with four workers per file and 2.66–2.82 s with eight. H.264 GPU batches showed little benefit above two workers per file. The full 3840×2160 single-file GPU sweep measured about 11.46 s at four workers, versus 12.61–12.96 s at two, 12.88–13.08 s at eight and 13.26–13.55 s at sixteen. This supports four workers for a lone large GPU file without treating more workers as automatically faster.
+
+After compilation completed, paired tests measured local HEVC batches at 2.57–2.60 s synchronous versus 2.62–2.66 s with io_uring; NAS equivalents were 2.90–2.99 s versus 3.13–3.22 s. Mixed AV1/HEVC MP4 local batches were about 2.8 s in either mode; NAS batches were 3.53–3.60 s synchronous versus 4.11–4.14 s with io_uring. H.264 GPU runs showed wider variation and NAS prefetch regressions. Cold-local full-4K pairs were about 12–13.5 s with either reader. The io_uring prototype is therefore retained for experiments, rather than enabled automatically. Every paired strip had the same output hash. Earlier trials overlapping compilation are excluded from these comparisons; NAS cache state remains uncontrolled.
+
+Reproduce with:
+
+```sh
+python3 scripts/video_workload_benchmark.py /home/vega/Videos/video-preview-tests-20261008/manifest.json --compare-io
+python3 scripts/video_workload_benchmark.py /home/vega/Videos/video-preview-tests-20261008/manifest.json --folders single-wide-4k --storage local --workers 2,4,8,16
+python3 scripts/video_workload_benchmark.py /home/vega/Videos/video-preview-tests-20261008/manifest.json --folders single-wide-4k --storage local --compare-io --cold-local
+python3 scripts/video_timeline_resolution_check.py --gpu --io-uring
+cargo test --release --manifest-path scripts/video_strip/rust_io/Cargo.toml
+```
+
+Cold-local runs evict only the selected file's clean cached pages with `posix_fadvise`; no global cache drop, NAS tuning, GPU clock changes or mount changes are performed. Synthetic Rust tests cover random seeks, eviction, direct reads, unaligned EOF, read failures and destruction with pending work. A private child with `io_uring_setup` denied by seccomp generated a byte-identical strip through synchronous fallback. Synthetic native CPU/CUDA strip checks retain all 128 luminance steps at every decimation width with prefetch enabled. Dispatch tests cover cropped 4K, size/duration classification, CPU budgets and concurrent GPU limits.
+
+Final validation passes the release Files build, three Rust reader tests, four dispatch/image-reader tests, synthetic CPU/CUDA detail checks with io_uring enabled, denied-ring fallback, offline rebuilding from retained vendored source, formatting and diff checks. Private 4K acceptance with prefetch enabled verifies 3,134 requested/painted columns at 1× and 196 requested columns across the same painted width at 16×. The harness now waits for Niri's resize transform to settle before applying the existing width assertion. Short-video three-file production batches measured 3.86 s on both local disk and NAS. Architecture comparison introduces no new function above the complexity threshold; its remaining duplication flag is the pre-existing editor-environment fallback in `config.rs`.
+
+### GPU full-frame area reduction
+
+The standalone GPL helper now reduces complete NV12/P010 CUDA frames to a 1×64 column on FFmpeg's existing CUDA device and stream. Every pixel contributes, with fractional vertical overlap at row boundaries; this does not sample a few slices or reduce temporal resolution. Only 384 bytes of averaged YUV values are downloaded per frame, followed by a tiny libswscale RGB conversion. Previously the helper downloaded full frames and performed full-frame CPU area scaling. Decoder-owned modules/buffers are synchronized before frame reuse and released before decoder teardown. Unsupported formats, missing optional builds/drivers and reduction failures retain the complete-frame fallback.
+
+Builds with `nvcc` and `ffnvcodec` headers compile/embed PTX; running them needs the CUDA driver but no compiler or CUDA runtime library. Source, generated PTX/header, GPL notices and rebuild instructions remain beside the independent executable. GPU averaging is enabled by default in capable builds; `VIDEO_STRIP_GPU_AVERAGE=0` selects the old path for comparisons. CPU and short ordinary-frame Timelens paths are unchanged.
+
+On the RTX 3090, three alternating paired runs at **3,200 columns** measured these medians. These direct helper requests ignore the application's `config.toml` decimation setting (including 4×). Timings include helper startup, indexing, decoding, reduction and PPM output, exclude FFprobe/UI painting, and do not overlap compilation, fixture copying or synthetic encoding. Local files use the existing copies; NAS cache state and background GPU activity are uncontrolled.
+
+| Workload | Full-frame download / CPU area | GPU area reduction | Speedup |
+| --- | ---: | ---: | ---: |
+| Full 3840×2160 HEVC, local, four workers | 12.38 s | 7.56 s | 1.64× |
+| Cropped 2862×2158 HEVC, local, four workers | 3.78 s | 2.86 s | 1.32× |
+| Two 1080p H.264 files, local, two workers each | 6.42 s | 6.42 s | 1.00× |
+| Project Hail Mary, NAS, four workers | 14.27 s | 10.71 s | 1.33× |
+
+Per-worker host-call profiling supports the source of the gain: in the full-4K case, median aggregate transfer plus CPU scaling time was 27.13 worker-seconds, replaced by 1.68 worker-seconds for reduction, small transfer and conversion. These are overlapping worker sums, **not elapsed time**. CUDA synchronization can move pending work into another host call, so these are not isolated GPU kernel timings. The remaining seek/read/decode path dominates the accelerated runs; the 1080p batch had much less transfer/scaling work and no measurable wall-time improvement.
+
+Real-file average RGB differences from the previous area filter were 0.48–0.95 levels on the 0–255 scale; 99th-percentile differences were 2–5 levels. Different rounding/chroma reduction means output is not byte-identical, but sample count/order and complete-frame coverage are retained. Nonuniform 8-bit H.264 and 10-bit HEVC synthetic fixtures pass with one/four workers and verify that the default uses the reducer. Builds without reduction and an intentionally invalid PTX module fall back to byte-identical old output. The 128-frame luminance regression preserves all 128 steps at 200/400/800/1,600/3,200 columns with CUDA averaging.
+
+Reproduce spatial/default/fallback checks and paired benchmarks with:
+
+```sh
+scripts/build_video_strip.sh
+python3 scripts/video_gpu_average_check.py --synthetic
+python3 scripts/video_gpu_average_check.py --manifest /home/vega/Videos/video-preview-tests-20261008/manifest.json
+VIDEO_STRIP_GPU_AVERAGE=1 python3 scripts/video_timeline_resolution_check.py --gpu
+```
+
+`--storage source` selects NAS originals from the fixture manifest; `--folders`, `--width` and `--rounds` control the benchmark cases. `--fallback-helper PATH` adds synthetic comparisons against a reducer-unavailable helper. `VIDEO_STRIP_PROFILE=1` exposes per-worker stage durations and averaged/downloaded frame counts. No additional local fixture copies were made.
+
+Architecture comparison against `pre-gpu-average` leaves maximum complexity and clone/cycle counts unchanged, reduces duplication by 0.02 percentage points, and introduces no function above the complexity threshold after separating CUDA submission, column color conversion and complete-frame fallback. Remaining flags are the config editor-environment clone already in that baseline and rank changes between unchanged UI acceptance helpers. A final freshly rebuilt 4K pair measured 12.87 s versus 7.54 s (1.71×), consistent with the three-pair median above.
+
+### Sparse GPU experiments and bottleneck profiling
+
+`VIDEO_STRIP_GPU_SLICES=5` enables a separate CUDA kernel reading single-pixel vertical columns at the left edge, quarter-width, center, three-quarter-width and right edge. It averages those five values with the existing vertical area weights. `VIDEO_STRIP_GPU_SLICES=1` reads only the center column, selecting each output row's vertical midpoint with no averaging. Both sample decoded GPU memory and retain the small download/RGB conversion. The decoder still reconstructs the complete frame. Unset/`0` retains the original complete-frame GPU averaging kernel. Each sparse mode has its own Files preview cache namespace; restoring full-frame mode restores its existing cache. Restart Files to change the inherited environment. No personal config or decimation setting is changed.
+
+Three rotating-order comparisons at 3,200 columns showed no meaningful end-to-end gain:
+
+| Workload | Full GPU average | Five columns | Center column |
+| --- | ---: | ---: | ---: |
+| Local full 4K HEVC | 7.55 s | 7.47 s | 7.51 s |
+| Local cropped 4K HEVC | 2.87 s | 2.85 s | 2.86 s |
+| Local two-file 1080p H.264 | 6.42 s | 6.42 s | 6.42 s |
+| Project Hail Mary on NAS | 10.76 s | 10.70 s | 10.69 s |
+
+Sparse modes reduce the measured reduction/download/conversion work, but introduce larger color differences and miss unsampled content. They remain opt-in. The pre-experiment helper/source snapshot is retained at `/tmp/video-full-average-backup/`; synthetic checks compare full-frame output against that binary byte for byte. Independent CPU references verify both sparse kernels' sample coordinates, bit depth and vertical sampling from decoded YUV pixels, on 8-bit H.264 and 10-bit HEVC with one/four workers.
+
+The helper's `VIDEO_STRIP_PROFILE=1` diagnostics now separate actual AVIO reads, container seeking, packet extraction, decoder flush/frame release, packet submission, draining and frame retrieval. Reads nested inside seeks/packet extraction are recorded separately and subtracted before reporting exclusive seek/demux costs. Worker opening/probing has a separate timer; the following shares describe active frame processing, excluding startup/indexing. These are **aggregate overlapping worker-time shares, not elapsed-time shares**:
+
+| Indexed workload | Decoder calls | File reading | Seek bookkeeping |
+| --- | ---: | ---: | ---: |
+| Local full 4K HEVC | 94.0% | 0.2% | below 0.1% |
+| NAS copy of the same 4K HEVC | 62.3% | 32.0% | below 0.1% |
+| Local 1080p H.264 previews | 97.1% | 0.2% | below 0.2% |
+| NAS 1080p H.264 previews | 47.9% | 49.5% | below 0.2% |
+| Local 1080p HEVC CPU previews | 96.6% | 0.4% | below 0.1% |
+| NAS 1080p HEVC CPU previews | 81.0% | 16.7% | below 0.1% |
+| Project Hail Mary on NAS | 47.0% | 48.8% | below 0.2% |
+
+For local 4K, medians of two runs were 27.29 decoder worker-seconds, 0.058 reading and 0.011 exclusive seeking, with 7.52 s elapsed. On its NAS original, 18.28 decoder worker-seconds and 9.39 reading produced 7.61 s elapsed: much of the read latency overlaps other workers' decoding. Project Hail Mary measured about 19.00 decoder worker-seconds, 19.69 reading, 0.064 exclusive seeking and 1.62 reduction, with approximately 11 s elapsed. Its worker AVIO callbacks delivered about 840 MB; this is logical delivered data, not a network-traffic measurement. Root probing/indexing is outside these worker totals.
+
+Decoder-call timings include CPU parsing, NVIDIA decoder scheduling/waits, frame mapping and internal GPU copies; they do not isolate pure NVDEC execution. The installed FFmpeg n9.0.2 [NVDEC implementation](https://raw.githubusercontent.com/FFmpeg/FFmpeg/n9.0.2/libavcodec/nvdec.c) maps/retrieves decoded surfaces and makes frames writable inside the codec path. An optional `VIDEO_STRIP_PROFILE_SYNC=1` diagnostic stream barrier after frame retrieval checks for pending work before averaging. On local/NAS 4K and Project Hail Mary it attributed roughly 0.52–0.56 worker-seconds to readiness, mostly shifting time from the following reduction call, while elapsed time remained consistent. It is off by default because it changes synchronization and shares a stream across workers.
+
+The short ordinary-frame Timelens path was checked separately on the 219-second AMV fixture: optimized helper wall times were 3.20–3.34 s local and 3.07–3.08 s on NAS. A quiet `perf` CPU-clock run attributed 86.98% of samples to libavcodec. `strace -f -c` recorded combined read/lseek time below 10 ms on both local and NAS inputs. These trace/profile runs were separate from baseline timings; NAS cache state is uncontrolled. Short previews therefore also show codec work dominating in the measured case, without treating CPU sample percentages as wall-time percentages.
+
+Reproduce with:
+
+```sh
+python3 scripts/video_gpu_average_check.py --sparse-modes
+python3 scripts/video_gpu_average_check.py --sparse-modes --synthetic --previous-helper /tmp/video-full-average-backup/video-strip
+VIDEO_STRIP_PROFILE=1 VIDEO_STRIP_GPU_SLICES=0 python3 scripts/video_workload_benchmark.py /home/vega/Videos/video-preview-tests-20261008/manifest.json --folders single-wide-4k h264-batch hevc-batch --storage both --rounds 2
+```
+
+Profiling confirms that decode/decoder internals dominate local previews; reading is a substantial second cost, sometimes equal to decoder time, on NAS. Container seek bookkeeping itself is small for these indexed files. Sparse sampling remains available for future experiments but the default retains full-frame preview quality.
+
+Final verification passes the release Files build, 8-bit/10-bit sparse pixel references with one/four workers, byte-identical full-frame restoration against the saved helper, and 128-step temporal checks at every tested width in both sparse modes. The refactored three-mode benchmark executes successfully. Formatting, shell/Python syntax and whitespace checks pass. Architecture comparison against `pre-five-slices` adds no function above the complexity threshold, leaves maximum complexity/clone/cycle counts unchanged and reduces measured duplication slightly; its final remaining flag is the config clone already in that baseline.
+
+A follow-up at 800 columns, corresponding to 4× division of a 3,200-column request, also showed negligible sparse gains: three rotating-order medians were 2.114 s full-frame, 2.093 s five-slice and 2.109 s center-only. The first invocation was slower than subsequent repeats; a single first-mode comparison can overstate a sampling improvement. Application config remained unchanged throughout.
+
+
+### Progressive video timelines (2026-10-08)
+Long indexed timelines now expose a full-width preview after eight distributed anchors per decoder, then refine it roughly four times per second. Each decoder remains open and skips its anchors during the dense pass, so the selected keyframe count and final pixels are unchanged. Pending positions repeat the nearest available column; the Files row displays “Refining…” until completion. Small sample sets that finish in the anchor pass use ordinary final delivery. Short Timelens timelines publish as ordinary frames arrive, retaining their existing temporal sampling. Timelens’ long fallback publishes completed worker chunks; the FFmpeg AV1 streaming fallback has no snapshot protocol.
+Snapshot pixels are copied under a short mutex and published outside it by atomic rename. The existing cancellable command worker polls at 50 ms, decodes bounded PPM snapshots, and sends through a one-image channel. The UI updates its existing texture; completion remains authoritative, partial images are not cached, and dropping the visible row retires its progress channel and kills/reaps its read-only helper.
+Five rotating-order repetitions per case compared the saved pre-change helpers against progressive generation on local fixtures. Measured elapsed time includes helper startup and simulated 50 ms snapshot polling/RGBA conversion, but excludes application metadata probing, queue admission and UI painting. Builds, encoding and other performance workloads were not running during timings. Every final file was byte-identical to the previous helper.
+| Local fixture | Columns | Previous final | Progressive final | First preview | Elapsed overhead |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| single-wide-4k | 800 | 2.105 s | 2.110 s | 0.352 s | +0.24% |
+| single-wide-4k | 3200 | 7.566 s | 7.566 s | 0.353 s | +0.01% |
+| single-4k | 800 | 1.854 s | 1.858 s | 0.352 s | +0.23% |
+| single-4k | 3200 | 2.856 s | 2.874 s | 0.353 s | +0.63% |
+| hevc-batch | 800 | 2.006 s | 1.961 s | 0.452 s | -2.25% |
+| hevc-batch | 3200 | 1.958 s | 1.978 s | 0.455 s | +1.04% |
+| h264-batch | 800 | 1.904 s | 1.907 s | 0.301 s | +0.15% |
+| h264-batch | 3200 | 3.507 s | 3.482 s | 0.303 s | -0.74% |
+| short-batch | 800 | 3.107 s | 3.313 s | 0.101 s | +6.63% |
+| short-batch | 3200 | 3.157 s | 3.282 s | 0.102 s | +3.94% |
+
+All measured medians stay below the requested 10% elapsed-overhead ceiling. On the full 4K fixture, helper CPU medians were 0.806/0.807 s previous/progressive at 800 columns and 1.531/1.524 s at 3,200 columns. CPU time alone excludes GPU execution/waits; elapsed completion is the acceptance metric. These measurements establish the budget on the tested workloads rather than guarantee timing on all hardware/media.
+
+Reproduce with:
+
+```sh
+python3 scripts/video_progressive_check.py /path/to/local/video.mkv --rounds 5 --widths 800,3200
+python3 scripts/video_timeline_resolution_check.py --gpu --progressive
+cargo test --release -p little-clip-core process::tests --offline
+cargo test --release -p clip-workbench --lib video_timeline --offline
+```
+
+
+Validation: release Files build passes; three core process tests and five
+video-timeline tests pass, including pending texture replacement/retirement.
+Synthetic ordinary/indexed CPU/CUDA strips retain all 128 luminance steps at
+all tested widths, and progressive/non-progressive final bytes match. Partial
+indexed strips retain endpoints and monotonic order without gaps. Private
+Weston/Niri acceptance passes at 1× and 16× decimation, including a helper held
+before completion to prove Files paints snapshots while its task is pending;
+screenshots show the Refining label. Normal final painting also passes.
+Formatting, Python/shell syntax and whitespace checks pass.
+
+Architecture comparison with `pre-progressive-video` leaves maximum complexity
+and dependency cycles unchanged and reduces duplication from 7.54% to 7.52%.
+The one additional clone is the identical parameter lists of `generate` and
+`generate_indexed` after adding their progress sender, confirmed with jscpd's
+exact fragment; it is not duplicate implementation logic. Keep the explicit
+parameters rather than introduce a context abstraction solely to hide this
+metric. The other clone flag is the config clone already present in the baseline.

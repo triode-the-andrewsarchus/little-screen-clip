@@ -1,0 +1,620 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index ed6fdc8..4be26b7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -21,8 +21,8 @@ Project homepage: https://timelens.blinry.org
+ """
+ 
+ [dependencies]
+-gstreamer = "0.12.2"
+-gstreamer-app = "0.12.2"
++gstreamer = { version = "0.12.2", features = ["v1_10"] }
++gstreamer-app = { version = "0.12.2", features = ["v1_10"] }
+ colored = "1.7.0"
+ 
+ [dependencies.clap]
+diff --git a/src/main.rs b/src/main.rs
+index 9021b08..be0ce8d 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -17,21 +17,23 @@ use std::time::{Duration, SystemTime};
+ 
+ mod frame;
+ mod source;
++mod preview;
+ 
+ // Maximum dimensions of a single thumbnail grid
+ const MAX_GRID_WIDTH: usize = 1000;
+ const MAX_GRID_HEIGHT: usize = 1000;
+ 
+ fn main() {
++    if preview::dispatch() { return; }
+     // Parse the command line arguments
+     let mut config = parse_config();
+ 
+     // Set source height to the timeline height, or the thumbnail height, whichever is larger.
+-    let source_height = cmp::max(config.thumbnail_height, config.height);
++    let source_height = if config.vtt_filename.is_some() { cmp::max(config.thumbnail_height, config.height) } else { config.height };
+ 
+     // Create and initialize VideoSource
+     let mut source =
+-        match source::VideoSource::new(&config.input_filename, source_height, config.width) {
++        match source::VideoSource::new(&config.input_filename, source_height, config.width, config.video_stream) {
+             Ok(source) => source,
+             Err(message) => error(&message),
+         };
+@@ -97,6 +99,7 @@ pub struct Config {
+ 
+     // Name of the input file
+     input_filename: String,
++    video_stream: i32,
+     // Name of the file the visual timeline will be written to
+     timeline_filename: Option<String>,
+     // Name of the file the VTT file will be written to
+@@ -139,6 +142,7 @@ fn parse_config() -> Config {
+                 .index(1)
+                 .required(true),
+         )
++        .arg(Arg::with_name("video-stream").long("video-stream").takes_value(true).default_value("0"))
+         .arg(
+             Arg::with_name("width")
+                 .help(
+@@ -337,6 +341,7 @@ fn parse_config() -> Config {
+         thumbnail_columns: 0,
+ 
+         input_filename: String::from(input_filename),
++        video_stream: matches.value_of("video-stream").unwrap().parse().expect("Invalid video stream"),
+         timeline_filename,
+         vtt_filename,
+     }
+@@ -357,16 +362,14 @@ fn generate_timeline_and_thumbnails(
+ 
+     let mut grids = vec![];
+ 
+-    // Frames that will hold the thumbnail grids
+-    let grid_columns = MAX_GRID_WIDTH / config.thumbnail_width;
+-    let grid_rows = MAX_GRID_HEIGHT / config.thumbnail_height;
+-
+-    let grid_count = config.width / (grid_columns * grid_rows) + 1;
+-    let grid_width = grid_columns * config.thumbnail_width;
+-    let grid_height = grid_rows * config.thumbnail_height;
+-
+-    for _ in 0..grid_count {
+-        grids.push(frame::Frame::new(grid_width, grid_height));
++    // Allocate thumbnail sheets only when they were requested.
++    if config.vtt_filename.is_some() {
++        let grid_columns = MAX_GRID_WIDTH / config.thumbnail_width;
++        let grid_rows = MAX_GRID_HEIGHT / config.thumbnail_height;
++        let grid_count = config.width / (grid_columns * grid_rows) + 1;
++        for _ in 0..grid_count {
++            grids.push(frame::Frame::new(grid_columns * config.thumbnail_width, grid_rows * config.thumbnail_height));
++        }
+     }
+ 
+     // Keep track of which columns are already done
+@@ -387,8 +390,6 @@ fn generate_timeline_and_thumbnails(
+             config.width - 1,
+         );
+ 
+-        let (file, x, y) = grid_position(i, &config);
+-
+         if config.timeline_filename.is_some() {
+             // Scale frame to 1 pixel width and copy into the timeline
+             let column = frame.scale(1, config.height);
+@@ -396,6 +397,7 @@ fn generate_timeline_and_thumbnails(
+         }
+ 
+         if config.vtt_filename.is_some() {
++            let (file, x, y) = grid_position(i, &config);
+             let thumbnail = frame.scale(config.thumbnail_width, config.thumbnail_height);
+             // Copy frame to the thumbnail grid
+             grids[file].copy(&thumbnail, x, y);
+diff --git a/src/preview.rs b/src/preview.rs
+new file mode 100644
+--- /dev/null
++++ b/src/preview.rs
+@@ -0,0 +1,207 @@
++//! Files' fast strip generation and persistent raw-frame protocol.
++use crate::{
++    frame::Frame,
++    source::{ColumnSource, PreviewSource},
++};
++use std::{
++    collections::VecDeque,
++    io::{self, BufRead, Write},
++    time::{Duration, Instant},
++};
++
++pub fn dispatch() -> bool {
++    let args: Vec<String> = std::env::args().collect();
++    let server = args.iter().any(|arg| arg == "--preview-server");
++    let fast = args.iter().any(|arg| arg == "--fast");
++    if !server && !fast {
++        return false;
++    }
++    if let Err(error) = run(&args, server) {
++        eprintln!("{}", error);
++        std::process::exit(1);
++    }
++    true
++}
++fn value<'a>(args: &'a [String], key: &str) -> Result<&'a str, String> {
++    args.windows(2)
++        .find(|pair| pair[0] == key)
++        .map(|pair| pair[1].as_str())
++        .ok_or_else(|| format!("Missing {}", key))
++}
++fn number(args: &[String], key: &str) -> Result<usize, String> {
++    value(args, key)?
++        .parse()
++        .map_err(|_| format!("Invalid {}", key))
++}
++fn run(args: &[String], server: bool) -> Result<(), String> {
++    let path = args.get(1).ok_or("Missing file")?;
++    let width = number(args, "--width")?.clamp(1, 16384);
++    let height = number(args, "--height")?.clamp(1, 1024);
++    let stream = number(args, "--video-stream")? as i32;
++    let gpu = args.iter().any(|arg| arg == "--gpu");
++    if server {
++        let source = PreviewSource::new(path, width, height, stream, gpu)?;
++        let mut cache = VecDeque::<Cached>::new();
++        let input = io::stdin();
++        let mut output = io::stdout().lock();
++        for line in input.lock().lines() {
++            let ms: u64 = line
++                .map_err(|e| e.to_string())?
++                .parse()
++                .map_err(|_| "Invalid timestamp")?;
++            let cached = cache
++                .iter()
++                .position(|frame| frame.from <= ms && ms <= frame.to);
++            let frame = if let Some(index) = cached {
++                cache.remove(index).unwrap()
++            } else {
++                let frame = source.seek(ms)?;
++                let map = frame
++                    .buffer
++                    .map_readable()
++                    .ok_or("Cannot map preview frame")?;
++                let bytes = map.as_slice();
++                if bytes.len() != width * height * 4 {
++                    return Err("Unexpected frame stride".into());
++                }
++                let pts = (frame.pts.unwrap_or(0.0) as f64 * 1000.0).round() as u64;
++                let mut frame = Cached {
++                    from: ms.min(pts),
++                    to: ms.max(pts),
++                    pts,
++                    bytes: bytes.to_vec(),
++                };
++                if let Some(index) = cache.iter().position(|previous| previous.pts == pts) {
++                    let previous = cache.remove(index).unwrap();
++                    frame.from = frame.from.min(previous.from);
++                    frame.to = frame.to.max(previous.to);
++                }
++                frame
++            };
++            let pts = frame.pts;
++            let bytes = &frame.bytes;
++            output
++                .write_all(&pts.to_le_bytes())
++                .map_err(|e| e.to_string())?;
++            output.write_all(bytes).map_err(|e| e.to_string())?;
++            output.flush().map_err(|e| e.to_string())?;
++            cache.push_back(frame);
++            let capacity = (16 * 1024 * 1024 / (width * height * 4)).clamp(1, 8);
++            while cache.len() > capacity {
++                cache.pop_front();
++            }
++        }
++    } else {
++        let duration = number(args, "--duration-ms")? as u64;
++        let source_width = number(args, "--source-width")?.clamp(1, 65536);
++        let source_height = number(args, "--source-height")?.clamp(1, 65536);
++        let scaled_width = ((source_width as f64 / source_height as f64 * height as f64).round()
++            as usize)
++            .clamp(1, 2048);
++        gstreamer::init().map_err(|e| e.to_string())?;
++        let mut timeline = Frame::new(width, height);
++        let mut progress = value(args, "--progressive").ok();
++        let mut known = vec![false; width];
++        let mut updated = None;
++        let codec = value(args, "--codec").unwrap_or("h264");
++        if duration <= 600_000 {
++            let source = ColumnSource::new(
++                path,
++                scaled_width,
++                height,
++                stream,
++                width,
++                duration,
++                gpu,
++                codec,
++            )?;
++            while let Some(frame) = source.next()? {
++                let index = ((frame.pts.unwrap_or(0.0) as f64 * 1000.0 / duration as f64
++                    * width as f64)
++                    .round() as usize)
++                    .min(width - 1);
++                timeline.copy(&frame.scale(1, height), index, 0);
++                known[index] = true;
++                if updated.map_or(true, |time: Instant| time.elapsed() >= Duration::from_millis(250)) {
++                    if let Some(path) = progress {
++                        if publish_progress(path, &timeline, &known).is_err() {
++                            progress = None;
++                        }
++                    }
++                    updated = Some(Instant::now());
++                }
++            }
++        } else {
++            let workers = 4.min(width);
++            let mut jobs = Vec::new();
++            for worker in 0..workers {
++                let path = path.to_owned();
++                let start = worker * width / workers;
++                let end = (worker + 1) * width / workers;
++                jobs.push(std::thread::spawn(
++                    move || -> Result<Vec<(usize, Frame)>, String> {
++                        let source = PreviewSource::new(&path, scaled_width, height, stream, gpu)?;
++                        let mut columns = Vec::with_capacity(end - start);
++                        for index in start..end {
++                            let time = duration.saturating_sub(1) * index as u64
++                                / width.saturating_sub(1).max(1) as u64;
++                            columns.push((index, source.seek(time)?.scale(1, height)));
++                        }
++                        Ok(columns)
++                    },
++                ));
++            }
++            for job in jobs {
++                for (index, column) in job.join().map_err(|_| "Timeline worker failed")?? {
++                    timeline.copy(&column, index, 0);
++                    known[index] = true;
++                }
++                if let Some(path) = progress {
++                    let _ = publish_progress(path, &timeline, &known);
++                }
++            }
++        }
++        timeline.write_to(value(args, "--timeline")?, 100)?;
++    }
++    Ok(())
++}
++
++// A snapped keyframe remains nearest between its PTS and a proven seek target.
++struct Cached {
++    from: u64,
++    to: u64,
++    pts: u64,
++    bytes: Vec<u8>,
++}
++
++// Atomic bounded snapshots: pending positions use the nearest available column.
++// The final timeline remains untouched, including its ordinary-frame sampling.
++fn publish_progress(path: &str, timeline: &Frame, known: &[bool]) -> Result<(), String> {
++    let map = timeline.buffer.map_readable().ok_or("Cannot map timeline")?;
++    let pixels = map.as_slice();
++    let indices: Vec<_> = known.iter().enumerate()
++        .filter_map(|(x, ready)| if *ready { Some(x) } else { None }).collect();
++    if indices.is_empty() {
++        return Ok(());
++    }
++    let mut nearest = Vec::with_capacity(timeline.width);
++    let mut index = 0;
++    for x in 0..timeline.width {
++        while index + 1 < indices.len() &&
++            indices[index + 1].abs_diff(x) < indices[index].abs_diff(x) {
++            index += 1;
++        }
++        nearest.push(indices[index]);
++    }
++    let mut bytes = format!("P6\n{} {}\n255\n", timeline.width, timeline.height).into_bytes();
++    bytes.reserve(timeline.width * timeline.height * 3);
++    for y in 0..timeline.height {
++        for &x in &nearest {
++            let offset = (y * timeline.width + x) * 4;
++            bytes.extend_from_slice(&[pixels[offset + 2], pixels[offset + 1], pixels[offset]]);
++        }
++    }
++    let temporary = format!("{}.tmp", path);
++    std::fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
++    std::fs::rename(&temporary, path).map_err(|e| e.to_string())
++}
+diff --git a/src/source.rs b/src/source.rs
+index 731a591..39f3699 100644
+--- a/src/source.rs
++++ b/src/source.rs
+@@ -30,19 +30,19 @@ impl VideoSource {
+     //
+     // Any frames this source outputs will be `output_height` pixels high. The source will try to
+     // output approximately `n` frames.
+-    pub fn new(filename: &str, output_height: usize, n: usize) -> Result<Self, String> {
++    pub fn new(filename: &str, output_height: usize, n: usize, video_stream: i32) -> Result<Self, String> {
+         // Initialize GStreamer
+         gst::init().expect("Could not initialize GStreamer");
+ 
+         // Get size and duration information
+-        let (aspect_ratio, duration) = get_meta(&filename)?;
++        let (aspect_ratio, duration) = get_meta(&filename, video_stream)?;
+ 
+         // Calculate which output width keeps the aspect ratio
+         let output_width = (output_height as f32 * aspect_ratio) as usize;
+ 
+         // Set up GStreamer pipeline
+         let (pipeline, capsfilter, appsink) =
+-            build_pipeline(&filename, output_width, output_height);
++            build_pipeline(&filename, output_width, output_height, video_stream, false, false, false);
+ 
+         // Set the input pipeline to paused to fill the buffers
+         pipeline
+@@ -144,7 +144,7 @@ impl Iterator for VideoSource {
+ }
+ 
+ // Get resolution and duration of the input file
+-fn get_meta(filename: &str) -> Result<(f32, f32), String> {
++fn get_meta(filename: &str, video_stream: i32) -> Result<(f32, f32), String> {
+     // Generate file:// URI from an absolute filename
+     let path = PathBuf::from(filename);
+ 
+@@ -168,7 +168,7 @@ fn get_meta(filename: &str) -> Result<(f32, f32), String> {
+     let absolute = absolute
+         .to_str()
+         .expect("Could not convert absolut path to str");
+-    let uri = format!("file://{}", absolute);
++    let uri = file_uri(absolute);
+ 
+     // Set up a playbin element, which automatically select decoders
+     let playbin = gst::ElementFactory::make("playbin", None).expect("Could not create playbin");
+@@ -176,6 +176,8 @@ fn get_meta(filename: &str) -> Result<(f32, f32), String> {
+         .set_property("uri", &uri)
+         .expect("Could not set property on playbin");
+ 
++    playbin.set_property("current-video", &video_stream).expect("Cannot select video stream");
++    playbin.set_property_from_str("flags", "video");
+     // We don't actually want any output, so we connect the playbin to fakesinks
+     let fakesink = gst::ElementFactory::make("fakesink", None).expect("Could not create fakesink");
+     let fakesink2 =
+@@ -204,7 +206,7 @@ fn get_meta(filename: &str) -> Result<(f32, f32), String> {
+ 
+     // Get the sinkpad of the first video stream
+     let pad = playbin
+-        .emit("get-video-pad", &[&0])
++        .emit("get-video-pad", &[&video_stream])
+         .expect("Could not get video pad")
+         .expect("Could not get video pad, part 2");
+ 
+@@ -267,9 +269,12 @@ fn build_pipeline(
+     filename: &str,
+     output_width: usize,
+     output_height: usize,
++    video_stream: i32,
++    preview: bool,
++    gpu: bool,
++    key_only: bool,
+ ) -> (gst::Pipeline, gst::Element, gst_app::AppSink) {
+-    let uri = format!(
+-        "file://{}",
++    let uri = file_uri(
+         fs::canonicalize(&PathBuf::from(filename))
+             .expect("Could not canonicalize input filename")
+             .to_str()
+@@ -277,14 +282,16 @@ fn build_pipeline(
+     );
+ 
+     let src =
+-        gst::ElementFactory::make("uridecodebin", None).expect("Could not create uridecodebin");
++        gst::ElementFactory::make("playbin", None).expect("Could not create uridecodebin");
+     src.set_property("uri", &uri)
+         .expect("Could not set property on uridecodebin");
+ 
++    src.set_property("current-video", &video_stream).expect("Cannot select video stream");
++    src.set_property_from_str("flags", "video");
+     let videoconvert =
+         gst::ElementFactory::make("videoconvert", None).expect("Could not create videoconvert");
+     let videorate =
+-        gst::ElementFactory::make("videorate", None).expect("Could not convert videorate");
++        gst::ElementFactory::make("videorate", "timeline-rate").expect("Could not convert videorate");
+     let videoscale =
+         gst::ElementFactory::make("videoscale", None).expect("Could not convert videoscale");
+     // Scale frames exactly to the desired size, don't add borders
+@@ -317,19 +324,46 @@ fn build_pipeline(
+ 
+     let pipeline = gst::Pipeline::new(None);
+ 
+-    pipeline
+-        .add_many(&[
+-            &src,
+-            &videoconvert,
+-            &videorate,
+-            &videoscale,
+-            &capsfilter,
+-            &sink,
+-        ])
+-        .expect("Could not add elements to input pipeline");
+-
+-    gst::Element::link_many(&[&videoconvert, &videorate, &videoscale, &capsfilter, &sink])
+-        .expect("Could not link input pipeline");
++    if preview {
++        capsfilter.set_property("caps", &gst::Caps::new_simple("video/x-raw", &[
++            ("format", &"BGRx"), ("width", &(output_width as i32)), ("height", &(output_height as i32)),
++        ])).expect("Cannot set preview caps");
++        videoscale.set_property_from_str("method", "bilinear");
++        pipeline.connect_deep_element_added(move |_, _, element| {
++            if element.find_property("max-threads").is_some() {
++                let _ = element.set_property("max-threads", &if key_only { 2i32 } else { 4i32 });
++            }
++            if element.find_property("num-output-surfaces").is_some() {
++                let _ = element.set_property("num-output-surfaces", &0u32);
++            }
++            if element.find_property("max-display-delay").is_some() {
++                let _ = element.set_property("max-display-delay", &0i32);
++            }
++            if key_only && element.find_property("skip-frame").is_some() {
++                element.set_property_from_str("skip-frame", "non-key");
++            }
++        });
++    }
++    let cuda = if gpu { gst::ElementFactory::make("cudaconvertscale", None) } else { None };
++    let download = if gpu { gst::ElementFactory::make("cudadownload", None) } else { None };
++    let cuda_caps = gst::ElementFactory::make("capsfilter", None).expect("Cannot create GPU caps");
++    if let Some(ref cuda) = cuda {
++        let _ = cuda.set_property("add-borders", &false);
++        let caps: gst::Caps = format!("video/x-raw(memory:CUDAMemory),format=BGRx,width={},height={}", output_width, output_height).parse().expect("Cannot make GPU caps");
++        cuda_caps.set_property("caps", &caps).expect("Cannot set GPU caps");
++    }
++    let video_sink = gst::Bin::new(None);
++    let elements = if let (Some(ref cuda), Some(ref download)) = (&cuda, &download) {
++        if key_only || !preview { vec![cuda, &cuda_caps, download, &capsfilter, &sink] }
++        else { vec![&videorate, cuda, &cuda_caps, download, &capsfilter, &sink] }
++    } else if preview {
++        if key_only { vec![&videoconvert, &videoscale, &capsfilter, &sink] }
++        else { vec![&videorate, &videoscale, &videoconvert, &capsfilter, &sink] }
++    } else {
++        vec![&videoconvert, &videorate, &videoscale, &capsfilter, &sink]
++    };
++    video_sink.add_many(&elements).expect("Cannot add video sink elements");
++    gst::Element::link_many(&elements).expect("Cannot link video sink elements");
+ 
+     let appsink = sink
+         .clone()
+@@ -340,44 +374,105 @@ fn build_pipeline(
+         .set_property("sync", &false)
+         .expect("Could not set property on input appsink");
+ 
+-    // When a new source pad opens on the decodebin, connect it to the videoconvert element.
+-    // this code is required because media files might contain no (or many) video strems, this is
+-    // not known before the pipeline is started.
+-    let convert_clone = videoconvert.clone();
+-    src.connect_pad_added(move |_, src_pad| {
+-        let convert = &convert_clone;
++    let pad = elements[0].get_static_pad("sink").expect("Missing video sink pad");
++    let ghost = gst::GhostPad::new("sink", &pad).expect("Cannot make video sink ghost pad");
++    ghost.set_active(true).expect("Cannot activate video sink pad");
++    video_sink.add_pad(&ghost).expect("Cannot add video sink pad");
++    src.set_property("video-sink", &video_sink).expect("Cannot install video sink");
++    pipeline.add(&src).expect("Cannot add selected video source");
+ 
+-        let sink_pad = convert
+-            .get_static_pad("sink")
+-            .expect("Failed to get static sink pad from convert");
++    (pipeline, capsfilter, appsink)
++}
+ 
+-        if sink_pad.is_linked() {
+-            // We are already linked. Ignoring.
+-            return;
++// Encode path bytes so spaces, Unicode, percent signs and # stay part of the filename.
++fn file_uri(filename: &str) -> String {
++    let mut uri = String::from("file://");
++    for byte in filename.bytes() {
++        if byte.is_ascii_alphanumeric() || b"/-_.~".contains(&byte) {
++            uri.push(byte as char);
++        } else {
++            uri.push_str(&format!("%{:02X}", byte));
+         }
++    }
++    uri
++}
+ 
+-        let new_pad_caps = src_pad
+-            .get_current_caps()
+-            .expect("Failed to get caps of new pad.");
+-        let new_pad_struct = new_pad_caps
+-            .get_structure(0)
+-            .expect("Failed to get first structure of caps.");
+-        let new_pad_type = new_pad_struct.get_name();
+-
+-        let is_audio = new_pad_type.starts_with("video/x-raw");
+-        if !is_audio {
+-            println!(
+-                "It has type {} which is not raw video. Ignoring.",
+-                new_pad_type
+-            );
+-            return;
+-        }
+ 
+-        let ret = src_pad.link(&sink_pad);
+-        if ret != gst::PadLinkReturn::Ok {
+-            println!("Type is {} but link failed.", new_pad_type);
+-        }
+-    });
++// Reuse one paused decoder for bounded keyframe seeks, with no video clock or audio.
++pub struct PreviewSource {
++    pipeline: gst::Pipeline,
++    appsink: gst_app::AppSink,
++    pub width: usize,
++    pub height: usize,
++}
++impl PreviewSource {
++    pub fn new(filename: &str, width: usize, height: usize, stream: i32, gpu: bool) -> Result<Self, String> {
++        gst::init().map_err(|e| e.to_string())?;
++        // Small H.264 keyframes are faster without GPU flush/transfer overhead.
++        if let Some(factory) = gst::ElementFactory::find("avdec_h264") { factory.set_rank(512); }
++        let gpu = gpu && gst::ElementFactory::find("nvh265dec").map_or(false, |factory| factory.get_rank() > 0)
++            && gst::ElementFactory::find("cudaconvertscale").is_some()
++            && gst::ElementFactory::find("cudadownload").is_some();
++        let (pipeline, _, appsink) = build_pipeline(filename, width, height, stream, true, gpu, true);
++        appsink.set_property("max-buffers", &1u32).map_err(|e| e.to_string())?;
++        appsink.set_property("drop", &true).map_err(|e| e.to_string())?;
++        let source = Self { pipeline, appsink, width, height };
++        source.pipeline.set_state(gst::State::Paused).into_result().map_err(|e| format!("Cannot pause decoder: {:?}", e))?;
++        let _ = source.pipeline.get_state(3 * gst::SECOND);
++        Ok(source)
++    }
++    pub fn seek(&self, time_ms: u64) -> Result<frame::Frame, String> {
++        // FLUSH removes the old preroll; KEY_UNIT avoids decoding the whole GOP.
++        self.pipeline.seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT | gst::SeekFlags::SNAP_NEAREST | gst::SeekFlags::TRICKMODE_KEY_UNITS,
++            time_ms.saturating_mul(1_000_000) * gst::NSECOND).map_err(|e| e.to_string())?;
++        let sample = self.appsink.try_pull_preroll(3 * gst::SECOND).ok_or("No preview frame")?;
++        let buffer = sample.get_buffer().ok_or("No preview pixels")?;
++        Ok(frame::Frame { pts: buffer.get_pts().nseconds().map(|t| t as f32 / 1_000_000_000.0),
++            buffer, width: self.width, height: self.height })
++    }
++}
++impl Drop for PreviewSource {
++    fn drop(&mut self) { let _ = self.pipeline.set_state(gst::State::Null); }
++}
+ 
+-    (pipeline, capsfilter, appsink)
++
++// Full temporal resolution: select one sample for every output column before
++// resizing/converting/downloading. Decoders preserve inter-frame dependencies.
++pub struct ColumnSource {
++    pipeline: gst::Pipeline,
++    appsink: gst_app::AppSink,
++    width: usize,
++    height: usize,
++}
++impl ColumnSource {
++    pub fn new(filename: &str, width: usize, height: usize, stream: i32, count: usize, duration_ms: u64, gpu: bool, codec: &str) -> Result<Self, String> {
++        gst::init().map_err(|e| e.to_string())?;
++        let factory = format!("nv{}dec", if codec == "hevc" { "h265" } else { codec });
++        let gpu = gpu && gst::ElementFactory::find(&factory).map_or(false, |f| f.get_rank() > 0)
++            && gst::ElementFactory::find("cudaconvertscale").is_some()
++            && gst::ElementFactory::find("cudadownload").is_some();
++        if let Some(factory) = gst::ElementFactory::find(if gpu { &factory } else { "avdec_h264" }) { factory.set_rank(512); }
++        let (pipeline, capsfilter, appsink) = build_pipeline(filename, width, height, stream, true, gpu, false);
++        let fps = gst::Fraction::new((count * 1000) as i32, duration_ms.min(i32::MAX as u64).max(1) as i32);
++        capsfilter.set_property("caps", &gst::Caps::new_simple("video/x-raw", &[
++            ("format", &"BGRx"), ("width", &(width as i32)), ("height", &(height as i32)), ("framerate", &fps),
++        ])).map_err(|e| e.to_string())?;
++        appsink.set_property("max-buffers", &2u32).map_err(|e| e.to_string())?;
++        let source = Self { pipeline, appsink, width, height };
++        source.pipeline.set_state(gst::State::Playing).into_result().map_err(|e| format!("Cannot start timeline decoder: {:?}", e))?;
++        Ok(source)
++    }
++    pub fn next(&self) -> Result<Option<frame::Frame>, String> {
++        let sample = match self.appsink.try_pull_sample(10 * gst::SECOND) {
++            Some(sample) => sample,
++            None if self.appsink.is_eos() => return Ok(None),
++            None => return Err("Timeline decoder timed out".into()),
++        };
++        let buffer = sample.get_buffer().ok_or("No timeline pixels")?;
++        Ok(Some(frame::Frame { pts: buffer.get_pts().nseconds().map(|t| t as f32 / 1_000_000_000.0),
++            buffer, width: self.width, height: self.height }))
++    }
++}
++impl Drop for ColumnSource {
++    fn drop(&mut self) { let _ = self.pipeline.set_state(gst::State::Null); }
+ }

@@ -39,16 +39,19 @@ pub struct AppConfig {
     pub file_manager: FileManagerConfig,
 }
 
-/// Music view activation preferences. Missing settings retain the 75% default.
+/// Standalone Files media view preferences.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileManagerConfig {
     pub music_threshold_percent: u8,
+    /// Timeline pixels per sample: 1, 2, 4, 8, or 16 (default: 1).
+    pub video_timeline_decimation: u8,
 }
 impl Default for FileManagerConfig {
     fn default() -> Self {
         Self {
             music_threshold_percent: 75,
+            video_timeline_decimation: 1,
         }
     }
 }
@@ -642,6 +645,19 @@ mod tests {
         let configured: AppConfig =
             toml::from_str("[file_manager]\nmusic_threshold_percent = 60\n").unwrap();
         assert_eq!(configured.file_manager.music_threshold_percent, 60);
+    }
+
+    #[test]
+    fn files_video_decimation_defaults_to_native_resolution() {
+        let defaults: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(defaults.file_manager.video_timeline_decimation, 1);
+        for factor in [1, 2, 4, 8, 16] {
+            let configured: AppConfig = toml::from_str(&format!(
+                "[file_manager]\nvideo_timeline_decimation = {factor}\n"
+            ))
+            .unwrap();
+            assert_eq!(configured.file_manager.video_timeline_decimation, factor);
+        }
     }
 
     #[test]

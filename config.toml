@@ -122,3 +122,6 @@ preview_triangle_limit = 10000
 # Default: 150000
 workbench_triangle_limit = 150000
 
+[file_manager]
+# Pixels per video timeline sample: 1 (native resolution), 2, 4, 8, or 16.
+video_timeline_decimation = 1

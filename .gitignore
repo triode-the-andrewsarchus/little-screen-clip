@@ -3,6 +3,8 @@
 .little-clipd.pid
 little-clipd.log
 Cargo.lock
+!/scripts/video_strip/rust_io/Cargo.lock
+/scripts/video_strip/rust_io/target/
 .DS_Store
 *.swp
 *.swo

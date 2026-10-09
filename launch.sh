@@ -73,6 +73,7 @@ function build_if_needed() {
     if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$WORKBENCH_BIN" ] || [ ! -x "$CLIPCTL_BIN" ]; then
         echo -e "${BLUE}Building workspace binaries (release mode)...${NC}"
         cargo build --release
+        sweep_target
         BIN_DIR="$SCRIPT_DIR/target/release"
         DAEMON_BIN="$BIN_DIR/little-clipd"
         CLIPCTL_BIN="$BIN_DIR/clipctl"
@@ -198,12 +199,15 @@ function run_workbench() {
 }
 
 function run_file_manager() {
+    "$SCRIPT_DIR/scripts/build_timelens.sh"
+    "$SCRIPT_DIR/scripts/build_video_strip.sh"
     local file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
     if [ ! -x "$file_manager_bin" ]; then
         file_manager_bin="$SCRIPT_DIR/target/debug/clip-file-manager"
     fi
     if [ ! -x "$file_manager_bin" ]; then
         cargo build --release --bin clip-file-manager
+        sweep_target
         file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
     fi
     "$file_manager_bin" "$@"
@@ -269,42 +273,54 @@ function manage_service() {
 
 function sweep_target() {
     local keep_n="${1:-2}"
+    local maxsize="${LITTLE_CLIP_TARGET_MAXSIZE:-20GB}"
+    if [[ ! "$keep_n" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Incremental retention must be a non-negative integer.${NC}" >&2
+        return 1
+    fi
+    local target_dir
+    target_dir=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
     echo -e "${BLUE}Sweeping target artifacts with cargo-sweep...${NC}"
     if command -v cargo-sweep >/dev/null 2>&1; then
+        # --installed alone keeps every artifact made by the current compiler.
+        # Size eviction must run first: toolchain inspection touches fingerprints
+        # and would otherwise make old artifacts look recently used.
+        cargo sweep --maxsize "$maxsize"
         cargo sweep --installed
     else
-        echo -e "${YELLOW}cargo-sweep not installed or not in PATH; skipping cargo sweep --installed.${NC}"
+        echo -e "${YELLOW}cargo-sweep unavailable; clearing debug artifacts with cargo clean --profile dev. Install cargo-sweep to retain a bounded cache.${NC}"
+        cargo clean --profile dev
     fi
 
     echo -e "${BLUE}Pruning stale incremental compilation sessions (retaining newest ${keep_n})...${NC}"
-    python3 -c "
-import os, re, shutil
-inc_roots = ['$SCRIPT_DIR/target/debug/incremental', '$SCRIPT_DIR/target/release/incremental']
-keep_n = int('$keep_n')
+    python3 - "$target_dir" "$keep_n" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+target_dir = Path(sys.argv[1])
+keep_n = int(sys.argv[2])
 total_freed = 0
 total_removed = 0
-for inc_root in inc_roots:
-    if not os.path.isdir(inc_root):
-        continue
-    groups = {}
-    for e in os.listdir(inc_root):
-        p = os.path.join(inc_root, e)
-        if os.path.isdir(p):
-            m = re.match(r'^(.*?)-[0-9a-z]+$', e)
-            base = m.group(1) if m else e
-            groups.setdefault(base, []).append((p, os.path.getmtime(p)))
-    for base, dirs in groups.items():
-        dirs.sort(key=lambda x: x[1], reverse=True)
-        for p, _ in dirs[keep_n:]:
-            sz = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(p) for f in fs)
-            shutil.rmtree(p, ignore_errors=True)
+for inc_root in target_dir.glob('**/incremental'):
+    for crate_dir in inc_root.iterdir():
+        if not crate_dir.is_dir() or crate_dir.is_symlink():
+            continue
+        # rustc stores sessions inside each crate/configuration directory.
+        sessions = [p for p in crate_dir.glob('s-*') if p.is_dir() and not p.is_symlink()]
+        sessions.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in sessions[keep_n:]:
+            sz = sum(f.stat().st_size for f in p.rglob('*') if f.is_file())
+            shutil.rmtree(p)
+            # Session lock names omit the final working-directory hash.
+            (crate_dir / (p.name.rsplit('-', 1)[0] + '.lock')).unlink(missing_ok=True)
             total_freed += sz
             total_removed += 1
 if total_freed > 0:
     print(f'Pruned {total_removed} stale incremental session(s), freeing {total_freed / (1024**3):.2f} GB.')
 else:
     print('Incremental cache is clean (no sessions beyond retention threshold).')
-" 2>/dev/null || true
+PY
     echo -e "${GREEN}Target sweep completed!${NC}"
 }
 
@@ -380,8 +396,12 @@ case "${1:-}" in
         shift || true
         echo -e "${BLUE}Building workspace (release mode)...${NC}"
         cargo build --release "$@"
+        sweep_target
+        if [ -x "$SCRIPT_DIR/target/release/clip-file-manager" ]; then
+            "$SCRIPT_DIR/scripts/build_timelens.sh"
+            "$SCRIPT_DIR/scripts/build_video_strip.sh"
+        fi
         echo -e "${GREEN}Build complete! (target/release)${NC}"
-        sweep_target 2
         ;;
     sweep)
         shift || true
@@ -411,6 +431,6 @@ case "${1:-}" in
         echo "  logs            - Tail daemon output logs"
         echo "  test            - Run direct USB display hardware test"
         echo "  build           - Recompile all Rust workspace crates in release mode and sweep stale artifacts"
-        echo "  sweep [N]       - Run cargo sweep --installed and prune incremental cache (keeps N past sessions, default: 2)"
+        echo "  sweep [N]       - Bound Cargo cache (LITTLE_CLIP_TARGET_MAXSIZE, default: 20GB) and keep N incremental sessions (default: 2)"
         ;;
 esac

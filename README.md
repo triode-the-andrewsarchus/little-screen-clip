@@ -103,6 +103,7 @@ them on a shared account if clipboard contents or recipe scripts are sensitive.
   - `wl-clipboard` (`wl-copy`, `wl-paste`) — Wayland clipboard protocol tools.
   - `pipewire` / `pipewire-pulse` — for rolling system audio buffer capture (`pw-record`).
 - **Image codecs**: `pkg-config` and `libheif` >= 1.17 development headers, with HEVC (e.g. libde265) and AV1 decoder plugins for HEIF/HEIC and AVIF. All standard `image` crate formats and Rayon acceleration are enabled.
+- **Files video previews**: `ffmpeg`/`ffprobe`/`ffplay`, plus GStreamer and GStreamer App development packages and codec plugins (including GStreamer libav for common formats). `./launch.sh build` and `./launch.sh files` build the pinned [Timelens](https://github.com/timelens/timelens) CLI into `target/tools/timelens`; its first build needs GitHub access. The GPL-2.0-or-later helper runs as a separate executable. FFmpeg development libraries (`libavformat`, `libavcodec`, `libavutil`, `libswscale`) also enable the independent indexed timeline helper in `target/tools/video-strip`; builds without them retain the Timelens fallback. Both helper directories include their source and license notices. Timeline columns follow physical display width; `[file_manager] video_timeline_decimation` accepts `1` (default), `2`, `4`, `8`, or `16`.
 - **Rust Toolchain**: Rust edition 2024 (`cargo`, `rustc`).
 - **Optional Tools for Pipeline Recipes & Picture Studio**:
   - `difftastic` (`difft`) — Structural semantic code diffing.
@@ -125,6 +126,16 @@ Compile the workspace in release mode:
 cd /home/vega/Documents/git/local/little-screen-clip
 ./launch.sh build
 ```
+
+Every `launch.sh` Cargo build evicts the oldest cached artifacts toward a 20 GB
+target-directory budget and sweeps artifacts from retired toolchains. Override it
+with `LITTLE_CLIP_TARGET_MAXSIZE=30GB ./launch.sh build`. Run `./launch.sh sweep`
+for cleanup without building; `./launch.sh sweep 0` also clears all incremental
+sessions (the default retains two per crate/configuration). If `cargo-sweep` is
+unavailable, cleanup uses `cargo clean --profile dev` to clear debug artifacts.
+Serialize cleanup with other Cargo commands. Evicted artifacts rebuild on demand;
+final binaries, helper sources/licenses, and other untracked files can keep the
+directory above the budget.
 
 This compiles:
 - `little-clipd`: Background ambient hardware daemon & clipboard observer.

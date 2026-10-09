@@ -23,6 +23,9 @@ pub(super) struct Entry {
 }
 
 impl Entry {
+    pub(super) fn is_video(&self) -> bool {
+        self.regular_file && little_clip_core::animation::is_video_path(&self.path)
+    }
     pub(super) fn is_photo(&self) -> bool {
         self.regular_file
             && (little_clip_core::item::is_image_path(&self.path)
@@ -272,4 +275,18 @@ impl Identity {
         (self.0, self.1, self.2, self.3, self.4, self.7)
             == (actual.0, actual.1, actual.2, actual.3, actual.4, actual.7)
     }
+}
+
+// Shared enumeration identity guard for metadata and video preview workers.
+pub(super) fn check_revision(path: &Path, revision: u64) -> Result<(), String> {
+    let mut version = std::collections::hash_map::DefaultHasher::new();
+    identity(&std::fs::metadata(path).map_err(|e| e.to_string())?).hash(&mut version);
+    Some(identity(
+        &std::fs::symlink_metadata(path).map_err(|e| e.to_string())?,
+    ))
+    .hash(&mut version);
+    if version.finish() != revision {
+        return Err("File changed since enumeration".into());
+    }
+    Ok(())
 }

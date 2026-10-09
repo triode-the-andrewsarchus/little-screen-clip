@@ -41,6 +41,10 @@ impl FileManagerApp {
         egui_extras::install_image_loaders(ctx);
         let mut browser = FileManager::default();
         browser.music_threshold = config.file_manager.music_threshold_percent.clamp(1, 100);
+        browser.video_timeline_decimation = match config.file_manager.video_timeline_decimation {
+            value @ (1 | 2 | 4 | 8 | 16) => value,
+            _ => 1,
+        };
         if let Some(path) = initial {
             browser.navigate(path, Navigation::New);
         }
@@ -146,6 +150,7 @@ impl FileManagerApp {
     fn main_content(&mut self, ctx: &egui::Context) {
         central_panel(ctx, |ui| {
             if self.viewers.active() {
+                self.browser.video_previews.clear();
                 if self.viewers.ui(ui, &self.palette) {
                     self.browser.refresh_after_transfer = true;
                     self.browser.restore_scroll = true;
@@ -161,8 +166,17 @@ impl FileManagerApp {
                     {
                         self.browser.music.stop();
                     }
-                    let collection = self.browser.photo_collection(&path);
-                    self.viewers.open_collection(path, collection);
+                    let start = self
+                        .browser
+                        .video_start
+                        .take()
+                        .filter(|(source, _)| source == &path);
+                    if let Some((_, seconds)) = start {
+                        self.viewers.open_video_at(path, seconds);
+                    } else {
+                        let collection = self.browser.photo_collection(&path);
+                        self.viewers.open_collection(path, collection);
+                    }
                 }
             }
         });

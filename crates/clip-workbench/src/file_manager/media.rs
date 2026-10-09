@@ -93,6 +93,9 @@ pub(super) struct VideoMetadata {
     pub(super) dimensions: (u32, u32),
     pub(super) duration_ms: u64,
     pub(super) stream: usize,
+    pub(super) codec: String,
+    pub(super) size_bytes: u64,
+    pub(super) frame_interval_ms: u64,
 }
 
 pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, String> {
@@ -104,7 +107,7 @@ pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, Str
             "-select_streams",
             "v",
             "-show_entries",
-            "stream=width,height:stream_disposition=attached_pic:format=duration",
+            "stream=width,height,avg_frame_rate,codec_name:stream_disposition=attached_pic:format=duration,size",
             "-of",
             "json",
         ])
@@ -127,6 +130,23 @@ pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, Str
         dimensions: (width, height),
         duration_ms,
         stream,
+        size_bytes: value["format"]["size"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
+        codec: value["streams"][stream]["codec_name"]
+            .as_str()
+            .unwrap_or_default()
+            .into(),
+        frame_interval_ms: value["streams"][stream]["avg_frame_rate"]
+            .as_str()
+            .and_then(|text| {
+                let (numerator, denominator) = text.split_once('/')?;
+                let fps = numerator.parse::<f64>().ok()? / denominator.parse::<f64>().ok()?;
+                (fps.is_finite() && fps > 0.0)
+                    .then(|| (1000.0 / fps).ceil().clamp(1.0, 60_000.0) as u64)
+            })
+            .unwrap_or(40),
     })
 }
 

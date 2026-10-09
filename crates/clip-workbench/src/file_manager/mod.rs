@@ -14,6 +14,7 @@ mod selection;
 mod shelf;
 mod text_editor;
 mod transfers;
+mod video_timeline;
 mod viewers;
 pub use app::run;
 #[cfg(test)]
@@ -37,6 +38,7 @@ enum BrowserView {
     List,
     Photos,
     Music,
+    Videos,
 }
 
 #[derive(Clone, Debug)]
@@ -136,11 +138,16 @@ pub(crate) struct FileManager {
     was_modal: bool,
     shelf: shelf::Shelf,
     open_file: Option<PathBuf>,
+    video_start: Option<(PathBuf, f64)>,
     previews: previews::EntryPreviews,
     gallery_previews: previews::EntryPreviews,
     view: BrowserView,
     music_threshold: u8,
+    video_timeline_decimation: u8,
     music_previews: previews::EntryPreviews,
+    video_previews: video_timeline::Previews,
+    video_count: usize,
+    video_offsets: Vec<f32>,
     thumbnail_edge: f32,
     gallery_columns: usize,
     gallery_layout: gallery::Gallery,
@@ -189,11 +196,16 @@ impl FileManager {
             was_modal: false,
             shelf: shelf::Shelf::default(),
             open_file: None,
+            video_start: None,
             previews: previews::EntryPreviews::default(),
             gallery_previews: previews::EntryPreviews::default(),
             view: BrowserView::List,
             music_threshold: 75,
+            video_timeline_decimation: 1,
             music_previews: previews::EntryPreviews::default(),
+            video_previews: Default::default(),
+            video_count: 0,
+            video_offsets: vec![0.0],
             thumbnail_edge: 160.0,
             gallery_columns: 1,
             gallery_layout: Default::default(),
@@ -221,6 +233,8 @@ impl FileManager {
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
         if path != self.path() {
             self.gallery_layout.retire();
+            self.video_previews.clear();
+            self.video_start = None;
             self.music_selection = None;
             self.music.stop();
         }
@@ -382,6 +396,9 @@ impl FileManager {
             .unwrap_or_default();
         self.reconcile_selection();
         self.audio_entries.clear();
+        self.video_count = 0;
+        self.video_offsets.clear();
+        self.video_offsets.push(0.0);
         self.music_offsets.clear();
         self.music_offsets.push(0.0);
         if let Some(directory) = &self.directory {
@@ -389,6 +406,12 @@ impl FileManager {
                 let entry = &directory.entries[*index];
                 let audio =
                     entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
+                let video = entry.is_video();
+                self.video_count += usize::from(video);
+                self.video_offsets.push(
+                    self.video_offsets.last().copied().unwrap_or(0.0)
+                        + if video { 108.0 } else { 28.0 },
+                );
                 if audio {
                     self.audio_entries.push(entry.path.clone());
                 }

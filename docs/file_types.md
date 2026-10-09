@@ -297,6 +297,8 @@
     - [ ] `.nki` — Kontakt instrument
     - [ ] `.sf2` — SoundFont 2
     - [ ] `.sfz`
+  - [ ] Scales
+    - [ ] .scala
 - [ ] Radio, RF, and embedded-device captures
   - [ ] E-ink note devices
     - [ ] `.note`

@@ -30,14 +30,27 @@ pub(super) struct Video {
     path: PathBuf,
     prepared: Prepared,
     child: Option<Child>,
+    start_seconds: f64,
     status: String,
 }
 impl Video {
-    pub fn new(path: PathBuf, prepared: Prepared) -> Self {
+    pub fn new(path: PathBuf, prepared: Prepared, start_seconds: f64) -> Self {
+        let start_seconds = if start_seconds.is_finite() {
+            start_seconds.clamp(
+                0.0,
+                prepared
+                    .duration_ms
+                    .saturating_sub(prepared.frame_interval_ms) as f64
+                    / 1000.0,
+            )
+        } else {
+            0.0
+        };
         let mut video = Self {
             path,
             prepared,
             child: None,
+            start_seconds,
             status: String::new(),
         };
         video.start();
@@ -82,6 +95,8 @@ impl Video {
             ])
             .arg("-vst")
             .arg(format!("v:{}", self.prepared.stream))
+            .arg("-ss")
+            .arg(format!("{:.3}", self.start_seconds))
             .arg("-i")
             .arg(&self.path)
             .stdin(Stdio::null())
@@ -170,6 +185,24 @@ impl Drop for Video {
 mod tests {
     use super::*;
 
+    fn fixture(path: PathBuf, child: Option<Child>) -> Video {
+        Video {
+            prepared: Prepared {
+                source: FileSource::capture(&path).unwrap(),
+                dimensions: (320, 180),
+                duration_ms: 1000,
+                stream: 0,
+                codec: "h264".into(),
+                size_bytes: 0,
+                frame_interval_ms: 40,
+            },
+            path,
+            child,
+            start_seconds: 0.0,
+            status: String::new(),
+        }
+    }
+
     #[test]
     fn returning_to_folder_terminates_and_reaps_owned_video() {
         let directory = tempfile::tempdir().unwrap();
@@ -177,17 +210,7 @@ mod tests {
         std::fs::write(&path, "fixture").unwrap();
         let child = Command::new("sleep").arg("30").spawn().unwrap();
         let pid = child.id();
-        let video = Video {
-            prepared: Prepared {
-                source: FileSource::capture(&path).unwrap(),
-                dimensions: (320, 180),
-                duration_ms: 1000,
-                stream: 0,
-            },
-            path,
-            child: Some(child),
-            status: String::new(),
-        };
+        let video = fixture(path, Some(child));
         drop(video);
         assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
     }
@@ -197,17 +220,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("clip.mp4");
         std::fs::write(&path, "original").unwrap();
-        let video = Video {
-            prepared: Prepared {
-                source: FileSource::capture(&path).unwrap(),
-                dimensions: (320, 180),
-                duration_ms: 1000,
-                stream: 0,
-            },
-            path: path.clone(),
-            child: None,
-            status: String::new(),
-        };
+        let video = fixture(path.clone(), None);
         std::fs::write(path, "replacement file").unwrap();
         assert!(video.spawn().unwrap_err().contains("source changed"));
     }

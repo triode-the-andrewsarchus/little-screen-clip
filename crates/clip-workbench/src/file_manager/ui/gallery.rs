@@ -3,24 +3,34 @@ use super::*;
 
 impl FileManager {
     pub(in crate::file_manager) fn set_view(&mut self, view: super::super::BrowserView) {
-        if view != self.view {
-            self.gallery_layout.retire();
+        if view == self.view {
+            return;
         }
-        if view != self.view && view == super::super::BrowserView::List {
+        self.retire_media_previews();
+        if view != self.view
+            && matches!(
+                view,
+                super::super::BrowserView::List | super::super::BrowserView::Videos
+            )
+        {
             self.music.stop();
         }
         if view == super::super::BrowserView::Music && self.view != view {
             self.shelf.open = false;
         }
         self.view = view;
-        self.music_previews.retain(&Default::default());
-        self.previews.retain(&Default::default());
-        self.gallery_previews.retain(&Default::default());
         if let Some(location) = self.location_mut() {
             location.manual_view = Some(view);
             location.scroll = 0.0;
         }
         self.restore_scroll = true;
+    }
+    pub(in crate::file_manager) fn retire_media_previews(&mut self) {
+        self.gallery_layout.retire();
+        self.video_previews.clear();
+        self.previews.retain(&Default::default());
+        self.gallery_previews.retain(&Default::default());
+        self.music_previews.retain(&Default::default());
     }
     pub(super) fn media_view_toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
         use crate::ui_tabs::{Tab, TabBar};
@@ -32,6 +42,7 @@ impl FileManager {
                     Tab::new(super::super::BrowserView::List, "List"),
                     Tab::new(super::super::BrowserView::Photos, "Photos"),
                     Tab::new(super::super::BrowserView::Music, "Music"),
+                    Tab::new(super::super::BrowserView::Videos, "Videos"),
                 ],
                 palette,
             )
@@ -101,10 +112,7 @@ impl FileManager {
         if self.visible.is_empty() {
             ui.label("No visible items.");
         }
-        let selected = self
-            .index
-            .and_then(|index| self.history.get(index))
-            .map(|location| &location.selection);
+        let selected = current_selection(&self.history, self.index);
         let can_edit = self.can_edit();
         let count = self.selection_count();
         let mut actions = ListActions {

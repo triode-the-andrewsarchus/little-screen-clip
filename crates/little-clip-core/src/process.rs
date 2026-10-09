@@ -9,8 +9,9 @@ use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use wait_timeout::ChildExt;
 
@@ -105,6 +106,49 @@ impl CommandRequest {
     /// [`CommandError::Wait`] if waiting for the child process fails,
     /// or [`CommandError::TimedOut`] if the command exceeds the configured timeout duration.
     pub fn run(&self) -> Result<CommandOutput, CommandError> {
+        self.run_inner(None, None)
+    }
+
+    /// Runs a read-only command until completion, cancellation, or timeout.
+    ///
+    /// Checks cancellation every 50 ms, kills and reaps the child, and drains
+    /// output readers before returning. Accepted writes should use [`Self::run`]
+    /// so cancellation cannot hide effects that already happened.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError::Cancelled`] when the token is set, or the same
+    /// launch, I/O, and timeout errors as [`Self::run`].
+    pub fn run_cancellable(&self, cancelled: &AtomicBool) -> Result<CommandOutput, CommandError> {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(CommandError::Cancelled);
+        }
+        self.run_inner(Some(cancelled), None)
+    }
+
+    /// Runs a cancellable read-only command, polling progress on the calling worker.
+    ///
+    /// The callback runs at most once per 50 ms wait interval. Keep it bounded;
+    /// it can inspect immutable helper snapshots without another polling thread.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::run_cancellable`].
+    pub fn run_cancellable_with_progress(
+        &self,
+        cancelled: &AtomicBool,
+        mut progress: impl FnMut(),
+    ) -> Result<CommandOutput, CommandError> {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(CommandError::Cancelled);
+        }
+        self.run_inner(Some(cancelled), Some(&mut progress))
+    }
+
+    fn run_inner(
+        &self,
+        cancelled: Option<&AtomicBool>,
+        progress: Option<&mut dyn FnMut()>,
+    ) -> Result<CommandOutput, CommandError> {
         let mut command = Command::new(&self.program);
         command
             .args(&self.args)
@@ -128,54 +172,39 @@ impl CommandRequest {
             source,
         })?;
 
-        let stdout_reader = if self.capture_stdout {
-            let stdout = child.stdout.take().expect("stdout was piped");
-            let limit = self.max_output_bytes;
-            Some(thread::spawn(move || read_capped(stdout, limit)))
-        } else {
-            None
-        };
-
-        let stderr_reader = if self.capture_stderr {
-            let stderr = child.stderr.take().expect("stderr was piped");
-            let limit = self.max_output_bytes;
-            Some(thread::spawn(move || read_capped(stderr, limit)))
-        } else {
-            None
-        };
+        let limit = self.max_output_bytes;
+        let stdout_reader = child
+            .stdout
+            .take()
+            .map(|stdout| thread::spawn(move || read_capped(stdout, limit)));
+        let stderr_reader = child
+            .stderr
+            .take()
+            .map(|stderr| thread::spawn(move || read_capped(stderr, limit)));
 
         let stdin_writer = self.stdin.clone().map(|bytes| {
             let mut stdin = child.stdin.take().expect("stdin was piped");
             thread::spawn(move || stdin.write_all(&bytes))
         });
 
-        let status = match child
-            .wait_timeout(self.timeout)
-            .map_err(CommandError::Wait)?
-        {
-            Some(status) => status,
-            None => {
+        let status = match self.wait(&mut child, cancelled, progress) {
+            Ok(status) => status,
+            Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 drain_threads(stdout_reader, stderr_reader, stdin_writer);
-                return Err(CommandError::TimedOut {
-                    program: self.program.clone(),
-                    timeout: self.timeout,
-                });
+                return Err(error);
             }
         };
 
-        let (stdout, stdout_truncated) = if let Some(reader) = stdout_reader {
-            reader.join().map_err(|_| CommandError::Reader)?
-        } else {
-            (Vec::new(), false)
-        };
-
-        let (stderr, stderr_truncated) = if let Some(reader) = stderr_reader {
-            reader.join().map_err(|_| CommandError::Reader)?
-        } else {
-            (Vec::new(), false)
-        };
+        let (stdout, stdout_truncated) = stdout_reader
+            .map(|reader| reader.join().map_err(|_| CommandError::Reader))
+            .transpose()?
+            .unwrap_or_default();
+        let (stderr, stderr_truncated) = stderr_reader
+            .map(|reader| reader.join().map_err(|_| CommandError::Reader))
+            .transpose()?
+            .unwrap_or_default();
 
         if let Some(writer) = stdin_writer {
             writer
@@ -191,6 +220,38 @@ impl CommandRequest {
             stdout_truncated,
             stderr_truncated,
         })
+    }
+
+    fn wait(
+        &self,
+        child: &mut std::process::Child,
+        cancelled: Option<&AtomicBool>,
+        mut progress: Option<&mut dyn FnMut()>,
+    ) -> Result<ExitStatus, CommandError> {
+        let start = Instant::now();
+        loop {
+            if cancelled.is_some_and(|token| token.load(Ordering::Relaxed)) {
+                return Err(CommandError::Cancelled);
+            }
+            if let Some(callback) = progress.as_deref_mut() {
+                callback();
+            }
+            let remaining = self.timeout.saturating_sub(start.elapsed());
+            if remaining.is_zero() {
+                return Err(CommandError::TimedOut {
+                    program: self.program.clone(),
+                    timeout: self.timeout,
+                });
+            }
+            let interval = if cancelled.is_some() {
+                remaining.min(Duration::from_millis(50))
+            } else {
+                remaining
+            };
+            if let Some(status) = child.wait_timeout(interval).map_err(CommandError::Wait)? {
+                return Ok(status);
+            }
+        }
     }
 }
 
@@ -228,6 +289,9 @@ impl CommandOutput {
 /// Failure to launch, wait for, or collect one local command.
 #[derive(Debug, Error)]
 pub enum CommandError {
+    /// The caller cancelled a read-only command; its child has been reaped.
+    #[error("command cancelled")]
+    Cancelled,
     /// The executable could not be launched.
     #[error("failed to spawn {program:?}: {source}")]
     Spawn {
@@ -332,5 +396,20 @@ mod tests {
             .run()
             .unwrap_err();
         assert!(matches!(error, CommandError::TimedOut { .. }));
+    }
+    #[test]
+    fn progress_polling_preserves_cancellation_and_reaps_the_child() {
+        let cancelled = AtomicBool::new(false);
+        let mut polls = 0;
+        let result = CommandRequest::new("sh")
+            .args(["-c", "exec sleep 1"])
+            .run_cancellable_with_progress(&cancelled, || {
+                polls += 1;
+                if polls == 2 {
+                    cancelled.store(true, Ordering::Relaxed);
+                }
+            });
+        assert!(matches!(result, Err(CommandError::Cancelled)));
+        assert_eq!(polls, 2);
     }
 }

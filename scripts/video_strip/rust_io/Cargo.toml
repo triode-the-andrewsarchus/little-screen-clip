@@ -1,0 +1,19 @@
+[package]
+name = "video-strip-io"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+io-uring = "0.7"
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+panic = "abort"

@@ -59,6 +59,7 @@ pub(super) struct Viewers {
     confirm_close: bool,
     config: AppConfig,
     gallery: Option<gallery::Collection>,
+    video_start_seconds: f64,
 }
 impl Viewers {
     pub fn new(config: AppConfig) -> Self {
@@ -83,6 +84,7 @@ impl Viewers {
         if self.active() {
             return;
         }
+        self.video_start_seconds = 0.0;
         let source = path.clone();
         let config = self.config.clone();
         let (ticket, receiver) = BackgroundJobs::global()
@@ -92,6 +94,13 @@ impl Viewers {
             path,
             receiver,
         });
+    }
+    pub fn open_video_at(&mut self, path: PathBuf, seconds: f64) {
+        if self.active() {
+            return;
+        }
+        self.open(path);
+        self.video_start_seconds = seconds;
     }
     fn poll(&mut self, ctx: &Context) {
         let Some(loading) = &self.loading else { return };
@@ -108,7 +117,14 @@ impl Viewers {
                     self.path = None;
                 }
             }
-            Ok(loaded) => self.session = Some(session(loaded, path, &self.config)),
+            Ok(loaded) => {
+                self.session = Some(session(
+                    loaded,
+                    path,
+                    &self.config,
+                    self.video_start_seconds,
+                ))
+            }
             Err(error) => self.error = Some(error),
         }
     }
@@ -228,6 +244,7 @@ impl Viewers {
         self.path = None;
         self.error = None;
         self.confirm_close = false;
+        self.video_start_seconds = 0.0;
     }
     fn open_external(&mut self) {
         if let Some(ViewerSession::Video(state)) = &mut self.session {
@@ -317,7 +334,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         _ => FileSource::capture(path).map(Loaded::Path),
     }
 }
-fn session(loaded: Loaded, path: PathBuf, config: &AppConfig) -> ViewerSession {
+fn session(loaded: Loaded, path: PathBuf, config: &AppConfig, video_start: f64) -> ViewerSession {
     match loaded {
         Loaded::Image(data, source) => ViewerSession::Image(
             ImagePreviewState::from_decoded(
@@ -328,7 +345,9 @@ fn session(loaded: Loaded, path: PathBuf, config: &AppConfig) -> ViewerSession {
             )
             .with_file_source(source),
         ),
-        Loaded::Video(prepared) => ViewerSession::Video(video::Video::new(path, prepared)),
+        Loaded::Video(prepared) => {
+            ViewerSession::Video(video::Video::new(path, prepared, video_start))
+        }
         Loaded::Text(state) => ViewerSession::Text(state),
         Loaded::Sheet(data) => ViewerSession::Sheet(SpreadsheetViewerState::new(data, Some(path))),
         Loaded::Midi(data) => ViewerSession::Midi(MidiViewerState::from_parsed_file(path, data)),
