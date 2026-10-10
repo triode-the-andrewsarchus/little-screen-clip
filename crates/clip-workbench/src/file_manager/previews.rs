@@ -10,8 +10,8 @@ pub(super) struct EntryPreviews {
     cache: Previews,
     identities: BTreeMap<std::path::PathBuf, (u64, uuid::Uuid)>,
     gallery_sizes: BTreeMap<std::path::PathBuf, u32>,
-    text_rasters: Previews,
-    text_sizes: BTreeMap<uuid::Uuid, ((u32, u32, [[u8; 3]; 9]), uuid::Uuid)>,
+    rasters: Previews,
+    raster_sizes: BTreeMap<uuid::Uuid, ((u32, u32, Vec<[u8; 3]>), uuid::Uuid)>,
     pdf_pages: super::pdf_strip::Pages,
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
@@ -22,12 +22,9 @@ impl EntryPreviews {
         entry: &Entry,
     ) -> Option<&super::shelf::preview::Ready> {
         self.cache.poll(ctx);
-        let id = self.identity(entry);
-        if self.cache.needs(id) {
-            self.cache.request(id, Source::Music(entry.path.clone()));
-        }
-        self.cache.get(id)
+        self.listing(entry)
     }
+
     fn identity(&mut self, entry: &Entry) -> uuid::Uuid {
         let (version, id) = self
             .identities
@@ -35,12 +32,15 @@ impl EntryPreviews {
             .or_insert_with(|| (entry.revision, uuid::Uuid::new_v4()));
         if *version != entry.revision {
             self.cache.invalidate(*id);
+            if let Some((_, raster)) = self.raster_sizes.remove(id) {
+                self.rasters.invalidate(raster);
+            }
             *version = entry.revision;
         }
         *id
     }
     pub fn poll(&mut self, ctx: &egui::Context) -> bool {
-        self.text_rasters.poll(ctx);
+        self.rasters.poll(ctx);
         self.pdf_pages.poll(ctx);
         let changed = self.cache.poll(ctx);
         if changed {
@@ -63,9 +63,9 @@ impl EntryPreviews {
         self.cache
             .retain(&self.identities.values().map(|(_, id)| *id).collect());
         let ids: BTreeSet<_> = self.identities.values().map(|(_, id)| *id).collect();
-        self.text_sizes.retain(|id, _| ids.contains(id));
-        self.text_rasters
-            .retain(&self.text_sizes.values().map(|(_, id)| *id).collect());
+        self.raster_sizes.retain(|id, _| ids.contains(id));
+        self.rasters
+            .retain(&self.raster_sizes.values().map(|(_, id)| *id).collect());
     }
     pub fn is_text(&self, entry: &Entry) -> bool {
         if !text_candidate(entry) {
@@ -86,15 +86,19 @@ impl EntryPreviews {
         self.pdf_pages.clear();
         self.identities.clear();
         self.gallery_sizes.clear();
-        self.text_rasters.clear();
-        self.text_sizes.clear();
+        self.rasters.clear();
+        self.raster_sizes.clear();
     }
     pub fn listing(&mut self, entry: &Entry) -> Option<&super::shelf::preview::Ready> {
         let id = self.identity(entry);
         if self.cache.needs(id) {
             self.cache.request(
                 id,
-                if text_candidate(entry) {
+                if super::midi_strip::is_midi(&entry.path) {
+                    Source::Midi(entry.path.clone())
+                } else if little_clip_core::audio::is_audio_path(&entry.path) {
+                    Source::Music(entry.path.clone())
+                } else if text_candidate(entry) {
                     Source::Text(entry.path.clone())
                 } else {
                     Source::Payload(Payload::Files {
@@ -105,6 +109,75 @@ impl EntryPreviews {
             );
         }
         self.cache.get(id)
+    }
+    pub fn show_midi(
+        &mut self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        entry: &Entry,
+        palette: &little_clip_core::palette::AppPalette,
+    ) -> Option<std::sync::Arc<super::midi_strip::Document>> {
+        let id = self.identity(entry);
+        let document = self.listing(entry)?.data.midi_document.clone()?;
+        let (width, height) = raster_dimensions(ui, rect);
+        let colors: Vec<_> = document
+            .groups
+            .iter()
+            .map(|(track, channel)| {
+                let color = crate::midi_view::get_track_color(
+                    *track,
+                    *channel,
+                    document.data.track_count,
+                    palette,
+                );
+                [color.r(), color.g(), color.b()]
+            })
+            .collect();
+        let source = Source::MidiRaster {
+            document: document.clone(),
+            width,
+            height,
+            colors: colors.clone(),
+        };
+        self.paint_raster(ui, rect, id, (width, height, colors), source);
+        Some(document)
+    }
+    fn paint_raster(
+        &mut self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        id: uuid::Uuid,
+        key: (u32, u32, Vec<[u8; 3]>),
+        source: Source,
+    ) {
+        if self
+            .raster_sizes
+            .get(&id)
+            .is_some_and(|(previous, _)| *previous != key)
+        {
+            if let Some((_, raster)) = self.raster_sizes.remove(&id) {
+                self.rasters.invalidate(raster);
+            }
+        }
+        let (_, raster) = self
+            .raster_sizes
+            .entry(id)
+            .or_insert_with(|| (key, uuid::Uuid::new_v4()));
+        if self.rasters.needs(*raster) {
+            self.rasters.request(*raster, source);
+        }
+        if let Some(texture) = self
+            .rasters
+            .get(*raster)
+            .and_then(|ready| ready.texture.as_ref())
+        {
+            ui.painter().image(
+                texture.id(),
+                rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
     }
     pub fn show_pdf(
         &mut self,
@@ -228,50 +301,15 @@ impl EntryPreviews {
             );
             return;
         };
-        let width = (rect.width() * ui.ctx().pixels_per_point())
-            .ceil()
-            .clamp(1.0, 2048.0) as u32;
-        let height = (rect.height() * ui.ctx().pixels_per_point())
-            .ceil()
-            .clamp(1.0, 128.0) as u32;
+        let (width, height) = raster_dimensions(ui, rect);
         let colors = super::text_strip::palette_colors(palette);
-        let key = (width, height, colors);
-        if self
-            .text_sizes
-            .get(&id)
-            .is_some_and(|(previous, _)| *previous != key)
-        {
-            if let Some((_, obsolete)) = self.text_sizes.remove(&id) {
-                self.text_rasters.invalidate(obsolete);
-            }
-        }
-        let (_, raster) = self
-            .text_sizes
-            .entry(id)
-            .or_insert_with(|| (key, uuid::Uuid::new_v4()));
-        if self.text_rasters.needs(*raster) {
-            self.text_rasters.request(
-                *raster,
-                Source::TextRaster {
-                    document: document.clone(),
-                    width,
-                    height,
-                    colors,
-                },
-            );
-        }
-        if let Some(texture) = self
-            .text_rasters
-            .get(*raster)
-            .and_then(|ready| ready.texture.as_ref())
-        {
-            ui.painter().image(
-                texture.id(),
-                rect,
-                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-        }
+        let source = Source::TextRaster {
+            document: document.clone(),
+            width,
+            height,
+            colors,
+        };
+        self.paint_raster(ui, rect, id, (width, height, colors.to_vec()), source);
         let hovered = ui.is_enabled()
             && ui
                 .ctx()
@@ -432,8 +470,20 @@ impl EntryPreviews {
     }
 }
 
+fn raster_dimensions(ui: &egui::Ui, rect: egui::Rect) -> (u32, u32) {
+    (
+        (rect.width() * ui.ctx().pixels_per_point())
+            .ceil()
+            .clamp(1.0, 2048.0) as u32,
+        (rect.height() * ui.ctx().pixels_per_point())
+            .ceil()
+            .clamp(1.0, 128.0) as u32,
+    )
+}
+
 fn text_candidate(entry: &Entry) -> bool {
     entry.regular_file
+        && !super::midi_strip::is_midi(&entry.path)
         && !entry.is_photo()
         && !entry.is_video()
         && !little_clip_core::audio::is_audio_path(&entry.path)
@@ -504,14 +554,14 @@ mod tests {
                     );
                 });
             });
-            let raster = previews.text_sizes[&id].1;
+            let raster = previews.raster_sizes[&id].1;
             wait_for_preview(|| {
                 previews.poll(&ctx);
-                previews.text_rasters.get(raster).is_some()
+                previews.rasters.get(raster).is_some()
             });
             assert_eq!(
                 previews
-                    .text_rasters
+                    .rasters
                     .get(raster)
                     .unwrap()
                     .texture
@@ -536,7 +586,7 @@ mod tests {
         // but keep this folder's row height stable when scrolling back.
         previews.retain(&[dir.path().join("another.txt")].into_iter().collect());
         assert!(previews.cache.get(id).is_none());
-        assert!(previews.text_sizes.is_empty());
+        assert!(previews.raster_sizes.is_empty());
         assert!(previews.is_text(&entry));
         previews.retire();
         assert!(previews.is_text(&entry));

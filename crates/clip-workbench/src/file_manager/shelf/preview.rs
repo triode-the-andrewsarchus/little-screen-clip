@@ -27,6 +27,13 @@ pub(in crate::file_manager) enum Source {
     },
     Music(PathBuf),
     Text(PathBuf),
+    Midi(PathBuf),
+    MidiRaster {
+        document: Arc<super::super::midi_strip::Document>,
+        width: u32,
+        height: u32,
+        colors: Vec<[u8; 3]>,
+    },
     PdfPage {
         path: PathBuf,
         page: usize,
@@ -89,7 +96,13 @@ impl Previews {
     pub fn request(&mut self, id: uuid::Uuid, source: Source) {
         let music = matches!(&source, Source::Music(_));
         let gallery = matches!(&source, Source::Gallery { .. } | Source::PdfPage { .. });
-        let text = matches!(&source, Source::Text(_) | Source::TextRaster { .. });
+        let text = matches!(
+            &source,
+            Source::Text(_)
+                | Source::TextRaster { .. }
+                | Source::Midi(_)
+                | Source::MidiRaster { .. }
+        );
         let executor = if gallery {
             gallery_preview_jobs()
         } else if music {
@@ -126,6 +139,31 @@ impl Previews {
                 Source::Music(path) => super::super::music::preview::load(&path, &token),
                 Source::PdfPage { path, page, edge } => {
                     super::super::pdf_strip::load_page(&path, page, edge, &token)
+                }
+                Source::Midi(path) => {
+                    let mut data = Data::new(display_path(&path), "MIDI".into(), Icon::Midi);
+                    match super::super::midi_strip::load(&path, &token) {
+                        Ok(document) => {
+                            data.detail = document.details();
+                            data.midi_document = Some(document);
+                        }
+                        Err(error) => {
+                            data.detail = error;
+                        }
+                    }
+                    data
+                }
+                Source::MidiRaster {
+                    document,
+                    width,
+                    height,
+                    colors,
+                } => {
+                    let mut data = Data::new(String::new(), document.details(), Icon::Midi);
+                    data.image =
+                        super::super::midi_strip::render(&document, width, height, &colors, &token);
+                    data.midi_document = Some(document);
+                    data
                 }
                 Source::Text(path) => {
                     let mut data = Data::new(display_path(&path), "Text".into(), Icon::Text);
@@ -204,7 +242,7 @@ impl Previews {
                     [image.width as usize, image.height as usize],
                     &image.premultiplied_rgba,
                 ),
-                if data.document.is_some() {
+                if data.document.is_some() || data.midi_document.is_some() {
                     egui::TextureOptions::NEAREST
                 } else {
                     egui::TextureOptions::LINEAR

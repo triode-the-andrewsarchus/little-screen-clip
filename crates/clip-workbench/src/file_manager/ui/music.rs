@@ -37,7 +37,7 @@ impl FileManager {
             .unwrap_or(automatic);
         if self.view != view {
             if matches!(view, BrowserView::List | BrowserView::Videos) {
-                self.music.stop();
+                self.stop_previews();
             }
             self.retire_media_previews();
             if view == BrowserView::Music {
@@ -175,6 +175,7 @@ impl FileManager {
         }
         self.finish_listing(ui, actions, output.state.offset.y, &background);
         if let Some(path) = play {
+            self.midi.stop();
             if self.music.current() != Some(&path) {
                 self.music.play(&path);
             }

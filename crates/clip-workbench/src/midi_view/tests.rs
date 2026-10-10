@@ -281,7 +281,7 @@ fn midi_space_runs_the_render_handler_and_sets_selected_region_bounds() {
     // This empty cache is too short for the selected-region offset, so
     // play_selection updates transport bounds and play returns before
     // attempting to decode audio or open an output device.
-    state.wav_cache = Some(vec![0; 44]);
+    state.wav_cache = Some(vec![0; 44].into());
     state.selected_region = Some((1.25, 2.75));
     let palette = AppPalette::for_appearance(WorkbenchAppearance::Dark);
     let mut close_requested = false;

@@ -29,6 +29,12 @@ impl Entry {
             && !self.typescript
             && little_clip_core::animation::is_video_path(&self.path)
     }
+    pub(super) fn is_playable_media(&self) -> bool {
+        self.regular_file
+            && (self.is_video()
+                || super::midi_strip::is_midi(&self.path)
+                || little_clip_core::audio::is_audio_path(&self.path))
+    }
     pub(super) fn is_photo(&self) -> bool {
         self.regular_file
             && (little_clip_core::item::is_image_path(&self.path)

@@ -176,7 +176,7 @@ impl FileManagerApp {
                             e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")
                         })
                     {
-                        self.browser.music.stop();
+                        self.browser.stop_previews();
                     }
                     let start = self
                         .browser
@@ -197,6 +197,40 @@ impl FileManagerApp {
             }
         });
     }
+    fn preview_keys(&mut self, ctx: &egui::Context) {
+        // Handle preview keys before focused controls consume them.
+        if ctx.input(|input| input.key_pressed(Key::Escape)) {
+            self.browser.stop_previews();
+        } else if ctx.input(|input| input.key_pressed(Key::Space)) {
+            let focused_text = ctx
+                .memory(|memory| memory.focused())
+                .is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
+            if !self.viewers.active() && !focused_text && self.play_space_selection(ctx) {
+                ctx.input_mut(|input| {
+                    input.consume_key(egui::Modifiers::NONE, Key::Space);
+                });
+            } else {
+                self.browser.stop_previews();
+            }
+        }
+        if self.viewers.uses_audio() {
+            self.browser.stop_previews();
+        }
+    }
+    fn play_space_selection(&mut self, ctx: &egui::Context) -> bool {
+        if ctx.memory(|memory| memory.has_focus(super::midi_strip::focus_id())) {
+            self.browser.music.stop();
+            return self.browser.midi.play_selection();
+        }
+        if self.browser.view == super::BrowserView::Music
+            && let Some(range) = self.browser.music_selection.clone()
+        {
+            self.browser.midi.stop();
+            self.browser.music.play_range(range);
+            return true;
+        }
+        false
+    }
     fn request_app_close(&mut self, ctx: &egui::Context) {
         if self.viewers.active() && !self.viewers.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -204,6 +238,7 @@ impl FileManagerApp {
         }
         if self.browser.filesystem_busy()
             || self.browser.music.copying()
+            || self.browser.midi.copying()
             || self.browser.shelf.sending()
             || self.native.as_ref().is_some_and(|native| native.busy())
         {
@@ -213,7 +248,7 @@ impl FileManagerApp {
                 failed: false,
             });
         } else {
-            self.browser.music.stop();
+            self.browser.stop_previews();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -226,33 +261,11 @@ impl eframe::App for FileManagerApp {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Handle preview keys before address/dialog handlers consume them;
-        // typing keeps its normal behavior and stops the preview.
-        if ctx.input(|input| input.key_pressed(Key::Escape)) {
-            self.browser.music.stop();
-        } else if ctx.input(|input| input.key_pressed(Key::Space)) {
-            let range = self.browser.music_selection.clone().filter(|_| {
-                self.browser.view == super::BrowserView::Music
-                    && !self.viewers.active()
-                    && !ctx
-                        .memory(|memory| memory.focused())
-                        .is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some())
-            });
-            if let Some(range) = range {
-                ctx.input_mut(|input| {
-                    input.consume_key(egui::Modifiers::NONE, Key::Space);
-                });
-                self.browser.music.play_range(range);
-            } else {
-                self.browser.music.stop();
-            }
-        }
-        if self.viewers.uses_audio() {
-            self.browser.music.stop();
-        }
+        self.preview_keys(ctx);
         self.browser
             .music
             .tick(ctx, &mut self.browser.music_selection);
+        self.browser.midi.tick(ctx);
         if self.viewers.active() {
             self.browser.drop_targets.clear();
         }

@@ -7,6 +7,7 @@ mod edits;
 mod filesystem;
 mod gallery;
 mod media;
+mod midi_strip;
 mod music;
 mod native_drag;
 mod pdf_strip;
@@ -160,6 +161,7 @@ pub(crate) struct FileManager {
     gallery_layout: gallery::Gallery,
     gallery_selecting: bool,
     music: music::Music,
+    midi: midi_strip::Preview,
     audio_entries: Vec<PathBuf>,
     music_offsets: Vec<f32>,
     music_selection: Option<ui::music::MusicRange>,
@@ -221,6 +223,7 @@ impl FileManager {
             gallery_layout: Default::default(),
             gallery_selecting: false,
             music: music::Music::default(),
+            midi: midi_strip::Preview::default(),
             audio_entries: Vec::new(),
             music_offsets: vec![0.0],
             music_selection: None,
@@ -240,13 +243,18 @@ impl FileManager {
             .map_or(&self.home, |location| &location.path)
     }
 
+    fn stop_previews(&mut self) {
+        self.music.stop();
+        self.midi.stop();
+    }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
         if path != self.path() {
             self.gallery_layout.retire();
             self.video_previews.clear();
             self.video_start = None;
             self.music_selection = None;
-            self.music.stop();
+            self.midi.selection = None;
+            self.stop_previews();
         }
         self.watch = None;
         self.watch_started = std::time::Instant::now();
@@ -449,9 +457,8 @@ impl FileManager {
             for index in &self.visible {
                 let entry = &directory.entries[*index];
                 let height = if self.previews.is_text(entry)
-                    || entry.is_video()
+                    || entry.is_playable_media()
                     || (entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path))
-                    || (entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path))
                 {
                     VIDEO_ROW_HEIGHT
                 } else {

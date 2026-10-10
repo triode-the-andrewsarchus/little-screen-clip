@@ -211,7 +211,7 @@ pub struct MidiViewerState {
     playback_start_offset: f32,
     player: Option<Player>,
     _sink: Option<MixerDeviceSink>,
-    pub wav_cache: Option<Vec<u8>>,
+    pub wav_cache: Option<Arc<[u8]>>,
     pub view_start_sec: f32,
     pub view_duration_sec: f32,
     pub user_panned_during_playback: bool,
@@ -224,7 +224,7 @@ pub struct MidiViewerState {
     pub play_stop_time: Option<f32>,
     pub is_synthesizing: bool,
     pub pending_play: bool,
-    synth_rx: Option<Receiver<Result<(Option<usize>, Vec<u8>), JobError>>>,
+    synth_rx: Option<Receiver<Result<(Option<usize>, Arc<[u8]>), JobError>>>,
     synth_ticket: Option<JobTicket>,
     export_job: Option<MidiExportJob>,
 }

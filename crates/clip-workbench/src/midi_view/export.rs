@@ -1,6 +1,9 @@
 use super::*;
 
 impl MidiViewerState {
+    pub(crate) fn export_pending(&self) -> bool {
+        self.export_job.is_some()
+    }
     pub fn copy_selection(&mut self, now: f64) -> bool {
         self.copy_selection_on(
             now,
@@ -24,7 +27,7 @@ impl MidiViewerState {
         + 'static,
     ) -> bool {
         let (s, e, is_slice) = match self.selected_region {
-            Some((a, b)) if (b - a).abs() > 0.05 => (a.min(b), a.max(b), true),
+            Some((a, b)) if (b - a).abs() > 0.0 => (a.min(b), a.max(b), true),
             _ => (0.0, self.data.duration_sec.max(0.1), false),
         };
         let timestamp = std::time::SystemTime::now()
@@ -66,7 +69,7 @@ impl MidiViewerState {
         }
     }
 
-    pub(super) fn poll_export(&mut self, now: f64, ctx: &egui::Context) {
+    pub(crate) fn poll_export(&mut self, now: f64, ctx: &egui::Context) {
         let Some(job) = self.export_job.as_ref() else {
             return;
         };

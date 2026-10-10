@@ -1,4 +1,5 @@
 use super::*;
+use rodio::Source;
 
 impl MidiViewerState {
     pub fn play(&mut self) {
@@ -16,7 +17,7 @@ impl MidiViewerState {
                 let solo = self.solo_track;
                 let (ticket, rx) = BackgroundJobs::global()
                     .submit(Duration::from_secs(120), move || {
-                        (solo, data.synthesize_tracks_to_wav(solo))
+                        (solo, Arc::<[u8]>::from(data.synthesize_tracks_to_wav(solo)))
                     });
                 self.synth_rx = Some(rx);
                 self.synth_ticket = Some(ticket);
@@ -29,36 +30,40 @@ impl MidiViewerState {
             return;
         }
 
-        let wav_bytes = self.wav_cache.as_ref().unwrap();
-
-        // Calculate offset in the WAV audio corresponding to playhead_sec so all tracks start at the playhead
-        let sample_rate = 44100u32;
-        let bytes_per_sample = 2usize; // 16-bit mono PCM
-        let sample_offset = (self.playhead_sec.max(0.0) * sample_rate as f32) as usize;
-        let byte_offset = 44 + sample_offset * bytes_per_sample;
-
-        let sliced_wav: Vec<u8> = if byte_offset < wav_bytes.len() {
-            let remaining_pcm = &wav_bytes[byte_offset..];
-            let mut buf = Vec::with_capacity(44 + remaining_pcm.len());
-            buf.extend_from_slice(&wav_bytes[0..4]); // "RIFF"
-            let riff_size = (36 + remaining_pcm.len()) as u32;
-            buf.extend_from_slice(&riff_size.to_le_bytes());
-            buf.extend_from_slice(&wav_bytes[8..40]); // format chunk up to "data"
-            let data_size = remaining_pcm.len() as u32;
-            buf.extend_from_slice(&data_size.to_le_bytes());
-            buf.extend_from_slice(remaining_pcm);
-            buf
-        } else {
-            // Already at or beyond end of song
+        let wav_bytes = Arc::clone(self.wav_cache.as_ref().unwrap());
+        if self.playhead_sec >= self.data.duration_sec {
             return;
-        };
+        }
 
         match crate::ui_ext::new_shared_audio_player() {
             Some(player) => {
-                let cursor = Cursor::new(sliced_wav);
-                match Decoder::new(cursor) {
-                    Ok(source) => {
-                        player.append(source);
+                let byte_len = wav_bytes.len() as u64;
+                let cursor = Cursor::new(wav_bytes);
+                match Decoder::builder()
+                    .with_data(cursor)
+                    .with_byte_len(byte_len)
+                    .with_seekable(true)
+                    .with_hint("wav")
+                    .build()
+                {
+                    Ok(mut source) => {
+                        if let Err(error) =
+                            source.try_seek(Duration::from_secs_f32(self.playhead_sec.max(0.0)))
+                        {
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0.0, |time| time.as_secs_f64());
+                            self.status_toast
+                                .set(format!("MIDI seek failed: {error}"), now);
+                            return;
+                        }
+                        if let Some(end) = self.play_stop_time {
+                            player.append(source.take_duration(Duration::from_secs_f32(
+                                (end - self.playhead_sec).max(0.0),
+                            )));
+                        } else {
+                            player.append(source);
+                        }
                         self.player = Some(player);
                         self._sink = None;
                         self.is_playing = true;

@@ -55,7 +55,12 @@ impl FileManager {
         ui.separator();
         self.docked_panels(ui, palette);
         ui.memory_mut(|memory| {
-            for id in [tree_id(), list_id(), music::waveform_id()] {
+            for id in [
+                tree_id(),
+                list_id(),
+                music::waveform_id(),
+                super::midi_strip::focus_id(),
+            ] {
                 memory.set_focus_lock_filter(
                     id,
                     egui::EventFilter {
@@ -69,9 +74,15 @@ impl FileManager {
         });
         self.naming_ui(ui.ctx(), colors);
         self.transfer_windows(ui.ctx(), colors);
-        let file_clipboard = ui
-            .memory(|memory| memory.has_focus(list_id()) || memory.has_focus(music::waveform_id()))
-            && self.edits.dialog.is_none()
+        let file_clipboard = ui.memory(|memory| {
+            [
+                list_id(),
+                music::waveform_id(),
+                super::midi_strip::focus_id(),
+            ]
+            .into_iter()
+            .any(|id| memory.has_focus(id))
+        }) && self.edits.dialog.is_none()
             && !self.transfers_modal();
         ui.ctx().data_mut(|data| {
             data.insert_temp(
@@ -98,6 +109,13 @@ impl FileManager {
         }
     }
 
+    fn copy_strip_selection(&mut self, ctx: &egui::Context) {
+        if ctx.memory(|memory| memory.has_focus(super::midi_strip::focus_id())) {
+            self.midi.copy_selection(ctx.input(|input| input.time));
+        } else {
+            self.copy_music_range();
+        }
+    }
     fn docked_panels(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let colors = WorkbenchColors::from_palette(palette);
         if self.shelf.open {
@@ -194,9 +212,13 @@ impl FileManager {
         }
         if ctx.memory(|memory| memory.has_focus(tree_id())) {
             self.tree_shortcuts(ctx);
-        } else if ctx.memory(|memory| memory.has_focus(music::waveform_id())) {
+        } else if ctx.memory(|memory| {
+            [super::midi_strip::focus_id(), music::waveform_id()]
+                .into_iter()
+                .any(|id| memory.has_focus(id))
+        }) {
             if key(ctx, Modifiers::CTRL, Key::C) {
-                self.copy_music_range();
+                self.copy_strip_selection(ctx);
             }
             if key(ctx, Modifiers::CTRL, Key::V) {
                 self.paste_files();
@@ -690,7 +712,7 @@ fn row_background(ui: &Ui, rect: Rect, selected: bool, hovered: bool, colors: Wo
     }
 }
 
-fn media_header(
+pub(super) fn media_header(
     ui: &Ui,
     header: Rect,
     entry: &super::filesystem::Entry,

@@ -6,6 +6,7 @@ struct ListPreviews<'a> {
     files: &'a mut EntryPreviews,
     music: &'a mut EntryPreviews,
     videos: &'a mut video_timeline::Previews,
+    midi: &'a mut super::super::midi_strip::Preview,
     selection: &'a mut Option<music::MusicRange>,
     playback: &'a super::super::music::Music,
     pdf_start: &'a mut Option<(PathBuf, usize)>,
@@ -20,19 +21,16 @@ struct ListPreviews<'a> {
     play: Option<(PathBuf, f32)>,
 }
 impl<'a> ListPreviews<'a> {
-    fn row(
+    fn response(
         &mut self,
         ui: &mut Ui,
         rect: Rect,
-        entry: &'a Entry,
+        entry: &Entry,
         marked: bool,
         name_width: f32,
         colors: WorkbenchColors,
-        palette: &AppPalette,
-        actions: &mut ListActions,
-    ) -> (egui::Response, bool) {
-        let is_audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
-        let mut response = if is_audio || entry.is_video() {
+    ) -> egui::Response {
+        let response = if entry.is_playable_media() {
             media_row(ui, rect, marked, colors)
         } else {
             let lines = (!entry.directory)
@@ -54,8 +52,35 @@ impl<'a> ListPreviews<'a> {
                 });
             file_row(ui, rect, entry, marked, name_width, lines, colors)
         };
+        response
+    }
+    fn row(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        entry: &'a Entry,
+        marked: bool,
+        name_width: f32,
+        colors: WorkbenchColors,
+        palette: &AppPalette,
+        actions: &mut ListActions,
+    ) -> (egui::Response, bool) {
+        let is_audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
+        let mut response = self.response(ui, rect, entry, marked, name_width, colors);
         let mut engaged = false;
-        if is_audio {
+        if entry.regular_file && super::super::midi_strip::is_midi(&entry.path) {
+            self.paths.insert(entry.path.clone());
+            engaged = super::super::midi_strip::show(
+                ui,
+                rect,
+                entry,
+                self.files,
+                self.midi,
+                &mut response,
+                colors,
+                palette,
+            );
+        } else if is_audio {
             self.music_paths.insert(entry.path.clone());
             let ready = self.music.music(ui.ctx(), entry);
             let (active, time) = music::preview_row(
@@ -137,6 +162,14 @@ impl FileManager {
             music::waveform_id(),
             Sense::focusable_noninteractive(),
         );
+        ui.interact(
+            ui.available_rect_before_wrap(),
+            super::super::midi_strip::focus_id(),
+            Sense::focusable_noninteractive(),
+        );
+        if let Some(message) = self.midi.notice.message(ui.input(|input| input.time)) {
+            ui.label(message);
+        }
         let scroll = self.list_scroll(ROW_HEIGHT);
         let Some(directory) = &self.directory else {
             ui.label(if self.pending.is_some() {
@@ -164,6 +197,7 @@ impl FileManager {
         let mut targets = Vec::new();
         let preview_paths = std::collections::BTreeSet::new();
         let mut previews = ListPreviews {
+            midi: &mut self.midi,
             files: &mut self.previews,
             music: &mut self.music_previews,
             videos: &mut self.video_previews,
@@ -216,7 +250,12 @@ impl FileManager {
         drop(previews);
         self.drop_targets.extend(targets);
         self.finish_listing(ui, actions, output.state.offset.y, &background);
+        if let Some((path, revision, document, time)) = self.midi.queued.take() {
+            self.music.stop();
+            self.midi.play(path, revision, document, time, None);
+        }
         if let Some((path, time)) = play {
+            self.midi.stop();
             if self.music.current() != Some(&path) {
                 self.music.play(&path);
             }
