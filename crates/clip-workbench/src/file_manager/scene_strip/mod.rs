@@ -1,4 +1,4 @@
-//! Four immediate orbit views and one coalesced live GPU hover preview.
+//! Four progressive orbit views and one coalesced live hover renderer.
 mod backend;
 mod hover;
 mod ui;
@@ -27,6 +27,7 @@ struct Pending {
 }
 struct Cached {
     revision: u64,
+    palette: little_clip_core::palette::AppPalette,
     metadata: Option<Metadata>,
     textures: [Option<TextureHandle>; 4],
     pending: Option<Pending>,
@@ -53,11 +54,11 @@ impl Previews {
             poll_strip(ctx, path, cached);
         }
     }
-    fn request(&mut self, entry: &Entry) {
+    fn request(&mut self, entry: &Entry, palette: &little_clip_core::palette::AppPalette) {
         if self
             .files
             .get(&entry.path)
-            .is_some_and(|cached| cached.revision != entry.revision)
+            .is_some_and(|cached| cached.revision != entry.revision || cached.palette != *palette)
         {
             self.files.remove(&entry.path);
         }
@@ -71,6 +72,7 @@ impl Previews {
             .entry(entry.path.clone())
             .or_insert_with(|| Cached {
                 revision: entry.revision,
+                palette: palette.clone(),
                 metadata: None,
                 textures: Default::default(),
                 pending: None,
@@ -83,8 +85,16 @@ impl Previews {
         let (tx, progress) = mpsc::sync_channel(4);
         let path = entry.path.clone();
         let revision = entry.revision;
+        let palette = palette.clone();
         let task = Task::start(&STRIPS, Duration::from_secs(120), move |token| {
-            let mut loaded = backend::load(&path, revision, backend::camera(0, 0.0), SIZE, token)?;
+            let mut loaded = backend::load(
+                &path,
+                revision,
+                backend::camera(0, 0.0),
+                SIZE,
+                &palette,
+                token,
+            )?;
             let _ = tx.send(Progress {
                 metadata: loaded.metadata.clone(),
                 view: 0,

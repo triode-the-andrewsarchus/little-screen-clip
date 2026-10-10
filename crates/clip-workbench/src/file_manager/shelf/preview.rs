@@ -31,7 +31,15 @@ pub(in crate::file_manager) enum Source {
     },
     Music(PathBuf),
     Text(PathBuf),
+    Binary(PathBuf),
+    BinaryRaster {
+        document: Arc<super::super::binary_strip::Document>,
+        width: u32,
+        height: u32,
+    },
     Midi(PathBuf),
+    Blend(PathBuf),
+    Material(super::super::material_strip::Request),
     MidiRaster {
         document: Arc<super::super::midi_strip::Document>,
         width: u32,
@@ -57,6 +65,49 @@ pub(in crate::file_manager) struct Ready {
     pub data: Data,
     pub texture: Option<egui::TextureHandle>,
     pub hash_textures: [Option<egui::TextureHandle>; 2],
+}
+
+/// One raster hover job, replaced when its source, position, or size changes.
+#[derive(Default)]
+pub(in crate::file_manager) struct HoverRaster {
+    cache: Previews,
+    key: Option<(uuid::Uuid, usize, u32, uuid::Uuid)>,
+    seen: bool,
+}
+impl HoverRaster {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        self.cache.poll(ctx);
+    }
+    pub fn retain(&mut self, keep: impl Fn(uuid::Uuid) -> bool) {
+        if !self.seen || self.key.is_some_and(|(source, _, _, _)| !keep(source)) {
+            self.clear();
+        }
+        self.seen = false;
+    }
+    pub fn request(
+        &mut self,
+        identity: uuid::Uuid,
+        position: usize,
+        edge: u32,
+        source: Source,
+    ) -> Option<&Ready> {
+        self.seen = true;
+        if !self
+            .key
+            .is_some_and(|key| key.0 == identity && key.1 == position && key.2 == edge)
+        {
+            self.cache.clear();
+            self.key = Some((identity, position, edge, uuid::Uuid::new_v4()));
+        }
+        let id = self.key.unwrap().3;
+        if self.cache.needs(id) {
+            self.cache.request(id, source);
+        }
+        self.cache.get(id)
+    }
 }
 struct Pending {
     ticket: JobTicket,
@@ -102,14 +153,20 @@ impl Previews {
         let music = matches!(&source, Source::Music(_));
         let gallery = matches!(
             &source,
-            Source::Gallery { .. } | Source::PdfPage { .. } | Source::Photo { .. }
+            Source::Gallery { .. }
+                | Source::PdfPage { .. }
+                | Source::Photo { .. }
+                | Source::Blend(_)
         );
         let text = matches!(
             &source,
             Source::Text(_)
+                | Source::Binary(_)
+                | Source::BinaryRaster { .. }
                 | Source::TextRaster { .. }
                 | Source::Midi(_)
                 | Source::MidiRaster { .. }
+                | Source::Material(_)
         );
         let executor = if gallery {
             gallery_preview_jobs()
@@ -148,6 +205,8 @@ impl Previews {
                     super::super::image_strip::load(&path, revision, &token)
                 }
                 Source::Music(path) => super::super::music::preview::load(&path, &token),
+                Source::Blend(path) => super::super::blend_preview::load(&path, &token),
+                Source::Material(request) => request.load(&token),
                 Source::PdfPage { path, page, edge } => {
                     super::super::pdf_strip::load_page(&path, page, edge, &token)
                 }
@@ -176,18 +235,18 @@ impl Previews {
                     data.midi_document = Some(document);
                     data
                 }
-                Source::Text(path) => {
-                    let mut data = Data::new(display_path(&path), "Text".into(), Icon::Text);
-                    match super::super::text_strip::load(&path, &token) {
-                        Ok(document) => {
-                            data.document = Some(document);
-                        }
-                        Err(error) => {
-                            data.detail = error;
-                        }
-                    }
+                Source::Binary(path) => super::super::binary_strip::load(&path, &token),
+                Source::BinaryRaster {
+                    document,
+                    width,
+                    height,
+                } => {
+                    let mut data = Data::new(String::new(), String::new(), Icon::Text);
+                    data.image =
+                        super::super::binary_strip::render(&document, width, height, &token);
                     data
                 }
+                Source::Text(path) => document_preview(&path, &token),
                 Source::TextRaster {
                     document,
                     width,
@@ -747,4 +806,26 @@ mod gallery_completion_tests {
         assert_eq!(previews.get(ids[1]).unwrap().data.title, "second");
         assert!(previews.get(ids[0]).is_none());
     }
+}
+
+fn document_preview(path: &Path, token: &AtomicBool) -> Data {
+    if let Ok(prefix) = crate::file_source::read_file_bytes(path, 8192, false, true) {
+        let non_text = prefix
+            .iter()
+            .any(|&byte| byte == 0 || (byte < 32 && !matches!(byte, b'\n' | b'\r' | b'\t' | 12)));
+        if non_text {
+            return super::super::binary_strip::load(path, token);
+        }
+    }
+    let mut data = Data::new(display_path(path), "Text".into(), Icon::Text);
+    match super::super::text_strip::load(path, token) {
+        Ok(document) => {
+            data.document = Some(document);
+        }
+        Err(error) if error == "Binary file" || error == "Unrecognized non-UTF-8 file" => {
+            return super::super::binary_strip::load(path, token);
+        }
+        Err(error) => data.detail = error,
+    }
+    data
 }

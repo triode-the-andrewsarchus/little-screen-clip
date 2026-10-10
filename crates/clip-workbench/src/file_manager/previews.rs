@@ -5,6 +5,21 @@ use super::{
     shelf::preview::{Previews, Source},
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+/// One-based item ordinals with a middle ellipsis when a strip is full.
+pub(super) fn strip_slots(count: usize, capacity: usize) -> Vec<Option<usize>> {
+    let capacity = capacity.max(3);
+    if count <= capacity {
+        return (1..=count).map(Some).collect();
+    }
+    let first = capacity / 2;
+    let last = capacity - first - 1;
+    (1..=first)
+        .map(Some)
+        .chain(std::iter::once(None))
+        .chain((count - last + 1..=count).map(Some))
+        .collect()
+}
 #[derive(Default)]
 pub(super) struct EntryPreviews {
     cache: Previews,
@@ -14,6 +29,7 @@ pub(super) struct EntryPreviews {
     raster_sizes: BTreeMap<uuid::Uuid, ((u32, u32, Vec<[u8; 3]>), uuid::Uuid)>,
     image_hover: super::image_strip::Hover,
     scenes: super::scene_strip::Previews,
+    materials: super::material_strip::Previews,
     pdf_pages: super::pdf_strip::Pages,
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
@@ -38,6 +54,7 @@ impl EntryPreviews {
                 self.rasters.invalidate(raster);
             }
             *version = entry.revision;
+            *id = uuid::Uuid::new_v4();
         }
         *id
     }
@@ -46,12 +63,18 @@ impl EntryPreviews {
         self.pdf_pages.poll(ctx);
         self.image_hover.poll(ctx);
         self.scenes.poll(ctx);
+        self.materials.poll(ctx);
         let changed = self.cache.poll(ctx);
         if changed {
             for (path, (revision, id)) in &self.identities {
                 if let Some(ready) = self.cache.get(*id) {
-                    self.text_status
-                        .insert(path.clone(), (*revision, ready.data.document.is_some()));
+                    self.text_status.insert(
+                        path.clone(),
+                        (
+                            *revision,
+                            ready.data.document.is_some() || ready.data.binary.is_some(),
+                        ),
+                    );
                 }
             }
         }
@@ -69,9 +92,19 @@ impl EntryPreviews {
         self.cache
             .retain(&self.identities.values().map(|(_, id)| *id).collect());
         let ids: BTreeSet<_> = self.identities.values().map(|(_, id)| *id).collect();
+        self.materials.retain(&ids);
         self.raster_sizes.retain(|id, _| ids.contains(id));
         self.rasters
             .retain(&self.raster_sizes.values().map(|(_, id)| *id).collect());
+    }
+    pub fn is_binary(&self, entry: &Entry) -> bool {
+        entry.regular_file
+            && (super::binary_strip::known(&entry.path)
+                || self
+                    .identities
+                    .get(&entry.path)
+                    .and_then(|(_, id)| self.cache.get(*id))
+                    .is_some_and(|ready| ready.data.binary.is_some()))
     }
     pub fn is_text(&self, entry: &Entry) -> bool {
         if !text_candidate(entry) {
@@ -82,7 +115,10 @@ impl EntryPreviews {
             .get(&entry.path)
             .filter(|(revision, _)| *revision == entry.revision);
         known.map_or_else(
-            || super::text_strip::known_text(&entry.path),
+            || {
+                super::text_strip::known_text(&entry.path)
+                    || super::binary_strip::known(&entry.path)
+            },
             |(_, text)| *text,
         )
     }
@@ -92,6 +128,7 @@ impl EntryPreviews {
         self.pdf_pages.clear();
         self.image_hover.clear();
         self.scenes.clear();
+        self.materials.clear();
         self.identities.clear();
         self.gallery_sizes.clear();
         self.rasters.clear();
@@ -107,10 +144,16 @@ impl EntryPreviews {
                         path: entry.path.clone(),
                         revision: entry.revision,
                     }
+                } else if entry.is_blend() {
+                    Source::Blend(entry.path.clone())
+                } else if entry.is_material() {
+                    Source::Material(super::material_strip::Request::Library(entry.path.clone()))
                 } else if super::midi_strip::is_midi(&entry.path) {
                     Source::Midi(entry.path.clone())
                 } else if little_clip_core::audio::is_audio_path(&entry.path) {
                     Source::Music(entry.path.clone())
+                } else if super::binary_strip::known(&entry.path) && entry.regular_file {
+                    Source::Binary(entry.path.clone())
                 } else if text_candidate(entry) {
                     Source::Text(entry.path.clone())
                 } else {
@@ -129,10 +172,11 @@ impl EntryPreviews {
         row: egui::Rect,
         entry: &Entry,
         colors: crate::ui_appearance::WorkbenchColors,
+        palette: &little_clip_core::palette::AppPalette,
     ) {
-        self.scenes.show(ui, row, entry, colors);
+        self.scenes.show(ui, row, entry, colors, palette);
     }
-    pub fn show_image(
+    pub fn show_visual(
         &mut self,
         ui: &mut egui::Ui,
         row: egui::Rect,
@@ -141,15 +185,22 @@ impl EntryPreviews {
     ) {
         let id = self.identity(entry);
         self.listing(entry);
-        super::image_strip::show(
-            ui,
-            row,
-            entry,
-            id,
-            self.cache.get(id),
-            &mut self.image_hover,
-            colors,
-        );
+        if entry.is_blend() {
+            super::blend_preview::show(ui, row, entry, self.cache.get(id), colors);
+        } else if entry.is_material() {
+            self.materials
+                .show(ui, row, entry, id, self.cache.get(id), colors);
+        } else {
+            super::image_strip::show(
+                ui,
+                row,
+                entry,
+                id,
+                self.cache.get(id),
+                &mut self.image_hover,
+                colors,
+            );
+        }
     }
     pub fn show_midi(
         &mut self,
@@ -242,6 +293,25 @@ impl EntryPreviews {
         colors: crate::ui_appearance::WorkbenchColors,
         palette: &little_clip_core::palette::AppPalette,
     ) -> Option<usize> {
+        let id = self.identity(entry);
+        self.listing(entry);
+        if self.is_binary(entry) {
+            let document = self
+                .cache
+                .get(id)
+                .and_then(|ready| ready.data.binary.clone());
+            let strip = super::binary_strip::show(ui, row, entry, self.cache.get(id), colors);
+            if let Some(document) = document {
+                let (width, height) = raster_dimensions(ui, strip);
+                let source = Source::BinaryRaster {
+                    document,
+                    width,
+                    height,
+                };
+                self.paint_raster(ui, strip, id, (width, height, Vec::new()), source);
+            }
+            return None;
+        }
         if row.height() <= 28.0 {
             self.show(
                 ui,
@@ -526,6 +596,8 @@ fn text_candidate(entry: &Entry) -> bool {
     entry.regular_file
         && !super::midi_strip::is_midi(&entry.path)
         && !entry.is_scene()
+        && !entry.is_blend()
+        && !entry.is_material()
         && !entry.is_photo()
         && !entry.is_video()
         && !little_clip_core::audio::is_audio_path(&entry.path)

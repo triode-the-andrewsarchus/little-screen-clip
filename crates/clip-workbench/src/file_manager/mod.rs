@@ -1,12 +1,15 @@
 //! Folder browsing and file management on the shared bounded executor.
 
 mod app;
+mod binary_strip;
+mod blend_preview;
 mod content;
 mod edit_ui;
 mod edits;
 mod filesystem;
 mod gallery;
 mod image_strip;
+mod material_strip;
 mod media;
 mod midi_strip;
 mod music;
@@ -462,6 +465,8 @@ impl FileManager {
                 let height = if self.previews.is_text(entry)
                     || entry.is_playable_media()
                     || entry.is_scene()
+                    || entry.is_blend()
+                    || entry.is_material()
                     || entry.is_photo()
                     || (entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path))
                 {

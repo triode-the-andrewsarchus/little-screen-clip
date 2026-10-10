@@ -24,6 +24,16 @@ pub(super) struct Entry {
 }
 
 impl Entry {
+    pub(super) fn is_blend(&self) -> bool {
+        self.regular_file
+            && self
+                .path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("blend"))
+    }
+    pub(super) fn is_material(&self) -> bool {
+        self.regular_file && little_clip_core::model3d::materials::is_material_file(&self.path)
+    }
     pub(super) fn is_video(&self) -> bool {
         self.regular_file
             && !self.typescript
@@ -36,7 +46,9 @@ impl Entry {
                 || little_clip_core::audio::is_audio_path(&self.path))
     }
     pub(super) fn is_scene(&self) -> bool {
-        self.regular_file && little_clip_scene::is_splat_file(&self.path)
+        self.regular_file
+            && (little_clip_scene::is_splat_file(&self.path)
+                || little_clip_core::presentation::model3d::is_3d_model_file(&self.path))
     }
     pub(super) fn is_photo(&self) -> bool {
         self.regular_file

@@ -1,8 +1,13 @@
-//! 3D model parsing and vector geometry using the Scenix asset loaders.
+//! 3D model parsing and vector geometry using Scenix and ufbx asset loaders.
 //!
 //! Provides 3D vector operations (`Vec3`), triangle representations with optional
 //! diffuse color tinting, and multi-format model loading for STL, Wavefront OBJ,
-//! and glTF / GLB assets.
+//! glTF / GLB, and static FBX assets.
+
+#[path = "model3d/fbx.rs"]
+mod fbx;
+#[path = "model3d/materials.rs"]
+pub mod materials;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -138,58 +143,63 @@ fn file_revision(path: &Path) -> Option<FileRevision> {
 /// stale hits.
 fn model_cache_identity(path: &Path) -> Option<ModelCacheIdentity> {
     let source = file_revision(path)?;
-    let mut dependencies = Vec::new();
-
-    let extension = path.extension().and_then(|ext| ext.to_str());
-    if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("glb")) {
-        // GLB dependency URIs live in its JSON chunk; until that chunk is
-        // inspected, only caching by the container file can return stale data.
-        return None;
-    }
-
-    if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("gltf")) {
-        let source_bytes = std::fs::read(path).ok()?;
-        let document: serde_json::Value = serde_json::from_slice(&source_bytes).ok()?;
-        let base_dir = path.parent().unwrap_or_else(|| Path::new("./"));
-        for dependency_group in ["buffers", "images"] {
-            let Some(entries) = document
-                .get(dependency_group)
-                .and_then(serde_json::Value::as_array)
-            else {
-                continue;
-            };
-            for entry in entries {
-                let Some(uri) = entry.get("uri").and_then(serde_json::Value::as_str) else {
-                    // Embedded buffers and bufferView-backed images have no
-                    // separate external revision; their data belongs to a
-                    // captured buffer or to the source GLB.
-                    continue;
-                };
-                if uri.starts_with("data:") {
-                    continue;
-                }
-                // The glTF importer percent-decodes relative URIs before
-                // joining them to the source directory. URL joining would
-                // instead treat '?' and '#' as query/fragment delimiters, and
-                // file: handling has separate semantics. Skip these unusual
-                // forms rather than fingerprinting a possibly different file.
-                if uri
-                    .chars()
-                    .any(|character| matches!(character, ':' | '?' | '#' | '%'))
-                {
-                    return None;
-                }
-                let dependency_path = base_dir.join(uri);
-                let revision = file_revision(&dependency_path)?;
-                dependencies.push((dependency_path, revision));
-            }
-        }
-    }
-
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    let dependencies = match extension.as_str() {
+        // GLB may reference external assets in its JSON chunk: bypass caching.
+        "glb" => return None,
+        "obj" => materials::obj_libraries(path)
+            .ok()?
+            .into_iter()
+            .map(|path| Some((path.clone(), file_revision(&path)?)))
+            .collect::<Option<Vec<_>>>()?,
+        "gltf" => gltf_dependencies(path)?,
+        _ => Vec::new(),
+    };
     Some(ModelCacheIdentity {
         source,
         dependencies,
     })
+}
+
+fn gltf_dependencies(path: &Path) -> Option<Vec<(PathBuf, FileRevision)>> {
+    let mut dependencies = Vec::new();
+    let source_bytes = std::fs::read(path).ok()?;
+    let document: serde_json::Value = serde_json::from_slice(&source_bytes).ok()?;
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("./"));
+    for dependency_group in ["buffers", "images"] {
+        let Some(entries) = document
+            .get(dependency_group)
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for entry in entries {
+            let Some(uri) = entry.get("uri").and_then(serde_json::Value::as_str) else {
+                // Embedded buffers and bufferView-backed images have no
+                // separate external revision; their data belongs to a
+                // captured buffer or to the source GLB.
+                continue;
+            };
+            if uri.starts_with("data:") {
+                continue;
+            }
+            // The glTF importer percent-decodes relative URIs before
+            // joining them to the source directory. URL joining would
+            // instead treat '?' and '#' as query/fragment delimiters, and
+            // file: handling has separate semantics. Skip these unusual
+            // forms rather than fingerprinting a possibly different file.
+            if uri
+                .chars()
+                .any(|character| matches!(character, ':' | '?' | '#' | '%'))
+            {
+                return None;
+            }
+            let dependency_path = base_dir.join(uri);
+            let revision = file_revision(&dependency_path)?;
+            dependencies.push((dependency_path, revision));
+        }
+    }
+    Some(dependencies)
 }
 
 /// 3-dimensional single-precision floating point vector for 3D coordinates.
@@ -304,6 +314,8 @@ pub enum ModelFormat {
     Obj,
     /// glTF 2.0 / GLB (.gltf, .glb)
     Gltf,
+    /// Autodesk FBX (.fbx), imported as a static scene.
+    Fbx,
 }
 
 impl ModelFormat {
@@ -313,6 +325,7 @@ impl ModelFormat {
             Self::Stl => "STL",
             Self::Obj => "OBJ",
             Self::Gltf => "GLTF",
+            Self::Fbx => "FBX",
         }
     }
 
@@ -323,12 +336,13 @@ impl ModelFormat {
             "stl" => Some(Self::Stl),
             "obj" => Some(Self::Obj),
             "gltf" | "glb" => Some(Self::Gltf),
+            "fbx" => Some(Self::Fbx),
             _ => None,
         }
     }
 }
 
-/// Returns `true` if the path has a supported 3D model extension (.stl, .obj, .gltf, .glb).
+/// Returns `true` for a supported mesh extension (.stl, .obj, .gltf, .glb, .fbx).
 pub fn is_3d_model_file<P: AsRef<Path>>(path: P) -> bool {
     let p = path.as_ref();
     if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
@@ -401,6 +415,7 @@ impl Model3d {
             ModelFormat::Stl => Self::load_stl_file(path, name),
             ModelFormat::Obj => Self::load_obj_file(path, name),
             ModelFormat::Gltf => Self::load_gltf_file(path, name),
+            ModelFormat::Fbx => Self::build_mesh(name, ModelFormat::Fbx, fbx::load(path)?),
         }
     }
 
@@ -455,7 +470,7 @@ impl Model3d {
                 let triangles = geometry_to_triangles(&geom, None);
                 Self::build_mesh(default_name, ModelFormat::Stl, triangles)
             }
-            ModelFormat::Obj | ModelFormat::Gltf => {
+            ModelFormat::Obj | ModelFormat::Gltf | ModelFormat::Fbx => {
                 let mut temp = tempfile::Builder::new()
                     .suffix(&format!(".{}", ext))
                     .tempfile()
@@ -478,8 +493,13 @@ impl Model3d {
         let obj_asset = scenix_loader::obj::load_with_materials(path)
             .map_err(|e| format!("Failed to parse OBJ file: {:?}", e))?;
         let mut all_triangles = Vec::new();
-        for geom in &obj_asset.geometries {
-            let tris = geometry_to_triangles(geom, None);
+        let materials = materials::obj_materials(path);
+        for (index, geom) in obj_asset.geometries.iter().enumerate() {
+            let color = obj_asset.geometry_materials[index]
+                .and_then(|index| obj_asset.materials.get(index))
+                .and_then(|material| materials.get(&material.name))
+                .map(materials::Material::rgba);
+            let tris = geometry_to_triangles(geom, color);
             all_triangles.extend(tris);
         }
         Self::build_mesh(name, ModelFormat::Obj, all_triangles)

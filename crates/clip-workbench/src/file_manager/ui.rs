@@ -712,6 +712,84 @@ fn row_background(ui: &Ui, rect: Rect, selected: bool, hovered: bool, colors: Wo
     }
 }
 
+/// Fits a scene thumbnail into its box, with the shared model icon as fallback.
+pub(super) fn model_thumbnail(
+    ui: &Ui,
+    rect: Rect,
+    texture: Option<&egui::TextureHandle>,
+    colors: WorkbenchColors,
+) {
+    ui.painter().rect_filled(rect, 3.0, colors.recessed);
+    if let Some(texture) = texture {
+        let size = texture.size_vec2();
+        let scale = (rect.width() / size.x).min(rect.height() / size.y);
+        ui.painter().image(
+            texture.id(),
+            Rect::from_center_size(rect.center(), size * scale),
+            Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    } else {
+        Icon::Model3d.paint(
+            ui.painter(),
+            Rect::from_center_size(rect.center(), vec2(32.0, 32.0)),
+            colors.text_secondary,
+        );
+    }
+}
+
+/// Restricts passive preview hover to the enabled, visible portion of its row.
+pub(super) fn preview_hovered(ui: &Ui, rect: Rect) -> bool {
+    ui.is_enabled()
+        && ui
+            .ctx()
+            .pointer_hover_pos()
+            .is_some_and(|point| rect.intersect(ui.clip_rect()).contains(point))
+}
+
+/// Paints a file-type icon and reserves the shared strip area beside it.
+pub(super) fn strip_body(ui: &Ui, row: Rect, icon: Icon, colors: WorkbenchColors) -> Rect {
+    let thumbnail = Rect::from_min_size(row.min + vec2(6.0, 32.0), vec2(64.0, 66.0));
+    icon.paint(ui.painter(), thumbnail.shrink(18.0), colors.text_secondary);
+    Rect::from_min_max(
+        pos2(thumbnail.right() + 8.0, thumbnail.top()),
+        row.max - vec2(6.0, 10.0),
+    )
+}
+
+/// Lays out numbered strip items and paints omitted middle items consistently.
+pub(super) fn strip_cells(
+    ui: &Ui,
+    strip: Rect,
+    slots: Vec<Option<usize>>,
+    width: f32,
+    colors: WorkbenchColors,
+) -> Vec<(usize, Rect)> {
+    slots
+        .into_iter()
+        .enumerate()
+        .filter_map(|(position, ordinal)| {
+            let cell = Rect::from_min_size(
+                strip.min + vec2(position as f32 * width, 0.0),
+                vec2(width, strip.height()),
+            );
+            match ordinal {
+                Some(ordinal) => Some((ordinal, cell)),
+                None => {
+                    ui.painter().text(
+                        cell.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "…",
+                        FontId::proportional(20.0),
+                        colors.text_secondary,
+                    );
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
 pub(super) fn media_header(
     ui: &Ui,
     header: Rect,
@@ -1068,4 +1146,22 @@ pub(super) fn preview_popup(
                 ui.label(message);
             }
         });
+}
+
+/// Common header and body geometry for passive information strips.
+pub(super) fn information_strip(
+    ui: &mut Ui,
+    row: Rect,
+    entry: &super::filesystem::Entry,
+    detail: String,
+    colors: WorkbenchColors,
+) -> Rect {
+    media_header(
+        ui,
+        Rect::from_min_size(row.min + vec2(6.0, 0.0), vec2(row.width() - 12.0, 24.0)),
+        entry,
+        Some(detail),
+        colors,
+    );
+    Rect::from_min_max(row.min + vec2(6.0, 32.0), row.max - vec2(6.0, 10.0))
 }

@@ -113,7 +113,7 @@ impl Canvas {
     }
 }
 
-pub(super) fn exact(hash: &str) -> Option<ImageThumbnail> {
+pub(in crate::file_manager) fn exact(hash: &str) -> Option<ImageThumbnail> {
     let mut bits = Bits::parse(hash)?;
     let family = bits.take(2);
     let hue = bits.unit(8) * 360.0;

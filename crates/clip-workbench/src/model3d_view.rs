@@ -1,6 +1,6 @@
 //! 3D model inspection and orbital viewport workbench view.
 //!
-//! Renders 3D triangle meshes (STL, OBJ, glTF/GLB) using software projection,
+//! Renders 3D triangle meshes (STL, OBJ, glTF/GLB, static FBX) using software projection,
 //! painter's algorithm depth sorting, directional shading with material tinting,
 //! wireframe mode, and background async asset parsing.
 
@@ -42,7 +42,7 @@ pub enum UpAxis {
     ZUp,
 }
 
-/// Interactive 3D orbital viewer state for 3D meshes (STL, OBJ, glTF).
+/// Interactive 3D orbital viewer state for supported triangle meshes.
 pub struct Model3dViewerState {
     pub path: Option<PathBuf>,
     pub title: String,

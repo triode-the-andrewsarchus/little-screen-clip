@@ -321,7 +321,9 @@ fn kind(path: &Path) -> Kind {
         Kind::Scene
     } else if little_clip_core::presentation::model3d::is_3d_model_file(path) {
         Kind::Model
-    } else if little_clip_ops::is_text_file(path) {
+    } else if little_clip_core::model3d::materials::is_material_file(path)
+        || little_clip_ops::is_text_file(path)
+    {
         Kind::Text
     } else {
         Kind::External

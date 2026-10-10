@@ -1,5 +1,5 @@
 //! Visible image rows share gallery decoding and Image Studio analysis.
-mod hash_art;
+pub(in crate::file_manager) mod hash_art;
 mod hover;
 mod ui;
 use super::media::PreviewData;

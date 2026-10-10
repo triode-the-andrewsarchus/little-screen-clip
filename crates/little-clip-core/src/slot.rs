@@ -530,7 +530,15 @@ impl SlotManager {
                         let e = ext.to_ascii_lowercase();
                         if matches!(
                             e.as_str(),
-                            "stl" | "obj" | "gltf" | "glb" | "ply" | "splat" | "sog" | "spz"
+                            "stl"
+                                | "obj"
+                                | "gltf"
+                                | "glb"
+                                | "fbx"
+                                | "ply"
+                                | "splat"
+                                | "sog"
+                                | "spz"
                         ) {
                             return true;
                         }

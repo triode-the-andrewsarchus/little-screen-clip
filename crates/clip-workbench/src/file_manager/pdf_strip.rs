@@ -2,7 +2,7 @@
 use super::{
     filesystem::Entry,
     media::PreviewData,
-    shelf::preview::{Previews, Source},
+    shelf::preview::{HoverRaster, Previews, Source},
 };
 use crate::{file_source::FileSource, icons::Icon, ui_appearance::WorkbenchColors};
 use std::{
@@ -14,27 +14,23 @@ use std::{
 #[derive(Default)]
 pub(super) struct Pages {
     cache: Previews,
-    hover_cache: Previews,
-    hover_key: Option<(uuid::Uuid, usize, u32, uuid::Uuid)>,
-    hover_seen: bool,
+    hover: HoverRaster,
     files: BTreeMap<PathBuf, (uuid::Uuid, u32, BTreeMap<usize, uuid::Uuid>)>,
 }
 impl Pages {
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
-        self.hover_cache.poll(ctx);
+        self.hover.poll(ctx);
     }
     pub fn clear(&mut self) {
         self.cache.clear();
-        self.clear_hover();
+        self.hover.clear();
         self.files.clear();
     }
     pub fn retain(&mut self, paths: &BTreeSet<PathBuf>) {
-        if !self.hover_seen {
-            self.clear_hover();
-        }
-        self.hover_seen = false;
         self.files.retain(|path, _| paths.contains(path));
+        self.hover
+            .retain(|source| self.files.values().any(|(id, _, _)| *id == source));
         self.cache.retain(
             &self
                 .files
@@ -52,13 +48,7 @@ impl Pages {
         info: Option<&little_clip_core::pdf::PdfInfo>,
         colors: WorkbenchColors,
     ) -> Option<usize> {
-        let icon =
-            egui::Rect::from_min_size(row.min + egui::vec2(6.0, 32.0), egui::vec2(64.0, 66.0));
-        Icon::Pdf.paint(ui.painter(), icon.shrink(18.0), colors.text_secondary);
-        let strip = egui::Rect::from_min_max(
-            egui::pos2(icon.right() + 8.0, icon.top()),
-            egui::pos2(row.right() - 6.0, row.bottom() - 10.0),
-        );
+        let strip = super::ui::strip_body(ui, row, Icon::Pdf, colors);
         ui.painter().rect_filled(strip, 3.0, colors.recessed);
         let Some(info) = info else {
             ui.painter().text(
@@ -70,7 +60,7 @@ impl Pages {
             );
             return None;
         };
-        let slots = page_slots(
+        let slots = super::previews::strip_slots(
             info.page_count,
             ((strip.width() / 56.0).floor() as usize).clamp(3, 64),
         );
@@ -96,21 +86,7 @@ impl Pages {
         });
         let width = 56.0_f32.min(strip.width() / slots.len().max(1) as f32);
         let mut clicked = None;
-        for (index, page) in slots.into_iter().enumerate() {
-            let cell = egui::Rect::from_min_size(
-                strip.min + egui::vec2(index as f32 * width, 0.0),
-                egui::vec2(width, strip.height()),
-            );
-            let Some(page) = page else {
-                ui.painter().text(
-                    cell.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "…",
-                    egui::FontId::proportional(20.0),
-                    colors.text_secondary,
-                );
-                continue;
-            };
+        for (page, cell) in super::ui::strip_cells(ui, strip, slots, width, colors) {
             let id = *record.2.entry(page).or_insert_with(uuid::Uuid::new_v4);
             if self.cache.needs(id) {
                 self.cache.request(
@@ -146,12 +122,7 @@ impl Pages {
                 egui::FontId::monospace(10.0),
                 colors.text_secondary,
             );
-            if ui.is_enabled()
-                && ui
-                    .ctx()
-                    .pointer_hover_pos()
-                    .is_some_and(|point| cell.intersect(ui.clip_rect()).contains(point))
-            {
+            if super::ui::preview_hovered(ui, cell) {
                 clicked = Some(page);
             }
         }
@@ -166,12 +137,6 @@ impl Pages {
         clicked
     }
 
-    fn clear_hover(&mut self) {
-        self.hover_cache.clear();
-        self.hover_key = None;
-        self.hover_seen = false;
-    }
-
     fn hover_page(
         &mut self,
         ui: &mut egui::Ui,
@@ -180,28 +145,19 @@ impl Pages {
         page: usize,
         fallback: Option<&egui::TextureHandle>,
     ) {
-        self.hover_seen = true;
         let edge = (480.0 * ui.ctx().pixels_per_point())
             .ceil()
             .clamp(256.0, 1024.0) as u32;
-        if !self.hover_key.is_some_and(|(source, previous, size, _)| {
-            source == identity && previous == page && size == edge
-        }) {
-            self.hover_cache.clear();
-            self.hover_key = Some((identity, page, edge, uuid::Uuid::new_v4()));
-        }
-        let id = self.hover_key.unwrap().3;
-        if self.hover_cache.needs(id) {
-            self.hover_cache.request(
-                id,
-                Source::PdfPage {
-                    path: entry.path.clone(),
-                    page,
-                    edge,
-                },
-            );
-        }
-        let ready = self.hover_cache.get(id);
+        let ready = self.hover.request(
+            identity,
+            page,
+            edge,
+            Source::PdfPage {
+                path: entry.path.clone(),
+                page,
+                edge,
+            },
+        );
         let texture = ready.and_then(|ready| ready.texture.as_ref()).or(fallback);
         egui::show_tooltip_at_pointer(
             ui.ctx(),
@@ -226,19 +182,6 @@ impl Pages {
             },
         );
     }
-}
-
-fn page_slots(pages: usize, capacity: usize) -> Vec<Option<usize>> {
-    if pages <= capacity {
-        return (1..=pages).map(Some).collect();
-    }
-    let first = capacity / 2;
-    let last = capacity - first - 1;
-    (1..=first)
-        .map(Some)
-        .chain(std::iter::once(None))
-        .chain((pages - last + 1..=pages).map(Some))
-        .collect()
 }
 
 pub(super) fn load_page(

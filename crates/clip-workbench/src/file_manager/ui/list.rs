@@ -30,7 +30,13 @@ impl<'a> ListPreviews<'a> {
         name_width: f32,
         colors: WorkbenchColors,
     ) -> egui::Response {
-        let response = if entry.is_playable_media() || entry.is_scene() || entry.is_photo() {
+        let response = if entry.is_playable_media()
+            || entry.is_scene()
+            || entry.is_blend()
+            || entry.is_photo()
+            || entry.is_material()
+            || self.files.is_binary(entry)
+        {
             media_row(ui, rect, marked, colors)
         } else {
             let lines = (!entry.directory)
@@ -68,13 +74,7 @@ impl<'a> ListPreviews<'a> {
         let is_audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
         let mut response = self.response(ui, rect, entry, marked, name_width, colors);
         let mut engaged = false;
-        if entry.is_scene() {
-            self.paths.insert(entry.path.clone());
-            self.files.show_scene(ui, rect, entry, colors);
-        } else if entry.is_photo() {
-            self.paths.insert(entry.path.clone());
-            self.files.show_image(ui, rect, entry, colors);
-        } else if entry.regular_file && super::super::midi_strip::is_midi(&entry.path) {
+        if entry.regular_file && super::super::midi_strip::is_midi(&entry.path) {
             self.paths.insert(entry.path.clone());
             engaged = super::super::midi_strip::show(
                 ui,
@@ -118,6 +118,26 @@ impl<'a> ListPreviews<'a> {
             );
             self.hovered_video |= time.is_some();
             actions.video_click(ui, &response, entry, time, self.video_start);
+        } else {
+            self.passive_row(ui, rect, entry, &response, colors, palette);
+        }
+        (response, engaged)
+    }
+    fn passive_row(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        entry: &Entry,
+        response: &egui::Response,
+        colors: WorkbenchColors,
+        palette: &AppPalette,
+    ) {
+        if entry.is_scene() {
+            self.paths.insert(entry.path.clone());
+            self.files.show_scene(ui, rect, entry, colors, palette);
+        } else if entry.is_photo() || entry.is_material() || entry.is_blend() {
+            self.paths.insert(entry.path.clone());
+            self.files.show_visual(ui, rect, entry, colors);
         } else if entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path) {
             self.paths.insert(entry.path.clone());
             let page = self.files.show_pdf(ui, rect, entry, colors);
@@ -131,7 +151,6 @@ impl<'a> ListPreviews<'a> {
                 *self.text_start = line.map(|line| (entry.path.clone(), line));
             }
         }
-        (response, engaged)
     }
 }
 

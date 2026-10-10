@@ -47,6 +47,9 @@ raw-window-handle = "0.6"
 wayland-client = { version = "0.31", features = ["system"] }
 filmr = { path = "../../vendor/filmr", default-features = false, features = ["compute-gpu"] }
 
+object = { version = "0.40", default-features = false, features = ["read", "std"] }
+sha2 = "0.10"
+
 [dev-dependencies]
 rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
 filmr-pinned = { package = "filmr", git = "https://github.com/W-Mai/filmr", rev = "fee388e213dd77bfe6977b63071b1c136213373a", default-features = false }

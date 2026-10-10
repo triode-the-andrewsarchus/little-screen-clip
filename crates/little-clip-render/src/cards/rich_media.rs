@@ -186,7 +186,8 @@ impl ScreenRenderer {
             clip_right,
         );
     }
-    pub(crate) fn draw_model3d_viewport(
+    /// Draws an orbit view using bounded preview geometry and material tints.
+    pub fn draw_model3d_viewport(
         &self,
         pixmap: &mut Pixmap,
         mesh: &model3d::Model3d,
