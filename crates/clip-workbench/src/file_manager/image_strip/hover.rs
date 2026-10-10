@@ -3,7 +3,7 @@ use super::super::{
     shelf::preview::{Previews, Source},
 };
 use super::Analysis;
-use egui::{Rect, TextureHandle, Ui, pos2, vec2};
+use egui::{Rect, TextureHandle, Ui, vec2};
 use std::{collections::BTreeSet, path::PathBuf};
 
 #[derive(Default)]
@@ -75,18 +75,13 @@ impl Hover {
             .get(id)
             .and_then(|ready| ready.texture.as_ref())
             .or(fallback);
-        let left = thumbnail
-            .left()
-            .clamp(screen.left(), (screen.right() - size.x).max(screen.left()));
-        // A passive overlay leaves wheel, click and selection handling in the file list.
-        egui::Area::new(egui::Id::new(("image_strip_hover", identity)))
-            .order(egui::Order::Tooltip)
-            .fixed_pos(pos2(left, top))
-            .interactable(false)
-            .show(ui.ctx(), |ui| {
-                if let Some(texture) = texture {
-                    ui.add(egui::Image::new(texture).fit_to_exact_size(size));
-                }
-            });
+        super::super::ui::preview_popup(
+            ui,
+            egui::Id::new(("image_strip_hover", identity)),
+            thumbnail,
+            size,
+            texture,
+            None,
+        );
     }
 }

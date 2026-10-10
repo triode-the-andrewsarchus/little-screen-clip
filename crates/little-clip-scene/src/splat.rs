@@ -50,6 +50,16 @@ impl SplatScene {
         self.gaussians.len()
     }
 
+    /// Returns the framing center and bounding sphere radius in scene units.
+    pub fn framing(&self) -> ([f32; 3], f32) {
+        (self.center.to_array(), self.radius)
+    }
+
+    /// Returns whether the scene's colors require linear-to-sRGB output encoding.
+    pub fn has_linear_color(&self) -> bool {
+        self.linear_color
+    }
+
     /// Returns whether the scene contains no Gaussians.
     pub fn is_empty(&self) -> bool {
         self.gaussians.is_empty()

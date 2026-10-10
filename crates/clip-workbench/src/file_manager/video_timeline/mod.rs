@@ -5,52 +5,15 @@ mod dispatch;
 mod scrub;
 use super::{filesystem::Entry, media::VideoMetadata};
 use egui::{Context, TextureHandle};
-use little_clip_core::{BackgroundJobs, ImageThumbnail, JobError, JobTicket};
+use little_clip_core::{BackgroundJobs, ImageThumbnail, JobError};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{
-        Arc, LazyLock,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::{Arc, LazyLock, mpsc},
     time::Duration,
 };
 
-struct Task<T> {
-    ticket: JobTicket,
-    token: Arc<AtomicBool>,
-    receiver: mpsc::Receiver<Result<T, JobError>>,
-}
-impl<T: Send + 'static> Task<T> {
-    fn start(
-        pool: &BackgroundJobs,
-        timeout: Duration,
-        work: impl FnOnce(&AtomicBool) -> T + Send + 'static,
-    ) -> Self {
-        let token = Arc::new(AtomicBool::new(false));
-        let worker = token.clone();
-        let (ticket, receiver) = pool.submit(timeout, move || work(&worker));
-        Self {
-            ticket,
-            token,
-            receiver,
-        }
-    }
-    fn poll(&self) -> Option<Result<T, JobError>> {
-        match self.receiver.try_recv() {
-            Ok(result) => Some(result),
-            Err(mpsc::TryRecvError::Empty) => None,
-            Err(_) => Some(Err(JobError::Cancelled)),
-        }
-    }
-}
-impl<T> Drop for Task<T> {
-    fn drop(&mut self) {
-        self.token.store(true, Ordering::Relaxed);
-        self.ticket.cancel();
-    }
-}
+use super::preview_job::Task;
 static TIMELINES: LazyLock<BackgroundJobs> =
     LazyLock::new(|| BackgroundJobs::new(*dispatch::FILE_LIMIT, 4));
 static FRAMES: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(1, 2));
@@ -340,6 +303,7 @@ impl Previews {
 mod tests {
     use super::*;
     use crate::file_source::FileSource;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn partial_textures_update_before_completion_and_retire_with_the_job() {

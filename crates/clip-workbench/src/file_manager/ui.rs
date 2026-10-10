@@ -1042,3 +1042,30 @@ fn media_rows(
         }
     })
 }
+
+/// Paints a passive image below a row, keeping file-list input available.
+pub(super) fn preview_popup(
+    ui: &Ui,
+    id: Id,
+    anchor: Rect,
+    size: egui::Vec2,
+    texture: Option<&egui::TextureHandle>,
+    message: Option<&str>,
+) {
+    let screen = ui.ctx().screen_rect().shrink(8.0);
+    let left = anchor
+        .left()
+        .clamp(screen.left(), (screen.right() - size.x).max(screen.left()));
+    egui::Area::new(id)
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos2(left, anchor.bottom() + 6.0))
+        .interactable(false)
+        .show(ui.ctx(), |ui| {
+            if let Some(texture) = texture {
+                ui.add(egui::Image::new(texture).fit_to_exact_size(size));
+            }
+            if let Some(message) = message {
+                ui.label(message);
+            }
+        });
+}

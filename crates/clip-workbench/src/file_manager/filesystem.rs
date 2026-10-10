@@ -35,6 +35,9 @@ impl Entry {
                 || super::midi_strip::is_midi(&self.path)
                 || little_clip_core::audio::is_audio_path(&self.path))
     }
+    pub(super) fn is_scene(&self) -> bool {
+        self.regular_file && little_clip_scene::is_splat_file(&self.path)
+    }
     pub(super) fn is_photo(&self) -> bool {
         self.regular_file
             && (little_clip_core::item::is_image_path(&self.path)
