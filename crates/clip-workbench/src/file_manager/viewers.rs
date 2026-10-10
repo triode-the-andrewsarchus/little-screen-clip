@@ -61,6 +61,7 @@ pub(super) struct Viewers {
     gallery: Option<gallery::Collection>,
     video_start_seconds: f64,
     text_start_line: Option<usize>,
+    pdf_start_page: Option<usize>,
 }
 impl Viewers {
     pub fn new(config: AppConfig) -> Self {
@@ -87,6 +88,7 @@ impl Viewers {
         }
         self.video_start_seconds = 0.0;
         self.text_start_line = None;
+        self.pdf_start_page = None;
         let source = path.clone();
         let config = self.config.clone();
         let (ticket, receiver) = BackgroundJobs::global()
@@ -110,6 +112,13 @@ impl Viewers {
         }
         self.open(path);
         self.text_start_line = Some(line);
+    }
+    pub fn open_pdf_at(&mut self, path: PathBuf, page: usize) {
+        if self.active() {
+            return;
+        }
+        self.open(path);
+        self.pdf_start_page = Some(page.max(1));
     }
     fn poll(&mut self, ctx: &Context) {
         let Some(loading) = &self.loading else { return };
@@ -135,6 +144,11 @@ impl Viewers {
                 ))
             }
             Err(error) => self.error = Some(error),
+        }
+        if let Some(ViewerSession::Pdf(state)) = &mut self.session
+            && let Some(page) = self.pdf_start_page.take()
+        {
+            state.selected_page = Some(page);
         }
         if let Some(ViewerSession::Text(state)) = &mut self.session
             && let Some(line) = self.text_start_line.take()

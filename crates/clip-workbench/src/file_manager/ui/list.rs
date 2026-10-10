@@ -8,6 +8,7 @@ struct ListPreviews<'a> {
     videos: &'a mut video_timeline::Previews,
     selection: &'a mut Option<music::MusicRange>,
     playback: &'a super::super::music::Music,
+    pdf_start: &'a mut Option<(PathBuf, usize)>,
     text_start: &'a mut Option<(PathBuf, usize)>,
     video_start: &'a mut Option<(PathBuf, f64)>,
     decimation: u8,
@@ -37,8 +38,20 @@ impl<'a> ListPreviews<'a> {
             let lines = (!entry.directory)
                 .then(|| self.files.listing(entry))
                 .flatten()
-                .and_then(|ready| ready.data.document.as_ref())
-                .map(|doc| doc.lines);
+                .and_then(|ready| {
+                    ready
+                        .data
+                        .document
+                        .as_ref()
+                        .map(|doc| format!("{} lines", doc.lines))
+                        .or_else(|| {
+                            ready
+                                .data
+                                .pdf_info
+                                .as_ref()
+                                .map(|info| format!("{} pages", info.page_count))
+                        })
+                });
             file_row(ui, rect, entry, marked, name_width, lines, colors)
         };
         let mut engaged = false;
@@ -74,6 +87,12 @@ impl<'a> ListPreviews<'a> {
             );
             self.hovered_video |= time.is_some();
             actions.video_click(ui, &response, entry, time, self.video_start);
+        } else if entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path) {
+            self.paths.insert(entry.path.clone());
+            let page = self.files.show_pdf(ui, rect, entry, colors);
+            if response.double_clicked() {
+                *self.pdf_start = page.map(|page| (entry.path.clone(), page));
+            }
         } else if !entry.directory && self.paths.len() < 128 {
             self.paths.insert(entry.path.clone());
             let line = self.files.show_listing(ui, rect, entry, colors, palette);
@@ -150,6 +169,7 @@ impl FileManager {
             videos: &mut self.video_previews,
             selection: &mut self.music_selection,
             playback: &self.music,
+            pdf_start: &mut self.pdf_start,
             text_start: &mut self.text_start,
             video_start: &mut self.video_start,
             decimation: self.video_timeline_decimation,

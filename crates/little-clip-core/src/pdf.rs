@@ -106,22 +106,46 @@ pub fn render_pdf_page_preview(
     page: usize,
     max_dim: u32,
 ) -> Result<(Vec<u8>, u32, u32), String> {
+    render_pdf_page_png(path, page, max_dim, false)
+}
+
+/// Renders a page with both dimensions bounded for compact thumbnails.
+pub fn render_pdf_page_thumbnail(
+    path: &Path,
+    page: usize,
+    max_dim: u32,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    render_pdf_page_png(path, page, max_dim.clamp(1, 1024), true)
+}
+
+fn render_pdf_page_png(
+    path: &Path,
+    page: usize,
+    max_dim: u32,
+    square_bounds: bool,
+) -> Result<(Vec<u8>, u32, u32), String> {
     let workspace = ArtifactStore::new()
         .and_then(|store| store.create_workspace("pdf", "preview"))
         .map_err(|error| format!("could not create PDF preview workspace: {error}"))?;
     let temp_prefix = workspace.path().join(format!("page-{page}"));
     let page_str = page.to_string();
 
-    let output = CommandRequest::new("pdftoppm")
+    let mut command = CommandRequest::new("pdftoppm")
         .arg("-png")
         .arg("-f")
         .arg(&page_str)
         .arg("-l")
-        .arg(&page_str)
-        .arg("-scale-to-x")
-        .arg(max_dim.to_string())
-        .arg("-scale-to-y")
-        .arg("-1")
+        .arg(&page_str);
+    command = if square_bounds {
+        command.arg("-scale-to").arg(max_dim.to_string())
+    } else {
+        command
+            .arg("-scale-to-x")
+            .arg(max_dim.to_string())
+            .arg("-scale-to-y")
+            .arg("-1")
+    };
+    let output = command
         .arg(path)
         .arg(&temp_prefix)
         .run()

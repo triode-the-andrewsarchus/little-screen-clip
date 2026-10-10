@@ -160,6 +160,11 @@ impl FileManagerApp {
             } else {
                 self.browser.ui(ui, &self.palette);
                 if let Some(path) = self.browser.open_file.take() {
+                    let pdf_start = self
+                        .browser
+                        .pdf_start
+                        .take()
+                        .filter(|(source, _)| source == &path);
                     let text_start = self
                         .browser
                         .text_start
@@ -178,7 +183,9 @@ impl FileManagerApp {
                         .video_start
                         .take()
                         .filter(|(source, _)| source == &path);
-                    if let Some((_, line)) = text_start {
+                    if let Some((_, page)) = pdf_start {
+                        self.viewers.open_pdf_at(path, page);
+                    } else if let Some((_, line)) = text_start {
                         self.viewers.open_text_at(path, line);
                     } else if let Some((_, seconds)) = start {
                         self.viewers.open_video_at(path, seconds);

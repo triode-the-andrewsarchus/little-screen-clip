@@ -757,7 +757,7 @@ fn file_row(
     entry: &super::filesystem::Entry,
     selected: bool,
     name_width: f32,
-    lines: Option<u64>,
+    count: Option<String>,
     colors: WorkbenchColors,
 ) -> egui::Response {
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
@@ -794,17 +794,17 @@ fn file_row(
         ui,
         rect,
         32.0,
-        name_width - 38.0 - if lines.is_some() { 108.0 } else { 0.0 },
+        name_width - 38.0 - if count.is_some() { 108.0 } else { 0.0 },
         &entry.name,
         colors.text_primary,
     );
-    if let Some(lines) = lines {
+    if let Some(count) = count {
         paint_text(
             ui,
             rect,
             name_width - 112.0,
             104.0,
-            &format!("{lines} lines"),
+            &count,
             colors.text_secondary,
         );
     }

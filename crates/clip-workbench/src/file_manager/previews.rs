@@ -12,6 +12,7 @@ pub(super) struct EntryPreviews {
     gallery_sizes: BTreeMap<std::path::PathBuf, u32>,
     text_rasters: Previews,
     text_sizes: BTreeMap<uuid::Uuid, ((u32, u32, [[u8; 3]; 9]), uuid::Uuid)>,
+    pdf_pages: super::pdf_strip::Pages,
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
 impl EntryPreviews {
@@ -40,6 +41,7 @@ impl EntryPreviews {
     }
     pub fn poll(&mut self, ctx: &egui::Context) -> bool {
         self.text_rasters.poll(ctx);
+        self.pdf_pages.poll(ctx);
         let changed = self.cache.poll(ctx);
         if changed {
             for (path, (revision, id)) in &self.identities {
@@ -55,6 +57,7 @@ impl EntryPreviews {
         if visible.is_empty() {
             self.text_status.clear();
         }
+        self.pdf_pages.retain(visible);
         self.identities.retain(|path, _| visible.contains(path));
         self.gallery_sizes.retain(|path, _| visible.contains(path));
         self.cache
@@ -80,6 +83,7 @@ impl EntryPreviews {
     /// Stop hidden preview work without changing this folder's row geometry.
     pub fn retire(&mut self) {
         self.cache.clear();
+        self.pdf_pages.clear();
         self.identities.clear();
         self.gallery_sizes.clear();
         self.text_rasters.clear();
@@ -101,6 +105,20 @@ impl EntryPreviews {
             );
         }
         self.cache.get(id)
+    }
+    pub fn show_pdf(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: egui::Rect,
+        entry: &Entry,
+        colors: crate::ui_appearance::WorkbenchColors,
+    ) -> Option<usize> {
+        let id = self.identity(entry);
+        let info = self
+            .listing(entry)
+            .and_then(|ready| ready.data.pdf_info.clone());
+        self.pdf_pages
+            .show(ui, row, entry, id, info.as_deref(), colors)
     }
     pub fn show_listing(
         &mut self,

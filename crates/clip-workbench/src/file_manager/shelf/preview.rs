@@ -27,6 +27,11 @@ pub(in crate::file_manager) enum Source {
     },
     Music(PathBuf),
     Text(PathBuf),
+    PdfPage {
+        path: PathBuf,
+        page: usize,
+        edge: u32,
+    },
     TextRaster {
         document: Arc<super::super::text_strip::Document>,
         width: u32,
@@ -83,7 +88,7 @@ impl Previews {
 
     pub fn request(&mut self, id: uuid::Uuid, source: Source) {
         let music = matches!(&source, Source::Music(_));
-        let gallery = matches!(&source, Source::Gallery { .. });
+        let gallery = matches!(&source, Source::Gallery { .. } | Source::PdfPage { .. });
         let text = matches!(&source, Source::Text(_) | Source::TextRaster { .. });
         let executor = if gallery {
             gallery_preview_jobs()
@@ -119,6 +124,9 @@ impl Previews {
                     orientation,
                 } => gallery_preview(&path, edge, orientation, &token),
                 Source::Music(path) => super::super::music::preview::load(&path, &token),
+                Source::PdfPage { path, page, edge } => {
+                    super::super::pdf_strip::load_page(&path, page, edge, &token)
+                }
                 Source::Text(path) => {
                     let mut data = Data::new(display_path(&path), "Text".into(), Icon::Text);
                     match super::super::text_strip::load(&path, &token) {
@@ -455,7 +463,8 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
         data.icon = Icon::Pdf;
         if let Ok(info) = little_clip_core::pdf::get_pdf_info(path) {
             data.detail = format!("{} pages", info.page_count);
-            data.text = info.title.unwrap_or_default();
+            data.text = info.title.clone().unwrap_or_default();
+            data.pdf_info = Some(Arc::new(info));
         }
     } else if let Ok(bytes) = crate::file_source::read_file_bytes(path, 2048, false, false)
         && !bytes.contains(&0)

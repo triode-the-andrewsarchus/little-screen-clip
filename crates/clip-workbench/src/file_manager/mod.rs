@@ -9,6 +9,7 @@ mod gallery;
 mod media;
 mod music;
 mod native_drag;
+mod pdf_strip;
 mod previews;
 mod selection;
 mod shelf;
@@ -142,6 +143,7 @@ pub(crate) struct FileManager {
     shelf: shelf::Shelf,
     open_file: Option<PathBuf>,
     text_start: Option<(PathBuf, usize)>,
+    pdf_start: Option<(PathBuf, usize)>,
     video_start: Option<(PathBuf, f64)>,
     previews: previews::EntryPreviews,
     gallery_previews: previews::EntryPreviews,
@@ -202,6 +204,7 @@ impl FileManager {
             shelf: shelf::Shelf::default(),
             open_file: None,
             text_start: None,
+            pdf_start: None,
             video_start: None,
             previews: previews::EntryPreviews::default(),
             gallery_previews: previews::EntryPreviews::default(),
@@ -447,6 +450,7 @@ impl FileManager {
                 let entry = &directory.entries[*index];
                 let height = if self.previews.is_text(entry)
                     || entry.is_video()
+                    || (entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path))
                     || (entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path))
                 {
                     VIDEO_ROW_HEIGHT
