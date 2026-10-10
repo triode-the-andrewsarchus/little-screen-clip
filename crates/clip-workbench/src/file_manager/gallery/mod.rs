@@ -1,6 +1,6 @@
 //! Independent, cached chunks with header metadata, background packing and a height index.
 mod jobs;
-mod metadata;
+pub(super) mod metadata;
 mod packing;
 #[cfg(test)]
 mod tests;

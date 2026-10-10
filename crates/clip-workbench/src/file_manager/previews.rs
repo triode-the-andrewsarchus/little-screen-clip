@@ -12,6 +12,7 @@ pub(super) struct EntryPreviews {
     gallery_sizes: BTreeMap<std::path::PathBuf, u32>,
     rasters: Previews,
     raster_sizes: BTreeMap<uuid::Uuid, ((u32, u32, Vec<[u8; 3]>), uuid::Uuid)>,
+    image_hover: super::image_strip::Hover,
     pdf_pages: super::pdf_strip::Pages,
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
@@ -42,6 +43,7 @@ impl EntryPreviews {
     pub fn poll(&mut self, ctx: &egui::Context) -> bool {
         self.rasters.poll(ctx);
         self.pdf_pages.poll(ctx);
+        self.image_hover.poll(ctx);
         let changed = self.cache.poll(ctx);
         if changed {
             for (path, (revision, id)) in &self.identities {
@@ -58,6 +60,7 @@ impl EntryPreviews {
             self.text_status.clear();
         }
         self.pdf_pages.retain(visible);
+        self.image_hover.retain(visible);
         self.identities.retain(|path, _| visible.contains(path));
         self.gallery_sizes.retain(|path, _| visible.contains(path));
         self.cache
@@ -84,6 +87,7 @@ impl EntryPreviews {
     pub fn retire(&mut self) {
         self.cache.clear();
         self.pdf_pages.clear();
+        self.image_hover.clear();
         self.identities.clear();
         self.gallery_sizes.clear();
         self.rasters.clear();
@@ -94,7 +98,12 @@ impl EntryPreviews {
         if self.cache.needs(id) {
             self.cache.request(
                 id,
-                if super::midi_strip::is_midi(&entry.path) {
+                if entry.regular_file && entry.is_photo() {
+                    Source::Photo {
+                        path: entry.path.clone(),
+                        revision: entry.revision,
+                    }
+                } else if super::midi_strip::is_midi(&entry.path) {
                     Source::Midi(entry.path.clone())
                 } else if little_clip_core::audio::is_audio_path(&entry.path) {
                     Source::Music(entry.path.clone())
@@ -109,6 +118,25 @@ impl EntryPreviews {
             );
         }
         self.cache.get(id)
+    }
+    pub fn show_image(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: egui::Rect,
+        entry: &Entry,
+        colors: crate::ui_appearance::WorkbenchColors,
+    ) {
+        let id = self.identity(entry);
+        self.listing(entry);
+        super::image_strip::show(
+            ui,
+            row,
+            entry,
+            id,
+            self.cache.get(id),
+            &mut self.image_hover,
+            colors,
+        );
     }
     pub fn show_midi(
         &mut self,

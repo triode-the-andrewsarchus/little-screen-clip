@@ -6,6 +6,7 @@ mod edit_ui;
 mod edits;
 mod filesystem;
 mod gallery;
+mod image_strip;
 mod media;
 mod midi_strip;
 mod music;
@@ -458,6 +459,7 @@ impl FileManager {
                 let entry = &directory.entries[*index];
                 let height = if self.previews.is_text(entry)
                     || entry.is_playable_media()
+                    || (entry.regular_file && entry.is_photo())
                     || (entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path))
                 {
                     VIDEO_ROW_HEIGHT

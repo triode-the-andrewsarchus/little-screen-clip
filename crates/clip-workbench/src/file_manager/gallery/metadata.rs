@@ -9,7 +9,7 @@ use std::{
 };
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-pub(super) struct Metadata {
+pub(in crate::file_manager) struct Metadata {
     pub width: u32,
     pub height: u32,
     pub orientation: u8,
@@ -28,7 +28,7 @@ impl Metadata {
     }
 }
 
-pub(super) fn probe(path: &Path, revision: u64) -> Result<Metadata, String> {
+pub(in crate::file_manager) fn probe(path: &Path, revision: u64) -> Result<Metadata, String> {
     let source = FileSource::capture(path)?;
     super::super::filesystem::check_revision(path, revision)?;
     let cache = cache_path(path, revision);

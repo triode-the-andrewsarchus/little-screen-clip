@@ -1,4 +1,4 @@
-//! Mixed List rows reuse the dedicated text, music, and video previews.
+//! Mixed List rows share image, text, music, video, MIDI, and PDF previews.
 use super::super::{filesystem::Entry, previews::EntryPreviews, video_timeline};
 use super::*;
 
@@ -30,7 +30,7 @@ impl<'a> ListPreviews<'a> {
         name_width: f32,
         colors: WorkbenchColors,
     ) -> egui::Response {
-        let response = if entry.is_playable_media() {
+        let response = if entry.is_playable_media() || (entry.regular_file && entry.is_photo()) {
             media_row(ui, rect, marked, colors)
         } else {
             let lines = (!entry.directory)
@@ -68,7 +68,10 @@ impl<'a> ListPreviews<'a> {
         let is_audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
         let mut response = self.response(ui, rect, entry, marked, name_width, colors);
         let mut engaged = false;
-        if entry.regular_file && super::super::midi_strip::is_midi(&entry.path) {
+        if entry.regular_file && entry.is_photo() {
+            self.paths.insert(entry.path.clone());
+            self.files.show_image(ui, rect, entry, colors);
+        } else if entry.regular_file && super::super::midi_strip::is_midi(&entry.path) {
             self.paths.insert(entry.path.clone());
             engaged = super::super::midi_strip::show(
                 ui,

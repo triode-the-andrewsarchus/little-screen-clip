@@ -25,6 +25,10 @@ pub(in crate::file_manager) enum Source {
         edge: u32,
         orientation: u8,
     },
+    Photo {
+        path: PathBuf,
+        revision: u64,
+    },
     Music(PathBuf),
     Text(PathBuf),
     Midi(PathBuf),
@@ -52,6 +56,7 @@ pub(in crate::file_manager) use super::super::media::PreviewData as Data;
 pub(in crate::file_manager) struct Ready {
     pub data: Data,
     pub texture: Option<egui::TextureHandle>,
+    pub hash_textures: [Option<egui::TextureHandle>; 2],
 }
 struct Pending {
     ticket: JobTicket,
@@ -95,7 +100,10 @@ impl Previews {
 
     pub fn request(&mut self, id: uuid::Uuid, source: Source) {
         let music = matches!(&source, Source::Music(_));
-        let gallery = matches!(&source, Source::Gallery { .. } | Source::PdfPage { .. });
+        let gallery = matches!(
+            &source,
+            Source::Gallery { .. } | Source::PdfPage { .. } | Source::Photo { .. }
+        );
         let text = matches!(
             &source,
             Source::Text(_)
@@ -136,6 +144,9 @@ impl Previews {
                     edge,
                     orientation,
                 } => gallery_preview(&path, edge, orientation, &token),
+                Source::Photo { path, revision } => {
+                    super::super::image_strip::load(&path, revision, &token)
+                }
                 Source::Music(path) => super::super::music::preview::load(&path, &token),
                 Source::PdfPage { path, page, edge } => {
                     super::super::pdf_strip::load_page(&path, page, edge, &token)
@@ -235,23 +246,55 @@ impl Previews {
             data.text = error.to_string();
             data
         });
-        let texture = data.image.as_ref().map(|image| {
-            ctx.load_texture(
-                format!("shelf_preview_{id}"),
-                egui::ColorImage::from_rgba_premultiplied(
-                    [image.width as usize, image.height as usize],
-                    &image.premultiplied_rgba,
-                ),
-                if data.document.is_some() || data.midi_document.is_some() {
-                    egui::TextureOptions::NEAREST
-                } else {
-                    egui::TextureOptions::LINEAR
-                },
-            )
+        let options = if data.document.is_some() || data.midi_document.is_some() {
+            egui::TextureOptions::NEAREST
+        } else {
+            egui::TextureOptions::LINEAR
+        };
+        let texture = data
+            .image
+            .as_ref()
+            .map(|image| upload_texture(ctx, format!("shelf_preview_{id}"), image, options));
+        let hash_textures = std::array::from_fn(|index| {
+            data.photo.as_ref()?.hash_art[index].as_ref().map(|image| {
+                upload_texture(
+                    ctx,
+                    format!("image_hash_{id}_{index}"),
+                    image,
+                    if index == 1 {
+                        egui::TextureOptions::NEAREST
+                    } else {
+                        egui::TextureOptions::LINEAR
+                    },
+                )
+            })
         });
-        self.ready.insert(id, Ready { data, texture });
+        self.ready.insert(
+            id,
+            Ready {
+                data,
+                texture,
+                hash_textures,
+            },
+        );
         ctx.request_repaint();
     }
+}
+
+fn upload_texture(
+    ctx: &egui::Context,
+    name: String,
+    image: &ImageThumbnail,
+    options: egui::TextureOptions,
+) -> egui::TextureHandle {
+    ctx.load_texture(
+        name,
+        egui::ColorImage::from_rgba_premultiplied(
+            [image.width as usize, image.height as usize],
+            &image.premultiplied_rgba,
+        ),
+        options,
+    )
 }
 
 fn text_preview_jobs() -> &'static BackgroundJobs {

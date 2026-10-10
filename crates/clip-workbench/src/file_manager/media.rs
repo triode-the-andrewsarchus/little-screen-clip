@@ -23,6 +23,7 @@ pub(in crate::file_manager) struct PreviewData {
     pub waveform_colors: Vec<[u8; 3]>,
     pub icon: Icon,
     pub music: Option<MusicMetadata>,
+    pub photo: Option<std::sync::Arc<super::image_strip::Analysis>>,
     pub midi_document: Option<std::sync::Arc<super::midi_strip::Document>>,
     pub pdf_info: Option<std::sync::Arc<little_clip_core::pdf::PdfInfo>>,
     pub document: Option<std::sync::Arc<super::text_strip::Document>>,
@@ -42,6 +43,7 @@ impl PreviewData {
             document: None,
             pdf_info: None,
             midi_document: None,
+            photo: None,
         }
     }
 }
