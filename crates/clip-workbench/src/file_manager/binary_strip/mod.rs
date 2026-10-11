@@ -156,9 +156,12 @@ pub(super) fn show(
         ready.and_then(|r| r.texture.as_ref()),
         colors,
     );
+    let label_font = egui::FontId::monospace(9.0);
+    let label_height = ui.fonts(|fonts| fonts.row_height(&label_font));
+    // Leave room for the section bar, its gaps, and a full line of text.
     let strip = Rect::from_min_max(
         pos2(thumbnail.right() + 8.0, body.top()),
-        pos2(body.right(), body.bottom() - 13.0),
+        pos2(body.right(), body.bottom() - label_height - 9.0),
     );
     ui.painter().rect_filled(strip, 2.0, colors.recessed);
     if let Some(document) = ready.and_then(|r| r.data.binary.as_ref()) {
@@ -180,7 +183,7 @@ pub(super) fn show(
                         pos2((left + right) / 2.0, bar.bottom() + 1.0),
                         egui::Align2::CENTER_TOP,
                         &section.name,
-                        egui::FontId::monospace(9.0),
+                        label_font.clone(),
                         colors.text_secondary,
                     );
             }
