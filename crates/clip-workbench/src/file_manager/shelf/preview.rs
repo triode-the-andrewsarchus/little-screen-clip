@@ -32,6 +32,13 @@ pub(in crate::file_manager) enum Source {
     Music(PathBuf),
     Text(PathBuf),
     Binary(PathBuf),
+    Font(PathBuf),
+    FontRaster {
+        document: Arc<super::super::font_strip::Document>,
+        width: u32,
+        height: u32,
+        color: [u8; 3],
+    },
     BinaryRaster {
         document: Arc<super::super::binary_strip::Document>,
         width: u32,
@@ -161,6 +168,8 @@ impl Previews {
         let text = matches!(
             &source,
             Source::Text(_)
+                | Source::Font(_)
+                | Source::FontRaster { .. }
                 | Source::Binary(_)
                 | Source::BinaryRaster { .. }
                 | Source::TextRaster { .. }
@@ -233,6 +242,18 @@ impl Previews {
                     data.image =
                         super::super::midi_strip::render(&document, width, height, &colors, &token);
                     data.midi_document = Some(document);
+                    data
+                }
+                Source::Font(path) => super::super::font_strip::load(&path, &token),
+                Source::FontRaster {
+                    document,
+                    width,
+                    height,
+                    color,
+                } => {
+                    let mut data = Data::new(String::new(), String::new(), Icon::Text);
+                    data.image =
+                        super::super::font_strip::render(&document, width, height, color, &token);
                     data
                 }
                 Source::Binary(path) => super::super::binary_strip::load(&path, &token),

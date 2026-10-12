@@ -144,6 +144,8 @@ impl EntryPreviews {
                         path: entry.path.clone(),
                         revision: entry.revision,
                     }
+                } else if entry.regular_file && super::font_strip::known(&entry.path) {
+                    Source::Font(entry.path.clone())
                 } else if entry.is_blend() {
                     Source::Blend(entry.path.clone())
                 } else if entry.is_material() {
@@ -185,7 +187,25 @@ impl EntryPreviews {
     ) {
         let id = self.identity(entry);
         self.listing(entry);
-        if entry.is_blend() {
+        if super::font_strip::known(&entry.path) {
+            let document = self.cache.get(id).and_then(|r| r.data.font.clone());
+            let strip = super::font_strip::show(ui, row, entry, self.cache.get(id), colors);
+            if let Some(document) = document {
+                let (width, height) = raster_dimensions(ui, strip);
+                let color = [
+                    colors.text_primary.r(),
+                    colors.text_primary.g(),
+                    colors.text_primary.b(),
+                ];
+                let source = Source::FontRaster {
+                    document,
+                    width,
+                    height,
+                    color,
+                };
+                self.paint_raster(ui, strip, id, (width, height, vec![color]), source);
+            }
+        } else if entry.is_blend() {
             super::blend_preview::show(ui, row, entry, self.cache.get(id), colors);
         } else if entry.is_material() {
             self.materials
@@ -594,6 +614,7 @@ fn raster_dimensions(ui: &egui::Ui, rect: egui::Rect) -> (u32, u32) {
 
 fn text_candidate(entry: &Entry) -> bool {
     entry.regular_file
+        && !super::font_strip::known(&entry.path)
         && !super::midi_strip::is_midi(&entry.path)
         && !entry.is_scene()
         && !entry.is_blend()

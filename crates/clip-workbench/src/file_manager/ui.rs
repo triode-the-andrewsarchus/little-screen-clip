@@ -1153,14 +1153,14 @@ pub(super) fn information_strip(
     ui: &mut Ui,
     row: Rect,
     entry: &super::filesystem::Entry,
-    detail: String,
+    detail: &str,
     colors: WorkbenchColors,
 ) -> Rect {
     media_header(
         ui,
         Rect::from_min_size(row.min + vec2(6.0, 0.0), vec2(row.width() - 12.0, 24.0)),
         entry,
-        Some(detail),
+        Some(format!("{detail} · {} · {}", entry.size, entry.modified)),
         colors,
     );
     Rect::from_min_max(row.min + vec2(6.0, 32.0), row.max - vec2(6.0, 10.0))

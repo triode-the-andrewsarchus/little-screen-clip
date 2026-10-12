@@ -141,12 +141,7 @@ pub(super) fn show(
         ui,
         row,
         entry,
-        format!(
-            "{} · {} · {}",
-            ready.map_or("Binary", |r| r.data.detail.as_str()),
-            entry.size,
-            entry.modified
-        ),
+        ready.map_or("Binary", |r| r.data.detail.as_str()),
         colors,
     );
     let thumbnail = Rect::from_min_size(body.min, vec2(body.height(), body.height()));

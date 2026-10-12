@@ -33,6 +33,8 @@ kamadak-exif = "0.6.1"
 png = "0.18.1"
 tiny-skia = { workspace = true }
 fontdue = { workspace = true }
+ttf-parser = "0.25"
+wuff = "0.2.9"
 syntect = { workspace = true }
 unicode-width = "0.2.2"
 regex = { workspace = true }

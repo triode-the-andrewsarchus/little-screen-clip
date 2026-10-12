@@ -26,6 +26,7 @@ pub(in crate::file_manager) struct PreviewData {
     pub photo: Option<std::sync::Arc<super::image_strip::Analysis>>,
     pub midi_document: Option<std::sync::Arc<super::midi_strip::Document>>,
     pub pdf_info: Option<std::sync::Arc<little_clip_core::pdf::PdfInfo>>,
+    pub font: Option<std::sync::Arc<super::font_strip::Document>>,
     pub binary: Option<std::sync::Arc<super::binary_strip::Document>>,
     pub document: Option<std::sync::Arc<super::text_strip::Document>>,
     pub materials:
@@ -45,6 +46,7 @@ impl PreviewData {
             music: None,
             document: None,
             binary: None,
+            font: None,
             pdf_info: None,
             midi_document: None,
             photo: None,

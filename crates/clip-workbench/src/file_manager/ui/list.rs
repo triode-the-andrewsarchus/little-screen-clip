@@ -35,6 +35,7 @@ impl<'a> ListPreviews<'a> {
             || entry.is_blend()
             || entry.is_photo()
             || entry.is_material()
+            || (entry.regular_file && super::super::font_strip::known(&entry.path))
             || self.files.is_binary(entry)
         {
             media_row(ui, rect, marked, colors)
@@ -135,7 +136,11 @@ impl<'a> ListPreviews<'a> {
         if entry.is_scene() {
             self.paths.insert(entry.path.clone());
             self.files.show_scene(ui, rect, entry, colors, palette);
-        } else if entry.is_photo() || entry.is_material() || entry.is_blend() {
+        } else if entry.is_photo()
+            || entry.is_material()
+            || entry.is_blend()
+            || (entry.regular_file && super::super::font_strip::known(&entry.path))
+        {
             self.paths.insert(entry.path.clone());
             self.files.show_visual(ui, rect, entry, colors);
         } else if entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path) {

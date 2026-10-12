@@ -7,6 +7,7 @@ mod content;
 mod edit_ui;
 mod edits;
 mod filesystem;
+mod font_strip;
 mod gallery;
 mod image_strip;
 mod material_strip;
@@ -463,6 +464,7 @@ impl FileManager {
             for index in &self.visible {
                 let entry = &directory.entries[*index];
                 let height = if self.previews.is_text(entry)
+                    || (entry.regular_file && font_strip::known(&entry.path))
                     || entry.is_playable_media()
                     || entry.is_scene()
                     || entry.is_blend()
