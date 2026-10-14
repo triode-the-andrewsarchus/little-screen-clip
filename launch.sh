@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Little Screen Clip Management Script
-# Usage: ./launch.sh [start|stop|restart|status|ui|logs|test|build]
+# Usage: ./launch.sh [start|stop|restart|status|ui|logs|test|build|deps|distro]
 
 set -e
 
@@ -31,6 +31,162 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
+
+# Distribution and Dependency Management
+function detect_distro_id() {
+    local distro="unknown"
+    if [ -f /etc/os-release ]; then
+        distro=$(. /etc/os-release 2>/dev/null && echo "${ID:-unknown}")
+    elif [ -f /usr/lib/os-release ]; then
+        distro=$(. /usr/lib/os-release 2>/dev/null && echo "${ID:-unknown}")
+    elif command -v lsb_release >/dev/null 2>&1; then
+        distro=$(lsb_release -is 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    elif [ -f /etc/debian_version ]; then
+        distro="debian"
+    elif [ "$(uname -s)" = "Darwin" ]; then
+        distro="macos"
+    elif [ "$(uname -s)" = "Linux" ]; then
+        distro="linux"
+    fi
+    echo "$distro"
+}
+
+function detect_distro() {
+    detect_distro_id
+}
+
+function detect_distro_name() {
+    local name=""
+    if [ -f /etc/os-release ]; then
+        name=$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-${NAME:-${ID:-unknown}}}")
+    elif [ -f /usr/lib/os-release ]; then
+        name=$(. /usr/lib/os-release 2>/dev/null && echo "${PRETTY_NAME:-${NAME:-${ID:-unknown}}}")
+    elif command -v lsb_release >/dev/null 2>&1; then
+        name=$(lsb_release -ds 2>/dev/null || echo "Linux")
+    elif [ -f /etc/debian_version ]; then
+        name="Debian $(cat /etc/debian_version 2>/dev/null)"
+    elif [ "$(uname -s)" = "Darwin" ]; then
+        name="macOS"
+    else
+        name="$(uname -s)"
+    fi
+    echo "$name"
+}
+
+function is_ubuntu_or_debian() {
+    local id="" id_like=""
+    if [ -f /etc/os-release ]; then
+        id=$(. /etc/os-release 2>/dev/null && echo "${ID:-}")
+        id_like=$(. /etc/os-release 2>/dev/null && echo "${ID_LIKE:-}")
+    elif [ -f /usr/lib/os-release ]; then
+        id=$(. /usr/lib/os-release 2>/dev/null && echo "${ID:-}")
+        id_like=$(. /usr/lib/os-release 2>/dev/null && echo "${ID_LIKE:-}")
+    elif [ -f /etc/debian_version ]; then
+        return 0
+    fi
+
+    case "$id" in
+        ubuntu|debian|pop|linuxmint|elementary|zorin)
+            return 0
+            ;;
+    esac
+
+    for like in $id_like; do
+        if [ "$like" = "ubuntu" ] || [ "$like" = "debian" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+UBUNTU_DEPS=(
+    "libheif-dev"
+    "libasound2-dev"
+    "libgstreamer1.0-dev"
+    "libgstreamer-plugins-base1.0-dev"
+    "gstreamer1.0-plugins-base"
+    "gstreamer1.0-plugins-good"
+    "gstreamer1.0-plugins-bad"
+    "gstreamer1.0-plugins-ugly"
+    "gstreamer1.0-libav"
+    "libgstrtspserver-1.0-dev"
+    "libges-1.0-dev"
+)
+
+DEPS_CHECKED=0
+
+function ensure_dependencies() {
+    local verbose="${1:-0}"
+    if [ "$DEPS_CHECKED" = "1" ] && [ "$verbose" != "1" ]; then
+        return 0
+    fi
+    DEPS_CHECKED=1
+
+    local distro_name distro_id
+    distro_name="$(detect_distro_name)"
+    distro_id="$(detect_distro_id)"
+
+    if is_ubuntu_or_debian; then
+        if ! command -v dpkg-query >/dev/null 2>&1; then
+            if [ "$verbose" = "1" ]; then
+                echo -e "${YELLOW}dpkg-query not available; skipping Debian/Ubuntu dependency check.${NC}"
+            fi
+            return 0
+        fi
+
+        local missing_deps=()
+        for pkg in "${UBUNTU_DEPS[@]}"; do
+            if [ "$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null)" != "install ok installed" ]; then
+                missing_deps+=("$pkg")
+            fi
+        done
+
+        if [ ${#missing_deps[@]} -eq 0 ]; then
+            if [ "$verbose" = "1" ]; then
+                echo -e "${GREEN}All required dependencies are installed for ${distro_name}.${NC}"
+            fi
+            return 0
+        fi
+
+        echo -e "${YELLOW}Detected missing dependencies for ${distro_name}:${NC}"
+        for pkg in "${missing_deps[@]}"; do
+            echo -e "  ${CYAN}-${NC} $pkg"
+        done
+
+        local sudo_cmd=""
+        if [ "$EUID" -ne 0 ]; then
+            if command -v sudo >/dev/null 2>&1; then
+                sudo_cmd="sudo"
+            else
+                echo -e "${YELLOW}Warning: 'sudo' not available and not root; unable to auto-install dependencies.${NC}"
+                echo -e "${YELLOW}Please install them manually:${NC}"
+                echo -e "  sudo apt-get install -y ${missing_deps[*]}"
+                return 0
+            fi
+        fi
+
+        echo -e "${BLUE}Attempting best-effort installation of missing dependencies...${NC}"
+        if $sudo_cmd apt-get install -y "${missing_deps[@]}"; then
+            echo -e "${GREEN}Dependencies installed successfully!${NC}"
+        elif $sudo_cmd apt-get update && $sudo_cmd apt-get install -y "${missing_deps[@]}"; then
+            echo -e "${GREEN}Dependencies installed successfully!${NC}"
+        else
+            echo -e "${YELLOW}Warning: Failed to install some dependencies automatically.${NC}"
+            echo -e "${YELLOW}You can try installing them manually:${NC}"
+            echo -e "  sudo apt-get install -y ${missing_deps[*]}"
+            echo -e "${YELLOW}Continuing build anyway (best-effort)...${NC}"
+        fi
+    else
+        if [ "$verbose" = "1" ]; then
+            echo -e "${BLUE}Detected distro: ${distro_name} (${distro_id})${NC}"
+            echo -e "${YELLOW}Automatic dependency installation is currently configured for Ubuntu/Debian.${NC}"
+            echo -e "Ensure development packages for libheif, ALSA, and GStreamer 1.0 are installed if build issues arise."
+        fi
+    fi
+
+    return 0
+}
 
 function is_systemd_run() {
     [ -n "$LITTLE_SCREEN_CLIP_SYSTEMD" ]
@@ -71,6 +227,7 @@ function get_pid() {
 
 function build_if_needed() {
     if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$WORKBENCH_BIN" ] || [ ! -x "$CLIPCTL_BIN" ]; then
+        ensure_dependencies
         echo -e "${BLUE}Building workspace binaries (release mode)...${NC}"
         cargo build --release
         sweep_target
@@ -163,6 +320,7 @@ function stop_daemon() {
 
 function status_daemon() {
     echo -e "${BOLD}${CYAN}=== LITTLE SCREEN CLIP STATUS ===${NC}"
+    echo -e "Distro:  $(detect_distro_name) ($(detect_distro_id))"
     if is_running; then
         local pid
         pid=$(get_pid)
@@ -199,6 +357,7 @@ function run_workbench() {
 }
 
 function run_file_manager() {
+    ensure_dependencies
     "$SCRIPT_DIR/scripts/build_timelens.sh"
     "$SCRIPT_DIR/scripts/build_video_strip.sh"
     local file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
@@ -394,6 +553,7 @@ case "${1:-}" in
         ;;
     build)
         shift || true
+        ensure_dependencies
         echo -e "${BLUE}Building workspace (release mode)...${NC}"
         cargo build --release "$@"
         sweep_target
@@ -406,6 +566,13 @@ case "${1:-}" in
     sweep)
         shift || true
         sweep_target "${1:-2}"
+        ;;
+    deps|dependencies)
+        ensure_dependencies 1
+        ;;
+    distro)
+        echo -e "Distro ID:   $(detect_distro_id)"
+        echo -e "Distro Name: $(detect_distro_name)"
         ;;
     *)
         status_daemon
@@ -432,5 +599,7 @@ case "${1:-}" in
         echo "  test            - Run direct USB display hardware test"
         echo "  build           - Recompile all Rust workspace crates in release mode and sweep stale artifacts"
         echo "  sweep [N]       - Bound Cargo cache (LITTLE_CLIP_TARGET_MAXSIZE, default: 20GB) and keep N incremental sessions (default: 2)"
+        echo "  deps            - Check and install required system dependencies (Ubuntu/Debian best-effort)"
+        echo "  distro          - Display detected Linux distribution"
         ;;
 esac
