@@ -7,7 +7,7 @@ impl FileManager {
         if !self.bookmarks.entries.is_empty() {
             let row = ROW_HEIGHT + ui.spacing().item_spacing.y;
             let height =
-                (32.0 + self.bookmarks.entries.len() as f32 * row).min(bounds.height() * 0.5);
+                (36.0 + self.bookmarks.entries.len() as f32 * row).min(bounds.height() * 0.5);
             let panel = egui::TopBottomPanel::bottom("files_bookmarks")
                 .exact_height(height)
                 .frame(egui::Frame::none())
@@ -42,7 +42,12 @@ impl FileManager {
         {
             self.bookmarks.add(payload.paths.clone(), None);
         }
-        self.tree_ui(ui, colors);
+        ui.scope(|ui| {
+            // Scroll areas allow a paint margin; keep it inside the space left
+            // above Bookmarks so tree rows cannot overlap its separator/header.
+            ui.set_clip_rect(ui.clip_rect().intersect(ui.available_rect_before_wrap()));
+            self.tree_ui(ui, colors);
+        });
         if let Some((rect, response)) = drop {
             let hovering = self
                 .native_drag_point
@@ -63,6 +68,7 @@ impl FileManager {
         }
     }
     fn bookmarks_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+        ui.add_space(4.0);
         ui.heading("Bookmarks");
         let mut open = None;
         let mut remove = None;
