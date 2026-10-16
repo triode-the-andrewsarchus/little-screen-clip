@@ -116,6 +116,7 @@ pub(super) fn synthetic_directory(count: usize) -> Directory {
                 size: "".into(),
                 size_bytes: 0,
                 modified: "".into(),
+                modified_time: None,
                 warning: None,
                 revision: 1,
                 identity: None,
@@ -123,6 +124,19 @@ pub(super) fn synthetic_directory(count: usize) -> Directory {
             .collect(),
     }
 }
+#[test]
+fn reordered_visible_entries_replace_the_previous_chunk_order() {
+    let directory = synthetic_directory(96);
+    let mut gallery = Gallery::default();
+    let mut visible: Vec<_> = (0..96).collect();
+    gallery.sync(&directory, &visible, false, 8);
+    assert_eq!(gallery.chunks[0].keys[0].path, directory.entries[0].path);
+    visible.reverse();
+    gallery.invalidate_order();
+    gallery.sync(&directory, &visible, false, 8);
+    assert_eq!(gallery.chunks[0].keys[0].path, directory.entries[95].path);
+}
+
 fn seed_chunk(gallery: &mut Gallery, index: usize, aspect: f32) {
     let chunk = &mut gallery.chunks[index];
     let values: Arc<[Metadata]> = vec![

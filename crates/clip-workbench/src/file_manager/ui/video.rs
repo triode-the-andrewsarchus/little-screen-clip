@@ -58,6 +58,7 @@ impl FileManager {
                 ui,
                 rect,
                 entry,
+                None,
                 &mut self.previews,
                 &mut self.video_previews,
                 self.video_timeline_decimation,
@@ -107,6 +108,7 @@ pub(super) fn preview_row(
     ui: &mut Ui,
     rect: Rect,
     entry: &Entry,
+    columns: Option<super::ListColumns>,
     previews: &mut super::super::previews::EntryPreviews,
     video_previews: &mut super::super::video_timeline::Previews,
     decimation: u8,
@@ -133,7 +135,7 @@ pub(super) fn preview_row(
         None
     };
     let ready = video_previews.get(entry);
-    let timeline = video_card(ui, rect, thumbnail, entry, ready, colors);
+    let timeline = video_card(ui, rect, thumbnail, entry, columns, ready, colors);
     let metadata = ready
         .and_then(|ready| ready.as_ref().ok())
         .map(|ready| ready.metadata.clone());
@@ -179,6 +181,7 @@ fn video_card(
     rect: Rect,
     thumbnail: Option<Rect>,
     entry: &Entry,
+    columns: Option<super::ListColumns>,
     ready: Option<&Result<Ready, String>>,
     colors: WorkbenchColors,
 ) -> Option<Rect> {
@@ -201,7 +204,7 @@ fn video_card(
             ready.metadata.description, ready.metadata.audio_description
         )
     });
-    media_header(ui, header, entry, details, colors);
+    media_header(ui, header, entry, details, columns, colors);
     if !video {
         return None;
     }

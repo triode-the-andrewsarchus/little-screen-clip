@@ -20,6 +20,7 @@ pub(super) struct Entry {
     pub size: String,
     pub size_bytes: u64,
     pub modified: String,
+    pub modified_time: Option<std::time::SystemTime>,
     pub warning: Option<String>,
     pub revision: u64,
     pub identity: Option<Identity>,
@@ -151,6 +152,7 @@ fn read_entry(child: std::fs::DirEntry) -> Entry {
                     .to_string()
             })
             .unwrap_or_else(|| "—".into()),
+        modified_time: modified,
         warning,
     }
 }

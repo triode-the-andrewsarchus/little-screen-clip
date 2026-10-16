@@ -10,6 +10,7 @@ pub(in crate::file_manager) fn show(
     ui: &mut Ui,
     row: Rect,
     entry: &super::super::filesystem::Entry,
+    columns: Option<super::super::ui::ListColumns>,
     previews: &mut super::super::previews::EntryPreviews,
     preview: &mut Preview,
     response: &mut egui::Response,
@@ -39,6 +40,7 @@ pub(in crate::file_manager) fn show(
         Rect::from_min_size(row.min + vec2(6.0, 0.0), vec2(row.width() - 12.0, 24.0)),
         entry,
         details,
+        columns,
         colors,
     );
     let Some(document) = document else {

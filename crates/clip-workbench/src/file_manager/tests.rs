@@ -1159,6 +1159,177 @@ fn escape_clears_rendered_selection_without_losing_list_focus() {
     assert!(ctx.memory(|memory| memory.has_focus(super::ui::list_id())));
 }
 
+fn visible_names(manager: &FileManager) -> Vec<String> {
+    let directory = manager.directory.as_ref().unwrap();
+    manager
+        .visible
+        .iter()
+        .map(|i| directory.entries[*i].name.clone())
+        .collect()
+}
+
+#[test]
+fn header_sorting_uses_natural_names_and_keeps_selection_across_size_and_refresh() {
+    use super::sorting::Column;
+    let temp = tempfile::tempdir().unwrap();
+    for (name, bytes) in [("foo_10.dat", 2), ("foo_2.dat", 1), ("foo_1.dat", 3)] {
+        std::fs::write(temp.path().join(name), vec![0; bytes]).unwrap();
+    }
+    std::fs::create_dir(temp.path().join("folder")).unwrap();
+    let (mut manager, jobs) = loaded(temp.path());
+    assert_eq!(
+        visible_names(&manager),
+        ["folder", "foo_1.dat", "foo_2.dat", "foo_10.dat"]
+    );
+    manager.select(temp.path().join("foo_2.dat"));
+    manager.sort_by(Column::Size);
+    assert_eq!(
+        visible_names(&manager),
+        ["folder", "foo_2.dat", "foo_10.dat", "foo_1.dat"]
+    );
+    manager.sort_by(Column::Size);
+    assert_eq!(
+        visible_names(&manager),
+        ["folder", "foo_1.dat", "foo_10.dat", "foo_2.dat"]
+    );
+    assert_eq!(
+        manager.location().unwrap().selected.as_ref(),
+        Some(&temp.path().join("foo_2.dat"))
+    );
+    manager.refresh();
+    finish(&mut manager, &jobs);
+    assert_eq!(
+        visible_names(&manager),
+        ["folder", "foo_1.dat", "foo_10.dat", "foo_2.dat"]
+    );
+    manager.sort_by(Column::Name);
+    manager.sort_by(Column::Name);
+    assert_eq!(
+        visible_names(&manager),
+        ["folder", "foo_10.dat", "foo_2.dat", "foo_1.dat"]
+    );
+}
+
+#[test]
+fn header_type_sorting_keeps_content_categories_and_extensions_contiguous() {
+    use super::sorting::Column;
+    let temp = tempfile::tempdir().unwrap();
+    for name in [
+        "a.wav", "b.WAV", "c.jpg", "d.JPG", "e.mp3", "f.MP3", "g.png", "h.PNG",
+    ] {
+        std::fs::write(temp.path().join(name), b"fixture").unwrap();
+    }
+    let (mut manager, _jobs) = loaded(temp.path());
+    manager.sort_by(Column::Type);
+    assert_eq!(
+        visible_names(&manager),
+        [
+            "e.mp3", "f.MP3", "a.wav", "b.WAV", "c.jpg", "d.JPG", "g.png", "h.PNG"
+        ]
+    );
+    manager.sort_by(Column::Type);
+    assert_eq!(
+        visible_names(&manager),
+        [
+            "g.png", "h.PNG", "c.jpg", "d.JPG", "a.wav", "b.WAV", "e.mp3", "f.MP3"
+        ]
+    );
+}
+
+#[test]
+fn header_modified_sorting_uses_full_timestamp_precision_and_leaves_unknown_last() {
+    use super::sorting::Column;
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["old", "new", "unknown"] {
+        std::fs::write(temp.path().join(name), b"fixture").unwrap();
+    }
+    let (mut manager, _jobs) = loaded(temp.path());
+    for entry in &mut manager.directory.as_mut().unwrap().entries {
+        entry.modified_time = match entry.name.as_str() {
+            "old" => Some(std::time::UNIX_EPOCH + Duration::from_nanos(10)),
+            "new" => Some(std::time::UNIX_EPOCH + Duration::from_nanos(20)),
+            _ => None,
+        };
+        entry.modified = "same displayed minute".into();
+    }
+    manager.sort_by(Column::Modified);
+    assert_eq!(visible_names(&manager), ["new", "old", "unknown"]);
+    manager.sort_by(Column::Modified);
+    assert_eq!(visible_names(&manager), ["old", "new", "unknown"]);
+}
+
+#[test]
+fn mixed_list_preview_metadata_aligns_with_both_column_headers() {
+    let temp = tempfile::tempdir().unwrap();
+    let names = [
+        "image.png",
+        "audio.wav",
+        "model.obj",
+        "cloud.splat",
+        "scene.glb",
+        "project.blend",
+        "library.mtl",
+        "font.ttf",
+        "raw.bin",
+        "document.txt",
+        "pages.pdf",
+        "score.mid",
+        "movie.mp4",
+    ];
+    for (index, name) in names.iter().enumerate() {
+        // Distinct sizes identify each row even while its decoder is loading or
+        // reporting an invalid fixture. Metadata must not depend on decoding.
+        std::fs::write(temp.path().join(name), vec![0; 201 + index]).unwrap();
+    }
+    let (mut manager, _jobs, ctx) = rendered(temp.path());
+    manager.set_view(BrowserView::List);
+    for name in names {
+        let path = temp.path().join(name);
+        manager.select(path.clone());
+        manager.reveal_selection = true;
+        let output = frame(&mut manager, &ctx, vec![]);
+        let painted: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| {
+                if let egui::Shape::Text(text) = &clipped.shape {
+                    clipped
+                        .clip_rect
+                        .intersects(text.visual_bounding_rect())
+                        .then(|| (text.galley.text().to_owned(), text.pos))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let header_x = |label| painted.iter().find(|(text, _)| text == label).unwrap().1.x;
+        let entry = manager
+            .directory
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .unwrap();
+        let size = painted
+            .iter()
+            .find(|(text, _)| text == &entry.size)
+            .unwrap_or_else(|| panic!("missing size for {name}: {painted:?}"));
+        let modified = painted
+            .iter()
+            .find(|(text, pos)| text == &entry.modified && (pos.y - size.1.y).abs() < 0.1)
+            .unwrap_or_else(|| panic!("missing modified column for {name}: {painted:?}"));
+        assert!(
+            (size.1.x - header_x("Size")).abs() < 0.1,
+            "size column: {name}"
+        );
+        assert!(
+            (modified.1.x - header_x("Modified")).abs() < 0.1,
+            "modified column: {name}"
+        );
+    }
+}
+
 #[test]
 fn status_summary_counts_selection_and_rounds_file_sizes() {
     let temp = tempfile::tempdir().unwrap();
@@ -1167,7 +1338,10 @@ fn status_summary_counts_selection_and_rounds_file_sizes() {
     std::fs::write(temp.path().join("one"), vec![0; 10_000]).unwrap();
     std::fs::write(temp.path().join("two"), vec![0; 500]).unwrap();
     let (mut manager, _jobs) = loaded(temp.path());
-    assert_eq!(manager.selection_summary(), "2 folders | 2 files (10.5KB)");
+    assert_eq!(
+        manager.selection_summary(),
+        "2 folders | 2 files (10.3 KiB)"
+    );
     manager.select(temp.path().join("alpha"));
     assert_eq!(manager.selection_summary(), "1 Folder");
     manager.select_with(temp.path().join("beta"), true, false);
@@ -1177,12 +1351,15 @@ fn status_summary_counts_selection_and_rounds_file_sizes() {
     manager.select_with(temp.path().join("two"), true, false);
     assert_eq!(
         manager.selection_summary(),
-        "Selection: 1 folder | 2 files (10.5KB)"
+        "Selection: 1 folder | 2 files (10.3 KiB)"
     );
     manager.select(temp.path().join("two"));
-    assert_eq!(manager.selection_summary(), "Selection: 1 file (500B)");
+    assert_eq!(manager.selection_summary(), "Selection: 1 file (500 B)");
     manager.clear_selection();
-    assert_eq!(manager.selection_summary(), "2 folders | 2 files (10.5KB)");
+    assert_eq!(
+        manager.selection_summary(),
+        "2 folders | 2 files (10.3 KiB)"
+    );
 }
 
 #[test]
@@ -1198,7 +1375,7 @@ fn status_summary_omits_zero_counts_and_handles_empty_directory() {
     std::fs::remove_dir(temp.path().join("alpha")).unwrap();
     std::fs::write(temp.path().join("data"), vec![0; 1_260_000]).unwrap();
     let (manager, _jobs) = loaded(temp.path());
-    assert_eq!(manager.selection_summary(), "1 file (1.3MB)");
+    assert_eq!(manager.selection_summary(), "1 file (1.2 MiB)");
 }
 
 #[test]

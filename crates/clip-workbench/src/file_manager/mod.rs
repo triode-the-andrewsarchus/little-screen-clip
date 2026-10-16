@@ -22,6 +22,7 @@ mod previews;
 mod scene_strip;
 mod selection;
 mod shelf;
+mod sorting;
 pub(crate) mod system;
 mod system_route;
 mod text_editor;
@@ -144,6 +145,7 @@ pub(crate) struct FileManager {
     index: Option<usize>,
     directory: Option<Directory>,
     visible: Vec<usize>,
+    sort: sorting::Sort,
     pending: Option<Request>,
     error: Option<String>,
     failed: Option<(PathBuf, Navigation)>,
@@ -216,6 +218,7 @@ impl FileManager {
             index: None,
             directory: None,
             visible: Vec::new(),
+            sort: sorting::Sort::default(),
             pending: None,
             error: None,
             failed: None,
@@ -498,6 +501,9 @@ impl FileManager {
                     .collect()
             })
             .unwrap_or_default();
+        if let Some(directory) = &self.directory {
+            self.sort.apply(directory, &mut self.visible);
+        }
         self.reconcile_selection();
         self.audio_entries.clear();
         self.video_count = 0;

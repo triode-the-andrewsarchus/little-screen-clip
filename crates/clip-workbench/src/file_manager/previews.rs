@@ -256,26 +256,29 @@ impl EntryPreviews {
         ui: &mut egui::Ui,
         row: egui::Rect,
         entry: &Entry,
+        columns: Option<super::ui::ListColumns>,
         colors: crate::ui_appearance::WorkbenchColors,
         palette: &little_clip_core::palette::AppPalette,
     ) {
-        self.scenes.show(ui, row, entry, colors, palette);
+        self.scenes.show(ui, row, entry, columns, colors, palette);
     }
     pub fn show_visual(
         &mut self,
         ui: &mut egui::Ui,
         row: egui::Rect,
         entry: &Entry,
+        columns: Option<super::ui::ListColumns>,
         colors: crate::ui_appearance::WorkbenchColors,
         palette: &little_clip_core::palette::AppPalette,
     ) {
         let id = self.identity(entry);
         self.listing(entry);
         if entry.system.is_some() {
-            super::system::show(ui, row, entry, self.cache.get(id), colors, palette);
+            super::system::show(ui, row, entry, columns, self.cache.get(id), colors, palette);
         } else if super::font_strip::known(&entry.path) {
             let document = self.cache.get(id).and_then(|r| r.data.font.clone());
-            let strip = super::font_strip::show(ui, row, entry, self.cache.get(id), colors);
+            let strip =
+                super::font_strip::show(ui, row, entry, columns, self.cache.get(id), colors);
             if let Some(document) = document {
                 let (width, height) = raster_dimensions(ui, strip);
                 let color = [
@@ -292,15 +295,16 @@ impl EntryPreviews {
                 self.paint_raster(ui, strip, id, (width, height, vec![color]), source);
             }
         } else if entry.is_blend() {
-            super::blend_preview::show(ui, row, entry, self.cache.get(id), colors);
+            super::blend_preview::show(ui, row, entry, columns, self.cache.get(id), colors);
         } else if entry.is_material() {
             self.materials
-                .show(ui, row, entry, id, self.cache.get(id), colors);
+                .show(ui, row, entry, columns, id, self.cache.get(id), colors);
         } else {
             super::image_strip::show(
                 ui,
                 row,
                 entry,
+                columns,
                 id,
                 self.cache.get(id),
                 &mut self.image_hover,
@@ -396,6 +400,7 @@ impl EntryPreviews {
         ui: &mut egui::Ui,
         row: egui::Rect,
         entry: &Entry,
+        columns: Option<super::ui::ListColumns>,
         colors: crate::ui_appearance::WorkbenchColors,
         palette: &little_clip_core::palette::AppPalette,
     ) -> Option<usize> {
@@ -406,7 +411,8 @@ impl EntryPreviews {
                 .cache
                 .get(id)
                 .and_then(|ready| ready.data.binary.clone());
-            let strip = super::binary_strip::show(ui, row, entry, self.cache.get(id), colors);
+            let strip =
+                super::binary_strip::show(ui, row, entry, columns, self.cache.get(id), colors);
             if let Some(document) = document {
                 let (width, height) = raster_dimensions(ui, strip);
                 let source = Source::BinaryRaster {

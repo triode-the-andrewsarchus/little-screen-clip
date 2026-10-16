@@ -49,6 +49,14 @@ file manager application. Both executables use its shared desktop UI library for
 controls, SVG icons, fonts, and appearance. The file manager runs without the daemon
 or a USB display. Open it with `./launch.sh files [DIRECTORY]` or
 `cargo run -p clip-workbench --bin clip-file-manager -- [DIRECTORY]`.
+In List view, click Type, Name, Size, or Modified to sort; click the active header
+again to reverse it. Names use case-insensitive natural ordering (`foo_2` before
+`foo_10`). Type keeps content categories together, then groups by extension and
+orders names naturally within each extension. Folders stay first. Size starts
+smallest-first, Modified starts newest-first, and unavailable metadata stays last.
+Sorting preserves selection and lasts for the current window, including refreshes
+and folder changes. The Type header is a sorting control; preview rows continue
+to identify their types through their existing names, icons and previews.
 Phase 1 provides folder browsing, Back/Forward/Up, an editable address bar, a lazy
 folder tree, refresh, and hidden-file visibility. Phase 2 adds multi-selection, create/rename, queued copy/move, conflict decisions,
 Trash/restore, permanent deletion, clipboard file references, external-change refresh, and native Wayland drag-and-drop. See [Phase 2 delivery](docs/File%20Manager/phase2.md).

@@ -240,6 +240,12 @@ impl Gallery {
             chunk.packing = None;
         }
     }
+    pub fn invalidate_order(&mut self) {
+        self.retire();
+        self.entries_signature = None;
+        self.pending_anchor = None;
+        self.generation = self.generation.wrapping_add(1);
+    }
     pub fn height(&self) -> f32 {
         self.offsets.last().copied().unwrap_or(0.0)
     }

@@ -150,6 +150,7 @@ impl FileManager {
                 ui,
                 rect,
                 entry,
+                None,
                 ready,
                 &mut response,
                 &mut self.music_selection,
@@ -190,6 +191,7 @@ pub(super) fn preview_row(
     ui: &mut Ui,
     rect: Rect,
     entry: &super::super::filesystem::Entry,
+    columns: Option<super::ListColumns>,
     ready: Option<&super::super::shelf::preview::Ready>,
     response: &mut egui::Response,
     selection: &mut Option<MusicRange>,
@@ -199,7 +201,7 @@ pub(super) fn preview_row(
     let range = selection
         .as_ref()
         .filter(|range| range.path == entry.path && range.revision == entry.revision);
-    let wave = music_card(ui, rect, entry, ready, colors, range);
+    let wave = music_card(ui, rect, entry, columns, ready, colors, range);
     if let Some(ready) = ready {
         response.clone().on_hover_text(&ready.data.detail);
     }
@@ -286,6 +288,7 @@ fn music_card<'a>(
     ui: &Ui,
     rect: Rect,
     entry: &super::super::filesystem::Entry,
+    columns: Option<super::ListColumns>,
     ready: Option<&'a super::super::shelf::preview::Ready>,
     colors: WorkbenchColors,
     selection: Option<&MusicRange>,
@@ -333,7 +336,7 @@ fn music_card<'a>(
         fields.push(&duration);
         fields.join(" · ")
     });
-    media_header(ui, text, entry, details, colors);
+    media_header(ui, text, entry, details, columns, colors);
     if let Some(metadata) = metadata {
         let wave = Rect::from_min_max(
             pos2(art.right() + 8.0, art.top()),

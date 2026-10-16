@@ -64,10 +64,11 @@ pub(super) fn show(
     ui: &mut Ui,
     row: Rect,
     entry: &Entry,
+    columns: Option<super::ui::ListColumns>,
     ready: Option<&Ready>,
     colors: WorkbenchColors,
 ) {
-    let body = super::ui::information_strip(ui, row, entry, "BLEND", colors);
+    let body = super::ui::information_strip(ui, row, entry, "BLEND", columns, colors);
     let thumbnail = Rect::from_min_size(body.min, vec2(body.height() * 16.0 / 9.0, body.height()));
     let texture = ready.and_then(|ready| ready.texture.as_ref());
     super::ui::model_thumbnail(ui, thumbnail, texture, colors);

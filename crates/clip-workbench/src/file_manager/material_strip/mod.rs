@@ -45,26 +45,21 @@ impl Previews {
         ui: &mut Ui,
         row: Rect,
         entry: &Entry,
+        columns: Option<super::ui::ListColumns>,
         source: uuid::Uuid,
         ready: Option<&Ready>,
         colors: WorkbenchColors,
     ) {
         let materials = ready.and_then(|ready| ready.data.materials.as_ref());
         let summary = materials
-            .map(|materials| {
-                format!(
-                    "MTL · {} materials · {} · {}",
-                    materials.len(),
-                    entry.size,
-                    entry.modified
-                )
-            })
-            .unwrap_or_else(|| format!("MTL · {} · {}", entry.size, entry.modified));
+            .map(|materials| format!("MTL · {} materials", materials.len()))
+            .unwrap_or_else(|| "MTL".into());
         super::ui::media_header(
             ui,
             Rect::from_min_size(row.min + vec2(6.0, 0.0), vec2(row.width() - 12.0, 24.0)),
             entry,
             Some(summary),
+            columns,
             colors,
         );
         let body = super::ui::strip_body(ui, row, Icon::Palette, colors);

@@ -134,6 +134,7 @@ pub(super) fn show(
     ui: &mut Ui,
     row: Rect,
     entry: &Entry,
+    columns: Option<super::ui::ListColumns>,
     ready: Option<&Ready>,
     colors: WorkbenchColors,
 ) -> Rect {
@@ -142,6 +143,7 @@ pub(super) fn show(
         row,
         entry,
         ready.map_or("Binary", |r| r.data.detail.as_str()),
+        columns,
         colors,
     );
     let thumbnail = Rect::from_min_size(body.min, vec2(body.height(), body.height()));

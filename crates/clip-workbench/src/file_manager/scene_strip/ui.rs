@@ -9,6 +9,7 @@ impl Previews {
         ui: &mut Ui,
         row: Rect,
         entry: &Entry,
+        columns: Option<super::super::ui::ListColumns>,
         colors: WorkbenchColors,
         palette: &little_clip_core::palette::AppPalette,
     ) {
@@ -20,12 +21,12 @@ impl Previews {
             .and_then(|extension| extension.to_str())
             .unwrap_or("Scene")
             .to_uppercase();
-        let details = format!("{format} · {} · {}", entry.size, entry.modified);
         super::super::ui::media_header(
             ui,
             Rect::from_min_size(row.min + vec2(6.0, 0.0), vec2(row.width() - 12.0, 24.0)),
             entry,
-            Some(details),
+            Some(format),
+            columns,
             colors,
         );
         let body = Rect::from_min_max(row.min + vec2(6.0, 32.0), row.max - vec2(6.0, 10.0));

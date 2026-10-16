@@ -16,23 +16,6 @@ mod video;
 
 const ROW_HEIGHT: f32 = 28.0;
 
-// Decimal units for the compact status strip; filesystem columns retain IEC units.
-fn summary_size(bytes: u64) -> String {
-    let units = ["B", "KB", "MB", "GB", "TB", "PB", "EB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 999.95 && unit < units.len() - 1 {
-        value /= 1000.0;
-        unit += 1;
-    }
-    let size = if unit == 0 {
-        bytes.to_string()
-    } else {
-        format!("{value:.1}")
-    };
-    format!("{size}{}", units[unit])
-}
-
 fn address_id() -> Id {
     Id::new("file_manager_address")
 }
@@ -423,7 +406,7 @@ impl FileManager {
             parts.push(format!(
                 "{files} {} ({})",
                 if files == 1 { "file" } else { "files" },
-                summary_size(bytes)
+                super::filesystem::format_size(bytes)
             ));
         }
         if parts.is_empty() {
@@ -857,13 +840,119 @@ pub(super) fn strip_cells(
         .collect()
 }
 
+/// Absolute table positions shared by the header and every mixed List row.
+#[derive(Clone, Copy)]
+pub(super) struct ListColumns {
+    size: f32,
+    modified: f32,
+    right: f32,
+}
+
+impl ListColumns {
+    fn new(header: Rect) -> Self {
+        let name_width = (header.width() - 245.0).max(header.width() * 0.4);
+        Self {
+            size: header.left() + name_width,
+            modified: header.left() + name_width + 90.0,
+            right: header.right(),
+        }
+    }
+
+    fn paint(&self, ui: &Ui, row: Rect, size: &str, modified: &str, color: Color32) {
+        paint_text(ui, row, self.size - row.left(), 85.0, size, color);
+        paint_text(
+            ui,
+            row,
+            self.modified - row.left(),
+            self.right - self.modified,
+            modified,
+            color,
+        );
+    }
+
+    fn sort_header(
+        &self,
+        ui: &mut Ui,
+        header: Rect,
+        sort: super::sorting::Sort,
+        colors: WorkbenchColors,
+    ) -> Option<super::sorting::Column> {
+        use super::sorting::Column;
+        let mut clicked = None;
+        for (column, label, left, right) in [
+            (
+                Column::Type,
+                "Type",
+                header.left() + 8.0,
+                header.left() + 64.0,
+            ),
+            (Column::Name, "Name", header.left() + 64.0, self.size),
+            (Column::Size, "Size", self.size, self.modified),
+            (Column::Modified, "Modified", self.modified, self.right),
+        ] {
+            let cell = Rect::from_min_max(pos2(left, header.top()), pos2(right, header.bottom()));
+            let response = ui
+                .interact(cell, Id::new(("files_sort", column)), Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(format!("Sort by {label}; click again to reverse"));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, label));
+            if response.hovered() {
+                ui.painter().rect_filled(cell, 2.0, colors.recessed);
+            }
+            let active = sort.column == column;
+            let color = if active {
+                colors.accent
+            } else {
+                colors.text_secondary
+            };
+            paint_text(ui, cell, 0.0, cell.width() - 18.0, label, color);
+            if active {
+                let width = ui
+                    .painter()
+                    .layout_no_wrap(label.into(), FontId::proportional(14.0), color)
+                    .size()
+                    .x;
+                let arrow = Rect::from_center_size(
+                    pos2(cell.left() + width + 10.0, cell.center().y),
+                    vec2(14.0, 14.0),
+                );
+                (if sort.descending {
+                    Icon::ArrowDown
+                } else {
+                    Icon::ArrowUp
+                })
+                .paint(
+                    &ui.painter().with_clip_rect(cell.intersect(ui.clip_rect())),
+                    arrow,
+                    color,
+                );
+            }
+            if response.clicked() {
+                clicked = Some(column);
+            }
+        }
+        clicked
+    }
+}
+
 pub(super) fn media_header(
     ui: &Ui,
-    header: Rect,
+    mut header: Rect,
     entry: &super::filesystem::Entry,
     details: Option<String>,
+    columns: Option<ListColumns>,
     colors: WorkbenchColors,
 ) {
+    if let Some(columns) = columns {
+        columns.paint(
+            ui,
+            header,
+            &entry.size,
+            &entry.modified,
+            colors.text_secondary,
+        );
+        header.max.x = (columns.size - 8.0).max(header.left());
+    }
     let details_width = details.as_ref().map_or(0.0, |details| {
         ui.painter()
             .layout_no_wrap(
@@ -884,22 +973,25 @@ pub(super) fn media_header(
         &entry.name,
         colors.text_primary,
     );
-    if let Some(details) = details {
+    if let Some(details) = &details {
         paint_text(
             ui,
             header,
             header.width() - details_width,
             details_width,
-            &details,
+            details,
             colors.text_secondary,
         );
-        ui.interact(
-            header,
-            Id::new(("media_metadata", &entry.path)),
-            Sense::hover(),
-        )
-        .on_hover_text(format!("{}\n{}", entry.name, details));
     }
+    ui.interact(
+        header,
+        Id::new(("media_metadata", &entry.path)),
+        Sense::hover(),
+    )
+    .on_hover_text(details.map_or_else(
+        || entry.name.clone(),
+        |details| format!("{}\n{}", entry.name, details),
+    ));
 }
 
 fn paint_text(ui: &Ui, rect: Rect, x: f32, width: f32, text: &str, color: Color32) {
@@ -923,7 +1015,7 @@ fn file_row(
     rect: Rect,
     entry: &super::filesystem::Entry,
     selected: bool,
-    name_width: f32,
+    columns: ListColumns,
     count: Option<String>,
     colors: WorkbenchColors,
 ) -> egui::Response {
@@ -943,6 +1035,7 @@ fn file_row(
     };
     row_background(ui, rect, selected, response.hovered(), colors);
     let rect = Rect::from_min_size(rect.min, vec2(rect.width(), ROW_HEIGHT));
+    let name_width = columns.size - rect.left();
     let icon = if entry.symlink {
         Icon::Link
     } else if entry.directory {
@@ -975,19 +1068,10 @@ fn file_row(
             colors.text_secondary,
         );
     }
-    paint_text(
+    columns.paint(
         ui,
         rect,
-        name_width,
-        85.0,
         &entry.size,
-        colors.text_secondary,
-    );
-    paint_text(
-        ui,
-        rect,
-        name_width + 90.0,
-        rect.width() - name_width - 90.0,
         &entry.modified,
         colors.text_secondary,
     );
@@ -1286,17 +1370,15 @@ pub(super) fn information_strip(
     row: Rect,
     entry: &super::filesystem::Entry,
     detail: &str,
+    columns: Option<ListColumns>,
     colors: WorkbenchColors,
 ) -> Rect {
     media_header(
         ui,
         Rect::from_min_size(row.min + vec2(6.0, 0.0), vec2(row.width() - 12.0, 24.0)),
         entry,
-        Some(if entry.system.is_some() {
-            detail.into()
-        } else {
-            format!("{detail} · {} · {}", entry.size, entry.modified)
-        }),
+        Some(detail.into()),
+        columns,
         colors,
     );
     Rect::from_min_max(row.min + vec2(6.0, 32.0), row.max - vec2(6.0, 10.0))

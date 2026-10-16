@@ -3,6 +3,7 @@ use super::super::{filesystem::Entry, previews::EntryPreviews, video_timeline};
 use super::*;
 
 struct ListPreviews<'a> {
+    columns: ListColumns,
     files: &'a mut EntryPreviews,
     music: &'a mut EntryPreviews,
     videos: &'a mut video_timeline::Previews,
@@ -27,7 +28,6 @@ impl<'a> ListPreviews<'a> {
         rect: Rect,
         entry: &Entry,
         marked: bool,
-        name_width: f32,
         colors: WorkbenchColors,
     ) -> egui::Response {
         let response = if entry.system.is_some()
@@ -58,7 +58,7 @@ impl<'a> ListPreviews<'a> {
                                 .map(|info| format!("{} pages", info.page_count))
                         })
                 });
-            file_row(ui, rect, entry, marked, name_width, lines, colors)
+            file_row(ui, rect, entry, marked, self.columns, lines, colors)
         };
         response
     }
@@ -68,13 +68,12 @@ impl<'a> ListPreviews<'a> {
         rect: Rect,
         entry: &'a Entry,
         marked: bool,
-        name_width: f32,
         colors: WorkbenchColors,
         palette: &AppPalette,
         actions: &mut ListActions,
     ) -> (egui::Response, bool) {
         let is_audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
-        let mut response = self.response(ui, rect, entry, marked, name_width, colors);
+        let mut response = self.response(ui, rect, entry, marked, colors);
         let mut engaged = false;
         if entry.regular_file && super::super::midi_strip::is_midi(&entry.path) {
             self.paths.insert(entry.path.clone());
@@ -82,6 +81,7 @@ impl<'a> ListPreviews<'a> {
                 ui,
                 rect,
                 entry,
+                Some(self.columns),
                 self.files,
                 self.midi,
                 &mut response,
@@ -95,6 +95,7 @@ impl<'a> ListPreviews<'a> {
                 ui,
                 rect,
                 entry,
+                Some(self.columns),
                 ready,
                 &mut response,
                 self.selection,
@@ -112,6 +113,7 @@ impl<'a> ListPreviews<'a> {
                 ui,
                 rect,
                 entry,
+                Some(self.columns),
                 self.files,
                 self.videos,
                 self.decimation,
@@ -136,17 +138,20 @@ impl<'a> ListPreviews<'a> {
     ) {
         if entry.system.is_some() {
             self.paths.insert(entry.path.clone());
-            self.files.show_visual(ui, rect, entry, colors, palette);
+            self.files
+                .show_visual(ui, rect, entry, Some(self.columns), colors, palette);
         } else if entry.is_scene() {
             self.paths.insert(entry.path.clone());
-            self.files.show_scene(ui, rect, entry, colors, palette);
+            self.files
+                .show_scene(ui, rect, entry, Some(self.columns), colors, palette);
         } else if entry.is_photo()
             || entry.is_material()
             || entry.is_blend()
             || (entry.regular_file && super::super::font_strip::known(&entry.path))
         {
             self.paths.insert(entry.path.clone());
-            self.files.show_visual(ui, rect, entry, colors, palette);
+            self.files
+                .show_visual(ui, rect, entry, Some(self.columns), colors, palette);
         } else if entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path) {
             self.paths.insert(entry.path.clone());
             let page = self.files.show_pdf(ui, rect, entry, colors);
@@ -155,7 +160,9 @@ impl<'a> ListPreviews<'a> {
             }
         } else if !entry.directory && self.paths.len() < 128 {
             self.paths.insert(entry.path.clone());
-            let line = self.files.show_listing(ui, rect, entry, colors, palette);
+            let line =
+                self.files
+                    .show_listing(ui, rect, entry, Some(self.columns), colors, palette);
             if response.double_clicked() {
                 *self.text_start = line.map(|line| (entry.path.clone(), line));
             }
@@ -166,25 +173,12 @@ impl<'a> ListPreviews<'a> {
 impl FileManager {
     pub(super) fn list_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
         let width = ui.available_width();
-        let name_width = (width - 245.0).max(width * 0.4);
         let (header, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
-        paint_text(
-            ui,
-            header,
-            8.0,
-            name_width - 10.0,
-            "Name",
-            colors.text_secondary,
-        );
-        paint_text(ui, header, name_width, 88.0, "Size", colors.text_secondary);
-        paint_text(
-            ui,
-            header,
-            name_width + 90.0,
-            width - name_width - 90.0,
-            "Modified",
-            colors.text_secondary,
-        );
+        let columns = ListColumns::new(header);
+        if let Some(column) = columns.sort_header(ui, header, self.sort, colors) {
+            self.sort_by(column);
+            ui.memory_mut(|memory| memory.request_focus(list_id()));
+        }
         ui.separator();
         if self.previews.poll(ui.ctx()) {
             self.rebuild_list_offsets();
@@ -231,6 +225,7 @@ impl FileManager {
         let mut targets = Vec::new();
         let preview_paths = std::collections::BTreeSet::new();
         let mut previews = ListPreviews {
+            columns,
             midi: &mut self.midi,
             files: &mut self.previews,
             music: &mut self.music_previews,
@@ -251,16 +246,8 @@ impl FileManager {
         let output = media_rows(ui, scroll, &self.list_offsets, |ui, index, rect| {
             let entry = &directory.entries[self.visible[index]];
             let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
-            let (response, engaged) = previews.row(
-                ui,
-                rect,
-                entry,
-                marked,
-                name_width,
-                colors,
-                palette,
-                &mut actions,
-            );
+            let (response, engaged) =
+                previews.row(ui, rect, entry, marked, colors, palette, &mut actions);
             if entry.directory && ui.is_enabled() {
                 targets.push((response.rect.intersect(ui.clip_rect()), entry.path.clone()));
             }

@@ -12,7 +12,7 @@ from file_manager_acceptance import (
 def exercise(session, root):
     text = session.observe("compact-browser", [
         "File", "Edit", "View", "Shelf", "Clear held files",
-        "2 folders", "2 files (10.5KB)", "Ctrl+L", "Ctrl+Q",
+        "2 folders", "2 files (10.3 KiB)", "Ctrl+L", "Ctrl+Q",
     ])
     for removed in ["New folder", "New file", "Select all", "F5: refresh"]:
         assert removed.lower() not in text.lower(), removed
@@ -24,9 +24,9 @@ def exercise(session, root):
     session.click(*session.word("compact-browser", "payload", minimum_y=150))
     session.observe("one-file", ["Selection: 1 file (10.0KB)"])
     session.key("a", "ctrl")
-    session.observe("all-selected", ["Selection: 2 folders", "2 files (10.5KB)"])
+    session.observe("all-selected", ["Selection: 2 folders", "2 files (10.3 KiB)"])
     session.key("Escape")
-    session.observe("selection-cleared", ["2 folders", "2 files (10.5KB)"])
+    session.observe("selection-cleared", ["2 folders", "2 files (10.3 KiB)"])
     session.click(*session.word("selection-cleared", "alpha", minimum_y=150))
     session.observe("one-folder", ["1 Folder"])
 

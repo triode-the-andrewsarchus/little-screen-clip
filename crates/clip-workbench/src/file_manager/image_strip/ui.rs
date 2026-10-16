@@ -7,25 +7,20 @@ pub(in crate::file_manager) fn show(
     ui: &mut Ui,
     row: Rect,
     entry: &Entry,
+    columns: Option<super::super::ui::ListColumns>,
     identity: uuid::Uuid,
     ready: Option<&Ready>,
     hover: &mut Hover,
     colors: WorkbenchColors,
 ) {
     let analysis = ready.and_then(|ready| ready.data.photo.as_deref());
-    let detail = analysis
-        .map(|a| {
-            format!(
-                "{} × {} · {} · {}",
-                a.dimensions.0, a.dimensions.1, entry.size, entry.modified
-            )
-        })
-        .or_else(|| Some(format!("{} · {}", entry.size, entry.modified)));
+    let detail = analysis.map(|a| format!("{} × {}", a.dimensions.0, a.dimensions.1));
     super::super::ui::media_header(
         ui,
         Rect::from_min_size(row.min + vec2(6.0, 0.0), vec2(row.width() - 12.0, 24.0)),
         entry,
         detail,
+        columns,
         colors,
     );
     let body = Rect::from_min_max(row.min + vec2(6.0, 32.0), row.max - vec2(6.0, 10.0));

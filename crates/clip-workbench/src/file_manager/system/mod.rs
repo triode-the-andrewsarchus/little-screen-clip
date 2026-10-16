@@ -330,6 +330,7 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     row: egui::Rect,
     entry: &Entry,
+    columns: Option<super::ui::ListColumns>,
     ready: Option<&Ready>,
     colors: WorkbenchColors,
     palette: &little_clip_core::palette::AppPalette,
@@ -339,6 +340,7 @@ pub(super) fn show(
         row,
         entry,
         ready.map_or("System interface", |r| r.data.detail.as_str()),
+        columns,
         colors,
     );
     let icon = egui::Rect::from_min_size(body.min, egui::vec2(body.height(), body.height()));
