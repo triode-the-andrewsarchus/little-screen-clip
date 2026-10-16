@@ -33,6 +33,7 @@ pub use app::run;
 #[cfg(test)]
 mod tests;
 mod tree;
+mod type_navigation;
 mod ui;
 
 use std::collections::BTreeSet;
@@ -154,6 +155,7 @@ pub(crate) struct FileManager {
     native_drag_point: Option<egui::Pos2>,
     restore_scroll: bool,
     reveal_selection: bool,
+    type_navigation: type_navigation::TypeNavigation,
     reveal_target: Option<PathBuf>,
     focus_address: bool,
     address_editing: bool,
@@ -221,6 +223,7 @@ impl FileManager {
             show_hidden: false,
             restore_scroll: false,
             reveal_selection: false,
+            type_navigation: type_navigation::TypeNavigation::default(),
             reveal_target: None,
             focus_address: false,
             address_editing: false,
@@ -278,6 +281,7 @@ impl FileManager {
         self.midi.stop();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
+        self.type_navigation.clear();
         self.reveal_target = None;
         if path != self.path() {
             self.gallery_layout.retire();
@@ -616,6 +620,7 @@ impl FileManager {
     }
 
     fn open_path(&mut self, path: PathBuf) {
+        self.type_navigation.clear();
         if self.directory.as_ref().is_some_and(|dir| {
             dir.entries
                 .iter()

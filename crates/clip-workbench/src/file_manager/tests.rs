@@ -456,6 +456,185 @@ fn address_focus_selection_submission_and_escape_work_in_rendered_ui() {
     assert!(manager.pending.is_none());
 }
 
+fn type_in_browser(manager: &mut FileManager, ctx: &egui::Context, text: &str) {
+    ctx.memory_mut(|memory| memory.request_focus(super::ui::list_id()));
+    frame(manager, ctx, vec![]);
+    frame(manager, ctx, vec![egui::Event::Text(text.into())]);
+}
+
+fn assert_type_navigation(
+    manager: &FileManager,
+    ctx: &egui::Context,
+    selected: Option<&Path>,
+    hint: Option<&str>,
+) {
+    assert_eq!(manager.location().unwrap().selected.as_deref(), selected);
+    assert_eq!(
+        manager
+            .type_navigation
+            .hint(ctx.input(|i| i.time))
+            .as_deref(),
+        hint
+    );
+    assert!(manager.open_file.is_none(), "typing must never open a file");
+}
+
+#[test]
+fn type_navigation_selects_reveals_and_edits_a_literal_query_without_opening() {
+    let temp = tempfile::tempdir().unwrap();
+    for index in 0..40 {
+        std::fs::create_dir(temp.path().join(format!("before-{index:02}"))).unwrap();
+    }
+    let exact = temp.path().join("report");
+    let prefix = temp.path().join("report.txt");
+    let substring = temp.path().join("old-report.txt");
+    for path in [&exact, &prefix, &substring] {
+        std::fs::write(path, "text").unwrap();
+    }
+    let (mut manager, _jobs, ctx) = rendered(temp.path());
+    type_in_browser(&mut manager, &ctx, "RePoRt");
+    assert_type_navigation(&manager, &ctx, Some(&exact), Some("Find: RePoRt"));
+    assert!(
+        manager.location().unwrap().scroll > 0.0,
+        "match must be revealed"
+    );
+    frame(&mut manager, &ctx, vec![egui::Event::Text(".txt".into())]);
+    assert_type_navigation(&manager, &ctx, Some(&prefix), Some("Find: RePoRt.txt"));
+    press(
+        &mut manager,
+        &ctx,
+        egui::Key::Backspace,
+        egui::Modifiers::NONE,
+    );
+    assert_type_navigation(&manager, &ctx, Some(&prefix), Some("Find: RePoRt.tx"));
+    frame(&mut manager, &ctx, vec![egui::Event::Text("zzz".into())]);
+    assert_type_navigation(
+        &manager,
+        &ctx,
+        Some(&prefix),
+        Some("Find: RePoRt.txzzz — No match"),
+    );
+    press(&mut manager, &ctx, egui::Key::Escape, egui::Modifiers::NONE);
+    assert_type_navigation(&manager, &ctx, Some(&prefix), None);
+    frame(&mut manager, &ctx, vec![egui::Event::Text("old-".into())]);
+    assert_type_navigation(&manager, &ctx, Some(&substring), Some("Find: old-"));
+}
+
+#[test]
+fn type_navigation_respects_hidden_entries_address_fields_and_navigation() {
+    let temp = tempfile::tempdir().unwrap();
+    let child = temp.path().join("child");
+    std::fs::create_dir(&child).unwrap();
+    std::fs::write(child.join("report.txt"), "text").unwrap();
+    std::fs::write(temp.path().join(".secret"), "text").unwrap();
+    let (mut manager, jobs, ctx) = rendered(temp.path());
+    type_in_browser(&mut manager, &ctx, "secret");
+    assert_type_navigation(&manager, &ctx, None, Some("Find: secret — No match"));
+    assert!(!manager.show_hidden);
+    press(&mut manager, &ctx, egui::Key::Escape, egui::Modifiers::NONE);
+    frame(&mut manager, &ctx, vec![egui::Event::Text("chi".into())]);
+    assert_eq!(manager.location().unwrap().selected.as_ref(), Some(&child));
+    press(&mut manager, &ctx, egui::Key::Enter, egui::Modifiers::NONE);
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.path(), child);
+    frame(&mut manager, &ctx, vec![egui::Event::Text("report".into())]);
+    assert_eq!(
+        manager.location().unwrap().selected.as_ref(),
+        Some(&child.join("report.txt"))
+    );
+    press(&mut manager, &ctx, egui::Key::L, egui::Modifiers::CTRL);
+    frame(
+        &mut manager,
+        &ctx,
+        vec![egui::Event::Text("unsubmitted path".into())],
+    );
+    assert_eq!(manager.address, "unsubmitted path");
+    assert_type_navigation(&manager, &ctx, Some(&child.join("report.txt")), None);
+    assert_eq!(manager.path(), child);
+}
+
+#[test]
+fn type_navigation_yields_to_rename_dialogs_and_other_browser_focus_targets() {
+    let (temp, child) = folder_fixture();
+    let (mut manager, _jobs, ctx) = rendered(temp.path());
+    ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("file_manager_tree_focus")));
+    frame(&mut manager, &ctx, vec![]);
+    frame(&mut manager, &ctx, vec![egui::Event::Text("child".into())]);
+    assert_type_navigation(&manager, &ctx, None, None);
+    type_in_browser(&mut manager, &ctx, "child");
+    assert_eq!(manager.location().unwrap().selected.as_ref(), Some(&child));
+    press(&mut manager, &ctx, egui::Key::F2, egui::Modifiers::NONE);
+    frame(
+        &mut manager,
+        &ctx,
+        vec![egui::Event::Text("new name".into())],
+    );
+    assert_eq!(manager.edits.dialog.as_ref().unwrap().name, "new name");
+    assert_type_navigation(&manager, &ctx, Some(&child), None);
+}
+
+#[test]
+fn type_navigation_timeout_starts_a_new_query_and_modified_text_is_ignored() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["alpha", "beta"] {
+        std::fs::create_dir(temp.path().join(name)).unwrap();
+    }
+    let (mut manager, _jobs) = loaded(temp.path());
+    let ctx = egui::Context::default();
+    for (time, text, modifiers, selected, hint) in [
+        (
+            10.0,
+            "alpha",
+            egui::Modifiers::NONE,
+            "alpha",
+            Some("Find: alpha"),
+        ),
+        (
+            13.0,
+            "beta",
+            egui::Modifiers::NONE,
+            "beta",
+            Some("Find: beta"),
+        ),
+        (14.0, "alpha", egui::Modifiers::CTRL, "beta", None),
+    ] {
+        let _ = ctx.run(
+            egui::RawInput {
+                time: Some(time),
+                modifiers,
+                events: vec![egui::Event::Text(text.into())],
+                ..Default::default()
+            },
+            |ctx| manager.type_navigation_keys(ctx),
+        );
+        assert_type_navigation(&manager, &ctx, Some(&temp.path().join(selected)), hint);
+    }
+}
+
+#[test]
+fn type_navigation_applies_batched_text_before_enter() {
+    let (temp, child) = folder_fixture();
+    let (mut manager, jobs, ctx) = rendered(temp.path());
+    ctx.memory_mut(|memory| memory.request_focus(super::ui::list_id()));
+    frame(&mut manager, &ctx, vec![]);
+    frame(
+        &mut manager,
+        &ctx,
+        vec![
+            egui::Event::Text("child".into()),
+            event(egui::Key::Enter, egui::Modifiers::NONE),
+        ],
+    );
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.path(), child);
+    assert!(
+        manager
+            .type_navigation
+            .hint(ctx.input(|i| i.time))
+            .is_none()
+    );
+}
+
 #[test]
 fn keyboard_arrows_select_without_navigating_and_enter_opens_a_folder() {
     let (temp, child) = folder_fixture();

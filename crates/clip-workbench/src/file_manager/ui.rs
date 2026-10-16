@@ -205,9 +205,11 @@ impl FileManager {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if self.edits.dialog.is_some() || self.transfers_modal() {
+            self.type_navigation.clear();
             return;
         }
         self.navigation_shortcuts(ctx);
+        self.type_navigation_keys(ctx);
         if ctx.memory(|memory| memory.has_focus(address_id())) {
             return;
         }
@@ -500,6 +502,9 @@ impl FileManager {
     }
 
     fn apply_list_actions(&mut self, actions: ListActions) {
+        if actions.selection.is_some() || actions.clear {
+            self.type_navigation.clear();
+        }
         if let Some((paths, destination, moving)) = actions.transfer {
             self.queue_transfer(paths, destination, moving);
         }

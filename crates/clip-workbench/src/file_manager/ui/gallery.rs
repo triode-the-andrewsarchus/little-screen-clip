@@ -6,6 +6,7 @@ impl FileManager {
         if view == self.view {
             return;
         }
+        self.type_navigation.clear();
         self.retire_media_previews();
         if view != self.view
             && matches!(

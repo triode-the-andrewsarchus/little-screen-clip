@@ -402,7 +402,30 @@ impl eframe::App for FileManagerApp {
                         .inner_margin(egui::Margin::symmetric(8.0, 3.0)),
                 )
                 .show(ctx, |ui| {
-                    ui.add(egui::Label::new(self.browser.selection_summary()).truncate(true));
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(
+                            ui.available_width(),
+                            ui.text_style_height(&egui::TextStyle::Body),
+                        ),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(self.browser.selection_summary()).truncate(true),
+                            );
+                            if let Some(hint) = self
+                                .browser
+                                .type_navigation
+                                .hint(ctx.input(|input| input.time))
+                            {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.add(egui::Label::new(hint).truncate(true));
+                                    },
+                                );
+                            }
+                        },
+                    );
                 });
         }
         self.main_content(ctx);
