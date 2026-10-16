@@ -312,13 +312,16 @@ fn music_card<'a>(
             Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
             Color32::WHITE,
         );
-    } else {
-        let icon = entry_icon(entry);
-        icon.paint(
-            ui.painter(),
-            art.shrink(if audio { 12.0 } else { 0.0 }),
-            colors.text_secondary,
+    } else if audio {
+        paint_audio_fallback(
+            ui,
+            art,
+            entry,
+            ready.and_then(|r| r.data.music.as_ref()),
+            colors,
         );
+    } else {
+        entry_icon(entry).paint(ui.painter(), art, colors.text_secondary);
     }
     let metadata = ready.and_then(|r| r.data.music.as_ref());
     let left = if audio { 6.0 } else { 32.0 };
@@ -399,6 +402,104 @@ fn music_card<'a>(
             .map(|s| (wave, metadata.duration, s));
     }
     None
+}
+
+fn paint_audio_fallback(
+    ui: &Ui,
+    rect: Rect,
+    entry: &super::super::filesystem::Entry,
+    metadata: Option<&super::super::media::MusicMetadata>,
+    colors: WorkbenchColors,
+) {
+    let extension = entry
+        .path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let icon = match extension.as_str() {
+        "wav" | "wave" => crate::icons::Icon::AudioWav,
+        "flac" => crate::icons::Icon::AudioFlac,
+        "aiff" | "aif" => crate::icons::Icon::AudioAiff,
+        "aac" => crate::icons::Icon::AudioAac,
+        "ogg" => crate::icons::Icon::AudioOgg,
+        "oga" => crate::icons::Icon::AudioOga,
+        "m4a" | "alac" => crate::icons::Icon::AudioM4a,
+        "wma" => crate::icons::Icon::AudioWma,
+        _ => crate::icons::Icon::Audio,
+    };
+    let quality = audio_quality(&extension, metadata);
+    let tint = quality.map_or(colors.text_secondary, |quality| quality.color());
+    ui.painter().rect_filled(
+        rect,
+        4.0,
+        quality.map_or(colors.recessed, |quality| quality.background()),
+    );
+    icon.paint(ui.painter(), rect.shrink(rect.width() * 0.20), tint);
+
+    if let Some(sample_rate) = metadata.and_then(|metadata| metadata.sample_rate) {
+        let mark = if sample_rate < 44_100 {
+            Some(crate::icons::Icon::ClefBass)
+        } else if sample_rate <= 48_000 {
+            None
+        } else if sample_rate <= 96_000 {
+            Some(crate::icons::Icon::ClefAlto)
+        } else if sample_rate <= 192_000 {
+            Some(crate::icons::Icon::ClefTreble)
+        } else {
+            Some(crate::icons::Icon::Bat)
+        };
+        if let Some(mark) = mark {
+            let side = (rect.width() * 0.30).clamp(12.0, 20.0);
+            let badge = Rect::from_min_size(
+                rect.right_bottom() - egui::vec2(side, side),
+                egui::vec2(side, side),
+            );
+            ui.painter().rect_filled(badge, side * 0.2, colors.panel);
+            mark.paint(ui.painter(), badge.shrink(2.0), colors.text_primary);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AudioQuality {
+    Bronze,
+    Silver,
+    Gold,
+}
+
+impl AudioQuality {
+    fn color(self) -> egui::Color32 {
+        match self {
+            Self::Bronze => egui::Color32::from_rgb(198, 130, 82),
+            Self::Silver => egui::Color32::from_rgb(192, 204, 218),
+            Self::Gold => egui::Color32::from_rgb(242, 194, 76),
+        }
+    }
+
+    fn background(self) -> egui::Color32 {
+        let color = self.color();
+        egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 44)
+    }
+}
+
+fn audio_quality(
+    extension: &str,
+    metadata: Option<&super::super::media::MusicMetadata>,
+) -> Option<AudioQuality> {
+    let metadata = metadata?;
+    if matches!(extension, "wav" | "wave" | "aiff" | "aif" | "flac" | "alac") {
+        return match metadata.bit_depth? {
+            depth if depth >= 24 => Some(AudioQuality::Gold),
+            depth if depth >= 16 => Some(AudioQuality::Silver),
+            _ => Some(AudioQuality::Bronze),
+        };
+    }
+    match metadata.bit_rate? / 1000 {
+        bitrate if bitrate >= 256 => Some(AudioQuality::Gold),
+        bitrate if bitrate >= 128 => Some(AudioQuality::Silver),
+        _ => Some(AudioQuality::Bronze),
+    }
 }
 
 fn paint_range(

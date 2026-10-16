@@ -10,6 +10,17 @@ use eframe::egui::{self, Color32, Response, Ui, Vec2};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
     Audio,
+    AudioWav,
+    AudioFlac,
+    AudioAiff,
+    AudioAac,
+    AudioOgg,
+    AudioOga,
+    AudioM4a,
+    AudioWma,
+    ClefBass,
+    ClefAlto,
+    ClefTreble,
     Image,
     Diff,
     BinaryDiff,
@@ -111,6 +122,17 @@ impl Icon {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Audio => "audio",
+            Self::AudioWav => "audio_wav",
+            Self::AudioFlac => "audio_flac",
+            Self::AudioAiff => "audio_aiff",
+            Self::AudioAac => "audio_aac",
+            Self::AudioOgg => "audio_ogg",
+            Self::AudioOga => "audio_oga",
+            Self::AudioM4a => "audio_m4a",
+            Self::AudioWma => "audio_wma",
+            Self::ClefBass => "clef_bass",
+            Self::ClefAlto => "clef_alto",
+            Self::ClefTreble => "clef_treble",
             Self::Image => "image",
             Self::Diff => "diff",
             Self::BinaryDiff => "binary",
@@ -212,6 +234,17 @@ impl Icon {
     pub const fn uri(&self) -> &'static str {
         match self {
             Self::Audio => "bytes://icons/audio.svg",
+            Self::AudioWav => "bytes://icons/audio_wav.svg",
+            Self::AudioFlac => "bytes://icons/audio_flac.svg",
+            Self::AudioAiff => "bytes://icons/audio_aiff.svg",
+            Self::AudioAac => "bytes://icons/audio_aac.svg",
+            Self::AudioOgg => "bytes://icons/audio_ogg.svg",
+            Self::AudioOga => "bytes://icons/audio_oga.svg",
+            Self::AudioM4a => "bytes://icons/audio_m4a.svg",
+            Self::AudioWma => "bytes://icons/audio_wma.svg",
+            Self::ClefBass => "bytes://icons/clef_bass.svg",
+            Self::ClefAlto => "bytes://icons/clef_alto.svg",
+            Self::ClefTreble => "bytes://icons/clef_treble.svg",
             Self::Image => "bytes://icons/image.svg",
             Self::Diff => "bytes://icons/diff.svg",
             Self::BinaryDiff => "bytes://icons/binary.svg",
@@ -313,6 +346,17 @@ impl Icon {
     pub const fn svg_bytes(&self) -> &'static [u8] {
         match self {
             Self::Audio => include_bytes!("../assets/icons/audio.svg"),
+            Self::AudioWav => include_bytes!("../assets/icons/audio_wav.svg"),
+            Self::AudioFlac => include_bytes!("../assets/icons/audio_flac.svg"),
+            Self::AudioAiff => include_bytes!("../assets/icons/audio_aiff.svg"),
+            Self::AudioAac => include_bytes!("../assets/icons/audio_aac.svg"),
+            Self::AudioOgg => include_bytes!("../assets/icons/audio_ogg.svg"),
+            Self::AudioOga => include_bytes!("../assets/icons/audio_oga.svg"),
+            Self::AudioM4a => include_bytes!("../assets/icons/audio_m4a.svg"),
+            Self::AudioWma => include_bytes!("../assets/icons/audio_wma.svg"),
+            Self::ClefBass => include_bytes!("../assets/icons/clef_bass.svg"),
+            Self::ClefAlto => include_bytes!("../assets/icons/clef_alto.svg"),
+            Self::ClefTreble => include_bytes!("../assets/icons/clef_treble.svg"),
             Self::Image => include_bytes!("../assets/icons/image.svg"),
             Self::Diff => include_bytes!("../assets/icons/diff.svg"),
             Self::BinaryDiff => include_bytes!("../assets/icons/binary.svg"),
@@ -426,9 +470,14 @@ impl Icon {
 
     /// Paints an SVG into an existing canvas without creating a widget.
     pub fn paint(self, painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+        // SVGs are rasterized by egui_extras before the renderer scales the
+        // texture. Request physical pixels here so high-DPI displays do not
+        // enlarge a logical-point-sized raster and soften the icon edges.
+        let pixels_per_point = painter.ctx().pixels_per_point();
+        let raster_size = rect.size() * pixels_per_point;
         match self
-            .image(rect.width())
-            .load_for_size(painter.ctx(), rect.size())
+            .image(rect.width() * pixels_per_point)
+            .load_for_size(painter.ctx(), raster_size)
         {
             Ok(egui::load::TexturePoll::Ready { texture }) => {
                 painter.image(
