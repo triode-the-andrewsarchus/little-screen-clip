@@ -1337,13 +1337,14 @@ fn media_rows(
     })
 }
 
-/// Paints a passive image below a row, keeping file-list input available.
-pub(super) fn preview_popup(
+/// Paints a passive image below a row, with optional overlay, keeping file-list input available.
+pub(super) fn preview_popup_with_overlay(
     ui: &Ui,
     id: Id,
     anchor: Rect,
     size: egui::Vec2,
     texture: Option<&egui::TextureHandle>,
+    overlay: Option<(&egui::TextureHandle, Color32)>,
     message: Option<&str>,
 ) {
     let screen = ui.ctx().screen_rect().shrink(8.0);
@@ -1356,12 +1357,38 @@ pub(super) fn preview_popup(
         .interactable(false)
         .show(ui.ctx(), |ui| {
             if let Some(texture) = texture {
-                ui.add(egui::Image::new(texture).fit_to_exact_size(size));
+                let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
+                ui.painter().image(
+                    texture.id(),
+                    rect,
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+                if let Some((overlay, tint)) = overlay {
+                    ui.painter().image(
+                        overlay.id(),
+                        rect,
+                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                        tint,
+                    );
+                }
             }
             if let Some(message) = message {
                 ui.label(message);
             }
         });
+}
+
+/// Paints a passive image below a row, keeping file-list input available.
+pub(super) fn preview_popup(
+    ui: &Ui,
+    id: Id,
+    anchor: Rect,
+    size: egui::Vec2,
+    texture: Option<&egui::TextureHandle>,
+    message: Option<&str>,
+) {
+    preview_popup_with_overlay(ui, id, anchor, size, texture, None, message);
 }
 
 /// Common header and body geometry for passive information strips.

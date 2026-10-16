@@ -3,6 +3,7 @@ use super::{Analysis, Hover};
 use crate::{icons::Icon, ui_appearance::WorkbenchColors};
 use egui::{Align2, Color32, FontId, Id, Rect, Sense, Stroke, Ui, pos2, vec2};
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::file_manager) fn show(
     ui: &mut Ui,
     row: Rect,
@@ -50,19 +51,21 @@ pub(in crate::file_manager) fn show(
         );
         return;
     };
-    if ui.is_enabled()
+    let palette = palette_rect(body, thumb);
+    let mut hovered_segment = None;
+    hilbert_strip_ui(ui, palette, entry, analysis, colors, &mut hovered_segment);
+
+    let thumb_hovered = ui.is_enabled()
         && ui
             .ctx()
             .pointer_hover_pos()
-            .is_some_and(|point| thumb.intersect(ui.clip_rect()).contains(point))
-    {
-        hover.show(ui, thumb, entry, identity, analysis, texture);
+            .is_some_and(|point| thumb.intersect(ui.clip_rect()).contains(point));
+
+    if thumb_hovered {
+        hover.show(ui, thumb, entry, identity, analysis, texture, None);
+    } else if let Some(segment) = hovered_segment.filter(|_| ui.is_enabled()) {
+        hover.show(ui, thumb, entry, identity, analysis, texture, Some(segment));
     }
-    let palette = Rect::from_min_size(
-        pos2(thumb.right() + 10.0, body.top()),
-        vec2(body.height(), body.height()),
-    );
-    swatches(ui, palette, entry, analysis);
     let rest = Rect::from_min_max(pos2(palette.right() + 12.0, body.top()), body.max);
     if rest.width() < 80.0 {
         return;
@@ -117,30 +120,82 @@ fn text(ui: &Ui, rect: Rect, value: &str, color: Color32) {
         );
 }
 
-fn swatches(ui: &Ui, rect: Rect, entry: &Entry, analysis: &Analysis) {
-    if analysis.palette.is_empty() {
+fn hilbert_strip_ui(
+    ui: &Ui,
+    rect: Rect,
+    entry: &Entry,
+    analysis: &Analysis,
+    colors: WorkbenchColors,
+    hovered_segment: &mut Option<usize>,
+) {
+    let strip = &analysis.hilbert_strip;
+    let count = strip.visible_segments.len();
+    if count == 0 {
         return;
     }
-    let edge = rect.width() / 3.0;
-    for index in 0..9 {
-        let color = analysis.palette[index % analysis.palette.len()];
-        let cell = Rect::from_min_size(
-            rect.min + vec2((index % 3) as f32 * edge, (index / 3) as f32 * edge),
-            vec2(edge, edge),
-        )
-        .shrink(1.0);
-        ui.painter().rect_filled(cell, 1.0, color);
-        let response = ui.interact(
-            cell,
-            Id::new(("image_strip_color", &entry.path, index)),
-            Sense::click(),
+
+    let clip = rect.intersect(ui.clip_rect());
+    let width = rect.width();
+
+    ui.painter().rect_filled(rect, 2.0, colors.recessed);
+
+    let painter = ui.painter().with_clip_rect(clip);
+    for (i, seg) in strip.visible_segments.iter().enumerate() {
+        let x0 = rect.left() + (i as f32 / count as f32) * width;
+        let x1 = rect.left() + ((i + 1) as f32 / count as f32) * width;
+        let stripe = Rect::from_min_max(pos2(x0, rect.top()), pos2(x1, rect.bottom()));
+        painter.rect_filled(stripe, 0.0, seg.color);
+    }
+
+    ui.painter()
+        .rect_stroke(rect, 2.0, Stroke::new(1.0_f32, colors.recessed));
+
+    let response = ui.interact(
+        rect,
+        Id::new(("image_strip_hilbert", &entry.path)),
+        Sense::click_and_drag(),
+    );
+
+    let pointer = ui
+        .ctx()
+        .pointer_hover_pos()
+        .or_else(|| response.interact_pointer_pos());
+
+    if let Some(pos) = pointer.filter(|p| clip.contains(*p)) {
+        let rel_x = ((pos.x - rect.left()) / width).clamp(0.0, 1.0 - f32::EPSILON);
+        let stripe_idx = ((rel_x * count as f32).floor() as usize).min(count - 1);
+        let seg = &strip.visible_segments[stripe_idx];
+        *hovered_segment = Some(seg.source_segment);
+
+        let x0 = rect.left() + (stripe_idx as f32 / count as f32) * width;
+        let x1 = rect.left() + ((stripe_idx + 1) as f32 / count as f32) * width;
+        let stripe_width = x1 - x0;
+        let marker_rect = if stripe_width < 3.0 {
+            let center_x = (x0 + x1) * 0.5;
+            Rect::from_center_size(pos2(center_x, rect.center().y), vec2(3.0, rect.height()))
+        } else {
+            Rect::from_min_max(pos2(x0, rect.top()), pos2(x1, rect.bottom()))
+        };
+        let color = seg.color;
+        let l = super::hilbert::oklab_l(color.r(), color.g(), color.b());
+        let marker_color = if l >= 0.5 {
+            Color32::BLACK
+        } else {
+            Color32::WHITE
+        };
+        ui.painter().with_clip_rect(clip).rect_stroke(
+            marker_rect,
+            0.0,
+            Stroke::new(1.5_f32, marker_color),
         );
+
+        let hex = format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b());
         if response.clicked() {
             ui.output_mut(|output| {
-                output.copied_text = format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b())
+                output.copied_text = hex.clone();
             });
         }
-        response.on_hover_text("Click to copy color");
+        response.on_hover_text(format!("Click to copy color\n{hex}"));
     }
 }
 
@@ -312,5 +367,61 @@ fn metadata_ui(ui: &Ui, rect: Rect, entry: &Entry, analysis: &Analysis, colors: 
             Sense::hover(),
         )
         .on_hover_text(details.join("\n"));
+    }
+}
+
+/// Target aspect ratio (width:height) for the palette strip when space allows.
+pub const PALETTE_ASPECT_RATIO: f32 = 8.0;
+
+/// Computes the palette rectangle, targeting an 8:1 rectangle when space allows,
+/// but trading space down to square (1:1) when the window is resized thinner.
+pub(super) fn palette_rect(body: Rect, thumb: Rect) -> Rect {
+    let available_space = (body.right() - thumb.right() - 10.0).max(0.0);
+    let ideal_palette_width = body.height() * PALETTE_ASPECT_RATIO;
+    let min_palette_width = body.height().min(available_space);
+    let rest_comfort_width = body.height() * 4.0 + 20.0;
+    let palette_width = if available_space >= ideal_palette_width + 12.0 + rest_comfort_width {
+        ideal_palette_width
+    } else {
+        (available_space - 12.0 - rest_comfort_width)
+            .clamp(min_palette_width, ideal_palette_width)
+            .min(available_space)
+    };
+    Rect::from_min_size(
+        pos2(thumb.right() + 10.0, body.top()),
+        vec2(palette_width, body.height()),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn palette_rect_aspect_ratio_and_space_trading() {
+        let h = 66.0;
+        let body_wide = Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, h));
+        let thumb = Rect::from_min_size(pos2(0.0, 0.0), vec2(h * 16.0 / 9.0, h));
+
+        // Wide window: gets the full 8:1 aspect ratio
+        let pal_wide = palette_rect(body_wide, thumb);
+        assert!((pal_wide.width() - h * 8.0).abs() < 0.01);
+        assert_eq!(pal_wide.height(), h);
+
+        // Medium window: trades space smoothly between 8:1 and 1:1
+        let body_med = Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, h));
+        let pal_med = palette_rect(body_med, thumb);
+        assert!(pal_med.width() < h * 8.0);
+        assert!(pal_med.width() >= h);
+
+        // Narrow window: clamps at 1:1 square
+        let body_narrow = Rect::from_min_size(pos2(0.0, 0.0), vec2(450.0, h));
+        let pal_narrow = palette_rect(body_narrow, thumb);
+        assert!((pal_narrow.width() - h).abs() < 0.01);
+
+        // Extremely narrow window: bounded by available space
+        let body_tiny = Rect::from_min_size(pos2(0.0, 0.0), vec2(thumb.right() + 30.0, h));
+        let pal_tiny = palette_rect(body_tiny, thumb);
+        assert!((pal_tiny.width() - 20.0).abs() < 0.01);
     }
 }

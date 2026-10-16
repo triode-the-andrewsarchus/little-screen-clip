@@ -17,7 +17,7 @@ mod save;
 mod tools;
 use tools::*;
 pub(crate) use tools::{
-    ImageToolProcessControl, OcrMsg, clear_image_tool_pid_if_owned, extract_palette, ocr_command,
+    ImageToolProcessControl, OcrMsg, clear_image_tool_pid_if_owned, ocr_command,
     run_image_tool_status_command, spawn_image_tool_child, terminate_image_tool_process,
 };
 
