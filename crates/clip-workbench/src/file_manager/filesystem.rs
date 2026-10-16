@@ -18,6 +18,7 @@ pub(super) struct Entry {
     pub symlink: bool,
     pub hidden: bool,
     pub size: String,
+    pub size_bytes: u64,
     pub modified: String,
     pub warning: Option<String>,
     pub revision: u64,
@@ -134,6 +135,7 @@ fn read_entry(child: std::fs::DirEntry) -> Entry {
         regular_file,
         system,
         symlink,
+        size_bytes: metadata.as_ref().map_or(0, |data| data.len()),
         size: if directory {
             "—".into()
         } else {

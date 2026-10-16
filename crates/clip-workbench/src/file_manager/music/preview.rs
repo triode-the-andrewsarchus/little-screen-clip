@@ -7,7 +7,7 @@ use std::{path::Path, time::Duration};
 
 pub(in crate::file_manager) use super::super::media::MusicMetadata as Metadata;
 
-pub(in crate::file_manager) fn load(path: &Path, cancelled: &AtomicBool) -> Data {
+pub(in crate::file_manager) fn load(path: &Path, spectrum: bool, cancelled: &AtomicBool) -> Data {
     let mut data = Data::new(
         super::super::display_path(path),
         "Music".into(),
@@ -25,7 +25,13 @@ pub(in crate::file_manager) fn load(path: &Path, cancelled: &AtomicBool) -> Data
         let ((mut metadata, image), result) = std::thread::scope(|scope| {
             let details =
                 scope.spawn(|| (metadata(path), super::super::media::media_frame(path, 0, 0)));
-            let result = waveform(path, duration, 512, None, cancelled);
+            let result = if spectrum {
+                super::spectrum::render(path, duration, cancelled)
+                    .map(|image| (Vec::new(), Vec::new(), Some(image)))
+            } else {
+                waveform(path, duration, 512, None, cancelled)
+                    .map(|(peaks, colors)| (peaks, colors, None))
+            };
             details
                 .join()
                 .map(|details| (details, result))
@@ -35,7 +41,8 @@ pub(in crate::file_manager) fn load(path: &Path, cancelled: &AtomicBool) -> Data
         data.title = metadata.title.clone();
         data.image = image;
         data.music = Some(metadata);
-        let (waveform, colors) = result?;
+        let (waveform, colors, spectrum) = result?;
+        data.spectrum = spectrum;
         data.waveform = waveform;
         data.waveform_colors = colors;
         source.check()?;
@@ -139,7 +146,10 @@ mod tests {
                     if cache.needs(*id) {
                         cache.request(
                             *id,
-                            super::super::super::shelf::preview::Source::Music((*path).clone()),
+                            super::super::super::shelf::preview::Source::Music(
+                                (*path).clone(),
+                                false,
+                            ),
                         );
                     }
                 }
@@ -201,6 +211,15 @@ mod tests {
             let wave = waveform(&path, duration, 512, None, &AtomicBool::new(false))
                 .unwrap_or_else(|error| panic!("{extension}: {error}"))
                 .0;
+            let spectrum = super::super::spectrum::render(&path, duration, &AtomicBool::new(false))
+                .unwrap_or_else(|error| panic!("{extension} spectrum: {error}"));
+            assert_eq!((spectrum.width, spectrum.height), (512, 64));
+            assert!(
+                spectrum
+                    .premultiplied_rgba
+                    .chunks_exact(4)
+                    .any(|pixel| pixel[0] > 20)
+            );
             assert_eq!(wave.len(), 512);
             assert!(
                 wave.iter().any(|peak| *peak > 0.01),
@@ -227,7 +246,7 @@ mod tests {
     #[test]
     fn music_metadata_and_missing_cover_keep_playable_waveform_data() {
         let (_dir, path) = crate::audio_preview::tests::generate_fixture_wav("metadata", 1.0);
-        let data = load(&path, &AtomicBool::new(false));
+        let data = load(&path, false, &AtomicBool::new(false));
         assert_eq!(data.waveform.len(), 512);
         let metadata = data.music.unwrap();
         assert!(metadata.title.contains("metadata"));

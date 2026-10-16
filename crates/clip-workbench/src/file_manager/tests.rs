@@ -979,3 +979,92 @@ fn escape_clears_rendered_selection_without_losing_list_focus() {
     assert_eq!(browser.selection_count(), 0);
     assert!(ctx.memory(|memory| memory.has_focus(super::ui::list_id())));
 }
+
+#[test]
+fn status_summary_counts_selection_and_rounds_file_sizes() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("alpha")).unwrap();
+    std::fs::create_dir(temp.path().join("beta")).unwrap();
+    std::fs::write(temp.path().join("one"), vec![0; 10_000]).unwrap();
+    std::fs::write(temp.path().join("two"), vec![0; 500]).unwrap();
+    let (mut manager, _jobs) = loaded(temp.path());
+    assert_eq!(manager.selection_summary(), "2 folders | 2 files (10.5KB)");
+    manager.select(temp.path().join("alpha"));
+    assert_eq!(manager.selection_summary(), "1 Folder");
+    manager.select_with(temp.path().join("beta"), true, false);
+    assert_eq!(manager.selection_summary(), "2 Folders");
+    manager.select(temp.path().join("alpha"));
+    manager.select_with(temp.path().join("one"), true, false);
+    manager.select_with(temp.path().join("two"), true, false);
+    assert_eq!(
+        manager.selection_summary(),
+        "Selection: 1 folder | 2 files (10.5KB)"
+    );
+    manager.select(temp.path().join("two"));
+    assert_eq!(manager.selection_summary(), "Selection: 1 file (500B)");
+    manager.clear_selection();
+    assert_eq!(manager.selection_summary(), "2 folders | 2 files (10.5KB)");
+}
+
+#[test]
+fn status_summary_omits_zero_counts_and_handles_empty_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let (manager, jobs) = loaded(temp.path());
+    assert_eq!(manager.selection_summary(), "Empty folder");
+    drop(jobs);
+    std::fs::create_dir(temp.path().join("alpha")).unwrap();
+    let (manager, jobs) = loaded(temp.path());
+    assert_eq!(manager.selection_summary(), "1 folder");
+    drop(jobs);
+    std::fs::remove_dir(temp.path().join("alpha")).unwrap();
+    std::fs::write(temp.path().join("data"), vec![0; 1_260_000]).unwrap();
+    let (manager, _jobs) = loaded(temp.path());
+    assert_eq!(manager.selection_summary(), "1 file (1.3MB)");
+}
+
+#[test]
+fn switching_audio_strips_preserves_range_and_rejects_previous_mode_previews() {
+    let (directory, path) = crate::audio_preview::tests::generate_fixture_wav("mode", 0.2);
+    let (mut manager, _jobs) = loaded(directory.path());
+    let source = crate::file_source::FileSource::capture(&path).unwrap();
+    let range = ui::music::MusicRange {
+        path: path.clone(),
+        start: 0.03,
+        end: 0.12,
+        revision: manager.directory.as_ref().unwrap().entries[0].revision,
+        source,
+        snapped: true,
+    };
+    manager.music_selection = Some(range.clone());
+    manager.select(path);
+    let ctx = egui::Context::default();
+    for spectrum in [false, true, false] {
+        // Start the old request, then switch while it may still be computing.
+        manager.music_previews.retire();
+        manager.music_previews.set_audio_spectrum(!spectrum);
+        let entry = &manager.directory.as_ref().unwrap().entries[0];
+        manager.music_previews.music(&ctx, entry);
+        manager.music_previews.set_audio_spectrum(spectrum);
+        let started = Instant::now();
+        loop {
+            if let Some(ready) = manager.music_previews.music(&ctx, entry) {
+                assert_eq!(
+                    ready.spectrum_texture.is_some(),
+                    spectrum,
+                    "{}",
+                    ready.data.detail
+                );
+                assert_eq!(!ready.data.waveform.is_empty(), !spectrum);
+                assert_eq!(
+                    ready.data.music.as_ref().unwrap().source.as_ref(),
+                    Some(&range.source)
+                );
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(manager.music_selection.as_ref() == Some(&range));
+        assert_eq!(manager.selection_count(), 1);
+    }
+}

@@ -51,6 +51,7 @@ impl FileManager {
             {
                 self.set_view(view);
             }
+            self.transfer_toolbar(ui);
             if self.view == super::super::BrowserView::Photos {
                 if ui
                     .button(if self.gallery_selecting {

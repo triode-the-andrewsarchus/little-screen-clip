@@ -4,7 +4,7 @@ use egui::{Key, Modifiers};
 use little_clip_core::{AppConfig, palette::AppPalette};
 
 use super::{FileManager, Navigation};
-use crate::{icons::Icon, ui_appearance, ui_ext};
+use crate::{ui_appearance, ui_ext};
 
 // egui 0.27 lets a CentralPanel frame grow with overflowing children. Bound
 // both its background and child painting to the space left by the outer docks.
@@ -41,6 +41,9 @@ impl FileManagerApp {
         egui_extras::install_image_loaders(ctx);
         let mut browser = FileManager::default();
         browser.music_threshold = config.file_manager.music_threshold_percent.clamp(1, 100);
+        browser
+            .music_previews
+            .set_audio_spectrum(config.file_manager.audio_spectrum);
         browser.video_timeline_decimation = match config.file_manager.video_timeline_decimation {
             value @ (1 | 2 | 4 | 8 | 16) => value,
             _ => 1,
@@ -294,22 +297,64 @@ impl eframe::App for FileManagerApp {
         }
         self.browser.handle_address_escape(ctx);
         egui::TopBottomPanel::top("file_manager_title").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(
-                    Icon::Folder.label(egui::RichText::new("Little Screen Clip — Files").strong()),
-                );
+            egui::menu::bar(ui, |ui| {
+                for title in ["File", "Edit", "View"] {
+                    ui.menu_button(title, |ui| {
+                        if title == "View" {
+                            ui.menu_button("Audio", |ui| {
+                                ui.style_mut().wrap = Some(false);
+                                let mut spectrum = self.browser.music_previews.audio_spectrum();
+                                if ui
+                                    .selectable_label(spectrum, "Use spectrum instead of waveform")
+                                    .clicked()
+                                {
+                                    spectrum = !spectrum;
+                                    match AppConfig::save_file_manager_audio_spectrum_to_file(
+                                        spectrum,
+                                    ) {
+                                        Ok(()) => {
+                                            self.browser.music_previews.set_audio_spectrum(spectrum)
+                                        }
+                                        Err(error) => {
+                                            self.browser.edits.report =
+                                                Some(super::edits::EditReport {
+                                                    text: format!(
+                                                        "Cannot save audio view preference: {error}"
+                                                    ),
+                                                    failed: true,
+                                                });
+                                        }
+                                    }
+                                }
+                            });
+                        } else {
+                            ui.add_enabled(false, egui::Label::new("No actions yet"));
+                        }
+                    });
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add(
                         egui::Label::new(if self.viewers.active() {
                             "Back to folder: browse  ·  Ctrl+Q: close"
                         } else {
-                            "Ctrl+L: address  ·  F5: refresh  ·  Ctrl+Q: close"
+                            "Ctrl+L: address  ·  Ctrl+Q: close"
                         })
                         .truncate(true),
                     );
                 });
             });
         });
+        if !self.viewers.active() {
+            egui::TopBottomPanel::bottom("file_manager_summary")
+                .frame(
+                    egui::Frame::none()
+                        .fill(ui_appearance::WorkbenchColors::from_palette(&self.palette).panel)
+                        .inner_margin(egui::Margin::symmetric(8.0, 3.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.add(egui::Label::new(self.browser.selection_summary()).truncate(true));
+                });
+        }
         self.main_content(ctx);
         self.native_start(ctx);
         let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q))

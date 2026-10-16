@@ -1,6 +1,7 @@
 //! Files previews one explicitly chosen track; playback never advances or repeats.
 pub(super) mod preview;
 mod selection;
+mod spectrum;
 use super::ui::music::MusicRange;
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use rodio::{Decoder, Player, Source};

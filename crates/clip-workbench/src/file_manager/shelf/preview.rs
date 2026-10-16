@@ -29,7 +29,7 @@ pub(in crate::file_manager) enum Source {
         path: PathBuf,
         revision: u64,
     },
-    Music(PathBuf),
+    Music(PathBuf, bool),
     Text(PathBuf),
     System(PathBuf),
     Binary(PathBuf),
@@ -71,7 +71,7 @@ impl Source {
     fn execution(&self) -> (&'static BackgroundJobs, usize, u64) {
         match self {
             Self::System(_) => (super::super::system::jobs(), 2, 3),
-            Self::Music(_) => (music_preview_jobs(), music_preview_workers(), 30),
+            Self::Music(..) => (music_preview_jobs(), music_preview_workers(), 30),
             Self::Gallery { .. } | Self::PdfPage { .. } | Self::Photo { .. } | Self::Blend(_) => {
                 (gallery_preview_jobs(), 4, 15)
             }
@@ -99,7 +99,9 @@ impl Source {
             Source::Photo { path, revision } => {
                 super::super::image_strip::load(&path, revision, token)
             }
-            Source::Music(path) => super::super::music::preview::load(&path, token),
+            Source::Music(path, spectrum) => {
+                super::super::music::preview::load(&path, spectrum, token)
+            }
             Source::Blend(path) => super::super::blend_preview::load(&path, token),
             Source::Material(request) => request.load(token),
             Source::PdfPage { path, page, edge } => {
@@ -175,6 +177,7 @@ pub(in crate::file_manager) use super::super::media::PreviewData as Data;
 pub(in crate::file_manager) struct Ready {
     pub data: Data,
     pub texture: Option<egui::TextureHandle>,
+    pub spectrum_texture: Option<egui::TextureHandle>,
     pub hash_textures: [Option<egui::TextureHandle>; 2],
 }
 
@@ -366,6 +369,14 @@ impl Previews {
             .image
             .as_ref()
             .map(|image| upload_texture(ctx, format!("shelf_preview_{id}"), image, options));
+        let spectrum_texture = data.spectrum.as_ref().map(|image| {
+            upload_texture(
+                ctx,
+                format!("music_spectrum_{id}"),
+                image,
+                egui::TextureOptions::LINEAR,
+            )
+        });
         let hash_textures = std::array::from_fn(|index| {
             data.photo.as_ref()?.hash_art[index].as_ref().map(|image| {
                 upload_texture(
@@ -386,6 +397,7 @@ impl Previews {
                 data,
                 texture,
                 hash_textures,
+                spectrum_texture,
             },
         );
         ctx.request_repaint();
@@ -753,7 +765,7 @@ mod tests {
             super::super::super::text_strip::load(&text, &AtomicBool::new(false)).unwrap();
         let cases = [
             (
-                Source::Music(dir.path().join("missing.wav")),
+                Source::Music(dir.path().join("missing.wav"), false),
                 music_preview_workers(),
             ),
             (Source::Text(text), 4),

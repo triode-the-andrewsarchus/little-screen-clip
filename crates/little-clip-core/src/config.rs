@@ -44,6 +44,8 @@ pub struct AppConfig {
 #[serde(default)]
 pub struct FileManagerConfig {
     pub music_threshold_percent: u8,
+    /// Render file-manager audio strips as spectra instead of waveforms.
+    pub audio_spectrum: bool,
     /// Timeline pixels per sample: 1, 2, 4, 8, or 16 (default: 1).
     pub video_timeline_decimation: u8,
 }
@@ -51,6 +53,7 @@ impl Default for FileManagerConfig {
     fn default() -> Self {
         Self {
             music_threshold_percent: 75,
+            audio_spectrum: false,
             video_timeline_decimation: 1,
         }
     }
@@ -537,21 +540,18 @@ impl AppConfig {
     pub fn save_workbench_appearance_to_file(
         appearance: WorkbenchAppearance,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let path = find_config_file_path();
-        let current = if path.exists() {
-            std::fs::read_to_string(&path)?
-        } else {
-            String::new()
-        };
         let value = match appearance {
             WorkbenchAppearance::Dark => "dark",
             WorkbenchAppearance::Light => "light",
         };
-        std::fs::write(
-            &path,
-            update_setting_in_text(&current, "workbench", "appearance", value),
-        )?;
-        Ok(())
+        save_setting_to_file("workbench", "appearance", value)
+    }
+
+    /// Save the Files audio-strip preference, preserving unrelated settings.
+    pub fn save_file_manager_audio_spectrum_to_file(
+        spectrum: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        save_setting_to_file("file_manager", "audio_spectrum", spectrum)
     }
 }
 
@@ -570,8 +570,32 @@ pub fn find_config_file_path() -> PathBuf {
     }
 }
 
-/// Update one quoted string setting without rewriting the rest of the TOML file.
-fn update_setting_in_text(text: &str, table: &str, setting: &str, value: &str) -> String {
+fn save_setting_to_file(
+    table: &str,
+    setting: &str,
+    value: impl Into<toml::Value>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = find_config_file_path();
+    let current = if path.exists() {
+        std::fs::read_to_string(&path)?
+    } else {
+        String::new()
+    };
+    std::fs::write(
+        &path,
+        update_setting_in_text(&current, table, setting, value),
+    )?;
+    Ok(())
+}
+
+/// Update one scalar setting without rewriting the rest of the TOML file.
+fn update_setting_in_text(
+    text: &str,
+    table: &str,
+    setting: &str,
+    value: impl Into<toml::Value>,
+) -> String {
+    let value = value.into().to_string();
     let mut output = Vec::new();
     let mut in_table = false;
     let mut updated = false;
@@ -582,7 +606,7 @@ fn update_setting_in_text(text: &str, table: &str, setting: &str, value: &str) -
         // Check for a table header such as [workbench] or [display].
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             if in_table && !updated {
-                output.push(format!("{setting} = \"{value}\""));
+                output.push(format!("{setting} = {value}"));
                 updated = true;
             }
             in_table = trimmed == format!("[{table}]");
@@ -595,7 +619,7 @@ fn update_setting_in_text(text: &str, table: &str, setting: &str, value: &str) -
             let key = trimmed.split('=').next().unwrap_or("").trim();
             if key == setting {
                 let leading: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                output.push(format!("{leading}{setting} = \"{value}\""));
+                output.push(format!("{leading}{setting} = {value}"));
                 updated = true;
                 continue;
             }
@@ -605,7 +629,7 @@ fn update_setting_in_text(text: &str, table: &str, setting: &str, value: &str) -
     }
 
     if in_table && !updated {
-        output.push(format!("{setting} = \"{value}\""));
+        output.push(format!("{setting} = {value}"));
     }
 
     if !table_found {
@@ -613,7 +637,7 @@ fn update_setting_in_text(text: &str, table: &str, setting: &str, value: &str) -
             output.push(String::new());
         }
         output.push(format!("[{table}]"));
-        output.push(format!("{setting} = \"{value}\""));
+        output.push(format!("{setting} = {value}"));
     }
 
     let mut res = output.join("\n");
@@ -637,6 +661,32 @@ pub fn get_user_config_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_spectrum_persists_as_a_boolean_without_rewriting_other_settings() {
+        let defaults: AppConfig = toml::from_str("").unwrap();
+        assert!(!defaults.file_manager.audio_spectrum);
+        let original = "# custom preferences\n[workbench]\nappearance = \"light\"\n[file_manager]\n# timeline quality\nvideo_timeline_decimation = 4\n";
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let enabled = update_setting_in_text(original, "file_manager", "audio_spectrum", true);
+        assert!(enabled.contains("audio_spectrum = true"));
+        assert!(enabled.starts_with(original.trim_end()));
+        std::fs::write(&path, &enabled).unwrap();
+        let loaded = AppConfig::load_from_path(&path).unwrap();
+        assert!(loaded.file_manager.audio_spectrum);
+        assert_eq!(loaded.file_manager.video_timeline_decimation, 4);
+        assert_eq!(loaded.workbench.appearance, WorkbenchAppearance::Light);
+        let disabled = update_setting_in_text(&enabled, "file_manager", "audio_spectrum", false);
+        assert_eq!(disabled.matches("audio_spectrum =").count(), 1);
+        std::fs::write(&path, disabled).unwrap();
+        assert!(
+            !AppConfig::load_from_path(&path)
+                .unwrap()
+                .file_manager
+                .audio_spectrum
+        );
+    }
 
     #[test]
     fn files_music_threshold_defaults_and_accepts_configuration() {

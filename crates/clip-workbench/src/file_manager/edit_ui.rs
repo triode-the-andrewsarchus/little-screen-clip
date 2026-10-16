@@ -1,5 +1,5 @@
 use egui::{Id, Key, Modifiers, Ui};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::edits::NamingAction;
 use super::ui::{focus_text, key, list_id};
@@ -38,34 +38,6 @@ pub(super) fn naming_buttons(
 }
 
 impl FileManager {
-    pub(super) fn edit_toolbar(&mut self, ui: &mut Ui) {
-        let rename: Option<PathBuf> = if self.selection_count() == 1 {
-            self.location()
-                .and_then(|location| location.selection.first())
-                .cloned()
-        } else {
-            None
-        };
-        let action = ui
-            .horizontal(|ui| {
-                let action = naming_buttons(ui, self.can_edit(), rename.as_deref());
-                ui.separator();
-                if ui
-                    .button("Select all")
-                    .on_hover_text("Select visible items [Ctrl+A]")
-                    .clicked()
-                {
-                    self.select_all();
-                }
-                ui.label(format!("{} selected", self.selection_count()));
-                action
-            })
-            .inner;
-        if let Some(action) = action {
-            self.begin_naming(action);
-        }
-    }
-
     pub(super) fn naming_ui(&mut self, ctx: &egui::Context, colors: WorkbenchColors) {
         let Some(dialog) = &mut self.edits.dialog else {
             return;

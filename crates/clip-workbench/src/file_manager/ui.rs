@@ -15,6 +15,23 @@ mod video;
 
 const ROW_HEIGHT: f32 = 28.0;
 
+// Decimal units for the compact status strip; filesystem columns retain IEC units.
+fn summary_size(bytes: u64) -> String {
+    let units = ["B", "KB", "MB", "GB", "TB", "PB", "EB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 999.95 && unit < units.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    let size = if unit == 0 {
+        bytes.to_string()
+    } else {
+        format!("{value:.1}")
+    };
+    format!("{size}{}", units[unit])
+}
+
 fn address_id() -> Id {
     Id::new("file_manager_address")
 }
@@ -49,8 +66,6 @@ impl FileManager {
         self.shortcuts(ui.ctx());
         ui.set_enabled(self.edits.dialog.is_none() && !self.transfers_modal());
         self.toolbar(ui, palette);
-        self.edit_toolbar(ui);
-        self.transfer_toolbar(ui);
         self.media_view_toolbar(ui, palette);
         ui.separator();
         self.docked_panels(ui, palette);
@@ -128,34 +143,27 @@ impl FileManager {
                     self.shelf_ui(ui, palette);
                 });
         }
-        egui::TopBottomPanel::bottom("file_manager_status")
-            .exact_height(
-                if self.shelf.open || self.view != super::BrowserView::List {
-                    if self.filesystem_busy()
-                        || self.error.is_some()
-                        || self.transfers.has_status()
-                        || self.edits.report.is_some()
-                    {
-                        56.0
-                    } else {
-                        32.0
-                    }
-                } else if self.transfers.has_status() {
-                    150.0
-                } else if self.edits.report.is_some() || self.error.is_some() {
-                    85.0
-                } else {
-                    40.0
-                },
-            )
-            .frame(egui::Frame::none().inner_margin(6.0))
-            .show_inside(ui, |ui| {
-                ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
-                egui::ScrollArea::vertical()
-                    .min_scrolled_height(0.0)
-                    .max_height(ui.available_height())
-                    .show(ui, |ui| self.status(ui, colors));
-            });
+        if self.filesystem_busy()
+            || self.error.is_some()
+            || self.transfers.has_status()
+            || self.edits.report.is_some()
+            || self
+                .directory
+                .as_ref()
+                .is_some_and(|directory| directory.skipped > 0)
+        {
+            egui::TopBottomPanel::bottom("file_manager_status")
+                .default_height(56.0)
+                .max_height(150.0)
+                .frame(egui::Frame::none().inner_margin(6.0))
+                .show_inside(ui, |ui| {
+                    ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                    egui::ScrollArea::vertical()
+                        .min_scrolled_height(0.0)
+                        .max_height(ui.available_height())
+                        .show(ui, |ui| self.status(ui, colors));
+                });
+        }
         egui::SidePanel::left("file_manager_folders")
             .default_width(240.0)
             .width_range(150.0..=400.0)
@@ -376,6 +384,57 @@ impl FileManager {
         });
     }
 
+    pub(super) fn selection_summary(&self) -> String {
+        let selection = self.location().map(|location| &location.selection);
+        let selected = selection.is_some_and(|paths| !paths.is_empty());
+        let entries = self
+            .directory
+            .iter()
+            .flat_map(|directory| self.visible.iter().map(|&index| &directory.entries[index]))
+            .filter(|entry| {
+                !selected || selection.is_some_and(|paths| paths.contains(&entry.path))
+            });
+        let mut folders = 0;
+        let mut files = 0;
+        let mut bytes = 0_u64;
+        for entry in entries {
+            if entry.directory {
+                folders += 1;
+            } else {
+                files += 1;
+                bytes = bytes.saturating_add(entry.size_bytes);
+            }
+        }
+        let mut parts = Vec::new();
+        if folders > 0 {
+            parts.push(format!(
+                "{folders} {}",
+                if folders == 1 { "folder" } else { "folders" }
+            ));
+        }
+        if files > 0 {
+            parts.push(format!(
+                "{files} {} ({})",
+                if files == 1 { "file" } else { "files" },
+                summary_size(bytes)
+            ));
+        }
+        if parts.is_empty() {
+            return "Empty folder".into();
+        }
+        if selected && files == 0 {
+            return format!(
+                "{folders} {}",
+                if folders == 1 { "Folder" } else { "Folders" }
+            );
+        }
+        format!(
+            "{}{}",
+            if selected { "Selection: " } else { "" },
+            parts.join(" | ")
+        )
+    }
+
     fn status(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         ui.horizontal(|ui| {
             if let Some(request) = &self.pending {
@@ -391,16 +450,6 @@ impl FileManager {
                         self.error = Some("Opening cancelled. Enter another path or retry.".into());
                     }
                 }
-            } else {
-                let count = self.visible.len();
-                ui.add(
-                    egui::Label::new(format!(
-                        "{} — {count} {}",
-                        display_path(self.path()),
-                        if count == 1 { "item" } else { "items" }
-                    ))
-                    .truncate(true),
-                );
             }
         });
         if let Some(error) = &self.error {
@@ -453,6 +502,9 @@ impl FileManager {
             self.select_with(path, additive, range);
         } else if actions.clear {
             self.clear_selection();
+        }
+        if actions.open_trash {
+            self.open_trash();
         }
         if actions.select_all {
             self.select_all();
@@ -948,6 +1000,7 @@ struct ListActions {
     naming: Option<super::edits::NamingAction>,
     files: Option<super::transfers::ui::SelectionAction>,
     select_all: bool,
+    open_trash: bool,
     clear: bool,
     transfer: Option<(Vec<PathBuf>, PathBuf, bool)>,
 }
@@ -964,7 +1017,8 @@ impl ListActions {
             self.naming = super::edit_ui::naming_buttons(ui, can_edit, None);
             self.files = super::transfers::ui::selection_buttons(ui, selected, can_edit, can_edit);
             self.select_all = ui.button("Select all").clicked();
-            if self.naming.is_some() || self.files.is_some() || self.select_all {
+            self.open_trash = ui.button("Open Trash…").clicked();
+            if self.naming.is_some() || self.files.is_some() || self.select_all || self.open_trash {
                 ui.close_menu();
             }
         });

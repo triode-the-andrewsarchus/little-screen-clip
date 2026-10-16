@@ -104,7 +104,7 @@ impl FileManager {
         if let Some(status) = self.music.status() {
             ui.add(egui::Label::new(status).truncate(true));
         }
-        ui.label("Click a waveform to play or seek. Space plays the selected range; Escape stops playback. Selection edges snap to zero crossings. Ctrl/Shift+click selects files. Drag to select audio; Ctrl+C copies the selection, Ctrl+V pastes into this folder.");
+        ui.label("Click an audio strip to play or seek. Space plays the selected range; Escape stops playback. Selection edges snap to zero crossings. Ctrl/Shift+click selects files. Drag to select audio; Ctrl+C copies the selection, Ctrl+V pastes into this folder.");
     }
     pub(super) fn music_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         // Register the shared waveform focus target every frame so egui retains it
@@ -341,43 +341,53 @@ fn music_card<'a>(
         );
         ui.painter().rect_filled(wave, 0.0, colors.recessed);
         if let Some(ready) = ready {
-            if ready.data.waveform.is_empty() {
-                paint_text(
-                    ui,
+            if let Some(texture) = &ready.spectrum_texture {
+                ui.painter().image(
+                    texture.id(),
                     wave,
-                    0.0,
-                    wave.width(),
-                    "Waveform unavailable",
-                    colors.text_secondary,
+                    Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
+                    Color32::WHITE,
                 );
-            }
-            let count = ready.data.waveform.len().max(1);
-            for (index, amplitude) in ready.data.waveform.iter().enumerate() {
-                let x = wave.left() + index as f32 / count as f32 * wave.width();
-                let height = amplitude * wave.height() * 0.5;
-                ui.painter().line_segment(
-                    [
-                        pos2(x, wave.center().y - height),
-                        pos2(x, wave.center().y + height),
-                    ],
-                    egui::Stroke::new(
-                        1.0_f32,
-                        if selection.is_some_and(|range| {
-                            let time = (index as f32 + 0.5) / count as f32 * metadata.duration;
-                            time >= range.start.min(range.end) && time <= range.start.max(range.end)
-                        }) {
-                            colors.accent
-                        } else {
-                            ready
-                                .data
-                                .waveform_colors
-                                .get(index)
-                                .map_or(colors.text_secondary, |rgb| {
-                                    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-                                })
-                        },
-                    ),
-                );
+            } else {
+                if ready.data.waveform.is_empty() {
+                    paint_text(
+                        ui,
+                        wave,
+                        0.0,
+                        wave.width(),
+                        "Audio strip unavailable",
+                        colors.text_secondary,
+                    );
+                }
+                let count = ready.data.waveform.len().max(1);
+                for (index, amplitude) in ready.data.waveform.iter().enumerate() {
+                    let x = wave.left() + index as f32 / count as f32 * wave.width();
+                    let height = amplitude * wave.height() * 0.5;
+                    ui.painter().line_segment(
+                        [
+                            pos2(x, wave.center().y - height),
+                            pos2(x, wave.center().y + height),
+                        ],
+                        egui::Stroke::new(
+                            1.0_f32,
+                            if selection.is_some_and(|range| {
+                                let time = (index as f32 + 0.5) / count as f32 * metadata.duration;
+                                time >= range.start.min(range.end)
+                                    && time <= range.start.max(range.end)
+                            }) {
+                                colors.accent
+                            } else {
+                                ready
+                                    .data
+                                    .waveform_colors
+                                    .get(index)
+                                    .map_or(colors.text_secondary, |rgb| {
+                                        Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+                                    })
+                            },
+                        ),
+                    );
+                }
             }
         }
         return metadata

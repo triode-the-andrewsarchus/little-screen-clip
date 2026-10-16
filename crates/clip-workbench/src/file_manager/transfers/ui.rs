@@ -12,26 +12,16 @@ impl FileManager {
             || self.transfers.has_conflict()
     }
 
+    pub(in crate::file_manager) fn open_trash(&mut self) {
+        self.transfers.trash.show();
+    }
+
     pub(crate) fn transfer_toolbar(&mut self, ui: &mut Ui) {
-        let selected = self.selection_count() > 0;
-        let action = ui
-            .horizontal_wrapped(|ui| {
-                let action =
-                    selection_buttons(ui, selected, self.can_edit(), self.selection_is_mutable());
-                if ui.button("Trash…").clicked() {
-                    self.transfers.trash.show();
-                }
-                if ui.button("Clear held files").clicked() {
-                    self.transfers.clipboard = None;
-                }
-                if ui.button(format!("Shelf ({})", self.shelf.len())).clicked() {
-                    self.shelf.open = !self.shelf.open;
-                }
-                action
-            })
-            .inner;
-        if let Some(action) = action {
-            self.selection_action(action);
+        if ui.button("Clear held files").clicked() {
+            self.transfers.clipboard = None;
+        }
+        if ui.button(format!("Shelf ({})", self.shelf.len())).clicked() {
+            self.shelf.open = !self.shelf.open;
         }
     }
 

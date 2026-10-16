@@ -114,6 +114,7 @@ pub(super) fn synthetic_directory(count: usize) -> Directory {
                 symlink: false,
                 hidden: false,
                 size: "".into(),
+                size_bytes: 0,
                 modified: "".into(),
                 warning: None,
                 revision: 1,

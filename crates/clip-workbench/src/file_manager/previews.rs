@@ -23,6 +23,7 @@ pub(super) fn strip_slots(count: usize, capacity: usize) -> Vec<Option<usize>> {
 #[derive(Default)]
 pub(super) struct EntryPreviews {
     cache: Previews,
+    audio_spectrum: bool,
     identities: BTreeMap<std::path::PathBuf, (u64, uuid::Uuid)>,
     gallery_sizes: BTreeMap<std::path::PathBuf, u32>,
     rasters: Previews,
@@ -35,6 +36,16 @@ pub(super) struct EntryPreviews {
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
 impl EntryPreviews {
+    pub fn audio_spectrum(&self) -> bool {
+        self.audio_spectrum
+    }
+    pub fn set_audio_spectrum(&mut self, spectrum: bool) {
+        if self.audio_spectrum != spectrum {
+            self.retire();
+            self.audio_spectrum = spectrum;
+        }
+    }
+
     pub fn music(
         &mut self,
         ctx: &egui::Context,
@@ -225,7 +236,7 @@ impl EntryPreviews {
                 } else if super::midi_strip::is_midi(&entry.path) {
                     Source::Midi(entry.path.clone())
                 } else if little_clip_core::audio::is_audio_path(&entry.path) {
-                    Source::Music(entry.path.clone())
+                    Source::Music(entry.path.clone(), self.audio_spectrum)
                 } else if super::binary_strip::known(&entry.path) && entry.regular_file {
                     Source::Binary(entry.path.clone())
                 } else if text_candidate(entry) {
