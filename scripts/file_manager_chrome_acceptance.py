@@ -19,7 +19,7 @@ def exercise(session, root):
     session.move_pointer_to_title = lambda: None
     for menu in ["File", "Edit", "View"]:
         session.click(*session.word("compact-browser", menu, tree=True))
-        session.observe(f"menu-{menu.lower()}", ["Audio"] if menu == "View" else ["No actions yet"])
+        session.observe(f"menu-{menu.lower()}", [{"View": "Audio", "Edit": "No actions available", "File": "No actions yet"}[menu]])
         session.key("Escape")
     session.click(*session.word("compact-browser", "payload", minimum_y=150))
     session.observe("one-file", ["Selection: 1 file (10.0KB)"])

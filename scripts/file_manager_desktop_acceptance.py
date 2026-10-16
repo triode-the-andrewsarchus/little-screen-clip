@@ -35,6 +35,19 @@ def drag(session, source, destination, copy=False):
     time.sleep(0.3)
 
 
+def start_two_clients(output, appearance, binary, roots, children):
+    config, env = isolated_runner(output, appearance, children)
+    apps = []
+    for index, root in enumerate(roots):
+        process = children.start(f"files-{index}", [str(binary.resolve()), str(root)], env=env | {"WAYLAND_DEBUG": "client"}, cwd=config["scratch"], log_path=output / f"files-{index}.log")
+        windows, _ = private.wait_for_app_window(config["niri_bin"], env, process, output)
+        window_id = str(windows[0]["id"])
+        for action in [["set-window-width", "--id", window_id, "640"], ["set-window-height", "--id", window_id, "700"], ["move-floating-window", "--id", window_id, "--x", str(index * 640), "--y", "0"]]:
+            private.run_checked([str(config["niri_bin"]), "msg", "action", *action], env=env)
+        apps.append(process)
+    return config, env, apps
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -52,16 +65,8 @@ def main():
         (right / "RETURNME").write_text("return payload")
         (left / "Nested").mkdir()
         (left / "TREE").mkdir(); (left / "TREE/data").write_text("tree payload")
-        config, env = isolated_runner(output, args.appearance, children)
         binary = Path(__file__).resolve().parent.parent / "target/debug/clip-file-manager"
-        apps = []
-        for index, root in enumerate([left, right]):
-            process = children.start(f"files-{index}", [str(binary), str(root)], env=env | {"WAYLAND_DEBUG": "client"}, cwd=config["scratch"], log_path=output / f"files-{index}.log")
-            windows, _ = private.wait_for_app_window(config["niri_bin"], env, process, output)
-            window_id = str(windows[0]["id"])
-            for action in [["set-window-width", "--id", window_id, "640"], ["set-window-height", "--id", window_id, "700"], ["move-floating-window", "--id", window_id, "--x", str(index * 640), "--y", "0"]]:
-                private.run_checked([str(config["niri_bin"]), "msg", "action", *action], env=env)
-            apps.append(process)
+        config, env, apps = start_two_clients(output, args.appearance, binary, [left, right], children)
         session = Session(output, env, config["niri_bin"], apps[0])
         session.observe("01-two-clients", ["COPYME", "MOVEME", "RETURNME"])
         drag(session, position(session, "01-two-clients", "COPYME", True), (1090, 470), copy=True)

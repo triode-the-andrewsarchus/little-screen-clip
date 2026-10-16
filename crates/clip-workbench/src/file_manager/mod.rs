@@ -3,6 +3,7 @@
 mod app;
 mod binary_strip;
 mod blend_preview;
+mod bookmarks;
 mod content;
 mod edit_ui;
 mod edits;
@@ -148,6 +149,9 @@ pub(crate) struct FileManager {
     address: String,
     show_hidden: bool,
     tree: FolderTree,
+    bookmarks: bookmarks::Bookmarks,
+    bookmark_drop_rect: Option<egui::Rect>,
+    native_drag_point: Option<egui::Pos2>,
     restore_scroll: bool,
     reveal_selection: bool,
     reveal_target: Option<PathBuf>,
@@ -202,6 +206,9 @@ impl FileManager {
     fn new(home: PathBuf) -> Self {
         Self {
             tree: FolderTree::new(home.clone()),
+            bookmarks: bookmarks::Bookmarks::new(home.join(".config/gtk-3.0/bookmarks")),
+            bookmark_drop_rect: None,
+            native_drag_point: None,
             home,
             history: Vec::new(),
             index: None,
@@ -349,6 +356,10 @@ impl FileManager {
 
     fn tick(&mut self, jobs: &BackgroundJobs) {
         self.shelf.tick();
+        self.bookmarks.tick(jobs);
+        if let Some(text) = self.bookmarks.report.take() {
+            self.edits.report = Some(edits::EditReport { text, failed: true });
+        }
         if self.directory.is_none() && self.pending.is_none() && self.error.is_none() {
             self.navigate(self.home.clone(), Navigation::New);
         }

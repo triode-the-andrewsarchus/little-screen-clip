@@ -1068,3 +1068,30 @@ fn switching_audio_strips_preserves_range_and_rejects_previous_mode_previews() {
         assert_eq!(manager.selection_count(), 1);
     }
 }
+
+#[test]
+fn bookmark_menu_requires_a_nonempty_selection_of_only_folders() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first");
+    let second = directory.path().join("second");
+    let file = directory.path().join("text");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::write(&file, "content").unwrap();
+    let (mut browser, _jobs) = loaded(directory.path());
+    assert!(browser.selected_bookmark_folders().is_none());
+    browser.select(first.clone());
+    assert_eq!(
+        browser.selected_bookmark_folders(),
+        Some(vec![first.clone()])
+    );
+    browser.select_with(second.clone(), true, false);
+    assert_eq!(
+        browser.selected_bookmark_folders(),
+        Some(vec![first, second])
+    );
+    browser.select_with(file.clone(), true, false);
+    assert!(browser.selected_bookmark_folders().is_none());
+    browser.select(file);
+    assert!(browser.selected_bookmark_folders().is_none());
+}

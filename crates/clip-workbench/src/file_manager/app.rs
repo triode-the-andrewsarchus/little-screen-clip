@@ -23,12 +23,17 @@ pub(super) fn central_panel<R>(
         })
 }
 
+enum DropDestination {
+    Directory(PathBuf),
+    Bookmark,
+}
+
 struct FileManagerApp {
     browser: FileManager,
     viewers: super::viewers::Viewers,
     palette: AppPalette,
     native: Option<super::native_drag::NativeDrag>,
-    drop_destinations: std::collections::BTreeMap<u64, PathBuf>,
+    drop_destinations: std::collections::BTreeMap<u64, DropDestination>,
 }
 
 impl FileManagerApp {
@@ -40,6 +45,7 @@ impl FileManagerApp {
         ui_appearance::apply_visuals(ctx, &palette);
         egui_extras::install_image_loaders(ctx);
         let mut browser = FileManager::default();
+        browser.bookmarks = super::bookmarks::Bookmarks::for_user(&browser.home);
         browser.music_threshold = config.file_manager.music_threshold_percent.clamp(1, 100);
         browser
             .music_previews
@@ -62,33 +68,67 @@ impl FileManagerApp {
 }
 
 impl FileManagerApp {
+    fn edit_menu(&mut self, ui: &mut egui::Ui) {
+        let folders = self
+            .browser
+            .selected_bookmark_folders()
+            .filter(|_| !self.viewers.active());
+        let Some(paths) = folders else {
+            ui.add_enabled(false, egui::Label::new("No actions available"));
+            return;
+        };
+        if ui
+            .button(if paths.len() == 1 {
+                "Add bookmark"
+            } else {
+                "Add bookmarks"
+            })
+            .clicked()
+        {
+            self.browser.bookmarks.add(paths, None);
+            ui.close_menu();
+        }
+    }
     fn native_tick(&mut self, ctx: &egui::Context) {
         let Some(native) = &mut self.native else {
             return;
         };
+        native.set_reference_target(self.browser.bookmark_drop_rect.map(|rect| {
+            egui::Rect::from_min_max(rect.min * ctx.zoom_factor(), rect.max * ctx.zoom_factor())
+        }));
         for event in native.tick() {
             use super::native_drag::Event;
             match event {
                 Event::Drop(token, point) => {
                     let point = point / ctx.zoom_factor();
-                    if let Some((_, path)) = self
+                    if self
+                        .browser
+                        .bookmark_drop_rect
+                        .is_some_and(|rect| rect.contains(point))
+                    {
+                        self.drop_destinations
+                            .insert(token, DropDestination::Bookmark);
+                    } else if let Some((_, path)) = self
                         .browser
                         .drop_targets
                         .iter()
                         .rev()
                         .find(|(rect, _)| rect.contains(point))
                     {
-                        self.drop_destinations.insert(token, path.clone());
+                        self.drop_destinations
+                            .insert(token, DropDestination::Directory(path.clone()));
                     }
                 }
                 Event::Files(token, paths, moving) => {
-                    let accepted =
-                        self.drop_destinations
-                            .remove(&token)
-                            .is_some_and(|destination| {
-                                self.browser
-                                    .queue_native_drop(token, paths, destination, moving)
-                            });
+                    let accepted = match self.drop_destinations.remove(&token) {
+                        Some(DropDestination::Bookmark) if !moving => {
+                            self.browser.bookmarks.add(paths, Some(token))
+                        }
+                        Some(DropDestination::Directory(destination)) => self
+                            .browser
+                            .queue_native_drop(token, paths, destination, moving),
+                        _ => false,
+                    };
                     if !accepted {
                         native.finish(token, false);
                     }
@@ -107,6 +147,12 @@ impl FileManagerApp {
                         Some(super::edits::EditReport { text, failed: true })
                 }
             }
+        }
+        self.browser.native_drag_point = native
+            .drag_position()
+            .map(|point| point / ctx.zoom_factor());
+        for (token, success) in self.browser.bookmarks.native_results.drain(..) {
+            native.finish(token, success);
         }
         for (token, success) in self.browser.transfers.native_results.drain(..) {
             native.finish(token, success);
@@ -258,6 +304,7 @@ impl FileManagerApp {
             return;
         }
         if self.browser.filesystem_busy()
+            || self.browser.bookmarks.busy()
             || self.browser.music.copying()
             || self.browser.midi.copying()
             || self.browser.shelf.sending()
@@ -289,6 +336,7 @@ impl eframe::App for FileManagerApp {
         self.browser.midi.tick(ctx);
         if self.viewers.active() {
             self.browser.drop_targets.clear();
+            self.browser.bookmark_drop_rect = None;
         }
         self.native_tick(ctx);
         if self.viewers.active() {
@@ -327,6 +375,8 @@ impl eframe::App for FileManagerApp {
                                     }
                                 }
                             });
+                        } else if title == "Edit" {
+                            self.edit_menu(ui);
                         } else {
                             ui.add_enabled(false, egui::Label::new("No actions yet"));
                         }

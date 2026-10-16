@@ -115,12 +115,13 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
                     dropped: false,
                 });
                 offer.accept(serial, Some(MIME.into()));
-                offer.set_actions(Action::Copy | Action::Move, Action::Move);
+                state.update_drop_action();
             }
             wl_data_device::Event::Motion { x, y, .. } => {
                 if let Some(incoming) = &mut state.incoming {
                     incoming.point = egui::pos2(x as f32, y as f32);
                 }
+                state.update_drop_action();
             }
             wl_data_device::Event::Leave => {
                 if let Some(incoming) = state.incoming.take()
@@ -135,6 +136,20 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
     }
 }
 impl State {
+    fn update_drop_action(&self) {
+        if let Some(incoming) = &self.incoming {
+            if self
+                .reference_target
+                .is_some_and(|rect| rect.contains(incoming.point))
+            {
+                incoming.offer.set_actions(Action::Copy, Action::Copy);
+            } else {
+                incoming
+                    .offer
+                    .set_actions(Action::Copy | Action::Move, Action::Move);
+            }
+        }
+    }
     fn read_drop(&mut self) {
         let Some(incoming) = &mut self.incoming else {
             return;
@@ -142,10 +157,20 @@ impl State {
         if incoming.dropped {
             return;
         }
+        let reference = self
+            .reference_target
+            .is_some_and(|rect| rect.contains(incoming.point));
         if !self.uri_offers.contains(&incoming.offer.id())
-            || !matches!(incoming.action, Action::Copy | Action::Move)
+            || (reference && !self.copy_offers.contains(&incoming.offer.id()))
+            || (!reference && !matches!(incoming.action, Action::Copy | Action::Move))
         {
             return;
+        }
+        if reference {
+            // Motion and Drop can arrive in one dispatch. Request Copy before
+            // receiving data instead of relying on an older Action notification.
+            // The source explicitly offers Copy and receives these requests in order.
+            incoming.offer.set_actions(Action::Copy, Action::Copy);
         }
         incoming.dropped = true;
         self.next += 1;
@@ -176,7 +201,7 @@ impl State {
                 receiver,
                 cancelled,
                 offer,
-                moving: incoming.action == Action::Move,
+                moving: !reference && incoming.action == Action::Move,
             },
         );
     }
@@ -194,6 +219,13 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for State {
             && mime_type == MIME
         {
             state.uri_offers.push(offer.id());
+        }
+        if let wl_data_offer::Event::SourceActions {
+            source_actions: WEnum::Value(actions),
+        } = event
+            && actions.contains(Action::Copy)
+        {
+            state.copy_offers.push(offer.id());
         }
         if let wl_data_offer::Event::Action {
             dnd_action: WEnum::Value(action),
@@ -227,7 +259,7 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
                 let snapshot = Arc::clone(&source.snapshot);
                 let cancelled = Arc::clone(&source.cancelled);
                 let written = Arc::clone(&source.written);
-                let movable = source.movable;
+                let movable = source.movable && source.action == Action::Move;
                 let deadline = Instant::now() + Duration::from_secs(10);
                 let (_, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
                     if movable {
@@ -254,14 +286,18 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
                     && source.action == Action::Move
                     && source.written.load(Ordering::Acquire)
                 {
-                    state.events.push(Event::Remove(
-                        source.identities,
-                        source
-                            .snapshot
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .clone(),
-                    ));
+                    let snapshot = source
+                        .snapshot
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    // A later action change cannot turn a reference-only send
+                    // into removal without a successful original-tree snapshot.
+                    if !snapshot.is_empty() {
+                        state
+                            .events
+                            .push(Event::Remove(source.identities, snapshot));
+                    }
                 }
                 source.proxy.destroy();
                 state.release_pointer = true;

@@ -8,6 +8,7 @@ use crate::icons::Icon;
 use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext;
 
+mod bookmarks;
 mod gallery;
 mod list;
 pub(super) mod music;
@@ -60,6 +61,7 @@ impl FileManager {
 
     pub(crate) fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
         self.drop_targets.clear();
+        self.bookmark_drop_rect = None;
         self.tick(super::BackgroundJobs::global());
         let colors = WorkbenchColors::from_palette(palette);
         self.sync_modal_focus(ui.ctx());
@@ -105,12 +107,15 @@ impl FileManager {
                 file_clipboard,
             );
         });
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs(1));
         ui.ctx().request_repaint_after(if self.shelf.open {
             std::time::Duration::from_millis(500)
         } else {
             std::time::Duration::from_secs(3)
         });
         if self.pending.is_some()
+            || self.bookmarks.busy()
             || self.edit_busy()
             || self.transfers.needs_repaint()
             || self.shelf.busy()
@@ -168,7 +173,7 @@ impl FileManager {
             .default_width(240.0)
             .width_range(150.0..=400.0)
             .resizable(true)
-            .show_inside(ui, |ui| self.tree_ui(ui, colors));
+            .show_inside(ui, |ui| self.sidebar_ui(ui, colors));
         egui::CentralPanel::default()
             .frame(egui::Frame::none().inner_margin(8.0))
             .show_inside(ui, |ui| {
@@ -563,6 +568,7 @@ impl FileManager {
         ui.separator();
         let rows = self.tree.rows(self.show_hidden);
         let mut scroll = egui::ScrollArea::both()
+            .min_scrolled_height(0.0)
             .id_source("file_manager_tree")
             .auto_shrink([false, false]);
         if self.tree.reveal

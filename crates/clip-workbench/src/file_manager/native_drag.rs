@@ -69,7 +69,9 @@ struct State {
     grab: Option<(wl_seat::WlSeat, u32)>,
     offers: Vec<wl_data_offer::WlDataOffer>,
     uri_offers: Vec<ObjectId>,
+    copy_offers: Vec<ObjectId>,
     incoming: Option<Incoming>,
+    reference_target: Option<egui::Rect>,
     reading: BTreeMap<u64, Reading>,
     awaiting: BTreeMap<u64, wl_data_offer::WlDataOffer>,
     source: Option<Source>,
@@ -117,7 +119,9 @@ impl NativeDrag {
             grab: None,
             offers: Vec::new(),
             uri_offers: Vec::new(),
+            copy_offers: Vec::new(),
             incoming: None,
+            reference_target: None,
             reading: BTreeMap::new(),
             awaiting: BTreeMap::new(),
             source: None,
@@ -132,6 +136,17 @@ impl NativeDrag {
             queue,
             state,
         })
+    }
+
+    pub(super) fn set_reference_target(&mut self, rect: Option<egui::Rect>) {
+        self.state.reference_target = rect;
+    }
+    pub(super) fn drag_position(&self) -> Option<egui::Pos2> {
+        self.state
+            .incoming
+            .as_ref()
+            .filter(|incoming| !incoming.dropped)
+            .map(|incoming| incoming.point)
     }
 
     pub(super) fn tick(&mut self) -> Vec<Event> {
@@ -235,6 +250,7 @@ impl NativeDrag {
     pub(super) fn finish(&mut self, token: u64, success: bool) {
         if let Some(offer) = self.state.awaiting.remove(&token) {
             self.state.uri_offers.retain(|id| id != &offer.id());
+            self.state.copy_offers.retain(|id| id != &offer.id());
             if success {
                 offer.finish();
             }
@@ -245,6 +261,7 @@ impl NativeDrag {
 
     pub(super) fn busy(&self) -> bool {
         self.state.source.is_some()
+            || self.state.incoming.is_some()
             || !self.state.reading.is_empty()
             || !self.state.awaiting.is_empty()
     }
@@ -278,6 +295,7 @@ impl State {
     fn destroy_offer(&mut self, offer: &wl_data_offer::WlDataOffer) {
         self.offers.retain(|existing| existing != offer);
         self.uri_offers.retain(|id| id != &offer.id());
+        self.copy_offers.retain(|id| id != &offer.id());
         offer.destroy();
     }
 }
