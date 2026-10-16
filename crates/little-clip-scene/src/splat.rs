@@ -31,7 +31,7 @@ impl SplatScene {
             "ply" => load_ply(path)?,
             "spz" => crate::spz::load(path)?,
             "splat" => decode_splat(&crate::read_bounded(
-                std::fs::File::open(path)?,
+                little_clip_core::kernel_interface::open_content(path, true)?,
                 2_000_000 * 32,
                 "SPLAT",
             )?)?,
@@ -102,7 +102,9 @@ impl SplatScene {
 }
 
 fn load_ply(path: &Path) -> Result<Vec<Gaussian>, SceneError> {
-    let mut reader = BufReader::new(std::fs::File::open(path)?);
+    let mut reader = BufReader::new(little_clip_core::kernel_interface::open_content(
+        path, true,
+    )?);
     if reader.get_ref().metadata()?.len() > 512 * 1024 * 1024 {
         return Err(SceneError::Invalid(
             "PLY exceeds the 512 MiB import budget".into(),
@@ -259,6 +261,18 @@ fn decode_splat(bytes: &[u8]) -> Result<Vec<Gaussian>, SceneError> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn scene_containers_reject_kernel_interfaces_before_reading() {
+        let directory = tempfile::tempdir().unwrap();
+        for extension in ["ply", "splat", "spz", "sog", "glb"] {
+            let path = directory.path().join(format!("interface.{extension}"));
+            std::os::unix::fs::symlink("/dev/null", &path).unwrap();
+            assert!(
+                matches!(super::SplatScene::load(&path), Err(crate::SceneError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied)
+            );
+        }
+    }
+
     use super::*;
     use wgpu_3dgs_viewer::core::{Gaussians, GaussiansSource};
 

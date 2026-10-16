@@ -72,23 +72,7 @@ impl FileManager {
             }
             Action::Check => self.shelf.check_references(),
             Action::Send(payload, hand) => self.shelf.submit(true, move || {
-                let request = match payload {
-                    Payload::Files { paths, .. } => {
-                        little_clip_core::ipc::IpcRequest::PushFileReferences { paths, hand }
-                    }
-                    Payload::Content(content) if content.mime.starts_with("image/") => {
-                        little_clip_core::ipc::IpcRequest::PushImage {
-                            bytes: content.bytes.to_vec(),
-                            mime: content.mime,
-                            hand,
-                        }
-                    }
-                    Payload::Content(content) => little_clip_core::ipc::IpcRequest::PushText {
-                        text: String::from_utf8(content.bytes.to_vec())
-                            .map_err(|error| error.to_string())?,
-                        hand,
-                    },
-                };
+                let request = super::send_request(payload, hand)?;
                 match ipc(request).map_err(|error| {
                     format!("Send not confirmed: {error}. Check the hand before retrying.")
                 })? {

@@ -530,6 +530,12 @@ impl ClipItem {
     }
 
     fn from_candidate_paths(paths: &[PathBuf]) -> Option<Self> {
+        if paths
+            .iter()
+            .any(|path| crate::kernel_interface::require_content(path).is_err())
+        {
+            return Some(Self::from_files(paths.to_vec()));
+        }
         if paths.len() == 1 {
             Some(Self::from_single_local_path(&paths[0]))
         } else if paths.iter().all(|p| is_image_path(p)) {
@@ -540,48 +546,39 @@ impl ClipItem {
     }
 
     fn from_single_local_path(path: &Path) -> Self {
+        if crate::kernel_interface::require_content(path).is_err() {
+            return Self::from_files(vec![path.to_path_buf()]);
+        }
         if path.is_dir() {
             return Self::from_directory(path.to_path_buf());
         }
-        if crate::animation::is_video_path(path) {
-            if let Some(item) = Self::from_video(path.to_path_buf()) {
+        let media: [(bool, fn(&Path) -> Option<Self>); 6] = [
+            (crate::animation::is_video_path(path), |p| {
+                Self::from_video(p.to_path_buf())
+            }),
+            (crate::animation::is_animated_image_path(path), |p| {
+                Self::from_animated_image(p.to_path_buf())
+            }),
+            (is_image_path(path), Self::from_image_file),
+            (
+                crate::raw_image::is_raw_image_path(path),
+                Self::from_raw_image_file,
+            ),
+            (crate::pdf::is_pdf_path(path), Self::from_pdf_file),
+            (crate::audio::is_audio_path(path), |p| {
+                Self::from_audio(p.to_path_buf())
+            }),
+        ];
+        for (matches, load) in media {
+            if matches && let Some(item) = load(path) {
                 return item;
             }
         }
-        if crate::animation::is_animated_image_path(path) {
-            if let Some(item) = Self::from_animated_image(path.to_path_buf()) {
-                return item;
-            }
-        }
-        if is_image_path(path) {
-            if let Some(item) = Self::from_image_file(path) {
-                return item;
-            }
-        }
-        if crate::raw_image::is_raw_image_path(path) {
-            if let Some(item) = Self::from_raw_image_file(path) {
-                return item;
-            }
-        }
-        if crate::pdf::is_pdf_path(path) {
-            if let Some(item) = Self::from_pdf_file(path) {
-                return item;
-            }
-        }
-        if crate::audio::is_audio_path(path) {
-            if let Some(item) = Self::from_audio(path.to_path_buf()) {
-                return item;
-            }
-        }
-        if let Some(item) = Self::from_text_or_code_file(path) {
-            return item;
-        }
-
-        Self::from_single_file(path)
+        Self::from_text_or_code_file(path).unwrap_or_else(|| Self::from_single_file(path))
     }
 
     fn from_image_file(path: &Path) -> Option<Self> {
-        let bytes = std::fs::read(path).ok()?;
+        let bytes = crate::kernel_interface::read_content(path).ok()?;
         let mime = guess_image_mime(path);
         let (w, h) = read_image_dimensions_with_mime(&bytes, Some(&mime)).unwrap_or((0, 0));
         let size_kb = bytes.len() as f64 / 1024.0;
@@ -942,6 +939,7 @@ impl ClipItem {
 
     /// Reads audio metadata from a file path and creates an `AudioRef` `ClipItem`.
     pub fn from_audio(path: PathBuf) -> Option<Self> {
+        crate::kernel_interface::require_content(&path).ok()?;
         let meta = crate::audio::read_audio_metadata(&path)?;
         let file_name = path
             .file_name()
@@ -986,6 +984,7 @@ impl ClipItem {
 
     /// Reads video metadata via `ffprobe` and creates an `Animation` `ClipItem`.
     pub fn from_video(path: PathBuf) -> Option<Self> {
+        crate::kernel_interface::require_content(&path).ok()?;
         let file_name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -1028,7 +1027,7 @@ impl ClipItem {
 
     /// Verifies animated image headers (GIF/WebP) and creates an `Animation` `ClipItem`.
     pub fn from_animated_image(path: PathBuf) -> Option<Self> {
-        let bytes = std::fs::read(&path).ok()?;
+        let bytes = crate::kernel_interface::read_content(&path).ok()?;
         let ext = path
             .extension()
             .map(|e| e.to_string_lossy().to_uppercase())
@@ -1104,7 +1103,7 @@ impl ClipItem {
     /// Creates a `ClipItem` for a single file on disk, attempting format-specific dispatch.
     pub fn from_single_file(p: &Path) -> Self {
         if is_image_path(p) {
-            if let Ok(bytes) = std::fs::read(p) {
+            if let Ok(bytes) = crate::kernel_interface::read_content(p) {
                 let mime = guess_image_mime(p);
                 if let Some(mut item) = Self::from_image_bytes(bytes, mime) {
                     let name = p
@@ -1323,7 +1322,7 @@ impl ClipItem {
                 let actual_bytes = if !bytes.is_empty() {
                     bytes.clone()
                 } else if let Some(p) = path {
-                    std::fs::read(p).ok()?
+                    crate::kernel_interface::read_content(p).ok()?
                 } else {
                     return None;
                 };
@@ -1331,7 +1330,7 @@ impl ClipItem {
             }
             _ => {
                 if let Some(p) = self.image_path() {
-                    if let Ok(bytes) = std::fs::read(&p) {
+                    if let Ok(bytes) = crate::kernel_interface::read_content(&p) {
                         let mime = guess_image_mime(&p);
                         return Some((bytes, mime, Some(p)));
                     }

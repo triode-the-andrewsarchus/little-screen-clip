@@ -69,11 +69,16 @@ fn metadata(path: &Path) -> Metadata {
             "-of",
             "json",
         ])
-        .arg(path.as_os_str())
-        .timeout(Duration::from_secs(3))
-        .max_output_bytes(64 * 1024)
-        .run();
-    if let Ok(probe) = probe
+        .arg_content_file(path)
+        .ok()
+        .and_then(|command| {
+            command
+                .timeout(Duration::from_secs(3))
+                .max_output_bytes(64 * 1024)
+                .run()
+                .ok()
+        });
+    if let Some(probe) = probe
         && probe.status.success()
         && !probe.stdout_truncated
         && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&probe.stdout)

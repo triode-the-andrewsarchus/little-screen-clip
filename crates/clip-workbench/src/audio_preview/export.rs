@@ -694,7 +694,7 @@ impl AudioPreviewState {
         };
         let destination_name = plan_destination_name(&self.save_destination_dir);
         let (ticket, receiver) =
-            BackgroundJobs::global().submit(Duration::from_secs(600), move || run_audio_save(plan));
+            BackgroundJobs::global().submit(Duration::MAX, move || run_audio_save(plan));
         self.save_job = Some(AudioSaveJob {
             ticket,
             receiver,
@@ -1204,12 +1204,12 @@ pub(super) fn run_audio_save(plan: AudioSavePlan) -> Result<AudioSaveOutcome, St
     if let Some(source) = &plan.file_source {
         source.check()?;
     }
-    std::fs::create_dir_all(&plan.destination)
+    let directory = little_clip_core::kernel_interface::create_content_directory(&plan.destination)
         .map_err(|error| format!("Cannot create destination directory: {error}"))?;
     let mut saved_paths = Vec::new();
     let mut failures = Vec::new();
     for region in &plan.regions {
-        match save_audio_region(&plan, region) {
+        match save_audio_region(&plan, region, &directory) {
             Ok(path) => saved_paths.push(path),
             Err(error) => failures.push(format!("{}: {error}", region.filename)),
         }
@@ -1222,9 +1222,11 @@ pub(super) fn run_audio_save(plan: AudioSavePlan) -> Result<AudioSaveOutcome, St
         });
     }
     if plan.open_folder {
-        let _ = std::process::Command::new("xdg-open")
-            .arg(&plan.destination)
-            .spawn();
+        let folder = saved_paths
+            .first()
+            .and_then(|path| path.parent())
+            .unwrap_or(&plan.destination);
+        let _ = std::process::Command::new("xdg-open").arg(folder).spawn();
     }
     Ok(AudioSaveOutcome {
         saved_count: saved_paths.len(),
@@ -1232,70 +1234,102 @@ pub(super) fn run_audio_save(plan: AudioSavePlan) -> Result<AudioSaveOutcome, St
     })
 }
 
-fn save_audio_region(plan: &AudioSavePlan, region: &AudioSaveRegion) -> Result<PathBuf, String> {
-    let out_path = plan.destination.join(&region.filename);
-    let staging = if plan.file_source.is_some() {
-        Some(
-            tempfile::Builder::new()
-                .prefix(".audio-export-")
-                .suffix(&format!(
-                    ".{}",
-                    out_path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .unwrap_or("wav")
-                ))
-                .tempfile_in(&plan.destination)
-                .map_err(|e| e.to_string())?,
-        )
+pub(super) fn save_audio_region(
+    plan: &AudioSavePlan,
+    region: &AudioSaveRegion,
+    directory: &std::fs::File,
+) -> Result<PathBuf, String> {
+    use std::os::fd::AsRawFd;
+    if Path::new(&region.filename).file_name() != Some(std::ffi::OsStr::new(&region.filename)) {
+        return Err("Enter one audio export filename".into());
+    }
+    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let parent = std::fs::read_link(&anchor).map_err(|error| error.to_string())?;
+    let out_path = anchor.join(&region.filename);
+    let staging = tempfile::NamedTempFile::new_in(&anchor).map_err(|error| error.to_string())?;
+    let status = audio_export_command(
+        &plan.source,
+        region,
+        staging
+            .as_file()
+            .try_clone()
+            .map_err(|error| error.to_string())?,
+    )?
+    .status()
+    .map_err(|error| error.to_string())?;
+    if !status.success() {
+        return Err(format!("ffmpeg exit {status}"));
+    }
+    staging
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
+    if let Some(source) = &plan.file_source {
+        source.check()?;
+        staging
+            .persist_noclobber(&out_path)
+            .map_err(|error| error.to_string())?;
     } else {
-        None
+        match little_clip_core::kernel_interface::require_content(&out_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        staging
+            .persist(&out_path)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(std::fs::read_link(&anchor)
+        .unwrap_or(parent)
+        .join(&region.filename))
+}
+
+fn audio_export_command(
+    source: &Path,
+    region: &AudioSaveRegion,
+    output: std::fs::File,
+) -> Result<std::process::Command, String> {
+    let extension = Path::new(&region.filename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("wav")
+        .to_ascii_lowercase();
+    let format = match extension.as_str() {
+        "m4a" | "m4b" => "ipod",
+        "aac" => "adts",
+        "oga" => "ogg",
+        "aif" => "aiff",
+        "wma" => "asf",
+        "mka" | "mkv" => "matroska",
+        value => value,
     };
-    let output_path = staging
-        .as_ref()
-        .map_or(out_path.as_path(), |file| file.path());
-    let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.arg("-y")
+    let mut request = little_clip_core::process::CommandRequest::new("ffmpeg")
+        .arg("-y")
         .arg("-ss")
         .arg(format!("{:.4}", region.start))
         .arg("-to")
         .arg(format!("{:.4}", region.end))
         .arg("-i")
-        .arg(&plan.source);
+        .arg_content_file(source)
+        .map_err(|error| error.to_string())?;
     if let Some(filter) = &region.filter {
-        cmd.arg("-af").arg(filter);
+        request = request.arg("-af").arg(filter);
     }
-    match out_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("wav") => {
-            cmd.arg("-c:a").arg("pcm_s16le");
-        }
-        Some("flac") => {
-            cmd.arg("-c:a").arg("flac");
-        }
-        _ => {}
-    }
-    let status = cmd
-        .arg(output_path)
+    request = match format {
+        "wav" => request.args(["-c:a", "pcm_s16le"]),
+        "flac" => request.args(["-c:a", "flac"]),
+        _ => request,
+    };
+    // stdout is the owned regular staging file, so FFmpeg can seek to finalize
+    // container headers without resolving an output pathname in the child.
+    let mut command = request
+        .args(["-f", format, "/proc/self/fd/1"])
+        .build_command();
+    command
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map_err(|e| e.to_string())?;
-    if !status.success() || !output_path.exists() {
-        return Err(format!("ffmpeg exit {status}"));
-    }
-    if let Some(staging) = staging {
-        plan.file_source.as_ref().unwrap().check()?;
-        staging
-            .persist_noclobber(&out_path)
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(out_path)
+        .stdout(std::process::Stdio::from(output))
+        .stderr(std::process::Stdio::null());
+    Ok(command)
 }
 
 pub(super) fn plan_destination_name(path: &str) -> String {

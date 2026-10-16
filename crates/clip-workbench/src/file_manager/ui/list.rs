@@ -30,7 +30,8 @@ impl<'a> ListPreviews<'a> {
         name_width: f32,
         colors: WorkbenchColors,
     ) -> egui::Response {
-        let response = if entry.is_playable_media()
+        let response = if entry.system.is_some()
+            || entry.is_playable_media()
             || entry.is_scene()
             || entry.is_blend()
             || entry.is_photo()
@@ -133,7 +134,10 @@ impl<'a> ListPreviews<'a> {
         colors: WorkbenchColors,
         palette: &AppPalette,
     ) {
-        if entry.is_scene() {
+        if entry.system.is_some() {
+            self.paths.insert(entry.path.clone());
+            self.files.show_visual(ui, rect, entry, colors, palette);
+        } else if entry.is_scene() {
             self.paths.insert(entry.path.clone());
             self.files.show_scene(ui, rect, entry, colors, palette);
         } else if entry.is_photo()
@@ -142,7 +146,7 @@ impl<'a> ListPreviews<'a> {
             || (entry.regular_file && super::super::font_strip::known(&entry.path))
         {
             self.paths.insert(entry.path.clone());
-            self.files.show_visual(ui, rect, entry, colors);
+            self.files.show_visual(ui, rect, entry, colors, palette);
         } else if entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path) {
             self.paths.insert(entry.path.clone());
             let page = self.files.show_pdf(ui, rect, entry, colors);

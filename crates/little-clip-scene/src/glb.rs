@@ -20,7 +20,7 @@ fn invalid(message: impl ToString) -> SceneError {
 }
 
 pub(crate) fn load(path: &Path) -> Result<SplatScene, SceneError> {
-    let file = std::fs::File::open(path)?;
+    let file = little_clip_core::kernel_interface::open_content(path, true)?;
     if file.metadata()?.len() > MAX_BYTES {
         return Err(invalid("GLB exceeds the 512 MiB import budget"));
     }

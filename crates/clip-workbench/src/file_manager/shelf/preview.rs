@@ -31,6 +31,7 @@ pub(in crate::file_manager) enum Source {
     },
     Music(PathBuf),
     Text(PathBuf),
+    System(PathBuf),
     Binary(PathBuf),
     Font(PathBuf),
     FontRaster {
@@ -64,6 +65,109 @@ pub(in crate::file_manager) enum Source {
         height: u32,
         colors: [[u8; 3]; 9],
     },
+}
+
+impl Source {
+    fn execution(&self) -> (&'static BackgroundJobs, usize, u64) {
+        match self {
+            Self::System(_) => (super::super::system::jobs(), 2, 3),
+            Self::Music(_) => (music_preview_jobs(), music_preview_workers(), 30),
+            Self::Gallery { .. } | Self::PdfPage { .. } | Self::Photo { .. } | Self::Blend(_) => {
+                (gallery_preview_jobs(), 4, 15)
+            }
+            Self::Text(_)
+            | Self::Font(_)
+            | Self::FontRaster { .. }
+            | Self::Binary(_)
+            | Self::BinaryRaster { .. }
+            | Self::TextRaster { .. }
+            | Self::Midi(_)
+            | Self::MidiRaster { .. }
+            | Self::Material(_) => (text_preview_jobs(), 4, 30),
+            _ => (BackgroundJobs::global(), 1, 15),
+        }
+    }
+    fn load(self, token: &AtomicBool) -> Data {
+        match self {
+            Source::Payload(payload) => payload_preview(&payload),
+            Source::Slot(slot, expected) => slot_preview(slot, expected),
+            Source::Gallery {
+                path,
+                edge,
+                orientation,
+            } => gallery_preview(&path, edge, orientation, token),
+            Source::Photo { path, revision } => {
+                super::super::image_strip::load(&path, revision, token)
+            }
+            Source::Music(path) => super::super::music::preview::load(&path, token),
+            Source::Blend(path) => super::super::blend_preview::load(&path, token),
+            Source::Material(request) => request.load(token),
+            Source::PdfPage { path, page, edge } => {
+                super::super::pdf_strip::load_page(&path, page, edge, token)
+            }
+            Source::Midi(path) => {
+                let mut data = Data::new(display_path(&path), "MIDI".into(), Icon::Midi);
+                match super::super::midi_strip::load(&path, token) {
+                    Ok(document) => {
+                        data.detail = document.details();
+                        data.midi_document = Some(document);
+                    }
+                    Err(error) => {
+                        data.detail = error;
+                    }
+                }
+                data
+            }
+            Source::MidiRaster {
+                document,
+                width,
+                height,
+                colors,
+            } => {
+                let mut data = Data::new(String::new(), document.details(), Icon::Midi);
+                data.image =
+                    super::super::midi_strip::render(&document, width, height, &colors, token);
+                data.midi_document = Some(document);
+                data
+            }
+            Source::System(path) => super::super::system::load(&path, token),
+            Source::Font(path) => super::super::font_strip::load(&path, token),
+            Source::FontRaster {
+                document,
+                width,
+                height,
+                color,
+            } => {
+                let mut data = Data::new(String::new(), String::new(), Icon::Text);
+                data.image =
+                    super::super::font_strip::render(&document, width, height, color, token);
+                data
+            }
+            Source::Binary(path) => super::super::binary_strip::load(&path, token),
+            Source::BinaryRaster {
+                document,
+                width,
+                height,
+            } => {
+                let mut data = Data::new(String::new(), String::new(), Icon::Text);
+                data.image = super::super::binary_strip::render(&document, width, height, token);
+                data
+            }
+            Source::Text(path) => document_preview(&path, token),
+            Source::TextRaster {
+                document,
+                width,
+                height,
+                colors,
+            } => {
+                let mut data = Data::new(String::new(), String::new(), Icon::Text);
+                data.image =
+                    super::super::text_strip::render(&document, width, height, colors, token);
+                data.document = Some(document);
+                data
+            }
+        }
+    }
 }
 
 pub(in crate::file_manager) use super::super::media::PreviewData as Data;
@@ -117,6 +221,8 @@ impl HoverRaster {
     }
 }
 struct Pending {
+    response_deadline: Option<std::time::Instant>,
+    executor: &'static BackgroundJobs,
     ticket: JobTicket,
     receiver: mpsc::Receiver<Result<Data, JobError>>,
     cancelled: Arc<AtomicBool>,
@@ -157,152 +263,56 @@ impl Previews {
     }
 
     pub fn request(&mut self, id: uuid::Uuid, source: Source) {
-        let music = matches!(&source, Source::Music(_));
-        let gallery = matches!(
-            &source,
-            Source::Gallery { .. }
-                | Source::PdfPage { .. }
-                | Source::Photo { .. }
-                | Source::Blend(_)
-        );
-        let text = matches!(
-            &source,
-            Source::Text(_)
-                | Source::Font(_)
-                | Source::FontRaster { .. }
-                | Source::Binary(_)
-                | Source::BinaryRaster { .. }
-                | Source::TextRaster { .. }
-                | Source::Midi(_)
-                | Source::MidiRaster { .. }
-                | Source::Material(_)
-        );
-        let executor = if gallery {
-            gallery_preview_jobs()
-        } else if music {
-            music_preview_jobs()
-        } else if text {
-            text_preview_jobs()
-        } else {
-            BackgroundJobs::global()
-        };
-        let limit = if gallery {
-            4
-        } else if music {
-            music_preview_workers()
-        } else if text {
-            4
-        } else {
-            1
-        };
-        if !self.needs(id) || self.pending.len() >= limit {
-            return;
+        let _ = self.start(id, source, false);
+    }
+    pub fn refresh(&mut self, id: uuid::Uuid, source: Source) -> bool {
+        self.start(id, source, true)
+    }
+    fn start(&mut self, id: uuid::Uuid, source: Source, refresh: bool) -> bool {
+        let (executor, limit, deadline) = source.execution();
+        if self.pending.contains_key(&id)
+            || (!refresh && self.ready.contains_key(&id))
+            || self
+                .pending
+                .values()
+                .filter(|pending| std::ptr::eq(pending.executor, executor))
+                .count()
+                >= limit
+        {
+            return false;
         }
         let cancelled = Arc::new(AtomicBool::new(false));
         let token = cancelled.clone();
-        let deadline = if music || text { 30 } else { 15 };
+        let response_deadline = matches!(&source, Source::System(_))
+            .then(|| std::time::Instant::now() + super::super::system::RESPONSE_DEADLINE);
         let (ticket, receiver) =
-            executor.submit(Duration::from_secs(deadline), move || match source {
-                Source::Payload(payload) => payload_preview(&payload),
-                Source::Slot(slot, expected) => slot_preview(slot, expected),
-                Source::Gallery {
-                    path,
-                    edge,
-                    orientation,
-                } => gallery_preview(&path, edge, orientation, &token),
-                Source::Photo { path, revision } => {
-                    super::super::image_strip::load(&path, revision, &token)
-                }
-                Source::Music(path) => super::super::music::preview::load(&path, &token),
-                Source::Blend(path) => super::super::blend_preview::load(&path, &token),
-                Source::Material(request) => request.load(&token),
-                Source::PdfPage { path, page, edge } => {
-                    super::super::pdf_strip::load_page(&path, page, edge, &token)
-                }
-                Source::Midi(path) => {
-                    let mut data = Data::new(display_path(&path), "MIDI".into(), Icon::Midi);
-                    match super::super::midi_strip::load(&path, &token) {
-                        Ok(document) => {
-                            data.detail = document.details();
-                            data.midi_document = Some(document);
-                        }
-                        Err(error) => {
-                            data.detail = error;
-                        }
-                    }
-                    data
-                }
-                Source::MidiRaster {
-                    document,
-                    width,
-                    height,
-                    colors,
-                } => {
-                    let mut data = Data::new(String::new(), document.details(), Icon::Midi);
-                    data.image =
-                        super::super::midi_strip::render(&document, width, height, &colors, &token);
-                    data.midi_document = Some(document);
-                    data
-                }
-                Source::Font(path) => super::super::font_strip::load(&path, &token),
-                Source::FontRaster {
-                    document,
-                    width,
-                    height,
-                    color,
-                } => {
-                    let mut data = Data::new(String::new(), String::new(), Icon::Text);
-                    data.image =
-                        super::super::font_strip::render(&document, width, height, color, &token);
-                    data
-                }
-                Source::Binary(path) => super::super::binary_strip::load(&path, &token),
-                Source::BinaryRaster {
-                    document,
-                    width,
-                    height,
-                } => {
-                    let mut data = Data::new(String::new(), String::new(), Icon::Text);
-                    data.image =
-                        super::super::binary_strip::render(&document, width, height, &token);
-                    data
-                }
-                Source::Text(path) => document_preview(&path, &token),
-                Source::TextRaster {
-                    document,
-                    width,
-                    height,
-                    colors,
-                } => {
-                    let mut data = Data::new(String::new(), String::new(), Icon::Text);
-                    data.image =
-                        super::super::text_strip::render(&document, width, height, colors, &token);
-                    data.document = Some(document);
-                    data
-                }
-            });
+            executor.submit(Duration::from_secs(deadline), move || source.load(&token));
         self.pending.insert(
             id,
             Pending {
+                response_deadline,
+                executor,
                 ticket,
                 receiver,
                 cancelled,
             },
         );
+        true
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) -> bool {
         let mut completed = Vec::new();
         self.pending.retain(|id, pending| {
-            let result = match pending.receiver.try_recv() {
-                Ok(Err(JobError::QueueFull)) => {
-                    ctx.request_repaint();
-                    return false;
-                }
-                Ok(result) => result,
-                Err(mpsc::TryRecvError::Empty) => return true,
-                Err(_) => Err(JobError::Cancelled),
-            };
+            let result =
+                match super::super::preview_job::poll(&pending.receiver, pending.response_deadline)
+                {
+                    Some(Err(JobError::QueueFull)) => {
+                        ctx.request_repaint();
+                        return false;
+                    }
+                    Some(result) => result,
+                    None => return true,
+                };
             completed.push((*id, result));
             false
         });
@@ -317,7 +327,7 @@ impl Previews {
     }
 
     fn complete(&mut self, ctx: &egui::Context, id: uuid::Uuid, result: Result<Data, JobError>) {
-        let data = result.unwrap_or_else(|error| {
+        let mut data = result.unwrap_or_else(|error| {
             let mut data = Data::new(
                 "Preview unavailable".into(),
                 "Retry with Refresh previews".into(),
@@ -326,6 +336,27 @@ impl Previews {
             data.text = error.to_string();
             data
         });
+        if data.system.is_none() {
+            if let Some(previous) = self.ready.get(&id).and_then(|r| r.data.system.as_ref()) {
+                let mut retained = (**previous).clone();
+                retained.last_error = Some(data.detail.clone());
+                data.detail = retained.title.clone();
+                data.system = Some(Arc::new(retained));
+            }
+        }
+        if let Some((current, previous)) = data.system.as_mut().zip(
+            self.ready
+                .get(&id)
+                .and_then(|ready| ready.data.system.as_ref()),
+        ) {
+            if current
+                .facts
+                .iter()
+                .any(|fact| fact.retained && fact.observed_generation.is_none())
+            {
+                Arc::make_mut(current).inherit_retained_provenance(previous);
+            }
+        }
         let options = if data.document.is_some() || data.midi_document.is_some() {
             egui::TextureOptions::NEAREST
         } else {
@@ -599,6 +630,10 @@ fn file_preview(paths: &[PathBuf]) -> Data {
 }
 
 fn preview_regular_file(path: &Path, data: &mut Data) {
+    if little_clip_core::kernel_interface::require_content(path).is_err() {
+        data.detail = "Kernel interface reference; contents not captured".into();
+        return;
+    }
     data.icon = Icon::Text;
     if little_clip_core::item::is_image_path(path) {
         data.icon = Icon::Image;
@@ -677,6 +712,37 @@ fn audio_excerpt(path: &Path) -> (Vec<f32>, Vec<[u8; 3]>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_completion_preserves_retained_fact_provenance_without_cloning_healthy_snapshots() {
+        let ctx = egui::Context::default();
+        let id = uuid::Uuid::new_v4();
+        let mut previews = Previews::default();
+        let previous = super::super::super::system::retained_provenance_fixture();
+        let previous = Arc::new(previous);
+        let mut data = Data::new("system".into(), "".into(), Icon::Text);
+        data.system = Some(previous.clone());
+        previews.complete(&ctx, id, Ok(data));
+        assert!(Arc::ptr_eq(
+            previews.get(id).unwrap().data.system.as_ref().unwrap(),
+            &previous
+        ));
+
+        let mut retained = (*previous).clone();
+        retained.facts[0].retained = true;
+        retained.facts[0].observed_generation = None;
+        retained.facts[0].error = Some("refresh failed".into());
+        let retained = Arc::new(retained);
+        let mut data = Data::new("system".into(), "".into(), Icon::Text);
+        data.system = Some(retained.clone());
+        previews.complete(&ctx, id, Ok(data));
+        let current = previews.get(id).unwrap().data.system.as_ref().unwrap();
+        assert_eq!(current.facts[0].observed_generation, Some(40));
+        assert_eq!(current.facts[0].observed_ms, 123_000);
+        assert!(current.facts[0].retained);
+        assert_eq!(current.facts[0].error.as_deref(), Some("refresh failed"));
+        assert_eq!(retained.facts[0].observed_generation, None);
+    }
 
     #[test]
     fn parallel_media_admission_is_bounded_and_retirement_cancels_every_job() {
@@ -799,9 +865,11 @@ mod gallery_completion_tests {
             previews.pending.insert(
                 id,
                 Pending {
+                    response_deadline: None,
                     ticket,
                     receiver,
                     cancelled: Arc::new(AtomicBool::new(false)),
+                    executor: BackgroundJobs::global(),
                 },
             );
             senders.push(sender);

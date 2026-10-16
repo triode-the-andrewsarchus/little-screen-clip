@@ -496,6 +496,72 @@ fn file_backed_audio_export_rejects_a_changed_source_before_creating_outputs() {
 }
 
 #[test]
+fn audio_exports_use_seekable_staging_in_the_held_directory() {
+    let (_fixture, source) = generate_fixture_wav("pinned-export", 1.0);
+    let root = tempfile::tempdir().unwrap();
+    let moved = root.path().join("actual-output");
+    std::fs::create_dir(&moved).unwrap();
+    let original = root.path().join("output-alias");
+    std::os::unix::fs::symlink(&moved, &original).unwrap();
+    let directory = little_clip_core::kernel_interface::pin_content_directory(&original).unwrap();
+    std::fs::remove_file(&original).unwrap();
+    std::os::unix::fs::symlink("/proc", &original).unwrap();
+    let plan = AudioSavePlan {
+        file_source: Some(crate::file_source::FileSource::capture(&source).unwrap()),
+        source,
+        destination: original.clone(),
+        regions: vec![],
+        open_folder: false,
+    };
+    for extension in ["wav", "flac", "mp3", "m4a"] {
+        let region = AudioSaveRegion {
+            start: 0.1,
+            end: 0.4,
+            filename: format!("slice.{extension}"),
+            filter: None,
+        };
+        let path = save_audio_region(&plan, &region, &directory).unwrap();
+        assert_eq!(path, moved.join(&region.filename));
+        let metadata = read_audio_metadata(&path).expect("finalized audio container");
+        assert!(
+            (200..550).contains(&metadata.duration_ms),
+            "{extension}: {}ms",
+            metadata.duration_ms
+        );
+        assert!(
+            Decoder::try_from(File::open(&path).unwrap())
+                .unwrap()
+                .count()
+                > 0
+        );
+    }
+    assert_eq!(
+        std::fs::read_dir(&moved).unwrap().count(),
+        4,
+        "no leaked staging files"
+    );
+    assert_eq!(std::fs::read_link(&original).unwrap(), Path::new("/proc"));
+    let invalid = AudioSaveRegion {
+        start: 0.0,
+        end: 0.1,
+        filename: "../escaped.wav".into(),
+        filter: None,
+    };
+    assert!(save_audio_region(&plan, &invalid, &directory).is_err());
+    let alias = root.path().join("kernel");
+    std::os::unix::fs::symlink("/proc", &alias).unwrap();
+    let error = run_audio_save(AudioSavePlan {
+        file_source: plan.file_source,
+        source: plan.source,
+        destination: alias,
+        regions: vec![],
+        open_folder: false,
+    })
+    .unwrap_err();
+    assert!(error.contains("inspection-only"));
+}
+
+#[test]
 fn audio_save_reports_ffmpeg_process_failure_with_filename() {
     let destination = tempfile::tempdir().unwrap();
     let result = run_audio_save(AudioSavePlan {

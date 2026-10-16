@@ -21,6 +21,7 @@ mod gallery;
 mod video;
 
 enum Loaded {
+    System(super::system::Document),
     Image(DecodedImageData, FileSource),
     Text(super::text_editor::TextSession),
     Sheet(little_clip_core::presentation::spreadsheet::SpreadsheetData),
@@ -30,6 +31,7 @@ enum Loaded {
     External,
 }
 enum ViewerSession {
+    System(super::system::Inspector),
     Image(ImagePreviewState),
     Text(super::text_editor::TextSession),
     Audio(AudioPreviewState),
@@ -41,12 +43,16 @@ enum ViewerSession {
     Video(video::Video),
 }
 struct Loading {
+    response_deadline: Option<std::time::Instant>,
     ticket: JobTicket,
     path: PathBuf,
     receiver: mpsc::Receiver<Result<Result<Loaded, String>, JobError>>,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl Drop for Loading {
     fn drop(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.ticket.cancel();
     }
 }
@@ -62,6 +68,7 @@ pub(super) struct Viewers {
     video_start_seconds: f64,
     text_start_line: Option<usize>,
     pdf_start_page: Option<usize>,
+    system_navigation: Option<super::system::BrowserTarget>,
 }
 impl Viewers {
     pub fn new(config: AppConfig) -> Self {
@@ -82,7 +89,13 @@ impl Viewers {
             .as_ref()
             .is_some_and(|l| matches!(kind(&l.path), Kind::Audio | Kind::Midi | Kind::Video))
     }
+    pub fn open_system(&mut self, path: PathBuf) {
+        self.open_on(path, true);
+    }
     pub fn open(&mut self, path: PathBuf) {
+        self.open_on(path, false);
+    }
+    fn open_on(&mut self, path: PathBuf, system: bool) {
         if self.active() {
             return;
         }
@@ -91,9 +104,24 @@ impl Viewers {
         self.pdf_start_page = None;
         let source = path.clone();
         let config = self.config.clone();
-        let (ticket, receiver) = BackgroundJobs::global()
-            .submit(Duration::from_secs(120), move || load(&source, &config));
+        let executor = if system {
+            super::system::jobs()
+        } else {
+            BackgroundJobs::global()
+        };
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker = cancelled.clone();
+        let (ticket, receiver) = executor.submit(Duration::from_secs(120), move || {
+            if system {
+                super::system::collect(&source, &worker).map(Loaded::System)
+            } else {
+                load(&source, &config)
+            }
+        });
         self.loading = Some(Loading {
+            response_deadline: system
+                .then(|| std::time::Instant::now() + super::system::RESPONSE_DEADLINE),
+            cancelled,
             ticket,
             path,
             receiver,
@@ -122,7 +150,13 @@ impl Viewers {
     }
     fn poll(&mut self, ctx: &Context) {
         let Some(loading) = &self.loading else { return };
-        let Some(result) = super::poll_job(&loading.receiver) else {
+        let Some(result) = super::preview_job::poll(&loading.receiver, loading.response_deadline)
+            .map(|result| {
+                result
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result)
+            })
+        else {
             ctx.request_repaint_after(Duration::from_millis(40));
             return;
         };
@@ -164,7 +198,8 @@ impl Viewers {
         let mut close = false;
         ui.horizontal(|ui| {
             close = ui.button("Back to folder").clicked();
-            if self.path.is_some() && ui.button("Open externally").clicked() {
+            let ordinary = !matches!(self.session, Some(ViewerSession::System(_)));
+            if self.path.is_some() && ordinary && ui.button("Open externally").clicked() {
                 self.open_external();
             }
             let path = self
@@ -183,15 +218,7 @@ impl Viewers {
         if let Some(error) = &self.error {
             ui.label(error);
         }
-        if let Some(viewer) = &mut self.session {
-            render(viewer, ui, palette, &mut close);
-            match viewer {
-                ViewerSession::Image(state) => self.path = state.path.clone(),
-                ViewerSession::Text(state) => self.path = Some(state.path().to_path_buf()),
-                ViewerSession::Pdf(state) => self.path = Some(state.path.clone()),
-                _ => {}
-            }
-        }
+        self.render_session(ui, palette, &mut close);
         if self.session.is_none() {
             close |=
                 ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
@@ -218,6 +245,27 @@ impl Viewers {
                 });
         }
         !self.active()
+    }
+    fn render_session(&mut self, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
+        if let Some(viewer) = &mut self.session {
+            render(viewer, ui, palette, close);
+            if let ViewerSession::System(state) = viewer
+                && let Some(target) = state.take_browser_target()
+            {
+                self.system_navigation = Some(target);
+                *close = true;
+            }
+            match viewer {
+                ViewerSession::System(state) => self.path = Some(state.document.path.clone()),
+                ViewerSession::Image(state) => self.path = state.path.clone(),
+                ViewerSession::Text(state) => self.path = Some(state.path().to_path_buf()),
+                ViewerSession::Pdf(state) => self.path = Some(state.path.clone()),
+                _ => {}
+            }
+        }
+    }
+    pub fn take_system_navigation(&mut self) -> Option<super::system::BrowserTarget> {
+        self.system_navigation.take()
     }
     pub fn request_close(&mut self) -> bool {
         self.pause_slideshow();
@@ -330,6 +378,14 @@ fn kind(path: &Path) -> Kind {
     }
 }
 fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
+    if little_clip_core::kernel_interface::classify(path)
+        .map_err(|e| e.to_string())?
+        .semantic()
+    {
+        return super::system::collect(path, &std::sync::atomic::AtomicBool::new(false))
+            .map(Loaded::System);
+    }
+    little_clip_core::kernel_interface::require_content(path).map_err(|e| e.to_string())?;
     let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if !metadata.is_file() {
         return Err("Only regular files can be inspected".into());
@@ -369,6 +425,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
 }
 fn session(loaded: Loaded, path: PathBuf, config: &AppConfig, video_start: f64) -> ViewerSession {
     match loaded {
+        Loaded::System(document) => ViewerSession::System(super::system::Inspector::new(document)),
         Loaded::Image(data, source) => ViewerSession::Image(
             ImagePreviewState::from_decoded(
                 data,
@@ -405,6 +462,7 @@ fn session(loaded: Loaded, path: PathBuf, config: &AppConfig, video_start: f64) 
 fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
     let ctx = ui.ctx().clone();
     match viewer {
+        ViewerSession::System(state) => state.ui(ui, close, palette),
         ViewerSession::Image(state) => state.render_ui(ui, &ctx, palette, close),
         ViewerSession::Text(state) => state.ui(ui, palette, close),
         ViewerSession::Audio(state) => state.render_ui(ui, &ctx, palette, close),
@@ -420,6 +478,9 @@ pub(super) fn external(path: PathBuf) -> Result<(), String> {
     std::thread::Builder::new()
         .name("file-external-launch".into())
         .spawn(move || {
+            if little_clip_core::kernel_interface::require_content(&path).is_err() {
+                return;
+            }
             if let Ok(mut child) = std::process::Command::new("xdg-open").arg(path).spawn() {
                 let _ = child.wait();
             }

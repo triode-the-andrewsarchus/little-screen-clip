@@ -94,8 +94,8 @@ fn gallery_page_opens_editor_without_raster_workers_and_retains_source_files() {
     // A successful edit reloads metadata and clears the original page
     // raster. The adopted document must stay alive through that reload.
     let output = editor.sibling_output_path("rotate");
-    let staging_dir = tempfile::tempdir_in(&directory).unwrap();
-    std::fs::copy(&pdf_path, staging_dir.path().join(STAGED_PDF_FILENAME)).unwrap();
+    let staging = super::super::output::PdfOutput::new(&output).unwrap();
+    std::fs::copy(&pdf_path, staging.staged_path()).unwrap();
     let (sender, receiver) = channel();
     editor.edit_rx = Some(receiver);
     editor.edit_in_progress = true;
@@ -103,9 +103,7 @@ fn gallery_page_opens_editor_without_raster_workers_and_retains_source_files() {
         .send(Ok(PdfEditMsg {
             operation: "rotate",
             page_num: 1,
-            output: output.clone(),
-            staging_dir,
-            result: Ok(()),
+            result: Ok(staging),
         }))
         .unwrap();
     let _ = ctx.run(egui::RawInput::default(), |ctx| {

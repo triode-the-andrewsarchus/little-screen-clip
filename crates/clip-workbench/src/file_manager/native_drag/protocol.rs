@@ -227,10 +227,13 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
                 let snapshot = Arc::clone(&source.snapshot);
                 let cancelled = Arc::clone(&source.cancelled);
                 let written = Arc::clone(&source.written);
+                let movable = source.movable;
                 let deadline = Instant::now() + Duration::from_secs(10);
                 let (_, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
-                    let entries = io::snapshot(&roots, deadline, &cancelled)?;
-                    *snapshot.lock().unwrap_or_else(|e| e.into_inner()) = entries;
+                    if movable {
+                        let entries = io::snapshot(&roots, deadline, &cancelled)?;
+                        *snapshot.lock().unwrap_or_else(|e| e.into_inner()) = entries;
+                    }
                     io::write(fd, bytes, deadline, cancelled, written)
                 });
                 state.writes.push(receiver);
@@ -247,7 +250,10 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
             }
             wl_data_source::Event::DndFinished => {
                 let source = state.source.take().expect("current source");
-                if source.action == Action::Move && source.written.load(Ordering::Acquire) {
+                if source.movable
+                    && source.action == Action::Move
+                    && source.written.load(Ordering::Acquire)
+                {
                     state.events.push(Event::Remove(
                         source.identities,
                         source

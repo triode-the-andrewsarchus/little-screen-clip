@@ -26,6 +26,7 @@ pub(in crate::file_manager) struct PreviewData {
     pub photo: Option<std::sync::Arc<super::image_strip::Analysis>>,
     pub midi_document: Option<std::sync::Arc<super::midi_strip::Document>>,
     pub pdf_info: Option<std::sync::Arc<little_clip_core::pdf::PdfInfo>>,
+    pub system: Option<std::sync::Arc<super::system::Document>>,
     pub font: Option<std::sync::Arc<super::font_strip::Document>>,
     pub binary: Option<std::sync::Arc<super::binary_strip::Document>>,
     pub document: Option<std::sync::Arc<super::text_strip::Document>>,
@@ -47,6 +48,7 @@ impl PreviewData {
             document: None,
             binary: None,
             font: None,
+            system: None,
             pdf_info: None,
             midi_document: None,
             photo: None,
@@ -76,7 +78,8 @@ pub(super) fn media_frame(
     }
     let result = command
         .arg("-i")
-        .arg(path.as_os_str())
+        .arg_content_file(path)
+        .ok()?
         .arg("-map")
         .arg(format!("0:v:{stream}"))
         .args([
@@ -133,7 +136,7 @@ pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, Str
             "-of",
             "json",
         ])
-        .arg(path.as_os_str())
+        .arg_content_file(path).map_err(|e|e.to_string())?
         .timeout(Duration::from_secs(3))
         .max_output_bytes(64 * 1024)
         .run()

@@ -99,6 +99,7 @@ fn exact_camera_shapes_and_resize_are_preserved_when_rows_fit() {
 
 pub(super) fn synthetic_directory(count: usize) -> Directory {
     Directory {
+        system: false,
         path: "/synthetic-gallery".into(),
         signature: 1,
         skipped: 0,
@@ -108,6 +109,7 @@ pub(super) fn synthetic_directory(count: usize) -> Directory {
                 name: format!("{i:05}.png"),
                 directory: false,
                 regular_file: true,
+                system: None,
                 typescript: false,
                 symlink: false,
                 hidden: false,

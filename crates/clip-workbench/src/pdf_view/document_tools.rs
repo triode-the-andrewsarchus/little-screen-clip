@@ -1,7 +1,7 @@
 use super::*;
 use crate::image_preview::{ImageToolProcessControl, ocr_command, run_image_tool_status_command};
 use little_clip_core::pdf::PdfPageLayout;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 struct ToolJob<T> {
     ticket: JobTicket,
@@ -47,18 +47,13 @@ impl<T> Drop for ToolJob<T> {
     }
 }
 
-struct OcrOutput {
-    directory: tempfile::TempDir,
-    output: PathBuf,
-}
-
 #[derive(Default)]
 pub(super) struct PdfDocumentTools {
     pub layout: Option<Arc<PdfPageLayout>>,
     pub layout_error: Option<String>,
     page: Option<usize>,
     layout_job: Option<ToolJob<PdfPageLayout>>,
-    ocr_job: Option<ToolJob<OcrOutput>>,
+    ocr_job: Option<ToolJob<super::output::PdfOutput>>,
     copy_job: Option<ToolJob<()>>,
     reuse_job: Option<ToolJob<Option<PathBuf>>>,
     pub ocr_language: String,
@@ -73,6 +68,7 @@ fn run_pdf_tool(
     source: &Path,
     output: &Path,
     arguments: &[String],
+    extra_input: Option<&Path>,
     control: &ImageToolProcessControl,
 ) -> Result<(), String> {
     use std::io::Read;
@@ -82,13 +78,21 @@ fn run_pdf_tool(
     let (python, script) = ocr_command();
     let script = Path::new(&script).with_file_name("pdf_document.py");
     let log = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
-    let mut command = Command::new(python);
-    command
+    let mut request = little_clip_core::process::CommandRequest::new(python)
         .arg(script)
         .arg(operation)
-        .arg(source)
-        .arg(output)
-        .args(arguments)
+        .arg_content_file(source)
+        .map_err(|error| error.to_string())?
+        .arg_content_output(output)
+        .map_err(|error| error.to_string())?;
+    if let Some(input) = extra_input {
+        request = request
+            .arg("--candidate")
+            .arg_content_file(input)
+            .map_err(|error| error.to_string())?;
+    }
+    let mut command = request.args(arguments).build_command();
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(
@@ -155,6 +159,7 @@ impl PdfDocumentTools {
                         &source,
                         &output,
                         &["--page".into(), page.to_string()],
+                        None,
                         &control,
                     )?;
                     let file = std::fs::File::open(output).map_err(|error| error.to_string())?;
@@ -192,24 +197,16 @@ impl PdfDocumentTools {
         self.ocr_status = format!("Adding searchable text to {count} pages…");
         self.ocr_job = Some(ToolJob::start(move |control| {
             let _lease = lease;
-            let parent = output
-                .parent()
-                .filter(|path| !path.as_os_str().is_empty())
-                .unwrap_or(Path::new("."));
-            let directory = tempfile::tempdir_in(parent).map_err(|error| error.to_string())?;
-            let staged = directory.path().join(STAGED_PDF_FILENAME);
-            run_pdf_tool(
-                "ocr",
-                &source,
-                &staged,
-                &["--language".into(), language],
-                &control,
-            )?;
-            let info = get_pdf_info(&staged)?;
-            if info.page_count != count {
-                return Err("OCR changed the PDF page count".into());
-            }
-            Ok(OcrOutput { directory, output })
+            super::output::PdfOutput::generate(&source, &output, count, true, |source, staged| {
+                run_pdf_tool(
+                    "ocr",
+                    source,
+                    staged,
+                    &["--language".into(), language],
+                    None,
+                    &control,
+                )
+            })
         }));
     }
 
@@ -237,6 +234,7 @@ impl PdfDocumentTools {
                     "--image".into(),
                     image.to_string(),
                 ],
+                None,
                 &control,
             )?;
             let bytes = std::fs::read(output).map_err(|error| error.to_string())?;
@@ -256,22 +254,17 @@ impl PdfEditorState {
         let lease = self.source_directory.clone();
         self.document_tools.reuse_job = Some(ToolJob::start(move |control| {
             let _lease = lease;
+            let source_revision = crate::file_source::FileSource::capture(&source)?;
+            let candidate_revision = crate::file_source::FileSource::capture(&candidate)?;
             let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
             let output = directory.path().join("matches.json");
-            run_pdf_tool(
-                "compare",
-                &source,
-                &output,
-                &[
-                    "--candidate".into(),
-                    candidate.to_string_lossy().into_owned(),
-                ],
-                &control,
-            )?;
+            run_pdf_tool("compare", &source, &output, &[], Some(&candidate), &control)?;
             let matches: bool = serde_json::from_reader(
                 std::fs::File::open(output).map_err(|error| error.to_string())?,
             )
             .map_err(|error| error.to_string())?;
+            source_revision.check()?;
+            candidate_revision.check()?;
             Ok(matches.then_some(candidate))
         }));
         true
@@ -315,13 +308,7 @@ impl PdfEditorState {
             .and_then(|job| job.poll(ctx))
         {
             self.document_tools.ocr_job = None;
-            match result.and_then(|output| {
-                self.publish_output(
-                    &output.directory.path().join(STAGED_PDF_FILENAME),
-                    &output.output,
-                )?;
-                Ok(output.output)
-            }) {
+            match result.and_then(|output| output.publish(self.protect_outputs)) {
                 Ok(path) => {
                     self.document_tools.ocr_complete = true;
                     self.path = path;
@@ -392,6 +379,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn extra_pdf_inputs_are_rejected_before_launch_when_they_are_kernel_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.pdf");
+        std::fs::write(&source, b"ordinary source; no parsing should occur").unwrap();
+        let candidate = root.path().join("candidate.pdf");
+        std::os::unix::fs::symlink("/proc/uptime", &candidate).unwrap();
+        let output = root.path().join("matches.json");
+        let error = run_pdf_tool(
+            "compare",
+            &source,
+            &output,
+            &[],
+            Some(&candidate),
+            &ImageToolProcessControl::new(),
+        )
+        .unwrap_err();
+        assert!(error.contains("inspection-only"), "{error}");
+        assert!(!output.exists());
+    }
+
+    #[test]
     fn opening_adopts_only_a_verified_ocr_copy_before_loading_pages() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.pdf");
@@ -441,15 +449,10 @@ mod tests {
         super::super::tests::write_two_page_pdf(&source);
         let mut state = PdfEditorState::without_jobs(source.clone());
         let output = state.sibling_output_path("ocr");
-        let staging = tempfile::tempdir_in(directory.path()).unwrap();
-        std::fs::copy(&source, staging.path().join(STAGED_PDF_FILENAME)).unwrap();
+        let staging = super::super::output::PdfOutput::new(&output).unwrap();
+        std::fs::copy(&source, staging.staged_path()).unwrap();
         let expected = output.clone();
-        state.document_tools.ocr_job = Some(ToolJob::start(move |_| {
-            Ok(OcrOutput {
-                directory: staging,
-                output,
-            })
-        }));
+        state.document_tools.ocr_job = Some(ToolJob::start(move |_| Ok(staging)));
         let ctx = egui::Context::default();
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while state.document_tools.ocr_busy() && std::time::Instant::now() < deadline {

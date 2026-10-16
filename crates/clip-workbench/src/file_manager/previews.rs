@@ -31,6 +31,7 @@ pub(super) struct EntryPreviews {
     scenes: super::scene_strip::Previews,
     materials: super::material_strip::Previews,
     pdf_pages: super::pdf_strip::Pages,
+    system_refresh: BTreeMap<uuid::Uuid, (u64, std::time::Instant, u32)>,
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
 impl EntryPreviews {
@@ -54,7 +55,18 @@ impl EntryPreviews {
                 self.rasters.invalidate(raster);
             }
             *version = entry.revision;
-            *id = uuid::Uuid::new_v4();
+            self.system_refresh.remove(id);
+        }
+        // A failed first collection has no Document, but still needs bounded
+        // visible retries. Classification owns scheduling, not successful data.
+        if entry.system.is_some() {
+            self.system_refresh.entry(*id).or_insert_with(|| {
+                (
+                    super::system::event_revision(),
+                    std::time::Instant::now(),
+                    0,
+                )
+            });
         }
         *id
     }
@@ -64,6 +76,29 @@ impl EntryPreviews {
         self.image_hover.poll(ctx);
         self.scenes.poll(ctx);
         self.materials.poll(ctx);
+        let now = std::time::Instant::now();
+
+        let systems = self
+            .identities
+            .iter()
+            .filter_map(|(path, (_, id))| {
+                self.system_refresh.contains_key(id).then_some(())?;
+                self.cache.get(*id).map(|ready| {
+                    let failed = ready
+                        .data
+                        .system
+                        .as_ref()
+                        .is_none_or(|document| document.last_error.is_some());
+                    (path.clone(), *id, failed)
+                })
+            })
+            .collect::<Vec<_>>();
+        let event = if systems.is_empty() {
+            0
+        } else {
+            super::system::event_revision()
+        };
+        self.refresh_systems(ctx, now, event, systems);
         let changed = self.cache.poll(ctx);
         if changed {
             for (path, (revision, id)) in &self.identities {
@@ -80,6 +115,39 @@ impl EntryPreviews {
         }
         changed
     }
+    fn refresh_systems(
+        &mut self,
+        ctx: &egui::Context,
+        now: std::time::Instant,
+        event: u64,
+        systems: Vec<(std::path::PathBuf, uuid::Uuid, bool)>,
+    ) {
+        for (path, id, failed) in systems {
+            let previous = self.system_refresh.entry(id).or_insert((event, now, 0));
+            if !failed {
+                previous.2 = 0;
+            }
+            let elapsed = now.duration_since(previous.1);
+            if elapsed >= std::time::Duration::from_secs(5)
+                && (previous.0 != event
+                    || elapsed
+                        >= std::time::Duration::from_secs((5_u64 << previous.2.min(3)).min(30)))
+            {
+                if self.cache.refresh(id, Source::System(path)) {
+                    *previous = (
+                        event,
+                        now,
+                        if failed {
+                            previous.2.saturating_add(1)
+                        } else {
+                            0
+                        },
+                    );
+                }
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+    }
     pub fn retain(&mut self, visible: &BTreeSet<std::path::PathBuf>) {
         if visible.is_empty() {
             self.text_status.clear();
@@ -93,6 +161,7 @@ impl EntryPreviews {
             .retain(&self.identities.values().map(|(_, id)| *id).collect());
         let ids: BTreeSet<_> = self.identities.values().map(|(_, id)| *id).collect();
         self.materials.retain(&ids);
+        self.system_refresh.retain(|id, _| ids.contains(id));
         self.raster_sizes.retain(|id, _| ids.contains(id));
         self.rasters
             .retain(&self.raster_sizes.values().map(|(_, id)| *id).collect());
@@ -133,13 +202,16 @@ impl EntryPreviews {
         self.gallery_sizes.clear();
         self.rasters.clear();
         self.raster_sizes.clear();
+        self.system_refresh.clear();
     }
     pub fn listing(&mut self, entry: &Entry) -> Option<&super::shelf::preview::Ready> {
         let id = self.identity(entry);
         if self.cache.needs(id) {
             self.cache.request(
                 id,
-                if entry.regular_file && entry.is_photo() {
+                if entry.system.is_some() {
+                    Source::System(entry.path.clone())
+                } else if entry.regular_file && entry.is_photo() {
                     Source::Photo {
                         path: entry.path.clone(),
                         revision: entry.revision,
@@ -184,10 +256,13 @@ impl EntryPreviews {
         row: egui::Rect,
         entry: &Entry,
         colors: crate::ui_appearance::WorkbenchColors,
+        palette: &little_clip_core::palette::AppPalette,
     ) {
         let id = self.identity(entry);
         self.listing(entry);
-        if super::font_strip::known(&entry.path) {
+        if entry.system.is_some() {
+            super::system::show(ui, row, entry, self.cache.get(id), colors, palette);
+        } else if super::font_strip::known(&entry.path) {
             let document = self.cache.get(id).and_then(|r| r.data.font.clone());
             let strip = super::font_strip::show(ui, row, entry, self.cache.get(id), colors);
             if let Some(document) = document {
@@ -651,6 +726,107 @@ mod tests {
         .unwrap();
         assert_eq!(directory.entries.len(), 1, "fixture must contain one file");
         directory.entries.pop().unwrap()
+    }
+
+    #[test]
+    fn initial_system_failure_retries_and_recovery_resets_backoff() {
+        use std::os::unix::fs::symlink;
+        use std::time::{Duration, Instant};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("system");
+        symlink("/proc/uptime", &path).unwrap();
+        let entry = single_entry(dir.path());
+        assert!(entry.system.is_some());
+        std::fs::remove_file(&path).unwrap();
+        let ctx = egui::Context::default();
+        let mut previews = EntryPreviews::default();
+        previews.listing(&entry);
+        let id = previews.identities[&path].1;
+        wait_for_preview(|| {
+            previews.poll(&ctx);
+            previews.cache.get(id).is_some()
+        });
+        assert!(previews.cache.get(id).unwrap().data.system.is_none());
+        let initial = previews.system_refresh[&id];
+        previews.poll(&ctx);
+        assert_eq!(
+            previews.system_refresh[&id], initial,
+            "no immediate retry loop"
+        );
+        previews.system_refresh.get_mut(&id).unwrap().1 = Instant::now() - Duration::from_secs(6);
+        previews.poll(&ctx);
+        assert_eq!(
+            previews.system_refresh[&id].2, 1,
+            "first failure uses existing backoff"
+        );
+        for (seconds, failures) in [(10, 1), (20, 2), (30, 3), (30, 4)] {
+            // Retire the previous worker so queue timing cannot decide whether
+            // the next retry was admitted. Advance only the scheduling clock.
+            previews.cache.invalidate(id);
+            let previous = previews.system_refresh[&id];
+            previews.refresh_systems(
+                &ctx,
+                previous.1 + Duration::from_secs(seconds - 1),
+                previous.0,
+                vec![(path.clone(), id, true)],
+            );
+            assert_eq!(
+                previews.system_refresh[&id], previous,
+                "backoff must hold for {seconds}s"
+            );
+            previews.refresh_systems(
+                &ctx,
+                previous.1 + Duration::from_secs(seconds),
+                previous.0,
+                vec![(path.clone(), id, true)],
+            );
+            assert_eq!(previews.system_refresh[&id].2, failures + 1);
+        }
+        previews.cache.invalidate(id);
+        let previous = previews.system_refresh[&id];
+        let changed_event = previous.0 + 1;
+        previews.refresh_systems(
+            &ctx,
+            previous.1 + Duration::from_secs(4),
+            changed_event,
+            vec![(path.clone(), id, true)],
+        );
+        assert_eq!(
+            previews.system_refresh[&id], previous,
+            "events cannot exceed the five-second measurement rate"
+        );
+        previews.refresh_systems(
+            &ctx,
+            previous.1 + Duration::from_secs(5),
+            changed_event,
+            vec![(path.clone(), id, true)],
+        );
+        assert_eq!(
+            previews.system_refresh[&id].0, changed_event,
+            "event invalidation bypasses longer backoff after the rate limit"
+        );
+        previews.cache.invalidate(id);
+        // Inject a successful outcome at the same scheduling boundary used by
+        // poll. Unit-test executables do not dispatch the GUI's internal helper.
+        let recovered = previews.system_refresh[&id].1 + Duration::from_secs(1);
+        previews.refresh_systems(
+            &ctx,
+            recovered,
+            previews.system_refresh[&id].0,
+            vec![(path.clone(), id, false)],
+        );
+        assert_eq!(
+            previews.system_refresh[&id].2, 0,
+            "recovery restores normal freshness immediately"
+        );
+        previews.retain(&BTreeSet::new());
+        assert!(previews.system_refresh.is_empty());
+        assert!(previews.cache.get(id).is_none());
+        previews.poll(&ctx);
+        assert!(
+            previews.system_refresh.is_empty(),
+            "hidden rows must not restart work"
+        );
     }
 
     #[test]

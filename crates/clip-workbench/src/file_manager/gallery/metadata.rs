@@ -135,7 +135,8 @@ fn raw_metadata(path: &Path) -> Result<Metadata, String> {
             "-PreviewImageWidth",
             "-PreviewImageHeight",
         ])
-        .arg(path)
+        .arg_content_file(path)
+        .map_err(|error| error.to_string())?
         .timeout(Duration::from_secs(5))
         .max_output_bytes(16 * 1024)
         .run()

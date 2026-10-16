@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::Duration;
 
+use super::system_route::Admission;
 use super::{BackgroundJobs, FileManager, JobError};
 
 #[derive(Clone, Debug)]
@@ -128,11 +129,13 @@ struct Running {
     batch: Batch,
     control: Arc<Control>,
     receiver: Option<mpsc::Receiver<Result<Report, JobError>>>,
+    admission: Admission,
 }
 
 #[derive(Clone)]
 pub(super) struct FileDrag {
     pub paths: Vec<PathBuf>,
+    pub copy_only: bool,
 }
 
 #[derive(Clone)]
@@ -153,6 +156,7 @@ type ImportResult =
 
 #[derive(Default)]
 pub(super) struct Transfers {
+    // Unadmitted requests only; recursive checks precede mutation submission.
     queue: VecDeque<Batch>,
     pub(super) native_results: Vec<(u64, bool)>,
     running: Option<Running>,
@@ -239,6 +243,7 @@ impl Transfers {
                 batch,
                 control,
                 receiver: None,
+                admission: Admission::Unchecked,
             });
         }
         let running = self.running.as_mut()?;
@@ -252,6 +257,21 @@ impl Transfers {
             };
             self.running = None;
             return Some(report);
+        }
+        match running.admit(jobs) {
+            Ok(false) => return None,
+            Ok(true) => {}
+            Err(error) => {
+                let report = Report {
+                    title: running.batch.kind.title().into(),
+                    native_drop: running.batch.native_drop,
+                    failed: vec![(PathBuf::from("Safety admission"), error)],
+                    unprocessed: running.batch.sources.len(),
+                    ..Default::default()
+                };
+                self.running = None;
+                return Some(report);
+            }
         }
         if running.receiver.is_none() {
             let batch = running.batch.clone();
@@ -298,6 +318,14 @@ impl Transfers {
             ));
         }
         Some(report)
+    }
+}
+
+impl Running {
+    fn admit(&mut self, jobs: &BackgroundJobs) -> Result<bool, String> {
+        let batch = self.batch.clone();
+        let control = Arc::clone(&self.control);
+        self.admission.poll(jobs, move || batch.preflight(&control))
     }
 }
 
@@ -379,7 +407,22 @@ impl FileManager {
             .unwrap_or_default()
     }
 
+    pub(super) fn selection_is_mutable(&self) -> bool {
+        self.directory.as_ref().is_some_and(|directory| {
+            !directory.system
+                && self.selected_paths().iter().all(|path| {
+                    directory
+                        .entries
+                        .iter()
+                        .any(|entry| entry.path == *path && entry.system.is_none())
+                })
+        })
+    }
     pub(super) fn copy_selection(&mut self, cut: bool) {
+        if cut && !self.selection_is_mutable() {
+            return;
+        }
+
         let paths = self.selected_paths();
         if !paths.is_empty() {
             self.transfers.clipboard = Some(FileClipboard {
@@ -495,6 +538,9 @@ impl FileManager {
     }
 
     pub(super) fn confirm_delete(&mut self, permanent: bool) {
+        if !self.selection_is_mutable() {
+            return;
+        }
         let paths = self.selected_paths();
         if !paths.is_empty() {
             let selected: BTreeSet<_> = paths.iter().collect();
@@ -551,6 +597,13 @@ impl Batch {
             }
             return report;
         }
+        if let Err(error) = self.preflight(control) {
+            report
+                .failed
+                .push((PathBuf::from("Safety preflight"), error));
+            report.unprocessed = self.sources.len();
+            return report;
+        }
         let mut policy = None;
         for (index, source) in self.sources.iter().enumerate() {
             if control.check().is_err() {
@@ -579,6 +632,33 @@ impl Batch {
         }
         report.cancelled |= control.cancelled.load(Ordering::Relaxed);
         report
+    }
+
+    fn preflight(&self, control: &Control) -> Result<(), String> {
+        if let Kind::Restore(items) = &self.kind {
+            for item in items {
+                trash_support::preflight_restore(item, &control.cancelled)?;
+            }
+            return Ok(());
+        }
+        if matches!(self.kind, Kind::Export(_) | Kind::ConsumeCut(_, _)) {
+            return Ok(());
+        }
+        let destination = match &self.kind {
+            Kind::Copy(path) | Kind::Move(path) => Some(path.as_path()),
+            _ => None,
+        };
+        let sources = self
+            .sources
+            .iter()
+            .filter(|source| {
+                !(matches!(self.kind, Kind::NativeMoveCleanup(_))
+                    && std::fs::symlink_metadata(source)
+                        .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        super::system_route::batch(&sources, destination, &control.cancelled)
     }
 
     // Returns true when a successful external move has already removed the source.

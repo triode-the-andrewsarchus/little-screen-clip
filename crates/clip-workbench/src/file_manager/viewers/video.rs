@@ -3,7 +3,7 @@ use crate::file_source::FileSource;
 use egui::Ui;
 use std::{
     path::PathBuf,
-    process::{Child, Command, Stdio},
+    process::{Child, Stdio},
     time::Duration,
 };
 
@@ -71,8 +71,7 @@ impl Video {
         if FileSource::capture(&self.path)? != self.prepared.source {
             return Err("Video source changed. Return to the folder and open it again.".into());
         }
-        let mut command = Command::new("ffplay");
-        command
+        let mut command = little_clip_core::process::CommandRequest::new("ffplay")
             .args([
                 "-loglevel",
                 "error",
@@ -98,7 +97,10 @@ impl Video {
             .arg("-ss")
             .arg(format!("{:.3}", self.start_seconds))
             .arg("-i")
-            .arg(&self.path)
+            .arg_content_file(&self.path)
+            .map_err(|error| error.to_string())?
+            .build_command();
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -184,6 +186,7 @@ impl Drop for Video {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     fn fixture(path: PathBuf, child: Option<Child>) -> Video {
         Video {

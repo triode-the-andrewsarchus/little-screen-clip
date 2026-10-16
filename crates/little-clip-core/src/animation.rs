@@ -87,7 +87,8 @@ pub fn read_video_metadata(path: &Path) -> Option<(u32, u32, u64)> {
         .arg("format=duration")
         .arg("-of")
         .arg("default=noprint_wrappers=1")
-        .arg(path.to_str()?)
+        .arg_content_file(path)
+        .ok()?
         .run()
         .ok()?;
 
@@ -132,7 +133,7 @@ pub fn decode_animated_gif_or_webp(
         return Some(thumb);
     }
 
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::kernel_interface::read_content(path).ok()?;
     decode_animated_bytes(&bytes, max_w, max_h, max_frames)
 }
 
@@ -151,7 +152,8 @@ pub fn extract_animated_frames_via_ffmpeg(
     let output = crate::process::CommandRequest::new("ffmpeg")
         .arg("-y")
         .arg("-i")
-        .arg(path.to_str()?)
+        .arg_content_file(path)
+        .ok()?
         .arg("-vf")
         .arg(&scale_filter)
         .arg("-frames:v")
@@ -358,7 +360,8 @@ pub fn extract_video_preview_frames(
         .arg("-t")
         .arg(format!("{:.2}", sample_duration_sec))
         .arg("-i")
-        .arg(path.to_str()?)
+        .arg_content_file(path)
+        .ok()?
         .arg("-vf")
         .arg(&scale_filter)
         .arg("-c:v")

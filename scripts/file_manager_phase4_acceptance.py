@@ -23,39 +23,37 @@ def click_word(session, shot, word, last=False, minimum_y=85, maximum_y=None):
 
 
 def open_file(session, root, filename, shot):
-    if filename == "external.unknown":
-        session.click(500, 310)
-        for _ in range(12):
-            session.key("Up")
-        session.key("Down")
-        session.observe(shot, ["external"])
-        session.key("Return")
-        return
-    private.run_checked([str(session.pointer), "scroll", "1280", "800", "800", "400", "-600"], env=session.env)
+    for _ in range(2):
+        private.run_checked([str(session.pointer), "scroll", "1280", "800", "800", "400", "-1000"], env=session.env)
     time.sleep(0.3)
-    for _ in range(4):
+    for _ in range(6):
         session.observe(shot, [])
-        if session.word(shot, filename, required=False):
-            break
+        position = session.word(shot, filename, required=False)
+        if position:
+            # Keep coordinates paired with the exact screenshot that resolved them.
+            x, y = position
+            session.observations[-1]["expected_visible_text"] = [filename]
+            session.click(x + 15, y)
+            session.key("Return")
+            return
         private.run_checked([str(session.pointer), "scroll", "1280", "800", "800", "400", "200"], env=session.env)
         time.sleep(0.3)
-    session.observe(shot, [filename])
-    x, y = session.word(shot, filename)
-    session.click(x + 15, y)
-    session.key("Return")
+    raise RuntimeError(f"{shot}: no visible file row for {filename}")
 
 
 def type_text(session, text):
     private.run_checked(["wtype", text], env=session.env)
 
 
-def back(session, shot):
-    # The fixed private 1280x800 fixture places the Files back button here.
-    session.click(150, 118)
+def back(session, shot, y=118):
+    # The shared toolbar is fixed; gallery navigation adds one row above it.
+    session.click(150, y)
 
 
 def exercise(session, root):
-    session.observe("01-browser", ["Files", "Folders", "notes.txt", "picture.png"])
+    session.observe("01-browser", ["Files", "Folders", "9 items"])
+    # Rich preview rows require scrolling; keep the Shelf out of this studio check.
+    session.click(848, 201)
     open_file(session, root, "notes.txt", "02-text-row")
     session.observe("03-text-preview", ["Back to folder", "ORIGINALNOTE", "Edit text"])
     click_word(session, "03-text-preview", "Edit")
@@ -92,24 +90,27 @@ def exercise(session, root):
     back(session, "13-text-conflict")
     session.observe("14-discard", ["Discard edits"])
     click_word(session, "14-discard", "Discard")
-    session.observe("15-browser", ["Folders", "picture.png"])
+    session.observe("15-browser", ["Folders", "9 items"])
 
     open_file(session, root, "picture.png", "16-image-row")
     session.observe("17-image-studio", ["picture.png", "PNG", "Nomacs"])
     session.key("f")
     session.observe("18-transform", ["Mirror"])
-    # Shared Image Studio's horizontal flip button in the fixed fixture.
-    session.click(160, 538)
+    click_word(session, "18-transform", "Horiz")
     session.key("s", "ctrl")
-    session.observe("19-image-save", ["Save", "picture_edit.png"])
+    session.observe("19-image-save", ["Enter destination file path"])
+    session.key("a", "ctrl")
+    type_text(session, str(root / "picture_edit.png"))
+    session.observe("19b-image-target", ["Enter destination file path", "picture_edit.png"])
+    # The modal Save button is fixed below its verified destination field.
     session.click(510, 498)
     wait_for(lambda: (root / "picture_edit.png").exists(), "image sibling save")
     with Image.open(root / "picture_edit.png") as image:
         assert image.size == (120, 80)
         assert image.getpixel((0, 0))[:3] == (0, 0, 255)
     session.observe("20-image-saved", ["picture_edit.png"])
-    back(session, "20-image-saved")
-    session.observe("21-image-return", ["picture.png", "Folders"])
+    back(session, "20-image-saved", y=160)
+    session.observe("21-image-return", ["10 items", "Folders"])
 
     open_file(session, root, "document.pdf", "22-pdf-row")
     session.observe("23-pdf-studio", ["Pages", "Find", "OCR"])
@@ -134,12 +135,19 @@ def exercise(session, root):
     session.observe("36-model-return", ["Folders"])
 
     open_file(session, root, "scene.splat", "37-scene-row")
-    session.observe("38-scene-studio", ["Gaussians", "Reset view"])
+    scene_text = session.observe("38-scene-studio", ["scene.splat"],
+                                 expected_any=["Gaussians", "No suitable graphics adapter"])
+    # No-adapter is an explicit capability outcome, never proof of rendered pixels.
+    (session.output / "scene-capability.json").write_text(json.dumps({
+        "rendered": "gaussians" in scene_text.lower(),
+        "unavailable_adapter": "no suitable graphics adapter" in scene_text.lower(),
+        "backend_requested": session.env.get("WGPU_BACKEND"),
+    }, indent=2))
     back(session, "38-scene-studio")
     session.observe("39-scene-return", ["Folders"])
-    open_file(session, root, "external.unknown", "40-external-row")
+    open_file(session, root, "handoff.odd", "40-external-row")
     wait_for(lambda: (session.output / "external-open.json").exists(), "external application handoff")
-    assert json.loads((session.output / "external-open.json").read_text()) == [str(root / "external.unknown")]
+    assert json.loads((session.output / "external-open.json").read_text()) == [str(root / "handoff.odd")]
     session.observe("41-external-return", ["Folders"])
     for dimension, value in [("width", "640"), ("height", "560")]:
         private.run_checked([session.niri, "msg", "action", f"set-window-{dimension}", value], env=session.env)
@@ -161,7 +169,7 @@ def main():
     fixture.midi_fixture(root)
     fixture.stl_fixture(root)
     (root / "scene.splat").write_bytes(struct.pack("<6f8B", 0, 0, 0, .1, .1, .1, 220, 80, 40, 255, 255, 128, 128, 128))
-    (root / "external.unknown").write_bytes(bytes([0, 255, 0]))
+    (root / "handoff.odd").write_bytes(bytes([0, 255, 0]))
     def prepare_environment(env, children):
         # A synthetic desktop opener keeps this check inside the private run.
         bin_dir = output / "bin"

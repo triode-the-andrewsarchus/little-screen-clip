@@ -8,6 +8,7 @@ mod document_tools;
 mod editing;
 mod interaction;
 mod navigation;
+mod output;
 mod page_cache;
 mod preview_jobs;
 mod studio;
@@ -419,9 +420,7 @@ impl PdfPageViewport {
 struct PdfEditMsg {
     operation: &'static str,
     page_num: usize,
-    output: PathBuf,
-    staging_dir: tempfile::TempDir,
-    result: Result<(), String>,
+    result: Result<output::PdfOutput, String>,
 }
 
 /// Immutable raster data whose temporary file remains alive while any view holds it.
@@ -595,17 +594,6 @@ impl PdfEditorState {
     pub fn with_protected_outputs(mut self) -> Self {
         self.protect_outputs = true;
         self
-    }
-    fn publish_output(&self, source: &Path, destination: &Path) -> Result<(), String> {
-        if self.protect_outputs {
-            std::fs::hard_link(source, destination).map_err(|e| {
-                format!(
-                    "Could not create PDF output; choose/remove the existing sibling first: {e}"
-                )
-            })
-        } else {
-            std::fs::rename(source, destination).map_err(|e| e.to_string())
-        }
     }
     /// Reports an accepted page edit or OCR write that must finish before closing.
     pub fn file_write_pending(&self) -> bool {

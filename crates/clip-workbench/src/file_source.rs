@@ -1,7 +1,7 @@
 //! Source identity and guarded atomic saves for file-backed desktop editors.
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -13,12 +13,29 @@ pub struct FileSource {
 }
 impl FileSource {
     /// Captures the resolved regular file's identity and timestamps on a worker.
+    ///
+    /// Classification, metadata and the resolved name come from the same pinned file.
+    ///
+    /// # Errors
+    /// Returns an error for protected interfaces, non-regular files or unavailable metadata.
     pub fn capture(path: &Path) -> Result<Self, String> {
-        let path = path.canonicalize().map_err(|e| e.to_string())?;
-        let metadata = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        let source =
+            little_clip_core::kernel_interface::pin(path, true).map_err(|e| e.to_string())?;
+        Self::capture_file(&source)
+    }
+    fn capture_file(source: &File) -> Result<Self, String> {
+        if little_clip_core::kernel_interface::classify_handle(source)
+            .map_err(|e| e.to_string())?
+            .protected()
+        {
+            return Err("Kernel interfaces are inspection-only".into());
+        }
+        let metadata = source.metadata().map_err(|e| e.to_string())?;
         if !metadata.is_file() {
             return Err("Source is not a regular file".into());
         }
+        let path = std::fs::read_link(format!("/proc/self/fd/{}", source.as_raw_fd()))
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             path,
             version: [
@@ -47,13 +64,26 @@ impl FileSource {
     /// Other destinations must be unused. Existing hard links retain their old
     /// contents after source replacement. The final check and rename are separate
     /// filesystem operations, so arbitrary concurrent writers are not locked out.
+    /// Staging and installation retain the validated ordinary parent directory.
+    ///
+    /// # Errors
+    /// Returns an error for protected/invalid parents, changed sources, existing Save As
+    /// destinations or filesystem failures.
     pub fn write(&self, destination: &Path, bytes: &[u8]) -> Result<Self, String> {
         let parent = destination.parent().unwrap_or(Path::new("."));
-        let parent = parent.canonicalize().map_err(|e| e.to_string())?;
+        let directory = little_clip_core::kernel_interface::pin_content_directory(parent)
+            .map_err(|e| e.to_string())?;
+        let parent = std::fs::read_link(format!("/proc/self/fd/{}", directory.as_raw_fd()))
+            .map_err(|e| e.to_string())?;
         let destination = parent.join(destination.file_name().ok_or("Missing filename")?);
+        self.write_in(&destination, bytes, &directory)
+    }
+    fn write_in(&self, destination: &Path, bytes: &[u8], directory: &File) -> Result<Self, String> {
+        let parent = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+        let target = parent.join(destination.file_name().ok_or("Missing filename")?);
         let mut temporary = tempfile::NamedTempFile::new_in(&parent).map_err(|e| e.to_string())?;
         temporary.write_all(bytes).map_err(|e| e.to_string())?;
-        let replacing = destination == self.path;
+        let replacing = destination == self.path.as_path();
         if replacing {
             temporary
                 .as_file()
@@ -61,10 +91,10 @@ impl FileSource {
                 .map_err(|e| e.to_string())?;
         }
         temporary.as_file().sync_all().map_err(|e| e.to_string())?;
-        if replacing {
-            let current = Self::capture(&destination)?;
+        let installed = if replacing {
+            let current = Self::capture(&target)?;
             if current != *self
-                || std::fs::symlink_metadata(&destination)
+                || std::fs::symlink_metadata(&target)
                     .map_err(|e| e.to_string())?
                     .file_type()
                     .is_symlink()
@@ -73,27 +103,19 @@ impl FileSource {
                     "Source changed outside Files. Reload it or save to a new filename.".into(),
                 );
             }
-            temporary.persist(&destination).map_err(|e| e.to_string())?;
+            temporary.persist(&target).map_err(|e| e.to_string())?
         } else {
             temporary
-                .persist_noclobber(&destination)
-                .map_err(|e| format!("Choose an unused filename: {e}"))?;
-        }
-        Self::capture(&destination)
+                .persist_noclobber(&target)
+                .map_err(|e| format!("Choose an unused filename: {e}"))?
+        };
+        Self::capture_file(&installed)
     }
 }
 
 /// Opens regular sources without blocking on a FIFO substituted after enumeration.
 pub(crate) fn open_regular_file(path: &Path, follow_symlinks: bool) -> std::io::Result<File> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK | if follow_symlinks { 0 } else { libc::O_NOFOLLOW })
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::other(
-            "Preview source is not a regular file",
-        ));
-    }
+    let file = little_clip_core::kernel_interface::open_content(path, follow_symlinks)?;
     Ok(file)
 }
 
@@ -118,6 +140,52 @@ pub(crate) fn read_file_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_source_metadata_cannot_adopt_a_replaced_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("installed.txt");
+        let moved = temp.path().join("moved.txt");
+        let mut installed = File::create(&target).unwrap();
+        installed.write_all(b"installed snapshot").unwrap();
+        let inode = installed.metadata().unwrap().ino();
+        std::fs::rename(&target, &moved).unwrap();
+        std::fs::write(&target, b"replacement").unwrap();
+        let captured = FileSource::capture_file(&installed).unwrap();
+        assert_eq!(captured.path, moved);
+        assert_eq!(captured.version[1], inode);
+        assert_ne!(captured, FileSource::capture(&target).unwrap());
+        assert_eq!(
+            std::fs::read(&captured.path).unwrap(),
+            b"installed snapshot"
+        );
+        captured.check().unwrap();
+    }
+
+    #[test]
+    fn save_as_uses_the_validated_directory_when_its_path_is_replaced() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.txt");
+        std::fs::write(&source, b"original").unwrap();
+        let original = FileSource::capture(&source).unwrap();
+        let parent = temp.path().join("parent");
+        let moved = temp.path().join("moved");
+        std::fs::create_dir(&parent).unwrap();
+        let directory = little_clip_core::kernel_interface::pin_content_directory(&parent).unwrap();
+        std::fs::rename(&parent, &moved).unwrap();
+        // Cover replacement by a fresh directory; the naming fixture covers an alias.
+        std::fs::create_dir(&parent).unwrap();
+        let saved = original
+            .write_in(&parent.join("saved.txt"), b"snapshot", &directory)
+            .unwrap();
+        assert_eq!(std::fs::read(moved.join("saved.txt")).unwrap(), b"snapshot");
+        assert!(!parent.join("saved.txt").exists());
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 1);
+        assert_eq!(saved.path, moved.join("saved.txt"));
+        saved.check().unwrap();
+        original.check().unwrap();
+    }
 
     #[test]
     fn source_replacement_updates_revision_preserves_mode_and_keeps_other_hard_links() {

@@ -463,6 +463,10 @@ impl FileManager {
         if let Some(action) = actions.naming {
             self.begin_naming(action);
         }
+        if let Some(path) = actions.inspect {
+            self.inspect_file = Some(path.clone());
+            self.open_file = Some(path);
+        }
         if let Some(path) = actions.open {
             self.open_path(path);
         }
@@ -940,6 +944,7 @@ struct ListActions {
     additive: bool,
     selection: Option<(PathBuf, bool, bool)>,
     open: Option<PathBuf>,
+    inspect: Option<PathBuf>,
     naming: Option<super::edits::NamingAction>,
     files: Option<super::transfers::ui::SelectionAction>,
     select_all: bool,
@@ -957,7 +962,7 @@ impl ListActions {
         }
         focus.context_menu(|ui| {
             self.naming = super::edit_ui::naming_buttons(ui, can_edit, None);
-            self.files = super::transfers::ui::selection_buttons(ui, selected, true);
+            self.files = super::transfers::ui::selection_buttons(ui, selected, can_edit, can_edit);
             self.select_all = ui.button("Select all").clicked();
             if self.naming.is_some() || self.files.is_some() || self.select_all {
                 ui.close_menu();
@@ -983,7 +988,10 @@ impl ListActions {
         } else {
             vec![path.clone()]
         };
-        response.dnd_set_drag_payload(super::transfers::FileDrag { paths });
+        response.dnd_set_drag_payload(super::transfers::FileDrag {
+            paths,
+            copy_only: false,
+        });
         if !marked {
             self.selection = Some((path.clone(), false, false));
         }
@@ -1029,7 +1037,24 @@ impl ListActions {
         if entry.directory {
             self.transfer = drop_files(ui, response, &entry.path);
         }
+        self.row_context_menu(response, entry, marked, can_edit, selection_count);
+        self.row_activation(ui, response, entry);
+    }
+
+    fn row_context_menu(
+        &mut self,
+        response: &egui::Response,
+        entry: &super::filesystem::Entry,
+        marked: bool,
+        can_edit: bool,
+        selection_count: usize,
+    ) {
         response.context_menu(|ui| {
+            if let Some(path) = inspection_button(ui, entry) {
+                self.inspect = Some(path);
+                ui.close_menu();
+            }
+
             if ui
                 .button(if entry.directory {
                     "Open folder"
@@ -1041,22 +1066,64 @@ impl ListActions {
                 self.open = Some(entry.path.clone());
                 ui.close_menu();
             }
-            if !entry.directory && ui.button("Open externally").clicked() {
+            if !entry.directory && entry.system.is_none() && ui.button("Open externally").clicked()
+            {
                 let _ = super::viewers::external(entry.path.clone());
                 ui.close_menu();
             }
             ui.separator();
             let rename = (!marked || selection_count == 1).then_some(entry.path.as_path());
-            self.naming = super::edit_ui::naming_buttons(ui, can_edit, rename);
-            self.files = super::transfers::ui::selection_buttons(ui, true, true);
+            self.naming =
+                super::edit_ui::naming_buttons(ui, can_edit && entry.system.is_none(), rename);
+            self.files = super::transfers::ui::selection_buttons(
+                ui,
+                true,
+                can_edit,
+                can_edit && entry.system.is_none(),
+            );
             if self.naming.is_some() || self.files.is_some() {
                 ui.close_menu();
             }
         });
-        if response.double_clicked() && !self.additive {
+    }
+
+    fn row_activation(
+        &mut self,
+        ui: &Ui,
+        response: &egui::Response,
+        entry: &super::filesystem::Entry,
+    ) {
+        let modifiers = ui.input(|input| input.modifiers);
+        if self.additive || modifiers.ctrl || modifiers.command || modifiers.shift {
+            return;
+        }
+        let icon = Rect::from_min_size(
+            response.rect.min + vec2(6.0, 32.0),
+            vec2(response.rect.height() - 42.0, response.rect.height() - 42.0),
+        );
+        let inspect_icon = entry.system.is_some()
+            && ui
+                .ctx()
+                .pointer_interact_pos()
+                .is_some_and(|point| icon.intersect(ui.clip_rect()).contains(point));
+        if (response.clicked() || response.double_clicked()) && inspect_icon {
+            self.inspect = Some(entry.path.clone());
+        } else if response.double_clicked() {
             self.open = Some(entry.path.clone());
         }
     }
+}
+
+/// Offers the appropriate explicit metadata inspection without changing normal opening.
+fn inspection_button(ui: &mut Ui, entry: &super::filesystem::Entry) -> Option<PathBuf> {
+    let label = match (entry.system.is_some(), entry.regular_file) {
+        (true, _) => "Inspect system object",
+        (false, true) => "Inspect loop associations",
+        _ => return None,
+    };
+    ui.add(egui::Button::new(label).wrap(false))
+        .clicked()
+        .then(|| entry.path.clone())
 }
 
 pub(super) fn focus_text(
@@ -1089,7 +1156,7 @@ fn drop_files(
             (
                 drag.paths.clone(),
                 destination.into(),
-                !ui.input(|i| i.modifiers.ctrl),
+                !drag.copy_only && !ui.input(|i| i.modifiers.ctrl),
             )
         })
 }
@@ -1160,8 +1227,36 @@ pub(super) fn information_strip(
         ui,
         Rect::from_min_size(row.min + vec2(6.0, 0.0), vec2(row.width() - 12.0, 24.0)),
         entry,
-        Some(format!("{detail} · {} · {}", entry.size, entry.modified)),
+        Some(if entry.system.is_some() {
+            detail.into()
+        } else {
+            format!("{detail} · {} · {}", entry.size, entry.modified)
+        }),
         colors,
     );
     Rect::from_min_max(row.min + vec2(6.0, 32.0), row.max - vec2(6.0, 10.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_inspection_preserves_request_mode_for_ordinary_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("image.img");
+        let mut browser = FileManager::new(temp.path().into());
+        browser.apply_list_actions(ListActions {
+            inspect: Some(path.clone()),
+            ..Default::default()
+        });
+        assert_eq!(browser.open_file.take(), Some(path.clone()));
+        assert_eq!(browser.inspect_file.take(), Some(path.clone()));
+        browser.apply_list_actions(ListActions {
+            open: Some(path.clone()),
+            ..Default::default()
+        });
+        assert_eq!(browser.open_file.take(), Some(path));
+        assert!(browser.inspect_file.is_none());
+    }
 }

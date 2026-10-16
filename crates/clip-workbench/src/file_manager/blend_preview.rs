@@ -34,7 +34,8 @@ fn thumbnail(path: &Path, token: &AtomicBool) -> Result<ImageThumbnail, String> 
         .map_err(|error| error.to_string())?;
     let output = directory.path().join("preview.png");
     let result = CommandRequest::new(helper.into_os_string())
-        .arg(path.as_os_str())
+        .arg_content_file(path)
+        .map_err(|e| e.to_string())?
         .arg(output.as_os_str())
         .timeout(Duration::from_secs(8))
         .max_output_bytes(16 * 1024)

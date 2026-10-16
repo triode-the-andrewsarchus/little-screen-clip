@@ -238,6 +238,7 @@ struct MidiExportJob {
 #[derive(Debug)]
 struct MidiExportArtifact {
     path: PathBuf,
+    directory: std::fs::File,
     total_notes: usize,
     duration_sec: f32,
     is_slice: bool,
@@ -261,7 +262,11 @@ impl MidiExportArtifact {
 impl Drop for MidiExportArtifact {
     fn drop(&mut self) {
         if !self.retain_file {
-            let _ = std::fs::remove_file(&self.path);
+            use std::os::fd::AsRawFd;
+            if let Some(name) = self.path.file_name() {
+                let parent = PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd()));
+                let _ = std::fs::remove_file(parent.join(name));
+            }
         }
     }
 }

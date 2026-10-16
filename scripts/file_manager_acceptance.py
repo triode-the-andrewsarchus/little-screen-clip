@@ -21,9 +21,9 @@ import ui_acceptance_capture as private
 
 @contextmanager
 def preserve_file_clipboard(env):
-    """Niri's capture action publishes a PNG; retain file references under test."""
+    """Niri's capture action publishes a PNG; retain references and plain text under test."""
     types = subprocess.run(["wl-paste", "--list-types"], env=env, capture_output=True, timeout=5).stdout.decode(errors="replace").splitlines()
-    mime = next((kind for kind in ["x-special/gnome-copied-files", "text/uri-list"] if kind in types), None)
+    mime = next((kind for kind in ["x-special/gnome-copied-files", "text/uri-list", "text/plain;charset=utf-8", "text/plain", "UTF8_STRING"] if kind in types), None)
     payload = None
     if mime:
         result = subprocess.run(["wl-paste", "--no-newline", "--type", mime], env=env, capture_output=True, timeout=5)
@@ -69,7 +69,7 @@ class Session:
         pointer.terminate()
         pointer.wait(timeout=3)
 
-    def observe(self, name, expected):
+    def observe(self, name, expected, expected_any=()):
         self.move_pointer_to_title()
         # Poll rendered output, not a guessed fixed delay, until the requested
         # visible evidence appears. Keep the PNG and extracted text for review.
@@ -81,12 +81,33 @@ class Session:
                 raise RuntimeError("file manager exited during acceptance")
             text = self.capture_text(name, path, expected)
             rendered = "".join(text.lower().split())
-            return all("".join(fragment.lower().split()) in rendered for fragment in expected)
-        wait_for(visible, f"{name}: {expected}")
+            required = all("".join(fragment.lower().split()) in rendered for fragment in expected)
+            alternatives = not expected_any or any("".join(fragment.lower().split()) in rendered for fragment in expected_any)
+            return required and alternatives
+        wait_for(visible, f"{name}: {expected}; any of {expected_any}")
         (self.output / f"{name}.txt").write_text(text)
-        self.observations.append({"name": name, "screenshot": str(path), "expected_visible_text": expected})
+        self.observations.append({"name": name, "screenshot": str(path), "expected_visible_text": expected, "expected_any": list(expected_any)})
+        return text
+
+    def scroll_to_visible(self, name, expected, step=150, attempts=24, position=(1050, 600)):
+        """Find inspector evidence with bounded scrolling on the private pointer."""
+        for index in range(attempts):
+            self.move_pointer_to_title()
+            scan = f"{name}-scan-{index}"
+            text = self.capture_text(scan, self.output / f"{scan}.png", expected)
+            rendered = "".join(text.lower().split())
+            if all("".join(fragment.lower().split()) in rendered for fragment in expected):
+                self.observe(name, expected)
+                return
+            private.run_checked([
+                str(self.pointer), "scroll", "1280", "800", *map(str, position), str(step),
+            ], env=self.env)
+            time.sleep(0.5)
+        raise RuntimeError(f"Unable to find {expected} in bounded inspector scroll")
 
     def capture_text(self, name, path, expected):
+        # Niri writes asynchronously; an existing file must not satisfy readiness.
+        path.unlink(missing_ok=True)
         with preserve_file_clipboard(self.env):
             private.screenshot(self.niri, self.env, path)
         ocr_path = self.output / f"{name}-ocr.png"
@@ -102,6 +123,7 @@ class Session:
             ("listing-ocr.png", (340, 280, 1180, 710)),
             ("toolbar-ocr.png", (90, 90, 1180, 280)),
             ("player-ocr.png", (90, 610, 1180, 775)),
+            ("dialog-ocr.png", (320, 330, 960, 540)),
         ]:
             region = self.output / filename
             with Image.open(path) as screen:
@@ -130,6 +152,27 @@ class Session:
         if required:
             raise RuntimeError(f"{name}: no {text!r} in {'tree' if tree else 'listing'}")
         return None
+
+    def trash_row(self, name, path):
+        """Resolve only the full owned path, joining OCR fragments on its row."""
+        data = private.run_checked([
+            "tesseract", str(self.output / f"{name}-ocr.png"), "stdout", "--psm", "11",
+            "-c", "tessedit_create_tsv=1", "-c", "tessedit_create_txt=0",
+        ], env=self.env)
+        words = [word for word in csv.DictReader(io.StringIO(data), delimiter="\t", quoting=csv.QUOTE_NONE)
+                 if word['text'].strip() and 330 <= int(word['left']) // 3 < 960
+                 and int(word['top']) // 3 >= 400]
+        wanted = str(path)
+        for word in words:
+            y = (int(word['top']) + int(word['height']) / 2) / 3
+            row = sorted((other for other in words
+                          if abs((int(other['top']) + int(other['height']) / 2) / 3 - y) < 5),
+                         key=lambda other: int(other['left']))
+            rendered = ''.join(other['text'] for other in row)
+            if wanted in rendered:
+                self.output.joinpath('verified-trash-source.txt').write_text(str(path))
+                return int(row[0]['left']) // 3 + 12, round(y)
+        raise RuntimeError(f"{name}: no verified Trash row for owned fixture {path}")
 
 
 def fixtures(output):
@@ -219,6 +262,8 @@ def phase2(session, root):
     (working / "beta").write_text("beta data")
     session.address(working)
     session.observe("22-operation-list", ["alpha", "beta", "2 items"])
+    # Rich preview rows need the browser space occupied by the open Shelf.
+    session.click(848, 202)
     session.click(140, 160)
     session.observe("23-create-dialog", ["Name:", "New folder"])
     private.run_checked(["wtype", "Organized"], env=session.env)
@@ -275,15 +320,15 @@ def phase2(session, root):
     x, y = session.word("37-moved", "renamed")
     session.click(x + 10, y)
     session.key("Delete")
-    session.observe("38-trash-confirmation", ["Move to Trash?", "1 selected items"])
+    session.observe("38-trash-confirmation", ["Move to Trash?", "1 selected", "Enter confirms"])
     session.key("Return")
     wait_for(lambda: not (working / "Organized/renamed").exists(), "trash")
     session.observe("39-trashed", ["2 items"])
     session.click(630, 202)
-    session.observe("40-trash-browser", ["Restore selected", str(working / "Organized/renamed")])
-    # The first and only isolated Trash entry is below its toolbar/help text.
-    x, y = session.word("40-trash-browser", "renamed", minimum_y=200, suffix=True)
-    session.click(x + 12, y)
+    session.observe("40-trash-browser", ["Restore returns files", "renamed"])
+    # Mounted-volume trash can contain unrelated records: select only our full path.
+    x, y = session.trash_row("40-trash-browser", working / "Organized/renamed")
+    session.click(x, y)
     session.observe("41-trash-selected", ["Restore selected"])
     x, y = session.word("41-trash-selected", "Restore", tree=True, minimum_y=200)
     session.click(x + 150, y - 34)

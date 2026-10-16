@@ -135,8 +135,25 @@ pub(super) fn write_unique_midi_export(
     slice_dir: &std::path::Path,
     filename: &str,
     bytes: &[u8],
+) -> Result<(PathBuf, std::fs::File), String> {
+    let directory = little_clip_core::kernel_interface::create_content_directory(slice_dir)
+        .map_err(|error| format!("Failed to create MIDI export directory: {error}"))?;
+    let path = write_unique_midi_export_in(&directory, filename, bytes)?;
+    Ok((path, directory))
+}
+
+pub(super) fn write_unique_midi_export_in(
+    directory: &std::fs::File,
+    filename: &str,
+    bytes: &[u8],
 ) -> Result<PathBuf, String> {
-    let base_path = slice_dir.join(filename);
+    use std::{os::fd::AsRawFd, path::Path};
+    let base_path = Path::new(filename);
+    if base_path.file_name() != Some(std::ffi::OsStr::new(filename)) {
+        return Err("Enter one MIDI export filename".into());
+    }
+    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let parent = std::fs::read_link(&anchor).map_err(|error| error.to_string())?;
     let stem = base_path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -146,27 +163,28 @@ pub(super) fn write_unique_midi_export(
         .and_then(|value| value.to_str())
         .unwrap_or("mid");
 
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(&anchor).map_err(|error| error.to_string())?;
+    temporary
+        .write_all(bytes)
+        .map_err(|error| error.to_string())?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
     for suffix in 0u32.. {
-        let path = if suffix == 0 {
-            base_path.clone()
+        let name = if suffix == 0 {
+            filename.to_owned()
         } else {
-            slice_dir.join(format!("{stem}_{suffix}.{extension}"))
+            format!("{stem}_{suffix}.{extension}")
         };
-        let mut file = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+        match temporary.persist_noclobber(anchor.join(&name)) {
+            Ok(_) => return Ok(std::fs::read_link(&anchor).unwrap_or(parent).join(name)),
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                temporary = error.file;
+            }
             Err(error) => return Err(format!("Failed to write MIDI file: {error}")),
-        };
-        if let Err(error) = file.write_all(bytes) {
-            drop(file);
-            let _ = std::fs::remove_file(&path);
-            return Err(format!("Failed to write MIDI file: {error}"));
         }
-        return Ok(path);
     }
     unreachable!("u32 collision suffix space exhausted")
 }
@@ -192,14 +210,6 @@ pub(super) fn write_midi_export(
         return Err("MIDI export cancelled".to_string());
     }
 
-    std::fs::create_dir_all(&slice_dir).map_err(|error| {
-        tracing::warn!(
-            "Failed to create midi slice directory {}: {error}",
-            slice_dir.display()
-        );
-        format!("Failed to create slice directory: {error}")
-    })?;
-
     let track_suffix = solo_track.map_or_else(String::new, |track| {
         let name = data
             .track_names
@@ -216,10 +226,11 @@ pub(super) fn write_midi_export(
     if cancelled.load(Ordering::Acquire) {
         return Err("MIDI export cancelled".to_string());
     }
-    let path = write_unique_midi_export(&slice_dir, &filename, &midi_bytes)?;
+    let (path, directory) = write_unique_midi_export(&slice_dir, &filename, &midi_bytes)?;
 
     let artifact = MidiExportArtifact {
         path,
+        directory,
         total_notes: sliced_data.total_notes,
         duration_sec: end_sec - start_sec,
         is_slice,

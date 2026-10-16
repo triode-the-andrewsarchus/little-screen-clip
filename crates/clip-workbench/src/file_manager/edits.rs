@@ -4,7 +4,6 @@ use std::ffi::{CString, OsString};
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -49,6 +48,7 @@ struct NamingOperation {
 
 struct PendingEdit {
     operation: NamingOperation,
+    admission: super::system_route::Admission,
     receiver: Option<mpsc::Receiver<Result<Result<PathBuf, String>, JobError>>>,
 }
 
@@ -71,7 +71,9 @@ impl FileManager {
     }
 
     pub(super) fn can_edit(&self) -> bool {
-        self.directory.is_some()
+        self.directory
+            .as_ref()
+            .is_some_and(|directory| !directory.system)
             && self.pending.is_none()
             && !self.filesystem_busy()
             && self.edits.dialog.is_none()
@@ -152,6 +154,7 @@ impl FileManager {
                 selection_revision: self.selection_revision,
             },
             receiver: None,
+            admission: super::system_route::Admission::default(),
         });
         self.edits.dialog = None;
         self.edits.report = None;
@@ -162,6 +165,16 @@ impl FileManager {
             return;
         }
         if let Some(pending) = &mut self.edits.pending {
+            let operation = pending.operation.clone();
+            match pending.admission.poll(jobs, move || operation.preflight()) {
+                Ok(false) => return,
+                Ok(true) => {}
+                Err(error) => {
+                    let pending = self.edits.pending.take().expect("failed admission");
+                    self.finish_edit(pending.operation, Err(error));
+                    return;
+                }
+            }
             if pending.receiver.is_none() {
                 let operation = pending.operation.clone();
                 // A post-operation timeout would discard the result of a mutation
@@ -320,30 +333,65 @@ pub(super) fn parse_name(text: &str) -> Result<OsString, String> {
 }
 
 impl NamingOperation {
-    fn execute(&self) -> Result<PathBuf, String> {
-        if let NamingAction::Content(content) = &self.action {
-            let staging = tempfile::Builder::new()
-                .prefix(".little-clip-copy-")
-                .tempdir_in(&self.parent)
-                .map_err(|e| e.to_string())?;
-            let staged = staging.path().join("content");
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&staged)
-                .map_err(|e| e.to_string())?;
-            file.write_all(&content.bytes)
-                .and_then(|_| file.sync_all())
-                .map_err(|e| e.to_string())?;
-            let target = self.parent.join(&self.name);
-            super::filesystem::rename_noreplace(&staged, &target).map_err(|e| e.to_string())?;
-            return Ok(target);
+    fn preflight(&self) -> Result<(), String> {
+        little_clip_core::kernel_interface::require_content(&self.parent)
+            .map_err(|e| e.to_string())?;
+        if let NamingAction::Rename(source) = &self.action {
+            if source.parent() != Some(self.parent.as_path()) {
+                return Err("Rename source is outside the captured folder".into());
+            }
+            super::system_route::tree(source, &std::sync::atomic::AtomicBool::new(false))?;
         }
-        let directory = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
-            .open(&self.parent)
-            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    fn stage_content(
+        &self,
+        content: &super::content::Content,
+        directory: &std::fs::File,
+    ) -> Result<PathBuf, String> {
+        // Keep both directories anchored until staging cleanup and installation finish.
+        let parent = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+        let staging = tempfile::Builder::new()
+            .prefix(".little-clip-copy-")
+            .tempdir_in(&parent)
+            .map_err(|e| e.to_string())?;
+        let stage = little_clip_core::kernel_interface::pin(staging.path(), false)
+            .map_err(|e| e.to_string())?;
+        if !stage.metadata().map_err(|e| e.to_string())?.is_dir()
+            || little_clip_core::kernel_interface::classify_handle(&stage)
+                .map_err(|e| e.to_string())?
+                .protected()
+        {
+            return Err("Captured-content staging directory changed or is protected".into());
+        }
+        let staged = PathBuf::from(format!("/proc/self/fd/{}", stage.as_raw_fd())).join("content");
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged)
+            .map_err(|e| e.to_string())?;
+        file.write_all(&content.bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        let target = self.parent.join(&self.name);
+        super::filesystem::rename_at_noreplace(
+            stage.as_raw_fd(),
+            std::ffi::OsStr::new("content"),
+            directory.as_raw_fd(),
+            &self.name,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(target)
+    }
+
+    fn execute(&self) -> Result<PathBuf, String> {
+        self.preflight()?;
+        let directory = little_clip_core::kernel_interface::pin_content_directory(&self.parent)
+            .map_err(|e| e.to_string())?;
+        if let NamingAction::Content(content) = &self.action {
+            return self.stage_content(content, &directory);
+        }
         let name = CString::new(self.name.as_bytes()).map_err(|error| error.to_string())?;
         let fd = directory.as_raw_fd();
         let result = match &self.action {
@@ -376,6 +424,12 @@ impl NamingOperation {
                     return Err("Rename source is outside the captured folder".into());
                 }
                 let source_name = source.file_name().ok_or("Missing source name")?;
+                let anchored_source =
+                    PathBuf::from(format!("/proc/self/fd/{fd}")).join(source_name);
+                super::system_route::tree(
+                    &anchored_source,
+                    &std::sync::atomic::AtomicBool::new(false),
+                )?;
                 super::filesystem::rename_at_noreplace(fd, source_name, fd, &self.name)
                     .map_err(|e| e.to_string())?;
                 0
@@ -403,6 +457,59 @@ fn relocate(path: &mut PathBuf, source: &Path, destination: &Path) -> bool {
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+    #[test]
+    fn captured_content_creation_keeps_exact_bytes_and_never_overwrites_or_leaks_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let bytes = b"captured\0snapshot\r\n";
+        let content =
+            super::super::content::Content::capture(bytes.to_vec(), "text/plain").unwrap();
+        let operation = NamingOperation {
+            action: NamingAction::Content(content),
+            parent: root.path().into(),
+            name: "snapshot.txt".into(),
+            selection_revision: 0,
+        };
+        let path = operation.execute().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+        std::fs::write(&path, b"existing content").unwrap();
+        assert!(operation.execute().is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing content");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn captured_content_stays_in_the_validated_parent_after_path_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let moved = temp.path().join("moved");
+        let redirected = temp.path().join("redirected");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::create_dir(&redirected).unwrap();
+        let content =
+            super::super::content::Content::capture(b"captured snapshot".to_vec(), "text/plain")
+                .unwrap();
+        let operation = NamingOperation {
+            action: NamingAction::Content(content.clone()),
+            parent: parent.clone(),
+            name: "snapshot.txt".into(),
+            selection_revision: 0,
+        };
+        operation.preflight().unwrap();
+        let directory = std::fs::File::open(&parent).unwrap();
+        std::fs::rename(&parent, &moved).unwrap();
+        symlink(&redirected, &parent).unwrap();
+        operation.stage_content(&content, &directory).unwrap();
+        assert!(
+            !redirected.join("snapshot.txt").exists(),
+            "parent replacement redirected the accepted write"
+        );
+        assert_eq!(
+            std::fs::read(moved.join("snapshot.txt")).unwrap(),
+            b"captured snapshot"
+        );
+        assert_eq!(std::fs::read_dir(&redirected).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 1);
+    }
     #[test]
     fn names_round_trip_bytes_and_reject_paths() {
         for invalid in ["", ".", "..", "../escape", "a/b", "\\x00"] {
@@ -438,5 +545,60 @@ mod tests {
             .unwrap();
         assert!(!source.exists());
         assert_eq!(std::fs::read(renamed).unwrap(), b"keep");
+    }
+    #[test]
+    fn naming_tick_rejects_protected_destination_before_mutation_submission() {
+        let root = tempfile::tempdir().unwrap();
+        let alias = root.path().join("kernel");
+        symlink("/sys", &alias).unwrap();
+        let content =
+            super::super::content::Content::capture(b"snapshot".to_vec(), "text/plain").unwrap();
+        for action in [
+            NamingAction::Folder,
+            NamingAction::File,
+            NamingAction::Content(content),
+        ] {
+            let mut manager = FileManager::new(root.path().into());
+            manager.edits.dialog = Some(NameDialog {
+                action,
+                parent: alias.clone(),
+                name: "admission-test".into(),
+                error: None,
+                focus: false,
+            });
+            manager.submit_naming();
+            let jobs = BackgroundJobs::new(1, 2);
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while manager.edit_busy() {
+                manager.tick_edits(&jobs);
+                if let Some(pending) = &manager.edits.pending {
+                    assert!(pending.receiver.is_none());
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert!(manager.edits.report.as_ref().unwrap().failed);
+            assert!(manager.edits.dialog.as_ref().unwrap().error.is_some());
+        }
+    }
+
+    #[test]
+    fn rename_preflight_checks_descendants_and_execution_rechecks_source() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("folder");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("ordinary"), b"kept").unwrap();
+        let operation = NamingOperation {
+            action: NamingAction::Rename(source.clone()),
+            parent: root.path().into(),
+            name: "renamed".into(),
+            selection_revision: 0,
+        };
+        operation.preflight().unwrap();
+        symlink("/proc/uptime", source.join("kernel")).unwrap();
+        assert!(operation.preflight().is_err());
+        assert!(operation.execute().is_err());
+        assert!(!root.path().join("renamed").exists());
+        assert_eq!(std::fs::read(source.join("ordinary")).unwrap(), b"kept");
     }
 }

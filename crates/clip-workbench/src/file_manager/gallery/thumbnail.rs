@@ -117,7 +117,8 @@ fn raw_preview(
         let output = little_clip_core::process::CommandRequest::new("exiftool")
             .arg("-b")
             .arg(tag)
-            .arg(path)
+            .arg_content_file(path)
+            .ok()?
             .timeout(Duration::from_secs(5))
             .max_output_bytes(16 * 1024 * 1024)
             .run()

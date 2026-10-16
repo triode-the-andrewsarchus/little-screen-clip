@@ -1,7 +1,10 @@
 """Integration checks for native objects and independently searchable PDF OCR."""
 import hashlib
 import io
+import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +16,32 @@ from pdf_document import image_png, page_layout, searchable_pdf, matching_ocr_co
 
 
 class PdfDocumentTests(unittest.TestCase):
+    def test_ocr_passes_an_inherited_staging_directory_to_tesseract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            with pdf.open() as document:
+                page = document.new_page(width=400, height=200)
+                page.insert_text((30, 60), "Native words remain", fontsize=24)
+                document.save(source)
+            descriptor = os.open(root, os.O_PATH | os.O_DIRECTORY)
+            source_descriptor = os.open(source, os.O_RDONLY)
+            try:
+                output = Path(f"/proc/self/fd/{descriptor}/searchable.pdf")
+                result = subprocess.run(
+                    [sys.executable, str(Path(__file__).with_name("pdf_document.py")),
+                     "ocr", f"/proc/self/fd/{source_descriptor}", str(output), "--language", "eng"],
+                    pass_fds=(descriptor, source_descriptor), capture_output=True, text=True, timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+            finally:
+                os.close(source_descriptor)
+                os.close(descriptor)
+            with pdf.open(root / "searchable.pdf") as result:
+                self.assertIn("Native words remain", result[0].get_text())
+                self.assertTrue(page_layout(result[0])["ocr_complete"])
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["searchable.pdf", "source.pdf"])
+
     def test_layout_preserves_unicode_byte_offsets_and_rotated_crop_coordinates(self):
         with pdf.open() as document:
             page = document.new_page(width=400, height=300)

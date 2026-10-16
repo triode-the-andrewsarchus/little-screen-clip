@@ -30,6 +30,104 @@ fn loaded(path: &Path) -> (FileManager, BackgroundJobs) {
     (manager, jobs)
 }
 
+fn system_reveal_fixture(
+    same_folder: bool,
+) -> (
+    tempfile::TempDir,
+    FileManager,
+    BackgroundJobs,
+    PathBuf,
+    PathBuf,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("first");
+    let second = if same_folder {
+        first.clone()
+    } else {
+        temp.path().join("second")
+    };
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    let original = first.join("original");
+    let target = second.join(".target");
+    std::fs::write(&original, b"original").unwrap();
+    std::fs::write(&target, b"target").unwrap();
+    let (mut manager, jobs) = loaded(&first);
+    manager.select(original.clone());
+    (temp, manager, jobs, original, target)
+}
+
+#[test]
+fn system_reveal_preserves_browser_history_and_selects_target() {
+    let (_temp, mut manager, jobs, original, target) = system_reveal_fixture(false);
+    let first = original.parent().unwrap();
+    let second = target.parent().unwrap();
+    manager.location_mut().unwrap().scroll = 125.0;
+    let alias = _temp.path().join("directory-alias");
+    symlink(second, &alias).unwrap();
+    manager.browse_system_target(
+        system::BrowserTarget::new(system::Relation::new(
+            "aliased target",
+            alias.join(".target"),
+        ))
+        .unwrap(),
+    );
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.path(), second);
+    assert_eq!(manager.location().unwrap().selected.as_ref(), Some(&target));
+    assert!(manager.show_hidden);
+    assert!(manager.reveal_selection);
+    manager.history_step(false);
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.path(), first);
+    assert_eq!(
+        manager.location().unwrap().selected.as_ref(),
+        Some(&original)
+    );
+    assert_eq!(manager.location().unwrap().scroll, 125.0);
+    manager.browse_system_target(
+        system::BrowserTarget::new(system::Relation::new("target", original.clone())).unwrap(),
+    );
+    finish(&mut manager, &jobs);
+    assert_eq!(
+        manager.location().unwrap().selected.as_ref(),
+        Some(&original)
+    );
+}
+
+#[test]
+fn replaced_system_reveal_does_not_commit_navigation_or_selection() {
+    for same_folder in [false, true] {
+        let (_temp, mut manager, jobs, original, target) = system_reveal_fixture(same_folder);
+        let first = original.parent().unwrap();
+        let second = target.parent().unwrap();
+        let captured =
+            system::BrowserTarget::new(system::Relation::new("target", target.clone())).unwrap();
+        manager.browse_system_target(captured);
+        std::fs::rename(&target, second.join("previous")).unwrap();
+        std::fs::write(&target, b"replacement").unwrap();
+        finish(&mut manager, &jobs);
+        assert!(manager.error.is_some());
+        assert!(
+            manager.failed.is_none(),
+            "retry must not drop the relationship guard"
+        );
+        assert!(manager.reveal_target.is_none());
+        for retry in [false, true] {
+            if retry {
+                manager.retry();
+                finish(&mut manager, &jobs);
+            }
+            let location = manager.location().unwrap();
+            assert_eq!(manager.path(), first);
+            assert_eq!(manager.history.len(), 1);
+            assert_eq!(location.selected.as_ref(), Some(&original));
+            assert_eq!(location.anchor.as_ref(), Some(&original));
+            assert_eq!(location.selection, BTreeSet::from([original.clone()]));
+        }
+    }
+}
+
 fn paused_directory(path: &Path, jobs: &BackgroundJobs) -> (DirectoryJob, mpsc::Sender<()>) {
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
@@ -491,6 +589,7 @@ fn stale_published_completion_cannot_replace_a_new_request() {
     let (sender, receiver) = mpsc::channel();
     sender.send(Ok(Ok(directory))).unwrap();
     manager.pending = Some(Request {
+        browser_target: None,
         path: old,
         navigation: Navigation::New,
         job: Some(DirectoryJob {
@@ -640,6 +739,7 @@ fn stalled_directory_worker_leaves_address_navigation_responsive() {
     let (mut manager, jobs) = loaded(temp.path());
     let (job, release_tx) = paused_directory(temp.path(), &jobs);
     manager.pending = Some(Request {
+        browser_target: None,
         path: temp.path().join("stalled"),
         navigation: Navigation::New,
         job: Some(job),
@@ -729,6 +829,7 @@ fn background_completion_preserves_an_in_progress_address_edit() {
     let (mut manager, jobs, ctx) = rendered(temp.path());
     let (job, release_tx) = paused_directory(temp.path(), &jobs);
     manager.pending = Some(Request {
+        browser_target: None,
         path: temp.path().into(),
         navigation: Navigation::Refresh,
         job: Some(job),

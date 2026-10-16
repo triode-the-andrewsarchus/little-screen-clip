@@ -76,55 +76,21 @@ impl PdfEditorState {
         }
         let input = self.path.clone();
         let output = self.sibling_output_path(operation);
-        let output_dir = output
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        let staging_dir = match tempfile::tempdir_in(output_dir) {
-            Ok(dir) => dir,
-            Err(error) => {
-                self.status_toast
-                    .set(format!("Could not stage PDF edit: {error}"), now);
-                return;
-            }
-        };
         let expected_page_count = self
             .page_count
             .saturating_sub(usize::from(operation == "delete"));
         let protect_outputs = self.protect_outputs;
         let (ticket, rx) = jobs.submit(Duration::MAX, move || {
-            let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
-            let source = if protect_outputs {
-                crate::file_source::FileSource::capture(&input).map(Some)
-            } else {
-                Ok(None)
-            };
-            let result = source
-                .and_then(|source| {
-                    perform_edit(&input, &staged_output)?;
-                    if let Some(source) = source {
-                        source.check()?;
-                    }
-                    Ok(())
-                })
-                .and_then(|()| {
-                    if !staged_output.is_file() {
-                        return Err("PDF operation produced no output file".to_string());
-                    }
-                    let info = get_pdf_info(&staged_output)?;
-                    if info.page_count != expected_page_count {
-                        return Err(format!(
-                            "Edited PDF has {} pages; expected {}",
-                            info.page_count, expected_page_count
-                        ));
-                    }
-                    render_pdf_page_preview(&staged_output, 1, 64).map(|_| ())
-                });
+            let result = super::output::PdfOutput::generate(
+                &input,
+                &output,
+                expected_page_count,
+                protect_outputs,
+                perform_edit,
+            );
             PdfEditMsg {
                 operation,
                 page_num,
-                output,
-                staging_dir,
                 result,
             }
         });
@@ -177,17 +143,14 @@ impl PdfEditorState {
             self.edit_rx = None;
             self.edit_ticket = None;
             self.edit_in_progress = false;
-            let result = message.result.and_then(|()| {
-                self.publish_output(
-                    &message.staging_dir.path().join(STAGED_PDF_FILENAME),
-                    &message.output,
-                )
-            });
-            match result {
-                Ok(()) => {
+            match message
+                .result
+                .and_then(|output| output.publish(self.protect_outputs))
+            {
+                Ok(output) => {
                     self.reset_navigation();
                     self.document_tools.invalidate_layout();
-                    self.path = message.output;
+                    self.path = output;
                     self.title = self
                         .path
                         .file_name()

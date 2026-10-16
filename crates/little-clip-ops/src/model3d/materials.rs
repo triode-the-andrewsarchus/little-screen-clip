@@ -1,7 +1,5 @@
 //! Bounded Wavefront material libraries shared by mesh and file previews.
 use std::{
-    collections::HashMap,
-    fs::File,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
 };
@@ -35,7 +33,8 @@ pub fn is_material_file(path: &Path) -> bool {
 
 pub fn load(path: &Path) -> Result<Vec<Material>, String> {
     const MAX_BYTES: u64 = 2 * 1024 * 1024;
-    let file = File::open(path).map_err(|error| error.to_string())?;
+    let file = little_clip_core::kernel_interface::open_content(path, true)
+        .map_err(|error| error.to_string())?;
     let mut bytes = Vec::new();
     file.take(MAX_BYTES + 1)
         .read_to_end(&mut bytes)
@@ -95,7 +94,8 @@ fn convert(source: tobj::Material, base: &Path) -> Material {
 /// Finds library declarations using the same filename-with-spaces rule as tobj.
 pub(super) fn obj_libraries(path: &Path) -> Result<Vec<PathBuf>, String> {
     let base = path.parent().unwrap_or_else(|| Path::new("."));
-    let file = File::open(path).map_err(|error| error.to_string())?;
+    let file = little_clip_core::kernel_interface::open_content(path, true)
+        .map_err(|error| error.to_string())?;
     let mut paths = Vec::new();
     for line in BufReader::new(file).lines() {
         let line = line.map_err(|error| error.to_string())?;
@@ -108,14 +108,4 @@ pub(super) fn obj_libraries(path: &Path) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(paths)
-}
-
-pub(super) fn obj_materials(path: &Path) -> HashMap<String, Material> {
-    obj_libraries(path)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|path| load(&path).ok())
-        .flatten()
-        .map(|material| (material.name.clone(), material))
-        .collect()
 }

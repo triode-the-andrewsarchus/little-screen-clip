@@ -133,7 +133,8 @@ fn generate(
     progress: &mpsc::SyncSender<ImageThumbnail>,
 ) -> Result<(), String> {
     let mut command = CommandRequest::new(helper().into_os_string())
-        .arg(path.as_os_str())
+        .arg_content_file(path)
+        .map_err(|error| error.to_string())?
         .arg("--fast")
         .arg("--timeline")
         .arg(output.as_os_str())
@@ -168,7 +169,8 @@ fn generate(
         );
         command = CommandRequest::new("ffmpeg")
             .args(["-v", "error", "-skip_frame", "nokey", "-threads", "2", "-i"])
-            .arg(path.as_os_str())
+            .arg_content_file(path)
+            .map_err(|error| error.to_string())?
             .args([
                 "-map",
                 &format!("0:v:{}", metadata.stream),
@@ -239,14 +241,14 @@ fn generate_indexed(
         if token.load(std::sync::atomic::Ordering::Acquire) {
             break;
         }
-        let mut command = CommandRequest::new(helper.as_os_str())
-            .arg(path.as_os_str())
-            .arg(output.as_os_str())
-            .args([
-                &width.to_string(),
-                &metadata.stream.to_string(),
-                &metadata.duration_ms.to_string(),
-            ]);
+        let Ok(command) = CommandRequest::new(helper.as_os_str()).arg_content_file(path) else {
+            return false;
+        };
+        let mut command = command.arg(output.as_os_str()).args([
+            &width.to_string(),
+            &metadata.stream.to_string(),
+            &metadata.duration_ms.to_string(),
+        ]);
         command = command.args(["--workers", &policy.workers(gpu).to_string()]);
         if std::env::var("LITTLE_CLIP_VIDEO_IO").is_ok_and(|mode| mode == "uring") {
             command = command.arg("--io-uring");

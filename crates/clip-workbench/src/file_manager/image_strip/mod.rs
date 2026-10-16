@@ -145,7 +145,8 @@ fn difference_hash(image: &image::RgbaImage) -> String {
 fn exact_hash(path: &Path, cancelled: &AtomicBool) -> Option<String> {
     let output = little_clip_core::process::CommandRequest::new("sha256sum")
         .arg("--")
-        .arg(path.as_os_str())
+        .arg_content_file(path)
+        .ok()?
         .timeout(Duration::from_secs(10))
         .run_cancellable(cancelled)
         .ok()?;

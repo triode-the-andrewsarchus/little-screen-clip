@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -28,6 +29,7 @@ chrono = "0.4"
 calamine = "0.36.1"
 midly = "0.5"
 scenix-loader = "1.5.0"
+gltf = "1.4"
 scenix-mesh = "1.5.0"
 ufbx = "0.11.5"
 tobj = "4.0"

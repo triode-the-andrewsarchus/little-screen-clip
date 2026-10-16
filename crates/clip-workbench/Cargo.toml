@@ -35,6 +35,7 @@ tiny-skia = { workspace = true }
 fontdue = { workspace = true }
 ttf-parser = "0.25"
 wuff = "0.2.9"
+udev = "0.9.3"
 syntect = { workspace = true }
 unicode-width = "0.2.2"
 regex = { workspace = true }
@@ -55,3 +56,6 @@ sha2 = "0.10"
 [dev-dependencies]
 rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
 filmr-pinned = { package = "filmr", git = "https://github.com/W-Mai/filmr", rev = "fee388e213dd77bfe6977b63071b1c136213373a", default-features = false }
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+raw-cpuid = "11.6.0"

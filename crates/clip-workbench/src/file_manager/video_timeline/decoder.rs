@@ -5,7 +5,7 @@ use std::{
     io::{Read, Write},
     os::fd::AsRawFd,
     path::Path,
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -27,8 +27,12 @@ impl Decoder {
             .min((width * 2 / 3) as f64 / metadata.dimensions.1 as f64);
         let width = (metadata.dimensions.0 as f64 * scale).round().max(1.0) as u32;
         let height = (metadata.dimensions.1 as f64 * scale).round().max(1.0) as u32;
-        let mut command = Command::new(backend::helper());
-        command.arg(path).args([
+        let mut command =
+            little_clip_core::process::CommandRequest::new(backend::helper().into_os_string())
+                .arg_content_file(path)
+                .map_err(|error| error.to_string())?
+                .build_command();
+        command.args([
             "--preview-server",
             "--width",
             &width.to_string(),

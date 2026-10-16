@@ -42,7 +42,9 @@ import json,os,sys,subprocess,time
 from pathlib import Path
 with open(os.environ['FILES_TEST_WIDTH_LOG'],'a') as f:
     f.write(json.dumps(sys.argv[1:])+'\\n')
-result = subprocess.run([os.environ['FILES_TEST_NATIVE']]+sys.argv[1:], timeout=10)
+source = sys.argv[1]
+fds = (int(source.rsplit('/',1)[1]),) if source.startswith('/proc/self/fd/') else ()
+result = subprocess.run([os.environ['FILES_TEST_NATIVE']]+sys.argv[1:], timeout=10, pass_fds=fds)
 if result.returncode:
     sys.exit(result.returncode)
 preview = Path(sys.argv[sys.argv.index('--progressive')+1])
@@ -66,8 +68,10 @@ def main():
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     folder = output / "videos"
     folder.mkdir()
+    # Keep the frame 16:9: a 30:1 fixture makes its full-height thumbnail
+    # consume ~2,000 pixels and leaves too little room for the 3,000-column check.
     subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
-                    "color=black:size=1920x64:rate=128/601,geq=r='mod(N,3)*100':g='mod(N+1,3)*100':b='mod(N+2,3)*100'",
+                    "color=black:size=640x360:rate=128/601,geq=r='mod(N,3)*100':g='mod(N+1,3)*100':b='mod(N+2,3)*100'",
                     "-frames:v", "128", "-c:v", "libx264", "-qp", "0", "-g", "1",
                     "-threads", "2", "-pix_fmt", "yuv420p", str(folder / "colors.mp4")], check=True)
     runner_args = private.create_parser().parse_args([
@@ -99,12 +103,17 @@ def main():
             private.wait_for_app_window(config["niri_bin"], env, process, output)
             private.run_checked([str(config["niri_bin"]), "msg", "action", "set-window-width", "3500"], env=env)
             private.run_checked([str(config["niri_bin"]), "msg", "action", "move-floating-window", "-x", "150", "-y", "400"], env=env)
+            (output / f"outputs-{factor}.json").write_text(private.run_checked(
+                [str(config["niri_bin"]), "msg", "--json", "outputs"], env=env))
+            (output / f"windows-{factor}.json").write_text(private.run_checked(
+                [str(config["niri_bin"]), "msg", "--json", "windows"], env=env))
             wait_for(lambda: width_log.exists() and any(int(json.loads(line)[2]) >= 3000 / factor
                      for line in width_log.read_text().splitlines()), "4K target-width helper request")
             screenshot = output / f"strip-{factor}.png"
             painted = None
             def capture_ready():
                 nonlocal painted
+                screenshot.unlink(missing_ok=True)
                 with preserve_file_clipboard(env):
                     private.screenshot(config["niri_bin"], env, screenshot)
                 try:

@@ -134,7 +134,10 @@ impl FileManagerApp {
                 (path.clone(), identity)
             })
             .collect();
-        match native.start(identities, ctx.input(|i| i.modifiers.ctrl)) {
+        match native.start(
+            identities,
+            payload.copy_only || ctx.input(|i| i.modifiers.ctrl),
+        ) {
             Ok(true) => {
                 egui::DragAndDrop::clear_payload(ctx);
             }
@@ -154,8 +157,12 @@ impl FileManagerApp {
                 self.browser.previews.retire();
                 self.browser.music_previews.retire();
                 if self.viewers.ui(ui, &self.palette) {
-                    self.browser.refresh_after_transfer = true;
-                    self.browser.restore_scroll = true;
+                    if let Some(target) = self.viewers.take_system_navigation() {
+                        self.browser.browse_system_target(target);
+                    } else {
+                        self.browser.refresh_after_transfer = true;
+                        self.browser.restore_scroll = true;
+                    }
                 }
             } else {
                 self.browser.ui(ui, &self.palette);
@@ -183,7 +190,18 @@ impl FileManagerApp {
                         .video_start
                         .take()
                         .filter(|(source, _)| source == &path);
-                    if let Some((_, page)) = pdf_start {
+                    let explicit_inspection =
+                        self.browser.inspect_file.take().as_ref() == Some(&path);
+                    let system = explicit_inspection
+                        || self.browser.directory.as_ref().is_some_and(|directory| {
+                            directory
+                                .entries
+                                .iter()
+                                .any(|entry| entry.path == path && entry.system.is_some())
+                        });
+                    if system {
+                        self.viewers.open_system(path);
+                    } else if let Some((_, page)) = pdf_start {
                         self.viewers.open_pdf_at(path, page);
                     } else if let Some((_, line)) = text_start {
                         self.viewers.open_text_at(path, line);
@@ -318,4 +336,10 @@ pub fn run(initial: Option<PathBuf>) -> Result<(), eframe::Error> {
         options,
         Box::new(move |cc| Box::new(FileManagerApp::new(cc, initial))),
     )
+}
+
+impl Drop for FileManagerApp {
+    fn drop(&mut self) {
+        super::system::shutdown();
+    }
 }

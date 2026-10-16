@@ -57,6 +57,7 @@ struct Source {
     cancelled: Arc<AtomicBool>,
     written: Arc<AtomicBool>,
     action: Action,
+    movable: bool,
 }
 struct State {
     surface: wl_surface::WlSurface,
@@ -209,10 +210,11 @@ impl NativeDrag {
             .expect("device has manager")
             .create_data_source(&self.queue.handle(), ());
         source.offer(MIME.into());
-        source.set_actions(if copy || identities.values().any(Option::is_none) {
-            Action::Copy
-        } else {
+        let movable = !copy && identities.values().all(Option::is_some);
+        source.set_actions(if movable {
             Action::Copy | Action::Move
+        } else {
+            Action::Copy
         });
         device.start_drag(Some(&source), &self.state.surface, None, serial);
         self.state.source = Some(Source {
@@ -223,6 +225,7 @@ impl NativeDrag {
             cancelled: Arc::new(AtomicBool::new(false)),
             written: Arc::new(AtomicBool::new(false)),
             action: Action::Copy,
+            movable,
         });
         self.state.release_pointer = true;
         let _ = self.connection.flush();

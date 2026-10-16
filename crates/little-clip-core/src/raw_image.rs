@@ -37,7 +37,8 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
         let out = CommandRequest::new("exiftool")
             .arg("-b")
             .arg(tag)
-            .arg(path)
+            .arg_content_file(path)
+            .map_err(|e| e.to_string())?
             .max_output_bytes(16 * 1024 * 1024)
             .run();
 
@@ -52,7 +53,8 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
 
     // 2. Fallback to ImageMagick
     let out = CommandRequest::new("magick")
-        .arg(format!("{}[0]", path.to_string_lossy()))
+        .arg_content_file_with_suffix(path, "[0]")
+        .map_err(|e| e.to_string())?
         .arg("-resize")
         .arg("1600x1200>")
         .arg("jpeg:-")

@@ -6,17 +6,22 @@
 
 #[path = "model3d/fbx.rs"]
 mod fbx;
+#[path = "model3d/inputs.rs"]
+mod inputs;
 #[path = "model3d/materials.rs"]
 pub mod materials;
 
 use std::collections::HashMap;
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileRevision {
+    device: u64,
+    inode: u64,
     modified: SystemTime,
     len: u64,
 }
@@ -131,8 +136,19 @@ fn model_retained_bytes(model: &Model3d) -> usize {
 }
 
 fn file_revision(path: &Path) -> Option<FileRevision> {
-    let metadata = std::fs::metadata(path).ok()?;
+    let pinned = little_clip_core::kernel_interface::pin(path, true).ok()?;
+    if little_clip_core::kernel_interface::classify_handle(&pinned).ok()?
+        != little_clip_core::kernel_interface::Kind::Content
+    {
+        return None;
+    }
+    let metadata = pinned.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
     Some(FileRevision {
+        device: metadata.dev(),
+        inode: metadata.ino(),
         modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
         len: metadata.len(),
     })
@@ -163,7 +179,7 @@ fn model_cache_identity(path: &Path) -> Option<ModelCacheIdentity> {
 
 fn gltf_dependencies(path: &Path) -> Option<Vec<(PathBuf, FileRevision)>> {
     let mut dependencies = Vec::new();
-    let source_bytes = std::fs::read(path).ok()?;
+    let source_bytes = little_clip_core::kernel_interface::read_content(path).ok()?;
     let document: serde_json::Value = serde_json::from_slice(&source_bytes).ok()?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("./"));
     for dependency_group in ["buffers", "images"] {
@@ -426,6 +442,8 @@ impl Model3d {
     /// continuous animation / turntable rendering.
     pub fn load_cached<P: AsRef<Path>>(path: P) -> Result<Arc<Self>, String> {
         let path = path.as_ref();
+        little_clip_core::kernel_interface::require_content(path)
+            .map_err(|error| error.to_string())?;
         let path_buf = path.to_path_buf();
         let identity = model_cache_identity(path);
         {
@@ -483,17 +501,20 @@ impl Model3d {
     }
 
     fn load_stl_file(path: &Path, name: String) -> Result<Self, String> {
-        let geom = scenix_loader::stl::load(path)
+        let bytes = little_clip_core::kernel_interface::read_content(path)
+            .map_err(|error| error.to_string())?;
+        let geom = scenix_loader::stl::load_bytes(&bytes)
             .map_err(|e| format!("Failed to parse STL file: {:?}", e))?;
         let triangles = geometry_to_triangles(&geom, None);
         Self::build_mesh(name, ModelFormat::Stl, triangles)
     }
 
     fn load_obj_file(path: &Path, name: String) -> Result<Self, String> {
-        let obj_asset = scenix_loader::obj::load_with_materials(path)
+        let input = inputs::Prepared::obj(path)?;
+        let obj_asset = scenix_loader::obj::load_with_materials(input.path())
             .map_err(|e| format!("Failed to parse OBJ file: {:?}", e))?;
         let mut all_triangles = Vec::new();
-        let materials = materials::obj_materials(path);
+        let materials = input.materials();
         for (index, geom) in obj_asset.geometries.iter().enumerate() {
             let color = obj_asset.geometry_materials[index]
                 .and_then(|index| obj_asset.materials.get(index))
@@ -506,9 +527,10 @@ impl Model3d {
     }
 
     fn load_gltf_file(path: &Path, name: String) -> Result<Self, String> {
+        let input = inputs::Prepared::gltf(path)?;
         let loader = scenix_loader::GltfLoader::new();
         let gltf_asset = loader
-            .load(path)
+            .load(input.path())
             .map_err(|e| format!("Failed to parse glTF file: {:?}", e))?;
         let mut all_triangles = Vec::new();
         for geom in gltf_asset.meshes.values() {
@@ -677,11 +699,61 @@ fn geometry_to_triangles(geom: &scenix_mesh::Geometry, color: Option<[f32; 4]>) 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn direct_mesh_and_material_readers_reject_kernel_aliases() {
+        let directory = tempfile::tempdir().unwrap();
+        for extension in ["stl", "fbx"] {
+            let path = directory.path().join(format!("interface.{extension}"));
+            std::os::unix::fs::symlink("/dev/null", &path).unwrap();
+            assert!(
+                super::Model3d::load_file(&path)
+                    .err()
+                    .unwrap()
+                    .contains("inspection-only")
+            );
+        }
+        let path = directory.path().join("interface.mtl");
+        std::os::unix::fs::symlink("/proc/uptime", &path).unwrap();
+        assert!(
+            super::materials::load(&path)
+                .err()
+                .unwrap()
+                .contains("inspection-only")
+        );
+        assert!(
+            super::materials::obj_libraries(&path)
+                .err()
+                .unwrap()
+                .contains("inspection-only")
+        );
+    }
+
     use super::*;
 
+    #[test]
+    fn replaced_model_inode_does_not_reuse_cache_with_same_size_and_timestamp() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("triangle.obj");
+        std::fs::write(&path, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let first = Model3d::load_cached(&path).unwrap();
+        std::fs::rename(&path, temp.path().join("old.obj")).unwrap();
+        std::fs::write(&path, "v 0 0 0\nv 2 0 0\nv 0 2 0\nf 1 2 3\n").unwrap();
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let replacement = Model3d::load_cached(&path).unwrap();
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink("/proc/uptime", &path).unwrap();
+        assert!(Model3d::load_cached(&path).is_err());
+    }
     fn cache_identity(revision: u64) -> ModelCacheIdentity {
         ModelCacheIdentity {
             source: FileRevision {
+                device: 0,
+                inode: 0,
                 modified: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(revision),
                 len: revision,
             },

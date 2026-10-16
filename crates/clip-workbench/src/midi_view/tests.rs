@@ -683,7 +683,19 @@ fn midi_export_worker_writes_selected_solo_slice_with_original_timing_and_name()
         "solo track is remapped to track zero"
     );
     assert!((parsed.notes[0].start_sec - 0.5).abs() < 0.01);
+    let moved = test_dir.with_extension("moved");
+    std::fs::rename(&test_dir, &moved).unwrap();
+    std::fs::create_dir(&test_dir).unwrap();
+    let replacement = test_dir.join(artifact.path.file_name().unwrap());
+    std::fs::write(&replacement, b"replacement must remain").unwrap();
     drop(artifact);
+    assert_eq!(
+        std::fs::read(&replacement).unwrap(),
+        b"replacement must remain"
+    );
+    assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 0);
+    std::fs::remove_file(replacement).unwrap();
+    std::fs::remove_dir(moved).unwrap();
     std::fs::remove_dir(test_dir).unwrap();
 }
 
@@ -934,7 +946,7 @@ fn midi_export_file_creation_retries_collision_without_overwriting_existing_file
     let original_path = test_dir.join("midi_slice_123_0.5s-2.0s_Bass.mid");
     std::fs::write(&original_path, b"original export").unwrap();
 
-    let second_path = write_unique_midi_export(
+    let (second_path, _directory) = write_unique_midi_export(
         &test_dir,
         "midi_slice_123_0.5s-2.0s_Bass.mid",
         b"new export",
@@ -950,6 +962,29 @@ fn midi_export_file_creation_retries_collision_without_overwriting_existing_file
     std::fs::remove_file(original_path).unwrap();
     std::fs::remove_file(second_path).unwrap();
     std::fs::remove_dir(test_dir).unwrap();
+}
+
+#[test]
+fn midi_export_keeps_its_directory_pin_and_stages_collision_retries() {
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("original");
+    let directory =
+        little_clip_core::kernel_interface::create_content_directory(&original).unwrap();
+    let moved = root.path().join("moved");
+    std::fs::rename(&original, &moved).unwrap();
+    std::fs::create_dir(&original).unwrap();
+    std::fs::write(moved.join("score.mid"), b"existing").unwrap();
+    let path =
+        write_unique_midi_export_in(&directory, "score.mid", b"MThd completed MIDI").unwrap();
+    assert_eq!(path, moved.join("score_1.mid"));
+    assert_eq!(std::fs::read(&path).unwrap(), b"MThd completed MIDI");
+    assert_eq!(std::fs::read(moved.join("score.mid")).unwrap(), b"existing");
+    assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 2);
+    assert_eq!(std::fs::read_dir(&original).unwrap().count(), 0);
+    assert!(write_unique_midi_export_in(&directory, "../escaped.mid", b"no").is_err());
+    let alias = root.path().join("kernel");
+    std::os::unix::fs::symlink("/proc", &alias).unwrap();
+    assert!(write_unique_midi_export(&alias, "forbidden.mid", b"no").is_err());
 }
 
 #[test]

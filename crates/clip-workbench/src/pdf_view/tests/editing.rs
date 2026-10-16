@@ -178,7 +178,6 @@ fn pdf_delete_and_rotate_without_selection_do_not_dispatch_edits() {
 fn pdf_delete_and_rotate_do_not_replace_an_active_edit() {
     let temp = tempfile::tempdir().unwrap();
     let mut state = action_guard_state(temp.path().join("fixture.pdf"), 2, Some(2));
-    let staging_dir = tempfile::tempdir_in(temp.path()).unwrap();
     let (sender, receiver) = channel();
     state.edit_rx = Some(receiver);
     state.edit_in_progress = true;
@@ -197,8 +196,6 @@ fn pdf_delete_and_rotate_do_not_replace_an_active_edit() {
             .send(Ok(PdfEditMsg {
                 operation: "sentinel",
                 page_num: 2,
-                output: temp.path().join("untouched.pdf"),
-                staging_dir,
                 result: Err("sentinel only".into()),
             }))
             .is_ok(),
@@ -367,8 +364,6 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
         .send(Ok(PdfEditMsg {
             operation: "rotate",
             page_num: 1,
-            output: temp.path().join("source.rotate.edited.pdf"),
-            staging_dir: tempfile::tempdir_in(temp.path()).unwrap(),
             result: Err("synthetic worker failure".to_owned()),
         }))
         .unwrap();
@@ -446,8 +441,8 @@ fn closed_viewer_discards_completed_edit_before_publication() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("document.rotate.edited.pdf");
     let mut state = PdfEditorState::new(temp.path().join("document.pdf"));
-    let staging_dir = tempfile::tempdir_in(temp.path()).unwrap();
-    let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
+    let staged = super::super::output::PdfOutput::new(&output).unwrap();
+    let staged_output = staged.staged_path();
     std::fs::write(&staged_output, b"staged edit").unwrap();
     let (sender, receiver) = channel();
     state.edit_rx = Some(receiver);
@@ -455,14 +450,12 @@ fn closed_viewer_discards_completed_edit_before_publication() {
         .send(Ok(PdfEditMsg {
             operation: "rotate",
             page_num: 1,
-            output: output.clone(),
-            staging_dir,
-            result: Ok(()),
+            result: Ok(staged),
         }))
         .unwrap();
     drop(state);
 
-    assert!(!staged_output.exists());
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
     assert!(!output.exists());
 }
 
@@ -472,9 +465,10 @@ fn failed_edit_preserves_existing_sibling_output() {
     let output = temp.path().join("document.rotate.edited.pdf");
     std::fs::write(&output, b"prior edit").unwrap();
     let mut state = PdfEditorState::new(temp.path().join("document.pdf"));
-    let staging_dir = tempfile::tempdir_in(temp.path()).unwrap();
-    let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
+    let staged = super::super::output::PdfOutput::new(&output).unwrap();
+    let staged_output = staged.staged_path();
     std::fs::write(&staged_output, b"failed edit").unwrap();
+    drop(staged);
     let (sender, receiver) = channel();
     state.edit_rx = Some(receiver);
     state.edit_in_progress = true;
@@ -482,8 +476,6 @@ fn failed_edit_preserves_existing_sibling_output() {
         .send(Ok(PdfEditMsg {
             operation: "rotate",
             page_num: 1,
-            output: output.clone(),
-            staging_dir,
             result: Err("render failed".to_owned()),
         }))
         .unwrap();
@@ -493,7 +485,7 @@ fn failed_edit_preserves_existing_sibling_output() {
         state.poll_edit_worker(ctx, 0.0)
     });
     assert_eq!(std::fs::read(output).unwrap(), b"prior edit");
-    assert!(!staged_output.exists());
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
     assert!(!state.edit_in_progress);
 }
 
@@ -502,8 +494,8 @@ fn validated_edit_publishes_sibling_output_from_open_viewer() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("document.rotate.edited.pdf");
     let mut state = PdfEditorState::new(temp.path().join("document.pdf"));
-    let staging_dir = tempfile::tempdir_in(temp.path()).unwrap();
-    let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
+    let staged = super::super::output::PdfOutput::new(&output).unwrap();
+    let staged_output = staged.staged_path();
     std::fs::write(&staged_output, b"validated edit").unwrap();
     let (sender, receiver) = channel();
     state.edit_rx = Some(receiver);
@@ -512,9 +504,7 @@ fn validated_edit_publishes_sibling_output_from_open_viewer() {
         .send(Ok(PdfEditMsg {
             operation: "rotate",
             page_num: 1,
-            output: output.clone(),
-            staging_dir,
-            result: Ok(()),
+            result: Ok(staged),
         }))
         .unwrap();
 
@@ -523,7 +513,7 @@ fn validated_edit_publishes_sibling_output_from_open_viewer() {
         state.poll_edit_worker(ctx, 0.0)
     });
     assert_eq!(std::fs::read(&output).unwrap(), b"validated edit");
-    assert!(!staged_output.exists());
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
     assert_eq!(state.path, output);
     assert!(state.dirty);
 }
@@ -532,16 +522,15 @@ fn validated_edit_publishes_sibling_output_from_open_viewer() {
 fn protected_pdf_publication_preserves_an_existing_sibling() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.pdf");
-    let staged = dir.path().join("staged.pdf");
     let output = dir.path().join("source.rotate.edited.pdf");
     std::fs::write(&source, b"original").unwrap();
-    std::fs::write(&staged, b"completed").unwrap();
-    let state = PdfEditorState::new(source.clone()).with_protected_outputs();
-    state.publish_output(&staged, &output).unwrap();
+    let staged = super::super::output::PdfOutput::new(&output).unwrap();
+    std::fs::write(staged.staged_path(), b"completed").unwrap();
+    staged.publish(true).unwrap();
     assert_eq!(std::fs::read(&output).unwrap(), b"completed");
-    std::fs::remove_file(&staged).unwrap();
-    std::fs::write(&staged, b"another result").unwrap();
-    assert!(state.publish_output(&staged, &output).is_err());
+    let staged = super::super::output::PdfOutput::new(&output).unwrap();
+    std::fs::write(staged.staged_path(), b"another result").unwrap();
+    assert!(staged.publish(true).is_err());
     assert_eq!(std::fs::read(output).unwrap(), b"completed");
     assert_eq!(std::fs::read(source).unwrap(), b"original");
 }

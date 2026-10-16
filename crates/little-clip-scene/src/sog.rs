@@ -21,7 +21,7 @@ fn invalid(message: impl Into<String>) -> SceneError {
 }
 
 pub(crate) fn load(path: &Path) -> Result<Vec<Gaussian>, SceneError> {
-    let file = std::fs::File::open(path)?;
+    let file = little_clip_core::kernel_interface::open_content(path, true)?;
     if file.metadata()?.len() > MAX_ARCHIVE_BYTES {
         return Err(invalid("SOG archive exceeds the 512 MiB import budget"));
     }

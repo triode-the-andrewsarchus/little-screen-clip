@@ -104,6 +104,12 @@ pub(super) fn from_item(item: &ClipItem) -> Result<Payload, String> {
             let bytes = if !bytes.is_empty() {
                 bytes.clone()
             } else if let Some(path) = path {
+                if little_clip_core::kernel_interface::classify(path)
+                    .map_err(|e| e.to_string())?
+                    .protected()
+                {
+                    return files(vec![path.clone()]);
+                }
                 crate::file_source::read_file_bytes(path, MAX_CONTENT_BYTES, true, true)
                     .map_err(|e| e.to_string())?
             } else {
@@ -111,5 +117,76 @@ pub(super) fn from_item(item: &ClipItem) -> Result<Payload, String> {
             };
             Content::capture(bytes, mime).map(Payload::Content)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image_item(bytes: Vec<u8>, path: Option<PathBuf>) -> ClipItem {
+        let mut item = ClipItem::from_text("fixture");
+        item.payload = ClipPayload::Image {
+            bytes,
+            path,
+            width: 1,
+            height: 1,
+            mime: "image/svg+xml".into(),
+            thumbnail: None,
+        };
+        item
+    }
+
+    #[test]
+    fn protected_image_references_are_not_hydrated() {
+        let root = tempfile::tempdir().unwrap();
+        let alias = root.path().join("ordinary-looking.svg");
+        std::os::unix::fs::symlink("/proc/uptime", &alias).unwrap();
+        for path in [
+            PathBuf::from("/proc/uptime"),
+            PathBuf::from("/dev/zero"),
+            alias,
+        ] {
+            let payload = from_item(&image_item(Vec::new(), Some(path.clone()))).unwrap();
+            let Payload::Files { paths, cut } = payload else {
+                panic!("a path-only image must stay a reference");
+            };
+            assert_eq!(paths, vec![path]);
+            assert!(!cut);
+        }
+        assert!(from_item(&image_item(Vec::new(), None)).is_err());
+        assert!(
+            from_item(&image_item(
+                Vec::new(),
+                Some(root.path().join("missing.svg"))
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn selected_ordinary_image_hydrates_the_snapshot_omitted_from_ipc() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("image.svg");
+        let bytes = b"<svg width='1' height='1'/>";
+        std::fs::write(&path, bytes).unwrap();
+        let payload = from_item(&image_item(Vec::new(), Some(path.clone()))).unwrap();
+        let Payload::Content(content) = payload else {
+            panic!("explicit ordinary-image collection must capture bytes");
+        };
+        assert_eq!(content.bytes.as_ref(), bytes);
+        std::fs::write(&path, b"not the snapshot").unwrap();
+        assert_eq!(content.bytes.as_ref(), bytes);
+    }
+
+    #[test]
+    fn stored_image_snapshot_does_not_reopen_its_source_reference() {
+        let bytes = b"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>".to_vec();
+        let payload = from_item(&image_item(bytes.clone(), Some("/proc/uptime".into()))).unwrap();
+        let Payload::Content(content) = payload else {
+            panic!("stored bytes must remain a captured snapshot");
+        };
+        assert_eq!(content.bytes.as_ref(), bytes);
+        assert_eq!(content.mime, "image/svg+xml");
     }
 }

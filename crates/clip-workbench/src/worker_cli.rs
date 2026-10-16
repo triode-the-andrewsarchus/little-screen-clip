@@ -7,6 +7,48 @@ pub fn run() -> bool {
     let Some(flag) = args.first() else {
         return false;
     };
+    if flag == "--internal-system-console-snapshot" {
+        let result = if args.len() == 2 {
+            args[1]
+                .to_str()
+                .ok_or("Invalid console request encoding".to_string())
+                .and_then(crate::file_manager::system::run_console_worker)
+        } else {
+            Err("Invalid console worker arguments".into())
+        };
+        if let Err(error) = result {
+            eprintln!("Console snapshot: {error}");
+            std::process::exit(2);
+        }
+        return true;
+    }
+    if flag == "--internal-system-processes" {
+        let result = if args.len() == 2 {
+            crate::file_manager::system::run_process_worker(std::path::Path::new(&args[1]))
+        } else {
+            Err("Invalid process worker arguments".into())
+        };
+        if let Err(error) = result {
+            eprintln!("Process observations: {error}");
+            std::process::exit(2);
+        }
+        return true;
+    }
+    if flag == "--internal-system-inspector" {
+        let result = if args.len() == 3 {
+            crate::file_manager::system::run_worker(
+                std::path::Path::new(&args[1]),
+                std::path::Path::new(&args[2]),
+            )
+        } else {
+            Err("Invalid system inspector arguments".into())
+        };
+        if let Err(error) = result {
+            eprintln!("System inspector: {error}");
+            std::process::exit(2);
+        }
+        return true;
+    }
     let barcode = flag == "--internal-barcode-worker";
     if !barcode && flag != "--internal-conversion-decode-worker" {
         return false;

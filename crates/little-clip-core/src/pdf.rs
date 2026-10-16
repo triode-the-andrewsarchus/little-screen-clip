@@ -60,7 +60,8 @@ pub fn is_pdf_path(p: &Path) -> bool {
 /// Runs `pdfinfo` on a file and parses its page count and metadata tags.
 pub fn get_pdf_info(path: &Path) -> Result<PdfInfo, String> {
     let output = CommandRequest::new("pdfinfo")
-        .arg(path)
+        .arg_content_file(path)
+        .map_err(|error| error.to_string())?
         .run()
         .map_err(|e| format!("Failed to run pdfinfo: {}", e))?;
 
@@ -146,7 +147,8 @@ fn render_pdf_page_png(
             .arg("-1")
     };
     let output = command
-        .arg(path)
+        .arg_content_file(path)
+        .map_err(|error| error.to_string())?
         .arg(&temp_prefix)
         .run()
         .map_err(|e| format!("pdftoppm execution failed: {}", e))?;
@@ -233,7 +235,10 @@ pub struct PdfOutlineEntry {
 ///
 /// Returns an error if the PDF cannot be read or its outline cannot be parsed.
 pub fn read_pdf_outline(path: &Path) -> Result<Vec<PdfOutlineEntry>, String> {
-    let document = Document::load(path).map_err(|error| error.to_string())?;
+    let document = Document::load_from(
+        crate::kernel_interface::open_content(path, true).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     if document
         .catalog()
         .and_then(|catalog| catalog.get(b"Outlines"))
@@ -291,7 +296,8 @@ pub fn extract_pdf_page_text(path: &Path, page: usize) -> Result<String, String>
         .arg(page.to_string())
         .arg("-l")
         .arg(page.to_string())
-        .arg(path)
+        .arg_content_file(path)
+        .map_err(|error| error.to_string())?
         .arg("-")
         .max_output_bytes(4 * 1024 * 1024)
         .run()
@@ -317,8 +323,10 @@ pub fn delete_pdf_pages(
     if let Ok(()) = rebuild_pages(input, pages_to_delete, None, output) {
         return Ok(());
     }
-    let mut document = Document::load(input)
-        .map_err(|error| format!("Could not parse PDF for page deletion: {error}"))?;
+    let mut document = Document::load_from(
+        crate::kernel_interface::open_content(input, true).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("Could not parse PDF for page deletion: {error}"))?;
     let pages = document.get_pages();
     if pages.is_empty() {
         return Err("PDF is empty".to_string());
@@ -367,8 +375,10 @@ pub fn rotate_pdf_page(
     if let Ok(()) = rebuild_pages(input, &[], Some((page_to_rotate, degrees)), output) {
         return Ok(());
     }
-    let mut document = Document::load(input)
-        .map_err(|error| format!("Could not parse PDF for rotation: {error}"))?;
+    let mut document = Document::load_from(
+        crate::kernel_interface::open_content(input, true).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("Could not parse PDF for rotation: {error}"))?;
     let pages = document.get_pages();
     let page_id = pages
         .get(&(page_to_rotate as u32))
@@ -409,8 +419,10 @@ fn qpdf_edit(
     if let Some((page, degrees)) = rotation {
         command = command
             .arg(format!("--rotate=+{degrees}:{page}"))
-            .arg(input)
-            .arg(output);
+            .arg_content_file(input)
+            .map_err(|error| error.to_string())?
+            .arg_content_output(output)
+            .map_err(|error| error.to_string())?;
     } else {
         let count = get_pdf_info(input)?.page_count;
         let kept = (1..=count)
@@ -421,12 +433,15 @@ fn qpdf_edit(
             return Err("Cannot delete all pages".into());
         }
         command = command
-            .arg(input)
+            .arg_content_file(input)
+            .map_err(|error| error.to_string())?
             .arg("--pages")
-            .arg(input)
+            .arg_content_file(input)
+            .map_err(|error| error.to_string())?
             .arg(kept.join(","))
             .arg("--")
-            .arg(output);
+            .arg_content_output(output)
+            .map_err(|error| error.to_string())?;
     }
     let result = command
         .run()
@@ -454,12 +469,13 @@ fn rebuild_pages(
     let temp = workspace.path();
     let pattern = temp.join("page-%d.pdf");
     let separated = CommandRequest::new("pdfseparate")
-        .arg(input)
-        .arg(&pattern)
+        .arg_content_file(input)
+        .map_err(|error| error.to_string())?
+        .arg_content_output(&pattern)
+        .map_err(|error| error.to_string())?
         .run()
         .map_err(|e| format!("pdfseparate unavailable: {e}"))?;
     if !separated.status.success() {
-        let _ = std::fs::remove_dir_all(temp);
         return Err("pdfseparate failed".into());
     }
     let mut inputs = Vec::new();
@@ -468,49 +484,29 @@ fn rebuild_pages(
             continue;
         }
         let source = temp.join(format!("page-{page}.pdf"));
-        if rotation.map(|(target, _)| target) == Some(page) {
-            let degrees = rotation.map(|(_, d)| d).unwrap_or(0);
-            let rotated = temp.join(format!("rotated-{page}.pdf"));
-            let orientation = match degrees {
-                90 => 3,
-                180 => 2,
-                270 => 1,
-                _ => 0,
-            };
-            let status = CommandRequest::new("gs")
-                .arg("-q")
-                .arg("-dNOPAUSE")
-                .arg("-dBATCH")
-                .arg("-sDEVICE=pdfwrite")
-                .arg(format!("-sOutputFile={}", rotated.display()))
-                .arg("-c")
-                .arg(format!("<</Orientation {orientation}>> setpagedevice"))
-                .arg("-f")
-                .arg(&source)
-                .run()
-                .map_err(|e| format!("Ghostscript unavailable: {e}"))?;
-            if !status.status.success() {
-                let _ = std::fs::remove_dir_all(temp);
-                return Err("Ghostscript rotation failed".into());
+        match rotation {
+            Some((target, degrees)) if target == page => {
+                let rotated = temp.join(format!("rotated-{page}.pdf"));
+                rotate_staged_page(&source, &rotated, degrees)?;
+                inputs.push(rotated);
             }
-            inputs.push(rotated);
-        } else {
-            inputs.push(source);
+            _ => inputs.push(source),
         }
     }
     if inputs.is_empty() {
-        let _ = std::fs::remove_dir_all(temp);
         return Err("Cannot delete all pages".into());
     }
     let mut unite = CommandRequest::new("pdfunite");
     for input_file in &inputs {
-        unite = unite.arg(input_file);
+        unite = unite
+            .arg_content_file(input_file)
+            .map_err(|error| error.to_string())?;
     }
     let status = unite
-        .arg(output)
+        .arg_content_output(output)
+        .map_err(|error| error.to_string())?
         .run()
         .map_err(|e| format!("pdfunite unavailable: {e}"))?;
-    let _ = std::fs::remove_dir_all(temp);
     if status.status.success() {
         Ok(())
     } else {
@@ -518,9 +514,65 @@ fn rebuild_pages(
     }
 }
 
+/// Rotates one privately staged page for the rebuild fallback.
+fn rotate_staged_page(source: &Path, output: &Path, degrees: u32) -> Result<(), String> {
+    let orientation = match degrees {
+        90 => 3,
+        180 => 2,
+        270 => 1,
+        _ => 0,
+    };
+    let status = CommandRequest::new("gs")
+        .args([
+            "-q",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-sDEVICE=pdfwrite",
+            "-dAutoRotatePages=/None",
+        ])
+        .arg("-o")
+        .arg_content_output(output)
+        .map_err(|error| error.to_string())?
+        .arg("-c")
+        .arg(format!("<</Orientation {orientation}>> setpagedevice"))
+        .arg("-f")
+        .arg_content_file(source)
+        .map_err(|error| error.to_string())?
+        .run()
+        .map_err(|error| format!("Ghostscript unavailable: {error}"))?;
+    if status.status.success() {
+        Ok(())
+    } else {
+        Err("Ghostscript rotation failed".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pdf_readers_reject_kernel_aliases_before_parsing_or_tool_launch() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("interface.pdf");
+        std::os::unix::fs::symlink("/proc/uptime", &path).unwrap();
+        assert!(get_pdf_info(&path).unwrap_err().contains("inspection-only"));
+        assert!(
+            read_pdf_outline(&path)
+                .unwrap_err()
+                .contains("inspection-only")
+        );
+        assert!(
+            extract_pdf_page_text(&path, 1)
+                .unwrap_err()
+                .contains("inspection-only")
+        );
+        assert!(
+            render_pdf_page_thumbnail(&path, 1, 64)
+                .unwrap_err()
+                .contains("inspection-only")
+        );
+    }
 
     fn navigation_fixture() -> (tempfile::TempDir, PathBuf) {
         use lopdf::{Stream, dictionary};
@@ -618,17 +670,51 @@ mod tests {
 
     #[test]
     fn test_delete_and_rotate_pdf() {
-        let input = Path::new("/tmp/test_multi.pdf");
-        if input.is_file() {
-            let del_out = Path::new("/tmp/test_del_out.pdf");
-            let del_res = delete_pdf_pages(input, &[1], del_out);
-            println!("del_res: {:?}", del_res);
-            assert!(del_res.is_ok());
-
-            let rot_out = Path::new("/tmp/test_rot_out.pdf");
-            let rot_res = rotate_pdf_page(input, 1, 90, rot_out);
-            println!("rot_res: {:?}", rot_res);
-            assert!(rot_res.is_ok());
+        let (directory, input) = navigation_fixture();
+        let before = std::fs::read(&input).unwrap();
+        let deleted = directory.path().join("deleted.pdf");
+        delete_pdf_pages(&input, &[2], &deleted).unwrap();
+        assert_eq!(get_pdf_info(&deleted).unwrap().page_count, 2);
+        assert!(
+            extract_pdf_page_text(&deleted, 1)
+                .unwrap()
+                .contains("Cobalt needle")
+        );
+        let rotated = directory.path().join("rotated.pdf");
+        rotate_pdf_page(&input, 1, 90, &rotated).unwrap();
+        let (_, width, height) = render_pdf_page_thumbnail(&rotated, 1, 96).unwrap();
+        assert!(width > height, "rotated page should be landscape");
+        if CommandRequest::new("qpdf")
+            .arg("--version")
+            .run()
+            .is_ok_and(|result| result.status.success())
+        {
+            let output = directory.path().join("qpdf.pdf");
+            qpdf_edit(&input, &[2], None, &output).unwrap();
+            assert_eq!(get_pdf_info(&output).unwrap().page_count, 2);
+            println!("qpdf inherited output: verified");
         }
+        if ["pdfseparate", "pdfunite", "gs"].iter().all(|tool| {
+            CommandRequest::new(*tool)
+                .arg("-v")
+                .run()
+                .is_ok_and(|result| result.status.success())
+        }) {
+            let output = directory.path().join("rebuilt.pdf");
+            rebuild_pages(&input, &[2], Some((1, 90)), &output).unwrap();
+            assert_eq!(get_pdf_info(&output).unwrap().page_count, 2);
+            let (_, width, height) = render_pdf_page_thumbnail(&output, 1, 96).unwrap();
+            assert!(
+                width > height,
+                "Ghostscript fallback page should be landscape"
+            );
+            assert!(
+                extract_pdf_page_text(&output, 1)
+                    .unwrap()
+                    .contains("Cobalt needle")
+            );
+            println!("Poppler/Ghostscript inherited output: verified");
+        }
+        assert_eq!(std::fs::read(input).unwrap(), before);
     }
 }

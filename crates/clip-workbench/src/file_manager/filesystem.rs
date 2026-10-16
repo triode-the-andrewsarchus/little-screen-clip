@@ -13,6 +13,7 @@ pub(super) struct Entry {
     pub name: String,
     pub directory: bool,
     pub regular_file: bool,
+    pub system: Option<little_clip_core::kernel_interface::Kind>,
     pub typescript: bool,
     pub symlink: bool,
     pub hidden: bool,
@@ -59,6 +60,7 @@ impl Entry {
 
 #[derive(Debug)]
 pub(super) struct Directory {
+    pub system: bool,
     pub path: PathBuf,
     pub entries: Vec<Entry>,
     pub skipped: usize,
@@ -92,7 +94,10 @@ pub(super) fn read_directory(path: &Path, cancelled: &AtomicBool) -> Result<Dire
         entry.revision.hash(&mut hasher);
     }
     skipped.hash(&mut hasher);
+    let system =
+        !little_clip_core::kernel_interface::classify(&path).is_ok_and(|kind| !kind.protected());
     Ok(Directory {
+        system,
         signature: hasher.finish(),
         path,
         entries,
@@ -105,7 +110,10 @@ fn read_entry(child: std::fs::DirEntry) -> Entry {
     let symlink = child.file_type().is_ok_and(|kind| kind.is_symlink());
     let metadata = std::fs::metadata(&path);
     let directory = metadata.as_ref().is_ok_and(|data| data.is_dir());
-    let regular_file = metadata.as_ref().is_ok_and(|data| data.is_file());
+    let route = little_clip_core::kernel_interface::classify(&path).ok();
+    let system = route.filter(|kind| kind.semantic());
+    let regular_file = route == Some(little_clip_core::kernel_interface::Kind::Content)
+        && metadata.as_ref().is_ok_and(|data| data.is_file());
     let modified = metadata.as_ref().ok().and_then(|data| data.modified().ok());
     let warning = metadata.as_ref().err().map(|error| error.to_string());
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -124,6 +132,7 @@ fn read_entry(child: std::fs::DirEntry) -> Entry {
         path,
         directory,
         regular_file,
+        system,
         symlink,
         size: if directory {
             "—".into()
@@ -144,7 +153,7 @@ fn read_entry(child: std::fs::DirEntry) -> Entry {
     }
 }
 
-fn format_size(bytes: u64) -> String {
+pub(super) fn format_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
     let mut unit = 0;

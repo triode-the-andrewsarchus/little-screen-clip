@@ -52,9 +52,16 @@ def tesseract_output(image: Image.Image, output: str, arguments: list[str], lang
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir=temporary_directory) as source:
         image.save(source.name, format="PNG")
     try:
+        import re
+        descriptors = set()
+        for path in (source.name, output):
+            matched = re.match(r"^/proc/self/fd/([0-9]+)(?:/|$)", path)
+            if matched:
+                descriptors.add(int(matched.group(1)))
         return subprocess.run(
             ["tesseract", source.name, output, "-l", language, *arguments],
             capture_output=True, text=True, env=os.environ, timeout=300,
+            pass_fds=tuple(sorted(descriptors)),
         )
     finally:
         os.unlink(source.name)

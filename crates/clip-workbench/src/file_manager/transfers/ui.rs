@@ -16,7 +16,8 @@ impl FileManager {
         let selected = self.selection_count() > 0;
         let action = ui
             .horizontal_wrapped(|ui| {
-                let action = selection_buttons(ui, selected, self.directory.is_some());
+                let action =
+                    selection_buttons(ui, selected, self.can_edit(), self.selection_is_mutable());
                 if ui.button("Trash…").clicked() {
                     self.transfers.trash.show();
                 }
@@ -344,14 +345,23 @@ pub(in crate::file_manager) fn selection_buttons(
     ui: &mut Ui,
     selected: bool,
     can_paste: bool,
+    can_mutate: bool,
 ) -> Option<SelectionAction> {
     let mut action = None;
     for (label, enabled, candidate) in [
         ("Copy", selected, SelectionAction::Copy),
-        ("Cut", selected, SelectionAction::Cut),
+        ("Cut", selected && can_mutate, SelectionAction::Cut),
         ("Paste", can_paste, SelectionAction::Paste),
-        ("Move to Trash", selected, SelectionAction::Trash),
-        ("Delete permanently…", selected, SelectionAction::Delete),
+        (
+            "Move to Trash",
+            selected && can_mutate,
+            SelectionAction::Trash,
+        ),
+        (
+            "Delete permanently…",
+            selected && can_mutate,
+            SelectionAction::Delete,
+        ),
     ] {
         if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
             action = Some(candidate);

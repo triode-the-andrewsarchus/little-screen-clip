@@ -21,6 +21,8 @@ mod previews;
 mod scene_strip;
 mod selection;
 mod shelf;
+pub(crate) mod system;
+mod system_route;
 mod text_editor;
 mod text_strip;
 mod transfers;
@@ -84,10 +86,19 @@ enum Completion {
 
 impl DirectoryJob {
     fn new(path: PathBuf, jobs: &BackgroundJobs) -> Self {
+        Self::guarded(path, None, jobs)
+    }
+
+    fn guarded(
+        path: PathBuf,
+        target: Option<system::BrowserTarget>,
+        jobs: &BackgroundJobs,
+    ) -> Self {
         let cancelled = Arc::new(AtomicBool::new(false));
         let token = Arc::clone(&cancelled);
-        let (ticket, receiver) = jobs.submit(Duration::from_secs(120), move || {
-            read_directory(&path, &token)
+        let (ticket, receiver) = jobs.submit(Duration::from_secs(120), move || match target {
+            Some(target) => target.read_directory(&token),
+            None => read_directory(&path, &token),
         });
         Self {
             ticket,
@@ -121,6 +132,7 @@ impl Drop for DirectoryJob {
 struct Request {
     path: PathBuf,
     navigation: Navigation,
+    browser_target: Option<system::BrowserTarget>,
     job: Option<DirectoryJob>,
 }
 
@@ -138,6 +150,7 @@ pub(crate) struct FileManager {
     tree: FolderTree,
     restore_scroll: bool,
     reveal_selection: bool,
+    reveal_target: Option<PathBuf>,
     focus_address: bool,
     address_editing: bool,
     edits: edits::EditState,
@@ -150,6 +163,7 @@ pub(crate) struct FileManager {
     was_modal: bool,
     shelf: shelf::Shelf,
     open_file: Option<PathBuf>,
+    inspect_file: Option<PathBuf>,
     text_start: Option<(PathBuf, usize)>,
     pdf_start: Option<(PathBuf, usize)>,
     video_start: Option<(PathBuf, f64)>,
@@ -200,6 +214,7 @@ impl FileManager {
             show_hidden: false,
             restore_scroll: false,
             reveal_selection: false,
+            reveal_target: None,
             focus_address: false,
             address_editing: false,
             edits: edits::EditState::default(),
@@ -212,6 +227,7 @@ impl FileManager {
             was_modal: false,
             shelf: shelf::Shelf::default(),
             open_file: None,
+            inspect_file: None,
             text_start: None,
             pdf_start: None,
             video_start: None,
@@ -255,6 +271,7 @@ impl FileManager {
         self.midi.stop();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
+        self.reveal_target = None;
         if path != self.path() {
             self.gallery_layout.retire();
             self.video_previews.clear();
@@ -276,6 +293,7 @@ impl FileManager {
         self.pending = Some(Request {
             path,
             navigation,
+            browser_target: None,
             job: None,
         });
         self.error = None;
@@ -336,9 +354,9 @@ impl FileManager {
         }
         let mut completion = None;
         if let Some(request) = &mut self.pending {
-            let job = request
-                .job
-                .get_or_insert_with(|| DirectoryJob::new(request.path.clone(), jobs));
+            let job = request.job.get_or_insert_with(|| {
+                DirectoryJob::guarded(request.path.clone(), request.browser_target.clone(), jobs)
+            });
             completion = job.poll();
         }
         if let Some(Completion::Retry) = completion {
@@ -354,7 +372,13 @@ impl FileManager {
                         "Cannot open {}: {error}",
                         display_path(&request.path)
                     ));
-                    self.failed = Some((request.path, request.navigation));
+                    self.reveal_target = None;
+                    // Retrying a rejected inspector relationship must not turn it
+                    // into an unguarded path navigation to the replacement.
+                    self.failed = request
+                        .browser_target
+                        .is_none()
+                        .then_some((request.path, request.navigation));
                 }
             }
             if !self.address_editing {
@@ -409,7 +433,40 @@ impl FileManager {
         self.tree.reveal(&directory.path);
         self.directory = Some(directory);
         self.rebuild_visible();
+        if let Some(path) = self.reveal_target.take() {
+            // Directory reads canonicalize the parent; keep reveal paths in that
+            // same namespace when the inspector followed a directory alias.
+            if let Some(name) = path.file_name() {
+                self.reveal_path(self.path().join(name));
+            }
+        }
         self.restore_scroll = true;
+    }
+
+    fn browse_system_target(&mut self, target: system::BrowserTarget) {
+        // Even the current folder must pass the asynchronous relationship guard.
+        self.navigate(target.folder.clone(), Navigation::Refresh);
+        if let Some(request) = &mut self.pending {
+            request.navigation = Navigation::New;
+            self.reveal_target = target.reveal.clone();
+            request.browser_target = Some(target);
+        }
+    }
+
+    fn reveal_path(&mut self, path: PathBuf) {
+        let Some(entry) = self
+            .directory
+            .as_ref()
+            .and_then(|directory| directory.entries.iter().find(|entry| entry.path == path))
+        else {
+            return;
+        };
+        if entry.hidden && !self.show_hidden {
+            self.show_hidden = true;
+            self.rebuild_visible();
+        }
+        self.select(path);
+        self.reveal_selection = true;
     }
 
     fn rebuild_visible(&mut self) {
@@ -463,7 +520,8 @@ impl FileManager {
         if let Some(directory) = &self.directory {
             for index in &self.visible {
                 let entry = &directory.entries[*index];
-                let height = if self.previews.is_text(entry)
+                let height = if entry.system.is_some()
+                    || self.previews.is_text(entry)
                     || (entry.regular_file && font_strip::known(&entry.path))
                     || entry.is_playable_media()
                     || entry.is_scene()

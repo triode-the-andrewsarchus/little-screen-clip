@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+little-clip-core = { path = "../little-clip-core" }
 image.workspace = true
 thiserror.workspace = true
 wgpu = "28.0"

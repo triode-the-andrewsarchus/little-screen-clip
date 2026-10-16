@@ -321,3 +321,59 @@ enum Action {
     Refresh,
     Send(Payload, HandSide),
 }
+
+/// Preserve references while translating a chosen Shelf payload for IPC.
+fn send_request(payload: Payload, hand: HandSide) -> Result<IpcRequest, String> {
+    Ok(match payload {
+        Payload::Files { paths, .. } => IpcRequest::PushFileReferences { paths, hand },
+        Payload::Content(content) if content.mime.starts_with("image/") => IpcRequest::PushImage {
+            bytes: content.bytes.to_vec(),
+            mime: content.mime,
+            hand,
+        },
+        Payload::Content(content) => IpcRequest::PushText {
+            text: String::from_utf8(content.bytes.to_vec()).map_err(|error| error.to_string())?,
+            hand,
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shelf_send_never_hydrates_file_references_including_single_images() {
+        for paths in [
+            vec!["/proc/uptime".into()],
+            vec!["/missing/image.png".into()],
+            vec!["/dev/zero".into(), "/sys".into()],
+        ] {
+            let request = send_request(
+                Payload::Files {
+                    paths: paths.clone(),
+                    cut: true,
+                },
+                HandSide::Left,
+            )
+            .unwrap();
+            let IpcRequest::PushFileReferences { paths: sent, hand } = request else {
+                panic!("Shelf file groups must use reference-only IPC");
+            };
+            assert_eq!(sent, paths);
+            assert_eq!(hand, HandSide::Left);
+        }
+    }
+
+    #[test]
+    fn shelf_send_uses_captured_bytes_without_source_paths() {
+        let content =
+            super::super::content::Content::capture(b"snapshot".to_vec(), "text/plain").unwrap();
+        let request = send_request(Payload::Content(content), HandSide::Right).unwrap();
+        let IpcRequest::PushText { text, hand } = request else {
+            panic!("captured text must remain text");
+        };
+        assert_eq!(text, "snapshot");
+        assert_eq!(hand, HandSide::Right);
+    }
+}

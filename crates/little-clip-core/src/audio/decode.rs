@@ -33,7 +33,7 @@ pub fn is_audio_path(path: &Path) -> bool {
 }
 
 pub fn read_audio_metadata(path: &Path) -> Option<AudioMetadata> {
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::kernel_interface::open_content(path, true).ok()?;
     let file_len = file.metadata().ok()?.len();
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -278,7 +278,7 @@ where
     };
     let num_cols = num_cols.max(120);
 
-    let file = match std::fs::File::open(path) {
+    let file = match crate::kernel_interface::open_content(path, true) {
         Ok(f) => f,
         Err(e) => {
             on_progress(AudioAnalysisProgress::Failed(format!(
@@ -1091,7 +1091,7 @@ pub fn compute_spectral_colors(
         (false, 0, meta.duration_ms)
     };
 
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::kernel_interface::open_content(path, true).ok()?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
