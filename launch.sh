@@ -229,8 +229,7 @@ function build_if_needed() {
     if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$WORKBENCH_BIN" ] || [ ! -x "$CLIPCTL_BIN" ]; then
         ensure_dependencies
         echo -e "${BLUE}Building workspace binaries (release mode)...${NC}"
-        cargo build --release
-        sweep_target
+        python3 "$SCRIPT_DIR/scripts/build_workspace.py"
         BIN_DIR="$SCRIPT_DIR/target/release"
         DAEMON_BIN="$BIN_DIR/little-clipd"
         CLIPCTL_BIN="$BIN_DIR/clipctl"
@@ -366,7 +365,6 @@ function run_file_manager() {
     fi
     if [ ! -x "$file_manager_bin" ]; then
         cargo build --release --bin clip-file-manager
-        sweep_target
         file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
     fi
     "$file_manager_bin" "$@"
@@ -555,8 +553,12 @@ case "${1:-}" in
         shift || true
         ensure_dependencies
         echo -e "${BLUE}Building workspace (release mode)...${NC}"
-        cargo build --release "$@"
-        sweep_target
+        if [ "$#" -eq 0 ]; then
+            python3 "$SCRIPT_DIR/scripts/build_workspace.py"
+        else
+            # Partial/custom builds do not describe the full workspace graph.
+            cargo build --release "$@"
+        fi
         if [ -x "$SCRIPT_DIR/target/release/clip-file-manager" ]; then
             "$SCRIPT_DIR/scripts/build_timelens.sh"
             "$SCRIPT_DIR/scripts/build_video_strip.sh"
@@ -597,7 +599,7 @@ case "${1:-}" in
         echo "  last            - Re-run last operation or recipe directly"
         echo "  logs            - Tail daemon output logs"
         echo "  test            - Run direct USB display hardware test"
-        echo "  build           - Recompile all Rust workspace crates in release mode and sweep stale artifacts"
+        echo "  build           - Build release workspace and prune obsolete release artifacts (default build only)"
         echo "  sweep [N]       - Bound Cargo cache (LITTLE_CLIP_TARGET_MAXSIZE, default: 20GB) and keep N incremental sessions (default: 2)"
         echo "  deps            - Check and install required system dependencies (Ubuntu/Debian best-effort)"
         echo "  distro          - Display detected Linux distribution"

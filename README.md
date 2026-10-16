@@ -127,10 +127,17 @@ cd /home/vega/Documents/git/local/little-screen-clip
 ./launch.sh build
 ```
 
-Every `launch.sh` Cargo build evicts the oldest cached artifacts toward a 20 GB
-target-directory budget and sweeps artifacts from retired toolchains. Override it
-with `LITTLE_CLIP_TARGET_MAXSIZE=30GB ./launch.sh build`. Run `./launch.sh sweep`
-for cleanup without building; `./launch.sh sweep 0` also clears all incremental
+The default `./launch.sh build` automatically removes obsolete release dependency
+artifacts after a successful workspace build. It keeps the complete current build
+graph, including cached dependencies, simultaneous crate versions, feature variants,
+and build-script outputs. Cleanup leaves debug artifacts and bundled helpers alone.
+Failed builds and builds with custom arguments skip automatic cleanup.
+
+Run `./launch.sh sweep` explicitly for more aggressive cleanup: it evicts the oldest
+cached artifacts toward a 20 GB target-directory budget and sweeps artifacts from
+retired toolchains. Override the budget with
+`LITTLE_CLIP_TARGET_MAXSIZE=30GB ./launch.sh sweep`. This can evict dependencies the
+next build needs. `./launch.sh sweep 0` also clears all incremental
 sessions (the default retains two per crate/configuration). If `cargo-sweep` is
 unavailable, cleanup uses `cargo clean --profile dev` to clear debug artifacts.
 Serialize cleanup with other Cargo commands. Evicted artifacts rebuild on demand;

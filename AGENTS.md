@@ -26,7 +26,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 ./launch.sh test                         # Exercise the USB display directly
 ```
 
-Every `launch.sh` Cargo build performs an automatic target sweep toward a 20 GB cache budget (`LITTLE_CLIP_TARGET_MAXSIZE` overrides it), retaining two incremental sessions per crate/configuration. Without `cargo-sweep`, cleanup clears debug artifacts with `cargo clean --profile dev`. Serialize launch builds and sweeps with other Cargo commands so they cannot prune a compiler’s active incremental session.
+Default `./launch.sh build` runs `scripts/build_workspace.py`: after a successful full build, it uses Cargo's complete JSON artifact graph (including fresh units and build-script outputs) to remove obsolete hashed release artifacts. It preserves all current versions/feature variants, debug artifacts and bundled helpers. Failed builds, incomplete inventories and custom/partial builds skip automatic pruning. Explicit `./launch.sh sweep` performs aggressive cleanup toward a 20 GB cache budget (`LITTLE_CLIP_TARGET_MAXSIZE` overrides it), retaining two incremental sessions per crate/configuration; this may evict active dependencies. Without `cargo-sweep`, explicit cleanup clears debug artifacts with `cargo clean --profile dev`. Serialize launch builds and sweeps with all other Cargo commands so cleanup cannot prune a compiler's active artifacts or incremental session.
 
 `./launch.sh test` can stop a running daemon and access attached hardware; use it only when that is intended.
 
