@@ -350,6 +350,7 @@ fn redact_escape_deselects_region_without_burning_or_closing() {
     state.active_mode = ImageToolMode::Redact;
     state.redaction_state.boxes.push(RedactionBox {
         normalized_rect: Rect::from_min_max(Pos2::new(0.1, 0.1), Pos2::new(0.8, 0.8)),
+        style: RedactionStyle::Black,
     });
     state.redaction_state.selected_idx = Some(0);
     let pixels_before = state.current_rgba.clone();

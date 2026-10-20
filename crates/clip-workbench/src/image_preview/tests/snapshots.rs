@@ -8,6 +8,7 @@ fn composed_input_stamp_tracks_every_display_image_input() {
 
     state.redaction_state.boxes.push(RedactionBox {
         normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 0.5)),
+        style: RedactionStyle::Black,
     });
     assert_ne!(state.input_stamp(), initial);
     let redacted = state.input_stamp();
@@ -52,6 +53,7 @@ fn display_snapshot_composes_redactions_markup_and_crop_like_current_image() {
     }));
     state.redaction_state.boxes.push(RedactionBox {
         normalized_rect: Rect::from_min_max(Pos2::new(0.2, 0.2), Pos2::new(0.45, 0.5)),
+        style: RedactionStyle::Black,
     });
     state.markup_state.items.push(MarkupShape::Text {
         pos: Pos2::new(0.55, 0.5),
@@ -113,6 +115,7 @@ fn background_worker_applies_unchanged_input_and_clears_baked_overlays() {
     let mut state = image_state_from_png((8, 8), "current background result");
     state.redaction_state.boxes.push(RedactionBox {
         normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 0.5)),
+        style: RedactionStyle::Black,
     });
     state.markup_state.items.push(MarkupShape::Text {
         pos: Pos2::ZERO,
@@ -184,6 +187,7 @@ fn background_worker_discards_stale_error_without_showing_it() {
         .unwrap();
     state.redaction_state.boxes.push(RedactionBox {
         normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.25, 0.25)),
+        style: RedactionStyle::Black,
     });
 
     state.poll_bg_removal();

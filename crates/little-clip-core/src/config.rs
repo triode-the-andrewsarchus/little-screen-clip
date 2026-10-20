@@ -123,6 +123,10 @@ pub struct ImageConfig {
     /// If left None, automatically checks for local script or system Python with nobg.
     #[serde(default)]
     pub bg_removal_cmd: Option<String>,
+    /// LaMa inpainting executable or script (e.g. "scripts/inpaint_lama.py" or custom command).
+    /// If left None, automatically checks for local script or system Python with onnxruntime.
+    #[serde(default)]
+    pub lama_inpaint_cmd: Option<String>,
 }
 
 fn default_image_editor() -> String {
@@ -144,6 +148,7 @@ impl Default for ImageConfig {
             svg_editor: default_svg_editor(),
             viewer: default_image_viewer(),
             bg_removal_cmd: None,
+            lama_inpaint_cmd: None,
         }
     }
 }
@@ -168,6 +173,26 @@ impl ImageConfig {
         (
             "python3".to_string(),
             vec!["scripts/remove_bg.py".to_string()],
+        )
+    }
+
+    /// Resolves the executable path and arguments for LaMa inpainting.
+    pub fn resolve_lama_inpaint_cmd(&self) -> (String, Vec<String>) {
+        if let Some(ref cmd) = self.lama_inpaint_cmd {
+            let parts: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
+            if !parts.is_empty() {
+                return (parts[0].clone(), parts[1..].to_vec());
+            }
+        }
+        let candidates = ["scripts/inpaint_lama.py", "./scripts/inpaint_lama.py"];
+        for path in &candidates {
+            if std::path::Path::new(path).exists() {
+                return (path.to_string(), Vec::new());
+            }
+        }
+        (
+            "python3".to_string(),
+            vec!["scripts/inpaint_lama.py".to_string()],
         )
     }
 }

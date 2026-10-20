@@ -281,6 +281,7 @@ fn test_redaction_placement_and_burn_in() {
     // Place redaction box covering x: [0.2, 0.6], y: [0.3, 0.7] (pixels 20..60, 30..70)
     state.redaction_state.boxes.push(RedactionBox {
         normalized_rect: Rect::from_min_max(Pos2::new(0.2, 0.3), Pos2::new(0.6, 0.7)),
+        style: RedactionStyle::Black,
     });
 
     // Test that current_display_image burns pending redactions non-destructively
@@ -331,9 +332,11 @@ fn test_redaction_delete_and_clear() {
 
     state.redaction_state.boxes.push(RedactionBox {
         normalized_rect: Rect::from_min_max(Pos2::new(0.1, 0.1), Pos2::new(0.3, 0.3)),
+        style: RedactionStyle::Black,
     });
     state.redaction_state.boxes.push(RedactionBox {
         normalized_rect: Rect::from_min_max(Pos2::new(0.5, 0.5), Pos2::new(0.8, 0.8)),
+        style: RedactionStyle::Black,
     });
     assert_eq!(state.redaction_state.boxes.len(), 2);
 

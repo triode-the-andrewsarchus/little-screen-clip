@@ -640,6 +640,7 @@ fn conversion_accepts_current_result_and_applies_baked_overlays_once() {
     state.active_mode = ImageToolMode::Convert;
     state.redaction_state.boxes.push(RedactionBox {
         normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 0.5)),
+        style: RedactionStyle::Black,
     });
     let input_stamp = state.input_stamp();
     state.convert_state.render_input_stamp = Some(input_stamp.clone());

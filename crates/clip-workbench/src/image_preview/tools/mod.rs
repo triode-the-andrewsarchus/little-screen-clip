@@ -198,7 +198,11 @@ pub(crate) use palette::{PaletteColor, extract_palette};
 mod pick_color;
 pub(super) use pick_color::{PickColorState, schedule_system_clipboard_copy_on};
 mod redact;
-pub(super) use redact::{RedactionBox, RedactionDrag, RedactionState};
+pub(super) use redact::{
+    InpaintSelectionMode, LamaInpaintMsg, RedactToolType, RedactionBox, RedactionDrag,
+    RedactionState, RedactionStyle,
+};
+pub(crate) use redact::{compose_redactions_only, compute_box_average_color};
 mod resize;
 pub(super) use resize::OptimizerMsg;
 pub(crate) use resize::OptimizerRequestStamp;

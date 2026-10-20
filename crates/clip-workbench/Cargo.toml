@@ -52,6 +52,8 @@ filmr = { path = "../../vendor/filmr", default-features = false, features = ["co
 
 object = { version = "0.40", default-features = false, features = ["read", "std"] }
 sha2 = "0.10"
+ort = { version = "2.0.0-rc.15", features = ["download-binaries"] }
+ndarray = "0.17.2"
 
 [dev-dependencies]
 rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }

@@ -200,6 +200,15 @@ pub struct ImagePreviewState {
     pub(crate) image_tool_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub multimatte_prompt: String,
 
+    // LaMa Inpainting Async Worker & State
+    pub inpaint_rx: Option<std::sync::mpsc::Receiver<LamaInpaintMsg>>,
+    pub inpaint_job_rx: Option<std::sync::mpsc::Receiver<Result<(), JobError>>>,
+    pub inpaint_ticket: Option<JobTicket>,
+    pub inpaint_cmd: Option<String>,
+    pub(crate) inpaint_child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub(crate) inpaint_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub(crate) inpaint_mask_texture: Option<egui::TextureHandle>,
+
     // Format Conversion (Squoosh-style)
     pub convert_state: ConvertState,
 
@@ -617,6 +626,13 @@ impl ImagePreviewState {
             image_tool_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             image_tool_cancel: None,
             multimatte_prompt: String::new(),
+            inpaint_rx: None,
+            inpaint_job_rx: None,
+            inpaint_ticket: None,
+            inpaint_cmd: config.image.lama_inpaint_cmd.clone(),
+            inpaint_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            inpaint_cancel: None,
+            inpaint_mask_texture: None,
             convert_state: ConvertState::default(),
             ocr_state: OcrState::default(),
             ocr_rx: None,

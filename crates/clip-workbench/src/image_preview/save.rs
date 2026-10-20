@@ -1367,6 +1367,7 @@ mod tests {
         let mut state = state();
         state.redaction_state.boxes.push(RedactionBox {
             normalized_rect: Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(0.5, 1.0)),
+            style: RedactionStyle::Black,
         });
         state.active_mode = ImageToolMode::Crop;
         state.crop_state.normalized_rect =
@@ -1466,6 +1467,7 @@ mod tests {
         state.update_conversion();
         state.redaction_state.boxes.push(RedactionBox {
             normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            style: RedactionStyle::Black,
         });
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("redacted.png");
@@ -1694,6 +1696,7 @@ mod tests {
         let mut state = state();
         state.redaction_state.boxes.push(RedactionBox {
             normalized_rect: Rect::from_min_max(Pos2::new(0.6, 0.0), Pos2::new(1.0, 1.0)),
+            style: RedactionStyle::Black,
         });
         let ctx = egui::Context::default();
         state.texture = Some(ctx.load_texture(

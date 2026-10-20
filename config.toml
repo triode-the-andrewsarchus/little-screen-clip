@@ -105,6 +105,10 @@ viewer = "nomacs"
 # If left empty, automatically checks for project script or system Python with nobg.
 # bg_removal_cmd = "scripts/remove_bg.py"
 
+# LaMa inpainting executable or script (e.g. "scripts/inpaint_lama.py" or custom command).
+# If left empty, automatically checks for project script or system Python with onnxruntime.
+# lama_inpaint_cmd = "scripts/inpaint_lama.py"
+
 [text]
 # Preferred external text editor command for text preview escape hatch
 # (e.g. "code", "subl", "gedit", "kate", "nano", "nvim").

@@ -203,7 +203,13 @@ impl ImagePreviewState {
             match self.active_mode {
                 ImageToolMode::Crop if image_shortcuts_enabled => self.apply_crop(),
                 ImageToolMode::Deskew if image_shortcuts_enabled => self.apply_deskew(),
-                ImageToolMode::Redact if image_shortcuts_enabled => self.apply_redactions(),
+                ImageToolMode::Redact if image_shortcuts_enabled => {
+                    if self.redaction_state.tool_type == RedactToolType::LamaInpaint {
+                        self.run_lama_inpaint();
+                    } else {
+                        self.apply_redactions();
+                    }
+                }
                 ImageToolMode::Markup
                     if image_shortcuts_enabled && self.markup_state.editing_text_idx.is_none() =>
                 {
@@ -244,7 +250,48 @@ impl ImagePreviewState {
                         || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
                 });
                 if del_pressed {
-                    self.delete_selected_redaction();
+                    if self.redaction_state.tool_type == RedactToolType::LamaInpaint {
+                        self.clear_inpaint_mask();
+                    } else {
+                        self.delete_selected_redaction();
+                    }
+                }
+
+                let plus_pressed = ui.input(|i| {
+                    i.key_pressed(egui::Key::Plus)
+                        || i.key_pressed(egui::Key::Equals)
+                        || i.events.iter().any(|e| match e {
+                            egui::Event::Key {
+                                key: egui::Key::Plus,
+                                pressed: true,
+                                ..
+                            }
+                            | egui::Event::Key {
+                                key: egui::Key::Equals,
+                                pressed: true,
+                                ..
+                            } => true,
+                            egui::Event::Text(t) => t == "+" || t == "=",
+                            _ => false,
+                        })
+                });
+                let minus_pressed = ui.input(|i| {
+                    i.key_pressed(egui::Key::Minus)
+                        || i.events.iter().any(|e| match e {
+                            egui::Event::Key {
+                                key: egui::Key::Minus,
+                                pressed: true,
+                                ..
+                            } => true,
+                            egui::Event::Text(t) => t == "-",
+                            _ => false,
+                        })
+                });
+
+                if plus_pressed {
+                    self.adjust_brush_radius(4.0);
+                } else if minus_pressed {
+                    self.adjust_brush_radius(-4.0);
                 }
             }
             if self.active_mode == ImageToolMode::Markup
@@ -405,6 +452,12 @@ impl ImagePreviewState {
             } else {
                 ctx.request_repaint();
             }
+        }
+
+        // Poll background LaMa AI inpainting if running
+        self.poll_lama_inpaint();
+        if self.redaction_state.inpaint_in_progress {
+            ctx.request_repaint();
         }
 
         // Poll format conversion and debounce costly full-resolution encodes.

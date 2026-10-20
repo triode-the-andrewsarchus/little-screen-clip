@@ -1487,6 +1487,7 @@ mod input_stamp_tests {
         tx.send(OcrMsg::Error("stale error".into())).unwrap();
         state.redaction_state.boxes.push(RedactionBox {
             normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 0.5)),
+            style: RedactionStyle::Black,
         });
 
         state.poll_ocr();

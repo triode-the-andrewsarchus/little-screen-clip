@@ -77,6 +77,7 @@ fn resize_with_pending_redactions_matches_legacy_output_and_keeps_two_undo_steps
     state.current_rgba = Arc::new(source.clone());
     let redactions = vec![RedactionBox {
         normalized_rect: Rect::from_min_max(Pos2::new(0.25, 0.25), Pos2::new(0.75, 0.75)),
+        style: RedactionStyle::Black,
     }];
     state.redaction_state.boxes = redactions.clone();
     state.active_mode = ImageToolMode::Resize;
