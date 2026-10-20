@@ -111,7 +111,234 @@ pub enum LamaInpaintMsg {
     Error(String),
 }
 
-/// Computes the average RGB color of the pixels in the specified normalized rect.
+const BAYER_4X4: [[f32; 4]; 4] = [
+    [-0.5000, 0.0000, -0.3750, 0.1250],
+    [0.2500, -0.2500, 0.3750, -0.1250],
+    [-0.3125, 0.1875, -0.4375, 0.0625],
+    [0.4375, -0.0625, 0.3125, -0.1875],
+];
+
+/// Extracts the 1D perimeter of a rectangle in clockwise order starting from top-left,
+/// and applies a 1D circular median filter (window size 5) to eliminate rogue text pixels
+/// touching the boundary.
+fn extract_clean_perimeter(
+    image: &RgbaImage,
+    min_x: u32,
+    max_x: u32,
+    min_y: u32,
+    max_y: u32,
+) -> (Vec<[f32; 4]>, [f32; 4]) {
+    if min_x >= max_x || min_y >= max_y {
+        return (Vec::new(), [0.0, 0.0, 0.0, 255.0]);
+    }
+
+    let w = max_x - min_x;
+    let h = max_y - min_y;
+    let last_x = max_x.saturating_sub(1);
+    let last_y = max_y.saturating_sub(1);
+
+    let mut raw: Vec<[f32; 4]> = Vec::new();
+
+    if w <= 2 || h <= 2 {
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                let p = image.get_pixel(x, y);
+                raw.push([p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]);
+            }
+        }
+    } else {
+        // Clockwise perimeter:
+        // 1. Top edge: (min_x..last_x, min_y)
+        for x in min_x..last_x {
+            let p = image.get_pixel(x, min_y);
+            raw.push([p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]);
+        }
+        // 2. Right edge: (last_x, min_y..last_y)
+        for y in min_y..last_y {
+            let p = image.get_pixel(last_x, y);
+            raw.push([p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]);
+        }
+        // 3. Bottom edge: (last_x down to min_x + 1, last_y)
+        for x in (min_x + 1..=last_x).rev() {
+            let p = image.get_pixel(x, last_y);
+            raw.push([p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]);
+        }
+        // 4. Left edge: (min_x, last_y down to min_y + 1)
+        for y in (min_y + 1..=last_y).rev() {
+            let p = image.get_pixel(min_x, y);
+            raw.push([p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]);
+        }
+    }
+
+    let n = raw.len();
+    if n == 0 {
+        return (Vec::new(), [0.0, 0.0, 0.0, 255.0]);
+    }
+
+    // Apply circular median filter of window size 5 to reject rogue text spikes
+    let mut clean = Vec::with_capacity(n);
+    let mut sum_r = 0.0;
+    let mut sum_g = 0.0;
+    let mut sum_b = 0.0;
+    let mut sum_a = 0.0;
+
+    if n < 5 {
+        for px in &raw {
+            sum_r += px[0];
+            sum_g += px[1];
+            sum_b += px[2];
+            sum_a += px[3];
+            clean.push(*px);
+        }
+    } else {
+        for i in 0..n {
+            let mut wr = [0.0; 5];
+            let mut wg = [0.0; 5];
+            let mut wb = [0.0; 5];
+            let mut wa = [0.0; 5];
+            for (k, offset) in [-2, -1, 0, 1, 2].iter().enumerate() {
+                let idx = ((i as isize + offset).rem_euclid(n as isize)) as usize;
+                wr[k] = raw[idx][0];
+                wg[k] = raw[idx][1];
+                wb[k] = raw[idx][2];
+                wa[k] = raw[idx][3];
+            }
+            wr.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            wg.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            wb.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            wa.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+            let med = [wr[2], wg[2], wb[2], wa[2]];
+            sum_r += med[0];
+            sum_g += med[1];
+            sum_b += med[2];
+            sum_a += med[3];
+            clean.push(med);
+        }
+    }
+
+    let count = clean.len() as f32;
+    let center = [sum_r / count, sum_g / count, sum_b / count, sum_a / count];
+    (clean, center)
+}
+
+/// Fills the specified rectangle with a dithered conical gradient projected from the
+/// perimeter edge colors towards a blurred center average.
+pub fn fill_conical_edge_gradient_redaction(
+    target: &mut RgbaImage,
+    source: &RgbaImage,
+    min_x: u32,
+    max_x: u32,
+    min_y: u32,
+    max_y: u32,
+) {
+    if min_x >= max_x || min_y >= max_y {
+        return;
+    }
+
+    let (perimeter, center) = extract_clean_perimeter(source, min_x, max_x, min_y, max_y);
+    if perimeter.is_empty() {
+        return;
+    }
+
+    let w = max_x - min_x;
+    let h = max_y - min_y;
+
+    if w <= 2 || h <= 2 {
+        let cr = center[0].round().clamp(0.0, 255.0) as u8;
+        let cg = center[1].round().clamp(0.0, 255.0) as u8;
+        let cb = center[2].round().clamp(0.0, 255.0) as u8;
+        let ca = center[3].round().clamp(0.0, 255.0) as u8;
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                target.put_pixel(x, y, image::Rgba([cr, cg, cb, ca]));
+            }
+        }
+        return;
+    }
+
+    let p_len = perimeter.len() as f32;
+    let last_x = (max_x - 1) as f32;
+    let last_y = (max_y - 1) as f32;
+    let f_min_x = min_x as f32;
+    let f_min_y = min_y as f32;
+
+    let cx = (f_min_x + last_x) * 0.5;
+    let cy = (f_min_y + last_y) * 0.5;
+    let wh = (last_x - f_min_x) * 0.5;
+    let hh = (last_y - f_min_y) * 0.5;
+
+    let seg_top = (max_x - min_x - 1) as f32;
+    let seg_right = (max_y - min_y - 1) as f32;
+    let seg_bottom = seg_top;
+
+    for y in min_y..max_y {
+        let py = y as f32;
+        let dy = py - cy;
+
+        for x in min_x..max_x {
+            let px = x as f32;
+            let dx = px - cx;
+
+            if dx.abs() < 1e-5 && dy.abs() < 1e-5 {
+                let dither = BAYER_4X4[(y % 4) as usize][(x % 4) as usize];
+                let r = (center[0] + dither).round().clamp(0.0, 255.0) as u8;
+                let g = (center[1] + dither).round().clamp(0.0, 255.0) as u8;
+                let b = (center[2] + dither).round().clamp(0.0, 255.0) as u8;
+                let a = center[3].round().clamp(0.0, 255.0) as u8;
+                target.put_pixel(x, y, image::Rgba([r, g, b, a]));
+                continue;
+            }
+
+            let tx = if dx.abs() > 1e-5 { wh / dx.abs() } else { 1e9 };
+            let ty = if dy.abs() > 1e-5 { hh / dy.abs() } else { 1e9 };
+            let t = tx.min(ty);
+            let d = (1.0 / t).clamp(0.0, 1.0);
+
+            let ex = cx + t * dx;
+            let ey = cy + t * dy;
+
+            // Map (ex, ey) to perimeter index s
+            let s = if (ey - f_min_y).abs() < 0.01 {
+                ex - f_min_x
+            } else if (ex - last_x).abs() < 0.01 {
+                seg_top + (ey - f_min_y)
+            } else if (ey - last_y).abs() < 0.01 {
+                seg_top + seg_right + (last_x - ex)
+            } else {
+                seg_top + seg_right + seg_bottom + (last_y - ey)
+            };
+
+            let s_clamped = s.rem_euclid(p_len);
+            let idx0 = (s_clamped.floor() as usize) % perimeter.len();
+            let idx1 = (idx0 + 1) % perimeter.len();
+            let frac = s_clamped - s_clamped.floor();
+
+            let edge_r = (1.0 - frac) * perimeter[idx0][0] + frac * perimeter[idx1][0];
+            let edge_g = (1.0 - frac) * perimeter[idx0][1] + frac * perimeter[idx1][1];
+            let edge_b = (1.0 - frac) * perimeter[idx0][2] + frac * perimeter[idx1][2];
+            let edge_a = (1.0 - frac) * perimeter[idx0][3] + frac * perimeter[idx1][3];
+
+            // Center blur: smoothstep transition from edge to center
+            let factor = d * d * (3.0 - 2.0 * d);
+            let blended_r = factor * edge_r + (1.0 - factor) * center[0];
+            let blended_g = factor * edge_g + (1.0 - factor) * center[1];
+            let blended_b = factor * edge_b + (1.0 - factor) * center[2];
+            let blended_a = factor * edge_a + (1.0 - factor) * center[3];
+
+            let dither = BAYER_4X4[(y % 4) as usize][(x % 4) as usize];
+            let r = (blended_r + dither).round().clamp(0.0, 255.0) as u8;
+            let g = (blended_g + dither).round().clamp(0.0, 255.0) as u8;
+            let b = (blended_b + dither).round().clamp(0.0, 255.0) as u8;
+            let a = blended_a.round().clamp(0.0, 255.0) as u8;
+
+            target.put_pixel(x, y, image::Rgba([r, g, b, a]));
+        }
+    }
+}
+
+/// Computes the representative background color of the perimeter edges
+/// for the specified normalized rect.
 pub fn compute_box_average_color(image: &RgbaImage, norm_rect: Rect) -> Color32 {
     let img_w = image.width() as f32;
     let img_h = image.height() as f32;
@@ -120,30 +347,13 @@ pub fn compute_box_average_color(image: &RgbaImage, norm_rect: Rect) -> Color32 
     let px_min_y = (norm_rect.min.y * img_h).floor().clamp(0.0, img_h) as u32;
     let px_max_y = (norm_rect.max.y * img_h).ceil().clamp(0.0, img_h) as u32;
 
-    let mut sum_r: u64 = 0;
-    let mut sum_g: u64 = 0;
-    let mut sum_b: u64 = 0;
-    let mut count: u64 = 0;
-
-    for y in px_min_y..px_max_y {
-        for x in px_min_x..px_max_x {
-            let p = image.get_pixel(x, y);
-            sum_r += p[0] as u64;
-            sum_g += p[1] as u64;
-            sum_b += p[2] as u64;
-            count += 1;
-        }
-    }
-
-    if count == 0 {
-        Color32::BLACK
-    } else {
-        Color32::from_rgb(
-            (sum_r / count) as u8,
-            (sum_g / count) as u8,
-            (sum_b / count) as u8,
-        )
-    }
+    let (_, center) = extract_clean_perimeter(image, px_min_x, px_max_x, px_min_y, px_max_y);
+    Color32::from_rgba_unmultiplied(
+        center[0].round().clamp(0.0, 255.0) as u8,
+        center[1].round().clamp(0.0, 255.0) as u8,
+        center[2].round().clamp(0.0, 255.0) as u8,
+        center[3].round().clamp(0.0, 255.0) as u8,
+    )
 }
 
 pub fn stamp_circle_on_mask(
@@ -1447,17 +1657,18 @@ pub(crate) fn compose_redactions_only(source: &RgbaImage, boxes: &[RedactionBox]
         let px_min_y = (b.normalized_rect.min.y * img_h).round().clamp(0.0, img_h) as u32;
         let px_max_y = (b.normalized_rect.max.y * img_h).round().clamp(0.0, img_h) as u32;
 
-        let fill_pixel = match b.style {
-            RedactionStyle::Black => image::Rgba([0, 0, 0, 255]),
-            RedactionStyle::AverageColor => {
-                let col = compute_box_average_color(source, b.normalized_rect);
-                image::Rgba([col.r(), col.g(), col.b(), 255])
+        match b.style {
+            RedactionStyle::Black => {
+                for y in px_min_y..px_max_y {
+                    for x in px_min_x..px_max_x {
+                        image.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+                    }
+                }
             }
-        };
-
-        for y in px_min_y..px_max_y {
-            for x in px_min_x..px_max_x {
-                image.put_pixel(x, y, fill_pixel);
+            RedactionStyle::AverageColor => {
+                fill_conical_edge_gradient_redaction(
+                    &mut image, source, px_min_x, px_max_x, px_min_y, px_max_y,
+                );
             }
         }
     }
@@ -1487,27 +1698,87 @@ mod tests {
         let left_avg = compute_box_average_color(&img, left_box);
         assert_eq!(left_avg, Color32::from_rgb(200, 0, 0));
 
-        // Box covering entire image (average should be ~ (100, 0, 100))
-        let all_box = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
-        let all_avg = compute_box_average_color(&img, all_box);
-        assert_eq!(all_avg, Color32::from_rgb(100, 0, 100));
-
-        // Compose with AverageColor style
-        let composed = compose_redactions_only(
+        let composed_left = compose_redactions_only(
             &img,
             &[RedactionBox {
-                normalized_rect: all_box,
+                normalized_rect: left_box,
                 style: RedactionStyle::AverageColor,
             }],
         );
-        assert_eq!(*composed.get_pixel(25, 25), image::Rgba([100, 0, 100, 255]));
-        assert_eq!(*composed.get_pixel(75, 75), image::Rgba([100, 0, 100, 255]));
+        // Interior of left half should remain pure red (200, 0, 0)
+        assert_eq!(
+            *composed_left.get_pixel(25, 25),
+            image::Rgba([200, 0, 0, 255])
+        );
+
+        // Black text on off-white background
+        let mut doc_img = RgbaImage::from_pixel(100, 100, image::Rgba([245, 245, 240, 255]));
+        // Add black text in the center (x: 30..70, y: 35..65)
+        for y in 35..65 {
+            for x in 30..70 {
+                doc_img.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+        // Redaction box enclosing the text with margin (x: 20..80, y: 25..75)
+        let text_box = Rect::from_min_max(Pos2::new(0.2, 0.25), Pos2::new(0.8, 0.75));
+        let edge_color = compute_box_average_color(&doc_img, text_box);
+        assert_eq!(edge_color, Color32::from_rgb(245, 245, 240));
+
+        let redacted_doc = compose_redactions_only(
+            &doc_img,
+            &[RedactionBox {
+                normalized_rect: text_box,
+                style: RedactionStyle::AverageColor,
+            }],
+        );
+
+        // Center where text was should now match the off-white background exactly, not tainted by black text
+        assert_eq!(
+            *redacted_doc.get_pixel(50, 50),
+            image::Rgba([245, 245, 240, 255])
+        );
+        assert_eq!(
+            *redacted_doc.get_pixel(35, 45),
+            image::Rgba([245, 245, 240, 255])
+        );
+
+        // Test gradient background redaction: top is dark gray (100, 100, 100), bottom is light gray (200, 200, 200)
+        let mut grad_img = RgbaImage::new(100, 100);
+        for y in 0..100 {
+            let v = (100.0 + (y as f32 / 99.0) * 100.0).round() as u8;
+            for x in 0..100 {
+                grad_img.put_pixel(x, y, image::Rgba([v, v, v, 255]));
+            }
+        }
+        // Black text in the center
+        for y in 40..60 {
+            for x in 30..70 {
+                grad_img.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+        let grad_box = Rect::from_min_max(Pos2::new(0.2, 0.2), Pos2::new(0.8, 0.8));
+        let redacted_grad = compose_redactions_only(
+            &grad_img,
+            &[RedactionBox {
+                normalized_rect: grad_box,
+                style: RedactionStyle::AverageColor,
+            }],
+        );
+        // Top edge of box (y = 20) matches background (~120)
+        let top_px = redacted_grad.get_pixel(50, 20);
+        assert!((top_px[0] as i16 - 120).abs() <= 2);
+        // Bottom edge of box (y = 79) matches background (~180)
+        let bot_px = redacted_grad.get_pixel(50, 79);
+        assert!((bot_px[0] as i16 - 180).abs() <= 2);
+        // Center (y = 50) where black text was is smoothly blurred to ~150 with zero black contamination
+        let mid_px = redacted_grad.get_pixel(50, 50);
+        assert!((mid_px[0] as i16 - 150).abs() <= 3);
 
         // Compose with Black style
         let composed_black = compose_redactions_only(
             &img,
             &[RedactionBox {
-                normalized_rect: all_box,
+                normalized_rect: left_box,
                 style: RedactionStyle::Black,
             }],
         );

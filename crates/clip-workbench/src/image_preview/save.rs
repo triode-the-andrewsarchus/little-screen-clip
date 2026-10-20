@@ -648,10 +648,16 @@ impl ImagePreviewState {
                                     point.y * image_rect.height(),
                                 )
                         };
+                        let fill = match redaction.style {
+                            RedactionStyle::Black => Color32::BLACK,
+                            RedactionStyle::AverageColor => {
+                                compute_box_average_color(&self.current_rgba, norm)
+                            }
+                        };
                         ui.painter().rect_filled(
                             Rect::from_min_max(to_screen(norm.min), to_screen(norm.max)),
                             0.0,
-                            Color32::BLACK,
+                            fill,
                         );
                     }
                 });
@@ -835,10 +841,16 @@ impl ImagePreviewState {
                             image_rect.min
                                 + Vec2::new(p.x * image_rect.width(), p.y * image_rect.height())
                         };
+                        let fill = match redaction.style {
+                            RedactionStyle::Black => Color32::BLACK,
+                            RedactionStyle::AverageColor => {
+                                compute_box_average_color(&self.current_rgba, norm)
+                            }
+                        };
                         ui.painter().rect_filled(
                             Rect::from_min_max(to_screen(norm.min), to_screen(norm.max)),
                             0.0,
-                            Color32::BLACK,
+                            fill,
                         );
                     }
                 });

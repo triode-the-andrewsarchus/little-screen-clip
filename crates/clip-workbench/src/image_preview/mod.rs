@@ -407,19 +407,7 @@ impl InlineImagePreview {
 fn compose_display_image(mut img: RgbaImage, stamp: &ImageInputStamp) -> RgbaImage {
     // Burn any pending redactions onto the output image
     if !stamp.redactions.is_empty() {
-        let img_w = img.width() as f32;
-        let img_h = img.height() as f32;
-        for b in &stamp.redactions {
-            let px_min_x = (b.normalized_rect.min.x * img_w).round().clamp(0.0, img_w) as u32;
-            let px_max_x = (b.normalized_rect.max.x * img_w).round().clamp(0.0, img_w) as u32;
-            let px_min_y = (b.normalized_rect.min.y * img_h).round().clamp(0.0, img_h) as u32;
-            let px_max_y = (b.normalized_rect.max.y * img_h).round().clamp(0.0, img_h) as u32;
-            for y in px_min_y..px_max_y {
-                for x in px_min_x..px_max_x {
-                    img.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
-                }
-            }
-        }
+        img = compose_redactions_only(&img, &stamp.redactions);
     }
 
     // Burn any pending vector markup layers onto the output image
