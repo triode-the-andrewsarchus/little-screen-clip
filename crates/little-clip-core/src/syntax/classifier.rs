@@ -53,14 +53,27 @@ impl SyntaxClassifier {
             }
         }
 
+        let has_code_symbol = text.contains('{')
+            || text.contains('}')
+            || text.contains(';')
+            || text.contains("->")
+            || text.contains("=>")
+            || text.contains("::")
+            || text.contains("==")
+            || text.contains("!=");
+
         let mut candidate_scores: Vec<(f32, u32, &str)> = Vec::with_capacity(self.models.len());
 
         for (lang_code, model) in &self.models {
             let mut score = 0.0f32;
             let mut word_matches = 0;
+            let mut keyword_matches = 0;
 
             for (&token, &count) in &tf {
                 if let Some(&log_prob) = model.tokens.get(token) {
+                    if log_prob >= -0.2 {
+                        keyword_matches += 1;
+                    }
                     let mut weight = 10.0 + log_prob;
                     if !PUNCT_STOPWORDS.contains(&token) {
                         weight *= 2.5;
@@ -72,7 +85,9 @@ impl SyntaxClassifier {
                 }
             }
 
-            if word_matches > 0 || score > 0.0 {
+            // Require at least one distinctive keyword (log_prob >= -0.2) or code symbols
+            // to prevent random English dictionary overlaps from classifying prose as code.
+            if (keyword_matches > 0 || has_code_symbol) && word_matches >= 2 && score >= 20.0 {
                 candidate_scores.push((score, model.rank, lang_code.as_str()));
             }
         }
@@ -84,11 +99,6 @@ impl SyntaxClassifier {
         candidate_scores.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
         let best_score = candidate_scores[0].0;
-        // Require a minimum confidence score to avoid misclassifying plain prose as code
-        if best_score < 20.0 {
-            return None;
-        }
-
         let threshold = best_score * 0.95;
 
         candidate_scores
@@ -122,18 +132,30 @@ fn tokenize(text: &str) -> Vec<&str> {
             continue;
         }
 
-        // Skip string literals
+        // String literals: do not trigger on contractions/apostrophes (e.g. don't, it's, Vega's)
         if b == b'"' || b == b'\'' {
+            let is_contraction = b == b'\''
+                && i > 0
+                && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_')
+                && i + 1 < len
+                && bytes[i + 1].is_ascii_alphabetic();
+
+            if is_contraction {
+                i += 1;
+                continue;
+            }
+
             let quote = b;
             i += 1;
-            while i < len && bytes[i] != quote {
+            // Stop at closing quote, or at newline (unmatched quote should not swallow entire document)
+            while i < len && bytes[i] != quote && bytes[i] != b'\n' {
                 if bytes[i] == b'\\' && i + 1 < len {
                     i += 2;
                 } else {
                     i += 1;
                 }
             }
-            if i < len {
+            if i < len && bytes[i] == quote {
                 i += 1;
             }
             continue;
@@ -159,12 +181,31 @@ fn tokenize(text: &str) -> Vec<&str> {
             continue;
         }
 
-        // Regular word tokens (alphanumeric, _, ., @, !, -)
-        if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'@' | b'-' | b'!') {
+        // Skip Unicode curly apostrophe (’ U+2019: 0xE2 0x80 0x99) inside words
+        if b == 0xE2 && i + 2 < len && bytes[i + 1] == 0x80 && bytes[i + 2] == 0x99 {
+            i += 3;
+            continue;
+        }
+
+        // Regular word tokens (alphanumeric, _, or @ / - prefix for directives)
+        if b.is_ascii_alphanumeric()
+            || b == b'_'
+            || ((b == b'@' || b == b'-') && i + 1 < len && bytes[i + 1].is_ascii_alphabetic())
+        {
             let start = i;
-            while i < len
-                && (bytes[i].is_ascii_alphanumeric()
-                    || matches!(bytes[i], b'_' | b'.' | b'@' | b'-' | b'!'))
+            if b == b'@' || b == b'-' {
+                i += 1;
+            }
+            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            // Check for Rust macro exclamation mark: println!, vec!, etc.
+            if i < len
+                && bytes[i] == b'!'
+                && matches!(
+                    &text[start..i],
+                    "println" | "eprintln" | "vec" | "format" | "panic"
+                )
             {
                 i += 1;
             }

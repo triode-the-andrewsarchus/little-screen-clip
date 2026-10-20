@@ -33,12 +33,17 @@ pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
         return lang;
     }
 
-    // 4. Precomputed statistical classifier with popularity prior (trained on Linguist corpus)
+    // 4. Prose check (detects natural language sentences, contractions, and prose words)
+    if is_prose_text(trimmed) {
+        return "txt";
+    }
+
+    // 5. Precomputed statistical classifier with popularity prior (trained on Linguist corpus)
     if let Some(lang) = classify_snippet(trimmed) {
         return lang;
     }
 
-    // 5. Fallback heuristics for short snippets
+    // 6. Fallback heuristics for short snippets
     check_snippet_fallback(trimmed).unwrap_or("txt")
 }
 
@@ -162,6 +167,129 @@ fn check_snippet_fallback(trimmed: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Returns true if the text exhibits clear prose structure without code characteristics.
+pub fn is_prose_text(trimmed: &str) -> bool {
+    // 1. Structural code symbols
+    // Code almost universally uses braces, statement terminators, or code operators.
+    const CODE_SYMBOLS: &[&str] = &[
+        "{", "}", ";", "->", "=>", "::", "==", "!=", ":=", "+=", "-=", "*=", "/=", "&&", "||",
+        "<<", ">>",
+    ];
+    if CODE_SYMBOLS.iter().any(|&s| trimmed.contains(s)) {
+        return false;
+    }
+
+    // 2. Line-start code prefixes / keywords
+    const CODE_LINE_PREFIXES: &[&str] = &[
+        "fn ",
+        "pub ",
+        "def ",
+        "class ",
+        "import ",
+        "from ",
+        "#include",
+        "include ",
+        "package ",
+        "func ",
+        "var ",
+        "val ",
+        "let ",
+        "const ",
+        "struct ",
+        "enum ",
+        "type ",
+        "interface ",
+        "pragma ",
+        "SELECT ",
+        "INSERT ",
+        "UPDATE ",
+        "DELETE ",
+        "CREATE ",
+        "ALTER ",
+        "DROP ",
+        "echo ",
+        "export ",
+        "sub ",
+        "public ",
+        "private ",
+        "protected ",
+        "template ",
+        "namespace ",
+        "module ",
+        "global ",
+        "section ",
+        "program ",
+        "IDENTIFICATION DIVISION",
+        "PROCEDURE DIVISION",
+        "ENVIRONMENT DIVISION",
+        "DATA DIVISION",
+        "cmake_minimum_required",
+        "\\documentclass",
+        "\\begin",
+        "terraform ",
+        "syntax =",
+        "contract ",
+        "resource ",
+    ];
+
+    for line in trimmed.lines() {
+        let l = line.trim();
+        if CODE_LINE_PREFIXES.iter().any(|&p| l.starts_with(p)) {
+            return false;
+        }
+        if l.starts_with("//") || l.starts_with("/*") || l.starts_with("(*") || l.starts_with("#!")
+        {
+            return false;
+        }
+    }
+
+    // 3. Sentence endings, contractions, or Latin lorem ipsum vocabulary
+    let has_sentence_end = trimmed.lines().any(|l| {
+        let trimmed_line = l.trim_end();
+        trimmed_line.ends_with('.')
+            || trimmed_line.ends_with('?')
+            || trimmed_line.ends_with('!')
+            || trimmed_line.ends_with(".\"")
+            || trimmed_line.ends_with("?\"")
+            || trimmed_line.ends_with("!\"")
+    });
+
+    let has_contraction = trimmed.contains('\'') || trimmed.contains('’');
+
+    const LOREM_WORDS: &[&str] = &[
+        "lorem",
+        "ipsum",
+        "dolor",
+        "sit",
+        "amet",
+        "consectetur",
+        "adipiscing",
+        "elit",
+        "sed",
+        "eiusmod",
+        "tempor",
+        "incididunt",
+        "labore",
+        "dolore",
+        "magna",
+        "aliqua",
+    ];
+    let lower = trimmed.to_ascii_lowercase();
+    let has_lorem = LOREM_WORDS.iter().any(|&w| lower.contains(w));
+
+    if has_sentence_end || has_contraction || has_lorem {
+        return true;
+    }
+
+    // Plain text without any function call '(' or assignment '='
+    let words_count = trimmed.split_whitespace().count();
+    if words_count >= 1 && !trimmed.contains('(') && !trimmed.contains('=') {
+        return true;
+    }
+
+    false
 }
 
 /// Maps standard file extensions to syntect language identifiers
@@ -882,6 +1010,48 @@ mod tests {
             detect_language("A walk through the garden.\nAnother lovely day.\n", None),
             "txt"
         );
+    }
+
+    #[test]
+    fn test_user_snippet() {
+        let text_unicode = "And maybe that’s possible still, maybe over the course of a decade OpGuides will still end up as that. But I don’t think that’s even what I want anymore. I don’t want this to be Vega’s Opinionated Big Ass Book To Give You An All-In-One Education, both because VegaOpBABTGYAAIOEdu is far less catchy, and because I don’t even think it’s possible. The more I write on this the more I value input of others and other resources I find, and the more happy I am that I called this project Opinionated Guides.";
+        assert_eq!(detect_language(text_unicode, None), "txt");
+
+        let text_ascii = "And maybe that's possible still, maybe over the course of a decade OpGuides will still end up as that. But I don't think that's even what I want anymore. I don't want this to be Vega's Opinionated Big Ass Book To Give You An All-In-One Education, both because VegaOpBABTGYAAIOEdu is far less catchy, and because I don't even think it's possible. The more I write on this the more I value input of others and other resources I find, and the more happy I am that I called this project Opinionated Guides.";
+        assert_eq!(detect_language(text_ascii, None), "txt");
+    }
+
+    #[test]
+    fn test_plain_prose_and_lorem_ipsum_stay_plain_text() {
+        let cases = [
+            "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+            "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.",
+            "Lorem ipsum dolor sit amet, but it's placeholder text.",
+            "Here's some text with an apostrophe and quotes: 'lorem ipsum'.",
+            "'Lorem ipsum dolor sit amet'",
+            "Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.",
+            "That's one small step for man, one giant leap for mankind.",
+            "Yes, let's do this.",
+            "This is a test note, it's plain text.",
+            "Just a quick note, don't forget milk.",
+            "Don't worry, be happy.",
+            "It's raining outside today.",
+            "User's manual and reference guide.",
+            "What's the meaning of life?",
+            "Let's write some plain English text with an apostrophe.",
+            "There's no place like home.",
+            "Plain notes.\n",
+            "A walk through the garden.\nAnother lovely day.\n",
+        ];
+
+        for text in cases {
+            assert_eq!(
+                detect_language(text, None),
+                "txt",
+                "Text should be classified as plain text ('txt'), but got: {}",
+                detect_language(text, None)
+            );
+        }
     }
 
     #[test]
