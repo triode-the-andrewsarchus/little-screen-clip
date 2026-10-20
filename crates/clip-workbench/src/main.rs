@@ -89,6 +89,10 @@ pub use clip_workbench::model3d_view;
 #[cfg(test)]
 mod model3d_view;
 #[cfg(not(test))]
+pub use clip_workbench::onnx_runtime;
+#[cfg(test)]
+mod onnx_runtime;
+#[cfg(not(test))]
 pub use clip_workbench::pdf_view;
 #[cfg(test)]
 mod pdf_view;

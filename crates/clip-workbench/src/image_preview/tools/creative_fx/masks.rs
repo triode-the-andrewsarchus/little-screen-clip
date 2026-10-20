@@ -165,6 +165,7 @@ impl ImagePreviewState {
             cmd_bin,
             cmd_args,
             stamp,
+            model_url: self.depth_model_url.clone(),
         });
         self.submit_creative_fx_depth_attempt(jobs);
     }
@@ -180,6 +181,33 @@ impl ImagePreviewState {
         let control = std::sync::Arc::new(ImageToolProcessControl::new());
         self.creative_fx_state.depth_process_control = Some(control.clone());
         let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            let is_default_depth_cmd = request.cmd_bin.contains("depth_estimation.py")
+                || request
+                    .cmd_args
+                    .iter()
+                    .any(|a| a.contains("depth_estimation.py"));
+            if is_default_depth_cmd {
+                if let Ok(model_path) = crate::onnx_runtime::ensure_model(
+                    crate::onnx_runtime::DEPTH_ANYTHING_V2_MODEL_NAME,
+                    request.model_url.as_deref(),
+                ) {
+                    let source_rgba = request.snapshot.compose();
+                    match super::super::background_removal::run_native_depth_map(
+                        &source_rgba,
+                        &model_path,
+                    ) {
+                        Ok(depth_rgba) => {
+                            if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                                return;
+                            }
+                            send_creative_fx_mask_result(&tx, &request.stamp, Ok(depth_rgba));
+                            return;
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+
             let mut cmd = Command::new(&request.cmd_bin);
             cmd.args(&request.cmd_args);
             let result = request
@@ -239,6 +267,7 @@ impl ImagePreviewState {
             cmd_bin,
             cmd_args,
             stamp,
+            model_url: self.rmbg_model_url.clone(),
         });
         self.submit_creative_fx_alpha_attempt(jobs);
     }
@@ -254,6 +283,30 @@ impl ImagePreviewState {
         let control = std::sync::Arc::new(ImageToolProcessControl::new());
         self.creative_fx_state.alpha_process_control = Some(control.clone());
         let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            let is_default_bg_cmd = request.cmd_bin.contains("remove_bg.py")
+                || request.cmd_args.iter().any(|a| a.contains("remove_bg.py"));
+            if is_default_bg_cmd {
+                if let Ok(model_path) = crate::onnx_runtime::ensure_model(
+                    crate::onnx_runtime::RMBG_14_MODEL_NAME,
+                    request.model_url.as_deref(),
+                ) {
+                    let source_rgba = request.snapshot.compose();
+                    match super::super::background_removal::run_native_background_removal(
+                        &source_rgba,
+                        &model_path,
+                    ) {
+                        Ok(cutout_rgba) => {
+                            if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                                return;
+                            }
+                            send_creative_fx_mask_result(&tx, &request.stamp, Ok(cutout_rgba));
+                            return;
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+
             let mut cmd = Command::new(&request.cmd_bin);
             cmd.args(&request.cmd_args);
             let result = request

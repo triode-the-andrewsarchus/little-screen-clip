@@ -1153,6 +1153,7 @@ impl ImagePreviewState {
         self.inpaint_cancel = Some(cancel.clone());
         self.inpaint_child_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let child_pid = self.inpaint_child_pid.clone();
+        let lama_url = self.lama_model_url.clone();
 
         let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
             let start = std::time::Instant::now();
@@ -1160,21 +1161,14 @@ impl ImagePreviewState {
                 "Running LaMa inpainting neural network...".to_string(),
             ));
 
-            // Priority 1: Native Rust ORT inference if model file exists
-            let model_candidates =
-                [
-                    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
-                        .join(".cache/little-screen-clip/models/big-lama.onnx"),
-                ];
+            // Priority 1: Native Rust ORT inference if model is available
+            let model_path = crate::onnx_runtime::ensure_model(
+                crate::onnx_runtime::BIG_LAMA_MODEL_NAME,
+                lama_url.as_deref(),
+            )
+            .ok();
 
-            let found_model = model_candidates.iter().find(|p| {
-                p.exists()
-                    && std::fs::metadata(p)
-                        .map(|m| m.len() > 1_000_000)
-                        .unwrap_or(false)
-            });
-
-            if let Some(model_path) = found_model {
+            if let Some(ref model_path) = model_path {
                 match run_native_lama_inpaint(&current_image, &mask_image, model_path) {
                     Ok(result_rgba) => {
                         let _ = tx.send(LamaInpaintMsg::Success {
@@ -1185,7 +1179,7 @@ impl ImagePreviewState {
                     }
                     Err(native_err) => {
                         let _ = tx.send(LamaInpaintMsg::Progress(format!(
-                            "Native ORT failed ({native_err}), trying Python worker..."
+                            "Native ORT failed ({native_err}), trying fallback..."
                         )));
                     }
                 }
@@ -1404,9 +1398,7 @@ pub fn run_native_lama_inpaint(
         }
     }
 
-    let env = ort::init()
-        .build()
-        .map_err(|e| format!("ORT init failed: {e}"))?;
+    let env = crate::onnx_runtime::get_ort_environment()?;
     let mut session = ort::session::Session::builder(&env)
         .map_err(|e| format!("ORT builder failed: {e}"))?
         .commit_from_file(model_path)

@@ -58,6 +58,7 @@ struct CreativeFxMaskRequest {
     cmd_bin: String,
     cmd_args: Vec<String>,
     stamp: CreativeFxMaskStamp,
+    model_url: Option<String>,
 }
 
 fn send_creative_fx_mask_result(

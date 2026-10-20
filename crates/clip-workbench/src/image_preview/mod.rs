@@ -60,6 +60,7 @@ struct BgRemovalRequest {
     operation: BgRemovalOperation,
     initial_progress: String,
     status: String,
+    model_url: Option<String>,
 }
 
 // filmr physics-based film simulation engine
@@ -196,6 +197,9 @@ pub struct ImagePreviewState {
     pub bg_removal_status: Option<String>,
     pub bg_removal_error: Option<String>,
     pub bg_removal_cmd: Option<String>,
+    pub lama_model_url: Option<String>,
+    pub rmbg_model_url: Option<String>,
+    pub depth_model_url: Option<String>,
     pub(crate) image_tool_child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
     pub(crate) image_tool_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub multimatte_prompt: String,
@@ -623,6 +627,9 @@ impl ImagePreviewState {
             bg_removal_status: None,
             bg_removal_error: None,
             bg_removal_cmd: config.image.bg_removal_cmd.clone(),
+            lama_model_url: Some(config.lama_model_url().to_string()),
+            rmbg_model_url: Some(config.rmbg_model_url().to_string()),
+            depth_model_url: Some(config.depth_model_url().to_string()),
             image_tool_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             image_tool_cancel: None,
             multimatte_prompt: String::new(),

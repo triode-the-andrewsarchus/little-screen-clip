@@ -37,6 +37,9 @@ pub struct AppConfig {
     /// Standalone Files media browsing preferences.
     #[serde(default)]
     pub file_manager: FileManagerConfig,
+    /// AI/ONNX neural network model download URL configuration.
+    #[serde(default, alias = "models")]
+    pub ai_models: AiModelsConfig,
 }
 
 /// Standalone Files media view preferences.
@@ -107,6 +110,27 @@ impl Default for AutoActionsConfig {
     }
 }
 
+pub const DEFAULT_BIG_LAMA_MODEL_URL: &str =
+    "https://huggingface.co/smile-forge/big-lama-onnx/resolve/main/big-lama.onnx";
+pub const DEFAULT_RMBG_14_MODEL_URL: &str =
+    "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx";
+pub const DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL: &str = "https://huggingface.co/onnx-community/Depth-Anything-V2-Small-ONNX/resolve/main/onnx/model.onnx";
+
+/// AI/ONNX model download URL overrides.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct AiModelsConfig {
+    /// Optional URL override for downloading the Big-LaMa inpainting ONNX model.
+    #[serde(alias = "big_lama_url", alias = "lama_model_url")]
+    pub lama_url: Option<String>,
+    /// Optional URL override for downloading the RMBG-1.4 background removal ONNX model.
+    #[serde(alias = "rmbg_14_url", alias = "rmbg_model_url")]
+    pub rmbg_url: Option<String>,
+    /// Optional URL override for downloading the Depth-Anything-V2 depth estimation ONNX model.
+    #[serde(alias = "depth_anything_url", alias = "depth_model_url")]
+    pub depth_url: Option<String>,
+}
+
 /// External tool paths for image viewing, editing, and background removal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageConfig {
@@ -127,6 +151,15 @@ pub struct ImageConfig {
     /// If left None, automatically checks for local script or system Python with onnxruntime.
     #[serde(default)]
     pub lama_inpaint_cmd: Option<String>,
+    /// Optional URL override for downloading the Big-LaMa inpainting ONNX model.
+    #[serde(default)]
+    pub lama_model_url: Option<String>,
+    /// Optional URL override for downloading the RMBG-1.4 background removal ONNX model.
+    #[serde(default)]
+    pub rmbg_model_url: Option<String>,
+    /// Optional URL override for downloading the Depth-Anything-V2 depth estimation ONNX model.
+    #[serde(default)]
+    pub depth_model_url: Option<String>,
 }
 
 fn default_image_editor() -> String {
@@ -149,6 +182,9 @@ impl Default for ImageConfig {
             viewer: default_image_viewer(),
             bg_removal_cmd: None,
             lama_inpaint_cmd: None,
+            lama_model_url: None,
+            rmbg_model_url: None,
+            depth_model_url: None,
         }
     }
 }
@@ -477,6 +513,7 @@ impl Default for AppConfig {
             auto_actions: AutoActionsConfig::default(),
             model3d: Model3dConfig::default(),
             file_manager: FileManagerConfig::default(),
+            ai_models: AiModelsConfig::default(),
         }
     }
 }
@@ -577,6 +614,33 @@ impl AppConfig {
         spectrum: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         save_setting_to_file("file_manager", "audio_spectrum", spectrum)
+    }
+
+    /// URL for downloading the Big-LaMa inpainting ONNX model.
+    pub fn lama_model_url(&self) -> &str {
+        self.ai_models
+            .lama_url
+            .as_deref()
+            .or(self.image.lama_model_url.as_deref())
+            .unwrap_or(DEFAULT_BIG_LAMA_MODEL_URL)
+    }
+
+    /// URL for downloading the RMBG-1.4 background removal ONNX model.
+    pub fn rmbg_model_url(&self) -> &str {
+        self.ai_models
+            .rmbg_url
+            .as_deref()
+            .or(self.image.rmbg_model_url.as_deref())
+            .unwrap_or(DEFAULT_RMBG_14_MODEL_URL)
+    }
+
+    /// URL for downloading the Depth-Anything-V2 depth estimation ONNX model.
+    pub fn depth_model_url(&self) -> &str {
+        self.ai_models
+            .depth_url
+            .as_deref()
+            .or(self.image.depth_model_url.as_deref())
+            .unwrap_or(DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL)
     }
 }
 
@@ -802,5 +866,51 @@ triangle_limit = 2500
 "#;
         let alias_cfg: AppConfig = toml::from_str(alias_toml).unwrap();
         assert_eq!(alias_cfg.model3d.preview_triangle_limit, 2500);
+    }
+
+    #[test]
+    fn test_ai_model_url_defaults_and_overrides() {
+        let default_cfg: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(default_cfg.lama_model_url(), DEFAULT_BIG_LAMA_MODEL_URL);
+        assert_eq!(default_cfg.rmbg_model_url(), DEFAULT_RMBG_14_MODEL_URL);
+        assert_eq!(
+            default_cfg.depth_model_url(),
+            DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL
+        );
+
+        // Test overrides under [ai_models]
+        let ai_models_toml = r#"
+[ai_models]
+lama_url = "https://custom.mirror/lama.onnx"
+rmbg_url = "https://custom.mirror/rmbg.onnx"
+depth_url = "https://custom.mirror/depth.onnx"
+"#;
+        let ai_cfg: AppConfig = toml::from_str(ai_models_toml).unwrap();
+        assert_eq!(ai_cfg.lama_model_url(), "https://custom.mirror/lama.onnx");
+        assert_eq!(ai_cfg.rmbg_model_url(), "https://custom.mirror/rmbg.onnx");
+        assert_eq!(ai_cfg.depth_model_url(), "https://custom.mirror/depth.onnx");
+
+        // Test overrides under [image]
+        let image_toml = r#"
+[image]
+lama_model_url = "https://image.mirror/lama.onnx"
+rmbg_model_url = "https://image.mirror/rmbg.onnx"
+depth_model_url = "https://image.mirror/depth.onnx"
+"#;
+        let img_cfg: AppConfig = toml::from_str(image_toml).unwrap();
+        assert_eq!(img_cfg.lama_model_url(), "https://image.mirror/lama.onnx");
+        assert_eq!(img_cfg.rmbg_model_url(), "https://image.mirror/rmbg.onnx");
+        assert_eq!(img_cfg.depth_model_url(), "https://image.mirror/depth.onnx");
+
+        // Test [ai_models] taking precedence over [image]
+        let both_toml = r#"
+[image]
+lama_model_url = "https://image.mirror/lama.onnx"
+
+[ai_models]
+lama_url = "https://ai.mirror/lama.onnx"
+"#;
+        let both_cfg: AppConfig = toml::from_str(both_toml).unwrap();
+        assert_eq!(both_cfg.lama_model_url(), "https://ai.mirror/lama.onnx");
     }
 }

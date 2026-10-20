@@ -407,6 +407,7 @@ impl ImagePreviewState {
             operation: BgRemovalOperation::DepthMap,
             initial_progress: "Invoking depth estimation neural network...".to_string(),
             status,
+            model_url: self.depth_model_url.clone(),
         });
         self.bg_removal_retry_at = None;
         self.submit_image_tool_attempt(jobs);

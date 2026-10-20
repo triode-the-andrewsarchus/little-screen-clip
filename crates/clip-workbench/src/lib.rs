@@ -24,6 +24,7 @@ pub mod conversion_decode_worker;
 pub mod image_preview;
 pub mod midi_view;
 pub mod model3d_view;
+pub mod onnx_runtime;
 pub mod pdf_view;
 pub mod shell;
 pub mod splat_view;

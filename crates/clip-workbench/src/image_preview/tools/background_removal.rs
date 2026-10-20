@@ -234,6 +234,167 @@ pub(crate) fn clear_image_tool_pid_if_owned(
         .is_ok()
 }
 
+pub fn run_native_background_removal(
+    image: &RgbaImage,
+    model_path: &std::path::Path,
+) -> Result<RgbaImage, String> {
+    let (orig_w, orig_h) = image.dimensions();
+    if orig_w == 0 || orig_h == 0 {
+        return Err("Image has zero dimension".to_string());
+    }
+
+    let resized = image::imageops::resize(image, 1024, 1024, image::imageops::FilterType::Triangle);
+    let mut img_arr = ndarray::Array4::<f32>::zeros((1, 3, 1024, 1024));
+
+    for y in 0..1024 {
+        for x in 0..1024 {
+            let px = resized.get_pixel(x, y);
+            img_arr[[0, 0, y as usize, x as usize]] = (px[0] as f32 / 255.0 - 0.5) / 0.5;
+            img_arr[[0, 1, y as usize, x as usize]] = (px[1] as f32 / 255.0 - 0.5) / 0.5;
+            img_arr[[0, 2, y as usize, x as usize]] = (px[2] as f32 / 255.0 - 0.5) / 0.5;
+        }
+    }
+
+    let env = crate::onnx_runtime::get_ort_environment()?;
+    let mut session = ort::session::Session::builder(&env)
+        .map_err(|e| format!("ORT builder failed: {e}"))?
+        .commit_from_file(model_path)
+        .map_err(|e| format!("ORT model load failed: {e}"))?;
+
+    let img_tensor = ort::value::Tensor::from_array(img_arr)
+        .map_err(|e| format!("ORT image tensor conversion failed: {e}"))?;
+
+    let outputs = session
+        .run(ort::inputs![img_tensor])
+        .map_err(|e| format!("ORT inference failed: {e}"))?;
+
+    let out_tensor = outputs[0]
+        .try_extract_array::<f32>()
+        .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
+
+    let mut mask_1024 = image::GrayImage::new(1024, 1024);
+    for y in 0..1024 {
+        for x in 0..1024 {
+            let val = out_tensor[[0, 0, y, x]].clamp(0.0, 1.0);
+            mask_1024.put_pixel(
+                x as u32,
+                y as u32,
+                image::Luma([(val * 255.0).round() as u8]),
+            );
+        }
+    }
+
+    let mask_orig = image::imageops::resize(
+        &mask_1024,
+        orig_w,
+        orig_h,
+        image::imageops::FilterType::Triangle,
+    );
+
+    let mut result = image.clone();
+    for y in 0..orig_h {
+        for x in 0..orig_w {
+            let mask_val = mask_orig.get_pixel(x, y)[0];
+            let orig_alpha = image.get_pixel(x, y)[3];
+            let new_alpha = ((orig_alpha as f32) * (mask_val as f32 / 255.0)).round() as u8;
+            let mut px = *image.get_pixel(x, y);
+            px[3] = new_alpha;
+            result.put_pixel(x, y, px);
+        }
+    }
+
+    Ok(result)
+}
+
+pub fn run_native_depth_map(
+    image: &RgbaImage,
+    model_path: &std::path::Path,
+) -> Result<RgbaImage, String> {
+    let (orig_w, orig_h) = image.dimensions();
+    if orig_w == 0 || orig_h == 0 {
+        return Err("Image has zero dimension".to_string());
+    }
+
+    let resized = image::imageops::resize(image, 518, 518, image::imageops::FilterType::Triangle);
+    let mut img_arr = ndarray::Array4::<f32>::zeros((1, 3, 518, 518));
+
+    for y in 0..518 {
+        for x in 0..518 {
+            let px = resized.get_pixel(x, y);
+            img_arr[[0, 0, y as usize, x as usize]] = (px[0] as f32 / 255.0 - 0.485) / 0.229;
+            img_arr[[0, 1, y as usize, x as usize]] = (px[1] as f32 / 255.0 - 0.456) / 0.224;
+            img_arr[[0, 2, y as usize, x as usize]] = (px[2] as f32 / 255.0 - 0.406) / 0.225;
+        }
+    }
+
+    let env = crate::onnx_runtime::get_ort_environment()?;
+    let mut session = ort::session::Session::builder(&env)
+        .map_err(|e| format!("ORT builder failed: {e}"))?
+        .commit_from_file(model_path)
+        .map_err(|e| format!("ORT model load failed: {e}"))?;
+
+    let img_tensor = ort::value::Tensor::from_array(img_arr)
+        .map_err(|e| format!("ORT image tensor conversion failed: {e}"))?;
+
+    let outputs = session
+        .run(ort::inputs![img_tensor])
+        .map_err(|e| format!("ORT inference failed: {e}"))?;
+
+    let out_tensor = outputs[0]
+        .try_extract_array::<f32>()
+        .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
+
+    let mut min_val = f32::INFINITY;
+    let mut max_val = f32::NEG_INFINITY;
+    for y in 0..518 {
+        for x in 0..518 {
+            let val = out_tensor[[0, y, x]];
+            if val < min_val {
+                min_val = val;
+            }
+            if val > max_val {
+                max_val = val;
+            }
+        }
+    }
+
+    let range = if (max_val - min_val) > 1e-6 {
+        max_val - min_val
+    } else {
+        1.0
+    };
+
+    let mut depth_518 = image::GrayImage::new(518, 518);
+    for y in 0..518 {
+        for x in 0..518 {
+            let val = out_tensor[[0, y, x]];
+            let norm = ((val - min_val) / range).clamp(0.0, 1.0);
+            depth_518.put_pixel(
+                x as u32,
+                y as u32,
+                image::Luma([(norm * 255.0).round() as u8]),
+            );
+        }
+    }
+
+    let depth_orig = image::imageops::resize(
+        &depth_518,
+        orig_w,
+        orig_h,
+        image::imageops::FilterType::Triangle,
+    );
+
+    let mut result = RgbaImage::new(orig_w, orig_h);
+    for y in 0..orig_h {
+        for x in 0..orig_w {
+            let d = depth_orig.get_pixel(x, y)[0];
+            result.put_pixel(x, y, image::Rgba([d, d, d, 255]));
+        }
+    }
+
+    Ok(result)
+}
+
 #[cfg(all(test, unix))]
 mod cancellation_tests {
     use super::*;
@@ -312,6 +473,7 @@ impl ImagePreviewState {
             operation: BgRemovalOperation::BackgroundRemoval,
             initial_progress: "Invoking FeyNoBg neural network...".to_string(),
             status: status_desc.clone(),
+            model_url: self.rmbg_model_url.clone(),
         });
         self.bg_removal_retry_at = None;
         self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
@@ -341,6 +503,74 @@ impl ImagePreviewState {
                 request.initial_progress.clone()
             };
             let _ = tx.send(BgRemovalMsg::Progress(init_msg));
+
+            // Native ORT fast path if using default/bundled scripts without custom overrides
+            let is_default_bg_cmd = request.command == "scripts/remove_bg.py"
+                || request.command == "./scripts/remove_bg.py"
+                || (request.command == "python3"
+                    && request
+                        .args
+                        .first()
+                        .is_some_and(|a| a.contains("remove_bg.py")));
+
+            let is_default_depth_cmd = request.command.contains("depth_estimation.py")
+                || request
+                    .args
+                    .iter()
+                    .any(|a| a.contains("depth_estimation.py"));
+
+            if request.operation == BgRemovalOperation::BackgroundRemoval
+                && request.prompt.is_none()
+                && is_default_bg_cmd
+            {
+                if let Ok(rmbg_path) = crate::onnx_runtime::ensure_model(
+                    crate::onnx_runtime::RMBG_14_MODEL_NAME,
+                    request.model_url.as_deref(),
+                ) {
+                    let _ = tx.send(BgRemovalMsg::Progress(
+                        "Running native RMBG-1.4 neural network...".to_string(),
+                    ));
+                    let source_rgba = request.snapshot.compose();
+                    match run_native_background_removal(&source_rgba, &rmbg_path) {
+                        Ok(result_rgba) => {
+                            let _ = tx.send(BgRemovalMsg::Success {
+                                result_rgba,
+                                duration_ms: start.elapsed().as_millis(),
+                            });
+                            return;
+                        }
+                        Err(err) => {
+                            let _ = tx.send(BgRemovalMsg::Progress(format!(
+                                "Native RMBG-1.4 failed ({err}), trying fallback..."
+                            )));
+                        }
+                    }
+                }
+            } else if request.operation == BgRemovalOperation::DepthMap && is_default_depth_cmd {
+                if let Ok(depth_path) = crate::onnx_runtime::ensure_model(
+                    crate::onnx_runtime::DEPTH_ANYTHING_V2_MODEL_NAME,
+                    request.model_url.as_deref(),
+                ) {
+                    let _ = tx.send(BgRemovalMsg::Progress(
+                        "Running native Depth-Anything-V2 neural network...".to_string(),
+                    ));
+                    let source_rgba = request.snapshot.compose();
+                    match run_native_depth_map(&source_rgba, &depth_path) {
+                        Ok(result_rgba) => {
+                            let _ = tx.send(BgRemovalMsg::Success {
+                                result_rgba,
+                                duration_ms: start.elapsed().as_millis(),
+                            });
+                            return;
+                        }
+                        Err(err) => {
+                            let _ = tx.send(BgRemovalMsg::Progress(format!(
+                                "Native Depth-Anything failed ({err}), trying fallback..."
+                            )));
+                        }
+                    }
+                }
+            }
 
             let png_bytes = match request.snapshot.compose_png() {
                 Ok(bytes) => bytes,
@@ -1052,5 +1282,52 @@ mod bounded_job_tests {
         }
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
         assert_eq!(state.image_tool_child_pid.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn native_background_removal_zero_dimension_fails() {
+        let empty = RgbaImage::new(0, 0);
+        let dummy = std::path::Path::new("dummy.onnx");
+        assert!(run_native_background_removal(&empty, dummy).is_err());
+    }
+
+    #[test]
+    fn native_depth_map_zero_dimension_fails() {
+        let empty = RgbaImage::new(0, 0);
+        let dummy = std::path::Path::new("dummy.onnx");
+        assert!(run_native_depth_map(&empty, dummy).is_err());
+    }
+
+    #[test]
+    fn native_background_removal_runs_if_model_present() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        let model_path =
+            std::path::PathBuf::from(home).join(".cache/little-screen-clip/models/rmbg-1.4.onnx");
+        if !model_path.exists() {
+            return;
+        }
+
+        let img = RgbaImage::from_pixel(32, 24, image::Rgba([120, 150, 200, 255]));
+        let result =
+            run_native_background_removal(&img, &model_path).expect("native rmbg inference");
+        assert_eq!(result.dimensions(), (32, 24));
+    }
+
+    #[test]
+    fn native_depth_map_runs_if_model_present() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        let model_path = std::path::PathBuf::from(home)
+            .join(".cache/little-screen-clip/models/depth-anything-v2-small.onnx");
+        if !model_path.exists() {
+            return;
+        }
+
+        let img = RgbaImage::from_pixel(32, 24, image::Rgba([120, 150, 200, 255]));
+        let result = run_native_depth_map(&img, &model_path).expect("native depth inference");
+        assert_eq!(result.dimensions(), (32, 24));
+        let px = result.get_pixel(10, 10);
+        assert_eq!(px[0], px[1]);
+        assert_eq!(px[1], px[2]);
+        assert_eq!(px[3], 255);
     }
 }
