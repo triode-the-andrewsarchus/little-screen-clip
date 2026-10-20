@@ -222,8 +222,14 @@ fn extract_clean_perimeter(
     (clean, center)
 }
 
-/// Fills the specified rectangle with a dithered conical gradient projected from the
-/// perimeter edge colors towards a blurred center average.
+/// Fills the specified rectangle with a 100% opaque, destructive synthetic gradient
+/// projected inward from the perimeter edge background colors.
+///
+/// Under no circumstances does this redaction rely on blurring the underlying image pixels.
+/// The original image data inside the box is completely overwritten and eliminated.
+/// The "center blur" refers strictly to smoothing the apex of the synthetic conical gradient
+/// itself (blending the incoming edge rays into their collective mean towards the geometric center)
+/// to eliminate pinch/spoke artifacts where the rays meet.
 pub fn fill_conical_edge_gradient_redaction(
     target: &mut RgbaImage,
     source: &RgbaImage,
