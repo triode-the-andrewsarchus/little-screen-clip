@@ -1,9 +1,14 @@
 //! Programming and markup language detection heuristics.
 //!
 //! Classifies plain text and code snippets into language tags (`rs`, `py`, `c`, `cpp`, `java`, `sh`, `json`, etc.)
-//! using file extension hints, shebang lines, structural markers, and keyword scoring.
+//! using file extension hints, shebang lines, structural markers, and precomputed Bayesian token frequencies.
 
 use std::path::Path;
+
+#[path = "syntax/classifier.rs"]
+mod classifier;
+
+pub use classifier::classify_snippet;
 
 /// Detects the programming or markup language from an optional file extension hint
 /// and content heuristics, prioritizing common languages: Python, C/C++, Rust, Java, Bash, etc.
@@ -28,8 +33,8 @@ pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
         return lang;
     }
 
-    // 4. Scoring heuristics prioritizing Python, C/C++, Rust, Java, Bash, JS/TS
-    if let Some(lang) = score_language_heuristics(trimmed) {
+    // 4. Precomputed statistical classifier with popularity prior (trained on Linguist corpus)
+    if let Some(lang) = classify_snippet(trimmed) {
         return lang;
     }
 
@@ -64,18 +69,41 @@ fn check_shebang(trimmed: &str) -> Option<&'static str> {
         Some("rb")
     } else if first_line.contains("perl") {
         Some("pl")
+    } else if first_line.contains("elixir") {
+        Some("ex")
+    } else if first_line.contains("julia") {
+        Some("jl")
+    } else if first_line.contains("pwsh") || first_line.contains("powershell") {
+        Some("ps1")
+    } else if first_line.contains("rscript") {
+        Some("r")
+    } else if first_line.contains("groovy") {
+        Some("groovy")
+    } else if first_line.contains("scala") {
+        Some("scala")
+    } else if first_line.contains("fish") {
+        Some("fish")
+    } else if first_line.contains("nu") {
+        Some("nu")
+    } else if first_line.contains("murex") {
+        Some("sh")
+    } else if first_line.contains("lua") {
+        Some("lua")
+    } else if first_line.contains("tcl") || first_line.contains("wish") {
+        Some("tcl")
+    } else if first_line.contains("awk") {
+        Some("awk")
     } else {
         None
     }
 }
 
 fn check_structural_format(trimmed: &str) -> Option<&'static str> {
-    if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+        && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
     {
-        if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
-            return Some("json");
-        }
+        return Some("json");
     }
 
     if trimmed.starts_with("<!DOCTYPE")
@@ -100,236 +128,6 @@ fn check_structural_format(trimmed: &str) -> Option<&'static str> {
     None
 }
 
-fn score_language_heuristics(trimmed: &str) -> Option<&'static str> {
-    let mut py_score: u32 = 0;
-    let mut rs_score: u32 = 0;
-    let mut c_score: u32 = 0;
-    let mut cpp_score: u32 = 0;
-    let mut java_score: u32 = 0;
-    let mut sh_score: u32 = 0;
-    let mut js_score: u32 = 0;
-
-    for line in trimmed.lines().take(40) {
-        let l = line.trim();
-        rs_score += score_rust_line(l);
-        py_score += score_python_line(l);
-        let (c_inc, cpp_inc) = score_c_cpp_line(l);
-        c_score += c_inc;
-        cpp_score += cpp_inc;
-        java_score += score_java_line(l);
-        sh_score += score_bash_line(l);
-        js_score += score_js_line(l);
-    }
-
-    let scores = [
-        (py_score, "py"),
-        (rs_score, "rs"),
-        (cpp_score, "cpp"),
-        (c_score, "c"),
-        (java_score, "java"),
-        (sh_score, "sh"),
-        (js_score, "js"),
-    ];
-
-    if let Some(&(max_score, lang)) = scores.iter().max_by_key(|(s, _)| *s) {
-        if max_score >= 2 {
-            return Some(lang);
-        }
-    }
-
-    None
-}
-
-fn score_rust_line(l: &str) -> u32 {
-    let mut score = 0;
-    if ["fn ", "pub fn ", "pub async fn "]
-        .iter()
-        .any(|p| l.starts_with(p))
-    {
-        score += 4;
-    }
-    if ["use std::", "use crate::", "pub use "]
-        .iter()
-        .any(|p| l.starts_with(p))
-    {
-        score += 3;
-    }
-    if ["impl ", "impl<", "trait "]
-        .iter()
-        .any(|p| l.starts_with(p))
-    {
-        score += 3;
-    }
-    if l.contains("let mut ") {
-        score += 2;
-    }
-    if ["println!(", "eprintln!(", "vec![", "format!("]
-        .iter()
-        .any(|p| l.contains(p))
-    {
-        score += 3;
-    }
-    if l.contains("match ") && l.ends_with('{') {
-        score += 2;
-    }
-    if ["-> Result<", "-> Option<"].iter().any(|p| l.contains(p)) {
-        score += 2;
-    }
-    score
-}
-
-fn score_python_line(l: &str) -> u32 {
-    let mut score = 0;
-    if l.starts_with("def ") && l.ends_with(':') {
-        score += 4;
-    }
-    if l.starts_with("class ") && l.ends_with(':') {
-        score += 3;
-    }
-    if ["import ", "from "].iter().any(|p| l.starts_with(p)) && !l.ends_with(';') {
-        score += 3;
-    }
-    if l.starts_with("if __name__ == ") || l.contains("__init__") {
-        score += 4;
-    }
-    if ["elif ", "except ", "finally:"]
-        .iter()
-        .any(|p| l.starts_with(p))
-    {
-        score += 3;
-    }
-    if l.contains("print(") && !l.ends_with(';') {
-        score += 2;
-    }
-    if l.contains("self.") {
-        score += 2;
-    }
-    score
-}
-
-fn score_c_cpp_line(l: &str) -> (u32, u32) {
-    let mut c_score = 0;
-    let mut cpp_score = 0;
-    if ["#include <", "#include \""]
-        .iter()
-        .any(|p| l.starts_with(p))
-    {
-        c_score += 4;
-        if ["<iostream>", "<vector>", "<string>", "<memory>"]
-            .iter()
-            .any(|p| l.contains(p))
-        {
-            cpp_score += 4;
-        }
-    }
-    if l.starts_with("#define ") {
-        c_score += 2;
-    }
-    if ["int main(", "void main(", "int main ("]
-        .iter()
-        .any(|p| l.contains(p))
-    {
-        c_score += 3;
-    }
-    if ["std::", "cout <<", "cin >>", "nullptr"]
-        .iter()
-        .any(|p| l.contains(p))
-    {
-        cpp_score += 4;
-    }
-    if ["template <", "template<", "namespace "]
-        .iter()
-        .any(|p| l.contains(p))
-    {
-        cpp_score += 3;
-    }
-    if ["printf(", "scanf(", "malloc("]
-        .iter()
-        .any(|p| l.contains(p))
-    {
-        c_score += 3;
-    }
-    (c_score, cpp_score)
-}
-
-fn score_java_line(l: &str) -> u32 {
-    let mut score = 0;
-    if [
-        "public static void main",
-        "System.out.print",
-        "System.err.print",
-    ]
-    .iter()
-    .any(|p| l.contains(p))
-    {
-        score += 5;
-    }
-    if ["public class ", "private class ", "public interface "]
-        .iter()
-        .any(|p| l.starts_with(p))
-    {
-        score += 4;
-    }
-    if l.starts_with("package ") && l.ends_with(';') {
-        score += 3;
-    }
-    if ["import java.", "import javax."]
-        .iter()
-        .any(|p| l.starts_with(p))
-    {
-        score += 4;
-    }
-    if l.contains("@Override") || l.contains("throws Exception") {
-        score += 2;
-    }
-    score
-}
-
-fn score_bash_line(l: &str) -> u32 {
-    let mut score = 0;
-    if ["echo ", "echo -e "].iter().any(|p| l.starts_with(p)) {
-        score += 2;
-    }
-    if l.starts_with("export ") && l.contains('=') {
-        score += 3;
-    }
-    if ["if [", "if [[", "elif ["].iter().any(|p| l.starts_with(p)) {
-        score += 3;
-    }
-    if ["fi", "done", "esac"].contains(&l) {
-        score += 4;
-    }
-    if ["chmod ", "chown ", "source "]
-        .iter()
-        .any(|p| l.starts_with(p))
-    {
-        score += 2;
-    }
-    if l.contains("${") && l.contains('}') {
-        score += 1;
-    }
-    score
-}
-
-fn score_js_line(l: &str) -> u32 {
-    let mut score = 0;
-    if (l.starts_with("const ") || l.starts_with("let ") || l.starts_with("var "))
-        && l.contains(" = ")
-    {
-        score += 1;
-    }
-    if l.contains("console.log(") || l.contains("console.error(") {
-        score += 3;
-    }
-    if l.starts_with("export default ") || l.starts_with("import React") {
-        score += 3;
-    }
-    if l.starts_with("interface ") && l.ends_with('{') {
-        score += 3;
-    }
-    score
-}
-
 fn check_snippet_fallback(trimmed: &str) -> Option<&'static str> {
     if trimmed.contains("fn ") || trimmed.contains("println!") {
         Some("rs")
@@ -341,6 +139,26 @@ fn check_snippet_fallback(trimmed: &str) -> Option<&'static str> {
         Some("sh")
     } else if trimmed.contains("public class") || trimmed.contains("System.out.") {
         Some("java")
+    } else if trimmed.contains("Console.WriteLine") || trimmed.contains("using System;") {
+        Some("cs")
+    } else if trimmed.contains("Write-Host") || trimmed.contains("Get-Process") {
+        Some("ps1")
+    } else if trimmed.contains("@echo off") {
+        Some("bat")
+    } else if trimmed.contains("defmodule ") {
+        Some("ex")
+    } else if trimmed.contains("-module(") {
+        Some("erl")
+    } else if trimmed.contains("(defn ") || trimmed.contains("(ns ") {
+        Some("clj")
+    } else if trimmed.contains("putStrLn ") {
+        Some("hs")
+    } else if trimmed.contains("@import(\"std\")") {
+        Some("zig")
+    } else if trimmed.contains("import std.stdio;") {
+        Some("d")
+    } else if trimmed.contains("fun ") {
+        Some("kt")
     } else {
         None
     }
@@ -349,7 +167,7 @@ fn check_snippet_fallback(trimmed: &str) -> Option<&'static str> {
 /// Maps standard file extensions to syntect language identifiers
 pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
     match ext.to_lowercase().as_str() {
-        "txt" | "text" => Some("txt"),
+        "txt" | "text" | "log" => Some("txt"),
         "rs" => Some("rs"),
         "py" | "pyw" | "python" => Some("py"),
         "c" | "h" => Some("c"),
@@ -368,13 +186,98 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "css" | "scss" | "sass" | "less" => Some("css"),
         "md" | "markdown" => Some("md"),
         "sql" => Some("sql"),
-        "xml" | "svg" => Some("xml"),
+        "xml" | "svg" | "xsd" => Some("xml"),
         "go" => Some("go"),
         "rb" | "ruby" => Some("rb"),
         "php" => Some("php"),
         "lua" => Some("lua"),
         "swift" => Some("swift"),
         "diff" | "patch" => Some("diff"),
+        "cs" | "csx" => Some("cs"),
+        "kt" | "kts" => Some("kt"),
+        "dart" => Some("dart"),
+        "scala" | "sc" | "sbt" => Some("scala"),
+        "pl" | "pm" | "t" => Some("pl"),
+        "r" | "rprofile" => Some("r"),
+        "jl" => Some("jl"),
+        "ps1" | "psm1" => Some("ps1"),
+        "bat" | "cmd" => Some("bat"),
+        "ex" | "exs" => Some("ex"),
+        "erl" | "hrl" => Some("erl"),
+        "clj" | "cljs" | "cljc" | "edn" => Some("clj"),
+        "hs" | "lhs" => Some("hs"),
+        "zig" => Some("zig"),
+        "groovy" | "gvy" | "gradle" => Some("groovy"),
+        "d" | "di" => Some("d"),
+        "asm" | "s" => Some("asm"),
+        "nim" => Some("nim"),
+        "ll" => Some("llvm"),
+        "red" | "reds" => Some("red"),
+        "odin" => Some("odin"),
+        "coffee" => Some("coffee"),
+        "raku" | "rakumod" => Some("raku"),
+        "hx" => Some("hx"),
+        "cr" => Some("cr"),
+        "noul" => Some("noul"),
+        "wat" | "wasm" => Some("wat"),
+        "elm" => Some("elm"),
+        "re" | "rei" => Some("re"),
+        "purs" => Some("purs"),
+        "hack" => Some("hack"),
+        "fth" | "4th" => Some("forth"),
+        "cob" | "cbl" => Some("cobol"),
+        "f" | "for" | "f90" | "f95" => Some("fortran"),
+        "pas" | "pp" | "p" | "dpr" => Some("pascal"),
+        "bas" | "bi" => Some("vb"),
+        "m" => Some("objc"),
+        "mm" => Some("objc"),
+        "matlab" => Some("matlab"),
+        "vb" | "vbs" => Some("vb"),
+        "apl" => Some("apl"),
+        "moon" => Some("moon"),
+        "ahk" | "ah2" => Some("ahk"),
+        "cy" => Some("cy"),
+        "wren" => Some("wren"),
+        "tcl" => Some("tcl"),
+        "fish" => Some("fish"),
+        "nu" => Some("nu"),
+        "xsh" => Some("xsh"),
+        "elv" => Some("elv"),
+        "tcsh" | "csh" => Some("csh"),
+        "rkt" | "scm" | "ss" => Some("scm"),
+        "lisp" | "lsp" | "cl" => Some("lisp"),
+        "el" => Some("lisp"),
+        "janet" => Some("janet"),
+        "u" => Some("unison"),
+        "roc" => Some("roc"),
+        "kk" => Some("koka"),
+        "fut" => Some("futhark"),
+        "ml" | "mli" => Some("ml"),
+        "fs" | "fsi" | "fsx" => Some("fs"),
+        "idr" => Some("idr"),
+        "agda" => Some("agda"),
+        "lean" => Some("lean"),
+        "vult" => Some("vult"),
+        "vhd" | "vhdl" => Some("vhdl"),
+        "scallop" => Some("scallop"),
+        "v" => Some("verilog"),
+        "wl" | "wls" => Some("wolfram"),
+        "sol" => Some("sol"),
+        "move" => Some("move"),
+        "proto" => Some("proto"),
+        "thrift" => Some("thrift"),
+        "graphql" | "gql" => Some("graphql"),
+        "tf" | "hcl" | "tfvars" => Some("tf"),
+        "nix" => Some("nix"),
+        "bzl" | "bazel" => Some("bazel"),
+        "cmake" => Some("cmake"),
+        "vim" | "vimrc" => Some("vim"),
+        "awk" => Some("awk"),
+        "glsl" | "vert" | "frag" | "geom" | "comp" => Some("glsl"),
+        "hlsl" | "fx" | "fxh" => Some("hlsl"),
+        "metal" => Some("metal"),
+        "tex" | "ltx" | "sty" | "cls" | "bib" => Some("tex"),
+        "bf" => Some("bf"),
         _ => None,
     }
 }
@@ -406,7 +309,124 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "lua" => "Lua",
         "swift" => "Swift",
         "diff" => "Diff",
+        "cs" => "C#",
+        "kt" => "Kotlin",
+        "dart" => "Dart",
+        "scala" => "Scala",
+        "pl" => "Perl",
+        "r" => "R",
+        "jl" => "Julia",
+        "ps1" => "PowerShell",
+        "bat" => "Batch",
+        "ex" => "Elixir",
+        "erl" => "Erlang",
+        "clj" => "Clojure",
+        "hs" => "Haskell",
+        "zig" => "Zig",
+        "groovy" => "Groovy",
+        "d" => "D",
+        "asm" => "Assembly",
+        "nim" => "Nim",
+        "llvm" => "LLVM IR",
+        "red" => "Red",
+        "odin" => "Odin",
+        "coffee" => "CoffeeScript",
+        "raku" => "Raku",
+        "hx" => "Haxe",
+        "cr" => "Crystal",
+        "noul" => "Noulith",
+        "wat" => "WebAssembly",
+        "elm" => "Elm",
+        "re" => "ReScript",
+        "purs" => "PureScript",
+        "hack" => "Hack",
+        "forth" => "Forth",
+        "cobol" => "COBOL",
+        "fortran" => "Fortran",
+        "pascal" => "Pascal",
+        "objc" => "Objective-C",
+        "matlab" => "MATLAB",
+        "vb" => "Visual Basic",
+        "apl" => "APL",
+        "moon" => "MoonScript",
+        "ahk" => "AutoHotkey",
+        "cy" => "Cyber",
+        "wren" => "Wren",
+        "tcl" => "Tcl",
+        "fish" => "Fish",
+        "nu" => "Nushell",
+        "xsh" => "Xonsh",
+        "elv" => "Elvish",
+        "csh" => "C Shell",
+        "scm" => "Scheme",
+        "lisp" => "Lisp",
+        "janet" => "Janet",
+        "unison" => "Unison",
+        "roc" => "Roc",
+        "koka" => "Koka",
+        "futhark" => "Futhark",
+        "ml" => "OCaml",
+        "fs" => "F#",
+        "idr" => "Idris",
+        "agda" => "Agda",
+        "lean" => "Lean",
+        "vult" => "Vult",
+        "vhdl" => "VHDL",
+        "scallop" => "Scallop",
+        "verilog" => "Verilog",
+        "wolfram" => "Wolfram",
+        "sol" => "Solidity",
+        "move" => "Move",
+        "proto" => "Protobuf",
+        "thrift" => "Thrift",
+        "graphql" => "GraphQL",
+        "tf" => "Terraform / HCL",
+        "nix" => "Nix",
+        "bazel" => "Bazel",
+        "cmake" => "CMake",
+        "vim" => "Vim script",
+        "awk" => "AWK",
+        "glsl" => "GLSL",
+        "hlsl" => "HLSL",
+        "metal" => "Metal",
+        "tex" => "TeX / LaTeX",
+        "bf" => "Brainfuck",
         _ => "Text",
+    }
+}
+
+/// Maps a language identifier to a compatible fallback language in syntect's default syntax set.
+pub fn syntect_fallback(lang: &str) -> &'static str {
+    match lang {
+        "kt" | "kts" | "dart" | "hack" => "java",
+        "cs" | "csx" => "cs",
+        "zig" | "odin" | "vhd" | "vhdl" | "verilog" | "asm" | "llvm" | "vult" | "scallop" => "c",
+        "nim" | "jl" | "cy" | "noul" | "wren" => "py",
+        "cr" | "moon" => "rb",
+        "ex" | "exs" => "rb",
+        "fs" | "fsi" | "fsx" => "ml",
+        "rkt" | "scm" | "ss" | "janet" | "lisp" => "lisp",
+        "elm" | "purs" | "idr" | "agda" | "lean" | "unison" | "roc" | "koka" | "futhark" => "hs",
+        "re" => "ml",
+        "glsl" | "vert" | "frag" | "hlsl" | "metal" | "proto" | "thrift" | "sol" | "move" => "cpp",
+        "tf" | "hcl" | "nix" => "yaml",
+        "cmake" => "make",
+        "ps1" | "psm1" | "nu" | "xsh" | "elv" | "tcsh" | "csh" | "fish" => "sh",
+        "graphql" | "gql" => "js",
+        "coffee" => "js",
+        "wat" => "lisp",
+        "vb" | "vbs" => "pas",
+        "f" | "for" | "f90" | "f95" | "fortran" => "pas",
+        "pascal" => "pas",
+        "tex" => "tex",
+        "raku" => "pl",
+        "hx" => "java",
+        "red" => "rb",
+        "ahk" => "bat",
+        "tcl" => "tcl",
+        "d" => "d",
+        "cobol" | "forth" | "apl" | "bf" | "wolfram" | "vim" | "awk" => "txt",
+        _ => "txt",
     }
 }
 
@@ -619,6 +639,236 @@ mod tests {
                 None
             ),
             "html"
+        );
+    }
+
+    #[test]
+    fn test_phase1_languages() {
+        // Extension tests
+        assert_eq!(detect_language("", Some("cs")), "cs");
+        assert_eq!(detect_language("", Some("kt")), "kt");
+        assert_eq!(detect_language("", Some("dart")), "dart");
+        assert_eq!(detect_language("", Some("scala")), "scala");
+        assert_eq!(detect_language("", Some("pl")), "pl");
+        assert_eq!(detect_language("", Some("r")), "r");
+        assert_eq!(detect_language("", Some("jl")), "jl");
+        assert_eq!(detect_language("", Some("ps1")), "ps1");
+        assert_eq!(detect_language("", Some("bat")), "bat");
+        assert_eq!(detect_language("", Some("ex")), "ex");
+        assert_eq!(detect_language("", Some("erl")), "erl");
+        assert_eq!(detect_language("", Some("clj")), "clj");
+        assert_eq!(detect_language("", Some("hs")), "hs");
+        assert_eq!(detect_language("", Some("zig")), "zig");
+        assert_eq!(detect_language("", Some("groovy")), "groovy");
+        assert_eq!(detect_language("", Some("d")), "d");
+
+        // Shebang tests
+        assert_eq!(
+            detect_language("#!/usr/bin/env perl\nuse strict;", None),
+            "pl"
+        );
+        assert_eq!(
+            detect_language("#!/usr/bin/env elixir\nIO.puts(1)", None),
+            "ex"
+        );
+        assert_eq!(
+            detect_language("#!/usr/bin/env julia\nprintln(1)", None),
+            "jl"
+        );
+        assert_eq!(
+            detect_language("#!/usr/bin/pwsh\nWrite-Host 1", None),
+            "ps1"
+        );
+
+        // Snippet / Heuristic tests
+        assert_eq!(
+            detect_language(
+                "using System;\nnamespace App {\n    class Program {\n        static void Main() { Console.WriteLine(\"hi\"); }\n    }\n}",
+                None
+            ),
+            "cs"
+        );
+        assert_eq!(
+            detect_language(
+                "fun main() {\n    val message = \"hello\"\n    println(message)\n}",
+                None
+            ),
+            "kt"
+        );
+        assert_eq!(
+            detect_language(
+                "import 'package:flutter/material.dart';\nclass MyWidget extends StatelessWidget {\n    Widget build(BuildContext context) {}\n}",
+                None
+            ),
+            "dart"
+        );
+        assert_eq!(
+            detect_language(
+                "defmodule Sample.Math do\n  def sum(a, b) do\n    a + b\n  end\nend",
+                None
+            ),
+            "ex"
+        );
+        assert_eq!(
+            detect_language(
+                "-module(hello_world).\n-export([start/0]).\nstart() -> io:format(\"Hello\").",
+                None
+            ),
+            "erl"
+        );
+        assert_eq!(
+            detect_language(
+                "(ns my.project\n  (:require [clojure.string :as str]))\n(defn greet [name]\n  (println name))",
+                None
+            ),
+            "clj"
+        );
+        assert_eq!(
+            detect_language(
+                "module Main where\nimport qualified Data.Map as Map\nmain :: IO ()\nmain = putStrLn \"hello\"",
+                None
+            ),
+            "hs"
+        );
+        assert_eq!(
+            detect_language(
+                "const std = @import(\"std\");\npub fn main() !void {\n    std.debug.print(\"hello\\n\", .{});\n}",
+                None
+            ),
+            "zig"
+        );
+        assert_eq!(
+            detect_language(
+                "@echo off\nsetlocal enabledelayedexpansion\necho Running script...\ngoto :end\n:end",
+                None
+            ),
+            "bat"
+        );
+        assert_eq!(
+            detect_language(
+                "import std.stdio;\nvoid main() {\n    writeln(\"Hello, D!\");\n}",
+                None
+            ),
+            "d"
+        );
+
+        // Popularity preference: ambiguous simple snippets prefer Python/JS over obscure languages
+        assert_eq!(detect_language("print(\"hello world\")", None), "py");
+    }
+
+    #[test]
+    fn test_additional_phases_languages() {
+        // Extension tests
+        assert_eq!(detect_language("", Some("sol")), "sol");
+        assert_eq!(detect_language("", Some("glsl")), "glsl");
+        assert_eq!(detect_language("", Some("cmake")), "cmake");
+        assert_eq!(detect_language("", Some("proto")), "proto");
+        assert_eq!(detect_language("", Some("graphql")), "graphql");
+        assert_eq!(detect_language("", Some("tf")), "tf");
+        assert_eq!(detect_language("", Some("nix")), "nix");
+        assert_eq!(detect_language("", Some("tex")), "tex");
+        assert_eq!(detect_language("", Some("coffee")), "coffee");
+        assert_eq!(detect_language("", Some("asm")), "asm");
+        assert_eq!(detect_language("", Some("f90")), "fortran");
+        assert_eq!(detect_language("", Some("pas")), "pascal");
+        assert_eq!(detect_language("", Some("ml")), "ml");
+        assert_eq!(detect_language("", Some("fs")), "fs");
+        assert_eq!(detect_language("", Some("scm")), "scm");
+        assert_eq!(detect_language("", Some("nim")), "nim");
+        assert_eq!(detect_language("", Some("odin")), "odin");
+        assert_eq!(detect_language("", Some("cr")), "cr");
+        assert_eq!(detect_language("", Some("cbl")), "cobol");
+        assert_eq!(detect_language("", Some("fth")), "forth");
+        assert_eq!(detect_language("", Some("vb")), "vb");
+        assert_eq!(detect_language("", Some("m")), "objc");
+        assert_eq!(detect_language("", Some("matlab")), "matlab");
+        assert_eq!(detect_language("", Some("bf")), "bf");
+        assert_eq!(detect_language("", Some("wat")), "wat");
+        assert_eq!(detect_language("", Some("elm")), "elm");
+        assert_eq!(detect_language("", Some("purs")), "purs");
+        assert_eq!(detect_language("", Some("re")), "re");
+        assert_eq!(detect_language("", Some("hx")), "hx");
+        assert_eq!(detect_language("", Some("raku")), "raku");
+        assert_eq!(detect_language("", Some("red")), "red");
+        assert_eq!(detect_language("", Some("vhd")), "vhdl");
+        assert_eq!(detect_language("", Some("v")), "verilog");
+        assert_eq!(detect_language("", Some("apl")), "apl");
+        assert_eq!(detect_language("", Some("ahk")), "ahk");
+        assert_eq!(detect_language("", Some("moon")), "moon");
+        assert_eq!(detect_language("", Some("wren")), "wren");
+        assert_eq!(detect_language("", Some("nu")), "nu");
+        assert_eq!(detect_language("", Some("fish")), "fish");
+
+        // Snippet classification tests
+        assert_eq!(
+            detect_language(
+                "pragma solidity ^0.8.0;\ncontract MyToken { mapping(address => uint256) public balances; }",
+                None
+            ),
+            "sol"
+        );
+        assert_eq!(
+            detect_language(
+                "cmake_minimum_required(VERSION 3.10)\nproject(MyProject)\nadd_executable(app main.cpp)",
+                None
+            ),
+            "cmake"
+        );
+        assert_eq!(
+            detect_language(
+                "syntax = \"proto3\";\nmessage UserRequest { string id = 1; int32 count = 2; }",
+                None
+            ),
+            "proto"
+        );
+        assert_eq!(
+            detect_language(
+                "terraform {\n  required_providers {\n    aws = {}\n  }\n}\nresource \"aws_s3_bucket\" \"b\" {}",
+                None
+            ),
+            "tf"
+        );
+        assert_eq!(
+            detect_language(
+                "\\documentclass{article}\n\\begin{document}\nHello LaTeX\n\\end{document}",
+                None
+            ),
+            "tex"
+        );
+        assert_eq!(
+            detect_language(
+                "section .data\nmsg db 'Hello', 0\nsection .text\nglobal _start\n_start:\n  mov eax, 1\n  ret",
+                None
+            ),
+            "asm"
+        );
+        assert_eq!(
+            detect_language(
+                "program Hello\n  implicit none\n  print *, 'Hello, Fortran!'\nend program Hello",
+                None
+            ),
+            "fortran"
+        );
+        assert_eq!(
+            detect_language(
+                "program HelloWorld;\nbegin\n  writeln('Hello, Pascal!');\nend.",
+                None
+            ),
+            "pascal"
+        );
+        assert_eq!(
+            detect_language(
+                "IDENTIFICATION DIVISION.\nPROGRAM-ID. HELLO.\nPROCEDURE DIVISION.\n    DISPLAY 'Hello, COBOL!'.\n    STOP RUN.",
+                None
+            ),
+            "cobol"
+        );
+
+        // Plain text without code structures should stay txt
+        assert_eq!(detect_language("Plain notes.\n", None), "txt");
+        assert_eq!(
+            detect_language("A walk through the garden.\nAnother lovely day.\n", None),
+            "txt"
         );
     }
 }

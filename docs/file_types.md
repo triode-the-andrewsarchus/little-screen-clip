@@ -110,116 +110,116 @@
     - [x] `.toml` — TOML syntax highlighting
     - [x] `.xml`, `.svg` — XML syntax highlighting
     - [x] `.yaml`, `.yml` — YAML syntax highlighting
-    - [ ] `.kdl`
-    - [ ] `.xsd` — XML Schema
+    - [x] `.kdl`
+    - [x] `.xsd` — XML Schema
   - [ ] Code (language families follow the [programming language guide](https://opguides.info/engineering/programming/languages/))
-    - [ ] Low-level and systems languages
+    - [x] Low-level and systems languages
       - [x] `.c`, `.h` — C
       - [x] `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`, `.c++` — C++
       - [x] `.rs` — Rust
       - [x] `.py`, `.pyw` — Python (also used by MicroPython and CircuitPython)
-      - [ ] `.asm`, `.s` — Assembly (processor/toolchain dialects)
-      - [ ] `.zig` — Zig
-      - [ ] `.nim` — Nim
-      - [ ] `.ll` — LLVM IR
-    - [ ] Mid-level languages
-      - [ ] `.red` — Red
-      - [ ] `.d` — D
-      - [ ] `.odin` — Odin
-    - [ ] High-level and general-purpose languages
+      - [x] `.asm`, `.s` — Assembly (processor/toolchain dialects)
+      - [x] `.zig` — Zig
+      - [x] `.nim` — Nim
+      - [x] `.ll` — LLVM IR
+    - [x] Mid-level languages
+      - [x] `.red` — Red
+      - [x] `.d` — D
+      - [x] `.odin` — Odin
+    - [x] High-level and general-purpose languages
       - [x] `.java` — Java
-      - [ ] `.kt`, `.kts` — Kotlin
+      - [x] `.kt`, `.kts` — Kotlin
       - [x] `.js`, `.mjs`, `.cjs`, `.jsx` — JavaScript
-      - [ ] `.coffee` — CoffeeScript
+      - [x] `.coffee` — CoffeeScript
       - [x] `.ts`, `.tsx` — TypeScript
       - [x] `.php` — PHP (Hack also commonly uses `.php`)
       - [x] `.rb` — Ruby
-      - [ ] `.raku`, `.rakumod` — Raku
+      - [x] `.raku`, `.rakumod` — Raku
       - [x] `.go` — Go
-      - [ ] `.hx` — Haxe
-      - [ ] `.cr` — Crystal
-      - [ ] Noulith source (extension varies)
-      - [ ] `.wasm`, `.wat` — WebAssembly binary / text formats
-      - [ ] `.ex`, `.exs` — Elixir
-      - [ ] `.erl`, `.hrl` — Erlang
-      - [ ] `.elm` — Elm
-      - [ ] `.re`, `.rei` — ReScript
-      - [ ] `.purs` — PureScript
+      - [x] `.hx` — Haxe
+      - [x] `.cr` — Crystal
+      - [x] Noulith source (extension varies)
+      - [x] `.wasm`, `.wat` — WebAssembly binary / text formats
+      - [x] `.ex`, `.exs` — Elixir
+      - [x] `.erl`, `.hrl` — Erlang
+      - [x] `.elm` — Elm
+      - [x] `.re`, `.rei` — ReScript
+      - [x] `.purs` — PureScript
       - [x] `.swift` — Swift
-      - [ ] `.cs` — C#
-      - [ ] `.dart` — Dart
-      - [ ] `.hack` — Hack (often shares `.php` with PHP)
-      - [ ] `.scala`, `.sc` — Scala
-    - [ ] Older and historical languages
-      - [ ] `.fth`, `.4th` — Forth
-      - [ ] `.cob`, `.cbl` — COBOL
-      - [ ] `.f`, `.for`, `.f90`, `.f95` — Fortran
-      - [ ] `.pas`, `.pp` — Pascal
-      - [ ] `.bas`, `.bi` — BASIC
-      - [ ] `.m`, `.mm` — Objective-C; `.m` is also used by MATLAB / Octave
-      - [ ] `.vb`, `.vbs` — Visual Basic
-      - [ ] `.apl` — APL
-    - [ ] Scripting languages
+      - [x] `.cs` — C#
+      - [x] `.dart` — Dart
+      - [x] `.hack` — Hack (often shares `.php` with PHP)
+      - [x] `.scala`, `.sc` — Scala
+    - [x] Older and historical languages
+      - [x] `.fth`, `.4th` — Forth
+      - [x] `.cob`, `.cbl` — COBOL
+      - [x] `.f`, `.for`, `.f90`, `.f95` — Fortran
+      - [x] `.pas`, `.pp` — Pascal
+      - [x] `.bas`, `.bi` — BASIC
+      - [x] `.m`, `.mm` — Objective-C; `.m` is also used by MATLAB / Octave
+      - [x] `.vb`, `.vbs` — Visual Basic
+      - [x] `.apl` — APL
+    - [x] Scripting languages
       - [x] `.lua` — Lua
-      - [ ] `.moon` — MoonScript
-      - [ ] `.ahk`, `.ah2` — AutoHotkey
-      - [ ] Cyber source (extension varies)
-      - [ ] `.wren` — Wren
-      - [ ] `.tcl` — Tcl
-      - [ ] `.pl`, `.pm` — Perl; `.pl` is also used by Prolog
-      - [ ] `.r` — R
-      - [ ] `.jl` — Julia
-      - [ ] `.groovy`, `.gradle` — Groovy / Gradle scripts
-    - [ ] Shell languages
+      - [x] `.moon` — MoonScript
+      - [x] `.ahk`, `.ah2` — AutoHotkey
+      - [x] Cyber source (extension varies)
+      - [x] `.wren` — Wren
+      - [x] `.tcl` — Tcl
+      - [x] `.pl`, `.pm` — Perl; `.pl` is also used by Prolog
+      - [x] `.r` — R
+      - [x] `.jl` — Julia
+      - [x] `.groovy`, `.gradle` — Groovy / Gradle scripts
+    - [x] Shell languages
       - [x] `.sh`, `.bash`, `.zsh`, `.ksh` — POSIX-style shell / Bash / Zsh / KornShell
-      - [ ] `.fish` — Fish
-      - [ ] `.nu` — Nushell
-      - [ ] `.xsh` — Xonsh
-      - [ ] `.elv` — Elvish
-      - [ ] `.tcsh`, `.csh` — C Shell / tcsh
-      - [ ] Murex scripts (no conventional extension)
-      - [ ] Hilbish scripts (Lua-based; `.lua`)
-      - [ ] `.cmd`, `.bat` — Windows command scripts
-      - [ ] `.ps1`, `.psm1` — PowerShell
-    - [ ] Functional and logic languages
-      - [ ] `.hs`, `.lhs` — Haskell
-      - [ ] `.clj`, `.cljs`, `.cljc`, `.edn` — Clojure
-      - [ ] `.rkt`, `.scm`, `.ss` — Racket / Scheme
-      - [ ] `.lisp`, `.lsp`, `.cl` — Common Lisp
-      - [ ] `.el` — Emacs Lisp
-      - [ ] `.janet` — Janet
-      - [ ] `.u` — Unison
-      - [ ] `.roc` — Roc
-      - [ ] `.kk` — Koka
-      - [ ] `.fut` — Futhark
-      - [ ] `.ml`, `.mli` — OCaml / Standard ML
-      - [ ] `.fs`, `.fsi`, `.fsx` — F#
-      - [ ] `.idr` — Idris
-      - [ ] `.agda` — Agda
-      - [ ] `.lean` — Lean
-    - [ ] Domain-specific languages and interfaces
+      - [x] `.fish` — Fish
+      - [x] `.nu` — Nushell
+      - [x] `.xsh` — Xonsh
+      - [x] `.elv` — Elvish
+      - [x] `.tcsh`, `.csh` — C Shell / tcsh
+      - [x] Murex scripts (no conventional extension)
+      - [x] Hilbish scripts (Lua-based; `.lua`)
+      - [x] `.cmd`, `.bat` — Windows command scripts
+      - [x] `.ps1`, `.psm1` — PowerShell
+    - [x] Functional and logic languages
+      - [x] `.hs`, `.lhs` — Haskell
+      - [x] `.clj`, `.cljs`, `.cljc`, `.edn` — Clojure
+      - [x] `.rkt`, `.scm`, `.ss` — Racket / Scheme
+      - [x] `.lisp`, `.lsp`, `.cl` — Common Lisp
+      - [x] `.el` — Emacs Lisp
+      - [x] `.janet` — Janet
+      - [x] `.u` — Unison
+      - [x] `.roc` — Roc
+      - [x] `.kk` — Koka
+      - [x] `.fut` — Futhark
+      - [x] `.ml`, `.mli` — OCaml / Standard ML
+      - [x] `.fs`, `.fsi`, `.fsx` — F#
+      - [x] `.idr` — Idris
+      - [x] `.agda` — Agda
+      - [x] `.lean` — Lean
+    - [x] Domain-specific languages and interfaces
       - [x] `.sql` — SQL
       - [x] `.css`, `.scss`, `.sass`, `.less` — CSS and stylesheet languages
-      - [ ] `.vult` — Vult
-      - [ ] `.vhd`, `.vhdl` — VHDL
-      - [ ] `.scallop` — Scallop
-      - [ ] `.v` — Verilog / V / Coq-Rocq proof source (extension is ambiguous)
-      - [ ] `.wl`, `.wls` — Wolfram Language
-      - [ ] `.sol` — Solidity
-      - [ ] `.move` — Move
-      - [ ] `.proto` — Protocol Buffers
-      - [ ] `.thrift` — Apache Thrift IDL
-      - [ ] `.graphql`, `.gql` — GraphQL
-      - [ ] `.tf`, `.hcl` — Terraform / HCL
-      - [ ] `.nix` — Nix
-      - [ ] `.bzl`, `.bazel` — Bazel
-      - [ ] `.cmake` — CMake
-      - [ ] `.vim` — Vim script
-      - [ ] `.awk` — AWK
-    - [ ] Graphics and shader languages
-      - [ ] `.glsl`, `.vert`, `.frag` — GLSL
-      - [ ] `.hlsl` — HLSL
-      - [ ] `.metal` — Metal Shading Language
+      - [x] `.vult` — Vult
+      - [x] `.vhd`, `.vhdl` — VHDL
+      - [x] `.scallop` — Scallop
+      - [x] `.v` — Verilog / V / Coq-Rocq proof source (extension is ambiguous)
+      - [x] `.wl`, `.wls` — Wolfram Language
+      - [x] `.sol` — Solidity
+      - [x] `.move` — Move
+      - [x] `.proto` — Protocol Buffers
+      - [x] `.thrift` — Apache Thrift IDL
+      - [x] `.graphql`, `.gql` — GraphQL
+      - [x] `.tf`, `.hcl` — Terraform / HCL
+      - [x] `.nix` — Nix
+      - [x] `.bzl`, `.bazel` — Bazel
+      - [x] `.cmake` — CMake
+      - [x] `.vim` — Vim script
+      - [x] `.awk` — AWK
+    - [x] Graphics and shader languages
+      - [x] `.glsl`, `.vert`, `.frag` — GLSL
+      - [x] `.hlsl` — HLSL
+      - [x] `.metal` — Metal Shading Language
     - [ ] Visual and node-based programming
       - [ ] `.pd` — Pure Data patch
       - [ ] `.maxpat` — Max/MSP patch
@@ -230,12 +230,12 @@
       - [ ] Node-RED flow export (JSON; `.json` text preview is already supported)
       - [ ] n8n workflow export (JSON; `.json` text preview is already supported)
     - [ ] Other programming formats and environments
-      - [ ] `.tex` — TeX / LaTeX
+      - [x] `.tex` — TeX / LaTeX
       - [ ] Tasker task/profile export (format varies)
       - [ ] Tool-specific visual project formats for tooll.io (no stable extension)
       - [ ] `.vi` — LabVIEW virtual instrument
-    - [ ] Esoteric programming languages
-      - [ ] `.bf` — Brainfuck
+    - [x] Esoteric programming languages
+      - [x] `.bf` — Brainfuck
   - [ ] `.doc`
   - [ ] `.docx`
   - [ ] `.odt`

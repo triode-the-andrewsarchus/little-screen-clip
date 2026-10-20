@@ -669,6 +669,11 @@ pub fn find_syntax(lang: &str) -> &'static SyntaxReference {
     let ps = &*SYNTAX_SET;
     ps.find_syntax_by_token(lang)
         .or_else(|| ps.find_syntax_by_extension(lang))
+        .or_else(|| {
+            let fallback = little_clip_core::syntax::syntect_fallback(lang);
+            ps.find_syntax_by_token(fallback)
+                .or_else(|| ps.find_syntax_by_extension(fallback))
+        })
         .unwrap_or_else(|| ps.find_syntax_plain_text())
 }
 #[cfg(test)]

@@ -411,6 +411,12 @@ impl ScreenRenderer {
         let syntax = SYNTAX_SET
             .find_syntax_by_extension(lang_id)
             .or_else(|| SYNTAX_SET.find_syntax_by_token(lang_id))
+            .or_else(|| {
+                let fallback = little_clip_core::syntax::syntect_fallback(lang_id);
+                SYNTAX_SET
+                    .find_syntax_by_extension(fallback)
+                    .or_else(|| SYNTAX_SET.find_syntax_by_token(fallback))
+            })
             .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
 
         let theme = THEME_SET
