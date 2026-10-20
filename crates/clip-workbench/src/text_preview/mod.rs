@@ -40,57 +40,8 @@ pub(crate) fn map_syntect_color_to_theme(
     let surface = hex_to_c32(&palette.colors.surface_recessed);
     let readable =
         |preferred| crate::ui_ext::contrast_text_c32_on(surface, surface, Some(preferred), palette);
-    let r = style_fg.r as f32 / 255.0;
-    let g = style_fg.g as f32 / 255.0;
-    let b = style_fg.b as f32 / 255.0;
-
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let delta = max - min;
-
-    // If low saturation (monochrome / gray)
-    if delta < 0.08 {
-        if max < 0.65 {
-            // Comment or muted punctuation
-            return readable(hex_to_c32(&palette.colors.text_muted));
-        } else {
-            // Standard high contrast text
-            return readable(hex_to_c32(&palette.colors.text_primary));
-        }
-    }
-
-    // Compute hue (0..360)
-    let mut h = if max == r {
-        60.0 * (((g - b) / delta) % 6.0)
-    } else if max == g {
-        60.0 * (((b - r) / delta) + 2.0)
-    } else {
-        60.0 * (((r - g) / delta) + 4.0)
-    };
-    if h < 0.0 {
-        h += 360.0;
-    }
-
-    // Map by hue angle to the shared color harmonies.
-    if h < 45.0 {
-        // Red / Orange (constants, literals)
-        readable(hex_to_c32(&palette.diff_mod))
-    } else if h < 90.0 {
-        // Amber / Yellow (strings)
-        readable(hex_to_c32(&palette.harmonies.triadic_2))
-    } else if h < 165.0 {
-        // Green (strings, regex)
-        readable(hex_to_c32(&palette.diff_add))
-    } else if h < 210.0 {
-        // Cyan (types, structures)
-        readable(hex_to_c32(&palette.harmonies.split_comp_1))
-    } else if h < 275.0 {
-        // Blue (functions, identifiers)
-        readable(hex_to_c32(&palette.harmonies.triadic_1))
-    } else {
-        // Purple / Magenta / Pink (keywords, control flow)
-        readable(hex_to_c32(&palette.harmonies.base))
-    }
+    let hex = palette.map_syntax_color_hex(style_fg.r, style_fg.g, style_fg.b);
+    readable(hex_to_c32(hex))
 }
 
 pub(crate) static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {

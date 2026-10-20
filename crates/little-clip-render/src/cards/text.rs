@@ -412,11 +412,7 @@ impl ScreenRenderer {
 
         let theme = THEME_SET
             .themes
-            .get(if self.palette.is_dark {
-                "base16-ocean.dark"
-            } else {
-                "base16-ocean.light"
-            })
+            .get("base16-eighties.dark")
             .or_else(|| THEME_SET.themes.values().next())
             .expect("default theme");
 
@@ -463,13 +459,13 @@ impl ScreenRenderer {
                 if cx >= clip_right {
                     break;
                 }
-                let fg = Color::from_rgba8(
+                let hex = self.palette.map_syntax_color_hex(
                     style.foreground.r,
                     style.foreground.g,
                     style.foreground.b,
-                    255,
                 );
-                let fg = self.contrast_color(preview_background, Some(fg));
+                let preferred = self.color_from_hex(hex);
+                let fg = self.contrast_color(preview_background, Some(preferred));
                 let font_style = if style
                     .font_style
                     .contains(syntect::highlighting::FontStyle::BOLD)

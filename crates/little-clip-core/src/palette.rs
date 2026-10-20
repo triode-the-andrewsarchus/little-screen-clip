@@ -445,6 +445,59 @@ impl AppPalette {
         self.colors.contrast_pair_fg(bg_hex, preferred_fg)
     }
 
+    /// Maps a syntax highlighting foreground RGB color into the theme's saturated palette harmonies.
+    pub fn map_syntax_color_hex(&self, r: u8, g: u8, b: u8) -> &str {
+        let rf = r as f32 / 255.0;
+        let gf = g as f32 / 255.0;
+        let bf = b as f32 / 255.0;
+
+        let max = rf.max(gf).max(bf);
+        let min = rf.min(gf).min(bf);
+        let delta = max - min;
+
+        // If low saturation (monochrome / gray)
+        if delta < 0.08 {
+            if max < 0.65 {
+                return &self.colors.text_muted;
+            } else {
+                return &self.colors.text_primary;
+            }
+        }
+
+        // Compute hue (0..360)
+        let mut h = if max == rf {
+            60.0 * (((gf - bf) / delta) % 6.0)
+        } else if max == gf {
+            60.0 * (((bf - rf) / delta) + 2.0)
+        } else {
+            60.0 * (((rf - gf) / delta) + 4.0)
+        };
+        if h < 0.0 {
+            h += 360.0;
+        }
+
+        // Map by hue angle to the shared color harmonies.
+        if h < 45.0 {
+            // Red / Orange (constants, literals)
+            &self.diff_mod
+        } else if h < 90.0 {
+            // Amber / Yellow (strings)
+            &self.harmonies.triadic_2
+        } else if h < 165.0 {
+            // Green (strings, regex)
+            &self.diff_add
+        } else if h < 210.0 {
+            // Cyan (types, structures)
+            &self.harmonies.split_comp_1
+        } else if h < 275.0 {
+            // Blue (functions, identifiers)
+            &self.harmonies.triadic_1
+        } else {
+            // Purple / Magenta / Pink (keywords, control flow)
+            &self.harmonies.base
+        }
+    }
+
     /// Computes an appearance-aware data color for a MIDI track or channel.
     ///
     /// Used for track legend chips, channel headers, and track-level badges.
@@ -609,6 +662,45 @@ mod tests {
         assert!(!harmonies.triadic_1.is_empty());
         assert!(!harmonies.tetradic_1.is_empty());
         assert!(!harmonies.warm_attention.is_empty());
+    }
+
+    #[test]
+    fn test_map_syntax_color_hex() {
+        let palette = AppPalette::for_appearance(WorkbenchAppearance::Dark);
+        // Red/Orange (e.g. 240, 80, 50) -> diff_mod
+        assert_eq!(palette.map_syntax_color_hex(240, 80, 50), &palette.diff_mod);
+        // Amber/Yellow (e.g. 220, 200, 20 -> h=54) -> triadic_2
+        assert_eq!(
+            palette.map_syntax_color_hex(220, 200, 20),
+            &palette.harmonies.triadic_2
+        );
+        // Green (e.g. 50, 200, 70) -> diff_add
+        assert_eq!(palette.map_syntax_color_hex(50, 200, 70), &palette.diff_add);
+        // Cyan (e.g. 40, 190, 200) -> split_comp_1
+        assert_eq!(
+            palette.map_syntax_color_hex(40, 190, 200),
+            &palette.harmonies.split_comp_1
+        );
+        // Blue (e.g. 60, 100, 240) -> triadic_1
+        assert_eq!(
+            palette.map_syntax_color_hex(60, 100, 240),
+            &palette.harmonies.triadic_1
+        );
+        // Purple/Magenta (e.g. 210, 80, 220) -> base
+        assert_eq!(
+            palette.map_syntax_color_hex(210, 80, 220),
+            &palette.harmonies.base
+        );
+        // Neutral gray (e.g. 100, 100, 100) -> text_muted
+        assert_eq!(
+            palette.map_syntax_color_hex(100, 100, 100),
+            &palette.colors.text_muted
+        );
+        // High-contrast white/light gray (e.g. 220, 220, 220) -> text_primary
+        assert_eq!(
+            palette.map_syntax_color_hex(220, 220, 220),
+            &palette.colors.text_primary
+        );
     }
 
     #[test]
