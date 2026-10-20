@@ -86,3 +86,67 @@ fn text_preview_rasters_have_readable_ink_on_light_and_dark_cards() {
         }
     }
 }
+
+#[test]
+fn text_preview_syntax_resolution_matches_workbench_supported_languages() {
+    assert_eq!(find_syntax("ts").name, "TypeScript");
+    assert_eq!(find_syntax("tsx").name, "TypeScript");
+    assert_eq!(find_syntax("toml").name, "Configuration");
+    assert_eq!(find_syntax("ini").name, "Configuration");
+    assert_eq!(find_syntax("kdl").name, "Configuration");
+    assert_eq!(find_syntax("objc").name, "Objective-C");
+    assert_eq!(find_syntax("rs").name, "Rust");
+    assert_eq!(find_syntax("py").name, "Python");
+    assert_eq!(find_syntax("kt").name, "Java");
+    assert_eq!(find_syntax("zig").name, "C");
+    assert_eq!(find_syntax("swift").name, "Rust");
+}
+
+#[test]
+fn text_preview_rasters_render_syntax_highlighted_code() {
+    let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+
+    for (code, ext) in [
+        ("const greeting: string = \"hello\";", "ts"),
+        (
+            "[package]\nname = \"little-clip\"\nversion = \"0.1.0\"",
+            "toml",
+        ),
+        ("[database]\nserver = 192.0.2.62\nport = 1433", "ini"),
+        ("fn main() {\n    let answer = 42;\n}", "rs"),
+        (
+            "def greet(name: str) -> str:\n    return f\"Hello, {name}\"",
+            "py",
+        ),
+        ("fun main() {\n    val greeting = \"hello\"\n}", "kt"),
+    ] {
+        let mut pixmap = Pixmap::new(400, 200).unwrap();
+        pixmap.fill(Color::BLACK);
+        renderer.draw_text_preview(
+            &mut pixmap,
+            code,
+            Some(ext),
+            0.0,
+            0.0,
+            400.0,
+            200.0,
+            true,
+            Color::WHITE,
+        );
+
+        // Collect distinct rendered non-background colors in the pixmap.
+        // A syntax-highlighted snippet must produce multiple distinct foreground hues.
+        let mut distinct_colors = std::collections::HashSet::new();
+        for pixel in pixmap.data().chunks_exact(4) {
+            let color = (pixel[0], pixel[1], pixel[2]);
+            if color != (0, 0, 0) {
+                distinct_colors.insert(color);
+            }
+        }
+        assert!(
+            distinct_colors.len() >= 3,
+            "Expected multiple syntax colors for {ext}, got {} colors",
+            distinct_colors.len()
+        );
+    }
+}

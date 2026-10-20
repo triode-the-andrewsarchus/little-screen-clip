@@ -9,11 +9,36 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
-use syntect::parsing::SyntaxSet;
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 use uuid::Uuid;
 
-static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_nonewlines);
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
+    let mut builder = SyntaxSet::load_defaults_nonewlines().into_builder();
+    for definition in [
+        little_clip_core::syntax::CONFIG_SUBLIME_SYNTAX,
+        little_clip_core::syntax::TYPESCRIPT_SUBLIME_SYNTAX,
+    ] {
+        match syntect::parsing::SyntaxDefinition::load_from_str(definition, false, None) {
+            Ok(syntax) => builder.add(syntax),
+            Err(error) => tracing::warn!(%error, "Could not load bundled syntax definition"),
+        }
+    }
+    builder.build()
+});
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+
+fn find_syntax(lang: &str) -> &'static SyntaxReference {
+    SYNTAX_SET
+        .find_syntax_by_token(lang)
+        .or_else(|| SYNTAX_SET.find_syntax_by_extension(lang))
+        .or_else(|| {
+            let fallback = little_clip_core::syntax::syntect_fallback(lang);
+            SYNTAX_SET
+                .find_syntax_by_token(fallback)
+                .or_else(|| SYNTAX_SET.find_syntax_by_extension(fallback))
+        })
+        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text())
+}
 
 /// Visual display format for rendering textual diffs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -616,16 +641,7 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
         };
     }
 
-    let syntax = SYNTAX_SET
-        .find_syntax_by_extension(lang_id)
-        .or_else(|| SYNTAX_SET.find_syntax_by_token(lang_id))
-        .or_else(|| {
-            let fallback = little_clip_core::syntax::syntect_fallback(lang_id);
-            SYNTAX_SET
-                .find_syntax_by_extension(fallback)
-                .or_else(|| SYNTAX_SET.find_syntax_by_token(fallback))
-        })
-        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+    let syntax = find_syntax(lang_id);
 
     let theme = THEME_SET
         .themes
@@ -1093,27 +1109,8 @@ pub fn generate_split_diff(lhs: &DiffTarget, rhs: &DiffTarget, width: usize) -> 
         };
     }
 
-    let syntax_lhs = SYNTAX_SET
-        .find_syntax_by_extension(lang_id_lhs)
-        .or_else(|| SYNTAX_SET.find_syntax_by_token(lang_id_lhs))
-        .or_else(|| {
-            let fallback = little_clip_core::syntax::syntect_fallback(lang_id_lhs);
-            SYNTAX_SET
-                .find_syntax_by_extension(fallback)
-                .or_else(|| SYNTAX_SET.find_syntax_by_token(fallback))
-        })
-        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
-
-    let syntax_rhs = SYNTAX_SET
-        .find_syntax_by_extension(lang_id_rhs)
-        .or_else(|| SYNTAX_SET.find_syntax_by_token(lang_id_rhs))
-        .or_else(|| {
-            let fallback = little_clip_core::syntax::syntect_fallback(lang_id_rhs);
-            SYNTAX_SET
-                .find_syntax_by_extension(fallback)
-                .or_else(|| SYNTAX_SET.find_syntax_by_token(fallback))
-        })
-        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+    let syntax_lhs = find_syntax(lang_id_lhs);
+    let syntax_rhs = find_syntax(lang_id_rhs);
 
     let theme = THEME_SET
         .themes

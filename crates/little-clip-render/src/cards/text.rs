@@ -408,16 +408,7 @@ impl ScreenRenderer {
         let mut line_y = ry + 124.0;
 
         let lang_id = little_clip_core::syntax::detect_language(trimmed, ext_hint);
-        let syntax = SYNTAX_SET
-            .find_syntax_by_extension(lang_id)
-            .or_else(|| SYNTAX_SET.find_syntax_by_token(lang_id))
-            .or_else(|| {
-                let fallback = little_clip_core::syntax::syntect_fallback(lang_id);
-                SYNTAX_SET
-                    .find_syntax_by_extension(fallback)
-                    .or_else(|| SYNTAX_SET.find_syntax_by_token(fallback))
-            })
-            .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+        let syntax = find_syntax(lang_id);
 
         let theme = THEME_SET
             .themes

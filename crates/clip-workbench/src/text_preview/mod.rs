@@ -96,8 +96,8 @@ pub(crate) fn map_syntect_color_to_theme(
 pub(crate) static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
     let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
     for definition in [
-        include_str!("config.sublime-syntax"),
-        include_str!("typescript.sublime-syntax"),
+        little_clip_core::syntax::CONFIG_SUBLIME_SYNTAX,
+        little_clip_core::syntax::TYPESCRIPT_SUBLIME_SYNTAX,
     ] {
         match syntect::parsing::SyntaxDefinition::load_from_str(definition, true, None) {
             Ok(syntax) => builder.add(syntax),

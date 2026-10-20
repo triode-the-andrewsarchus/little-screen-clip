@@ -395,9 +395,21 @@ pub fn language_display_name(lang: &str) -> &'static str {
     }
 }
 
+/// Bundled Sublime Syntax definition for configuration formats (TOML, INI, KDL, etc.).
+pub const CONFIG_SUBLIME_SYNTAX: &str = include_str!("syntax/config.sublime-syntax");
+
+/// Bundled Sublime Syntax definition for TypeScript and TSX formats.
+pub const TYPESCRIPT_SUBLIME_SYNTAX: &str = include_str!("syntax/typescript.sublime-syntax");
+
 /// Maps a language identifier to a compatible fallback language in syntect's default syntax set.
 pub fn syntect_fallback(lang: &str) -> &'static str {
     match lang {
+        "ts" | "tsx" | "mts" | "cts" => "js",
+        "toml" | "kdl" | "ini" | "cfg" | "conf" | "env" => "yaml",
+        "objc" | "mm" => "m",
+        "swift" => "rs",
+        "bazel" | "bzl" => "py",
+        "awk" => "c",
         "kt" | "kts" | "dart" | "hack" => "java",
         "cs" | "csx" => "cs",
         "zig" | "odin" | "vhd" | "vhdl" | "verilog" | "asm" | "llvm" | "vult" | "scallop" => "c",
@@ -425,7 +437,7 @@ pub fn syntect_fallback(lang: &str) -> &'static str {
         "ahk" => "bat",
         "tcl" => "tcl",
         "d" => "d",
-        "cobol" | "forth" | "apl" | "bf" | "wolfram" | "vim" | "awk" => "txt",
+        "cobol" | "forth" | "apl" | "bf" | "wolfram" | "vim" => "txt",
         _ => "txt",
     }
 }
@@ -870,5 +882,21 @@ mod tests {
             detect_language("A walk through the garden.\nAnother lovely day.\n", None),
             "txt"
         );
+    }
+
+    #[test]
+    fn test_syntect_fallback_and_bundled_syntax() {
+        assert!(!CONFIG_SUBLIME_SYNTAX.is_empty());
+        assert!(!TYPESCRIPT_SUBLIME_SYNTAX.is_empty());
+
+        assert_eq!(syntect_fallback("ts"), "js");
+        assert_eq!(syntect_fallback("tsx"), "js");
+        assert_eq!(syntect_fallback("toml"), "yaml");
+        assert_eq!(syntect_fallback("ini"), "yaml");
+        assert_eq!(syntect_fallback("objc"), "m");
+        assert_eq!(syntect_fallback("swift"), "rs");
+        assert_eq!(syntect_fallback("bazel"), "py");
+        assert_eq!(syntect_fallback("kt"), "java");
+        assert_eq!(syntect_fallback("zig"), "c");
     }
 }

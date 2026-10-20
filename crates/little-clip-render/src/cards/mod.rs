@@ -16,11 +16,36 @@ use std::path::Path;
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
-use syntect::parsing::SyntaxSet;
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 use tiny_skia::*;
 
-static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_nonewlines);
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
+    let mut builder = SyntaxSet::load_defaults_nonewlines().into_builder();
+    for definition in [
+        little_clip_core::syntax::CONFIG_SUBLIME_SYNTAX,
+        little_clip_core::syntax::TYPESCRIPT_SUBLIME_SYNTAX,
+    ] {
+        match syntect::parsing::SyntaxDefinition::load_from_str(definition, false, None) {
+            Ok(syntax) => builder.add(syntax),
+            Err(error) => tracing::warn!(%error, "Could not load bundled syntax definition"),
+        }
+    }
+    builder.build()
+});
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+
+pub(crate) fn find_syntax(lang: &str) -> &'static SyntaxReference {
+    SYNTAX_SET
+        .find_syntax_by_token(lang)
+        .or_else(|| SYNTAX_SET.find_syntax_by_extension(lang))
+        .or_else(|| {
+            let fallback = little_clip_core::syntax::syntect_fallback(lang);
+            SYNTAX_SET
+                .find_syntax_by_token(fallback)
+                .or_else(|| SYNTAX_SET.find_syntax_by_extension(fallback))
+        })
+        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text())
+}
 
 impl ScreenRenderer {
     /// Draws a single slot card on the canvas with rounded header, status badges, and content previews.
