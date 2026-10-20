@@ -1084,7 +1084,11 @@ fn main() -> Result<(), eframe::Error> {
         println!("      --pdf <PATH>     Open PDF page editor directly");
         println!("      --midi <PATH>    Open MIDI piano roll directly");
         println!("      --scene <PATH>   Open a read-only 3D scene viewer directly");
+        println!("      --sheet <PATH>   Open spreadsheet viewer directly");
+        println!("  -t, --text <PATH>    Open text preview directly");
         println!("      --component-gallery  Open the UI component styling page directly");
+        println!("      --nodes          Open the Big Node Machine directly");
+        println!("      --auto-actions   Open the Auto-Actions view directly");
         println!("  -l, --last           Re-execute last action (with modal prompt if needed)");
         println!("  -h, --help           Print help");
         return Ok(());
@@ -1121,6 +1125,20 @@ fn main() -> Result<(), eframe::Error> {
         .position(|argument| argument == "--scene")
         .and_then(|index| args.get(index + 1))
         .map(PathBuf::from);
+    let initial_sheet = args
+        .iter()
+        .position(|a| a == "--sheet" || a == "--spreadsheet")
+        .and_then(|idx| args.get(idx + 1))
+        .map(PathBuf::from);
+    let initial_text = args
+        .iter()
+        .position(|a| a == "--text" || a == "-t")
+        .and_then(|idx| args.get(idx + 1))
+        .map(PathBuf::from);
+    let start_node_machine = args.iter().any(|a| a == "--nodes" || a == "--node-machine");
+    let start_auto_actions = args
+        .iter()
+        .any(|a| a == "--auto-actions" || a == "--actions");
 
     if is_last {
         let state = match send_ipc_request(&IpcRequest::GetState) {
@@ -1190,7 +1208,11 @@ fn main() -> Result<(), eframe::Error> {
                 initial_pdf,
                 initial_midi,
                 initial_scene,
+                initial_sheet,
+                initial_text,
                 open_component_gallery,
+                start_node_machine,
+                start_auto_actions,
             ))
         }),
     )

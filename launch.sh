@@ -539,6 +539,42 @@ case "${1:-}" in
         shift
         run_workbench --audio "$@"
         ;;
+    image|img)
+        shift
+        run_workbench --image "$@"
+        ;;
+    pdf)
+        shift
+        run_workbench --pdf "$@"
+        ;;
+    midi)
+        shift
+        run_workbench --midi "$@"
+        ;;
+    scene|3d|splat|model)
+        shift
+        run_workbench --scene "$@"
+        ;;
+    sheet|spreadsheet|csv)
+        shift
+        run_workbench --sheet "$@"
+        ;;
+    text|txt)
+        shift
+        run_workbench --text "$@"
+        ;;
+    gallery|component-gallery)
+        shift
+        run_workbench --component-gallery "$@"
+        ;;
+    nodes|node-machine)
+        shift
+        run_workbench --nodes "$@"
+        ;;
+    actions|auto-actions)
+        shift
+        run_workbench --auto-actions "$@"
+        ;;
     last)
         shift
         run_workbench --last "$@"
@@ -596,6 +632,15 @@ case "${1:-}" in
         echo "  diff            - Open the interactive Diff Viewer modal"
         echo "  bdiff           - Open the interactive Biodiff-style Binary Diff Viewer modal"
         echo "  audio <f>       - Open audio file in full waveform preview & slicer"
+        echo "  image <f>       - Open image file in image preview & editor"
+        echo "  pdf <f>         - Open PDF file in PDF page editor"
+        echo "  midi <f>        - Open MIDI file in MIDI piano roll"
+        echo "  scene <f>       - Open 3D Gaussian splat or mesh model in 3D scene viewer"
+        echo "  sheet <f>       - Open spreadsheet / CSV / TSV / Excel file in spreadsheet viewer"
+        echo "  text <f>        - Open text / Markdown / code file in text previewer"
+        echo "  gallery         - Open the UI component styling gallery"
+        echo "  nodes           - Open the Big Node Machine directly"
+        echo "  actions         - Open the Auto-Actions configuration view directly"
         echo "  last            - Re-run last operation or recipe directly"
         echo "  logs            - Tail daemon output logs"
         echo "  test            - Run direct USB display hardware test"

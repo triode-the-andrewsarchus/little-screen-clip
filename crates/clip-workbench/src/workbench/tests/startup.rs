@@ -677,3 +677,99 @@ fn compact_palette_footer_reserves_wrapped_status_above_scrollable_results() {
     assert!(results_viewport_height > 0.0);
     assert!(results_content_height > results_viewport_height);
 }
+
+#[test]
+fn startup_initial_text_file_opens_text_viewer() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let text_path = temp_dir.path().join("sample.txt");
+    std::fs::write(&text_path, "Hello from startup text").unwrap();
+
+    let app = WorkbenchApp::new(
+        egui::Context::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(text_path),
+        false,
+        false,
+        false,
+    );
+
+    let Some(ViewerSession::Text(state)) = &app.viewer else {
+        panic!("expected Text viewer session");
+    };
+    assert_eq!(state.content.as_str(), "Hello from startup text");
+    assert!(app.status_msg.is_none());
+}
+
+#[test]
+fn startup_initial_sheet_file_opens_spreadsheet_viewer() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let sheet_path = temp_dir.path().join("sample.csv");
+    std::fs::write(&sheet_path, "col1,col2\nval1,val2\n").unwrap();
+
+    let app = WorkbenchApp::new(
+        egui::Context::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(sheet_path),
+        None,
+        false,
+        false,
+        false,
+    );
+
+    let Some(ViewerSession::Spreadsheet(state)) = &app.viewer else {
+        panic!("expected Spreadsheet viewer session");
+    };
+    assert_eq!(state.data.sheets.len(), 1);
+    assert_eq!(state.data.sheets[0].rows.len(), 2);
+    assert!(app.status_msg.is_none());
+}
+
+#[test]
+fn startup_view_options_select_node_machine_and_auto_actions() {
+    let node_app = WorkbenchApp::new(
+        egui::Context::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        true,
+        false,
+    );
+    assert_eq!(node_app.view, WorkbenchView::NodeMachine);
+
+    let actions_app = WorkbenchApp::new(
+        egui::Context::default(),
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        false,
+        true,
+    );
+    assert_eq!(actions_app.view, WorkbenchView::AutoActions);
+}

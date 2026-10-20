@@ -18,7 +18,11 @@ impl WorkbenchApp {
         initial_pdf: Option<PathBuf>,
         initial_midi: Option<PathBuf>,
         initial_scene: Option<PathBuf>,
+        initial_sheet: Option<PathBuf>,
+        initial_text: Option<PathBuf>,
         open_component_gallery: bool,
+        start_node_machine: bool,
+        start_auto_actions: bool,
     ) -> Self {
         let mut config = AppConfig::load();
         // Desktop monitor mirror is always upright (no 180 flip)
@@ -54,6 +58,37 @@ impl WorkbenchApp {
         if let Some(path) = initial_scene {
             startup_viewers.push_back(scene_file_viewer(path, &config));
         }
+        let mut initial_status_msg = None;
+        if let Some(path) = initial_sheet {
+            match little_clip_core::presentation::spreadsheet::load_spreadsheet(&path) {
+                Ok(data) => {
+                    startup_viewers.push_back(ViewerSession::Spreadsheet(
+                        SpreadsheetViewerState::new(data, Some(path)),
+                    ));
+                }
+                Err(error) => {
+                    initial_status_msg = Some(format!("Spreadsheet: {error}"));
+                }
+            }
+        }
+        if let Some(path) = initial_text {
+            if let Some(text_state) = TextPreviewState::from_file(&path, &config) {
+                startup_viewers.push_back(ViewerSession::Text(text_state));
+            } else {
+                initial_status_msg = Some(format!(
+                    "Could not read or prepare text file {}",
+                    path.display()
+                ));
+            }
+        }
+
+        let view = if start_node_machine {
+            WorkbenchView::NodeMachine
+        } else if start_auto_actions {
+            WorkbenchView::AutoActions
+        } else {
+            WorkbenchView::Palette
+        };
 
         let mut app = Self {
             state,
@@ -62,7 +97,7 @@ impl WorkbenchApp {
             startup_comparison: (!open_component_gallery
                 && (start_with_diff || start_with_binary_diff))
                 .then_some(start_with_binary_diff),
-            view: WorkbenchView::Palette,
+            view,
             canvas_state,
             recipes,
             search_query: String::new(),
@@ -70,7 +105,7 @@ impl WorkbenchApp {
             selected_action_index: 0,
             selected_slots: vec![SlotId::LeftHand],
             inspector_text_preview_cache: None,
-            status_msg: None,
+            status_msg: initial_status_msg,
             appearance_sync: AppearanceSync::default(),
             renderer: None,
             mirror_job: None,
