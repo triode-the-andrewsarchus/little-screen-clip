@@ -39,6 +39,9 @@ impl WorkbenchApp {
         if let Some((ticket, _)) = self.midi_load_job.take() {
             ticket.cancel();
         }
+        if let Some((ticket, _)) = self.office_load_job.take() {
+            ticket.cancel();
+        }
     }
 
     pub(crate) fn poll_text_load(&mut self, ctx: &egui::Context) {
@@ -186,6 +189,97 @@ impl WorkbenchApp {
         });
         if let Some(source) = source {
             self.start_spreadsheet_load(source);
+        }
+    }
+
+    pub(crate) fn start_office_document_load(&mut self, path: PathBuf) {
+        self.prepare_text_load();
+        if let Some((ticket, _)) = self.office_load_job.take() {
+            ticket.cancel();
+        }
+        let (ticket, receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(60), move || {
+                let store =
+                    little_clip_core::staging::ArtifactStore::new().map_err(|e| e.to_string())?;
+                let workspace = store
+                    .create_workspace("office_preview", "pdf_render")
+                    .map_err(|e| e.to_string())?;
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("document");
+                let pdf_path = workspace.path().join(format!("{stem}.pdf"));
+                let title = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "document".to_string());
+                if little_clip_core::document::render_to_pdf(&path, &pdf_path).is_ok()
+                    && std::fs::metadata(&pdf_path)
+                        .map(|m| m.len() > 0)
+                        .unwrap_or(false)
+                {
+                    let workspace_dir = workspace.retain();
+                    Ok(OfficeLoadResult::Pdf {
+                        pdf_path,
+                        workspace_dir,
+                        title,
+                    })
+                } else {
+                    let md = little_clip_core::document::render_to_markdown(&path)?;
+                    Ok(OfficeLoadResult::Markdown {
+                        content: md,
+                        title,
+                        path,
+                    })
+                }
+            });
+        self.office_load_job = Some((ticket, receiver));
+        self.clear_status_message();
+    }
+
+    pub(crate) fn poll_office_document_load(&mut self, ctx: &egui::Context) {
+        let Some((_, receiver)) = &self.office_load_job else {
+            return;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(80));
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        self.office_load_job = None;
+        match result {
+            Ok(Ok(OfficeLoadResult::Pdf {
+                pdf_path,
+                workspace_dir,
+                title,
+            })) => {
+                let state = PdfEditorState::new(pdf_path)
+                    .with_title(title)
+                    .with_cleanup_dir(workspace_dir)
+                    .with_protected_outputs();
+                self.replace_viewer(Some(ViewerSession::Pdf(state)));
+                ctx.request_repaint();
+            }
+            Ok(Ok(OfficeLoadResult::Markdown {
+                content,
+                title,
+                path,
+            })) => {
+                let mut state = TextPreviewState::from_text(content, Some(title), &self.config);
+                state.path = Some(path);
+                state.view_mode = crate::text_preview::TextViewMode::RenderedMarkdown;
+                self.replace_viewer(Some(ViewerSession::Text(state)));
+                ctx.request_repaint();
+            }
+            Ok(Err(err)) => {
+                self.status_msg = Some(format!("Document preview: {err}"));
+            }
+            Err(err) => {
+                self.status_msg = Some(format!("Document preview failed: {err}"));
+            }
         }
     }
 }

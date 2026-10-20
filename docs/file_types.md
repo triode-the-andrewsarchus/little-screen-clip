@@ -236,16 +236,16 @@
       - [ ] `.vi` — LabVIEW virtual instrument
     - [x] Esoteric programming languages
       - [x] `.bf` — Brainfuck
-  - [ ] `.doc`
-  - [ ] `.docx`
-  - [ ] `.odt`
-  - [ ] `.rtf`
+  - [x] `.doc`
+  - [x] `.docx`
+  - [x] `.odt`
+  - [x] `.rtf`
   - [ ] `.epub`
   - [ ] `.azw3` — Kindle Format 8
   - [ ] `.mobi` — Mobipocket
   - [ ] `.fb2` — FictionBook
   - [ ] `.djvu`, `.djv` — scanned-document format
-  - [ ] `.ppt`, `.pptx`, `.odp`
+  - [x] `.ppt`, `.pptx`, `.odp`
 - [ ] Spreadsheets
   - [x] `.csv`
   - [x] `.ods`

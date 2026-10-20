@@ -71,6 +71,21 @@ impl TextSession {
             editor,
         })
     }
+    pub fn from_markdown(
+        path: &Path,
+        markdown: String,
+        config: &little_clip_core::AppConfig,
+    ) -> Self {
+        let title = path.file_name().map(|n| n.to_string_lossy().to_string());
+        let mut preview = TextPreviewState::from_text(markdown, title, config);
+        preview.path = Some(path.to_path_buf());
+        preview.view_mode = crate::text_preview::TextViewMode::RenderedMarkdown;
+        Self {
+            preview,
+            mode: Mode::Preview,
+            editor: None,
+        }
+    }
     pub fn path(&self) -> &Path {
         self.editor.as_ref().map_or_else(
             || self.preview.path.as_deref().unwrap_or(Path::new(".")),

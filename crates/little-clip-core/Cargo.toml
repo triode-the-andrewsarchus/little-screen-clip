@@ -38,3 +38,5 @@ regex.workspace = true
 flate2 = "1.0"
 wait-timeout = "0.2"
 libheif-rs = { version = "3.0", default-features = false, features = ["v1_17", "image"] }
+anydoc = "0.2"
+rdocx = "0.16"

@@ -53,6 +53,7 @@ pub(super) fn test_workbench_app(
         text_load_job: None,
         spreadsheet_load_job: None,
         midi_load_job: None,
+        office_load_job: None,
         rolling_editor_job: None,
         rolling_audio_strip: None,
         dragging_slot: None,
@@ -243,10 +244,14 @@ pub(super) fn wait_for_image_load(app: &mut WorkbenchApp) {
 
 pub(super) fn wait_for_text_load(app: &mut WorkbenchApp) {
     let ctx = egui::Context::default();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while app.text_load_job.is_some() || app.spreadsheet_load_job.is_some() {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while app.text_load_job.is_some()
+        || app.spreadsheet_load_job.is_some()
+        || app.office_load_job.is_some()
+    {
         app.poll_spreadsheet_load(&ctx);
         app.poll_text_load(&ctx);
+        app.poll_office_document_load(&ctx);
         assert!(
             std::time::Instant::now() < deadline,
             "text load did not finish"

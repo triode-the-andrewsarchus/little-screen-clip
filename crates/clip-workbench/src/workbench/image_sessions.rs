@@ -65,6 +65,9 @@ impl WorkbenchApp {
         if let Some((ticket, _)) = self.midi_load_job.take() {
             ticket.cancel();
         }
+        if let Some((ticket, _)) = self.office_load_job.take() {
+            ticket.cancel();
+        }
         self.image_load_job = Some(ImageLoadJob::new_with_key(source, key));
         self.clear_status_message();
     }

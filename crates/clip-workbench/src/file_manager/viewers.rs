@@ -26,6 +26,11 @@ enum Loaded {
     Text(super::text_editor::TextSession),
     Sheet(little_clip_core::presentation::spreadsheet::SpreadsheetData),
     Midi(little_clip_core::presentation::midi::MidiData),
+    OfficePdf {
+        pdf_path: PathBuf,
+        workspace_dir: PathBuf,
+        original_path: PathBuf,
+    },
     Path(FileSource),
     Video(super::media::VideoMetadata),
     External,
@@ -339,6 +344,7 @@ enum Kind {
     Image,
     Audio,
     Pdf,
+    OfficeDoc,
     Sheet,
     Midi,
     Scene,
@@ -358,6 +364,8 @@ fn kind(path: &Path) -> Kind {
         Kind::Video
     } else if little_clip_core::pdf::is_pdf_path(path) {
         Kind::Pdf
+    } else if little_clip_core::document::is_office_document(path) {
+        Kind::OfficeDoc
     } else if little_clip_core::presentation::spreadsheet::is_spreadsheet_file(path) {
         Kind::Sheet
     } else if path
@@ -417,6 +425,34 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         Kind::Midi => {
             little_clip_core::presentation::midi::MidiData::parse_file(path).map(Loaded::Midi)
         }
+        Kind::OfficeDoc => {
+            let store =
+                little_clip_core::staging::ArtifactStore::new().map_err(|e| e.to_string())?;
+            let workspace = store
+                .create_workspace("office_preview", "pdf_render")
+                .map_err(|e| e.to_string())?;
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("document");
+            let pdf_path = workspace.path().join(format!("{stem}.pdf"));
+            if little_clip_core::document::render_to_pdf(path, &pdf_path).is_ok()
+                && std::fs::metadata(&pdf_path)
+                    .map(|m| m.len() > 0)
+                    .unwrap_or(false)
+            {
+                let workspace_dir = workspace.retain();
+                Ok(Loaded::OfficePdf {
+                    pdf_path,
+                    workspace_dir,
+                    original_path: path.to_path_buf(),
+                })
+            } else {
+                let md = little_clip_core::document::render_to_markdown(path)?;
+                let text_session = super::text_editor::TextSession::from_markdown(path, md, config);
+                Ok(Loaded::Text(text_session))
+            }
+        }
         Kind::Text => super::text_editor::TextSession::load(path, config).map(Loaded::Text),
         Kind::Video => video::prepare(path).map(Loaded::Video),
         Kind::External => Ok(Loaded::External),
@@ -441,6 +477,22 @@ fn session(loaded: Loaded, path: PathBuf, config: &AppConfig, video_start: f64) 
         Loaded::Text(state) => ViewerSession::Text(state),
         Loaded::Sheet(data) => ViewerSession::Sheet(SpreadsheetViewerState::new(data, Some(path))),
         Loaded::Midi(data) => ViewerSession::Midi(MidiViewerState::from_parsed_file(path, data)),
+        Loaded::OfficePdf {
+            pdf_path,
+            workspace_dir,
+            original_path,
+        } => {
+            let title = original_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "document".to_string());
+            ViewerSession::Pdf(
+                PdfEditorState::new(pdf_path)
+                    .with_title(title)
+                    .with_cleanup_dir(workspace_dir)
+                    .with_protected_outputs(),
+            )
+        }
         Loaded::Path(source) if little_clip_core::audio::is_audio_path(&path) => {
             ViewerSession::Audio(
                 AudioPreviewState::new(path.clone(), super::display_path(&path))
@@ -562,5 +614,36 @@ mod tests {
             load(&unknown, &AppConfig::default()).unwrap(),
             Loaded::External
         ));
+    }
+
+    #[test]
+    fn office_document_loads_in_file_manager_viewers() {
+        let dir = tempfile::tempdir().unwrap();
+        let rtf_path = dir.path().join("document.rtf");
+        std::fs::write(
+            &rtf_path,
+            b"{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Courier;}}\\f0\\fs24 Hello \\b File Manager!\\b0\\par Content paragraph.}",
+        )
+        .unwrap();
+
+        let ctx = egui::Context::default();
+        let mut viewers = Viewers::default();
+        viewers.open(rtf_path.clone());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while viewers.loading.is_some() {
+            viewers.poll(&ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            matches!(
+                viewers.session,
+                Some(ViewerSession::Pdf(_)) | Some(ViewerSession::Text(_))
+            ),
+            "expected Pdf or Text viewer session for office document"
+        );
+        assert_eq!(viewers.path.as_ref(), Some(&rtf_path));
+        assert!(viewers.request_close());
+        assert!(!viewers.active());
     }
 }

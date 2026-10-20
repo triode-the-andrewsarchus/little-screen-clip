@@ -553,6 +553,7 @@ pub struct PdfEditorState {
     viewport: PdfPageViewport,
     navigation: navigation::PdfNavigation,
     document_tools: document_tools::PdfDocumentTools,
+    cleanup_dir: Option<PathBuf>,
 }
 
 impl PdfEditorState {
@@ -587,7 +588,20 @@ impl PdfEditorState {
             viewport: PdfPageViewport::default(),
             navigation: navigation::PdfNavigation::default(),
             document_tools: document_tools::PdfDocumentTools::default(),
+            cleanup_dir: None,
         }
+    }
+
+    /// Sets the displayed title for converted documents.
+    pub fn with_title(mut self, title: String) -> Self {
+        self.title = title;
+        self
+    }
+
+    /// Attaches an owned temporary workspace directory to be deleted on drop.
+    pub fn with_cleanup_dir(mut self, dir: PathBuf) -> Self {
+        self.cleanup_dir = Some(dir);
+        self
     }
 
     /// Prevents Files page edits and OCR from replacing an existing sibling file.
@@ -638,6 +652,9 @@ impl Drop for PdfEditorState {
         }
         if let Some((ticket, _)) = &self.info_job {
             ticket.cancel();
+        }
+        if let Some(dir) = &self.cleanup_dir {
+            let _ = std::fs::remove_dir_all(dir);
         }
     }
 }

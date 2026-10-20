@@ -47,6 +47,7 @@ impl eframe::App for WorkbenchApp {
         }
         self.poll_image_load(ctx);
         self.poll_text_load(ctx);
+        self.poll_office_document_load(ctx);
         if self.render_modal_viewers(ctx) {
             self.palette_search_needs_focus = true;
             return;

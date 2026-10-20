@@ -416,6 +416,21 @@ type SpreadsheetLoadReceiver =
     Receiver<Result<Result<(SpreadsheetData, Option<PathBuf>), String>, JobError>>;
 type MidiLoadReceiver = Receiver<Result<Result<(MidiData, PathBuf), String>, JobError>>;
 
+pub(crate) enum OfficeLoadResult {
+    Pdf {
+        pdf_path: PathBuf,
+        workspace_dir: PathBuf,
+        title: String,
+    },
+    Markdown {
+        content: String,
+        title: String,
+        path: PathBuf,
+    },
+}
+
+type OfficeDocLoadReceiver = Receiver<Result<Result<OfficeLoadResult, String>, JobError>>;
+
 enum ImageLoadSource {
     File(PathBuf),
     ItemFile {
@@ -651,6 +666,7 @@ struct WorkbenchApp {
         Option<(Arc<String>, String)>,
     )>,
     midi_load_job: Option<(JobTicket, MidiLoadReceiver)>,
+    pub(crate) office_load_job: Option<(JobTicket, OfficeDocLoadReceiver)>,
     rolling_editor_job: Option<RollingEditorLoadJob>,
     rolling_audio_strip: Option<RollingAudioStripState>,
     dragging_slot: Option<SlotId>,
@@ -903,6 +919,9 @@ impl Drop for WorkbenchApp {
             ticket.cancel();
         }
         if let Some((ticket, _)) = &self.midi_load_job {
+            ticket.cancel();
+        }
+        if let Some((ticket, _)) = &self.office_load_job {
             ticket.cancel();
         }
     }

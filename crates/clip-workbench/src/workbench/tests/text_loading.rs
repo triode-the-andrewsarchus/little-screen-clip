@@ -287,3 +287,28 @@ fn dropping_workbench_cancels_queued_text_load() {
     release_blocker_and_wait_for_queue_to_drain(&jobs, release);
     assert!(!ran.load(Ordering::Acquire));
 }
+
+#[test]
+fn office_document_loads_via_pdf_or_markdown() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let rtf_path = temp_dir.path().join("sample.rtf");
+    std::fs::write(
+        &rtf_path,
+        b"{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Courier;}}\\f0\\fs24 Hello \\b Office World!\\b0\\par Content paragraph.}",
+    )
+    .unwrap();
+
+    let mut app = test_workbench_app(Some(gallery_viewer()), VecDeque::new());
+    app.open_slot_file_preview(&rtf_path, false);
+    assert!(app.office_load_job.is_some());
+
+    wait_for_text_load(&mut app);
+    assert!(app.office_load_job.is_none());
+    assert!(
+        matches!(
+            app.viewer,
+            Some(ViewerSession::Pdf(_)) | Some(ViewerSession::Text(_))
+        ),
+        "expected Pdf or Text viewer session for office document"
+    );
+}

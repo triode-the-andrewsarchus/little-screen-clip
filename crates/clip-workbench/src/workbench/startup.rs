@@ -127,6 +127,7 @@ impl WorkbenchApp {
             text_load_job: None,
             spreadsheet_load_job: None,
             midi_load_job: None,
+            office_load_job: None,
             rolling_editor_job: None,
             rolling_audio_strip,
             dragging_slot: None,

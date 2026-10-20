@@ -15,13 +15,18 @@ impl WorkbenchApp {
         }
 
         let Some(viewer) = self.viewer.as_mut() else {
-            if self.image_load_job.is_some() || self.text_load_job.is_some() {
+            if self.image_load_job.is_some()
+                || self.text_load_job.is_some()
+                || self.office_load_job.is_some()
+            {
                 let mut cancel = false;
                 show_viewer_panel(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label(if self.image_load_job.is_some() {
                             "Loading image…"
+                        } else if self.office_load_job.is_some() {
+                            "Converting document…"
                         } else {
                             "Loading text…"
                         });
@@ -31,6 +36,7 @@ impl WorkbenchApp {
                 if cancel || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                     self.image_load_job = None;
                     self.text_load_job = None;
+                    self.office_load_job = None;
                 }
                 ctx.request_repaint_after(Duration::from_millis(40));
                 return true;
@@ -331,6 +337,8 @@ impl WorkbenchApp {
             self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(
                 fp.to_path_buf(),
             ))));
+        } else if little_clip_core::document::is_office_document(fp) {
+            self.start_office_document_load(fp.to_path_buf());
         } else if is_spreadsheet_file(fp) {
             self.start_spreadsheet_load(SpreadsheetLoadSource::File(fp.to_path_buf()));
         } else if is_image || is_image_path(fp) {
