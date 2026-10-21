@@ -78,6 +78,7 @@ pub struct RedactionState {
 
     pub inpaint_mask: Option<image::GrayImage>,
     pub brush_radius: f32,
+    pub grow_selection_px: f32,
     pub last_brush_pos: Option<Pos2>,
     pub inpaint_in_progress: bool,
     pub inpaint_status: Option<String>,
@@ -94,6 +95,7 @@ impl Default for RedactionState {
             active_drag: None,
             inpaint_mask: None,
             brush_radius: 24.0,
+            grow_selection_px: 6.0,
             last_brush_pos: None,
             inpaint_in_progress: false,
             inpaint_status: None,
@@ -551,12 +553,21 @@ impl ImagePreviewState {
                 super::sam::SamWorkerResponse::Mask { query_id, mask, .. } => {
                     self.sam_state.in_flight = false;
                     if query_id == self.sam_state.latest_query_id {
+                        self.sam_state.raw_hovered_mask = Some(mask.clone());
+                        let final_mask = if self.redaction_state.grow_selection_px > 0.0 {
+                            super::sam::dilate_binary_mask(
+                                &mask,
+                                self.redaction_state.grow_selection_px,
+                            )
+                        } else {
+                            mask
+                        };
                         super::sam::update_hovered_mask_texture(
-                            &mask,
+                            &final_mask,
                             &mut self.sam_state.hovered_mask_texture,
                             ctx,
                         );
-                        self.sam_state.hovered_mask = Some(mask);
+                        self.sam_state.hovered_mask = Some(final_mask);
                         ctx.request_repaint();
 
                         if let Some((_, val)) = self.sam_state.pending_click.take() {
@@ -626,6 +637,36 @@ impl ImagePreviewState {
             }
         } else if let Some(norm_p) = self.sam_state.hovered_pos {
             self.sam_state.pending_click = Some((norm_p, val));
+        }
+    }
+
+    pub fn refresh_sam_hover_preview(&mut self, ctx: &egui::Context) {
+        if let Some(ref raw) = self.sam_state.raw_hovered_mask {
+            let final_mask = if self.redaction_state.grow_selection_px > 0.0 {
+                super::sam::dilate_binary_mask(raw, self.redaction_state.grow_selection_px)
+            } else {
+                raw.clone()
+            };
+            super::sam::update_hovered_mask_texture(
+                &final_mask,
+                &mut self.sam_state.hovered_mask_texture,
+                ctx,
+            );
+            self.sam_state.hovered_mask = Some(final_mask);
+            ctx.request_repaint();
+        }
+    }
+
+    pub fn grow_current_inpaint_mask(&mut self, ctx: &egui::Context) {
+        let grow_px = self.redaction_state.grow_selection_px.max(1.0);
+        if let Some(mask) = self.redaction_state.inpaint_mask.as_mut() {
+            let grown = super::sam::dilate_binary_mask(mask, grow_px);
+            *mask = grown;
+            self.update_inpaint_mask_texture(ctx);
+            self.show_toast(format!(
+                "Grew inpaint mask by {} px",
+                grow_px.round() as u32
+            ));
         }
     }
 
@@ -979,6 +1020,26 @@ impl ImagePreviewState {
                         }
                     }
 
+                    ui.add_space(crate::ui_ext::SPACE_XS);
+                    ui.horizontal(|ui| {
+                        ui.label("Grow Selection:");
+                        let mut grow = self.redaction_state.grow_selection_px;
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut grow, 0.0..=64.0)
+                                    .step_by(1.0)
+                                    .text("px"),
+                            )
+                            .on_hover_text(
+                                "Expand selection mask outward by N pixels to give inpainting room to work with",
+                            )
+                            .changed()
+                        {
+                            self.redaction_state.grow_selection_px = grow;
+                            self.refresh_sam_hover_preview(ui.ctx());
+                        }
+                    });
+
                     ui.add_space(crate::ui_ext::SPACE_SM);
 
                     let has_mask = self.inpaint_has_mask();
@@ -1007,16 +1068,34 @@ impl ImagePreviewState {
                         self.run_lama_inpaint();
                     }
 
-                    // Clear Mask Button
-                    let clear_mask_btn = crate::ui_ext::secondary_button_icon(
-                        Some(Icon::Close),
-                        "Clear Mask",
-                        btn_bg,
-                        palette,
-                    );
-                    if ui.add_enabled(has_mask, clear_mask_btn).clicked() {
-                        self.clear_inpaint_mask();
-                    }
+                    // Action buttons: Clear Mask & Grow Mask
+                    ui.horizontal(|ui| {
+                        let clear_mask_btn = crate::ui_ext::secondary_button_icon(
+                            Some(Icon::Close),
+                            "Clear Mask",
+                            btn_bg,
+                            palette,
+                        );
+                        if ui.add_enabled(has_mask, clear_mask_btn).clicked() {
+                            self.clear_inpaint_mask();
+                        }
+
+                        let grow_mask_btn = crate::ui_ext::secondary_button_icon(
+                            Some(Icon::Plus),
+                            "Grow Mask",
+                            btn_bg,
+                            palette,
+                        );
+                        if ui
+                            .add_enabled(has_mask && !in_progress, grow_mask_btn)
+                            .on_hover_text(
+                                "Expand current inpaint mask by the grow-selection slider radius",
+                            )
+                            .clicked()
+                        {
+                            self.grow_current_inpaint_mask(ui.ctx());
+                        }
+                    });
 
                     if let Some(ref st) = self.redaction_state.inpaint_status {
                         ui.add_space(crate::ui_ext::SPACE_XS);
@@ -2248,5 +2327,57 @@ mod tests {
         assert_eq!(mask.get_pixel(45, 45)[0], 255);
         assert_eq!(mask.get_pixel(10, 10)[0], 0);
         assert!(state.inpaint_has_mask());
+    }
+
+    #[test]
+    fn test_grow_selection_expands_sam_and_inpaint_mask() {
+        let app_config = little_clip_core::AppConfig::default();
+        let mut png = Vec::new();
+        RgbaImage::from_pixel(100, 100, image::Rgba([120, 120, 120, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut state = ImagePreviewState::from_bytes_with_meta(
+            png,
+            "image/png".into(),
+            None,
+            "Grow test".into(),
+            &app_config,
+        )
+        .unwrap();
+
+        state.redaction_state.tool_type = RedactToolType::LamaInpaint;
+        state.redaction_state.grow_selection_px = 5.0;
+
+        // 1. Check raw hover mask dilation via refresh_sam_hover_preview
+        let mut raw_mask = image::GrayImage::new(100, 100);
+        // Small 10x10 patch at (45..55, 45..55)
+        for y in 45..55 {
+            for x in 45..55 {
+                raw_mask.put_pixel(x, y, image::Luma([255]));
+            }
+        }
+        state.sam_state.raw_hovered_mask = Some(raw_mask);
+        let ctx = egui::Context::default();
+        state.refresh_sam_hover_preview(&ctx);
+
+        let dilated_hover = state.sam_state.hovered_mask.as_ref().unwrap();
+        // Point (40, 50) is 5 pixels away from x=45, should now be included
+        assert_eq!(dilated_hover.get_pixel(40, 50)[0], 255);
+        // Point (35, 50) is 10 pixels away, should be 0
+        assert_eq!(dilated_hover.get_pixel(35, 50)[0], 0);
+
+        // 2. Check growing an existing inpaint mask
+        let mask = state.ensure_inpaint_mask();
+        mask.put_pixel(50, 50, image::Luma([255]));
+        state.grow_current_inpaint_mask(&ctx);
+
+        let grown_mask = state.ensure_inpaint_mask();
+        // Center is still 255
+        assert_eq!(grown_mask.get_pixel(50, 50)[0], 255);
+        // 5 pixels away is now 255
+        assert_eq!(grown_mask.get_pixel(50, 45)[0], 255);
+        assert_eq!(grown_mask.get_pixel(55, 50)[0], 255);
+        // 10 pixels away is 0
+        assert_eq!(grown_mask.get_pixel(50, 40)[0], 0);
     }
 }

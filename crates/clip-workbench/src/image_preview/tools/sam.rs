@@ -239,6 +239,105 @@ pub fn update_hovered_mask_texture(
     }
 }
 
+/// Dilates a binary mask outward by `radius_px` using the linear-time 2D Euclidean Distance Transform.
+///
+/// This provides exact, smooth, isotropic dilation without directional bias in O(W * H) time.
+pub fn dilate_binary_mask(mask: &GrayImage, radius_px: f32) -> GrayImage {
+    if radius_px <= 0.0 {
+        return mask.clone();
+    }
+
+    let (w, h) = mask.dimensions();
+    if w == 0 || h == 0 {
+        return mask.clone();
+    }
+
+    let w_usize = w as usize;
+    let h_usize = h as usize;
+    let r2 = radius_px * radius_px;
+
+    // Helper 1D parabolic envelope distance transform (Felzenszwalb-Huttenlocher)
+    fn edt_1d(f: &[f32], d: &mut [f32], v: &mut [usize], z: &mut [f32]) {
+        let n = f.len();
+        if n == 0 {
+            return;
+        }
+        let mut k = 0usize;
+        v[0] = 0;
+        z[0] = -1e20;
+        z[1] = 1e20;
+
+        for q in 1..n {
+            let mut s = ((f[q] + (q * q) as f32) - (f[v[k]] + (v[k] * v[k]) as f32))
+                / (2 * q - 2 * v[k]) as f32;
+            while s <= z[k] {
+                k = k.saturating_sub(1);
+                s = ((f[q] + (q * q) as f32) - (f[v[k]] + (v[k] * v[k]) as f32))
+                    / (2 * q - 2 * v[k]) as f32;
+            }
+            k += 1;
+            v[k] = q;
+            z[k] = s;
+            z[k + 1] = 1e20;
+        }
+
+        k = 0;
+        for q in 0..n {
+            while z[k + 1] < q as f32 {
+                k += 1;
+            }
+            let dist_sq = (q as isize - v[k] as isize).pow(2) as f32 + f[v[k]];
+            d[q] = dist_sq;
+        }
+    }
+
+    // Grid initialized with 0.0 if mask > 0, else large infinity
+    let mut grid = vec![1e20f32; w_usize * h_usize];
+    for y in 0..h_usize {
+        let row_offset = y * w_usize;
+        for x in 0..w_usize {
+            if mask.get_pixel(x as u32, y as u32)[0] > 0 {
+                grid[row_offset + x] = 0.0;
+            }
+        }
+    }
+
+    let mut temp = vec![0.0f32; w_usize * h_usize];
+    let max_dim = w_usize.max(h_usize);
+    let mut v = vec![0usize; max_dim];
+    let mut z = vec![0.0f32; max_dim + 1];
+    let mut col_in = vec![0.0f32; h_usize];
+    let mut col_out = vec![0.0f32; h_usize];
+
+    // Pass 1: Columns
+    for x in 0..w_usize {
+        for y in 0..h_usize {
+            col_in[y] = grid[y * w_usize + x];
+        }
+        edt_1d(&col_in, &mut col_out, &mut v, &mut z);
+        for y in 0..h_usize {
+            temp[y * w_usize + x] = col_out[y];
+        }
+    }
+
+    // Pass 2: Rows & thresholding
+    let mut dilated = GrayImage::new(w, h);
+    let mut row_out = vec![0.0f32; w_usize];
+
+    for y in 0..h_usize {
+        let row_start = y * w_usize;
+        let row_in = &temp[row_start..row_start + w_usize];
+        edt_1d(row_in, &mut row_out, &mut v, &mut z);
+        for x in 0..w_usize {
+            if row_out[x] <= r2 {
+                dilated.put_pixel(x as u32, y as u32, image::Luma([255]));
+            }
+        }
+    }
+
+    dilated
+}
+
 pub enum SamWorkerCommand {
     EncodeImage {
         image: Arc<RgbaImage>,
@@ -252,6 +351,7 @@ pub enum SamWorkerCommand {
     Quit,
 }
 
+#[allow(dead_code)]
 pub enum SamWorkerResponse {
     Ready,
     ImageLoaded {
@@ -378,6 +478,7 @@ fn run_sam_native_worker_thread(
     }
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct SamState {
     pub worker: Option<SamWorkerHandle>,
@@ -389,6 +490,7 @@ pub struct SamState {
 
     pub hovered_pos: Option<Pos2>,
     pub hovered_point_px: Option<(f32, f32)>,
+    pub raw_hovered_mask: Option<GrayImage>,
     pub hovered_mask: Option<GrayImage>,
     pub hovered_mask_texture: Option<egui::TextureHandle>,
 
@@ -403,6 +505,7 @@ impl SamState {
     pub fn reset_hover(&mut self) {
         self.hovered_pos = None;
         self.hovered_point_px = None;
+        self.raw_hovered_mask = None;
         self.hovered_mask = None;
         self.hovered_mask_texture = None;
         self.last_query_norm_pos = None;
@@ -423,6 +526,32 @@ impl SamState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_dilate_binary_mask_grows_selection_isotropically() {
+        let mut mask = GrayImage::new(50, 50);
+        // Single central pixel at (25, 25)
+        mask.put_pixel(25, 25, image::Luma([255]));
+
+        // Dilate by 5 pixels
+        let dilated = dilate_binary_mask(&mask, 5.0);
+
+        // Center must be 255
+        assert_eq!(dilated.get_pixel(25, 25)[0], 255);
+        // Pixels within 5.0 Euclidean distance must be 255
+        assert_eq!(dilated.get_pixel(25, 20)[0], 255);
+        assert_eq!(dilated.get_pixel(25, 30)[0], 255);
+        assert_eq!(dilated.get_pixel(20, 25)[0], 255);
+        assert_eq!(dilated.get_pixel(30, 25)[0], 255);
+        assert_eq!(dilated.get_pixel(22, 22)[0], 255); // sqrt((3^2)+(3^2)) = 4.24 <= 5.0
+
+        // Pixels outside 5.0 Euclidean distance must be 0
+        assert_eq!(dilated.get_pixel(25, 19)[0], 0); // dist 6.0
+        assert_eq!(dilated.get_pixel(25, 31)[0], 0); // dist 6.0
+        assert_eq!(dilated.get_pixel(19, 25)[0], 0); // dist 6.0
+        assert_eq!(dilated.get_pixel(21, 21)[0], 0); // sqrt((4^2)+(4^2)) = 5.66 > 5.0
+        assert_eq!(dilated.get_pixel(5, 5)[0], 0);
+    }
 
     #[test]
     fn stamp_sam_mask_combines_and_erases() {
