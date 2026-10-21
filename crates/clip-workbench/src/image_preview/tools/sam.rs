@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Instant;
 
 use crate::onnx_runtime::{
     MOBILE_SAM_DECODER_MODEL_NAME, MOBILE_SAM_DECODER_MODEL_URL, MOBILE_SAM_ENCODER_MODEL_NAME,
@@ -351,22 +350,10 @@ pub enum SamWorkerCommand {
     Quit,
 }
 
-#[allow(dead_code)]
 pub enum SamWorkerResponse {
     Ready,
-    ImageLoaded {
-        revision: u64,
-        width: u32,
-        height: u32,
-    },
-    Mask {
-        query_id: u64,
-        x: f32,
-        y: f32,
-        width: u32,
-        height: u32,
-        mask: GrayImage,
-    },
+    ImageLoaded { revision: u64 },
+    Mask { query_id: u64, mask: GrayImage },
     Error(String),
 }
 
@@ -442,11 +429,7 @@ fn run_sam_native_worker_thread(
             SamWorkerCommand::EncodeImage { image, revision } => {
                 match session.encode_image(&image) {
                     Ok(()) => {
-                        let _ = resp_tx.send(SamWorkerResponse::ImageLoaded {
-                            revision,
-                            width: session.orig_w,
-                            height: session.orig_h,
-                        });
+                        let _ = resp_tx.send(SamWorkerResponse::ImageLoaded { revision });
                     }
                     Err(err) => {
                         let _ = resp_tx.send(SamWorkerResponse::Error(format!(
@@ -458,14 +441,7 @@ fn run_sam_native_worker_thread(
             SamWorkerCommand::PredictPoint { x, y, query_id } => {
                 match session.predict_point(x, y) {
                     Ok(mask) => {
-                        let _ = resp_tx.send(SamWorkerResponse::Mask {
-                            query_id,
-                            x,
-                            y,
-                            width: session.orig_w,
-                            height: session.orig_h,
-                            mask,
-                        });
+                        let _ = resp_tx.send(SamWorkerResponse::Mask { query_id, mask });
                     }
                     Err(err) => {
                         let _ = resp_tx.send(SamWorkerResponse::Error(format!(
@@ -478,14 +454,12 @@ fn run_sam_native_worker_thread(
     }
 }
 
-#[allow(dead_code)]
 #[derive(Default)]
 pub struct SamState {
     pub worker: Option<SamWorkerHandle>,
     pub loaded_revision: Option<u64>,
     pub is_loading: bool,
     pub is_ready: bool,
-    pub status_text: Option<String>,
     pub error_text: Option<String>,
 
     pub hovered_pos: Option<Pos2>,
@@ -497,7 +471,6 @@ pub struct SamState {
     pub latest_query_id: u64,
     pub in_flight: bool,
     pub last_query_norm_pos: Option<Pos2>,
-    pub last_query_instant: Option<Instant>,
     pub pending_click: Option<(Pos2, u8)>,
 }
 
@@ -510,16 +483,6 @@ impl SamState {
         self.hovered_mask_texture = None;
         self.last_query_norm_pos = None;
         self.pending_click = None;
-    }
-
-    pub fn shutdown(&mut self) {
-        self.worker = None;
-        self.loaded_revision = None;
-        self.is_loading = false;
-        self.is_ready = false;
-        self.status_text = None;
-        self.error_text = None;
-        self.reset_hover();
     }
 }
 

@@ -41,24 +41,6 @@ impl Default for RedactionBox {
     }
 }
 
-impl RedactionBox {
-    #[allow(dead_code)]
-    pub fn new(normalized_rect: Rect) -> Self {
-        Self {
-            normalized_rect,
-            style: RedactionStyle::Black,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn with_style(normalized_rect: Rect, style: RedactionStyle) -> Self {
-        Self {
-            normalized_rect,
-            style,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RedactionDrag {
     Creating(Pos2, Pos2),
@@ -541,7 +523,7 @@ impl ImagePreviewState {
                     self.sam_state.error_text = None;
                     self.sync_sam_image();
                 }
-                super::sam::SamWorkerResponse::ImageLoaded { revision, .. } => {
+                super::sam::SamWorkerResponse::ImageLoaded { revision } => {
                     self.sam_state.loaded_revision = Some(revision);
                     self.sam_state.is_loading = false;
                     self.sam_state.error_text = None;
@@ -550,7 +532,7 @@ impl ImagePreviewState {
                         self.sam_on_hover(norm_pos, ctx);
                     }
                 }
-                super::sam::SamWorkerResponse::Mask { query_id, mask, .. } => {
+                super::sam::SamWorkerResponse::Mask { query_id, mask } => {
                     self.sam_state.in_flight = false;
                     if query_id == self.sam_state.latest_query_id {
                         self.sam_state.raw_hovered_mask = Some(mask.clone());
