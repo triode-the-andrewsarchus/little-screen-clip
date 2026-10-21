@@ -11,6 +11,7 @@ use crate::ui_ext;
 mod bookmarks;
 mod gallery;
 mod list;
+mod mounts;
 pub(super) mod music;
 mod video;
 
@@ -99,6 +100,7 @@ impl FileManager {
         });
         if self.pending.is_some()
             || self.bookmarks.busy()
+            || self.mounts.busy()
             || self.edit_busy()
             || self.fuse_mounts.busy()
             || self.transfers.needs_repaint()
@@ -134,6 +136,7 @@ impl FileManager {
         }
         if self.filesystem_busy()
             || self.fuse_mounts.busy()
+            || self.mounts.busy()
             || self.error.is_some()
             || self.transfers.has_status()
             || self.edits.report.is_some()
@@ -449,7 +452,11 @@ impl FileManager {
                     }
                 }
             }
-            if let Some(mount_status) = self.fuse_mounts.status_text() {
+            let status = self
+                .fuse_mounts
+                .status_text()
+                .or_else(|| self.mounts.status_text().map(str::to_owned));
+            if let Some(mount_status) = status {
                 ui.spinner();
                 ui.add(egui::Label::new(mount_status).truncate(true));
             }

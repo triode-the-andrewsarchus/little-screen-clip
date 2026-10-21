@@ -15,6 +15,7 @@ mod image_strip;
 mod material_strip;
 mod media;
 mod midi_strip;
+pub(crate) mod mounts;
 mod music;
 mod native_drag;
 mod pdf_strip;
@@ -196,6 +197,7 @@ pub(crate) struct FileManager {
     music_offsets: Vec<f32>,
     music_selection: Option<ui::music::MusicRange>,
     fuse_mounts: fuse_binwalk::MountManager,
+    mounts: mounts::Mounts,
 }
 
 impl Default for FileManager {
@@ -266,6 +268,7 @@ impl FileManager {
             music_offsets: vec![0.0],
             music_selection: None,
             fuse_mounts: Default::default(),
+            mounts: mounts::Mounts::new(),
         }
     }
 
@@ -353,6 +356,7 @@ impl FileManager {
 
     fn refresh(&mut self) {
         fuse_binwalk::refresh_cached_mount_table();
+        self.mounts.request_scan(BackgroundJobs::global());
         self.tree.refresh(self.path().to_path_buf());
         self.navigate(self.path().to_path_buf(), Navigation::Refresh);
     }
@@ -409,53 +413,91 @@ impl FileManager {
         }
         self.tick_edits(jobs);
         self.tick_transfers(jobs);
-        if let Some(outcome) = self.fuse_mounts.tick() {
-            match outcome {
-                fuse_binwalk::MountOutcome::Mounted {
-                    binary_path,
-                    mount_point,
-                    writable,
-                } => {
-                    self.navigate(mount_point, Navigation::New);
-                    let name = binary_path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy();
-                    let mode_str = if writable { "writable" } else { "read-only" };
-                    self.edits.report = Some(edits::EditReport {
-                        text: format!("Mounted '{name}' ({mode_str}) via fuse-binwalk"),
-                        failed: false,
-                    });
-                }
-                fuse_binwalk::MountOutcome::Unmounted { mount_point } => {
-                    if self.path().starts_with(&mount_point) {
-                        let fallback = self
-                            .history
-                            .iter()
-                            .rev()
-                            .find(|loc| !loc.path.starts_with(&mount_point))
-                            .map(|loc| loc.path.clone())
-                            .unwrap_or_else(|| self.home.clone());
-                        self.navigate(fallback, Navigation::New);
-                    } else {
-                        self.refresh();
-                    }
-                    self.edits.report = Some(edits::EditReport {
-                        text: "Unmounted binary contents".into(),
-                        failed: false,
-                    });
-                }
-                fuse_binwalk::MountOutcome::Failed(text) => {
-                    self.edits.report = Some(edits::EditReport { text, failed: true });
-                }
-            }
-        }
+        self.tick_mounts(jobs);
+        self.tick_fuse_binwalk(jobs);
         if self.refresh_after_transfer && self.pending.is_none() {
             self.refresh_after_transfer = false;
             self.refresh();
         }
         self.tick_watch(jobs);
         self.tree.tick(jobs);
+    }
+
+    fn navigate_outside(&mut self, unmounted_path: &Path) {
+        if self.path().starts_with(unmounted_path) {
+            let fallback = self
+                .history
+                .iter()
+                .rev()
+                .find(|loc| !loc.path.starts_with(unmounted_path))
+                .map(|loc| loc.path.clone())
+                .unwrap_or_else(|| self.home.clone());
+            self.navigate(fallback, Navigation::New);
+        } else {
+            self.refresh();
+        }
+    }
+
+    fn tick_mounts(&mut self, jobs: &BackgroundJobs) {
+        let Some(event) = self.mounts.tick(jobs) else {
+            return;
+        };
+        match event {
+            mounts::MountEvent::Mounted(mount_point) => {
+                fuse_binwalk::refresh_cached_mount_table();
+                self.navigate(mount_point.clone(), Navigation::New);
+                self.edits.report = Some(edits::EditReport {
+                    text: format!("Mounted '{}'", display_path(&mount_point)),
+                    failed: false,
+                });
+            }
+            mounts::MountEvent::Unmounted(mount_point) => {
+                fuse_binwalk::refresh_cached_mount_table();
+                self.navigate_outside(&mount_point);
+                self.edits.report = Some(edits::EditReport {
+                    text: format!("Unmounted '{}'", display_path(&mount_point)),
+                    failed: false,
+                });
+            }
+            mounts::MountEvent::Error(text) => {
+                self.edits.report = Some(edits::EditReport { text, failed: true });
+            }
+        }
+    }
+
+    fn tick_fuse_binwalk(&mut self, jobs: &BackgroundJobs) {
+        let Some(outcome) = self.fuse_mounts.tick() else {
+            return;
+        };
+        self.mounts.request_scan(jobs);
+        match outcome {
+            fuse_binwalk::MountOutcome::Mounted {
+                binary_path,
+                mount_point,
+                writable,
+            } => {
+                self.navigate(mount_point, Navigation::New);
+                let name = binary_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let mode_str = if writable { "writable" } else { "read-only" };
+                self.edits.report = Some(edits::EditReport {
+                    text: format!("Mounted '{name}' ({mode_str}) via fuse-binwalk"),
+                    failed: false,
+                });
+            }
+            fuse_binwalk::MountOutcome::Unmounted { mount_point } => {
+                self.navigate_outside(&mount_point);
+                self.edits.report = Some(edits::EditReport {
+                    text: "Unmounted binary contents".into(),
+                    failed: false,
+                });
+            }
+            fuse_binwalk::MountOutcome::Failed(text) => {
+                self.edits.report = Some(edits::EditReport { text, failed: true });
+            }
+        }
     }
 
     fn append_location(&mut self, path: PathBuf) {

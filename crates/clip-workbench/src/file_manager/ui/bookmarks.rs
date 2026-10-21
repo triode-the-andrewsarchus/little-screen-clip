@@ -4,10 +4,10 @@ use super::*;
 impl FileManager {
     pub(super) fn sidebar_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         let bounds = ui.available_rect_before_wrap();
+        let row = ROW_HEIGHT + ui.spacing().item_spacing.y;
         if !self.bookmarks.entries.is_empty() {
-            let row = ROW_HEIGHT + ui.spacing().item_spacing.y;
             let height =
-                (36.0 + self.bookmarks.entries.len() as f32 * row).min(bounds.height() * 0.5);
+                (36.0 + self.bookmarks.entries.len() as f32 * row).min(bounds.height() * 0.35);
             let panel = egui::TopBottomPanel::bottom("files_bookmarks")
                 .exact_height(height)
                 .frame(egui::Frame::none())
@@ -42,9 +42,24 @@ impl FileManager {
         {
             self.bookmarks.add(payload.paths.clone(), None);
         }
+
+        if !self.mounts.entries.is_empty() {
+            let available_height = ui.available_height();
+            let height = (36.0 + self.mounts.entries.len() as f32 * row)
+                .min(available_height * 0.4)
+                .max(36.0 + row);
+            egui::TopBottomPanel::bottom("files_mounts")
+                .exact_height(height)
+                .frame(egui::Frame::none())
+                .show_inside(ui, |ui| {
+                    ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                    self.mounts_ui(ui, colors);
+                });
+        }
+
         ui.scope(|ui| {
             // Scroll areas allow a paint margin; keep it inside the space left
-            // above Bookmarks so tree rows cannot overlap its separator/header.
+            // above Bookmarks and Mounts so tree rows cannot overlap its separator/header.
             ui.set_clip_rect(ui.clip_rect().intersect(ui.available_rect_before_wrap()));
             self.tree_ui(ui, colors);
         });

@@ -114,6 +114,9 @@ pub enum Icon {
     Globe,
     Mouse,
     Hourglass,
+    Drive,
+    Eject,
+    Usb,
 }
 
 impl Icon {
@@ -226,6 +229,9 @@ impl Icon {
             Self::Globe => "globe",
             Self::Mouse => "mouse",
             Self::Hourglass => "hourglass",
+            Self::Drive => "drive",
+            Self::Eject => "eject",
+            Self::Usb => "usb",
         }
     }
 
@@ -338,6 +344,9 @@ impl Icon {
             Self::Globe => "bytes://icons/globe.svg",
             Self::Mouse => "bytes://icons/mouse.svg",
             Self::Hourglass => "bytes://icons/hourglass.svg",
+            Self::Drive => "bytes://icons/drive.svg",
+            Self::Eject => "bytes://icons/eject.svg",
+            Self::Usb => "bytes://icons/usb.svg",
         }
     }
 
@@ -450,6 +459,9 @@ impl Icon {
             Self::Globe => include_bytes!("../assets/icons/globe.svg"),
             Self::Mouse => include_bytes!("../assets/icons/mouse.svg"),
             Self::Hourglass => include_bytes!("../assets/icons/hourglass.svg"),
+            Self::Drive => include_bytes!("../assets/icons/drive.svg"),
+            Self::Eject => include_bytes!("../assets/icons/eject.svg"),
+            Self::Usb => include_bytes!("../assets/icons/usb.svg"),
         }
     }
 
@@ -647,6 +659,9 @@ impl Icon {
         Self::Globe,
         Self::Mouse,
         Self::Hourglass,
+        Self::Drive,
+        Self::Eject,
+        Self::Usb,
     ];
 }
 
