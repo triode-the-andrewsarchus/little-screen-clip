@@ -105,8 +105,9 @@ impl Mounts {
         }
     }
 
+    /// Whether an explicit mount or unmount user action is currently in progress.
     pub fn busy(&self) -> bool {
-        self.pending.is_some() || self.scan_receiver.is_some()
+        self.pending.is_some()
     }
 
     pub fn status_text(&self) -> Option<&str> {
@@ -173,7 +174,9 @@ impl Mounts {
         if let Some(rx) = &self.scan_receiver {
             match rx.try_recv() {
                 Ok(Ok(entries)) => {
-                    self.entries = entries;
+                    if self.entries != entries {
+                        self.entries = entries;
+                    }
                     self.scan_receiver = None;
                     self.scan_ticket = None;
                 }
