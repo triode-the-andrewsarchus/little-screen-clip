@@ -259,7 +259,7 @@ fn safe_component(value: &str, fallback: &str) -> String {
     }
 }
 
-fn dirs_or_fallback_cache() -> PathBuf {
+pub(crate) fn dirs_or_fallback_cache() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
         if !xdg.is_empty() {
             return PathBuf::from(xdg);

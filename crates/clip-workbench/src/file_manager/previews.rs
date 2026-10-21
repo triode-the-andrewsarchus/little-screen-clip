@@ -179,6 +179,7 @@ impl EntryPreviews {
     }
     pub fn is_binary(&self, entry: &Entry) -> bool {
         entry.regular_file
+            && !little_clip_core::document::is_office_document(&entry.path)
             && (super::binary_strip::known(&entry.path)
                 || self
                     .identities
@@ -718,6 +719,7 @@ fn text_candidate(entry: &Entry) -> bool {
             .path
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        && !little_clip_core::document::is_office_document(&entry.path)
 }
 
 #[cfg(test)]
@@ -959,5 +961,45 @@ mod tests {
         previews.retain(&BTreeSet::new());
         assert!(previews.identities.is_empty());
         assert!(previews.cache.get(previous_id.unwrap()).is_none());
+    }
+
+    #[test]
+    fn office_document_is_not_binary_and_provides_pdf_info() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.rtf");
+        std::fs::write(
+            &path,
+            b"{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Courier;}}\\f0\\fs24 Office Document Preview Test\\par Page 1.}",
+        )
+        .unwrap();
+
+        let entry = single_entry(dir.path());
+        let mut previews = EntryPreviews::default();
+        let ctx = egui::Context::default();
+
+        assert!(!previews.is_binary(&entry));
+        assert!(!previews.is_text(&entry));
+
+        previews.listing(&entry);
+        let id = previews.identity(&entry);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while previews.cache.get(id).is_none() {
+            previews.poll(&ctx);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "office doc preview timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let ready = previews.cache.get(id).unwrap();
+        assert!(!previews.is_binary(&entry));
+        assert!(
+            ready.data.pdf_info.is_some(),
+            "expected pdf_info for office doc"
+        );
+        assert_eq!(ready.data.pdf_info.as_ref().unwrap().page_count, 1);
+        assert_eq!(ready.data.icon, crate::icons::Icon::Pdf);
     }
 }

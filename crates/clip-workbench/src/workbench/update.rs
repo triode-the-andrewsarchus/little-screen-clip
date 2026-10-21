@@ -222,6 +222,12 @@ impl eframe::App for WorkbenchApp {
                                 .filter(|item| is_pdf_clip_item(item))
                                 .and_then(bounded_item_file_path)
                         });
+                    let first_office_doc_item = self.selected_slots.iter().find_map(|s| {
+                            self.state
+                                .get(*s)
+                                .filter(|item| is_office_document_clip_item(item))
+                                .and_then(bounded_item_file_path)
+                        });
                         let first_spreadsheet_slot = self
                             .inspector_text_preview_cache
                             .as_ref()
@@ -260,6 +266,27 @@ impl eframe::App for WorkbenchApp {
                             );
                             if ui.add(pdf_btn).on_hover_text("Open PDF Page Editor (Delete / Rotate pages)").clicked() {
                                 self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(pdf_path))));
+                            }
+                        }
+
+                        if let Some(doc_path) = first_office_doc_item {
+                            ui.add_space(crate::ui_ext::SPACE_SM);
+                            let doc_btn = contextual_palette_action_button(
+                                Some(Icon::Pdf),
+                                if self.office_load_job.is_some() {
+                                    "Opening Document…"
+                                } else {
+                                    "View Document"
+                                },
+                                &self.ui_palette,
+                            );
+                            let doc_response = ui_ext::on_hover_text_with_disabled_reason(
+                                ui.add_enabled(self.office_load_job.is_none(), doc_btn),
+                                "Open office document in structured preview or PDF viewer",
+                                "Wait for the current document load to finish.",
+                            );
+                            if doc_response.clicked() {
+                                self.start_office_document_load(doc_path);
                             }
                         }
 

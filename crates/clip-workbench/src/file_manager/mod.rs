@@ -550,6 +550,8 @@ impl FileManager {
                     || entry.is_material()
                     || entry.is_photo()
                     || (entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path))
+                    || (entry.regular_file
+                        && little_clip_core::document::is_office_document(&entry.path))
                 {
                     VIDEO_ROW_HEIGHT
                 } else {

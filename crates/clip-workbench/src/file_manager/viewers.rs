@@ -436,6 +436,20 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
                 .and_then(|s| s.to_str())
                 .unwrap_or("document");
             let pdf_path = workspace.path().join(format!("{stem}.pdf"));
+            if let Ok(cached_pdf) = little_clip_core::document::ensure_rendered_pdf(path) {
+                if std::fs::copy(&cached_pdf, &pdf_path).is_ok()
+                    && std::fs::metadata(&pdf_path)
+                        .map(|m| m.len() > 0)
+                        .unwrap_or(false)
+                {
+                    let workspace_dir = workspace.retain();
+                    return Ok(Loaded::OfficePdf {
+                        pdf_path,
+                        workspace_dir,
+                        original_path: path.to_path_buf(),
+                    });
+                }
+            }
             if little_clip_core::document::render_to_pdf(path, &pdf_path).is_ok()
                 && std::fs::metadata(&pdf_path)
                     .map(|m| m.len() > 0)

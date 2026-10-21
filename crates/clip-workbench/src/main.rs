@@ -397,8 +397,22 @@ fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) 
         .show(ctx, contents);
 }
 
+pub(crate) fn is_office_document_clip_item(item: &ClipItem) -> bool {
+    bounded_item_file_path(item)
+        .as_deref()
+        .is_some_and(little_clip_core::document::is_office_document)
+        || matches!(
+            &item.payload,
+            little_clip_core::ClipPayload::Image { mime, .. }
+                if little_clip_core::document::is_office_mime(mime)
+        )
+}
+
 fn is_image_preview_action_item(item: &ClipItem) -> bool {
-    !is_large_text_payload(item) && item.is_image() && !is_pdf_clip_item(item)
+    !is_large_text_payload(item)
+        && item.is_image()
+        && !is_pdf_clip_item(item)
+        && !is_office_document_clip_item(item)
 }
 
 fn is_pdf_clip_item(item: &ClipItem) -> bool {

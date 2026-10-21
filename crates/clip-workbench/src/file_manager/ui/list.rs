@@ -152,11 +152,14 @@ impl<'a> ListPreviews<'a> {
             self.paths.insert(entry.path.clone());
             self.files
                 .show_visual(ui, rect, entry, Some(self.columns), colors, palette);
-        } else if entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path) {
+        } else if entry.regular_file
+            && (little_clip_core::pdf::is_pdf_path(&entry.path)
+                || little_clip_core::document::is_office_document(&entry.path))
+        {
             self.paths.insert(entry.path.clone());
             let page = self.files.show_pdf(ui, rect, entry, colors);
             if response.double_clicked() {
-                *self.pdf_start = page.map(|page| (entry.path.clone(), page));
+                *self.pdf_start = Some((entry.path.clone(), page.unwrap_or(1)));
             }
         } else if !entry.directory && self.paths.len() < 128 {
             self.paths.insert(entry.path.clone());

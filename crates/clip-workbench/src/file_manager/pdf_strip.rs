@@ -51,10 +51,15 @@ impl Pages {
         let strip = super::ui::strip_body(ui, row, Icon::Pdf, colors);
         ui.painter().rect_filled(strip, 3.0, colors.recessed);
         let Some(info) = info else {
+            let label = if little_clip_core::document::is_office_document(&entry.path) {
+                "Document preview unavailable or loading…"
+            } else {
+                "PDF preview unavailable or loading…"
+            };
             ui.painter().text(
                 strip.left_center(),
                 egui::Align2::LEFT_CENTER,
-                "PDF preview unavailable or loading…",
+                label,
                 egui::FontId::proportional(14.0),
                 colors.text_secondary,
             );
@@ -196,7 +201,12 @@ pub(super) fn load_page(
             return Err("Preview cancelled".into());
         }
         let source = FileSource::capture(path)?;
-        let (png, _, _) = little_clip_core::pdf::render_pdf_page_thumbnail(path, page, edge)?;
+        let (png, _, _) = if little_clip_core::document::is_office_document(path) {
+            let pdf_path = little_clip_core::document::ensure_rendered_pdf(path)?;
+            little_clip_core::pdf::render_pdf_page_thumbnail(&pdf_path, page, edge)?
+        } else {
+            little_clip_core::pdf::render_pdf_page_thumbnail(path, page, edge)?
+        };
         source.check()?;
         if cancelled.load(Ordering::Relaxed) {
             return Err("Preview cancelled".into());

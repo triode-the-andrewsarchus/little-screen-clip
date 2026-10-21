@@ -552,7 +552,7 @@ impl ClipItem {
         if path.is_dir() {
             return Self::from_directory(path.to_path_buf());
         }
-        let media: [(bool, fn(&Path) -> Option<Self>); 6] = [
+        let media: [(bool, fn(&Path) -> Option<Self>); 7] = [
             (crate::animation::is_video_path(path), |p| {
                 Self::from_video(p.to_path_buf())
             }),
@@ -565,6 +565,10 @@ impl ClipItem {
                 Self::from_raw_image_file,
             ),
             (crate::pdf::is_pdf_path(path), Self::from_pdf_file),
+            (
+                crate::document::is_office_document(path),
+                Self::from_office_document_file,
+            ),
             (crate::audio::is_audio_path(path), |p| {
                 Self::from_audio(p.to_path_buf())
             }),
@@ -695,6 +699,45 @@ impl ClipItem {
             subtitle,
             details: vec![format!("{} pages", page_count), "PDF".to_string()],
             handler_tag: "PDF (DOCUMENT)".to_string(),
+        })
+    }
+
+    fn from_office_document_file(path: &Path) -> Option<Self> {
+        let pdf_path = crate::document::ensure_rendered_pdf(path).ok()?;
+        let (page1_bytes, w, h) = crate::pdf::render_pdf_page_preview(&pdf_path, 1, 800).ok()?;
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "document".to_string());
+        let page_count = crate::pdf::get_pdf_info(&pdf_path)
+            .map(|i| i.page_count)
+            .unwrap_or(1);
+        let file_size_kb = std::fs::metadata(path)
+            .map(|m| m.len() as f64 / 1024.0)
+            .unwrap_or(0.0);
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_uppercase())
+            .unwrap_or_else(|| "DOC".to_string());
+        let subtitle = format!("{} ({} pg) • {:.1} KB", ext, page_count, file_size_kb);
+        let thumbnail = ImageThumbnail::generate(&page1_bytes, 320, 220);
+        let mime = crate::document::guess_office_mime(path).to_string();
+
+        Some(Self {
+            id: Uuid::new_v4(),
+            created_at: current_unix_timestamp(),
+            payload: ClipPayload::Image {
+                bytes: page1_bytes,
+                path: Some(path.to_path_buf()),
+                width: w,
+                height: h,
+                mime,
+                thumbnail,
+            },
+            title: file_name,
+            subtitle,
+            details: vec![format!("{} pages", page_count), ext.clone()],
+            handler_tag: format!("{ext} (DOCUMENT)"),
         })
     }
 
@@ -1709,5 +1752,50 @@ mod tests {
             ClipItem::from_image_bytes(b"not an image".to_vec(), "application/octet-stream")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn test_from_office_document_file() {
+        let mut doc = rdocx::Document::new();
+        doc.add_paragraph("Testing DOCX Card Item Creation");
+
+        let dir = tempfile::tempdir().unwrap();
+        let docx_path = dir.path().join("item_test.docx");
+        doc.save(&docx_path).expect("save docx");
+
+        let item = ClipItem::from_candidate_paths(std::slice::from_ref(&docx_path))
+            .expect("ClipItem from docx path");
+        assert_eq!(item.handler_tag, "DOCX (DOCUMENT)");
+        assert!(item.subtitle.contains("DOCX"));
+        assert!(item.subtitle.contains("1 pg"));
+        assert_eq!(
+            item.details,
+            vec!["1 pages".to_string(), "DOCX".to_string()]
+        );
+
+        if let ClipPayload::Image {
+            bytes,
+            path,
+            width,
+            height,
+            mime,
+            thumbnail,
+        } = &item.payload
+        {
+            assert!(!bytes.is_empty());
+            assert_eq!(path.as_deref(), Some(docx_path.as_path()));
+            assert!(width > &0);
+            assert!(height > &0);
+            assert_eq!(
+                mime,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            );
+            assert!(thumbnail.is_some());
+        } else {
+            panic!(
+                "Expected ClipPayload::Image for office doc, got: {:?}",
+                item.payload
+            );
+        }
     }
 }

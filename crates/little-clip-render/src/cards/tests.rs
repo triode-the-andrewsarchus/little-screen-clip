@@ -150,3 +150,45 @@ fn text_preview_rasters_render_syntax_highlighted_code() {
         );
     }
 }
+
+#[test]
+fn office_document_file_batch_renders_page_thumbnail_preview() {
+    let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let rtf_path = dir.path().join("preview_card.rtf");
+    std::fs::write(
+        &rtf_path,
+        b"{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Courier;}}\\f0\\fs24 Office Document Card Preview\\par Page 1.}",
+    )
+    .unwrap();
+
+    let mut item = ClipItem::from_text("preview_card.rtf");
+    item.payload = ClipPayload::FileBatch(vec![rtf_path.clone()]);
+    item.title = "preview_card.rtf".to_string();
+    item.subtitle = "RTF (1 pg)".to_string();
+    item.details = vec!["1 pages".to_string(), "RTF".to_string()];
+    item.handler_tag = "RTF (DOCUMENT)".to_string();
+
+    let mut pixmap = Pixmap::new(500, 400).unwrap();
+    pixmap.fill(Color::BLACK);
+    renderer.draw_item_content(
+        &mut pixmap,
+        &item,
+        0.0,
+        0.0,
+        500.0,
+        400.0,
+        true,
+        Color::WHITE,
+    );
+
+    let non_black_count = pixmap
+        .data()
+        .chunks_exact(4)
+        .filter(|p| (p[0], p[1], p[2]) != (0, 0, 0))
+        .count();
+    assert!(
+        non_black_count > 500,
+        "Expected thumbnail preview to be rendered on card"
+    );
+}

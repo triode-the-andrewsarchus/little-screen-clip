@@ -377,6 +377,15 @@ impl WorkbenchApp {
             }
             return;
         }
+        if crate::is_office_document_clip_item(item) {
+            if let Some(fp) = item.file_path() {
+                self.start_office_document_load(fp);
+            } else {
+                self.status_msg =
+                    Some("Office document preview requires a local file path".to_owned());
+            }
+            return;
+        }
         if let Some(audio_path) = item.audio_path() {
             self.replace_viewer(Some(ViewerSession::Audio(
                 AudioPreviewState::new(audio_path, item.title.clone())

@@ -575,6 +575,9 @@ fn payload_preview(payload: &Payload) -> Data {
         Payload::Content(content) if content.mime == "application/pdf" => {
             Data::new(content.default_name(), "PDF document".into(), Icon::Pdf)
         }
+        Payload::Content(content) if little_clip_core::document::is_office_mime(&content.mime) => {
+            Data::new(content.default_name(), "Office document".into(), Icon::Pdf)
+        }
         Payload::Content(content) => text_preview(&content.bytes, &content.extension),
     }
 }
@@ -673,6 +676,22 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
             data.detail = format!("{} pages", info.page_count);
             data.text = info.title.clone().unwrap_or_default();
             data.pdf_info = Some(Arc::new(info));
+        }
+    } else if little_clip_core::document::is_office_document(path) {
+        data.icon = Icon::Pdf;
+        if let Ok(pdf_path) = little_clip_core::document::ensure_rendered_pdf(path) {
+            if let Ok(info) = little_clip_core::pdf::get_pdf_info(&pdf_path) {
+                data.detail = format!("{} pages", info.page_count);
+                data.text = info.title.clone().unwrap_or_default();
+                data.pdf_info = Some(Arc::new(info));
+            }
+        }
+        if data.pdf_info.is_none() {
+            if let Ok(md) = little_clip_core::document::render_to_markdown(path) {
+                data.icon = Icon::Text;
+                data.text = md.lines().take(4).collect::<Vec<_>>().join("\n");
+                data.detail = "Document".to_string();
+            }
         }
     } else if let Ok(bytes) = crate::file_source::read_file_bytes(path, 2048, false, false)
         && !bytes.contains(&0)
@@ -910,6 +929,11 @@ mod gallery_completion_tests {
 }
 
 fn document_preview(path: &Path, token: &AtomicBool) -> Data {
+    if little_clip_core::document::is_office_document(path) {
+        let mut data = Data::new(display_path(path), "Document".into(), Icon::Pdf);
+        preview_regular_file(path, &mut data);
+        return data;
+    }
     if let Ok(prefix) = crate::file_source::read_file_bytes(path, 8192, false, true) {
         let non_text = prefix
             .iter()

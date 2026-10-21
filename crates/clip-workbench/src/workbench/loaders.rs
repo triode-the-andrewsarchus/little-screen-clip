@@ -213,6 +213,20 @@ impl WorkbenchApp {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "document".to_string());
+                if let Ok(cached_pdf) = little_clip_core::document::ensure_rendered_pdf(&path) {
+                    if std::fs::copy(&cached_pdf, &pdf_path).is_ok()
+                        && std::fs::metadata(&pdf_path)
+                            .map(|m| m.len() > 0)
+                            .unwrap_or(false)
+                    {
+                        let workspace_dir = workspace.retain();
+                        return Ok(OfficeLoadResult::Pdf {
+                            pdf_path,
+                            workspace_dir,
+                            title,
+                        });
+                    }
+                }
                 if little_clip_core::document::render_to_pdf(&path, &pdf_path).is_ok()
                     && std::fs::metadata(&pdf_path)
                         .map(|m| m.len() > 0)

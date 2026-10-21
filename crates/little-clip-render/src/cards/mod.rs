@@ -445,6 +445,51 @@ impl ScreenRenderer {
                     if self.draw_scene_file_card(pixmap, p, [rx, ry, rw, rh], is_hero) {
                         return;
                     }
+                    if p.is_file() && little_clip_core::document::is_office_document(p) {
+                        if let Ok(pdf_path) = little_clip_core::document::ensure_rendered_pdf(p) {
+                            if let Ok((page1_bytes, w, h)) =
+                                little_clip_core::pdf::render_pdf_page_preview(&pdf_path, 1, 800)
+                            {
+                                let thumb = little_clip_core::ImageThumbnail::generate(
+                                    &page1_bytes,
+                                    320,
+                                    220,
+                                );
+                                self.draw_image_thumbnail(
+                                    pixmap,
+                                    w,
+                                    h,
+                                    thumb.as_ref(),
+                                    rx,
+                                    ry,
+                                    rw,
+                                    rh,
+                                    is_hero,
+                                );
+                                return;
+                            }
+                        }
+                    }
+                    if p.is_file() && little_clip_core::pdf::is_pdf_path(p) {
+                        if let Ok((page1_bytes, w, h)) =
+                            little_clip_core::pdf::render_pdf_page_preview(p, 1, 800)
+                        {
+                            let thumb =
+                                little_clip_core::ImageThumbnail::generate(&page1_bytes, 320, 220);
+                            self.draw_image_thumbnail(
+                                pixmap,
+                                w,
+                                h,
+                                thumb.as_ref(),
+                                rx,
+                                ry,
+                                rw,
+                                rh,
+                                is_hero,
+                            );
+                            return;
+                        }
+                    }
                     if p.is_file() && little_clip_core::syntax::is_code_file(p) {
                         if let Ok(file_content) = std::fs::read_to_string(p) {
                             let clean_content = file_content
