@@ -203,6 +203,8 @@ pub(super) use redact::{
     RedactionState, RedactionStyle,
 };
 pub(crate) use redact::{compose_redactions_only, compute_box_average_color};
+pub mod sam;
+pub(super) use sam::SamState;
 mod resize;
 pub(super) use resize::OptimizerMsg;
 pub(crate) use resize::OptimizerRequestStamp;

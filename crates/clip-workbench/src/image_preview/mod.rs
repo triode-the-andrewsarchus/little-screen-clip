@@ -216,6 +216,7 @@ pub struct ImagePreviewState {
     pub(crate) inpaint_child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
     pub(crate) inpaint_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) inpaint_mask_texture: Option<egui::TextureHandle>,
+    pub sam_state: SamState,
 
     // Format Conversion (Squoosh-style)
     pub convert_state: ConvertState,
@@ -636,6 +637,7 @@ impl ImagePreviewState {
             inpaint_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             inpaint_cancel: None,
             inpaint_mask_texture: None,
+            sam_state: SamState::default(),
             convert_state: ConvertState::default(),
             ocr_state: OcrState::default(),
             ocr_rx: None,
@@ -705,6 +707,7 @@ impl ImagePreviewState {
         self.creative_fx_state.fx_thumbnails.clear();
         self.creative_fx_state.pending_thumbnails.clear();
         self.creative_fx_state.thumbnail_pixel_revision = None;
+        self.sam_state.reset_hover();
         self.pixel_revision = self.pixel_revision.wrapping_add(1);
     }
 

@@ -17,6 +17,14 @@ pub const RMBG_14_MODEL_URL: &str = FEYNOBG_FP16_MODEL_URL;
 pub const DEPTH_ANYTHING_V2_MODEL_NAME: &str = "depth-anything-v2-small.onnx";
 pub const DEPTH_ANYTHING_V2_MODEL_URL: &str = DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL;
 
+pub const MOBILE_SAM_ENCODER_MODEL_NAME: &str = "mobile_sam_encoder.onnx";
+pub const MOBILE_SAM_ENCODER_MODEL_URL: &str =
+    "https://huggingface.co/Acly/MobileSAM/resolve/main/mobile_sam_image_encoder.onnx";
+
+pub const MOBILE_SAM_DECODER_MODEL_NAME: &str = "mobile_sam_decoder.onnx";
+pub const MOBILE_SAM_DECODER_MODEL_URL: &str =
+    "https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx";
+
 /// Get or initialize the global ONNX Runtime environment.
 ///
 /// ONNX Runtime requires that only a single `Environment` exists per process.
@@ -65,6 +73,8 @@ pub fn expected_model_size(model_name: &str) -> Option<u64> {
         DEPTH_ANYTHING_V2_MODEL_NAME => Some(99_110_037),
         BIG_LAMA_MODEL_NAME => Some(208_851_664),
         "rmbg-1.4.onnx" => Some(176_153_355),
+        MOBILE_SAM_ENCODER_MODEL_NAME => Some(28_157_093),
+        MOBILE_SAM_DECODER_MODEL_NAME => Some(16_501_323),
         _ => None,
     }
 }

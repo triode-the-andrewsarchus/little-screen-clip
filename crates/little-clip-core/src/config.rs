@@ -159,6 +159,8 @@ pub struct ImageConfig {
     /// If left None, automatically checks for local script or system Python with onnxruntime.
     #[serde(default)]
     pub lama_inpaint_cmd: Option<String>,
+    #[serde(default)]
+    pub sam_cmd: Option<String>,
     /// Optional URL override for downloading the Big-LaMa inpainting ONNX model.
     #[serde(default)]
     pub lama_model_url: Option<String>,
@@ -190,6 +192,7 @@ impl Default for ImageConfig {
             viewer: default_image_viewer(),
             bg_removal_cmd: None,
             lama_inpaint_cmd: None,
+            sam_cmd: None,
             lama_model_url: None,
             rmbg_model_url: None,
             depth_model_url: None,
@@ -237,6 +240,29 @@ impl ImageConfig {
         (
             "python3".to_string(),
             vec!["scripts/inpaint_lama.py".to_string()],
+        )
+    }
+
+    /// Resolves the executable path and arguments for Segment Anything (SAM).
+    pub fn resolve_sam_cmd(&self) -> (String, Vec<String>) {
+        if let Some(ref cmd) = self.sam_cmd {
+            let parts: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
+            if !parts.is_empty() {
+                return (parts[0].clone(), parts[1..].to_vec());
+            }
+        }
+        let candidates = [
+            "scripts/segment_anything.py",
+            "./scripts/segment_anything.py",
+        ];
+        for path in &candidates {
+            if std::path::Path::new(path).exists() {
+                return (path.to_string(), Vec::new());
+            }
+        }
+        (
+            "python3".to_string(),
+            vec!["scripts/segment_anything.py".to_string()],
         )
     }
 }

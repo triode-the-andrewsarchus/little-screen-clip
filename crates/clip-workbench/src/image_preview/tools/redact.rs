@@ -22,6 +22,7 @@ pub enum InpaintSelectionMode {
     #[default]
     Rectangle,
     Brush,
+    PointSam,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -460,10 +461,172 @@ impl ImagePreviewState {
             mask.fill(0);
         }
         self.inpaint_mask_texture = None;
+        self.sam_state.reset_hover();
         self.show_toast(crate::ui_ext::StatusMessage::new(
             crate::icons::Icon::Trash,
             "Cleared inpaint mask",
         ));
+    }
+
+    pub fn set_inpaint_mode(&mut self, mode: InpaintSelectionMode) {
+        self.redaction_state.inpaint_mode = mode;
+        if mode == InpaintSelectionMode::PointSam {
+            self.ensure_sam_worker();
+            self.sync_sam_image();
+        } else {
+            self.sam_state.reset_hover();
+        }
+    }
+
+    pub fn ensure_sam_worker(&mut self) {
+        if self.sam_state.worker.is_none() {
+            match super::sam::SamWorkerHandle::spawn_native() {
+                Ok(worker) => {
+                    self.sam_state.worker = Some(worker);
+                    self.sam_state.error_text = None;
+                }
+                Err(err) => {
+                    self.sam_state.error_text = Some(err);
+                }
+            }
+        }
+    }
+
+    pub fn sync_sam_image(&mut self) {
+        self.ensure_sam_worker();
+        if self.sam_state.loaded_revision != Some(self.pixel_revision) && !self.sam_state.is_loading
+        {
+            if let Some(ref worker) = self.sam_state.worker {
+                if worker
+                    .send(super::sam::SamWorkerCommand::EncodeImage {
+                        image: self.current_rgba.clone(),
+                        revision: self.pixel_revision,
+                    })
+                    .is_ok()
+                {
+                    self.sam_state.is_loading = true;
+                    self.sam_state.error_text = None;
+                }
+            }
+        }
+    }
+
+    pub fn poll_sam(&mut self, ctx: &egui::Context) {
+        let mut msgs = Vec::new();
+        let mut disconnected = false;
+        if let Some(ref worker) = self.sam_state.worker {
+            loop {
+                match worker.try_recv() {
+                    Ok(msg) => msgs.push(msg),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if disconnected {
+            self.sam_state.worker = None;
+            self.sam_state.is_loading = false;
+            self.sam_state.in_flight = false;
+        }
+
+        for msg in msgs {
+            match msg {
+                super::sam::SamWorkerResponse::Ready => {
+                    self.sam_state.is_ready = true;
+                    self.sam_state.error_text = None;
+                    self.sync_sam_image();
+                }
+                super::sam::SamWorkerResponse::ImageLoaded { revision, .. } => {
+                    self.sam_state.loaded_revision = Some(revision);
+                    self.sam_state.is_loading = false;
+                    self.sam_state.error_text = None;
+                    if let Some(norm_pos) = self.sam_state.hovered_pos {
+                        self.sam_state.last_query_norm_pos = None;
+                        self.sam_on_hover(norm_pos, ctx);
+                    }
+                }
+                super::sam::SamWorkerResponse::Mask { query_id, mask, .. } => {
+                    self.sam_state.in_flight = false;
+                    if query_id == self.sam_state.latest_query_id {
+                        super::sam::update_hovered_mask_texture(
+                            &mask,
+                            &mut self.sam_state.hovered_mask_texture,
+                            ctx,
+                        );
+                        self.sam_state.hovered_mask = Some(mask);
+                        ctx.request_repaint();
+
+                        if let Some((_, val)) = self.sam_state.pending_click.take() {
+                            self.commit_sam_hover(val, ctx);
+                        }
+                    }
+                }
+                super::sam::SamWorkerResponse::Error(err) => {
+                    self.sam_state.error_text = Some(err);
+                    self.sam_state.is_loading = false;
+                    self.sam_state.in_flight = false;
+                }
+            }
+        }
+    }
+
+    pub fn sam_on_hover(&mut self, norm_pos: Pos2, _ctx: &egui::Context) {
+        if !self.sam_state.is_ready || self.sam_state.is_loading {
+            self.sam_state.hovered_pos = Some(norm_pos);
+            return;
+        }
+
+        if let Some(last_pos) = self.sam_state.last_query_norm_pos {
+            let dx = (norm_pos.x - last_pos.x).abs();
+            let dy = (norm_pos.y - last_pos.y).abs();
+            if dx < 0.003 && dy < 0.003 {
+                return;
+            }
+        }
+
+        if self.sam_state.in_flight {
+            return;
+        }
+
+        let px = norm_pos.x * self.current_rgba.width() as f32;
+        let py = norm_pos.y * self.current_rgba.height() as f32;
+
+        self.sam_state.latest_query_id = self.sam_state.latest_query_id.wrapping_add(1);
+        let qid = self.sam_state.latest_query_id;
+
+        if let Some(ref worker) = self.sam_state.worker {
+            if worker
+                .send(super::sam::SamWorkerCommand::PredictPoint {
+                    x: px,
+                    y: py,
+                    query_id: qid,
+                })
+                .is_ok()
+            {
+                self.sam_state.in_flight = true;
+                self.sam_state.last_query_norm_pos = Some(norm_pos);
+                self.sam_state.hovered_pos = Some(norm_pos);
+                self.sam_state.hovered_point_px = Some((px, py));
+            }
+        }
+    }
+
+    pub fn commit_sam_hover(&mut self, val: u8, ctx: &egui::Context) {
+        if let Some(mask) = self.sam_state.hovered_mask.clone() {
+            let target = self.ensure_inpaint_mask();
+            super::sam::stamp_sam_mask_on_inpaint_mask(target, &mask, val);
+            self.update_inpaint_mask_texture(ctx);
+            if val > 0 {
+                self.show_toast("✦ Object added to inpaint mask");
+            } else {
+                self.show_toast("Object erased from inpaint mask");
+            }
+        } else if let Some(norm_p) = self.sam_state.hovered_pos {
+            self.sam_state.pending_click = Some((norm_p, val));
+        }
     }
 
     pub fn adjust_brush_radius(&mut self, delta: f32) {
@@ -755,16 +918,17 @@ impl ImagePreviewState {
                             .color(hex_to_c32(&palette.harmonies.base)),
                     );
 
-                    // Selection Mode Toggle: Rectangle | Brush
+                    // Selection Mode Toggle: Block Select | Paint | Point (SAM)
                     ui.horizontal(|ui| {
                         let modes = [
-                            (InpaintSelectionMode::Rectangle, "Rectangle"),
-                            (InpaintSelectionMode::Brush, "Paint Brush"),
+                            (InpaintSelectionMode::Rectangle, "Block Select"),
+                            (InpaintSelectionMode::Brush, "Paint"),
+                            (InpaintSelectionMode::PointSam, "Point (SAM)"),
                         ];
                         for (mode, label) in modes {
                             let is_active = self.redaction_state.inpaint_mode == mode;
                             if ui.selectable_label(is_active, label).clicked() {
-                                self.redaction_state.inpaint_mode = mode;
+                                self.set_inpaint_mode(mode);
                             }
                         }
                     });
@@ -793,6 +957,26 @@ impl ImagePreviewState {
                             .size(crate::ui_ext::BODY_FONT_SIZE - 2.0)
                             .color(hex_to_c32(&palette.colors.text_secondary)),
                         );
+                    } else if self.redaction_state.inpaint_mode == InpaintSelectionMode::PointSam {
+                        ui.add_space(crate::ui_ext::SPACE_XS);
+                        if self.sam_state.is_loading {
+                            ui.label(
+                                egui::RichText::new("Loading Segment Anything neural network...")
+                                    .italics()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE - 2.0)
+                                    .color(hex_to_c32(&palette.colors.text_secondary)),
+                            );
+                        } else if let Some(ref err) = self.sam_state.error_text {
+                            ui.colored_label(hex_to_c32(&palette.diff_del), format!("SAM: {err}"));
+                        } else {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Tip: Hover to preview object (blue)\nClick to add to inpaint mask; Right-click to erase",
+                                )
+                                .size(crate::ui_ext::BODY_FONT_SIZE - 2.0)
+                                .color(hex_to_c32(&palette.colors.text_secondary)),
+                            );
+                        }
                     }
 
                     ui.add_space(crate::ui_ext::SPACE_SM);
@@ -925,6 +1109,25 @@ impl ImagePreviewState {
                 Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                 Color32::WHITE,
             );
+        }
+
+        // 1b. Paint Segment Anything hovered object preview (transparent blue) if active
+        if self.redaction_state.tool_type == RedactToolType::LamaInpaint
+            && self.redaction_state.inpaint_mode == InpaintSelectionMode::PointSam
+        {
+            if let Some(ref tex) = self.sam_state.hovered_mask_texture {
+                painter.image(
+                    tex.id(),
+                    img_rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            if let Some(norm_p) = self.sam_state.hovered_pos {
+                let screen_p = to_screen(norm_p);
+                painter.circle_filled(screen_p, 3.5, Color32::from_rgb(30, 144, 255));
+                painter.circle_stroke(screen_p, 5.5, Stroke::new(1.5, Color32::WHITE));
+            }
         }
 
         // 2. Draw existing redaction boxes
@@ -1079,6 +1282,16 @@ impl ImagePreviewState {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                         }
                     }
+                    InpaintSelectionMode::PointSam => {
+                        if img_rect.contains(ptr_pos) {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                            let norm = to_norm(ptr_pos);
+                            self.sam_on_hover(norm, ui.ctx());
+                        } else {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+                            self.sam_state.reset_hover();
+                        }
+                    }
                 }
             } else if let Some(selected_idx) = self.redaction_state.selected_idx {
                 if selected_idx < self.redaction_state.boxes.len() {
@@ -1137,6 +1350,7 @@ impl ImagePreviewState {
                                 self.update_inpaint_mask_texture(ui.ctx());
                             }
                         }
+                        InpaintSelectionMode::PointSam => {}
                     }
                 } else {
                     let mut handled = false;
@@ -1308,6 +1522,17 @@ impl ImagePreviewState {
                         }
                     });
                 self.redaction_state.selected_idx = hit_any;
+            }
+        }
+
+        // Point-to-select SAM mask click actions
+        if self.redaction_state.tool_type == RedactToolType::LamaInpaint
+            && self.redaction_state.inpaint_mode == InpaintSelectionMode::PointSam
+        {
+            if response.clicked() {
+                self.commit_sam_hover(255, ui.ctx());
+            } else if response.secondary_clicked() {
+                self.commit_sam_hover(0, ui.ctx());
             }
         }
     }
@@ -1929,5 +2154,99 @@ mod tests {
         assert_eq!(*result.get_pixel(10, 10), image::Rgba([40, 200, 40, 255]));
         // Inside the mask, the blue patch should have been replaced (no longer [40, 40, 200])
         assert_ne!(*result.get_pixel(32, 32), image::Rgba([40, 40, 200, 255]));
+    }
+
+    #[test]
+    fn test_inpaint_selection_modes_combine_onto_same_mask() {
+        let mut mask = image::GrayImage::new(100, 100);
+
+        // 1. Block Select: stamp a rectangle from norm (0.1, 0.1) to (0.3, 0.3)
+        let rect = Rect::from_min_max(Pos2::new(0.1, 0.1), Pos2::new(0.3, 0.3));
+        stamp_rect_on_mask(&mut mask, rect, 255);
+
+        // Check rectangle was stamped (e.g. at pixel 20, 20)
+        assert_eq!(mask.get_pixel(20, 20)[0], 255);
+        assert_eq!(mask.get_pixel(50, 50)[0], 0);
+
+        // 2. Paint Brush: stamp a circle at norm (0.5, 0.5) with radius 10px
+        stamp_circle_on_mask(&mut mask, Pos2::new(0.5, 0.5), 10.0, 255);
+        assert_eq!(mask.get_pixel(50, 50)[0], 255);
+
+        // 3. Point-to-Select (SAM): stamp a segmented object at (70..90, 70..90)
+        let mut sam_mask = image::GrayImage::new(100, 100);
+        for y in 70..90 {
+            for x in 70..90 {
+                sam_mask.put_pixel(x, y, image::Luma([255]));
+            }
+        }
+        super::sam::stamp_sam_mask_on_inpaint_mask(&mut mask, &sam_mask, 255);
+        assert_eq!(mask.get_pixel(80, 80)[0], 255);
+
+        // All three modes are present simultaneously on the exact same mask!
+        assert_eq!(mask.get_pixel(20, 20)[0], 255); // Block Select
+        assert_eq!(mask.get_pixel(50, 50)[0], 255); // Paint Brush
+        assert_eq!(mask.get_pixel(80, 80)[0], 255); // SAM Object
+        assert_eq!(mask.get_pixel(5, 5)[0], 0); // Background
+
+        // 4. SAM Erase: erase a portion of the block select rectangle (15..25, 15..25)
+        let mut erase_sam = image::GrayImage::new(100, 100);
+        for y in 15..25 {
+            for x in 15..25 {
+                erase_sam.put_pixel(x, y, image::Luma([255]));
+            }
+        }
+        super::sam::stamp_sam_mask_on_inpaint_mask(&mut mask, &erase_sam, 0);
+
+        // Erased portion is now 0
+        assert_eq!(mask.get_pixel(20, 20)[0], 0);
+        // Rest of rectangle remains 255
+        assert_eq!(mask.get_pixel(12, 12)[0], 255);
+        // Paint brush and SAM object remain untouched!
+        assert_eq!(mask.get_pixel(50, 50)[0], 255);
+        assert_eq!(mask.get_pixel(80, 80)[0], 255);
+    }
+
+    #[test]
+    fn test_point_sam_mode_hover_and_commit() {
+        let app_config = little_clip_core::AppConfig::default();
+        let mut png = Vec::new();
+        RgbaImage::from_pixel(100, 100, image::Rgba([120, 120, 120, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut state = ImagePreviewState::from_bytes_with_meta(
+            png,
+            "image/png".into(),
+            None,
+            "SAM test".into(),
+            &app_config,
+        )
+        .unwrap();
+
+        state.redaction_state.tool_type = RedactToolType::LamaInpaint;
+        state.set_inpaint_mode(InpaintSelectionMode::PointSam);
+
+        assert_eq!(
+            state.redaction_state.inpaint_mode,
+            InpaintSelectionMode::PointSam
+        );
+
+        // Simulate a SAM mask arriving from worker
+        let mut sam_mask = image::GrayImage::new(100, 100);
+        for y in 30..60 {
+            for x in 30..60 {
+                sam_mask.put_pixel(x, y, image::Luma([255]));
+            }
+        }
+        state.sam_state.hovered_mask = Some(sam_mask);
+        state.sam_state.hovered_pos = Some(Pos2::new(0.45, 0.45));
+
+        let ctx = egui::Context::default();
+        // Commit the hover mask into inpaint_mask
+        state.commit_sam_hover(255, &ctx);
+
+        let mask = state.ensure_inpaint_mask();
+        assert_eq!(mask.get_pixel(45, 45)[0], 255);
+        assert_eq!(mask.get_pixel(10, 10)[0], 0);
+        assert!(state.inpaint_has_mask());
     }
 }

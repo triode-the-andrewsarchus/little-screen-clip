@@ -460,6 +460,14 @@ impl ImagePreviewState {
             ctx.request_repaint();
         }
 
+        // Poll Segment Anything point-to-select worker if active
+        if self.active_mode == ImageToolMode::Redact
+            && self.redaction_state.tool_type == RedactToolType::LamaInpaint
+            && self.redaction_state.inpaint_mode == InpaintSelectionMode::PointSam
+        {
+            self.poll_sam(ctx);
+        }
+
         // Poll format conversion and debounce costly full-resolution encodes.
         self.poll_conversion();
         if self.active_mode == ImageToolMode::Convert {
@@ -770,6 +778,16 @@ impl ImagePreviewState {
         }
         if prev_mode == ImageToolMode::Resize && target_mode != ImageToolMode::Resize {
             self.cancel_pixel_resize();
+        }
+        if prev_mode == ImageToolMode::Redact && target_mode != ImageToolMode::Redact {
+            self.sam_state.reset_hover();
+        }
+        if target_mode == ImageToolMode::Redact
+            && self.redaction_state.tool_type == RedactToolType::LamaInpaint
+            && self.redaction_state.inpaint_mode == InpaintSelectionMode::PointSam
+        {
+            self.ensure_sam_worker();
+            self.sync_sam_image();
         }
         if prev_mode == ImageToolMode::Ocr
             && target_mode != ImageToolMode::Ocr
