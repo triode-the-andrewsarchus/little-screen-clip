@@ -396,6 +396,8 @@ impl ImagePreviewState {
         self.bg_removal_input_stamp = Some(snapshot.input_stamp.clone());
         self.bg_removal_operation = BgRemovalOperation::DepthMap;
         self.bg_removal_in_progress = true;
+        self.bg_removal_started_at = Some(std::time::Instant::now());
+        self.bg_removal_progress = Some(0.0);
         let status = "Estimating depth map with Depth-Anything...".to_string();
         self.bg_removal_status = Some(status.clone());
         self.bg_removal_error = None;
@@ -413,8 +415,7 @@ impl ImagePreviewState {
         self.submit_image_tool_attempt(jobs);
     }
 
-    /// Polls the background removal worker channel and applies result on success.
-
+    /// Renders the depth estimation tool options, progress bar, and actions.
     pub(crate) fn render_depth_map_toolbar(
         &mut self,
         ui: &mut egui::Ui,
@@ -442,15 +443,31 @@ impl ImagePreviewState {
 
         ui.vertical(|ui| {
             if self.bg_removal_in_progress {
-                ui.add(egui::Spinner::new().size(16.0).color(base_c));
-                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-                let st = self.bg_removal_status.as_deref().unwrap_or("Estimating depth map with Depth-Anything...");
+                let progress = self.effective_bg_removal_progress();
+                let pct = (progress * 100.0).round() as u32;
+                let elapsed_sec = self
+                    .bg_removal_started_at
+                    .map(|t| t.elapsed().as_secs_f32())
+                    .unwrap_or(0.0);
+
+                let bar_text = format!("{pct}% • {elapsed_sec:.1}s");
+                ui.add(
+                    egui::ProgressBar::new(progress)
+                        .fill(base_c)
+                        .animate(true)
+                        .desired_width(ui.available_width())
+                        .text(bar_text),
+                );
+                ui.add_space(crate::ui_ext::SPACE_XS);
+                let st = self
+                    .bg_removal_status
+                    .as_deref()
+                    .unwrap_or("Estimating depth map with Depth-Anything...");
                 ui.label(
                     egui::RichText::new(st)
                         .size(crate::ui_ext::BODY_FONT_SIZE)
                         .monospace()
-                        .strong()
-                        .color(base_c),
+                        .color(f_low),
                 );
             } else {
                 let depth_fg = contrast_text_c32(base_c, None, palette);

@@ -58,19 +58,56 @@ pub fn resolve_model_url(model_name: &str, url_override: Option<&str>) -> String
     }
 }
 
+/// Helper to determine the expected file size in bytes for progress reporting.
+pub fn expected_model_size(model_name: &str) -> Option<u64> {
+    match model_name {
+        FEYNOBG_FP16_MODEL_NAME => Some(563_545_826),
+        DEPTH_ANYTHING_V2_MODEL_NAME => Some(99_110_037),
+        BIG_LAMA_MODEL_NAME => Some(208_851_664),
+        "rmbg-1.4.onnx" => Some(176_153_355),
+        _ => None,
+    }
+}
+
 /// Ensure that a named ONNX model is available locally in the cache directory,
 /// downloading it from the configured or default URL if necessary.
 pub fn ensure_model(model_name: &str, url_override: Option<&str>) -> Result<PathBuf, String> {
+    ensure_model_with_progress(model_name, url_override, |_, _| {})
+}
+
+/// Ensure that a named ONNX model is available locally in the cache directory,
+/// downloading it with progress reporting if necessary.
+pub fn ensure_model_with_progress<F>(
+    model_name: &str,
+    url_override: Option<&str>,
+    on_progress: F,
+) -> Result<PathBuf, String>
+where
+    F: Fn(f32, &str),
+{
     let url = resolve_model_url(model_name, url_override);
     if url.is_empty() {
         return Err(format!("No download URL configured for model {model_name}"));
     }
-    ensure_model_with_url(model_name, &url)
+    ensure_model_with_url_progress(model_name, &url, on_progress)
 }
 
 /// Ensure that a named ONNX model is available locally in the cache directory,
 /// downloading it from a specific URL if necessary.
 pub fn ensure_model_with_url(model_name: &str, url: &str) -> Result<PathBuf, String> {
+    ensure_model_with_url_progress(model_name, url, |_, _| {})
+}
+
+/// Ensure that a named ONNX model is available locally in the cache directory,
+/// downloading it from a specific URL with progress reporting if necessary.
+pub fn ensure_model_with_url_progress<F>(
+    model_name: &str,
+    url: &str,
+    on_progress: F,
+) -> Result<PathBuf, String>
+where
+    F: Fn(f32, &str),
+{
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     let models_dir = PathBuf::from(home).join(".cache/little-screen-clip/models");
     let model_path = models_dir.join(model_name);
@@ -85,7 +122,8 @@ pub fn ensure_model_with_url(model_name: &str, url: &str) -> Result<PathBuf, Str
     }
     let _ = std::fs::create_dir_all(&models_dir);
     let tmp_path = models_dir.join(format!("{}.tmp.{}", model_name, std::process::id()));
-    let status = std::process::Command::new("curl")
+
+    let mut child = std::process::Command::new("curl")
         .arg("-L")
         .arg("-f")
         .arg("--connect-timeout")
@@ -93,10 +131,40 @@ pub fn ensure_model_with_url(model_name: &str, url: &str) -> Result<PathBuf, Str
         .arg("-o")
         .arg(&tmp_path)
         .arg(url)
-        .status();
+        .spawn()
+        .map_err(|err| format!("Failed to run curl to download model: {err}"))?;
+
+    let expected = expected_model_size(model_name);
+    let total_mb = expected.map(|e| e as f32 / 1_000_000.0).unwrap_or(100.0);
+
+    on_progress(0.01, &format!("Connecting to download {model_name}..."));
+
+    while let Ok(None) = child.try_wait() {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        if let Ok(meta) = std::fs::metadata(&tmp_path) {
+            let dl_bytes = meta.len();
+            let dl_mb = dl_bytes as f32 / 1_000_000.0;
+            let frac = if let Some(tot) = expected {
+                (dl_bytes as f32 / tot as f32).clamp(0.01, 0.99)
+            } else {
+                (dl_mb / (dl_mb + 50.0)).clamp(0.01, 0.99)
+            };
+            on_progress(
+                frac,
+                &format!(
+                    "Downloading {model_name}: {:.0}% ({:.1}/{:.1} MB)",
+                    frac * 100.0,
+                    dl_mb,
+                    total_mb
+                ),
+            );
+        }
+    }
+
+    let status = child.wait().map_err(|e| format!("curl wait failed: {e}"))?;
 
     match status {
-        Ok(st) if st.success() && tmp_path.exists() => {
+        st if st.success() && tmp_path.exists() => {
             if let Ok(meta) = std::fs::metadata(&tmp_path) {
                 if meta.len() <= 1_000_000 {
                     let _ = std::fs::remove_file(&tmp_path);
@@ -108,15 +176,12 @@ pub fn ensure_model_with_url(model_name: &str, url: &str) -> Result<PathBuf, Str
             }
             std::fs::rename(&tmp_path, &model_path)
                 .map_err(|e| format!("Failed to save downloaded model: {e}"))?;
+            on_progress(1.0, &format!("Model {model_name} download complete"));
             Ok(model_path)
         }
-        Ok(st) => {
+        st => {
             let _ = std::fs::remove_file(&tmp_path);
             Err(format!("curl download failed with exit code {st}"))
-        }
-        Err(err) => {
-            let _ = std::fs::remove_file(&tmp_path);
-            Err(format!("Failed to run curl to download model: {err}"))
         }
     }
 }

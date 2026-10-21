@@ -3,6 +3,10 @@ use super::super::*;
 #[derive(Debug)]
 pub enum BgRemovalMsg {
     Progress(String),
+    ProgressFraction {
+        fraction: f32,
+        status: String,
+    },
     Success {
         result_rgba: RgbaImage,
         duration_ms: u128,
@@ -234,13 +238,18 @@ pub(crate) fn clear_image_tool_pid_if_owned(
         .is_ok()
 }
 
-pub fn run_native_background_removal(
+pub fn run_native_background_removal_with_progress(
     image: &RgbaImage,
     model_path: &std::path::Path,
+    on_progress: Option<&dyn Fn(f32, &str)>,
 ) -> Result<RgbaImage, String> {
     let (orig_w, orig_h) = image.dimensions();
     if orig_w == 0 || orig_h == 0 {
         return Err("Image has zero dimension".to_string());
+    }
+
+    if let Some(ref cb) = on_progress {
+        cb(0.15, "Resizing and normalizing image (1024x1024)...");
     }
 
     let resized = image::imageops::resize(image, 1024, 1024, image::imageops::FilterType::Triangle);
@@ -255,6 +264,13 @@ pub fn run_native_background_removal(
         }
     }
 
+    if let Some(ref cb) = on_progress {
+        cb(
+            0.25,
+            "Loading FeyNoBg neural network weights into ONNX session...",
+        );
+    }
+
     let env = crate::onnx_runtime::get_ort_environment()?;
     let mut session = ort::session::Session::builder(&env)
         .map_err(|e| format!("ORT builder failed: {e}"))?
@@ -264,9 +280,17 @@ pub fn run_native_background_removal(
     let img_tensor = ort::value::Tensor::from_array(img_arr)
         .map_err(|e| format!("ORT image tensor conversion failed: {e}"))?;
 
+    if let Some(ref cb) = on_progress {
+        cb(0.35, "Running FeyNoBg neural network inference...");
+    }
+
     let outputs = session
         .run(ort::inputs![img_tensor])
         .map_err(|e| format!("ORT inference failed: {e}"))?;
+
+    if let Some(ref cb) = on_progress {
+        cb(0.95, "Extracting alpha matte and compositing...");
+    }
 
     let out_tensor = outputs[0]
         .try_extract_array::<f32>()
@@ -318,13 +342,25 @@ pub fn run_native_background_removal(
     Ok(result)
 }
 
-pub fn run_native_depth_map(
+pub fn run_native_background_removal(
     image: &RgbaImage,
     model_path: &std::path::Path,
+) -> Result<RgbaImage, String> {
+    run_native_background_removal_with_progress(image, model_path, None)
+}
+
+pub fn run_native_depth_map_with_progress(
+    image: &RgbaImage,
+    model_path: &std::path::Path,
+    on_progress: Option<&dyn Fn(f32, &str)>,
 ) -> Result<RgbaImage, String> {
     let (orig_w, orig_h) = image.dimensions();
     if orig_w == 0 || orig_h == 0 {
         return Err("Image has zero dimension".to_string());
+    }
+
+    if let Some(ref cb) = on_progress {
+        cb(0.15, "Resizing and normalizing image (518x518)...");
     }
 
     let resized = image::imageops::resize(image, 518, 518, image::imageops::FilterType::Triangle);
@@ -339,6 +375,13 @@ pub fn run_native_depth_map(
         }
     }
 
+    if let Some(ref cb) = on_progress {
+        cb(
+            0.25,
+            "Loading Depth-Anything V2 weights into ONNX session...",
+        );
+    }
+
     let env = crate::onnx_runtime::get_ort_environment()?;
     let mut session = ort::session::Session::builder(&env)
         .map_err(|e| format!("ORT builder failed: {e}"))?
@@ -348,9 +391,20 @@ pub fn run_native_depth_map(
     let img_tensor = ort::value::Tensor::from_array(img_arr)
         .map_err(|e| format!("ORT image tensor conversion failed: {e}"))?;
 
+    if let Some(ref cb) = on_progress {
+        cb(
+            0.35,
+            "Running Depth-Anything V2 neural network inference...",
+        );
+    }
+
     let outputs = session
         .run(ort::inputs![img_tensor])
         .map_err(|e| format!("ORT inference failed: {e}"))?;
+
+    if let Some(ref cb) = on_progress {
+        cb(0.95, "Normalizing depth map values...");
+    }
 
     let out_tensor = outputs[0]
         .try_extract_array::<f32>()
@@ -417,6 +471,13 @@ pub fn run_native_depth_map(
     }
 
     Ok(result)
+}
+
+pub fn run_native_depth_map(
+    image: &RgbaImage,
+    model_path: &std::path::Path,
+) -> Result<RgbaImage, String> {
+    run_native_depth_map_with_progress(image, model_path, None)
 }
 
 #[cfg(all(test, unix))]
@@ -502,6 +563,8 @@ impl ImagePreviewState {
         self.bg_removal_retry_at = None;
         self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
         self.bg_removal_in_progress = true;
+        self.bg_removal_started_at = Some(std::time::Instant::now());
+        self.bg_removal_progress = Some(0.0);
         self.bg_removal_status = Some(status_desc);
         self.bg_removal_error = None;
         self.submit_image_tool_attempt(jobs);
@@ -547,15 +610,31 @@ impl ImagePreviewState {
                 && request.prompt.is_none()
                 && is_default_bg_cmd
             {
-                if let Ok(model_path) = crate::onnx_runtime::ensure_model(
+                let tx_dl = tx.clone();
+                let on_dl = move |frac: f32, status: &str| {
+                    let _ = tx_dl.send(BgRemovalMsg::ProgressFraction {
+                        fraction: frac * 0.40,
+                        status: status.to_string(),
+                    });
+                };
+                if let Ok(model_path) = crate::onnx_runtime::ensure_model_with_progress(
                     crate::onnx_runtime::FEYNOBG_FP16_MODEL_NAME,
                     request.model_url.as_deref(),
+                    on_dl,
                 ) {
-                    let _ = tx.send(BgRemovalMsg::Progress(
-                        "Running native FeyNoBg FP16 neural network...".to_string(),
-                    ));
+                    let tx_run = tx.clone();
+                    let on_run = move |frac: f32, status: &str| {
+                        let _ = tx_run.send(BgRemovalMsg::ProgressFraction {
+                            fraction: frac,
+                            status: status.to_string(),
+                        });
+                    };
                     let source_rgba = request.snapshot.compose();
-                    match run_native_background_removal(&source_rgba, &model_path) {
+                    match run_native_background_removal_with_progress(
+                        &source_rgba,
+                        &model_path,
+                        Some(&on_run),
+                    ) {
                         Ok(result_rgba) => {
                             let _ = tx.send(BgRemovalMsg::Success {
                                 result_rgba,
@@ -571,15 +650,31 @@ impl ImagePreviewState {
                     }
                 }
             } else if request.operation == BgRemovalOperation::DepthMap && is_default_depth_cmd {
-                if let Ok(depth_path) = crate::onnx_runtime::ensure_model(
+                let tx_dl = tx.clone();
+                let on_dl = move |frac: f32, status: &str| {
+                    let _ = tx_dl.send(BgRemovalMsg::ProgressFraction {
+                        fraction: frac * 0.40,
+                        status: status.to_string(),
+                    });
+                };
+                if let Ok(depth_path) = crate::onnx_runtime::ensure_model_with_progress(
                     crate::onnx_runtime::DEPTH_ANYTHING_V2_MODEL_NAME,
                     request.model_url.as_deref(),
+                    on_dl,
                 ) {
-                    let _ = tx.send(BgRemovalMsg::Progress(
-                        "Running native Depth-Anything-V2 neural network...".to_string(),
-                    ));
+                    let tx_run = tx.clone();
+                    let on_run = move |frac: f32, status: &str| {
+                        let _ = tx_run.send(BgRemovalMsg::ProgressFraction {
+                            fraction: frac,
+                            status: status.to_string(),
+                        });
+                    };
                     let source_rgba = request.snapshot.compose();
-                    match run_native_depth_map(&source_rgba, &depth_path) {
+                    match run_native_depth_map_with_progress(
+                        &source_rgba,
+                        &depth_path,
+                        Some(&on_run),
+                    ) {
                         Ok(result_rgba) => {
                             let _ = tx.send(BgRemovalMsg::Success {
                                 result_rgba,
@@ -636,8 +731,7 @@ impl ImagePreviewState {
         self.bg_removal_job_rx = Some(job_rx);
     }
 
-    /// Runs AI depth estimation asynchronously using Depth-Anything / MiDaS.
-
+    /// Polls background removal or depth estimation worker completion.
     pub fn poll_bg_removal(&mut self) {
         self.poll_bg_removal_on(BackgroundJobs::global());
     }
@@ -652,6 +746,8 @@ impl ImagePreviewState {
             self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
+            self.bg_removal_progress = None;
+            self.bg_removal_started_at = None;
             return;
         }
 
@@ -693,6 +789,8 @@ impl ImagePreviewState {
                     self.bg_removal_retry_at = None;
                     self.bg_removal_in_progress = false;
                     self.bg_removal_status = None;
+                    self.bg_removal_progress = None;
+                    self.bg_removal_started_at = None;
                     return;
                 }
                 Ok(Err(error)) => {
@@ -704,6 +802,8 @@ impl ImagePreviewState {
                     self.bg_removal_retry_at = None;
                     self.bg_removal_in_progress = false;
                     self.bg_removal_status = None;
+                    self.bg_removal_progress = None;
+                    self.bg_removal_started_at = None;
                     let label = match self.bg_removal_operation {
                         BgRemovalOperation::BackgroundRemoval => "Background removal",
                         BgRemovalOperation::DepthMap => "Depth Map",
@@ -721,6 +821,8 @@ impl ImagePreviewState {
                     self.bg_removal_retry_at = None;
                     self.bg_removal_in_progress = false;
                     self.bg_removal_status = None;
+                    self.bg_removal_progress = None;
+                    self.bg_removal_started_at = None;
                     let label = match self.bg_removal_operation {
                         BgRemovalOperation::BackgroundRemoval => "Background removal",
                         BgRemovalOperation::DepthMap => "Depth Map",
@@ -740,6 +842,10 @@ impl ImagePreviewState {
                 match rx.try_recv() {
                     Ok(BgRemovalMsg::Progress(st)) => {
                         self.bg_removal_status = Some(st);
+                    }
+                    Ok(BgRemovalMsg::ProgressFraction { fraction, status }) => {
+                        self.bg_removal_progress = Some(fraction);
+                        self.bg_removal_status = Some(status);
                     }
                     Ok(BgRemovalMsg::Success {
                         result_rgba,
@@ -785,6 +891,8 @@ impl ImagePreviewState {
             self.dirty_texture = true;
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
+            self.bg_removal_progress = None;
+            self.bg_removal_started_at = None;
             self.bg_removal_rx = None;
             self.bg_removal_job_rx = None;
             self.bg_removal_ticket = None;
@@ -795,6 +903,15 @@ impl ImagePreviewState {
             self.bg_removal_error = None;
             self.resize_state.sync_from_image(&self.current_rgba);
             self.palette_state.is_extracted = false;
+
+            match operation {
+                BgRemovalOperation::BackgroundRemoval => {
+                    self.last_bg_removal_duration_ms = Some(duration_ms);
+                }
+                BgRemovalOperation::DepthMap => {
+                    self.last_depth_map_duration_ms = Some(duration_ms);
+                }
+            }
 
             let elapsed = duration_ms as f64 / 1000.0;
             self.show_toast(crate::ui_ext::StatusMessage::new(
@@ -814,6 +931,8 @@ impl ImagePreviewState {
         } else if let Some(err) = error_msg {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
+            self.bg_removal_progress = None;
+            self.bg_removal_started_at = None;
             self.bg_removal_rx = None;
             self.bg_removal_job_rx = None;
             self.bg_removal_ticket = None;
@@ -825,6 +944,8 @@ impl ImagePreviewState {
         } else if disconnected {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
+            self.bg_removal_progress = None;
+            self.bg_removal_started_at = None;
             self.bg_removal_rx = None;
             self.bg_removal_job_rx = None;
             self.bg_removal_ticket = None;
@@ -853,10 +974,49 @@ impl ImagePreviewState {
         self.bg_removal_input_stamp = None;
         self.bg_removal_in_progress = false;
         self.bg_removal_status = None;
+        self.bg_removal_progress = None;
+        self.bg_removal_started_at = None;
     }
 
-    /// Opens a native save-as dialog (zenity) or falls back to an in-app path input modal.
+    pub fn effective_bg_removal_progress(&self) -> f32 {
+        if !self.bg_removal_in_progress {
+            return 0.0;
+        }
 
+        let base_progress = self.bg_removal_progress.unwrap_or(0.0);
+
+        if let Some(ref status) = self.bg_removal_status {
+            if status.contains("Downloading") || status.contains("Connecting to download") {
+                return (base_progress * 0.45).clamp(0.02, 0.45);
+            }
+        }
+
+        let started = match self.bg_removal_started_at {
+            Some(t) => t,
+            None => return base_progress.clamp(0.05, 0.95),
+        };
+        let elapsed = started.elapsed().as_secs_f32();
+
+        let expected_duration = match self.bg_removal_operation {
+            BgRemovalOperation::BackgroundRemoval => self
+                .last_bg_removal_duration_ms
+                .map(|ms| (ms as f32 / 1000.0).max(1.0))
+                .unwrap_or(11.0),
+            BgRemovalOperation::DepthMap => self
+                .last_depth_map_duration_ms
+                .or(self.last_bg_removal_duration_ms)
+                .map(|ms| (ms as f32 / 1000.0).max(0.5))
+                .unwrap_or(2.0),
+        };
+
+        let start_p = base_progress.max(0.15);
+        let target_p = 0.95;
+        let tau = (expected_duration * 0.75).max(0.5);
+        let curve = 1.0 - (-elapsed / tau).exp();
+        (start_p + (target_p - start_p) * curve).clamp(0.05, 0.96)
+    }
+
+    /// Renders the background removal tool options, progress bar, and actions.
     pub(crate) fn render_remove_bg_toolbar(
         &mut self,
         ui: &mut egui::Ui,
@@ -987,23 +1147,31 @@ impl ImagePreviewState {
         ui.add_space(crate::ui_ext::SPACE_XS);
 
         if self.bg_removal_in_progress {
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(14.0).color(action_color));
-                ui.label(
-                    egui::RichText::new("Working…")
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(action_color),
-                );
-            });
+            let progress = self.effective_bg_removal_progress();
+            let pct = (progress * 100.0).round() as u32;
+            let elapsed_sec = self
+                .bg_removal_started_at
+                .map(|t| t.elapsed().as_secs_f32())
+                .unwrap_or(0.0);
+
+            ui.add_space(crate::ui_ext::SPACE_XS);
+            let bar_text = format!("{pct}% • {elapsed_sec:.1}s");
+            let progress_bar = egui::ProgressBar::new(progress)
+                .fill(action_color)
+                .animate(true)
+                .desired_width(ui.available_width())
+                .text(bar_text);
+            ui.add(progress_bar);
+            ui.add_space(crate::ui_ext::SPACE_XS);
+
+            let status_text = self
+                .bg_removal_status
+                .as_deref()
+                .unwrap_or("Removing background with FeyNoBg…");
             ui.label(
-                egui::RichText::new(
-                    self.bg_removal_status
-                        .as_deref()
-                        .unwrap_or("Preparing the segmentation model…"),
-                )
-                .size(crate::ui_ext::BODY_FONT_SIZE)
-                .color(muted),
+                egui::RichText::new(status_text)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(muted),
             );
         } else {
             ui.label(
@@ -1353,5 +1521,71 @@ mod bounded_job_tests {
         assert_eq!(px[0], px[1]);
         assert_eq!(px[1], px[2]);
         assert_eq!(px[3], 255);
+    }
+
+    #[test]
+    fn effective_bg_removal_progress_eases_smoothly_within_bounds() {
+        let mut state = state_with_command("dummy".into());
+        assert_eq!(state.effective_bg_removal_progress(), 0.0);
+
+        state.bg_removal_in_progress = true;
+        state.bg_removal_started_at = Some(Instant::now());
+        state.last_bg_removal_duration_ms = Some(2000);
+
+        let p0 = state.effective_bg_removal_progress();
+        assert!(p0 >= 0.05 && p0 <= 0.35);
+
+        // Advance artificial start time into the future of the calculation
+        state.bg_removal_started_at = Some(Instant::now() - Duration::from_secs(1));
+        let p1 = state.effective_bg_removal_progress();
+        assert!(p1 > p0);
+        assert!(p1 < 0.96);
+
+        state.bg_removal_started_at = Some(Instant::now() - Duration::from_secs(10));
+        let p_late = state.effective_bg_removal_progress();
+        assert!(p_late >= p1);
+        assert!(p_late <= 0.96);
+
+        // Downloading status scaling
+        state.bg_removal_status = Some("Downloading feynobg-fp16.onnx: 50% (280/563 MB)".into());
+        state.bg_removal_progress = Some(0.50);
+        let p_dl = state.effective_bg_removal_progress();
+        assert!((p_dl - 0.225).abs() < 0.05);
+    }
+
+    #[test]
+    fn bg_removal_progress_message_updates_state_and_success_clears_it() {
+        let mut state = state_with_command("dummy".into());
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.bg_removal_in_progress = true;
+        state.bg_removal_started_at = Some(Instant::now());
+        state.bg_removal_input_stamp = Some(state.input_stamp());
+        state.bg_removal_rx = Some(rx);
+
+        tx.send(BgRemovalMsg::ProgressFraction {
+            fraction: 0.35,
+            status: "Running FeyNoBg neural network inference...".into(),
+        })
+        .unwrap();
+
+        state.poll_bg_removal();
+        assert_eq!(state.bg_removal_progress, Some(0.35));
+        assert_eq!(
+            state.bg_removal_status.as_deref(),
+            Some("Running FeyNoBg neural network inference...")
+        );
+
+        let res_img = RgbaImage::new(16, 16);
+        tx.send(BgRemovalMsg::Success {
+            result_rgba: res_img,
+            duration_ms: 1250,
+        })
+        .unwrap();
+
+        state.poll_bg_removal();
+        assert!(!state.bg_removal_in_progress);
+        assert_eq!(state.bg_removal_progress, None);
+        assert_eq!(state.bg_removal_started_at, None);
+        assert_eq!(state.last_bg_removal_duration_ms, Some(1250));
     }
 }
