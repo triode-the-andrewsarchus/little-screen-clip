@@ -49,6 +49,30 @@ pub fn run() -> bool {
         }
         return true;
     }
+    if flag == "--internal-fuse-binwalk-daemon" {
+        let mut writable = false;
+        let mut paths = Vec::new();
+        for arg in args.into_iter().skip(1) {
+            let s = arg.to_string_lossy();
+            if s == "--writable" || s == "-w" {
+                writable = true;
+            } else {
+                paths.push(std::path::PathBuf::from(arg));
+            }
+        }
+        if paths.len() != 2 {
+            eprintln!("Usage: --internal-fuse-binwalk-daemon [-w] <binary_path> <mountpoint>");
+            std::process::exit(2);
+        }
+        let result = crate::file_manager::fuse_binwalk::run_fuse_binwalk_daemon(
+            &paths[0], &paths[1], writable,
+        );
+        if let Err(error) = result {
+            eprintln!("FUSE binwalk daemon: {error}");
+            std::process::exit(2);
+        }
+        return true;
+    }
     let barcode = flag == "--internal-barcode-worker";
     if !barcode && flag != "--internal-conversion-decode-worker" {
         return false;

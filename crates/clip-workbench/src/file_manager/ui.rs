@@ -100,6 +100,7 @@ impl FileManager {
         if self.pending.is_some()
             || self.bookmarks.busy()
             || self.edit_busy()
+            || self.fuse_mounts.busy()
             || self.transfers.needs_repaint()
             || self.shelf.busy()
             || self.watch.is_some()
@@ -132,6 +133,7 @@ impl FileManager {
                 });
         }
         if self.filesystem_busy()
+            || self.fuse_mounts.busy()
             || self.error.is_some()
             || self.transfers.has_status()
             || self.edits.report.is_some()
@@ -441,6 +443,10 @@ impl FileManager {
                     }
                 }
             }
+            if let Some(mount_status) = self.fuse_mounts.status_text() {
+                ui.spinner();
+                ui.add(egui::Label::new(mount_status).truncate(true));
+            }
         });
         if let Some(error) = &self.error {
             let retry = ui
@@ -514,6 +520,17 @@ impl FileManager {
         }
         if let Some(path) = actions.open {
             self.open_path(path);
+        }
+        if let Some(folder) = actions.navigate_folder {
+            self.navigate(folder, Navigation::New);
+        }
+        if let Some((binary_path, writable)) = actions.mount_binary {
+            self.fuse_mounts
+                .request_mount(binary_path, writable, super::BackgroundJobs::global());
+        }
+        if let Some(mount_point) = actions.unmount_binary {
+            self.fuse_mounts
+                .request_unmount(mount_point, super::BackgroundJobs::global());
         }
     }
 
@@ -1091,6 +1108,7 @@ struct ListActions {
     additive: bool,
     selection: Option<(PathBuf, bool, bool)>,
     open: Option<PathBuf>,
+    navigate_folder: Option<PathBuf>,
     inspect: Option<PathBuf>,
     naming: Option<super::edits::NamingAction>,
     files: Option<super::transfers::ui::SelectionAction>,
@@ -1098,6 +1116,8 @@ struct ListActions {
     open_trash: bool,
     clear: bool,
     transfer: Option<(Vec<PathBuf>, PathBuf, bool)>,
+    mount_binary: Option<(PathBuf, bool)>,
+    unmount_binary: Option<PathBuf>,
 }
 
 impl ListActions {
@@ -1219,6 +1239,43 @@ impl ListActions {
             {
                 let _ = super::viewers::external(entry.path.clone());
                 ui.close_menu();
+            }
+
+            let mounts = super::fuse_binwalk::cached_mount_table();
+            if super::fuse_binwalk::is_mountable_binary(entry) {
+                let mount_point = super::fuse_binwalk::mount_point_for_binary(&entry.path);
+                let shift = ui.input(|i| i.modifiers.shift);
+                if let Some(mode) = mounts.status(&mount_point) {
+                    if ui.button("Open mounted binary contents").clicked() {
+                        self.navigate_folder = Some(mount_point.clone());
+                        ui.close_menu();
+                    }
+                    if shift && mode == super::fuse_binwalk::MountMode::ReadOnly {
+                        if ui
+                            .button(super::fuse_binwalk::remount_writable_menu_label())
+                            .clicked()
+                        {
+                            self.mount_binary = Some((entry.path.clone(), true));
+                            ui.close_menu();
+                        }
+                    }
+                    if ui.button("Unmount binary contents").clicked() {
+                        self.unmount_binary = Some(mount_point);
+                        ui.close_menu();
+                    }
+                } else {
+                    let label = super::fuse_binwalk::mount_menu_label(shift);
+                    if ui.button(label).clicked() {
+                        self.mount_binary = Some((entry.path.clone(), shift));
+                        ui.close_menu();
+                    }
+                }
+            }
+            if let Some(mount_root) = mounts.enclosing_mount_point(&entry.path) {
+                if ui.button("Unmount binary contents").clicked() {
+                    self.unmount_binary = Some(mount_root);
+                    ui.close_menu();
+                }
             }
             ui.separator();
             let rename = (!marked || selection_count == 1).then_some(entry.path.as_path());

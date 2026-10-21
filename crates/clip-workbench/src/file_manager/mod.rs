@@ -9,6 +9,7 @@ mod edit_ui;
 mod edits;
 mod filesystem;
 mod font_strip;
+pub(crate) mod fuse_binwalk;
 mod gallery;
 mod image_strip;
 mod material_strip;
@@ -194,6 +195,7 @@ pub(crate) struct FileManager {
     audio_entries: Vec<PathBuf>,
     music_offsets: Vec<f32>,
     music_selection: Option<ui::music::MusicRange>,
+    fuse_mounts: fuse_binwalk::MountManager,
 }
 
 impl Default for FileManager {
@@ -263,6 +265,7 @@ impl FileManager {
             audio_entries: Vec::new(),
             music_offsets: vec![0.0],
             music_selection: None,
+            fuse_mounts: Default::default(),
         }
     }
 
@@ -349,6 +352,7 @@ impl FileManager {
     }
 
     fn refresh(&mut self) {
+        fuse_binwalk::refresh_cached_mount_table();
         self.tree.refresh(self.path().to_path_buf());
         self.navigate(self.path().to_path_buf(), Navigation::Refresh);
     }
@@ -405,6 +409,47 @@ impl FileManager {
         }
         self.tick_edits(jobs);
         self.tick_transfers(jobs);
+        if let Some(outcome) = self.fuse_mounts.tick() {
+            match outcome {
+                fuse_binwalk::MountOutcome::Mounted {
+                    binary_path,
+                    mount_point,
+                    writable,
+                } => {
+                    self.navigate(mount_point, Navigation::New);
+                    let name = binary_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    let mode_str = if writable { "writable" } else { "read-only" };
+                    self.edits.report = Some(edits::EditReport {
+                        text: format!("Mounted '{name}' ({mode_str}) via fuse-binwalk"),
+                        failed: false,
+                    });
+                }
+                fuse_binwalk::MountOutcome::Unmounted { mount_point } => {
+                    if self.path().starts_with(&mount_point) {
+                        let fallback = self
+                            .history
+                            .iter()
+                            .rev()
+                            .find(|loc| !loc.path.starts_with(&mount_point))
+                            .map(|loc| loc.path.clone())
+                            .unwrap_or_else(|| self.home.clone());
+                        self.navigate(fallback, Navigation::New);
+                    } else {
+                        self.refresh();
+                    }
+                    self.edits.report = Some(edits::EditReport {
+                        text: "Unmounted binary contents".into(),
+                        failed: false,
+                    });
+                }
+                fuse_binwalk::MountOutcome::Failed(text) => {
+                    self.edits.report = Some(edits::EditReport { text, failed: true });
+                }
+            }
+        }
         if self.refresh_after_transfer && self.pending.is_none() {
             self.refresh_after_transfer = false;
             self.refresh();
@@ -427,6 +472,7 @@ impl FileManager {
     }
 
     fn commit(&mut self, directory: Directory, navigation: Navigation) {
+        fuse_binwalk::refresh_cached_mount_table();
         if self
             .directory
             .as_ref()
