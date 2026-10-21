@@ -108,15 +108,19 @@ pub(in crate::file_manager::system) fn paint(
                 Color32::WHITE,
             );
         }
-        ui.interact(
-            bar,
-            ui.id().with(("partition-preview", &partition.path)),
-            Sense::hover(),
-        )
-        .on_hover_text(partition_hover(partition, storage));
+        if !crate::file_manager::ui::popup_open(ui.ctx()) {
+            ui.interact(
+                bar,
+                ui.id().with(("partition-preview", &partition.path)),
+                Sense::hover(),
+            )
+            .on_hover_text(partition_hover(partition, storage));
+        }
     }
-    ui.interact(rect, ui.id().with(("partition-layout", &storage.disk)), Sense::hover())
-        .on_hover_text(format!("{}\nCapacity: {}\nCoverage: {}\nGray areas are outside observed partition ranges, not a free-space measurement.", storage.disk.display(), bytes(capacity), storage.coverage));
+    if !crate::file_manager::ui::popup_open(ui.ctx()) {
+        ui.interact(rect, ui.id().with(("partition-layout", &storage.disk)), Sense::hover())
+            .on_hover_text(format!("{}\nCapacity: {}\nCoverage: {}\nGray areas are outside observed partition ranges, not a free-space measurement.", storage.disk.display(), bytes(capacity), storage.coverage));
+    }
 }
 fn partition_hover(partition: &super::Partition, storage: &Storage) -> String {
     let geometry = format!(

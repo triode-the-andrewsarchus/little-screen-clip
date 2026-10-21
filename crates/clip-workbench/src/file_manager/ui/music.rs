@@ -202,7 +202,9 @@ pub(super) fn preview_row(
         .as_ref()
         .filter(|range| range.path == entry.path && range.revision == entry.revision);
     let wave = music_card(ui, rect, entry, columns, ready, colors, range);
-    if let Some(ready) = ready {
+    if let Some(ready) = ready
+        && !super::popup_open(ui.ctx())
+    {
         response.clone().on_hover_text(&ready.data.detail);
     }
     wave.map_or((false, None), |wave| {

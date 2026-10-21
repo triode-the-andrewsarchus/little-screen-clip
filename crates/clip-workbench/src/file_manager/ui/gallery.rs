@@ -177,7 +177,9 @@ impl FileManager {
                     None
                 };
                 paint_gallery_tile(ui, &response, entry, marked, colors, check_color, preview);
-                response.clone().on_hover_text(&entry.name);
+                if !super::popup_open(ui.ctx()) {
+                    response.clone().on_hover_text(&entry.name);
+                }
                 if entry.directory {
                     targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
                 }

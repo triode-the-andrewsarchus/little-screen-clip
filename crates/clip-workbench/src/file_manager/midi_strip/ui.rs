@@ -24,9 +24,11 @@ pub(in crate::file_manager) fn show(
         Sense::click(),
     );
     Icon::Midi.paint(ui.painter(), icon.shrink(16.0), colors.text_secondary);
-    icon_response
-        .clone()
-        .on_hover_text("Double-click to open the MIDI editor");
+    if !super::super::ui::popup_open(ui.ctx()) {
+        icon_response
+            .clone()
+            .on_hover_text("Double-click to open the MIDI editor");
+    }
     *response = response.clone().union(icon_response);
     let strip = Rect::from_min_max(
         pos2(icon.right() + 8.0, icon.top()),
@@ -99,7 +101,9 @@ pub(in crate::file_manager) fn show(
     if engaged {
         ui.memory_mut(|memory| memory.request_focus(focus_id()));
     }
-    interaction.on_hover_text("Click to play from here. Drag to select MIDI; Ctrl+C copies the region, Space plays it once. Ctrl/Shift+click selects files.");
+    if !super::super::ui::popup_open(ui.ctx()) {
+        interaction.on_hover_text("Click to play from here. Drag to select MIDI; Ctrl+C copies the region, Space plays it once. Ctrl/Shift+click selects files.");
+    }
     engaged
 }
 fn paint_selection(

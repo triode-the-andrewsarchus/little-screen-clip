@@ -111,10 +111,10 @@ impl FileManager {
         if !self.type_navigation.active(now) || pointer_pressed {
             self.type_navigation.clear();
         }
-        let browser_focused = ctx.memory(|memory| {
-            (memory.focused().is_none() || memory.has_focus(super::ui::list_id()))
-                && !memory.any_popup_open()
-        });
+        let browser_focused = !super::ui::popup_open(ctx)
+            && ctx.memory(|memory| {
+                memory.focused().is_none() || memory.has_focus(super::ui::list_id())
+            });
         // Shift changes literal text; other modifiers belong to shortcuts.
         let shortcut_modifiers = egui::Modifiers {
             shift: false,

@@ -55,11 +55,7 @@ pub(in crate::file_manager) fn show(
     let mut hovered_segment = None;
     hilbert_strip_ui(ui, palette, entry, analysis, colors, &mut hovered_segment);
 
-    let thumb_hovered = ui.is_enabled()
-        && ui
-            .ctx()
-            .pointer_hover_pos()
-            .is_some_and(|point| thumb.intersect(ui.clip_rect()).contains(point));
+    let thumb_hovered = super::super::ui::preview_hovered(ui, thumb);
 
     if thumb_hovered {
         hover.show(ui, thumb, entry, identity, analysis, texture, None);
@@ -96,12 +92,14 @@ pub(in crate::file_manager) fn show(
             Rect::from_center_size(tag.center(), vec2(16.0, 16.0)),
             colors.text_secondary,
         );
-        ui.interact(
-            tag,
-            Id::new(("image_strip_tags", &entry.path)),
-            Sense::hover(),
-        )
-        .on_hover_text("Image tags");
+        if !super::super::ui::popup_open(ui.ctx()) {
+            ui.interact(
+                tag,
+                Id::new(("image_strip_tags", &entry.path)),
+                Sense::hover(),
+            )
+            .on_hover_text("Image tags");
+        }
     }
 }
 
@@ -156,10 +154,13 @@ fn hilbert_strip_ui(
         Sense::click_and_drag(),
     );
 
-    let pointer = ui
-        .ctx()
-        .pointer_hover_pos()
-        .or_else(|| response.interact_pointer_pos());
+    let pointer = (!super::super::ui::popup_open(ui.ctx()))
+        .then(|| {
+            ui.ctx()
+                .pointer_hover_pos()
+                .or_else(|| response.interact_pointer_pos())
+        })
+        .flatten();
 
     if let Some(pos) = pointer.filter(|p| clip.contains(*p)) {
         let rel_x = ((pos.x - rect.left()) / width).clamp(0.0, 1.0 - f32::EPSILON);
@@ -237,17 +238,19 @@ fn histogram_ui(ui: &Ui, rect: Rect, analysis: &Analysis, colors: WorkbenchColor
         ui.painter()
             .add(egui::Shape::line(points, Stroke::new(1.0_f32, color)));
     }
-    ui.interact(
-        rect,
-        Id::new((
-            "image_rgb_histogram",
-            ui.id(),
-            rect.min.x.to_bits(),
-            rect.min.y.to_bits(),
-        )),
-        Sense::hover(),
-    )
-    .on_hover_text("RGB histogram · sampled image colors");
+    if !super::super::ui::popup_open(ui.ctx()) {
+        ui.interact(
+            rect,
+            Id::new((
+                "image_rgb_histogram",
+                ui.id(),
+                rect.min.x.to_bits(),
+                rect.min.y.to_bits(),
+            )),
+            Sense::hover(),
+        )
+        .on_hover_text("RGB histogram · sampled image colors");
+    }
 }
 
 fn hash_ui(
@@ -302,10 +305,12 @@ fn hash_ui(
             } else {
                 "Use this to spot visually similar images, including resized or recompressed copies. The colors summarize the image's coarse color; the 8×8 grid describes its light/dark structure. Similar colors and patterns suggest similarity, but do not prove the images are identical."
             };
-            response.on_hover_text(format!(
-                "{label}\n{hash}\n\n{explanation}\n\nClick to copy hash"
-            ));
-        } else {
+            if !super::super::ui::popup_open(ui.ctx()) {
+                response.on_hover_text(format!(
+                    "{label}\n{hash}\n\n{explanation}\n\nClick to copy hash"
+                ));
+            }
+        } else if !super::super::ui::popup_open(ui.ctx()) {
             response.on_hover_text("Exact file hash unavailable");
         }
     }
@@ -357,7 +362,7 @@ fn metadata_ui(ui: &Ui, rect: Rect, entry: &Entry, analysis: &Analysis, colors: 
             colors.text_primary,
         );
     }
-    if !populated.is_empty() {
+    if !populated.is_empty() && !super::super::ui::popup_open(ui.ctx()) {
         let mut details: Vec<_> = populated.iter().map(|(_, value)| value.clone()).collect();
         details.extend(meta.lens_model.iter().cloned());
         details.extend(meta.software.iter().cloned());

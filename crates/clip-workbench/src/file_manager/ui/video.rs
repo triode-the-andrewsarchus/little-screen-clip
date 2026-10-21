@@ -152,10 +152,10 @@ fn video_hover(
 ) -> Option<u64> {
     let timeline = timeline?;
     let metadata = metadata?;
-    let point = ui.ctx().pointer_hover_pos()?;
-    if !ui.is_enabled() || !timeline.intersect(ui.clip_rect()).contains(point) {
+    if !super::preview_hovered(ui, timeline) {
         return None;
     }
+    let point = ui.ctx().pointer_hover_pos()?;
     let fraction = ((point.x - timeline.left()) / timeline.width()).clamp(0.0, 1.0);
     let time = (fraction as f64 * metadata.duration_ms as f64).round() as u64;
     let time = time.min(metadata.duration_ms.saturating_sub(1));

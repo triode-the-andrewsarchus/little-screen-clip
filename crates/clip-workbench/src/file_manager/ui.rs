@@ -244,10 +244,16 @@ impl FileManager {
         if key(ctx, Modifiers::CTRL, Key::L) {
             self.focus_address = true;
         }
-        if key(ctx, Modifiers::ALT, Key::ArrowLeft) {
+        if key(ctx, Modifiers::ALT, Key::ArrowLeft)
+            || (!popup_open(ctx)
+                && ctx.input(|input| input.pointer.button_pressed(egui::PointerButton::Extra1)))
+        {
             self.history_step(false);
         }
-        if key(ctx, Modifiers::ALT, Key::ArrowRight) {
+        if key(ctx, Modifiers::ALT, Key::ArrowRight)
+            || (!popup_open(ctx)
+                && ctx.input(|input| input.pointer.button_pressed(egui::PointerButton::Extra2)))
+        {
             self.history_step(true);
         }
         if key(ctx, Modifiers::ALT, Key::ArrowUp) {
@@ -697,9 +703,11 @@ impl FileManager {
                     } else {
                         ""
                     });
-            response
-                .clone()
-                .on_hover_text(format!("{}\n{detail}", display_path(&row.path)));
+            if !popup_open(ui.ctx()) {
+                response
+                    .clone()
+                    .on_hover_text(format!("{}\n{detail}", display_path(&row.path)));
+            }
             if branch.error.is_some() {
                 Icon::Alert.paint(
                     ui.painter(),
@@ -805,9 +813,24 @@ pub(super) fn model_thumbnail(
     }
 }
 
+/// Returns whether any popup or context menu is currently open or opening.
+pub(super) fn popup_open(ctx: &egui::Context) -> bool {
+    let reload_error = Id::new("appearance_reload_error");
+    ctx.input(|input| input.pointer.secondary_clicked() || input.pointer.secondary_down())
+        || ctx.memory(|memory| {
+            memory.any_popup_open()
+                || memory
+                    .areas()
+                    .visible_layer_ids()
+                    .into_iter()
+                    .any(|layer| layer.order == egui::Order::Foreground && layer.id != reload_error)
+        })
+}
+
 /// Restricts passive preview hover to the enabled, visible portion of its row.
 pub(super) fn preview_hovered(ui: &Ui, rect: Rect) -> bool {
     ui.is_enabled()
+        && !popup_open(ui.ctx())
         && ui
             .ctx()
             .pointer_hover_pos()
@@ -1000,15 +1023,17 @@ pub(super) fn media_header(
             colors.text_secondary,
         );
     }
-    ui.interact(
-        header,
-        Id::new(("media_metadata", &entry.path)),
-        Sense::hover(),
-    )
-    .on_hover_text(details.map_or_else(
-        || entry.name.clone(),
-        |details| format!("{}\n{}", entry.name, details),
-    ));
+    if !popup_open(ui.ctx()) {
+        ui.interact(
+            header,
+            Id::new(("media_metadata", &entry.path)),
+            Sense::hover(),
+        )
+        .on_hover_text(details.map_or_else(
+            || entry.name.clone(),
+            |details| format!("{}\n{}", entry.name, details),
+        ));
+    }
 }
 
 fn paint_text(ui: &Ui, rect: Rect, x: f32, width: f32, text: &str, color: Color32) {
@@ -1037,7 +1062,7 @@ fn file_row(
     colors: WorkbenchColors,
 ) -> egui::Response {
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
-    let response = if rect.height() <= ROW_HEIGHT {
+    let response = if rect.height() <= ROW_HEIGHT && !popup_open(ui.ctx()) {
         response.on_hover_text(format!(
             "{}{}",
             display_path(&entry.path),
@@ -1404,6 +1429,9 @@ pub(super) fn preview_popup_with_overlay(
     overlay: Option<(&egui::TextureHandle, Color32)>,
     message: Option<&str>,
 ) {
+    if popup_open(ui.ctx()) {
+        return;
+    }
     let screen = ui.ctx().screen_rect().shrink(8.0);
     let left = anchor
         .left()
@@ -1489,5 +1517,137 @@ mod tests {
         });
         assert_eq!(browser.open_file.take(), Some(path));
         assert!(browser.inspect_file.is_none());
+    }
+
+    #[test]
+    fn mouse_back_and_forward_buttons_step_navigation_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+
+        let mut browser = FileManager::new(temp.path().into());
+        browser.history = vec![
+            super::super::Location {
+                path: first.clone(),
+                selected: None,
+                selection: Default::default(),
+                anchor: None,
+                selection_undo: None,
+                scroll: 0.0,
+                manual_view: None,
+            },
+            super::super::Location {
+                path: second.clone(),
+                selected: None,
+                selection: Default::default(),
+                anchor: None,
+                selection_undo: None,
+                scroll: 0.0,
+                manual_view: None,
+            },
+        ];
+        browser.index = Some(1);
+
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerButton {
+            pos: pos2(20.0, 20.0),
+            button: egui::PointerButton::Extra1,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        let _ = ctx.run(raw, |ctx| {
+            browser.navigation_shortcuts(ctx);
+        });
+        assert_eq!(
+            browser.pending.as_ref().map(|req| &req.path),
+            Some(&first),
+            "mouse Back (Extra1) should step back in history"
+        );
+        browser.index = Some(0);
+        browser.pending = None;
+
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerButton {
+            pos: pos2(20.0, 20.0),
+            button: egui::PointerButton::Extra2,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        let _ = ctx.run(raw, |ctx| {
+            browser.navigation_shortcuts(ctx);
+        });
+        assert_eq!(
+            browser.pending.as_ref().map(|req| &req.path),
+            Some(&second),
+            "mouse Forward (Extra2) should step forward in history"
+        );
+    }
+
+    #[test]
+    fn context_menu_suppresses_preview_hover_and_popup() {
+        let ctx = egui::Context::default();
+        let target_rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(200.0, 60.0));
+        let hover_pos = pos2(40.0, 30.0);
+
+        // Frame 1: ordinary hover without context menu.
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerMoved(hover_pos));
+        let mut hovered_without_menu = false;
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let response = ui.allocate_rect(target_rect, Sense::click());
+                hovered_without_menu = preview_hovered(ui, target_rect);
+                response.context_menu(|ui| {
+                    let _ = ui.button("Open in Files");
+                });
+            });
+        });
+        assert!(hovered_without_menu);
+
+        // Frame 2: right-click opens context menu; hover is suppressed immediately.
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerMoved(hover_pos));
+        raw.events.push(egui::Event::PointerButton {
+            pos: hover_pos,
+            button: egui::PointerButton::Secondary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        raw.events.push(egui::Event::PointerButton {
+            pos: hover_pos,
+            button: egui::PointerButton::Secondary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        let mut hovered_on_open = true;
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let response = ui.allocate_rect(target_rect, Sense::click());
+                hovered_on_open = preview_hovered(ui, target_rect);
+                response.context_menu(|ui| {
+                    let _ = ui.button("Open in Files");
+                });
+            });
+        });
+        assert!(!hovered_on_open);
+
+        // Frame 3: while context menu stays open, hover remains suppressed even away from menu box.
+        let mut raw = egui::RawInput::default();
+        raw.events
+            .push(egui::Event::PointerMoved(pos2(180.0, 50.0)));
+        let mut hovered_while_open = true;
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let response = ui.allocate_rect(target_rect, Sense::click());
+                hovered_while_open = preview_hovered(ui, target_rect);
+                response.context_menu(|ui| {
+                    let _ = ui.button("Open in Files");
+                });
+            });
+        });
+        assert!(!hovered_while_open);
     }
 }

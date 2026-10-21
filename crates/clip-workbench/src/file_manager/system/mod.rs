@@ -345,12 +345,14 @@ pub(super) fn show(
     );
     let icon = egui::Rect::from_min_size(body.min, egui::vec2(body.height(), body.height()));
     crate::icons::Icon::Eye.paint(ui.painter(), icon.shrink(15.0), colors.text_secondary);
-    ui.interact(
-        icon,
-        egui::Id::new(("system-inspection-icon", &entry.path)),
-        egui::Sense::hover(),
-    )
-    .on_hover_text("Inspect system object");
+    if !super::ui::popup_open(ui.ctx()) {
+        ui.interact(
+            icon,
+            egui::Id::new(("system-inspection-icon", &entry.path)),
+            egui::Sense::hover(),
+        )
+        .on_hover_text("Inspect system object");
+    }
     let text = egui::Rect::from_min_max(egui::pos2(icon.right() + 10.0, body.top()), body.max);
     let mut summary = ready
         .and_then(|r| r.data.system.as_ref())

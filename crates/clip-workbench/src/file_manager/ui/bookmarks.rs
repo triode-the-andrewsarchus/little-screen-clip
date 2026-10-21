@@ -106,11 +106,13 @@ impl FileManager {
                     if response.clicked() {
                         open = entry.path.clone();
                     }
-                    response.clone().on_hover_text(if entry.path.is_some() {
-                        &entry.uri
-                    } else {
-                        "This remote bookmark needs a mounted local folder."
-                    });
+                    if !super::popup_open(ui.ctx()) {
+                        response.clone().on_hover_text(if entry.path.is_some() {
+                            &entry.uri
+                        } else {
+                            "This remote bookmark needs a mounted local folder."
+                        });
+                    }
                     response.context_menu(|ui| {
                         if ui.button("Remove shortcut").clicked() {
                             remove = Some(entry.uri.clone());

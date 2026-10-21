@@ -67,12 +67,14 @@ impl Previews {
                 FontId::proportional(13.0),
                 colors.text_secondary,
             );
-        ui.interact(
-            info,
-            egui::Id::new(("scene-strip-metadata", &entry.path)),
-            egui::Sense::hover(),
-        )
-        .on_hover_text(&detail);
+        if !super::super::ui::popup_open(ui.ctx()) {
+            ui.interact(
+                info,
+                egui::Id::new(("scene-strip-metadata", &entry.path)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(&detail);
+        }
         if ready.is_some_and(|ready| ready.metadata.is_some())
             && let Some((view, rect, texture)) = hovered
         {

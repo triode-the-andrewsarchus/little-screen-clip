@@ -796,28 +796,30 @@ pub(super) fn paint(
             label,
             colors.text_secondary,
         );
-        ui.interact(
-            cell,
-            ui.id().with(("bus-topology-node", &node.path)),
-            egui::Sense::hover(),
-        )
-        .on_hover_text(format!(
-            "{}\n{}\nParent: {}\nCoverage: {} · {}/{} nodes shown{}",
-            node.label,
-            node.path.display(),
-            node.parent
-                .and_then(|parent| topology.nodes.get(parent))
-                .map(|parent| parent.label.as_str())
-                .unwrap_or("Root"),
-            topology.coverage,
-            visible,
-            topology.nodes.len(),
-            if topology.retained {
-                " · last observation"
-            } else {
-                ""
-            }
-        ));
+        if !crate::file_manager::ui::popup_open(ui.ctx()) {
+            ui.interact(
+                cell,
+                ui.id().with(("bus-topology-node", &node.path)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(format!(
+                "{}\n{}\nParent: {}\nCoverage: {} · {}/{} nodes shown{}",
+                node.label,
+                node.path.display(),
+                node.parent
+                    .and_then(|parent| topology.nodes.get(parent))
+                    .map(|parent| parent.label.as_str())
+                    .unwrap_or("Root"),
+                topology.coverage,
+                visible,
+                topology.nodes.len(),
+                if topology.retained {
+                    " · last observation"
+                } else {
+                    ""
+                }
+            ));
+        }
     }
 }
 fn registration_domains(registrations: &[Registration]) -> Vec<u8> {
@@ -868,12 +870,14 @@ fn paint_addresses(
             if observed.iter().any(|entry| entry.selected) {
                 painter.rect_stroke(cell, 0.0, egui::Stroke::new(1.5_f32, colors.text_primary));
             }
-            ui.interact(cell,ui.id().with(("registered-address",bits,bin)),egui::Sense::hover()).on_hover_ui(|ui| {
-                ui.label(format!("{bits}-bit registered-address metadata: 0x{start:02x}–0x{end:02x}"));
-                for entry in &observed { ui.label(format!("{}{}\n{}",entry.label,if entry.target {" · target interface"} else {""},entry.path.display())); }
-                if observed.is_empty() {ui.label("No registration shown in this observation; physical absence is not established.");}
-                ui.label(format!("Coverage: {}{}",topology.coverage,if topology.retained {" · last observation"} else {""}));
-            });
+            if !crate::file_manager::ui::popup_open(ui.ctx()) {
+                ui.interact(cell,ui.id().with(("registered-address",bits,bin)),egui::Sense::hover()).on_hover_ui(|ui| {
+                    ui.label(format!("{bits}-bit registered-address metadata: 0x{start:02x}–0x{end:02x}"));
+                    for entry in &observed { ui.label(format!("{}{}\n{}",entry.label,if entry.target {" · target interface"} else {""},entry.path.display())); }
+                    if observed.is_empty() {ui.label("No registration shown in this observation; physical absence is not established.");}
+                    ui.label(format!("Coverage: {}{}",topology.coverage,if topology.retained {" · last observation"} else {""}));
+                });
+            }
         }
     }
 }

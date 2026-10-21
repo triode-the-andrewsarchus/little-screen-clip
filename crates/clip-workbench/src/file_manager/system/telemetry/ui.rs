@@ -151,13 +151,15 @@ fn cell(
             colors.text_secondary,
         );
     }
-    ui.interact(
-        rect,
-        ui.id()
-            .with(("telemetry-series", index, &row.current.source)),
-        Sense::hover(),
-    )
-    .on_hover_text(tooltip(row));
+    if !crate::file_manager::ui::popup_open(ui.ctx()) {
+        ui.interact(
+            rect,
+            ui.id()
+                .with(("telemetry-series", index, &row.current.source)),
+            Sense::hover(),
+        )
+        .on_hover_text(tooltip(row));
+    }
 }
 pub(in crate::file_manager::system) fn paint(
     ui: &mut Ui,

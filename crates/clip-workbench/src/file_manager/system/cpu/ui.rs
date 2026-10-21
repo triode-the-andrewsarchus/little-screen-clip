@@ -92,12 +92,14 @@ pub(in crate::file_manager::system) fn paint(
                 ""
             }
         ));
-        ui.interact(
-            cell,
-            ui.id().with(("cpu-membership", index)),
-            Sense::hover(),
-        )
-        .on_hover_text(tooltip);
+        if !crate::file_manager::ui::popup_open(ui.ctx()) {
+            ui.interact(
+                cell,
+                ui.id().with(("cpu-membership", index)),
+                Sense::hover(),
+            )
+            .on_hover_text(tooltip);
+        }
     }
 }
 pub(in crate::file_manager::system) fn inspector(

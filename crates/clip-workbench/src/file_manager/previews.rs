@@ -485,21 +485,20 @@ impl EntryPreviews {
                             .max(1)
                     })
             });
-        if ui.is_enabled()
-            && ui.ctx().pointer_hover_pos().is_some_and(|point| {
-                row.intersect(ui.clip_rect()).contains(point) && !strip.contains(point)
-            })
-        {
-            if let Some(document) = self
+        if super::ui::preview_hovered(ui, row)
+            && ui
+                .ctx()
+                .pointer_hover_pos()
+                .is_some_and(|point| !strip.contains(point))
+            && let Some(document) = self
                 .listing(entry)
                 .and_then(|ready| ready.data.document.clone())
-            {
-                egui::show_tooltip_at_pointer(
-                    ui.ctx(),
-                    egui::Id::new(("text_strip_hover", &entry.path)),
-                    |ui| document.excerpt_ui(ui, 0.0, usize::MAX, palette),
-                );
-            }
+        {
+            egui::show_tooltip_at_pointer(
+                ui.ctx(),
+                egui::Id::new(("text_strip_hover", &entry.path)),
+                |ui| document.excerpt_ui(ui, 0.0, usize::MAX, palette),
+            );
         }
         clicked_line
     }
@@ -534,11 +533,7 @@ impl EntryPreviews {
             colors,
         };
         self.paint_raster(ui, rect, id, (width, height, colors.to_vec()), source);
-        let hovered = ui.is_enabled()
-            && ui
-                .ctx()
-                .pointer_hover_pos()
-                .is_some_and(|point| rect.intersect(ui.clip_rect()).contains(point));
+        let hovered = super::ui::preview_hovered(ui, rect);
         if hovered {
             let point = ui.ctx().pointer_hover_pos().unwrap_or(rect.min);
             let fraction = ((point.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
@@ -640,45 +635,47 @@ impl EntryPreviews {
                     .icon
                     .paint(ui.painter(), rect, ui.visuals().text_color());
             }
-            ui.interact(
-                rect,
-                egui::Id::new(("listing_preview", id)),
-                egui::Sense::hover(),
-            )
-            .on_hover_ui(|ui| {
-                ui.label(&ready.data.detail);
-                if let Some(texture) = &ready.texture {
-                    ui.image((texture.id(), texture.size_vec2()));
-                }
-                if !ready.data.text.is_empty() {
-                    ui.label(&ready.data.text);
-                }
-                if !ready.data.waveform.is_empty() {
-                    let (wave, _) =
-                        ui.allocate_exact_size(egui::vec2(180.0, 40.0), egui::Sense::hover());
-                    let step = wave.width() / ready.data.waveform.len() as f32;
-                    for (i, level) in ready.data.waveform.iter().enumerate() {
-                        let x = wave.left() + i as f32 * step;
-                        let amp = level * wave.height() / 2.0;
-                        ui.painter().line_segment(
-                            [
-                                egui::pos2(x, wave.center().y - amp),
-                                egui::pos2(x, wave.center().y + amp),
-                            ],
-                            egui::Stroke::new(
-                                1.0_f32,
-                                ready
-                                    .data
-                                    .waveform_colors
-                                    .get(i)
-                                    .map_or(ui.visuals().text_color(), |rgb| {
-                                        egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-                                    }),
-                            ),
-                        );
+            if !super::ui::popup_open(ui.ctx()) {
+                ui.interact(
+                    rect,
+                    egui::Id::new(("listing_preview", id)),
+                    egui::Sense::hover(),
+                )
+                .on_hover_ui(|ui| {
+                    ui.label(&ready.data.detail);
+                    if let Some(texture) = &ready.texture {
+                        ui.image((texture.id(), texture.size_vec2()));
                     }
-                }
-            });
+                    if !ready.data.text.is_empty() {
+                        ui.label(&ready.data.text);
+                    }
+                    if !ready.data.waveform.is_empty() {
+                        let (wave, _) =
+                            ui.allocate_exact_size(egui::vec2(180.0, 40.0), egui::Sense::hover());
+                        let step = wave.width() / ready.data.waveform.len() as f32;
+                        for (i, level) in ready.data.waveform.iter().enumerate() {
+                            let x = wave.left() + i as f32 * step;
+                            let amp = level * wave.height() / 2.0;
+                            ui.painter().line_segment(
+                                [
+                                    egui::pos2(x, wave.center().y - amp),
+                                    egui::pos2(x, wave.center().y + amp),
+                                ],
+                                egui::Stroke::new(
+                                    1.0_f32,
+                                    ready
+                                        .data
+                                        .waveform_colors
+                                        .get(i)
+                                        .map_or(ui.visuals().text_color(), |rgb| {
+                                            egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+                                        }),
+                                ),
+                            );
+                        }
+                    }
+                });
+            }
         } else {
             let icon = if entry.is_video() {
                 crate::icons::Icon::Film

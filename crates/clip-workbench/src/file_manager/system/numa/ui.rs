@@ -133,5 +133,7 @@ fn distance_cell(
             ),
         );
     }
-    ui.interact(cell,ui.id().with(("numa-distance",row.id,column)),Sense::hover()).on_hover_text(format!("node{} → node{column}: {} · {}{}\nRelative distance, not measured latency · observed {} ms ago",row.id,value.map_or_else(||"unavailable".into(),u16::to_string),row.outcome,if row.retained {" · last observation"} else {""},super::super::model::now_ms().saturating_sub(row.observed_ms)));
+    if !crate::file_manager::ui::popup_open(ui.ctx()) {
+        ui.interact(cell,ui.id().with(("numa-distance",row.id,column)),Sense::hover()).on_hover_text(format!("node{} → node{column}: {} · {}{}\nRelative distance, not measured latency · observed {} ms ago",row.id,value.map_or_else(||"unavailable".into(),u16::to_string),row.outcome,if row.retained {" · last observation"} else {""},super::super::model::now_ms().saturating_sub(row.observed_ms)));
+    }
 }
