@@ -2,14 +2,17 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 pub use little_clip_core::config::{
-    DEFAULT_BIG_LAMA_MODEL_URL, DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL, DEFAULT_RMBG_14_MODEL_URL,
+    DEFAULT_BIG_LAMA_MODEL_URL, DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL, DEFAULT_FEYNOBG_FP16_MODEL_URL,
 };
 
 pub const BIG_LAMA_MODEL_NAME: &str = "big-lama.onnx";
 pub const BIG_LAMA_MODEL_URL: &str = DEFAULT_BIG_LAMA_MODEL_URL;
 
-pub const RMBG_14_MODEL_NAME: &str = "rmbg-1.4.onnx";
-pub const RMBG_14_MODEL_URL: &str = DEFAULT_RMBG_14_MODEL_URL;
+pub const FEYNOBG_FP16_MODEL_NAME: &str = "feynobg-fp16.onnx";
+pub const FEYNOBG_FP16_MODEL_URL: &str = DEFAULT_FEYNOBG_FP16_MODEL_URL;
+
+pub const RMBG_14_MODEL_NAME: &str = FEYNOBG_FP16_MODEL_NAME;
+pub const RMBG_14_MODEL_URL: &str = FEYNOBG_FP16_MODEL_URL;
 
 pub const DEPTH_ANYTHING_V2_MODEL_NAME: &str = "depth-anything-v2-small.onnx";
 pub const DEPTH_ANYTHING_V2_MODEL_URL: &str = DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL;
@@ -49,7 +52,7 @@ pub fn resolve_model_url(model_name: &str, url_override: Option<&str>) -> String
     let config = little_clip_core::AppConfig::load();
     match model_name {
         BIG_LAMA_MODEL_NAME => config.lama_model_url().to_string(),
-        RMBG_14_MODEL_NAME => config.rmbg_model_url().to_string(),
+        FEYNOBG_FP16_MODEL_NAME | "rmbg-1.4.onnx" => config.rmbg_model_url().to_string(),
         DEPTH_ANYTHING_V2_MODEL_NAME => config.depth_model_url().to_string(),
         _ => String::new(),
     }
@@ -72,7 +75,13 @@ pub fn ensure_model_with_url(model_name: &str, url: &str) -> Result<PathBuf, Str
     let models_dir = PathBuf::from(home).join(".cache/little-screen-clip/models");
     let model_path = models_dir.join(model_name);
     if model_path.exists() {
-        return Ok(model_path);
+        if let Ok(meta) = std::fs::metadata(&model_path) {
+            // Verify file has non-trivial size (> 1MB) so corrupted/stub downloads are discarded
+            if meta.len() > 1_000_000 {
+                return Ok(model_path);
+            }
+        }
+        let _ = std::fs::remove_file(&model_path);
     }
     let _ = std::fs::create_dir_all(&models_dir);
     let tmp_path = models_dir.join(format!("{}.tmp.{}", model_name, std::process::id()));
@@ -88,6 +97,15 @@ pub fn ensure_model_with_url(model_name: &str, url: &str) -> Result<PathBuf, Str
 
     match status {
         Ok(st) if st.success() && tmp_path.exists() => {
+            if let Ok(meta) = std::fs::metadata(&tmp_path) {
+                if meta.len() <= 1_000_000 {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return Err(format!(
+                        "Downloaded model {model_name} is too small ({} bytes)",
+                        meta.len()
+                    ));
+                }
+            }
             std::fs::rename(&tmp_path, &model_path)
                 .map_err(|e| format!("Failed to save downloaded model: {e}"))?;
             Ok(model_path)

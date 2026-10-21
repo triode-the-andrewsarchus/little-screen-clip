@@ -112,9 +112,11 @@ impl Default for AutoActionsConfig {
 
 pub const DEFAULT_BIG_LAMA_MODEL_URL: &str =
     "https://huggingface.co/smile-forge/big-lama-onnx/resolve/main/big-lama.onnx";
-pub const DEFAULT_RMBG_14_MODEL_URL: &str =
-    "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx";
-pub const DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL: &str = "https://huggingface.co/onnx-community/Depth-Anything-V2-Small-ONNX/resolve/main/onnx/model.onnx";
+pub const DEFAULT_FEYNOBG_FP16_MODEL_URL: &str =
+    "https://huggingface.co/PinkPixel/fey-nobg-onnx/resolve/main/model_fp16.onnx";
+pub const DEFAULT_RMBG_14_MODEL_URL: &str = DEFAULT_FEYNOBG_FP16_MODEL_URL;
+pub const DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL: &str =
+    "https://huggingface.co/mtbui2010/depth-anything-v2-small-ONNX/resolve/main/model.onnx";
 
 /// AI/ONNX model download URL overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -123,8 +125,14 @@ pub struct AiModelsConfig {
     /// Optional URL override for downloading the Big-LaMa inpainting ONNX model.
     #[serde(alias = "big_lama_url", alias = "lama_model_url")]
     pub lama_url: Option<String>,
-    /// Optional URL override for downloading the RMBG-1.4 background removal ONNX model.
-    #[serde(alias = "rmbg_14_url", alias = "rmbg_model_url")]
+    /// Optional URL override for downloading the background removal (FeyNoBg) ONNX model.
+    #[serde(
+        alias = "rmbg_url",
+        alias = "rmbg_14_url",
+        alias = "rmbg_model_url",
+        alias = "feynobg_url",
+        alias = "bg_removal_url"
+    )]
     pub rmbg_url: Option<String>,
     /// Optional URL override for downloading the Depth-Anything-V2 depth estimation ONNX model.
     #[serde(alias = "depth_anything_url", alias = "depth_model_url")]
@@ -625,13 +633,18 @@ impl AppConfig {
             .unwrap_or(DEFAULT_BIG_LAMA_MODEL_URL)
     }
 
-    /// URL for downloading the RMBG-1.4 background removal ONNX model.
+    /// URL for downloading the background removal (FeyNoBg) ONNX model.
     pub fn rmbg_model_url(&self) -> &str {
         self.ai_models
             .rmbg_url
             .as_deref()
             .or(self.image.rmbg_model_url.as_deref())
-            .unwrap_or(DEFAULT_RMBG_14_MODEL_URL)
+            .unwrap_or(DEFAULT_FEYNOBG_FP16_MODEL_URL)
+    }
+
+    /// URL for downloading the background removal (FeyNoBg) ONNX model.
+    pub fn bg_removal_model_url(&self) -> &str {
+        self.rmbg_model_url()
     }
 
     /// URL for downloading the Depth-Anything-V2 depth estimation ONNX model.
@@ -882,12 +895,19 @@ triangle_limit = 2500
         let ai_models_toml = r#"
 [ai_models]
 lama_url = "https://custom.mirror/lama.onnx"
-rmbg_url = "https://custom.mirror/rmbg.onnx"
+feynobg_url = "https://custom.mirror/feynobg.onnx"
 depth_url = "https://custom.mirror/depth.onnx"
 "#;
         let ai_cfg: AppConfig = toml::from_str(ai_models_toml).unwrap();
         assert_eq!(ai_cfg.lama_model_url(), "https://custom.mirror/lama.onnx");
-        assert_eq!(ai_cfg.rmbg_model_url(), "https://custom.mirror/rmbg.onnx");
+        assert_eq!(
+            ai_cfg.rmbg_model_url(),
+            "https://custom.mirror/feynobg.onnx"
+        );
+        assert_eq!(
+            ai_cfg.bg_removal_model_url(),
+            "https://custom.mirror/feynobg.onnx"
+        );
         assert_eq!(ai_cfg.depth_model_url(), "https://custom.mirror/depth.onnx");
 
         // Test overrides under [image]

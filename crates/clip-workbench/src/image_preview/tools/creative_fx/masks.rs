@@ -287,7 +287,7 @@ impl ImagePreviewState {
                 || request.cmd_args.iter().any(|a| a.contains("remove_bg.py"));
             if is_default_bg_cmd {
                 if let Ok(model_path) = crate::onnx_runtime::ensure_model(
-                    crate::onnx_runtime::RMBG_14_MODEL_NAME,
+                    crate::onnx_runtime::FEYNOBG_FP16_MODEL_NAME,
                     request.model_url.as_deref(),
                 ) {
                     let source_rgba = request.snapshot.compose();

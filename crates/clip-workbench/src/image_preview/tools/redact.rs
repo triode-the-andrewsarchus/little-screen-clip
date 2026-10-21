@@ -603,7 +603,7 @@ impl ImagePreviewState {
                             .color(text_col),
                     )
                     .fill(fill)
-                    .stroke(Stroke::new(1.0, stroke_col))
+                    .stroke(Stroke::new(1.0_f32, stroke_col))
                     .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                     .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
@@ -1068,12 +1068,12 @@ impl ImagePreviewState {
                             painter.circle_stroke(
                                 ptr_pos,
                                 screen_radius + 0.5,
-                                Stroke::new(1.5, Color32::BLACK),
+                                Stroke::new(1.5_f32, Color32::BLACK),
                             );
                             painter.circle_stroke(
                                 ptr_pos,
                                 screen_radius,
-                                Stroke::new(1.0, Color32::WHITE),
+                                Stroke::new(1.0_f32, Color32::WHITE),
                             );
                         } else {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);

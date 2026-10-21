@@ -249,9 +249,9 @@ pub fn run_native_background_removal(
     for y in 0..1024 {
         for x in 0..1024 {
             let px = resized.get_pixel(x, y);
-            img_arr[[0, 0, y as usize, x as usize]] = (px[0] as f32 / 255.0 - 0.5) / 0.5;
-            img_arr[[0, 1, y as usize, x as usize]] = (px[1] as f32 / 255.0 - 0.5) / 0.5;
-            img_arr[[0, 2, y as usize, x as usize]] = (px[2] as f32 / 255.0 - 0.5) / 0.5;
+            img_arr[[0, 0, y as usize, x as usize]] = (px[0] as f32 / 255.0 - 0.485) / 0.229;
+            img_arr[[0, 1, y as usize, x as usize]] = (px[1] as f32 / 255.0 - 0.456) / 0.224;
+            img_arr[[0, 2, y as usize, x as usize]] = (px[2] as f32 / 255.0 - 0.406) / 0.225;
         }
     }
 
@@ -272,10 +272,22 @@ pub fn run_native_background_removal(
         .try_extract_array::<f32>()
         .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
 
+    let get_alpha = |y: usize, x: usize| -> f32 {
+        if out_tensor.ndim() == 4 {
+            out_tensor[[0, 0, y, x]]
+        } else if out_tensor.ndim() == 3 {
+            out_tensor[[0, y, x]]
+        } else if out_tensor.ndim() == 2 {
+            out_tensor[[y, x]]
+        } else {
+            0.0
+        }
+    };
+
     let mut mask_1024 = image::GrayImage::new(1024, 1024);
     for y in 0..1024 {
         for x in 0..1024 {
-            let val = out_tensor[[0, 0, y, x]].clamp(0.0, 1.0);
+            let val = get_alpha(y, x).clamp(0.0, 1.0);
             mask_1024.put_pixel(
                 x as u32,
                 y as u32,
@@ -344,11 +356,23 @@ pub fn run_native_depth_map(
         .try_extract_array::<f32>()
         .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
 
+    let get_depth = |y: usize, x: usize| -> f32 {
+        if out_tensor.ndim() == 4 {
+            out_tensor[[0, 0, y, x]]
+        } else if out_tensor.ndim() == 3 {
+            out_tensor[[0, y, x]]
+        } else if out_tensor.ndim() == 2 {
+            out_tensor[[y, x]]
+        } else {
+            0.0
+        }
+    };
+
     let mut min_val = f32::INFINITY;
     let mut max_val = f32::NEG_INFINITY;
     for y in 0..518 {
         for x in 0..518 {
-            let val = out_tensor[[0, y, x]];
+            let val = get_depth(y, x);
             if val < min_val {
                 min_val = val;
             }
@@ -367,7 +391,7 @@ pub fn run_native_depth_map(
     let mut depth_518 = image::GrayImage::new(518, 518);
     for y in 0..518 {
         for x in 0..518 {
-            let val = out_tensor[[0, y, x]];
+            let val = get_depth(y, x);
             let norm = ((val - min_val) / range).clamp(0.0, 1.0);
             depth_518.put_pixel(
                 x as u32,
@@ -523,15 +547,15 @@ impl ImagePreviewState {
                 && request.prompt.is_none()
                 && is_default_bg_cmd
             {
-                if let Ok(rmbg_path) = crate::onnx_runtime::ensure_model(
-                    crate::onnx_runtime::RMBG_14_MODEL_NAME,
+                if let Ok(model_path) = crate::onnx_runtime::ensure_model(
+                    crate::onnx_runtime::FEYNOBG_FP16_MODEL_NAME,
                     request.model_url.as_deref(),
                 ) {
                     let _ = tx.send(BgRemovalMsg::Progress(
-                        "Running native RMBG-1.4 neural network...".to_string(),
+                        "Running native FeyNoBg FP16 neural network...".to_string(),
                     ));
                     let source_rgba = request.snapshot.compose();
-                    match run_native_background_removal(&source_rgba, &rmbg_path) {
+                    match run_native_background_removal(&source_rgba, &model_path) {
                         Ok(result_rgba) => {
                             let _ = tx.send(BgRemovalMsg::Success {
                                 result_rgba,
@@ -541,7 +565,7 @@ impl ImagePreviewState {
                         }
                         Err(err) => {
                             let _ = tx.send(BgRemovalMsg::Progress(format!(
-                                "Native RMBG-1.4 failed ({err}), trying fallback..."
+                                "Native FeyNoBg failed ({err}), trying fallback..."
                             )));
                         }
                     }
@@ -1301,15 +1325,15 @@ mod bounded_job_tests {
     #[test]
     fn native_background_removal_runs_if_model_present() {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        let model_path =
-            std::path::PathBuf::from(home).join(".cache/little-screen-clip/models/rmbg-1.4.onnx");
+        let model_path = std::path::PathBuf::from(home)
+            .join(".cache/little-screen-clip/models/feynobg-fp16.onnx");
         if !model_path.exists() {
             return;
         }
 
         let img = RgbaImage::from_pixel(32, 24, image::Rgba([120, 150, 200, 255]));
         let result =
-            run_native_background_removal(&img, &model_path).expect("native rmbg inference");
+            run_native_background_removal(&img, &model_path).expect("native feynobg inference");
         assert_eq!(result.dimensions(), (32, 24));
     }
 

@@ -114,8 +114,8 @@ viewer = "nomacs"
 # By default, public Hugging Face ONNX releases are downloaded into ~/.cache/little-screen-clip/models/.
 # Override these to point to your own local/S3/mirror URLs to avoid dependency on 3rd-party availability:
 # lama_url = "https://huggingface.co/smile-forge/big-lama-onnx/resolve/main/big-lama.onnx"
-# rmbg_url = "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx"
-# depth_url = "https://huggingface.co/onnx-community/Depth-Anything-V2-Small-ONNX/resolve/main/onnx/model.onnx"
+# feynobg_url = "https://huggingface.co/PinkPixel/fey-nobg-onnx/resolve/main/model_fp16.onnx"
+# depth_url = "https://huggingface.co/mtbui2010/depth-anything-v2-small-ONNX/resolve/main/model.onnx"
 
 [text]
 # Preferred external text editor command for text preview escape hatch
