@@ -40,7 +40,7 @@ DEFAULT_MODEL_URL = "https://huggingface.co/smile-forge/big-lama-onnx/resolve/ma
 FALLBACK_MODEL_URL = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"
 
 
-def ensure_model_path(model_arg: str | None) -> str:
+def ensure_model_path(model_arg: str | None, model_url: str | None = None) -> str:
     if model_arg and os.path.exists(model_arg):
         return model_arg
 
@@ -52,7 +52,17 @@ def ensure_model_path(model_arg: str | None) -> str:
     sys.stderr.write(f"Downloading LaMa model to {model_path}...\n")
     sys.stderr.flush()
 
-    for url in [DEFAULT_MODEL_URL, FALLBACK_MODEL_URL]:
+    env_url = os.environ.get("LAMA_MODEL_URL") or os.environ.get("BIG_LAMA_MODEL_URL")
+    target_urls = []
+    if model_url and model_url.strip():
+        target_urls.append(model_url.strip())
+    if env_url and env_url.strip() and env_url.strip() not in target_urls:
+        target_urls.append(env_url.strip())
+    for default_url in [DEFAULT_MODEL_URL, FALLBACK_MODEL_URL]:
+        if default_url not in target_urls:
+            target_urls.append(default_url)
+
+    for url in target_urls:
         try:
             req = urllib.request.Request(
                 url,
@@ -94,9 +104,15 @@ def ensure_model_path(model_arg: str | None) -> str:
     raise RuntimeError("Failed to download LaMa inpainting model from all available sources.")
 
 
-def inpaint(image_path: str, mask_path: str, output_path: str, model_path: str):
+def inpaint(
+    image_path: str,
+    mask_path: str,
+    output_path: str,
+    model_path: str | None = None,
+    model_url: str | None = None,
+):
     t0 = time.time()
-    model_file = ensure_model_path(model_path)
+    model_file = ensure_model_path(model_path, model_url)
 
     # Available execution providers
     available_providers = ort.get_available_providers()
@@ -190,6 +206,9 @@ def main():
     parser.add_argument("--mask", "-m", default=None, help="Input mask file path")
     parser.add_argument("--output", "-o", default=None, help="Output image file path")
     parser.add_argument("--model", default=None, help="Path to custom ONNX model")
+    parser.add_argument(
+        "--model-url", default=None, help="Custom download URL for the LaMa ONNX model"
+    )
 
     args = parser.parse_args()
 
@@ -210,7 +229,7 @@ def main():
         sys.exit(1)
 
     try:
-        inpaint(image_path, mask_path, output_path, args.model)
+        inpaint(image_path, mask_path, output_path, args.model, args.model_url)
     except Exception as err:
         sys.stderr.write(f"ERROR: Inpainting failed: {err}\n")
         sys.exit(1)

@@ -1712,6 +1712,12 @@ impl ImagePreviewState {
 
             let mut process_cmd = Command::new(&cmd);
             process_cmd.args(&args);
+            if let Some(ref path) = model_path {
+                process_cmd.arg("--model").arg(path);
+            } else if let Some(ref url) = lama_url {
+                process_cmd.arg("--model-url").arg(url);
+                process_cmd.env("LAMA_MODEL_URL", url);
+            }
             process_cmd.arg(&temp_in);
             process_cmd.arg(&temp_mask);
             process_cmd.arg(&temp_out);

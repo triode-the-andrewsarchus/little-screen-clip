@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 pub use little_clip_core::config::{
-    DEFAULT_BIG_LAMA_MODEL_URL, DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL, DEFAULT_FEYNOBG_FP16_MODEL_URL,
+    DEFAULT_BIG_LAMA_MODEL_URL, DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL,
+    DEFAULT_FEYNOBG_FP16_MODEL_URL, DEFAULT_MOBILE_SAM_DECODER_MODEL_URL,
+    DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL,
 };
 
 pub const BIG_LAMA_MODEL_NAME: &str = "big-lama.onnx";
@@ -18,12 +20,10 @@ pub const DEPTH_ANYTHING_V2_MODEL_NAME: &str = "depth-anything-v2-small.onnx";
 pub const DEPTH_ANYTHING_V2_MODEL_URL: &str = DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL;
 
 pub const MOBILE_SAM_ENCODER_MODEL_NAME: &str = "mobile_sam_encoder.onnx";
-pub const MOBILE_SAM_ENCODER_MODEL_URL: &str =
-    "https://huggingface.co/Acly/MobileSAM/resolve/main/mobile_sam_image_encoder.onnx";
+pub const MOBILE_SAM_ENCODER_MODEL_URL: &str = DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL;
 
 pub const MOBILE_SAM_DECODER_MODEL_NAME: &str = "mobile_sam_decoder.onnx";
-pub const MOBILE_SAM_DECODER_MODEL_URL: &str =
-    "https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx";
+pub const MOBILE_SAM_DECODER_MODEL_URL: &str = DEFAULT_MOBILE_SAM_DECODER_MODEL_URL;
 
 /// Get or initialize the global ONNX Runtime environment.
 ///
@@ -62,6 +62,8 @@ pub fn resolve_model_url(model_name: &str, url_override: Option<&str>) -> String
         BIG_LAMA_MODEL_NAME => config.lama_model_url().to_string(),
         FEYNOBG_FP16_MODEL_NAME | "rmbg-1.4.onnx" => config.rmbg_model_url().to_string(),
         DEPTH_ANYTHING_V2_MODEL_NAME => config.depth_model_url().to_string(),
+        MOBILE_SAM_ENCODER_MODEL_NAME => config.sam_encoder_model_url().to_string(),
+        MOBILE_SAM_DECODER_MODEL_NAME => config.sam_decoder_model_url().to_string(),
         _ => String::new(),
     }
 }
@@ -100,12 +102,6 @@ where
         return Err(format!("No download URL configured for model {model_name}"));
     }
     ensure_model_with_url_progress(model_name, &url, on_progress)
-}
-
-/// Ensure that a named ONNX model is available locally in the cache directory,
-/// downloading it from a specific URL if necessary.
-pub fn ensure_model_with_url(model_name: &str, url: &str) -> Result<PathBuf, String> {
-    ensure_model_with_url_progress(model_name, url, |_, _| {})
 }
 
 /// Ensure that a named ONNX model is available locally in the cache directory,
@@ -209,6 +205,14 @@ mod tests {
             resolve_model_url(DEPTH_ANYTHING_V2_MODEL_NAME, Some(custom)),
             custom
         );
+        assert_eq!(
+            resolve_model_url(MOBILE_SAM_ENCODER_MODEL_NAME, Some(custom)),
+            custom
+        );
+        assert_eq!(
+            resolve_model_url(MOBILE_SAM_DECODER_MODEL_NAME, Some(custom)),
+            custom
+        );
     }
 
     #[test]
@@ -224,6 +228,14 @@ mod tests {
         assert_eq!(
             resolve_model_url(DEPTH_ANYTHING_V2_MODEL_NAME, None),
             DEPTH_ANYTHING_V2_MODEL_URL
+        );
+        assert_eq!(
+            resolve_model_url(MOBILE_SAM_ENCODER_MODEL_NAME, None),
+            MOBILE_SAM_ENCODER_MODEL_URL
+        );
+        assert_eq!(
+            resolve_model_url(MOBILE_SAM_DECODER_MODEL_NAME, None),
+            MOBILE_SAM_DECODER_MODEL_URL
         );
     }
 }

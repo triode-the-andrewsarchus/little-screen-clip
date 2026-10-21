@@ -86,9 +86,31 @@ def ensure_model(model_name: str, url: str) -> str:
 
 
 class SamEngine:
-    def __init__(self, encoder_path: str = None, decoder_path: str = None):
-        enc_file = encoder_path if (encoder_path and os.path.exists(encoder_path)) else ensure_model(DEFAULT_ENCODER_NAME, ENCODER_URL)
-        dec_file = decoder_path if (decoder_path and os.path.exists(decoder_path)) else ensure_model(DEFAULT_DECODER_NAME, DECODER_URL)
+    def __init__(
+        self,
+        encoder_path: str = None,
+        decoder_path: str = None,
+        encoder_url: str = None,
+        decoder_url: str = None,
+    ):
+        enc_url = (
+            encoder_url
+            or os.environ.get("SAM_ENCODER_URL")
+            or os.environ.get("SAM_URL")
+            or ENCODER_URL
+        )
+        dec_url = decoder_url or os.environ.get("SAM_DECODER_URL") or DECODER_URL
+
+        enc_file = (
+            encoder_path
+            if (encoder_path and os.path.exists(encoder_path))
+            else ensure_model(DEFAULT_ENCODER_NAME, enc_url)
+        )
+        dec_file = (
+            decoder_path
+            if (decoder_path and os.path.exists(decoder_path))
+            else ensure_model(DEFAULT_DECODER_NAME, dec_url)
+        )
 
         # Prefer CUDA if available, fallback to CPU
         providers = ["CPUExecutionProvider"]
@@ -166,11 +188,16 @@ class SamEngine:
         return runs
 
 
-def run_server():
+def run_server(
+    encoder_path: str = None,
+    decoder_path: str = None,
+    encoder_url: str = None,
+    decoder_url: str = None,
+):
     sys.stderr.write("Starting Segment Anything ONNX server...\n")
     sys.stderr.flush()
     try:
-        engine = SamEngine()
+        engine = SamEngine(encoder_path, decoder_path, encoder_url, decoder_url)
     except Exception as err:
         sys.stderr.write(f"Failed to initialize SAM engine: {err}\n")
         sys.stderr.flush()
@@ -235,11 +262,13 @@ def main():
     parser.add_argument("--output", default=None, help="Output mask PNG path")
     parser.add_argument("--encoder", default=None, help="Custom encoder ONNX path")
     parser.add_argument("--decoder", default=None, help="Custom decoder ONNX path")
+    parser.add_argument("--encoder-url", default=None, help="Custom download URL for the encoder ONNX model")
+    parser.add_argument("--decoder-url", default=None, help="Custom download URL for the decoder ONNX model")
 
     args = parser.parse_args()
 
     if args.server:
-        run_server()
+        run_server(args.encoder, args.decoder, args.encoder_url, args.decoder_url)
         return
 
     if not args.image or not args.point or not args.output:
@@ -247,7 +276,7 @@ def main():
         sys.exit(1)
 
     coords = [float(p.strip()) for p in args.point.split(",")]
-    engine = SamEngine(args.encoder, args.decoder)
+    engine = SamEngine(args.encoder, args.decoder, args.encoder_url, args.decoder_url)
     engine.load_image(args.image)
     rle = engine.predict_point(coords[0], coords[1])
 

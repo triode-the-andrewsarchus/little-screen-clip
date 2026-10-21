@@ -117,6 +117,10 @@ pub const DEFAULT_FEYNOBG_FP16_MODEL_URL: &str =
 pub const DEFAULT_RMBG_14_MODEL_URL: &str = DEFAULT_FEYNOBG_FP16_MODEL_URL;
 pub const DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL: &str =
     "https://huggingface.co/mtbui2010/depth-anything-v2-small-ONNX/resolve/main/model.onnx";
+pub const DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL: &str =
+    "https://huggingface.co/Acly/MobileSAM/resolve/main/mobile_sam_image_encoder.onnx";
+pub const DEFAULT_MOBILE_SAM_DECODER_MODEL_URL: &str =
+    "https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx";
 
 /// AI/ONNX model download URL overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -137,6 +141,12 @@ pub struct AiModelsConfig {
     /// Optional URL override for downloading the Depth-Anything-V2 depth estimation ONNX model.
     #[serde(alias = "depth_anything_url", alias = "depth_model_url")]
     pub depth_url: Option<String>,
+    /// Optional URL override for downloading the MobileSAM encoder ONNX model.
+    #[serde(alias = "sam_encoder_model_url", alias = "sam_url")]
+    pub sam_encoder_url: Option<String>,
+    /// Optional URL override for downloading the MobileSAM decoder ONNX model.
+    #[serde(alias = "sam_decoder_model_url")]
+    pub sam_decoder_url: Option<String>,
 }
 
 /// External tool paths for image viewing, editing, and background removal.
@@ -170,6 +180,12 @@ pub struct ImageConfig {
     /// Optional URL override for downloading the Depth-Anything-V2 depth estimation ONNX model.
     #[serde(default)]
     pub depth_model_url: Option<String>,
+    /// Optional URL override for downloading the MobileSAM encoder ONNX model.
+    #[serde(default)]
+    pub sam_encoder_model_url: Option<String>,
+    /// Optional URL override for downloading the MobileSAM decoder ONNX model.
+    #[serde(default)]
+    pub sam_decoder_model_url: Option<String>,
 }
 
 fn default_image_editor() -> String {
@@ -196,6 +212,8 @@ impl Default for ImageConfig {
             lama_model_url: None,
             rmbg_model_url: None,
             depth_model_url: None,
+            sam_encoder_model_url: None,
+            sam_decoder_model_url: None,
         }
     }
 }
@@ -681,6 +699,24 @@ impl AppConfig {
             .or(self.image.depth_model_url.as_deref())
             .unwrap_or(DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL)
     }
+
+    /// URL for downloading the MobileSAM encoder ONNX model.
+    pub fn sam_encoder_model_url(&self) -> &str {
+        self.ai_models
+            .sam_encoder_url
+            .as_deref()
+            .or(self.image.sam_encoder_model_url.as_deref())
+            .unwrap_or(DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL)
+    }
+
+    /// URL for downloading the MobileSAM decoder ONNX model.
+    pub fn sam_decoder_model_url(&self) -> &str {
+        self.ai_models
+            .sam_decoder_url
+            .as_deref()
+            .or(self.image.sam_decoder_model_url.as_deref())
+            .unwrap_or(DEFAULT_MOBILE_SAM_DECODER_MODEL_URL)
+    }
 }
 
 /// Finds the active config file path, prioritizing local `config.toml` if present.
@@ -916,6 +952,14 @@ triangle_limit = 2500
             default_cfg.depth_model_url(),
             DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL
         );
+        assert_eq!(
+            default_cfg.sam_encoder_model_url(),
+            DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL
+        );
+        assert_eq!(
+            default_cfg.sam_decoder_model_url(),
+            DEFAULT_MOBILE_SAM_DECODER_MODEL_URL
+        );
 
         // Test overrides under [ai_models]
         let ai_models_toml = r#"
@@ -923,6 +967,8 @@ triangle_limit = 2500
 lama_url = "https://custom.mirror/lama.onnx"
 feynobg_url = "https://custom.mirror/feynobg.onnx"
 depth_url = "https://custom.mirror/depth.onnx"
+sam_encoder_url = "https://custom.mirror/sam_enc.onnx"
+sam_decoder_url = "https://custom.mirror/sam_dec.onnx"
 "#;
         let ai_cfg: AppConfig = toml::from_str(ai_models_toml).unwrap();
         assert_eq!(ai_cfg.lama_model_url(), "https://custom.mirror/lama.onnx");
@@ -935,6 +981,14 @@ depth_url = "https://custom.mirror/depth.onnx"
             "https://custom.mirror/feynobg.onnx"
         );
         assert_eq!(ai_cfg.depth_model_url(), "https://custom.mirror/depth.onnx");
+        assert_eq!(
+            ai_cfg.sam_encoder_model_url(),
+            "https://custom.mirror/sam_enc.onnx"
+        );
+        assert_eq!(
+            ai_cfg.sam_decoder_model_url(),
+            "https://custom.mirror/sam_dec.onnx"
+        );
 
         // Test overrides under [image]
         let image_toml = r#"
@@ -942,11 +996,21 @@ depth_url = "https://custom.mirror/depth.onnx"
 lama_model_url = "https://image.mirror/lama.onnx"
 rmbg_model_url = "https://image.mirror/rmbg.onnx"
 depth_model_url = "https://image.mirror/depth.onnx"
+sam_encoder_model_url = "https://image.mirror/sam_enc.onnx"
+sam_decoder_model_url = "https://image.mirror/sam_dec.onnx"
 "#;
         let img_cfg: AppConfig = toml::from_str(image_toml).unwrap();
         assert_eq!(img_cfg.lama_model_url(), "https://image.mirror/lama.onnx");
         assert_eq!(img_cfg.rmbg_model_url(), "https://image.mirror/rmbg.onnx");
         assert_eq!(img_cfg.depth_model_url(), "https://image.mirror/depth.onnx");
+        assert_eq!(
+            img_cfg.sam_encoder_model_url(),
+            "https://image.mirror/sam_enc.onnx"
+        );
+        assert_eq!(
+            img_cfg.sam_decoder_model_url(),
+            "https://image.mirror/sam_dec.onnx"
+        );
 
         // Test [ai_models] taking precedence over [image]
         let both_toml = r#"

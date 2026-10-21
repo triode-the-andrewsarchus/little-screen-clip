@@ -12,8 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::onnx_runtime::{
-    MOBILE_SAM_DECODER_MODEL_NAME, MOBILE_SAM_DECODER_MODEL_URL, MOBILE_SAM_ENCODER_MODEL_NAME,
-    MOBILE_SAM_ENCODER_MODEL_URL, ensure_model_with_url, get_ort_environment,
+    MOBILE_SAM_DECODER_MODEL_NAME, MOBILE_SAM_ENCODER_MODEL_NAME, get_ort_environment,
 };
 
 /// Pure-Rust ONNX Runtime session for Segment Anything (MobileSAM).
@@ -52,10 +51,8 @@ impl NativeSamSession {
     }
 
     pub fn load_default() -> Result<Self, String> {
-        let enc_path =
-            ensure_model_with_url(MOBILE_SAM_ENCODER_MODEL_NAME, MOBILE_SAM_ENCODER_MODEL_URL)?;
-        let dec_path =
-            ensure_model_with_url(MOBILE_SAM_DECODER_MODEL_NAME, MOBILE_SAM_DECODER_MODEL_URL)?;
+        let enc_path = crate::onnx_runtime::ensure_model(MOBILE_SAM_ENCODER_MODEL_NAME, None)?;
+        let dec_path = crate::onnx_runtime::ensure_model(MOBILE_SAM_DECODER_MODEL_NAME, None)?;
         Self::new(&enc_path, &dec_path)
     }
 
