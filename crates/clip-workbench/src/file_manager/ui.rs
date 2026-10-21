@@ -91,9 +91,18 @@ impl FileManager {
                 file_clipboard,
             );
         });
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_secs(1));
-        ui.ctx().request_repaint_after(if self.shelf.open {
+        self.schedule_repaints(ui.ctx());
+    }
+
+    fn schedule_repaints(&self, ctx: &egui::Context) {
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        if let Some(last) = &self.last_status {
+            let elapsed = last.timestamp.elapsed();
+            if elapsed < super::STATUS_MIN_DURATION {
+                ctx.request_repaint_after(super::STATUS_MIN_DURATION - elapsed);
+            }
+        }
+        ctx.request_repaint_after(if self.shelf.open {
             std::time::Duration::from_millis(500)
         } else {
             std::time::Duration::from_secs(3)
@@ -110,8 +119,7 @@ impl FileManager {
                 branch.expanded && branch.directory.is_none() && branch.error.is_none()
             })
         {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(50));
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
 
@@ -134,12 +142,17 @@ impl FileManager {
                     self.shelf_ui(ui, palette);
                 });
         }
+        let last_active = self
+            .last_status
+            .as_ref()
+            .is_some_and(|status| status.is_active(super::STATUS_MIN_DURATION));
         if self.filesystem_busy()
             || self.fuse_mounts.busy()
             || self.mounts.busy()
             || self.error.is_some()
             || self.transfers.has_status()
             || self.edits.report.is_some()
+            || last_active
             || self
                 .directory
                 .as_ref()
@@ -436,7 +449,17 @@ impl FileManager {
         )
     }
 
-    fn status(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+    fn has_active_status(&self) -> bool {
+        self.error.is_some()
+            || self.edits.report.is_some()
+            || self.pending.is_some()
+            || self.fuse_mounts.status_text().is_some()
+            || self.mounts.status_text().is_some()
+            || self.edit_busy()
+            || self.transfers.has_status()
+    }
+
+    fn pending_status_ui(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             if let Some(request) = &self.pending {
                 ui.spinner();
@@ -448,7 +471,7 @@ impl FileManager {
                     self.pending = None;
                     self.address = display_path(self.path());
                     if self.directory.is_none() {
-                        self.error = Some("Opening cancelled. Enter another path or retry.".into());
+                        self.set_error("Opening cancelled. Enter another path or retry.");
                     }
                 }
             }
@@ -461,19 +484,66 @@ impl FileManager {
                 ui.add(egui::Label::new(mount_status).truncate(true));
             }
         });
-        if let Some(error) = &self.error {
-            let retry = ui
-                .horizontal_wrapped(|ui| {
-                    ui.add(Icon::Alert.label(egui::RichText::new(error).color(colors.danger)));
-                    ui.small_button("Retry").clicked()
-                })
-                .inner;
-            if retry {
-                self.retry();
-            }
+    }
+
+    fn error_status_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+        let Some(error) = &self.error else {
+            return;
+        };
+        if self.last_status.as_ref().map(|s| &s.text) != Some(error) {
+            self.last_status = Some(super::LastStatus::new(Icon::Alert, error.clone(), true));
         }
+        let (retry, dismiss) = ui
+            .horizontal_wrapped(|ui| {
+                ui.add(Icon::Alert.label(egui::RichText::new(error).color(colors.danger)));
+                let retry = ui.small_button("Retry").clicked();
+                let dismiss = ui.small_button("Dismiss").clicked();
+                (retry, dismiss)
+            })
+            .inner;
+        if retry {
+            self.retry();
+        }
+        if dismiss {
+            self.clear_status();
+        }
+    }
+
+    fn last_status_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+        if self.has_active_status() {
+            return;
+        }
+        let Some(last) = &self.last_status else {
+            return;
+        };
+        if !last.is_active(super::STATUS_MIN_DURATION) {
+            return;
+        }
+        let color = if last.is_error {
+            colors.danger
+        } else {
+            colors.text_secondary
+        };
+        let dismiss = ui
+            .horizontal_wrapped(|ui| {
+                ui.add(
+                    last.icon
+                        .label(egui::RichText::new(&last.text).color(color)),
+                );
+                ui.small_button("Dismiss").clicked()
+            })
+            .inner;
+        if dismiss {
+            self.clear_status();
+        }
+    }
+
+    fn status(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+        self.pending_status_ui(ui);
+        self.error_status_ui(ui, colors);
         self.edit_status(ui, colors);
         self.transfer_status(ui, colors);
+        self.last_status_ui(ui, colors);
         if let Some(directory) = &self.directory
             && directory.skipped > 0
         {
@@ -538,10 +608,20 @@ impl FileManager {
             self.navigate(folder, Navigation::New);
         }
         if let Some((binary_path, writable)) = actions.mount_binary {
+            let label = binary_path
+                .file_name()
+                .map(|name| name.to_string_lossy())
+                .unwrap_or_default();
+            self.set_status(
+                Icon::Hourglass,
+                format!("Mounting '{label}' via fuse-binwalk…"),
+                false,
+            );
             self.fuse_mounts
                 .request_mount(binary_path, writable, super::BackgroundJobs::global());
         }
         if let Some(mount_point) = actions.unmount_binary {
+            self.set_status(Icon::Hourglass, "Unmounting binary contents…", false);
             self.fuse_mounts
                 .request_unmount(mount_point, super::BackgroundJobs::global());
         }
@@ -1558,16 +1638,20 @@ mod tests {
         browser.index = Some(1);
 
         let ctx = egui::Context::default();
-        let mut raw = egui::RawInput::default();
-        raw.events.push(egui::Event::PointerButton {
-            pos: pos2(20.0, 20.0),
-            button: egui::PointerButton::Extra1,
-            pressed: true,
-            modifiers: Modifiers::NONE,
-        });
-        let _ = ctx.run(raw, |ctx| {
-            browser.navigation_shortcuts(ctx);
-        });
+        let test_nav = |browser: &mut FileManager, button: egui::PointerButton| {
+            let mut raw = egui::RawInput::default();
+            raw.events.push(egui::Event::PointerButton {
+                pos: pos2(20.0, 20.0),
+                button,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            });
+            let _ = ctx.run(raw, |ctx| {
+                browser.navigation_shortcuts(ctx);
+            });
+        };
+
+        test_nav(&mut browser, egui::PointerButton::Extra1);
         assert_eq!(
             browser.pending.as_ref().map(|req| &req.path),
             Some(&first),
@@ -1576,16 +1660,7 @@ mod tests {
         browser.index = Some(0);
         browser.pending = None;
 
-        let mut raw = egui::RawInput::default();
-        raw.events.push(egui::Event::PointerButton {
-            pos: pos2(20.0, 20.0),
-            button: egui::PointerButton::Extra2,
-            pressed: true,
-            modifiers: Modifiers::NONE,
-        });
-        let _ = ctx.run(raw, |ctx| {
-            browser.navigation_shortcuts(ctx);
-        });
+        test_nav(&mut browser, egui::PointerButton::Extra2);
         assert_eq!(
             browser.pending.as_ref().map(|req| &req.path),
             Some(&second),

@@ -38,10 +38,20 @@ impl FileManager {
             self.navigate(path, Navigation::New);
         }
         if let Some(entry) = mount_target {
+            self.set_status(
+                Icon::Hourglass,
+                format!("Mounting '{}'…", entry.label),
+                false,
+            );
             self.mounts
                 .request_mount(&entry, super::super::BackgroundJobs::global());
         }
         if let Some(entry) = unmount_target {
+            self.set_status(
+                Icon::Hourglass,
+                format!("Unmounting '{}'…", entry.label),
+                false,
+            );
             self.mounts
                 .request_unmount(&entry, super::super::BackgroundJobs::global());
         }

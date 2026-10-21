@@ -1451,3 +1451,51 @@ fn bookmark_menu_requires_a_nonempty_selection_of_only_folders() {
     browser.select(file);
     assert!(browser.selected_bookmark_folders().is_none());
 }
+
+#[test]
+fn status_bar_retains_last_status_for_at_least_fifteen_seconds() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut browser, jobs) = loaded(directory.path());
+
+    assert!(browser.last_status.is_none());
+
+    browser.set_status(Icon::Drive, "Mounted '/media/drive'", false);
+    let status = browser.last_status.as_ref().expect("status should be set");
+    assert_eq!(status.icon, Icon::Drive);
+    assert_eq!(status.text, "Mounted '/media/drive'");
+    assert!(!status.is_error);
+    assert!(status.is_active(STATUS_MIN_DURATION));
+
+    browser.tick(&jobs);
+    assert!(browser.last_status.is_some());
+
+    if let Some(status) = &mut browser.last_status {
+        status.timestamp -= Duration::from_secs(16);
+    }
+    assert!(
+        !browser
+            .last_status
+            .as_ref()
+            .unwrap()
+            .is_active(STATUS_MIN_DURATION)
+    );
+
+    browser.tick(&jobs);
+    assert!(browser.last_status.is_none());
+}
+
+#[test]
+fn status_dismiss_clears_active_status_and_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut browser, _jobs) = loaded(directory.path());
+
+    browser.set_error("Failed to read disk");
+    assert!(browser.error.is_some());
+    assert!(browser.last_status.is_some());
+    assert!(browser.last_status.as_ref().unwrap().is_error);
+
+    browser.clear_status();
+    assert!(browser.error.is_none());
+    assert!(browser.last_status.is_none());
+    assert!(browser.edits.report.is_none());
+}

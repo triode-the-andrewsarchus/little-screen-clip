@@ -49,6 +49,33 @@ use filesystem::{Directory, display_path, parse_address, read_directory};
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use tree::FolderTree;
 
+use crate::icons::Icon;
+
+pub(crate) const STATUS_MIN_DURATION: Duration = Duration::from_secs(15);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LastStatus {
+    pub icon: Icon,
+    pub text: String,
+    pub is_error: bool,
+    pub timestamp: std::time::Instant,
+}
+
+impl LastStatus {
+    pub fn new(icon: Icon, text: impl Into<String>, is_error: bool) -> Self {
+        Self {
+            icon,
+            text: text.into(),
+            is_error,
+            timestamp: std::time::Instant::now(),
+        }
+    }
+
+    pub fn is_active(&self, duration: Duration) -> bool {
+        self.timestamp.elapsed() < duration
+    }
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 enum BrowserView {
     #[default]
@@ -198,6 +225,7 @@ pub(crate) struct FileManager {
     music_selection: Option<ui::music::MusicRange>,
     fuse_mounts: fuse_binwalk::MountManager,
     mounts: mounts::Mounts,
+    pub(crate) last_status: Option<LastStatus>,
 }
 
 impl Default for FileManager {
@@ -269,7 +297,24 @@ impl FileManager {
             music_selection: None,
             fuse_mounts: Default::default(),
             mounts: mounts::Mounts::new(),
+            last_status: None,
         }
+    }
+
+    pub(crate) fn set_status(&mut self, icon: Icon, text: impl Into<String>, is_error: bool) {
+        self.last_status = Some(LastStatus::new(icon, text, is_error));
+    }
+
+    pub(crate) fn set_error(&mut self, error: impl Into<String>) {
+        let text = error.into();
+        self.set_status(Icon::Alert, text.clone(), true);
+        self.error = Some(text);
+    }
+
+    pub(crate) fn clear_status(&mut self) {
+        self.last_status = None;
+        self.error = None;
+        self.edits.report = None;
     }
 
     fn location(&self) -> Option<&Location> {
@@ -349,7 +394,7 @@ impl FileManager {
             Err(error) => {
                 self.pending = None;
                 self.failed = None;
-                self.error = Some(error);
+                self.set_error(error);
             }
         }
     }
@@ -370,9 +415,18 @@ impl FileManager {
     }
 
     fn tick(&mut self, jobs: &BackgroundJobs) {
+        if self
+            .last_status
+            .as_ref()
+            .is_some_and(|status| !status.is_active(STATUS_MIN_DURATION))
+        {
+            self.last_status = None;
+            self.edits.report = None;
+        }
         self.shelf.tick();
         self.bookmarks.tick(jobs);
         if let Some(text) = self.bookmarks.report.take() {
+            self.set_status(Icon::Alert, text.clone(), true);
             self.edits.report = Some(edits::EditReport { text, failed: true });
         }
         if self.directory.is_none() && self.pending.is_none() && self.error.is_none() {
@@ -394,7 +448,7 @@ impl FileManager {
             match result {
                 Ok(directory) => self.commit(directory, request.navigation),
                 Err(error) => {
-                    self.error = Some(format!(
+                    self.set_error(format!(
                         "Cannot open {}: {error}",
                         display_path(&request.path)
                     ));
@@ -446,20 +500,25 @@ impl FileManager {
             mounts::MountEvent::Mounted(mount_point) => {
                 fuse_binwalk::refresh_cached_mount_table();
                 self.navigate(mount_point.clone(), Navigation::New);
+                let text = format!("Mounted '{}'", display_path(&mount_point));
+                self.set_status(Icon::Drive, text.clone(), false);
                 self.edits.report = Some(edits::EditReport {
-                    text: format!("Mounted '{}'", display_path(&mount_point)),
+                    text,
                     failed: false,
                 });
             }
             mounts::MountEvent::Unmounted(mount_point) => {
                 fuse_binwalk::refresh_cached_mount_table();
                 self.navigate_outside(&mount_point);
+                let text = format!("Unmounted '{}'", display_path(&mount_point));
+                self.set_status(Icon::Eject, text.clone(), false);
                 self.edits.report = Some(edits::EditReport {
-                    text: format!("Unmounted '{}'", display_path(&mount_point)),
+                    text,
                     failed: false,
                 });
             }
             mounts::MountEvent::Error(text) => {
+                self.set_status(Icon::Alert, text.clone(), true);
                 self.edits.report = Some(edits::EditReport { text, failed: true });
             }
         }
@@ -482,19 +541,24 @@ impl FileManager {
                     .unwrap_or_default()
                     .to_string_lossy();
                 let mode_str = if writable { "writable" } else { "read-only" };
+                let text = format!("Mounted '{name}' ({mode_str}) via fuse-binwalk");
+                self.set_status(Icon::BinaryDiff, text.clone(), false);
                 self.edits.report = Some(edits::EditReport {
-                    text: format!("Mounted '{name}' ({mode_str}) via fuse-binwalk"),
+                    text,
                     failed: false,
                 });
             }
             fuse_binwalk::MountOutcome::Unmounted { mount_point } => {
                 self.navigate_outside(&mount_point);
+                let text = "Unmounted binary contents".to_string();
+                self.set_status(Icon::Eject, text.clone(), false);
                 self.edits.report = Some(edits::EditReport {
-                    text: "Unmounted binary contents".into(),
+                    text,
                     failed: false,
                 });
             }
             fuse_binwalk::MountOutcome::Failed(text) => {
+                self.set_status(Icon::Alert, text.clone(), true);
                 self.edits.report = Some(edits::EditReport { text, failed: true });
             }
         }

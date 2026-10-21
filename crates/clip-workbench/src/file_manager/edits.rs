@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use super::filesystem::decode_path;
 use super::{BackgroundJobs, FileManager, JobError, Navigation, display_path};
+use crate::icons::Icon;
 
 #[derive(Clone, Debug)]
 pub(super) enum NamingAction {
@@ -113,10 +114,9 @@ impl FileManager {
 
     pub(super) fn name_content(&mut self, content: super::content::Content, parent: PathBuf) {
         if self.edits.dialog.is_some() || self.edit_busy() {
-            self.edits.report = Some(EditReport {
-                text: "Finish the current naming operation before pasting content.".into(),
-                failed: true,
-            });
+            let text = "Finish the current naming operation before pasting content.".to_string();
+            self.set_status(Icon::Alert, text.clone(), true);
+            self.edits.report = Some(EditReport { text, failed: true });
             return;
         }
         self.edits.dialog = Some(NameDialog {
@@ -237,16 +237,17 @@ impl FileManager {
                 {
                     self.select(path.clone());
                 }
+                let text = format!("{title}: {}", display_path(&path));
+                self.set_status(Icon::Folder, text.clone(), false);
                 self.edits.report = Some(EditReport {
-                    text: format!("{title}: {}", display_path(&path)),
+                    text,
                     failed: false,
                 });
             }
             Err(error) => {
-                self.edits.report = Some(EditReport {
-                    text: format!("{title} failed: {error}"),
-                    failed: true,
-                });
+                let text = format!("{title} failed: {error}");
+                self.set_status(Icon::Alert, text.clone(), true);
+                self.edits.report = Some(EditReport { text, failed: true });
                 // Keep the captured destination and proposed name available for
                 // correction. A failed filesystem operation is never retried automatically.
                 self.edits.dialog = Some(NameDialog {

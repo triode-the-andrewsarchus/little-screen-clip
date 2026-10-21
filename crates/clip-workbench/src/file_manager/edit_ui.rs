@@ -123,7 +123,7 @@ impl FileManager {
                 })
                 .inner;
             if dismiss {
-                self.edits.report = None;
+                self.clear_status();
             }
         }
     }
