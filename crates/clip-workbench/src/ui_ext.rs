@@ -1153,24 +1153,6 @@ pub fn is_zenity_available() -> bool {
 
 static SHARED_AUDIO_SINK: std::sync::LazyLock<Option<rodio::stream::MixerDeviceSink>> =
     std::sync::LazyLock::new(|| {
-        if let Ok(builder) = rodio::stream::DeviceSinkBuilder::from_default_device() {
-            if let Ok(mut s) = builder
-                .with_buffer_size(rodio::cpal::BufferSize::Fixed(512))
-                .open_stream()
-            {
-                s.log_on_drop(false);
-                return Some(s);
-            }
-        }
-        if let Ok(builder) = rodio::stream::DeviceSinkBuilder::from_default_device() {
-            if let Ok(mut s) = builder
-                .with_buffer_size(rodio::cpal::BufferSize::Fixed(1024))
-                .open_stream()
-            {
-                s.log_on_drop(false);
-                return Some(s);
-            }
-        }
         rodio::stream::DeviceSinkBuilder::open_default_sink()
             .ok()
             .map(|mut s| {

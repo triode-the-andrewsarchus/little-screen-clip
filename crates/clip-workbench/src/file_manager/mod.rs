@@ -335,6 +335,7 @@ impl FileManager {
     }
 
     fn stop_previews(&mut self) {
+        self.constellation.stop_playback();
         self.music.stop();
         self.midi.stop();
     }

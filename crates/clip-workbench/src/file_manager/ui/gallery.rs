@@ -31,6 +31,7 @@ impl FileManager {
         self.restore_scroll = true;
     }
     pub(in crate::file_manager) fn retire_media_previews(&mut self) {
+        self.constellation.stop_playback();
         self.midi.stop();
         self.gallery_layout.retire();
         self.video_previews.clear();

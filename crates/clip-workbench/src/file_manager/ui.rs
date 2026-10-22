@@ -222,8 +222,8 @@ impl FileManager {
         );
 
         if let Some(p) = sample_to_play {
-            self.music.stop();
-            self.constellation.play_audition_sample(&p);
+            self.constellation.stop_playback();
+            self.music.play(&p);
         }
         if let Some(p) = sample_to_select {
             self.select(p);
