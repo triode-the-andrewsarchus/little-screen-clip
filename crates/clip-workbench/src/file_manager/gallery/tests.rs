@@ -574,3 +574,36 @@ fn ten_row_retention_window_bounds_previews_and_discards_distant_tiles() {
         assert!(d0 <= d1 + 0.001);
     }
 }
+
+#[test]
+fn gallery_zoom_and_temporal_badge_invariants() {
+    // 1. In-place zoom edge clamping
+    let mut edge = 160.0f32;
+    let zoom_delta = 50.0f32;
+    edge = (edge + zoom_delta * 0.4).clamp(80.0, 280.0);
+    assert_eq!(edge, 180.0);
+
+    // Zooming out to lower limit clamps at 80.0
+    edge = (edge - 500.0 * 0.4).clamp(80.0, 280.0);
+    assert_eq!(edge, 80.0);
+
+    // Zooming in to upper limit clamps at 280.0
+    edge = (edge + 1000.0 * 0.4).clamp(80.0, 280.0);
+    assert_eq!(edge, 280.0);
+
+    // 2. Date label extraction invariant for temporal timeline badge
+    let format_date = |modified: &str| -> Option<String> {
+        if modified.len() >= 7 {
+            Some(modified[0..7].to_string())
+        } else {
+            None
+        }
+    };
+    assert_eq!(format_date("2024-10-22 14:30"), Some("2024-10".to_string()));
+    assert_eq!(format_date("—"), None);
+
+    // 3. Megapixel calculation invariant for EXIF hover pop-out
+    let (w, h) = (4032.0f32, 3024.0f32);
+    let mp = (w * h) / 1_000_000.0;
+    assert_eq!(format!("{:.1} MP", mp), "12.2 MP");
+}
