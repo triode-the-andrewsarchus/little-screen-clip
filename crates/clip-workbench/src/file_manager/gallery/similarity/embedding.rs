@@ -51,16 +51,18 @@ pub fn project_features_to_2d(features: &[Vec<f32>]) -> Vec<(f32, f32)> {
         return vec![(0.0, 0.0)];
     }
 
-    let d = features[0].len();
+    let d = features.iter().map(|f| f.len()).max().unwrap_or(0);
     if d == 0 {
         return vec![(0.0, 0.0); n];
     }
 
     if n == 2 {
-        let diff: f32 = features[0]
-            .iter()
-            .zip(features[1].iter())
-            .map(|(a, b)| (a - b).powi(2))
+        let diff: f32 = (0..d)
+            .map(|j| {
+                let a = features[0].get(j).copied().unwrap_or(0.0);
+                let b = features[1].get(j).copied().unwrap_or(0.0);
+                (a - b).powi(2)
+            })
             .sum();
         if diff < 1e-6 {
             return vec![(-0.5, 0.0), (0.5, 0.0)];
@@ -71,7 +73,7 @@ pub fn project_features_to_2d(features: &[Vec<f32>]) -> Vec<(f32, f32)> {
     // 1. Compute per-feature mean
     let mut means = vec![0.0f32; d];
     for feat in features {
-        for (j, &val) in feat.iter().enumerate().take(d) {
+        for (j, &val) in feat.iter().enumerate() {
             means[j] += val;
         }
     }

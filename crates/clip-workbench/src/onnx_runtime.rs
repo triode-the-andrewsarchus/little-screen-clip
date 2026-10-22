@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 pub use little_clip_core::config::{
     DEFAULT_BIG_LAMA_MODEL_URL, DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL,
     DEFAULT_FEYNOBG_FP16_MODEL_URL, DEFAULT_MOBILE_SAM_DECODER_MODEL_URL,
-    DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL,
+    DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL, DEFAULT_SIGLIP2_GIANT_MODEL_URL,
 };
 
 pub const BIG_LAMA_MODEL_NAME: &str = "big-lama.onnx";
@@ -24,6 +24,9 @@ pub const MOBILE_SAM_ENCODER_MODEL_URL: &str = DEFAULT_MOBILE_SAM_ENCODER_MODEL_
 
 pub const MOBILE_SAM_DECODER_MODEL_NAME: &str = "mobile_sam_decoder.onnx";
 pub const MOBILE_SAM_DECODER_MODEL_URL: &str = DEFAULT_MOBILE_SAM_DECODER_MODEL_URL;
+
+pub const SIGLIP2_GIANT_MODEL_NAME: &str = "siglip2-giant-vision.onnx";
+pub const SIGLIP2_GIANT_MODEL_URL: &str = DEFAULT_SIGLIP2_GIANT_MODEL_URL;
 
 /// Get or initialize the global ONNX Runtime environment.
 ///
@@ -64,6 +67,7 @@ pub fn resolve_model_url(model_name: &str, url_override: Option<&str>) -> String
         DEPTH_ANYTHING_V2_MODEL_NAME => config.depth_model_url().to_string(),
         MOBILE_SAM_ENCODER_MODEL_NAME => config.sam_encoder_model_url().to_string(),
         MOBILE_SAM_DECODER_MODEL_NAME => config.sam_decoder_model_url().to_string(),
+        SIGLIP2_GIANT_MODEL_NAME => config.siglip2_giant_model_url().to_string(),
         _ => String::new(),
     }
 }
@@ -77,6 +81,7 @@ pub fn expected_model_size(model_name: &str) -> Option<u64> {
         "rmbg-1.4.onnx" => Some(176_153_355),
         MOBILE_SAM_ENCODER_MODEL_NAME => Some(28_157_093),
         MOBILE_SAM_DECODER_MODEL_NAME => Some(16_501_323),
+        SIGLIP2_GIANT_MODEL_NAME => Some(1_170_827_444),
         _ => None,
     }
 }
@@ -213,6 +218,10 @@ mod tests {
             resolve_model_url(MOBILE_SAM_DECODER_MODEL_NAME, Some(custom)),
             custom
         );
+        assert_eq!(
+            resolve_model_url(SIGLIP2_GIANT_MODEL_NAME, Some(custom)),
+            custom
+        );
     }
 
     #[test]
@@ -236,6 +245,10 @@ mod tests {
         assert_eq!(
             resolve_model_url(MOBILE_SAM_DECODER_MODEL_NAME, None),
             MOBILE_SAM_DECODER_MODEL_URL
+        );
+        assert_eq!(
+            resolve_model_url(SIGLIP2_GIANT_MODEL_NAME, None),
+            DEFAULT_SIGLIP2_GIANT_MODEL_URL
         );
     }
 }

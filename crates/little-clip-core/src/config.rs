@@ -155,6 +155,7 @@ pub const DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL: &str =
     "https://huggingface.co/Acly/MobileSAM/resolve/main/mobile_sam_image_encoder.onnx";
 pub const DEFAULT_MOBILE_SAM_DECODER_MODEL_URL: &str =
     "https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx";
+pub const DEFAULT_SIGLIP2_GIANT_MODEL_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_quantized.onnx";
 
 /// AI/ONNX model download URL overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -181,6 +182,14 @@ pub struct AiModelsConfig {
     /// Optional URL override for downloading the MobileSAM decoder ONNX model.
     #[serde(alias = "sam_decoder_model_url")]
     pub sam_decoder_url: Option<String>,
+    /// Optional URL override for downloading the SigLIP 2 Giant vision encoder ONNX model.
+    #[serde(
+        alias = "siglip2_url",
+        alias = "siglip2_giant_url",
+        alias = "siglip_giant_url",
+        alias = "siglip_url"
+    )]
+    pub siglip2_giant_url: Option<String>,
 }
 
 /// External tool paths for image viewing, editing, and background removal.
@@ -765,6 +774,14 @@ impl AppConfig {
             .or(self.image.sam_decoder_model_url.as_deref())
             .unwrap_or(DEFAULT_MOBILE_SAM_DECODER_MODEL_URL)
     }
+
+    /// URL for downloading the SigLIP 2 Giant vision encoder ONNX model.
+    pub fn siglip2_giant_model_url(&self) -> &str {
+        self.ai_models
+            .siglip2_giant_url
+            .as_deref()
+            .unwrap_or(DEFAULT_SIGLIP2_GIANT_MODEL_URL)
+    }
 }
 
 /// Finds the active config file path, prioritizing local `config.toml` if present.
@@ -1060,6 +1077,10 @@ triangle_limit = 2500
             default_cfg.sam_decoder_model_url(),
             DEFAULT_MOBILE_SAM_DECODER_MODEL_URL
         );
+        assert_eq!(
+            default_cfg.siglip2_giant_model_url(),
+            DEFAULT_SIGLIP2_GIANT_MODEL_URL
+        );
 
         // Test overrides under [ai_models]
         let ai_models_toml = r#"
@@ -1069,6 +1090,7 @@ feynobg_url = "https://custom.mirror/feynobg.onnx"
 depth_url = "https://custom.mirror/depth.onnx"
 sam_encoder_url = "https://custom.mirror/sam_enc.onnx"
 sam_decoder_url = "https://custom.mirror/sam_dec.onnx"
+siglip2_giant_url = "https://custom.mirror/siglip2.onnx"
 "#;
         let ai_cfg: AppConfig = toml::from_str(ai_models_toml).unwrap();
         assert_eq!(ai_cfg.lama_model_url(), "https://custom.mirror/lama.onnx");
@@ -1088,6 +1110,10 @@ sam_decoder_url = "https://custom.mirror/sam_dec.onnx"
         assert_eq!(
             ai_cfg.sam_decoder_model_url(),
             "https://custom.mirror/sam_dec.onnx"
+        );
+        assert_eq!(
+            ai_cfg.siglip2_giant_model_url(),
+            "https://custom.mirror/siglip2.onnx"
         );
 
         // Test overrides under [image]

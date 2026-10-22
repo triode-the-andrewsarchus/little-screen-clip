@@ -201,3 +201,73 @@ fn test_similarity_canvas_initial_fit() {
     assert!(canvas.pan.x >= 0.0);
     assert!(canvas.pan.y >= 0.0);
 }
+
+#[test]
+fn test_siglip_giant_1536d_embedding_and_normalization() {
+    use super::embedding::FeatureVector;
+    use super::siglip::SIGLIP_BATCH_SIZE;
+
+    assert_eq!(SIGLIP_BATCH_SIZE, 8);
+
+    // SigLIP 2 Giant embedding dimension: 1536
+    const D: usize = 1536;
+    let mut features = Vec::new();
+
+    // Group 1: strong signal in dimensions 0..100
+    for i in 0..5 {
+        let mut v = vec![0.0f32; D];
+        for j in 0..100 {
+            v[j] = 1.0 + (i as f32) * 0.02;
+        }
+        let feat = FeatureVector::Dense(v);
+        assert_eq!(feat.dimension(), D);
+        features.push(feat.to_vec());
+    }
+
+    // Group 2: strong signal in dimensions 200..300
+    for i in 0..5 {
+        let mut v = vec![0.0f32; D];
+        for j in 200..300 {
+            v[j] = 1.0 + (i as f32) * 0.02;
+        }
+        let feat = FeatureVector::Dense(v);
+        features.push(feat.to_vec());
+    }
+
+    let coords = super::embedding::project_features_to_2d(&features);
+    assert_eq!(coords.len(), 10);
+
+    let avg1: f32 = coords[0..5].iter().map(|c| c.0).sum::<f32>() / 5.0;
+    let avg2: f32 = coords[5..10].iter().map(|c| c.0).sum::<f32>() / 5.0;
+    assert!(
+        (avg1 - avg2).abs() > 0.5,
+        "1536-dim SigLIP 2 clusters must be distinctly separated"
+    );
+}
+
+#[test]
+fn test_heterogeneous_feature_vector_pca() {
+    use super::embedding::FeatureVector;
+
+    // Mix of 64-bit dhash and 1536-bit dense features
+    let mut features = Vec::new();
+    features.push(FeatureVector::DHash(0x1234_5678_9ABC_DEF0).to_vec());
+    features.push(FeatureVector::DHash(0xFEDC_BA98_7654_3210).to_vec());
+
+    let mut dense1 = vec![0.0f32; 1536];
+    dense1[0] = 1.0;
+    features.push(FeatureVector::Dense(dense1).to_vec());
+
+    let mut dense2 = vec![0.0f32; 1536];
+    dense2[1] = 1.0;
+    features.push(FeatureVector::Dense(dense2).to_vec());
+
+    let coords = super::embedding::project_features_to_2d(&features);
+    assert_eq!(coords.len(), 4);
+    for (x, y) in coords {
+        assert!(x.is_finite());
+        assert!(y.is_finite());
+        assert!(x >= -1.0 && x <= 1.0);
+        assert!(y >= -1.0 && y <= 1.0);
+    }
+}
