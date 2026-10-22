@@ -273,7 +273,7 @@ fn test_heterogeneous_feature_vector_pca() {
 }
 
 #[test]
-fn test_concept_search_grid_splitting() {
+fn test_multi_grid_search_retention_and_chaining() {
     use super::canvas::SimilarityCanvas;
     use super::embedding::FeatureVector;
     use crate::file_manager::filesystem::Entry;
@@ -305,66 +305,115 @@ fn test_concept_search_grid_splitting() {
         });
 
         // 1536-dimensional feature vectors:
-        // Items 0..4 have high signal in dimension 0 (matches concept)
-        // Items 4..12 have high signal in dimension 1 (does not match concept)
+        // Items 0..4 have high signal in dimension 0 (concept "animal")
+        // Items 0..2 also have high signal in dimension 2 (concept "indoors")
+        // Items 4..12 have high signal in dimension 1 (other)
         let mut vec = vec![0.0f32; 1536];
         if i < 4 {
             vec[0] = 1.0;
         } else {
             vec[1] = 1.0;
         }
+        if i < 2 {
+            vec[2] = 1.0;
+        }
         canvas.insert_hash(path, FeatureVector::Dense(vec), 1);
     }
 
-    canvas.entries = entries;
+    canvas.set_entries(entries);
 
-    // Define concept embedding pointing along dimension 0
-    let mut concept = vec![0.0f32; 1536];
-    concept[0] = 1.0;
-    canvas.concept_embedding = Some(concept);
+    // Initial state: Base grid retains all 12 photos
+    assert_eq!(canvas.grids.len(), 1);
+    assert_eq!(canvas.grids[0].id, 0);
+    assert_eq!(canvas.grids[0].indices.len(), 12);
+    assert!(canvas.grids[0].selected_for_search);
 
-    canvas.recompute_layout();
+    // 1. Search for concept "animal" (pointing along dimension 0)
+    let mut animal_concept = vec![0.0f32; 1536];
+    animal_concept[0] = 1.0;
 
-    // Invariants check:
-    assert_eq!(canvas.match_counts, (4, 8));
-    assert!(
-        canvas.split_row_offset > 0,
-        "Second grid must have positive row offset"
-    );
+    let candidate_indices = canvas.grids[0].indices.clone();
+    let grid1_id = canvas.add_search_grid("animal", false, candidate_indices, animal_concept);
 
-    let split_row = canvas.split_row_offset;
+    assert_eq!(canvas.grids.len(), 2);
+    // Base grid STILL retains all 12 photos!
+    assert_eq!(canvas.grids[0].indices.len(), 12);
+    // Grid 1 contains exactly the 4 matching photos
+    assert_eq!(canvas.grids[1].id, grid1_id);
+    assert_eq!(canvas.grids[1].indices.len(), 4);
+    assert_eq!(canvas.grids[1].indices, vec![0, 1, 2, 3]);
 
-    // Verify matching items (0..4) are placed strictly above split_row
-    let mut seen_cells = std::collections::HashSet::new();
-    for p in &canvas.placements {
+    // Grid 1 was automatically selected for next search, Base grid deselected
+    assert!(!canvas.grids[0].selected_for_search);
+    assert!(canvas.grids[1].selected_for_search);
+
+    // Verify layout placements: Grid 0 rows < Grid 1 row_offset
+    let base_max_row = canvas.grids[0].row_offset + canvas.grids[0].grid_rows;
+    assert!(canvas.grids[1].row_offset >= base_max_row);
+
+    // 2. Chained subset search: search for "indoors" within selected Grid 1 ("animal")
+    let mut indoors_concept = vec![0.0f32; 1536];
+    indoors_concept[2] = 1.0;
+
+    // Candidates are collected from selected_for_search grids (which is Grid 1)
+    let chained_candidates: Vec<usize> = canvas
+        .grids
+        .iter()
+        .filter(|g| g.selected_for_search)
+        .flat_map(|g| g.indices.iter().copied())
+        .collect();
+    assert_eq!(chained_candidates, vec![0, 1, 2, 3]);
+
+    let grid2_id = canvas.add_search_grid("indoors", false, chained_candidates, indoors_concept);
+
+    assert_eq!(canvas.grids.len(), 3);
+    // Base grid still retains all 12 photos!
+    assert_eq!(canvas.grids[0].indices.len(), 12);
+    // Grid 1 still has 4 photos
+    assert_eq!(canvas.grids[1].indices.len(), 4);
+    // Grid 2 has the subset (items 0 and 1, which have indoors signal)
+    assert_eq!(canvas.grids[2].id, grid2_id);
+    assert_eq!(canvas.grids[2].indices.len(), 2);
+    assert_eq!(canvas.grids[2].indices, vec![0, 1]);
+
+    // 3. Inverted search: search for "!animal" from base grid (all photos)
+    let mut inv_animal_concept = vec![0.0f32; 1536];
+    inv_animal_concept[0] = 1.0;
+
+    let base_candidates = canvas.grids[0].indices.clone();
+    let grid3_id = canvas.add_search_grid("!animal", true, base_candidates, inv_animal_concept);
+
+    assert_eq!(canvas.grids.len(), 4);
+    // Inverted search should match items 4..12 (items without animal signal in dim 0)
+    assert_eq!(canvas.grids[3].id, grid3_id);
+    assert_eq!(canvas.grids[3].indices.len(), 8);
+    for idx in &canvas.grids[3].indices {
         assert!(
-            seen_cells.insert((p.col, p.row)),
-            "Duplicate cell at ({}, {})",
-            p.col,
-            p.row
+            *idx >= 4,
+            "Inverted search must only match non-animal items, got {idx}"
         );
-        if p.index < 4 {
-            assert!(
-                p.row < split_row,
-                "Matching item {} should be in row < {}, got {}",
-                p.index,
-                split_row,
-                p.row
-            );
-        } else {
-            assert!(
-                p.row >= split_row,
-                "Non-matching item {} should be in row >= {}, got {}",
-                p.index,
-                split_row,
-                p.row
-            );
-        }
     }
 
-    // Now test clearing search restores single grid
-    canvas.clear_search();
-    assert_eq!(canvas.concept_embedding, None);
-    assert_eq!(canvas.match_counts, (0, 0));
-    assert_eq!(canvas.split_row_offset, 0);
+    // 4. Test solo selection (Ctrl+click logic): solo select Grid 0
+    let solo_id = 0;
+    for g in &mut canvas.grids {
+        g.selected_for_search = g.id == solo_id;
+    }
+    assert!(canvas.grids[0].selected_for_search);
+    assert!(!canvas.grids[1].selected_for_search);
+    assert!(!canvas.grids[2].selected_for_search);
+    assert!(!canvas.grids[3].selected_for_search);
+
+    // 5. Test removing a search grid: remove Grid 1
+    canvas.remove_grid(grid1_id);
+    assert_eq!(canvas.grids.len(), 3);
+    assert!(!canvas.grids.iter().any(|g| g.id == grid1_id));
+    assert_eq!(canvas.grids[0].indices.len(), 12);
+
+    // 6. Test clear all searches
+    canvas.clear_all_searches();
+    assert_eq!(canvas.grids.len(), 1);
+    assert_eq!(canvas.grids[0].id, 0);
+    assert_eq!(canvas.grids[0].indices.len(), 12);
+    assert!(canvas.grids[0].selected_for_search);
 }

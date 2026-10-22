@@ -199,9 +199,6 @@ impl FileManager {
                     None
                 };
                 paint_gallery_tile(ui, &response, entry, marked, colors, check_color, preview);
-                if !super::popup_open(ui.ctx()) {
-                    response.clone().on_hover_text(&entry.name);
-                }
                 if entry.directory {
                     targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
                 }
@@ -318,61 +315,124 @@ impl FileManager {
                 Some(&mut self.gallery_previews),
             );
 
-            if !super::popup_open(ui.ctx()) {
-                tile_response.clone().on_hover_text(&entry.name);
-            }
-
             actions.row(ui, &tile_response, entry, selected, can_edit, count);
         }
 
         self.gallery_previews.retain(&visible_paths);
 
-        // Section headers & divider when concept search is active
-        if self.similarity_canvas.concept_embedding.is_some() {
-            let font_id = egui::FontId::proportional(13.0);
-            let matches_count = self.similarity_canvas.match_counts.0;
-            let other_count = self.similarity_canvas.match_counts.1;
+        // Grid header bars and dividers
+        let mut toggle_grid = None;
+        let mut remove_grid = None;
 
-            if matches_count > 0 {
-                let first_tile = self
-                    .similarity_canvas
-                    .tile_screen_rect(canvas_rect.min, 0, 0);
-                ui.painter().text(
-                    pos2(first_tile.min.x, first_tile.min.y - 18.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    format!("✓ Matches ({matches_count})"),
-                    font_id.clone(),
-                    colors.accent,
-                );
-            }
+        for (grid_idx, grid) in self.similarity_canvas.grids.iter().enumerate() {
+            let top_left =
+                self.similarity_canvas
+                    .tile_screen_rect(canvas_rect.min, 0, grid.row_offset);
 
-            if self.similarity_canvas.split_row_offset > 0 && other_count > 0 {
-                let other_tile = self.similarity_canvas.tile_screen_rect(
-                    canvas_rect.min,
-                    0,
-                    self.similarity_canvas.split_row_offset,
-                );
-                let step = (self.similarity_canvas.tile_size + self.similarity_canvas.spacing)
-                    * self.similarity_canvas.zoom;
-                let div_y = other_tile.min.y - step * 0.5;
-                let total_w = (self.similarity_canvas.grid_cols as f32) * step;
+            let step = (self.similarity_canvas.tile_size + self.similarity_canvas.spacing)
+                * self.similarity_canvas.zoom;
 
+            // Divider line between grids
+            if grid_idx > 0 {
+                let div_y = top_left.min.y - step * 0.5;
+                let total_w = (grid.grid_cols.max(1) as f32) * step;
                 ui.painter().line_segment(
                     [
-                        pos2(other_tile.min.x, div_y),
-                        pos2(other_tile.min.x + total_w, div_y),
+                        pos2(top_left.min.x, div_y),
+                        pos2(top_left.min.x + total_w, div_y),
                     ],
                     egui::Stroke::new(1.0, colors.border),
                 );
+            }
 
+            if top_left.min.y < canvas_rect.min.y - 100.0
+                || top_left.min.y > canvas_rect.max.y + 100.0
+            {
+                continue;
+            }
+
+            let bar_rect = Rect::from_min_size(
+                pos2(top_left.min.x, top_left.min.y - 32.0),
+                vec2(400.0, 26.0),
+            );
+
+            ui.allocate_ui_at_rect(bar_rect, |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(colors.panel.gamma_multiply(0.95))
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        if grid.selected_for_search {
+                            colors.accent
+                        } else {
+                            colors.border
+                        },
+                    ))
+                    .rounding(4.0)
+                    .inner_margin(egui::Margin::symmetric(6.0, 3.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let is_ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+                            let btn_label = if grid.selected_for_search {
+                                "☑ Search target"
+                            } else {
+                                "☐ Search target"
+                            };
+                            let btn_resp = ui
+                                .selectable_label(grid.selected_for_search, btn_label)
+                                .on_hover_text(
+                                    "Use this grid as input for next search. Ctrl+click to search ONLY this grid.",
+                                );
+                            if btn_resp.clicked() {
+                                toggle_grid = Some((grid.id, is_ctrl));
+                            }
+
+                            ui.separator();
+
+                            let title_text = if grid.id == 0 {
+                                format!("All photos ({})", grid.indices.len())
+                            } else {
+                                format!("\"{}\" ({})", grid.title, grid.indices.len())
+                            };
+                            ui.label(egui::RichText::new(title_text).strong());
+
+                            if grid.id > 0 {
+                                ui.separator();
+                                if ui
+                                    .small_button("✕")
+                                    .on_hover_text("Remove this search grid")
+                                    .clicked()
+                                {
+                                    remove_grid = Some(grid.id);
+                                }
+                            }
+                        });
+                    });
+            });
+
+            if grid.indices.is_empty() && grid.id > 0 {
+                let msg_pos = pos2(top_left.min.x + 12.0, top_left.min.y + 8.0);
                 ui.painter().text(
-                    pos2(other_tile.min.x, other_tile.min.y - 18.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    format!("Other photos ({other_count})"),
-                    font_id,
-                    colors.text_primary.gamma_multiply(0.7),
+                    msg_pos,
+                    egui::Align2::LEFT_TOP,
+                    "No matching photos found in target grid.",
+                    egui::FontId::proportional(13.0),
+                    colors.text_secondary,
                 );
             }
+        }
+
+        if let Some((id, is_ctrl)) = toggle_grid {
+            if is_ctrl {
+                for g in &mut self.similarity_canvas.grids {
+                    g.selected_for_search = g.id == id;
+                }
+            } else if let Some(g) = self.similarity_canvas.grids.iter_mut().find(|g| g.id == id) {
+                g.selected_for_search = !g.selected_for_search;
+            }
+        }
+
+        if let Some(id) = remove_grid {
+            self.similarity_canvas.remove_grid(id);
         }
 
         // Floating search HUD pill
@@ -394,8 +454,8 @@ impl FileManager {
                                 egui::TextEdit::singleline(
                                     &mut self.similarity_canvas.search_query,
                                 )
-                                .hint_text("Search concept (e.g. cat, nature)…")
-                                .desired_width(180.0),
+                                .hint_text("Search concept (e.g. cat, !dog, indoors)…")
+                                .desired_width(200.0),
                             );
                             if (edit_res.lost_focus()
                                 && ui.input(|i| i.key_pressed(egui::Key::Enter)))
@@ -403,22 +463,36 @@ impl FileManager {
                             {
                                 self.similarity_canvas.trigger_search();
                             }
-                            if !self.similarity_canvas.search_query.is_empty()
-                                || self.similarity_canvas.active_concept.is_some()
-                            {
-                                if ui.small_button("✕").clicked() {
-                                    self.similarity_canvas.clear_search();
+                            let has_searches = self.similarity_canvas.grids.len() > 1;
+                            if !self.similarity_canvas.search_query.is_empty() || has_searches {
+                                if ui
+                                    .small_button("✕")
+                                    .on_hover_text("Clear searches and reset to all photos")
+                                    .clicked()
+                                {
+                                    self.similarity_canvas.clear_all_searches();
                                 }
                             }
                             if self.similarity_canvas.is_searching() {
                                 ui.spinner();
                                 ui.label("Searching…");
-                            } else if self.similarity_canvas.concept_embedding.is_some() {
+                            } else if has_searches {
                                 ui.separator();
+                                let target_grids = self
+                                    .similarity_canvas
+                                    .grids
+                                    .iter()
+                                    .filter(|g| g.selected_for_search)
+                                    .count();
+                                let target_photos: usize = self
+                                    .similarity_canvas
+                                    .grids
+                                    .iter()
+                                    .filter(|g| g.selected_for_search)
+                                    .map(|g| g.indices.len())
+                                    .sum();
                                 ui.label(format!(
-                                    "{} matches · {} other",
-                                    self.similarity_canvas.match_counts.0,
-                                    self.similarity_canvas.match_counts.1
+                                    "{target_grids} target grid(s) ({target_photos} photos)"
                                 ));
                                 ui.separator();
                                 if ui
@@ -523,7 +597,7 @@ fn paint_gallery_tile(
     marked: bool,
     colors: WorkbenchColors,
     check_color: Color32,
-    preview: Option<&mut super::super::previews::EntryPreviews>,
+    mut preview: Option<&mut super::super::previews::EntryPreviews>,
 ) {
     let rect = response.rect;
     ui.painter().rect_filled(
@@ -536,8 +610,19 @@ fn paint_gallery_tile(
         },
     );
     let image_rect = rect.shrink(if marked { 7.0 } else { 0.0 });
-    if let Some(preview) = preview {
+    let (detail, texture_info) = if let Some(ref mut preview) = preview {
         preview.show_gallery(ui, image_rect, entry);
+        if let Some(ready) = preview.listing(entry) {
+            let detail = if !ready.data.detail.is_empty() {
+                Some(ready.data.detail.clone())
+            } else {
+                None
+            };
+            let tex = ready.texture.as_ref().map(|t| (t.id(), t.size_vec2()));
+            (detail, tex)
+        } else {
+            (None, None)
+        }
     } else {
         entry_icon(entry).paint(
             ui.painter(),
@@ -555,7 +640,9 @@ fn paint_gallery_tile(
             &entry.name,
             colors.text_primary,
         );
-    }
+        (None, None)
+    };
+
     if marked {
         let badge = pos2(rect.right() - 18.0, rect.bottom() - 18.0);
         ui.painter().circle_filled(badge, 12.0, colors.accent);
@@ -571,4 +658,57 @@ fn paint_gallery_tile(
             egui::Stroke::new(2.0_f32, colors.focus),
         );
     }
+
+    if !super::popup_open(ui.ctx()) {
+        paint_tile_hover_preview(ui, response, entry, detail.as_deref(), texture_info);
+    }
+}
+
+fn paint_tile_hover_preview(
+    _ui: &Ui,
+    response: &egui::Response,
+    entry: &super::super::filesystem::Entry,
+    detail: Option<&str>,
+    texture_info: Option<(egui::TextureId, egui::Vec2)>,
+) {
+    response.clone().on_hover_ui(|ui| {
+        ui.set_max_width(360.0);
+        if let Some((tex_id, size)) = texture_info {
+            let max_w = 340.0;
+            let max_h = 240.0;
+            let scale = (max_w / size.x.max(1.0))
+                .min(max_h / size.y.max(1.0))
+                .min(1.0);
+            let display_size = size * scale;
+            ui.image((tex_id, display_size));
+            ui.add_space(4.0);
+        }
+        ui.strong(&entry.name);
+        ui.label(
+            egui::RichText::new(entry.path.to_string_lossy().as_ref())
+                .weak()
+                .size(11.0),
+        );
+        ui.horizontal(|ui| {
+            if !entry.size.is_empty() {
+                ui.label(egui::RichText::new(&entry.size).strong().size(12.0));
+            }
+            if let Some(dims) = detail {
+                ui.label(egui::RichText::new(format!("· {dims}")).weak().size(12.0));
+            } else if let Some((_, size)) = texture_info {
+                ui.label(
+                    egui::RichText::new(format!("· {:.0} × {:.0}", size.x, size.y))
+                        .weak()
+                        .size(12.0),
+                );
+            }
+            if !entry.modified.is_empty() {
+                ui.label(
+                    egui::RichText::new(format!("· {}", entry.modified))
+                        .weak()
+                        .size(12.0),
+                );
+            }
+        });
+    });
 }
