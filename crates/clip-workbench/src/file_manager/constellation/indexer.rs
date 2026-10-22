@@ -4,7 +4,6 @@ use super::classifier::classify_sample;
 use super::db::{ConstellationDb, ConstellationSample};
 use rodio::{Decoder, Source};
 use std::collections::VecDeque;
-use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,16 +61,35 @@ pub fn run_indexing(
             return;
         }
 
-        if let Ok(entries) = std::fs::read_dir(&current_dir) {
+        let entries = little_clip_core::kernel_interface::pin_content_directory(&current_dir)
+            .and_then(|directory| {
+                use std::os::fd::AsRawFd;
+                std::fs::read_dir(format!("/proc/self/fd/{}", directory.as_raw_fd()))
+                    .map(|entries| (directory, entries))
+            });
+        let (_directory, entries) = match entries {
+            Ok(entries) => entries,
+            Err(error) => {
+                let _ = sender.send(IndexProgress::Error(format!(
+                    "Cannot scan {}: {error}",
+                    current_dir.display()
+                )));
+                return;
+            }
+        };
+        {
             for entry_res in entries {
                 if is_cancelled() {
                     return;
                 }
                 let Ok(entry) = entry_res else { continue };
-                let p = entry.path();
+                let p = current_dir.join(entry.file_name());
                 let filename = entry.file_name().to_string_lossy().to_string();
 
-                if filename.starts_with('.') || filename.starts_with("._") || filename == "__MACOSX"
+                if filename.starts_with('.')
+                    || filename.starts_with("._")
+                    || filename == "__MACOSX"
+                    || filename == super::sample_pack::PACKS_DIR_NAME
                 {
                     continue;
                 }
@@ -93,12 +111,6 @@ pub fn run_indexing(
     }
 
     let total = audio_paths.len();
-    if total == 0 {
-        let _ = sender.send(IndexProgress::Complete {
-            samples: Vec::new(),
-        });
-        return;
-    }
 
     // 2. Parallel processing of audio files using a scoped worker pool
     let num_workers = std::thread::available_parallelism()
@@ -171,8 +183,10 @@ pub fn run_indexing(
     }
 
     // 3. Save to database
-    if let Ok(db) = ConstellationDb::new() {
-        if let Err(e) = db.save_samples(&folder, &indexed_samples) {
+    {
+        if let Err(e) =
+            ConstellationDb::new().and_then(|db| db.save_samples(&folder, &indexed_samples))
+        {
             let _ = sender.send(IndexProgress::Error(format!(
                 "Failed to save indexed samples to database: {e}"
             )));
@@ -190,7 +204,7 @@ fn process_single_audio_file(
     filename: String,
     root_folder: &Path,
 ) -> Option<ConstellationSample> {
-    let file = File::open(path).ok()?;
+    let file = little_clip_core::kernel_interface::open_content(path, true).ok()?;
     let meta = file.metadata().ok();
     let file_size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
     let mtime = meta
@@ -207,8 +221,12 @@ fn process_single_audio_file(
         return None;
     }
 
-    // Decode first 1.5 seconds into mono f32 samples
-    let max_samples_per_ch = (sample_rate * 1.5) as usize;
+    let duration = decoder
+        .total_duration()
+        .map(|duration| duration.as_secs_f32());
+
+    // Bound acoustic analysis while retaining the full source duration.
+    let max_samples_per_ch = (sample_rate * 3.0) as usize;
     let max_total_samples = max_samples_per_ch * channels;
 
     let mut mono_samples = Vec::with_capacity(max_samples_per_ch);
@@ -248,7 +266,7 @@ fn process_single_audio_file(
         filename,
         category: classification.category,
         confidence: classification.confidence,
-        duration_seconds: classification.duration,
+        duration_seconds: duration.unwrap_or(classification.duration),
         pitch_hz: classification.pitch_hz,
         pitch_clarity: classification.pitch_clarity,
         brightness: classification.brightness,
@@ -278,36 +296,10 @@ mod tests {
     }
 
     #[test]
-    fn test_indexing_real_sample_folder_if_available() {
-        let sample_folder = PathBuf::from("/mnt/rust/music/Music/Samples/BPB Cluster Pack/Samples");
-        if !sample_folder.exists() {
-            return;
-        }
-
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let (sender, receiver) = mpsc::channel();
-
-        run_indexing(sample_folder.clone(), cancelled, sender);
-
-        let mut final_samples = Vec::new();
-        while let Ok(msg) = receiver.recv() {
-            match msg {
-                IndexProgress::Complete { samples } => {
-                    final_samples = samples;
-                    break;
-                }
-                IndexProgress::Error(e) => {
-                    panic!("Indexing error: {e}");
-                }
-                _ => {}
-            }
-        }
-
-        assert!(!final_samples.is_empty(), "Should have indexed samples");
-        println!(
-            "Successfully indexed {} samples from {:?}",
-            final_samples.len(),
-            sample_folder
+    fn rejects_protected_audio_inputs() {
+        assert!(
+            process_single_audio_file(Path::new("/dev/zero"), "zero.wav".into(), Path::new("/dev"))
+                .is_none()
         );
     }
 }

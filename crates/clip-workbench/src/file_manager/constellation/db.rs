@@ -193,7 +193,7 @@ impl ConstellationDb {
     pub fn load_samples(&self, folder: &Path) -> Result<Vec<ConstellationSample>, String> {
         let conn = self.open()?;
         let folder_str = folder.to_string_lossy();
-        let prefix_like = format!("{}%", folder_str);
+        let prefix_like = format!("{}/", folder_str.trim_end_matches('/'));
 
         let mut stmt = conn
             .prepare(
@@ -201,7 +201,7 @@ impl ConstellationDb {
                         duration_seconds, pitch_hz, pitch_clarity, brightness, x, y, file_size, mtime,
                         sample_rate, channels, bit_depth
                  FROM samples
-                 WHERE folder_path = ?1 OR folder_path LIKE ?2",
+                 WHERE folder_path = ?1 OR substr(folder_path, 1, length(?2)) = ?2 ORDER BY file_path",
             )
             .map_err(|e| e.to_string())?;
 
@@ -252,17 +252,17 @@ impl ConstellationDb {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
         let folder_str = folder.to_string_lossy();
-        let prefix_like = format!("{}%", folder_str);
+        let prefix_like = format!("{}/", folder_str.trim_end_matches('/'));
 
         // Clear existing entries for this folder subtree
         tx.execute(
-            "DELETE FROM samples WHERE folder_path = ?1 OR folder_path LIKE ?2",
+            "DELETE FROM samples WHERE folder_path = ?1 OR substr(folder_path, 1, length(?2)) = ?2",
             params![folder_str, prefix_like],
         )
         .map_err(|e| e.to_string())?;
 
         tx.execute(
-            "DELETE FROM indexed_folders WHERE folder_path = ?1 OR folder_path LIKE ?2",
+            "DELETE FROM indexed_folders WHERE folder_path = ?1 OR substr(folder_path, 1, length(?2)) = ?2",
             params![folder_str, prefix_like],
         )
         .map_err(|e| e.to_string())?;
@@ -378,9 +378,10 @@ mod tests {
 
         assert_eq!(db.is_folder_indexed(&test_folder).unwrap(), Some(2));
 
-        let loaded = db
+        let mut loaded = db
             .load_samples(&test_folder)
             .expect("Failed to load samples");
+        loaded.sort_by(|a, b| b.filename.cmp(&a.filename));
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].filename, "punchy_kick.wav");
         assert_eq!(loaded[0].category, SampleCategory::Kick);
@@ -393,6 +394,36 @@ mod tests {
         assert_eq!(loaded[1].sample_rate, 48000);
         assert_eq!(loaded[1].channels, 1);
         assert_eq!(loaded[1].bit_depth, 16);
+
+        for folder in [
+            "/samples/drums-extra",
+            "/samples/drums/sub",
+            "/samples/dr_ms",
+            "/samples/dr%ms",
+        ] {
+            let mut sample = samples[0].clone();
+            sample.folder_path = PathBuf::from(folder);
+            sample.file_path = sample.folder_path.join("kick.wav");
+            db.save_samples(&sample.folder_path, &[sample.clone()])
+                .unwrap();
+        }
+        assert_eq!(db.load_samples(&test_folder).unwrap().len(), 3);
+        assert_eq!(
+            db.load_samples(Path::new("/samples/dr_ms")).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            db.load_samples(Path::new("/samples/dr%ms")).unwrap().len(),
+            1
+        );
+        db.save_samples(&test_folder, &[]).unwrap();
+        assert!(db.load_samples(&test_folder).unwrap().is_empty());
+        assert_eq!(
+            db.is_folder_indexed(Path::new("/samples/drums-extra"))
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(db.load_samples(Path::new("/")).unwrap().len(), 3);
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir_all(&temp_dir);

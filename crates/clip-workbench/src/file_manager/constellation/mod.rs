@@ -230,12 +230,15 @@ impl ConstellationState {
         let cancel_clone = Arc::clone(&cancelled);
         let folder_clone = folder_buf.clone();
 
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name("constellation-indexer".to_string())
             .spawn(move || {
                 run_indexing(folder_clone, cancel_clone, sender);
-            })
-            .ok();
+            });
+        if let Err(error) = worker {
+            self.indexing_status = Some(format!("Cannot start indexer: {error}"));
+            return;
+        }
 
         self.active_job = Some(IndexingJob {
             folder: folder_buf,
@@ -317,6 +320,17 @@ impl ConstellationState {
         }
     }
 
+    /// Retires all audition and layered playback when leaving the view or stopping previews.
+    pub fn stop_playback(&mut self) {
+        if let Some(player) = self.single_audition_player.take() {
+            player.stop();
+        }
+        for player in self.active_players.drain(..) {
+            player.stop();
+        }
+        self.last_hovered_path = None;
+    }
+
     /// Triggers audio playback for a sample slot (all layered samples play simultaneously).
     pub fn trigger_slot(&mut self, slot_idx: usize) {
         if slot_idx >= self.pack_bank.slots.len() {
@@ -361,13 +375,6 @@ impl ConstellationState {
         self.browser_packs = sample_pack::list_saved_packs(root);
     }
 
-    /// Plays an individual audition sample directly with low latency (e.g. when hovering/clicking on the map).
-    pub fn play_audition_sample(&mut self, path: &Path) {
-        if let Some(player) = sample_pack::play_audio_file_direct(path) {
-            self.single_audition_player = Some(player);
-        }
-    }
-
     /// Periodic tick called from the application update loop to receive indexing updates.
     pub fn tick(&mut self) {
         self.poll_hover_previews();
@@ -380,7 +387,16 @@ impl ConstellationState {
         let mut job_done = false;
 
         if let Some(job) = &self.active_job {
-            while let Ok(msg) = job.receiver.try_recv() {
+            loop {
+                let msg = match job.receiver.try_recv() {
+                    Ok(msg) => msg,
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        self.indexing_status = Some("Indexer stopped before completion".into());
+                        job_done = true;
+                        break;
+                    }
+                };
                 match msg {
                     IndexProgress::Scanning { files_found } => {
                         self.indexing_status =
@@ -398,7 +414,14 @@ impl ConstellationState {
                         ));
                     }
                     IndexProgress::Complete { samples, .. } => {
-                        self.samples = samples;
+                        if self.current_indexed_folder.as_ref() == Some(&job.folder) {
+                            self.samples = samples;
+                            self.selected_path = None;
+                            self.last_hovered_path = None;
+                            self.history_trail.clear();
+                            self.hover_previews.clear();
+                            self.pending_hover_path = None;
+                        }
                         self.indexing_status = None;
                         job_done = true;
                         break;
@@ -421,6 +444,43 @@ impl ConstellationState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexing_completion_does_not_replace_another_folder() {
+        let mut state = ConstellationState::default();
+        state.current_indexed_folder = Some(PathBuf::from("/current"));
+        state.selected_path = Some(PathBuf::from("/current/selected.wav"));
+        let (sender, receiver) = mpsc::channel();
+        state.active_job = Some(IndexingJob {
+            folder: PathBuf::from("/old"),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            receiver,
+        });
+        sender
+            .send(IndexProgress::Complete { samples: vec![] })
+            .unwrap();
+        state.tick();
+        assert_eq!(
+            state.selected_path,
+            Some(PathBuf::from("/current/selected.wav"))
+        );
+        assert!(state.active_job.is_none());
+    }
+
+    #[test]
+    fn disconnected_indexer_reports_failure() {
+        let mut state = ConstellationState::default();
+        let (sender, receiver) = mpsc::channel();
+        drop(sender);
+        state.active_job = Some(IndexingJob {
+            folder: PathBuf::from("/old"),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            receiver,
+        });
+        state.tick();
+        assert!(state.active_job.is_none());
+        assert!(state.indexing_status.unwrap().contains("stopped"));
+    }
 
     #[test]
     fn test_history_trail_recording_and_deduplication() {
