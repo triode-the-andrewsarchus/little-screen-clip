@@ -5,6 +5,7 @@ pub use little_clip_core::config::{
     DEFAULT_BIG_LAMA_MODEL_URL, DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL,
     DEFAULT_FEYNOBG_FP16_MODEL_URL, DEFAULT_MOBILE_SAM_DECODER_MODEL_URL,
     DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL, DEFAULT_SIGLIP2_GIANT_MODEL_URL,
+    DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL, DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL,
 };
 
 pub const BIG_LAMA_MODEL_NAME: &str = "big-lama.onnx";
@@ -27,6 +28,12 @@ pub const MOBILE_SAM_DECODER_MODEL_URL: &str = DEFAULT_MOBILE_SAM_DECODER_MODEL_
 
 pub const SIGLIP2_GIANT_MODEL_NAME: &str = "siglip2-giant-vision.onnx";
 pub const SIGLIP2_GIANT_MODEL_URL: &str = DEFAULT_SIGLIP2_GIANT_MODEL_URL;
+
+pub const SIGLIP2_GIANT_TEXT_MODEL_NAME: &str = "siglip2-giant-text.onnx";
+pub const SIGLIP2_GIANT_TEXT_MODEL_URL: &str = DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL;
+
+pub const SIGLIP2_GIANT_TOKENIZER_NAME: &str = "siglip2-giant-tokenizer.json";
+pub const SIGLIP2_GIANT_TOKENIZER_URL: &str = DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL;
 
 /// Get or initialize the global ONNX Runtime environment.
 ///
@@ -68,6 +75,8 @@ pub fn resolve_model_url(model_name: &str, url_override: Option<&str>) -> String
         MOBILE_SAM_ENCODER_MODEL_NAME => config.sam_encoder_model_url().to_string(),
         MOBILE_SAM_DECODER_MODEL_NAME => config.sam_decoder_model_url().to_string(),
         SIGLIP2_GIANT_MODEL_NAME => config.siglip2_giant_model_url().to_string(),
+        SIGLIP2_GIANT_TEXT_MODEL_NAME => config.siglip2_giant_text_model_url().to_string(),
+        SIGLIP2_GIANT_TOKENIZER_NAME => config.siglip2_giant_tokenizer_url().to_string(),
         _ => String::new(),
     }
 }
@@ -82,6 +91,8 @@ pub fn expected_model_size(model_name: &str) -> Option<u64> {
         MOBILE_SAM_ENCODER_MODEL_NAME => Some(28_157_093),
         MOBILE_SAM_DECODER_MODEL_NAME => Some(16_501_323),
         SIGLIP2_GIANT_MODEL_NAME => Some(1_170_827_444),
+        SIGLIP2_GIANT_TEXT_MODEL_NAME => Some(711_572_480),
+        SIGLIP2_GIANT_TOKENIZER_NAME => Some(34_363_039),
         _ => None,
     }
 }
@@ -222,6 +233,14 @@ mod tests {
             resolve_model_url(SIGLIP2_GIANT_MODEL_NAME, Some(custom)),
             custom
         );
+        assert_eq!(
+            resolve_model_url(SIGLIP2_GIANT_TEXT_MODEL_NAME, Some(custom)),
+            custom
+        );
+        assert_eq!(
+            resolve_model_url(SIGLIP2_GIANT_TOKENIZER_NAME, Some(custom)),
+            custom
+        );
     }
 
     #[test]
@@ -249,6 +268,14 @@ mod tests {
         assert_eq!(
             resolve_model_url(SIGLIP2_GIANT_MODEL_NAME, None),
             DEFAULT_SIGLIP2_GIANT_MODEL_URL
+        );
+        assert_eq!(
+            resolve_model_url(SIGLIP2_GIANT_TEXT_MODEL_NAME, None),
+            DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL
+        );
+        assert_eq!(
+            resolve_model_url(SIGLIP2_GIANT_TOKENIZER_NAME, None),
+            DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL
         );
     }
 }
