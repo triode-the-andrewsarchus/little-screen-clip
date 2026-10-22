@@ -712,7 +712,15 @@ fn gallery_preview(path: &Path, edge: u32, orientation: u8, cancelled: &AtomicBo
         return data;
     }
     data.image = super::super::gallery::thumbnail::load(path, edge, orientation, cancelled);
-    if data.image.is_none() {
+    if let Some(ref image) = data.image {
+        let (mut w, mut h) = imagesize::size(path)
+            .map(|dim| (dim.width, dim.height))
+            .unwrap_or((image.width as usize, image.height as usize));
+        if (image.width > image.height) != (w > h) {
+            std::mem::swap(&mut w, &mut h);
+        }
+        data.detail = format!("{w} × {h}");
+    } else {
         data.detail = "Preview unavailable; open in Image Studio or externally".into();
     }
     data

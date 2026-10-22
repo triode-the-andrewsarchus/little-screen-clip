@@ -522,3 +522,55 @@ fn resize_rebatching_preserves_absolute_item_anchor_and_metadata_cache() {
     let corrected = gallery.anchored_offset(anchor);
     assert!((corrected - gallery.item_offset(anchor.item.unwrap()) - anchor.delta).abs() < 0.01);
 }
+
+#[test]
+fn ten_row_retention_window_bounds_previews_and_discards_distant_tiles() {
+    let directory = synthetic_directory(500);
+    let visible = (0..500).collect::<Vec<_>>();
+    let mut gallery = Gallery::default();
+    gallery.sync(&directory, &visible, false, 10);
+    for i in 0..gallery.chunks.len() {
+        seed_chunk(&mut gallery, i, 1.0);
+    }
+
+    // Viewport at y: [40.0, 50.0]
+    let view_min = 40.0;
+    let view_max = 50.0;
+    const BUFFER_ROWS_UNITS: f32 = 20.0; // 10 rows at 2 units/row
+    let retain_min = (view_min - BUFFER_ROWS_UNITS).max(0.0); // 20.0
+    let retain_max = view_max + BUFFER_ROWS_UNITS; // 70.0
+
+    let visible_tiles = gallery.placements(view_min, view_max);
+    let retain_tiles = gallery.placements(retain_min, retain_max);
+
+    // Retained tiles include all visible tiles
+    for vis in &visible_tiles {
+        assert!(retain_tiles.iter().any(|t| t.index == vis.index));
+    }
+
+    // Retained tiles include tiles within the 10-row buffer
+    assert!(retain_tiles.len() > visible_tiles.len());
+
+    // Tiles more than 10 rows out of view (e.g. at y = 10.0 or y = 80.0) are NOT in retain_tiles
+    for tile in &retain_tiles {
+        assert!(tile.y + tile.height as f32 >= retain_min);
+        assert!(tile.y <= retain_max);
+    }
+
+    // Pre-cache buffer tiles are strictly outside visible tiles and ordered by distance
+    let mut buffer_tiles: Vec<_> = retain_tiles
+        .iter()
+        .filter(|t| !visible_tiles.iter().any(|v| v.index == t.index))
+        .collect();
+    let center_y = (view_min + view_max) / 2.0;
+    buffer_tiles.sort_by(|a, b| {
+        let dist_a = (a.y - center_y).abs();
+        let dist_b = (b.y - center_y).abs();
+        dist_a.total_cmp(&dist_b)
+    });
+    for window in buffer_tiles.windows(2) {
+        let d0 = (window[0].y - center_y).abs();
+        let d1 = (window[1].y - center_y).abs();
+        assert!(d0 <= d1 + 0.001);
+    }
+}

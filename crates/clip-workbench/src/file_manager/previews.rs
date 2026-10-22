@@ -580,9 +580,15 @@ impl EntryPreviews {
         let previous = self.gallery_sizes.entry(entry.path.clone()).or_default();
         if edge > *previous {
             *previous = edge;
-            self.cache.invalidate(id);
-        }
-        if self.cache.needs(id) {
+            self.cache.refresh(
+                id,
+                Source::Gallery {
+                    path: entry.path.clone(),
+                    edge,
+                    orientation,
+                },
+            );
+        } else if self.cache.needs(id) {
             self.cache.request(
                 id,
                 Source::Gallery {
@@ -635,7 +641,7 @@ impl EntryPreviews {
                     .icon
                     .paint(ui.painter(), rect, ui.visuals().text_color());
             }
-            if !super::ui::popup_open(ui.ctx()) {
+            if !gallery && !super::ui::popup_open(ui.ctx()) {
                 ui.interact(
                     rect,
                     egui::Id::new(("listing_preview", id)),
