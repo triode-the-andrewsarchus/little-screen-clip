@@ -103,6 +103,7 @@ impl FileManager {
         }
 
         self.gallery_previews.poll(ui.ctx());
+        self.gallery_hover.poll(ui.ctx());
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
         let width = (ui.available_width() - ui.spacing().scroll.allocated_width()).max(1.0);
         let columns = ((width + 2.0) / (self.thumbnail_edge + 2.0))
@@ -140,6 +141,8 @@ impl FileManager {
         let background = actions.background(ui, can_edit, count > 0);
         let mut targets = Vec::new();
         let mut paths = std::collections::BTreeSet::new();
+        let mut retain_paths = std::collections::BTreeSet::new();
+        let mut hovered_path = None;
         let output = scroll.show_viewport(ui, |ui, viewport| {
             ui.set_min_height((self.gallery_layout.height() * unit - 2.0).max(0.0));
             let origin = ui.min_rect().min;
@@ -159,7 +162,30 @@ impl FileManager {
                 .iter()
                 .map(|tile| directory.entries[self.visible[tile.index]].path.clone())
                 .collect();
-            self.gallery_previews.retain(&paths);
+
+            // 10 rows buffer above and below (nominal row height is 2.0 units)
+            const BUFFER_ROWS_UNITS: f32 = 20.0;
+            let retain_min = (min - BUFFER_ROWS_UNITS).max(0.0);
+            let retain_max = max + BUFFER_ROWS_UNITS;
+            let retain_tiles = self.gallery_layout.placements(retain_min, retain_max);
+            retain_paths = retain_tiles
+                .iter()
+                .map(|tile| directory.entries[self.visible[tile.index]].path.clone())
+                .collect();
+
+            // Discard items more than 10 rows out of view and cancel in-flight fetches
+            self.gallery_previews.retain(&retain_paths);
+
+            // Track scroll settling (~0.2s without scrolling)
+            let current_scroll_y = viewport.min.y;
+            let now = ui.input(|i| i.time);
+            if (current_scroll_y - self.gallery_last_scroll_y).abs() > 1.0 {
+                self.gallery_last_scroll_y = current_scroll_y;
+                self.gallery_last_scroll_time = now;
+            }
+            let is_scroll_settled = (now - self.gallery_last_scroll_time) >= 0.2;
+
+            // 1. Request base thumbnails for visible tiles
             for tile in priority.iter() {
                 let entry = &directory.entries[self.visible[tile.index]];
                 if tile.ready && entry.is_photo() {
@@ -168,6 +194,60 @@ impl FileManager {
                         .request_gallery(entry, edge, tile.orientation);
                 }
             }
+
+            // Check if all visible thumbnails in view have loaded
+            let all_visible_loaded = priority.iter().all(|tile| {
+                let entry = &directory.entries[self.visible[tile.index]];
+                if !tile.ready || !entry.is_photo() {
+                    return true;
+                }
+                self.gallery_previews
+                    .listing(entry)
+                    .and_then(|ready| ready.texture.as_ref())
+                    .is_some()
+            });
+
+            if all_visible_loaded {
+                // 2. Pre-cache buffer tiles (prior and next 10 rows) ordered by closeness to viewport
+                let mut buffer_tiles: Vec<_> = retain_tiles
+                    .iter()
+                    .filter(|t| !priority.iter().any(|p| p.index == t.index))
+                    .collect();
+                buffer_tiles.sort_by(|a, b| {
+                    let dist_a = (a.y * unit - viewport.center().y).abs();
+                    let dist_b = (b.y * unit - viewport.center().y).abs();
+                    dist_a.total_cmp(&dist_b)
+                });
+                for tile in buffer_tiles {
+                    let entry = &directory.entries[self.visible[tile.index]];
+                    if tile.ready && entry.is_photo() {
+                        let edge = tile.thumbnail_edge(unit, ui.ctx().pixels_per_point());
+                        self.gallery_previews
+                            .request_gallery(entry, edge, tile.orientation);
+                    }
+                }
+
+                // 3. Once settled for ~0.2s, fetch higher quality previews of only what's currently visible
+                if is_scroll_settled {
+                    for tile in priority.iter() {
+                        let entry = &directory.entries[self.visible[tile.index]];
+                        if tile.ready && entry.is_photo() {
+                            let hq_edge = 1024;
+                            self.gallery_previews
+                                .request_gallery(entry, hq_edge, tile.orientation);
+                        }
+                    }
+                } else {
+                    let elapsed = now - self.gallery_last_scroll_time;
+                    if elapsed < 0.2 {
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_secs_f64(
+                                (0.2 - elapsed).max(0.001),
+                            ));
+                    }
+                }
+            }
+
             for tile in tiles {
                 let index = tile.index;
                 let entry = &directory.entries[self.visible[index]];
@@ -185,19 +265,30 @@ impl FileManager {
                 );
                 let marked = selected.is_some_and(|s| s.contains(&entry.path));
                 let photo = entry.is_photo();
-                let preview = if photo && paths.contains(&entry.path) {
+                let preview = if photo && retain_paths.contains(&entry.path) {
                     Some(&mut self.gallery_previews)
                 } else {
                     None
                 };
-                paint_gallery_tile(ui, &response, entry, marked, colors, check_color, preview);
+                paint_gallery_tile(
+                    ui,
+                    &response,
+                    entry,
+                    marked,
+                    colors,
+                    check_color,
+                    preview,
+                    Some(&mut self.gallery_hover),
+                    &mut hovered_path,
+                );
                 if entry.directory {
                     targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
                 }
                 actions.row(ui, &response, entry, selected, can_edit, count);
             }
         });
-        self.gallery_previews.retain(&paths);
+        self.gallery_previews.retain(&retain_paths);
+        self.gallery_hover.retain(hovered_path.as_deref());
         if ui.is_enabled() {
             self.drop_targets.extend(targets);
         }
@@ -236,6 +327,7 @@ impl FileManager {
     ) {
         self.similarity_canvas.poll(ui.ctx());
         self.gallery_previews.poll(ui.ctx());
+        self.gallery_hover.poll(ui.ctx());
 
         if let Some(directory) = &self.directory {
             self.similarity_canvas.sync(
@@ -271,6 +363,7 @@ impl FileManager {
             .clamp(64.0, 2048.0) as u32;
 
         let mut visible_paths = std::collections::BTreeSet::new();
+        let mut hovered_path = None;
 
         for placement in &self.similarity_canvas.placements {
             let Some(entry) = self.similarity_canvas.entries.get(placement.index) else {
@@ -292,7 +385,7 @@ impl FileManager {
 
             let tile_response = ui.interact(
                 tile_rect,
-                Id::new(("sim_tile", &entry.path)),
+                Id::new(("sim_tile", &entry.path, placement.col, placement.row)),
                 Sense::click_and_drag(),
             );
 
@@ -305,16 +398,27 @@ impl FileManager {
                 colors,
                 check_color,
                 Some(&mut self.gallery_previews),
+                Some(&mut self.gallery_hover),
+                &mut hovered_path,
             );
 
             actions.row(ui, &tile_response, entry, selected, can_edit, count);
         }
 
         self.gallery_previews.retain(&visible_paths);
+        self.gallery_hover.retain(hovered_path.as_deref());
 
         // Grid header bars and dividers
-        let mut toggle_grid = None;
-        let mut remove_grid = None;
+        let mut solo_grid: Option<usize> = None;
+        let mut toggle_grid: Option<usize> = None;
+        let mut remove_grid: Option<usize> = None;
+
+        let total_selected = self
+            .similarity_canvas
+            .grids
+            .iter()
+            .filter(|g| g.selected_for_search)
+            .count();
 
         for (grid_idx, grid) in self.similarity_canvas.grids.iter().enumerate() {
             let top_left = self.similarity_canvas.tile_screen_rect(
@@ -334,7 +438,7 @@ impl FileManager {
                     [
                         pos2(
                             div_x,
-                            canvas_rect.min.y + self.similarity_canvas.pan.y - 36.0,
+                            canvas_rect.min.y + self.similarity_canvas.pan.y - 48.0,
                         ),
                         pos2(
                             div_x,
@@ -363,9 +467,12 @@ impl FileManager {
                 continue;
             }
 
+            let is_solo = grid.selected_for_search && total_selected == 1;
+            let is_multi = grid.selected_for_search && total_selected > 1;
+
             let bar_rect = Rect::from_min_size(
-                pos2(top_left.min.x, top_left.min.y - 32.0),
-                vec2(400.0, 26.0),
+                pos2(top_left.min.x, top_left.min.y - 44.0),
+                vec2(540.0, 28.0),
             );
 
             ui.allocate_ui_at_rect(bar_rect, |ui| {
@@ -383,19 +490,24 @@ impl FileManager {
                     .inner_margin(egui::Margin::symmetric(6.0, 3.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            let is_ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
-                            let btn_label = if grid.selected_for_search {
-                                "☑ Search target"
-                            } else {
-                                "☐ Search target"
-                            };
-                            let btn_resp = ui
-                                .selectable_label(grid.selected_for_search, btn_label)
+                            let solo_resp = ui
+                                .selectable_label(is_solo, "Search this grid")
                                 .on_hover_text(
-                                    "Use this grid as input for next search. Ctrl+click to search ONLY this grid.",
+                                    "Select ONLY this grid as the search set for the next query",
                                 );
-                            if btn_resp.clicked() {
-                                toggle_grid = Some((grid.id, is_ctrl));
+                            if solo_resp.clicked() {
+                                solo_grid = Some(grid.id);
+                            }
+
+                            let add_resp = ui
+                                .selectable_label(is_multi, "+ Add grid to search")
+                                .on_hover_text(if grid.selected_for_search {
+                                    "This grid is currently in the search set. Click to remove."
+                                } else {
+                                    "Add this grid to the active search set alongside other grids."
+                                });
+                            if add_resp.clicked() {
+                                toggle_grid = Some(grid.id);
                             }
 
                             ui.separator();
@@ -409,8 +521,15 @@ impl FileManager {
 
                             if grid.id > 0 {
                                 ui.separator();
-                                if ui
-                                    .small_button("✕")
+                                let close_resp = ui.add(
+                                    egui::Button::image(
+                                        crate::icons::Icon::Close
+                                            .image_tinted(10.0, colors.text_secondary),
+                                    )
+                                    .frame(true)
+                                    .min_size(vec2(16.0, 16.0)),
+                                );
+                                if close_resp
                                     .on_hover_text("Remove this search grid")
                                     .clicked()
                                 {
@@ -433,14 +552,16 @@ impl FileManager {
             }
         }
 
-        if let Some((id, is_ctrl)) = toggle_grid {
-            if is_ctrl {
-                for g in &mut self.similarity_canvas.grids {
-                    g.selected_for_search = g.id == id;
-                }
-            } else if let Some(g) = self.similarity_canvas.grids.iter_mut().find(|g| g.id == id) {
-                g.selected_for_search = !g.selected_for_search;
+        if let Some(id) = solo_grid {
+            for g in &mut self.similarity_canvas.grids {
+                g.selected_for_search = g.id == id;
             }
+        }
+
+        if let Some(g) =
+            toggle_grid.and_then(|id| self.similarity_canvas.grids.iter_mut().find(|g| g.id == id))
+        {
+            g.selected_for_search = !g.selected_for_search;
         }
 
         if let Some(id) = remove_grid {
@@ -451,7 +572,7 @@ impl FileManager {
         let search_id = Id::new("similarity_canvas_search");
         let search_pos = pos2(canvas_rect.left() + 20.0, canvas_rect.top() + 16.0);
         egui::Area::new(search_id)
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Middle)
             .fixed_pos(search_pos)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style())
@@ -461,7 +582,7 @@ impl FileManager {
                     .inner_margin(egui::Margin::symmetric(8.0, 4.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label("🔍");
+                            crate::icons::Icon::Search.ui(ui, 14.0, colors.text_secondary);
                             let edit_res = ui.add(
                                 egui::TextEdit::singleline(
                                     &mut self.similarity_canvas.search_query,
@@ -477,8 +598,15 @@ impl FileManager {
                             }
                             let has_searches = self.similarity_canvas.grids.len() > 1;
                             if !self.similarity_canvas.search_query.is_empty() || has_searches {
-                                if ui
-                                    .small_button("✕")
+                                let clear_resp = ui.add(
+                                    egui::Button::image(
+                                        crate::icons::Icon::Close
+                                            .image_tinted(10.0, colors.text_secondary),
+                                    )
+                                    .frame(true)
+                                    .min_size(vec2(16.0, 16.0)),
+                                );
+                                if clear_resp
                                     .on_hover_text("Clear searches and reset to all photos")
                                     .clicked()
                                 {
@@ -507,8 +635,15 @@ impl FileManager {
                                     "{target_grids} target grid(s) ({target_photos} photos)"
                                 ));
                                 ui.separator();
-                                if ui
-                                    .small_button("-")
+                                let minus_resp = ui.add(
+                                    egui::Button::image(
+                                        crate::icons::Icon::Minus
+                                            .image_tinted(10.0, colors.text_secondary),
+                                    )
+                                    .frame(true)
+                                    .min_size(vec2(16.0, 16.0)),
+                                );
+                                if minus_resp
                                     .on_hover_text("Lower similarity threshold")
                                     .clicked()
                                 {
@@ -522,8 +657,15 @@ impl FileManager {
                                     self.similarity_canvas.similarity_threshold
                                 ))
                                 .on_hover_text("Matching similarity threshold");
-                                if ui
-                                    .small_button("+")
+                                let plus_resp = ui.add(
+                                    egui::Button::image(
+                                        crate::icons::Icon::Plus
+                                            .image_tinted(10.0, colors.text_secondary),
+                                    )
+                                    .frame(true)
+                                    .min_size(vec2(16.0, 16.0)),
+                                );
+                                if plus_resp
                                     .on_hover_text("Raise similarity threshold")
                                     .clicked()
                                 {
@@ -541,7 +683,7 @@ impl FileManager {
         let hud_id = Id::new("similarity_canvas_hud");
         let hud_pos = pos2(canvas_rect.right() - 250.0, canvas_rect.bottom() - 44.0);
         egui::Area::new(hud_id)
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Middle)
             .fixed_pos(hud_pos)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style())
@@ -610,7 +752,13 @@ fn paint_gallery_tile(
     colors: WorkbenchColors,
     check_color: Color32,
     mut preview: Option<&mut super::super::previews::EntryPreviews>,
+    mut hover: Option<&mut super::super::gallery::GalleryHover>,
+    hovered_path: &mut Option<std::path::PathBuf>,
 ) {
+    if response.hovered() {
+        *hovered_path = Some(entry.path.clone());
+    }
+
     let rect = response.rect;
     ui.painter().rect_filled(
         rect,
@@ -671,8 +819,51 @@ fn paint_gallery_tile(
         );
     }
 
-    if !super::popup_open(ui.ctx()) {
-        paint_tile_hover_preview(ui, response, entry, detail.as_deref(), texture_info);
+    if response.hovered() && !super::popup_open(ui.ctx()) {
+        let orig_dims = imagesize::size(&entry.path)
+            .ok()
+            .map(|dim| (dim.width as f32, dim.height as f32))
+            .or_else(|| {
+                detail.as_deref().and_then(|d| {
+                    let parts: Vec<&str> = d.split('×').map(|s| s.trim()).collect();
+                    if parts.len() == 2 {
+                        let w = parts[0].parse::<f32>().ok()?;
+                        let h = parts[1].parse::<f32>().ok()?;
+                        Some((w, h))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .or_else(|| texture_info.map(|(_, size)| (size.x, size.y)));
+
+        let screen = ui.ctx().screen_rect().shrink(16.0);
+        let max_image_w = (screen.width() - 32.0).max(100.0);
+        let max_image_h = (screen.height() - 120.0).max(100.0);
+
+        let (mut orig_w, mut orig_h) = orig_dims.unwrap_or((320.0, 240.0));
+        if let Some((_, tex_size)) = texture_info {
+            if (tex_size.x > tex_size.y) != (orig_w > orig_h) {
+                std::mem::swap(&mut orig_w, &mut orig_h);
+            }
+        }
+
+        let scale = (max_image_w / orig_w.max(1.0))
+            .min(max_image_h / orig_h.max(1.0))
+            .min(1.0);
+        let display_size = vec2(orig_w * scale, orig_h * scale);
+
+        let needed_edge = (orig_w.max(orig_h) as u32).clamp(128, 4096);
+        let needed_edge = needed_edge.div_ceil(128) * 128;
+
+        let active_texture = if let Some(ref mut hover) = hover {
+            hover.texture_for(&entry.path, needed_edge, 1, texture_info)
+        } else {
+            texture_info
+        };
+
+        let dims_text = Some(format!("{:.0} × {:.0}", orig_w, orig_h));
+        paint_tile_hover_preview(ui, response, entry, dims_text, active_texture, display_size);
     }
 }
 
@@ -680,18 +871,13 @@ fn paint_tile_hover_preview(
     _ui: &Ui,
     response: &egui::Response,
     entry: &super::super::filesystem::Entry,
-    detail: Option<&str>,
+    dims_text: Option<String>,
     texture_info: Option<(egui::TextureId, egui::Vec2)>,
+    display_size: egui::Vec2,
 ) {
     response.clone().on_hover_ui(|ui| {
-        ui.set_max_width(360.0);
-        if let Some((tex_id, size)) = texture_info {
-            let max_w = 340.0;
-            let max_h = 240.0;
-            let scale = (max_w / size.x.max(1.0))
-                .min(max_h / size.y.max(1.0))
-                .min(1.0);
-            let display_size = size * scale;
+        ui.set_max_width(display_size.x.max(320.0));
+        if let Some((tex_id, _size)) = texture_info {
             ui.image((tex_id, display_size));
             ui.add_space(4.0);
         }
@@ -705,14 +891,8 @@ fn paint_tile_hover_preview(
             if !entry.size.is_empty() {
                 ui.label(egui::RichText::new(&entry.size).strong().size(12.0));
             }
-            if let Some(dims) = detail {
+            if let Some(dims) = dims_text {
                 ui.label(egui::RichText::new(format!("· {dims}")).weak().size(12.0));
-            } else if let Some((_, size)) = texture_info {
-                ui.label(
-                    egui::RichText::new(format!("· {:.0} × {:.0}", size.x, size.y))
-                        .weak()
-                        .size(12.0),
-                );
             }
             if !entry.modified.is_empty() {
                 ui.label(

@@ -218,6 +218,9 @@ pub(crate) struct FileManager {
     gallery_columns: usize,
     gallery_layout: gallery::Gallery,
     gallery_selecting: bool,
+    gallery_last_scroll_y: f32,
+    gallery_last_scroll_time: f64,
+    gallery_hover: gallery::GalleryHover,
     pub(in crate::file_manager) photo_mode: gallery::similarity::PhotoMode,
     pub(in crate::file_manager) photo_recurse: bool,
     pub(in crate::file_manager) similarity_canvas: gallery::similarity::SimilarityCanvas,
@@ -293,6 +296,9 @@ impl FileManager {
             gallery_columns: 1,
             gallery_layout: Default::default(),
             gallery_selecting: false,
+            gallery_last_scroll_y: 0.0,
+            gallery_last_scroll_time: 0.0,
+            gallery_hover: Default::default(),
             photo_mode: gallery::similarity::PhotoMode::default(),
             photo_recurse: false,
             similarity_canvas: gallery::similarity::SimilarityCanvas::default(),
@@ -339,6 +345,7 @@ impl FileManager {
     fn stop_previews(&mut self) {
         self.music.stop();
         self.midi.stop();
+        self.gallery_hover.clear();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
         self.type_navigation.clear();

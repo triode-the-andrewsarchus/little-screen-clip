@@ -781,7 +781,7 @@ impl SimilarityCanvas {
 
         // Position the header bar cleanly below the top HUD (at ~76px from canvas top)
         let top_offset = 76.0;
-        let header_spacing = 34.0;
+        let header_spacing = 46.0;
         let target_y = top_offset + header_spacing - (grid.row_offset as f32) * step;
 
         self.pan = egui::vec2(target_x, target_y);

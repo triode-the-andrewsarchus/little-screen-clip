@@ -485,8 +485,8 @@ fn test_search_pan_to_grid_results() {
     let top_tile_rect =
         canvas.tile_screen_rect(viewport.min, result_grid.col_offset, result_grid.row_offset);
 
-    // The tile should be positioned cleanly in the upper portion of the viewport (y == 110.0)
-    assert!((top_tile_rect.min.y - 110.0).abs() < 1.0);
+    // The tile should be positioned cleanly below the header bar in the viewport (y == 122.0)
+    assert!((top_tile_rect.min.y - 122.0).abs() < 1.0);
     assert!(viewport.contains(top_tile_rect.center()));
 }
 
@@ -577,4 +577,60 @@ fn test_vertical_packing_and_order_retention() {
     assert_eq!(canvas.grids[4].grid_rows, 3);
     assert_eq!(canvas.grids[4].col_offset, 28); // 17 + 9 + COL_GAP(2)
     assert_eq!(canvas.grids[4].row_offset, 0);
+}
+
+#[test]
+fn test_similarity_canvas_hud_does_not_block_popup_or_hover() {
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput::default();
+    let _ = ctx.run(raw, |ctx| {
+        egui::Area::new(egui::Id::new("similarity_canvas_search"))
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                ui.label("Search");
+            });
+        egui::Area::new(egui::Id::new("similarity_canvas_hud"))
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                ui.label("HUD");
+            });
+    });
+
+    // popup_open should be false so hover previews function
+    assert!(!crate::file_manager::ui::popup_open(&ctx));
+}
+
+#[test]
+fn test_gallery_hover_preview_sizing_respects_original_and_window_bounds() {
+    // Helper function matching the sizing algorithm in paint_tile_hover_preview
+    let compute_size = |screen_size: egui::Vec2, orig: egui::Vec2| -> egui::Vec2 {
+        let max_image_w = (screen_size.x - 32.0).max(100.0);
+        let max_image_h = (screen_size.y - 120.0).max(100.0);
+        let scale = (max_image_w / orig.x.max(1.0))
+            .min(max_image_h / orig.y.max(1.0))
+            .min(1.0);
+        orig * scale
+    };
+
+    // Case 1: Original image smaller than window bounds => stays exact original size (no downscaling or artificial 340x240 clamping)
+    let screen_1080p = egui::vec2(1920.0, 1080.0);
+    let small_orig = egui::vec2(500.0, 400.0);
+    let size1 = compute_size(screen_1080p, small_orig);
+    assert_eq!(size1.x, 500.0);
+    assert_eq!(size1.y, 400.0);
+
+    // Case 2: Original image larger than window (e.g. 4000x3000 camera photo) => scaled down proportionally to fit window
+    let large_orig = egui::vec2(4000.0, 3000.0);
+    let size2 = compute_size(screen_1080p, large_orig);
+    assert!(size2.x <= 1920.0 - 32.0);
+    assert!(size2.y <= 1080.0 - 120.0);
+    // Preserves aspect ratio 4:3
+    assert!(((size2.x / size2.y) - (4.0 / 3.0)).abs() < 0.001);
+
+    // Case 3: Smaller window (e.g. 800x600) => scales down to fit available bounds
+    let small_screen = egui::vec2(800.0, 600.0);
+    let size3 = compute_size(small_screen, large_orig);
+    assert!(size3.x <= 800.0 - 32.0);
+    assert!(size3.y <= 600.0 - 120.0);
+    assert!(((size3.x / size3.y) - (4.0 / 3.0)).abs() < 0.001);
 }
