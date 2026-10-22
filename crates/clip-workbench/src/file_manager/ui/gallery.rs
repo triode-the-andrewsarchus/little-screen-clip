@@ -105,6 +105,29 @@ impl FileManager {
         self.gallery_previews.poll(ui.ctx());
         self.gallery_hover.poll(ui.ctx());
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+
+        let pointer_inside = ui.rect_contains_pointer(ui.available_rect_before_wrap());
+        if pointer_inside {
+            let ctrl_zoom = ui.input(|i| {
+                if (i.modifiers.ctrl || i.modifiers.command) && i.raw_scroll_delta.y.abs() > 0.01 {
+                    Some(i.raw_scroll_delta.y)
+                } else {
+                    None
+                }
+            });
+            if let Some(delta) = ctrl_zoom {
+                let old_edge = self.thumbnail_edge;
+                let new_edge = (old_edge + delta * 0.4).clamp(80.0, 280.0);
+                if (new_edge - old_edge).abs() > 0.1 {
+                    self.thumbnail_edge = new_edge;
+                }
+                ui.input_mut(|i| {
+                    i.raw_scroll_delta = egui::Vec2::ZERO;
+                });
+                ui.ctx().request_repaint();
+            }
+        }
+
         let width = (ui.available_width() - ui.spacing().scroll.allocated_width()).max(1.0);
         let columns = ((width + 2.0) / (self.thumbnail_edge + 2.0))
             .floor()
@@ -248,7 +271,7 @@ impl FileManager {
                 }
             }
 
-            for tile in tiles {
+            for tile in &tiles {
                 let index = tile.index;
                 let entry = &directory.entries[self.visible[index]];
                 let rect = Rect::from_min_size(
@@ -285,6 +308,48 @@ impl FileManager {
                     targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
                 }
                 actions.row(ui, &response, entry, selected, can_edit, count);
+            }
+
+            let top_tile = tiles.iter().min_by(|a, b| a.y.total_cmp(&b.y));
+            let top_date = top_tile.and_then(|t| {
+                let entry = &directory.entries[self.visible[t.index]];
+                if let Some(time) = entry.modified_time {
+                    Some(
+                        chrono::DateTime::<chrono::Local>::from(time)
+                            .format("%B %Y")
+                            .to_string(),
+                    )
+                } else if entry.modified.len() >= 7 {
+                    Some(entry.modified[0..7].to_string())
+                } else {
+                    None
+                }
+            });
+
+            if let Some(date_text) = top_date {
+                let time_since_scroll = now - self.gallery_last_scroll_time;
+                if time_since_scroll < 1.2 {
+                    let alpha = ((1.2 - time_since_scroll) / 0.3).clamp(0.0, 1.0) as f32;
+                    let clip = ui.clip_rect();
+                    let badge_rect = Rect::from_min_size(
+                        pos2(clip.right() - 170.0, clip.top() + 16.0),
+                        vec2(150.0, 30.0),
+                    );
+                    let fill = colors.panel.gamma_multiply(0.92 * alpha);
+                    let text_color = colors.text_primary.gamma_multiply(alpha);
+                    let stroke_color = colors.border.gamma_multiply(alpha);
+
+                    ui.painter()
+                        .rect(badge_rect, 6.0, fill, egui::Stroke::new(1.0, stroke_color));
+                    ui.painter().text(
+                        badge_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        date_text,
+                        egui::FontId::proportional(13.0),
+                        text_color,
+                    );
+                    ui.ctx().request_repaint();
+                }
             }
         });
         self.gallery_previews.retain(&retain_paths);
@@ -838,7 +903,7 @@ fn paint_gallery_tile(
         },
     );
     let image_rect = rect.shrink(if marked { 7.0 } else { 0.0 });
-    let (detail, texture_info) = if let Some(ref mut preview) = preview {
+    let (detail, texture_info, metadata_summary) = if let Some(ref mut preview) = preview {
         preview.show_gallery(ui, image_rect, entry);
         if let Some(ready) = preview.listing(entry) {
             let detail = if !ready.data.detail.is_empty() {
@@ -847,9 +912,10 @@ fn paint_gallery_tile(
                 None
             };
             let tex = ready.texture.as_ref().map(|t| (t.id(), t.size_vec2()));
-            (detail, tex)
+            let meta = ready.data.photo.as_ref().map(|p| p.metadata.clone());
+            (detail, tex, meta)
         } else {
-            (None, None)
+            (None, None, None)
         }
     } else {
         entry_icon(entry).paint(
@@ -868,7 +934,7 @@ fn paint_gallery_tile(
             &entry.name,
             colors.text_primary,
         );
-        (None, None)
+        (None, None, None)
     };
 
     if marked {
@@ -930,8 +996,16 @@ fn paint_gallery_tile(
             texture_info
         };
 
-        let dims_text = Some(format!("{:.0} × {:.0}", orig_w, orig_h));
-        paint_tile_hover_preview(ui, response, entry, dims_text, active_texture, display_size);
+        let dims = Some((orig_w, orig_h));
+        paint_tile_hover_preview(
+            ui,
+            response,
+            entry,
+            dims,
+            metadata_summary,
+            active_texture,
+            display_size,
+        );
     }
 }
 
@@ -939,28 +1013,51 @@ fn paint_tile_hover_preview(
     _ui: &Ui,
     response: &egui::Response,
     entry: &super::super::filesystem::Entry,
-    dims_text: Option<String>,
+    dims: Option<(f32, f32)>,
+    meta: Option<little_clip_ops::metadata::ImageMetadataSummary>,
     texture_info: Option<(egui::TextureId, egui::Vec2)>,
     display_size: egui::Vec2,
 ) {
     response.clone().on_hover_ui(|ui| {
-        ui.set_max_width(display_size.x.max(320.0));
+        ui.set_max_width(display_size.x.max(340.0));
         if let Some((tex_id, _size)) = texture_info {
             ui.image((tex_id, display_size));
             ui.add_space(4.0);
         }
-        ui.strong(&entry.name);
+
+        ui.horizontal(|ui| {
+            let ext = entry
+                .path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_uppercase())
+                .unwrap_or_else(|| "IMG".to_string());
+            ui.label(
+                egui::RichText::new(format!(" {ext} "))
+                    .size(10.0)
+                    .strong()
+                    .background_color(ui.visuals().extreme_bg_color),
+            );
+            ui.strong(&entry.name);
+        });
+
         ui.label(
             egui::RichText::new(entry.path.to_string_lossy().as_ref())
                 .weak()
                 .size(11.0),
         );
+
         ui.horizontal(|ui| {
             if !entry.size.is_empty() {
                 ui.label(egui::RichText::new(&entry.size).strong().size(12.0));
             }
-            if let Some(dims) = dims_text {
-                ui.label(egui::RichText::new(format!("· {dims}")).weak().size(12.0));
+            if let Some((w, h)) = dims {
+                let mp = (w * h) / 1_000_000.0;
+                ui.label(
+                    egui::RichText::new(format!("· {:.0} × {:.0} ({:.1} MP)", w, h, mp))
+                        .weak()
+                        .size(12.0),
+                );
             }
             if !entry.modified.is_empty() {
                 ui.label(
@@ -970,5 +1067,47 @@ fn paint_tile_hover_preview(
                 );
             }
         });
+
+        if let Some(ref m) = meta {
+            let mut camera_parts = Vec::new();
+            if let Some(ref model) = m.model {
+                camera_parts.push(model.clone());
+            } else if let Some(ref make) = m.make {
+                camera_parts.push(make.clone());
+            }
+
+            let mut exp_parts = Vec::new();
+            if let Some(fl) = m.focal_length {
+                exp_parts.push(format!("{:.0}mm", fl));
+            }
+            if let Some(fn_val) = m.f_number {
+                exp_parts.push(format!("ƒ/{:.1}", fn_val));
+            }
+            if let Some(ref et) = m.exposure_time {
+                exp_parts.push(et.clone());
+            }
+            if let Some(iso) = m.iso {
+                exp_parts.push(format!("ISO {}", iso));
+            }
+
+            if !camera_parts.is_empty() || !exp_parts.is_empty() {
+                ui.horizontal(|ui| {
+                    if !camera_parts.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!("📷 {}", camera_parts.join(" ")))
+                                .size(11.0)
+                                .color(ui.visuals().text_color()),
+                        );
+                    }
+                    if !exp_parts.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!("· {}", exp_parts.join(" · ")))
+                                .weak()
+                                .size(11.0),
+                        );
+                    }
+                });
+            }
+        }
     });
 }
