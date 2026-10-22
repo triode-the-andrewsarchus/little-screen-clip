@@ -271,3 +271,100 @@ fn test_heterogeneous_feature_vector_pca() {
         assert!(y >= -1.0 && y <= 1.0);
     }
 }
+
+#[test]
+fn test_concept_search_grid_splitting() {
+    use super::canvas::SimilarityCanvas;
+    use super::embedding::FeatureVector;
+    use crate::file_manager::filesystem::Entry;
+    use std::path::PathBuf;
+
+    let mut canvas = SimilarityCanvas::default();
+    canvas.similarity_threshold = 0.5;
+
+    let count = 12;
+    let mut entries = Vec::new();
+    for i in 0..count {
+        let path = PathBuf::from(format!("/test_img_{i}.png"));
+        entries.push(Entry {
+            path: path.clone(),
+            name: format!("img_{i}.png"),
+            directory: false,
+            regular_file: true,
+            system: None,
+            typescript: false,
+            symlink: false,
+            hidden: false,
+            size: "1 KB".to_string(),
+            size_bytes: 1024,
+            modified: "today".to_string(),
+            modified_time: None,
+            warning: None,
+            revision: 1,
+            identity: None,
+        });
+
+        // 1536-dimensional feature vectors:
+        // Items 0..4 have high signal in dimension 0 (matches concept)
+        // Items 4..12 have high signal in dimension 1 (does not match concept)
+        let mut vec = vec![0.0f32; 1536];
+        if i < 4 {
+            vec[0] = 1.0;
+        } else {
+            vec[1] = 1.0;
+        }
+        canvas.insert_hash(path, FeatureVector::Dense(vec), 1);
+    }
+
+    canvas.entries = entries;
+
+    // Define concept embedding pointing along dimension 0
+    let mut concept = vec![0.0f32; 1536];
+    concept[0] = 1.0;
+    canvas.concept_embedding = Some(concept);
+
+    canvas.recompute_layout();
+
+    // Invariants check:
+    assert_eq!(canvas.match_counts, (4, 8));
+    assert!(
+        canvas.split_row_offset > 0,
+        "Second grid must have positive row offset"
+    );
+
+    let split_row = canvas.split_row_offset;
+
+    // Verify matching items (0..4) are placed strictly above split_row
+    let mut seen_cells = std::collections::HashSet::new();
+    for p in &canvas.placements {
+        assert!(
+            seen_cells.insert((p.col, p.row)),
+            "Duplicate cell at ({}, {})",
+            p.col,
+            p.row
+        );
+        if p.index < 4 {
+            assert!(
+                p.row < split_row,
+                "Matching item {} should be in row < {}, got {}",
+                p.index,
+                split_row,
+                p.row
+            );
+        } else {
+            assert!(
+                p.row >= split_row,
+                "Non-matching item {} should be in row >= {}, got {}",
+                p.index,
+                split_row,
+                p.row
+            );
+        }
+    }
+
+    // Now test clearing search restores single grid
+    canvas.clear_search();
+    assert_eq!(canvas.concept_embedding, None);
+    assert_eq!(canvas.match_counts, (0, 0));
+    assert_eq!(canvas.split_row_offset, 0);
+}

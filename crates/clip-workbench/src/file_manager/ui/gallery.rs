@@ -319,6 +319,104 @@ impl FileManager {
 
         self.gallery_previews.retain(&visible_paths);
 
+        // Section headers & divider when concept search is active
+        if self.similarity_canvas.concept_embedding.is_some() {
+            let font_id = egui::FontId::proportional(13.0);
+            let matches_count = self.similarity_canvas.match_counts.0;
+            let other_count = self.similarity_canvas.match_counts.1;
+
+            if matches_count > 0 {
+                let first_tile = self
+                    .similarity_canvas
+                    .tile_screen_rect(canvas_rect.min, 0, 0);
+                ui.painter().text(
+                    pos2(first_tile.min.x, first_tile.min.y - 18.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    format!("✓ Matches ({matches_count})"),
+                    font_id.clone(),
+                    colors.accent,
+                );
+            }
+
+            if self.similarity_canvas.split_row_offset > 0 && other_count > 0 {
+                let other_tile = self.similarity_canvas.tile_screen_rect(
+                    canvas_rect.min,
+                    0,
+                    self.similarity_canvas.split_row_offset,
+                );
+                let step = (self.similarity_canvas.tile_size + self.similarity_canvas.spacing)
+                    * self.similarity_canvas.zoom;
+                let div_y = other_tile.min.y - step * 0.5;
+                let total_w = (self.similarity_canvas.grid_cols as f32) * step;
+
+                ui.painter().line_segment(
+                    [
+                        pos2(other_tile.min.x, div_y),
+                        pos2(other_tile.min.x + total_w, div_y),
+                    ],
+                    egui::Stroke::new(1.0, colors.border),
+                );
+
+                ui.painter().text(
+                    pos2(other_tile.min.x, other_tile.min.y - 18.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    format!("Other photos ({other_count})"),
+                    font_id,
+                    colors.text_primary.gamma_multiply(0.7),
+                );
+            }
+        }
+
+        // Floating search HUD pill
+        let search_id = Id::new("similarity_canvas_search");
+        let search_pos = pos2(canvas_rect.left() + 20.0, canvas_rect.top() + 16.0);
+        egui::Area::new(search_id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(search_pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(colors.panel)
+                    .stroke(egui::Stroke::new(1.0, colors.border))
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("🔍");
+                            let edit_res = ui.add(
+                                egui::TextEdit::singleline(
+                                    &mut self.similarity_canvas.search_query,
+                                )
+                                .hint_text("Search concept (e.g. cat, nature)…")
+                                .desired_width(180.0),
+                            );
+                            if (edit_res.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                                || ui.small_button("Search").clicked()
+                            {
+                                self.similarity_canvas.trigger_search();
+                            }
+                            if !self.similarity_canvas.search_query.is_empty()
+                                || self.similarity_canvas.active_concept.is_some()
+                            {
+                                if ui.small_button("✕").clicked() {
+                                    self.similarity_canvas.clear_search();
+                                }
+                            }
+                            if self.similarity_canvas.is_searching() {
+                                ui.spinner();
+                                ui.label("Searching…");
+                            } else if self.similarity_canvas.concept_embedding.is_some() {
+                                ui.separator();
+                                ui.label(format!(
+                                    "{} matches · {} other",
+                                    self.similarity_canvas.match_counts.0,
+                                    self.similarity_canvas.match_counts.1
+                                ));
+                            }
+                        });
+                    });
+            });
+
         // Floating HUD pill
         let hud_id = Id::new("similarity_canvas_hud");
         let hud_pos = pos2(canvas_rect.right() - 250.0, canvas_rect.bottom() - 44.0);

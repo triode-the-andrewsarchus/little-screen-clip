@@ -128,6 +128,8 @@ pub const DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL: &str =
 pub const DEFAULT_MOBILE_SAM_DECODER_MODEL_URL: &str =
     "https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx";
 pub const DEFAULT_SIGLIP2_GIANT_MODEL_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_quantized.onnx";
+pub const DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/text_model_quantized.onnx";
+pub const DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/tokenizer.json";
 
 /// AI/ONNX model download URL overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -162,6 +164,20 @@ pub struct AiModelsConfig {
         alias = "siglip_url"
     )]
     pub siglip2_giant_url: Option<String>,
+    /// Optional URL override for downloading the SigLIP 2 Giant text encoder ONNX model.
+    #[serde(
+        alias = "siglip2_text_url",
+        alias = "siglip2_giant_text_url",
+        alias = "siglip_text_url"
+    )]
+    pub siglip2_giant_text_url: Option<String>,
+    /// Optional URL override for downloading the SigLIP 2 Giant tokenizer JSON.
+    #[serde(
+        alias = "siglip2_tokenizer_url",
+        alias = "siglip2_giant_tokenizer_url",
+        alias = "siglip_tokenizer_url"
+    )]
+    pub siglip2_giant_tokenizer_url: Option<String>,
 }
 
 /// External tool paths for image viewing, editing, and background removal.
@@ -754,6 +770,22 @@ impl AppConfig {
             .as_deref()
             .unwrap_or(DEFAULT_SIGLIP2_GIANT_MODEL_URL)
     }
+
+    /// URL for downloading the SigLIP 2 Giant text encoder ONNX model.
+    pub fn siglip2_giant_text_model_url(&self) -> &str {
+        self.ai_models
+            .siglip2_giant_text_url
+            .as_deref()
+            .unwrap_or(DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL)
+    }
+
+    /// URL for downloading the SigLIP 2 Giant tokenizer JSON.
+    pub fn siglip2_giant_tokenizer_url(&self) -> &str {
+        self.ai_models
+            .siglip2_giant_tokenizer_url
+            .as_deref()
+            .unwrap_or(DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL)
+    }
 }
 
 /// Finds the active config file path, prioritizing local `config.toml` if present.
@@ -1021,6 +1053,14 @@ triangle_limit = 2500
             default_cfg.siglip2_giant_model_url(),
             DEFAULT_SIGLIP2_GIANT_MODEL_URL
         );
+        assert_eq!(
+            default_cfg.siglip2_giant_text_model_url(),
+            DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL
+        );
+        assert_eq!(
+            default_cfg.siglip2_giant_tokenizer_url(),
+            DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL
+        );
 
         // Test overrides under [ai_models]
         let ai_models_toml = r#"
@@ -1031,6 +1071,8 @@ depth_url = "https://custom.mirror/depth.onnx"
 sam_encoder_url = "https://custom.mirror/sam_enc.onnx"
 sam_decoder_url = "https://custom.mirror/sam_dec.onnx"
 siglip2_giant_url = "https://custom.mirror/siglip2.onnx"
+siglip2_giant_text_url = "https://custom.mirror/siglip2_text.onnx"
+siglip2_giant_tokenizer_url = "https://custom.mirror/siglip2_tokenizer.json"
 "#;
         let ai_cfg: AppConfig = toml::from_str(ai_models_toml).unwrap();
         assert_eq!(ai_cfg.lama_model_url(), "https://custom.mirror/lama.onnx");
@@ -1054,6 +1096,14 @@ siglip2_giant_url = "https://custom.mirror/siglip2.onnx"
         assert_eq!(
             ai_cfg.siglip2_giant_model_url(),
             "https://custom.mirror/siglip2.onnx"
+        );
+        assert_eq!(
+            ai_cfg.siglip2_giant_text_model_url(),
+            "https://custom.mirror/siglip2_text.onnx"
+        );
+        assert_eq!(
+            ai_cfg.siglip2_giant_tokenizer_url(),
+            "https://custom.mirror/siglip2_tokenizer.json"
         );
 
         // Test overrides under [image]

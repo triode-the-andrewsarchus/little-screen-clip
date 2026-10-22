@@ -18,7 +18,7 @@ use super::{
     embedding::{FeatureVector, project_features_to_2d},
     grid::{GridPlacement, grid_dimensions, snap_to_grid},
     scanner::scan_recursive_photos,
-    siglip::{SIGLIP_BATCH_SIZE, SiglipEmbedder},
+    siglip::{SIGLIP_BATCH_SIZE, SiglipEmbedder, SiglipTextEmbedder},
 };
 use crate::file_manager::filesystem::{Directory, Entry};
 
@@ -64,8 +64,15 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     current_signature: Option<(PathBuf, u64, bool, usize)>,
     scan_job: Option<PendingJob<Vec<Entry>>>,
     hash_job: Option<HashJob>,
+    search_job: Option<PendingJob<Option<Vec<f32>>>>,
     initial_fit_done: bool,
     pub hashing_progress: (usize, usize), // (completed, total)
+    pub search_query: String,
+    pub active_concept: Option<String>,
+    pub concept_embedding: Option<Vec<f32>>,
+    pub similarity_threshold: f32,
+    pub match_counts: (usize, usize), // (matching, other)
+    pub split_row_offset: usize,      // Row index where the "other" grid begins
 }
 
 impl Default for SimilarityCanvas {
@@ -83,8 +90,15 @@ impl Default for SimilarityCanvas {
             current_signature: None,
             scan_job: None,
             hash_job: None,
+            search_job: None,
             initial_fit_done: false,
             hashing_progress: (0, 0),
+            search_query: String::new(),
+            active_concept: None,
+            concept_embedding: None,
+            similarity_threshold: 0.10,
+            match_counts: (0, 0),
+            split_row_offset: 0,
         }
     }
 }
@@ -107,6 +121,12 @@ impl SimilarityCanvas {
     pub fn retire(&mut self) {
         self.scan_job = None;
         self.hash_job = None;
+        self.search_job = None;
+    }
+
+    /// Stores a feature vector for a path (used in tests and internal cache updates).
+    pub fn insert_hash(&mut self, path: PathBuf, feat: FeatureVector, rev: u64) {
+        self.hashes.insert(path, (feat, rev));
     }
 
     pub fn is_scanning(&self) -> bool {
@@ -115,6 +135,50 @@ impl SimilarityCanvas {
 
     pub fn is_hashing(&self) -> bool {
         self.hash_job.is_some()
+    }
+
+    pub fn is_searching(&self) -> bool {
+        self.search_job.is_some()
+    }
+
+    /// Triggers an asynchronous concept search by embedding the search query.
+    pub fn trigger_search(&mut self) {
+        let q = self.search_query.trim().to_string();
+        if q.is_empty() {
+            self.clear_search();
+            return;
+        }
+
+        self.active_concept = Some(q.clone());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let c = Arc::clone(&cancelled);
+        let pool = worker_pool();
+        let (ticket, receiver) = pool.submit(Duration::from_secs(60), move || {
+            if c.load(Ordering::Relaxed) {
+                return None;
+            }
+            let mut embedder = SiglipTextEmbedder::try_new().ok()?;
+            if c.load(Ordering::Relaxed) {
+                return None;
+            }
+            embedder.embed_text(&q).ok()
+        });
+        self.search_job = Some(PendingJob {
+            ticket,
+            cancelled,
+            receiver,
+        });
+    }
+
+    /// Clears the active concept search and restores the single similarity grid.
+    pub fn clear_search(&mut self) {
+        self.search_query.clear();
+        self.active_concept = None;
+        self.concept_embedding = None;
+        self.match_counts = (0, 0);
+        self.split_row_offset = 0;
+        self.search_job = None;
+        self.recompute_layout();
     }
 
     /// Synchronizes entries with the active directory or launches recursive scan.
@@ -301,17 +365,128 @@ impl SimilarityCanvas {
             }
         }
 
-        if self.scan_job.is_some() || self.hash_job.is_some() {
+        if let Some(job) = &self.search_job {
+            if let Ok(res) = job.receiver.try_recv() {
+                self.search_job = None;
+                if let Ok(Some(emb)) = res {
+                    self.concept_embedding = Some(emb);
+                    self.recompute_layout();
+                }
+                ctx.request_repaint();
+            }
+        }
+
+        if self.scan_job.is_some() || self.hash_job.is_some() || self.search_job.is_some() {
             ctx.request_repaint_after(Duration::from_millis(32));
         }
     }
 
-    fn recompute_layout(&mut self) {
+    pub fn recompute_layout(&mut self) {
         let n = self.entries.len();
         if n == 0 {
             self.placements.clear();
+            self.split_row_offset = 0;
+            self.match_counts = (0, 0);
             return;
         }
+
+        // If a concept embedding is active, split into two grids (matches vs others)
+        if let Some(ref concept_vec) = self.concept_embedding {
+            let mut scored: Vec<(usize, f32)> = Vec::with_capacity(n);
+            for (i, entry) in self.entries.iter().enumerate() {
+                let score = if let Some((FeatureVector::Dense(img_vec), _)) =
+                    self.hashes.get(&entry.path)
+                {
+                    img_vec
+                        .iter()
+                        .zip(concept_vec.iter())
+                        .map(|(&a, &b)| a * b)
+                        .sum::<f32>()
+                } else {
+                    -1.0
+                };
+                scored.push((i, score));
+            }
+
+            let threshold = self.similarity_threshold;
+            let mut matches: Vec<(usize, f32)> = scored
+                .iter()
+                .filter(|&&(_, s)| s >= threshold)
+                .copied()
+                .collect();
+            let others: Vec<(usize, f32)> = scored
+                .iter()
+                .filter(|&&(_, s)| s < threshold)
+                .copied()
+                .collect();
+
+            // Sort matches descending by similarity score
+            matches.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            self.match_counts = (matches.len(), others.len());
+            let mut new_placements = Vec::with_capacity(n);
+            const ROW_GAP: usize = 2;
+
+            match (matches.is_empty(), others.is_empty()) {
+                (false, false) => {
+                    let (c1, r1) = grid_dimensions(matches.len());
+                    for (rank, &(entry_idx, _)) in matches.iter().enumerate() {
+                        new_placements.push(GridPlacement {
+                            index: entry_idx,
+                            col: if c1 > 0 { rank % c1 } else { 0 },
+                            row: if c1 > 0 { rank / c1 } else { 0 },
+                        });
+                    }
+
+                    let row_offset = r1 + ROW_GAP;
+                    self.split_row_offset = row_offset;
+
+                    let (c2, r2) = grid_dimensions(others.len());
+                    for (rank, &(entry_idx, _)) in others.iter().enumerate() {
+                        new_placements.push(GridPlacement {
+                            index: entry_idx,
+                            col: if c2 > 0 { rank % c2 } else { 0 },
+                            row: row_offset + if c2 > 0 { rank / c2 } else { 0 },
+                        });
+                    }
+
+                    self.grid_cols = c1.max(c2);
+                    self.grid_rows = row_offset + r2;
+                }
+                (false, true) => {
+                    self.split_row_offset = 0;
+                    let (c1, r1) = grid_dimensions(matches.len());
+                    for (rank, &(entry_idx, _)) in matches.iter().enumerate() {
+                        new_placements.push(GridPlacement {
+                            index: entry_idx,
+                            col: if c1 > 0 { rank % c1 } else { 0 },
+                            row: if c1 > 0 { rank / c1 } else { 0 },
+                        });
+                    }
+                    self.grid_cols = c1;
+                    self.grid_rows = r1;
+                }
+                _ => {
+                    self.split_row_offset = 0;
+                    let (c2, r2) = grid_dimensions(others.len());
+                    for (rank, &(entry_idx, _)) in others.iter().enumerate() {
+                        new_placements.push(GridPlacement {
+                            index: entry_idx,
+                            col: if c2 > 0 { rank % c2 } else { 0 },
+                            row: if c2 > 0 { rank / c2 } else { 0 },
+                        });
+                    }
+                    self.grid_cols = c2;
+                    self.grid_rows = r2;
+                }
+            }
+
+            self.placements = new_placements;
+            return;
+        }
+
+        self.split_row_offset = 0;
+        self.match_counts = (0, 0);
 
         let features: Vec<Vec<f32>> = self
             .entries
