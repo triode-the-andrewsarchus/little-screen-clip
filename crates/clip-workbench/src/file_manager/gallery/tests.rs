@@ -620,3 +620,43 @@ fn gallery_zoom_and_temporal_badge_invariants() {
     assert_eq!(extract_letter(".hidden.jpg"), Some("H".to_string()));
     assert_eq!(extract_letter(""), None);
 }
+
+#[test]
+fn test_deferred_gallery_hq_upgrade_resilience() {
+    let mut previews = super::super::previews::EntryPreviews::default();
+    let entry = Entry {
+        path: PathBuf::from("/test/sample_photo.jpg"),
+        name: "sample_photo.jpg".into(),
+        directory: false,
+        regular_file: true,
+        system: None,
+        typescript: false,
+        symlink: false,
+        hidden: false,
+        size: "2 MB".into(),
+        size_bytes: 2 * 1024 * 1024,
+        modified: "2024-10-22".into(),
+        modified_time: None,
+        warning: None,
+        revision: 1,
+        identity: None,
+    };
+
+    assert!(!previews.is_ready(&entry));
+    assert_eq!(previews.gallery_size(&entry.path), 0);
+
+    // Initial base thumbnail request
+    previews.request_gallery(&entry, 256, 1);
+    // Since job was submitted, gallery_size is recorded as 256
+    assert_eq!(previews.gallery_size(&entry.path), 256);
+
+    // Attempting an HQ upgrade (1024) while the base thumbnail is still pending in the worker
+    // must NOT prematurely overwrite gallery_size to 1024 if the refresh job was deferred!
+    previews.request_gallery(&entry, 1024, 1);
+    // gallery_size remains at 256 so the upgrade can be retried once the worker slot is free
+    assert_eq!(
+        previews.gallery_size(&entry.path),
+        256,
+        "gallery_size must not prematurely advance to 1024 if refresh was deferred"
+    );
+}

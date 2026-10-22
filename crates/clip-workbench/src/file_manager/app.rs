@@ -483,6 +483,7 @@ impl eframe::App for FileManagerApp {
                                 {
                                     let mode = super::gallery::similarity::PhotoMode::Masonry;
                                     self.browser.photo_mode = mode;
+                                    self.browser.gallery_last_scroll_time = ui.input(|i| i.time);
                                     let _ = AppConfig::save_file_manager_photo_mode_to_file(
                                         mode.as_str(),
                                     );
