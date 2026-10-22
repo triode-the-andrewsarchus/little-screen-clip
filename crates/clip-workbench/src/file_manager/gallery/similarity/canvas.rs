@@ -40,9 +40,13 @@ pub struct CanvasGrid {
     pub grid_rows: usize,
     pub col_offset: usize,
     pub row_offset: usize,
+    pub threshold: f32,
 }
 
 impl CanvasGrid {
+    pub fn adjust_allowance(&mut self, delta: f32) {
+        self.threshold = (self.threshold + delta).clamp(0.01, 0.90);
+    }
     pub fn refilter(
         &mut self,
         hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
@@ -383,6 +387,7 @@ impl SimilarityCanvas {
             grid_rows: 0,
             col_offset: 0,
             row_offset: 0,
+            threshold: self.similarity_threshold,
         };
         grid.refilter(&self.hashes, &self.entries, self.similarity_threshold);
         for g in &mut self.grids {
@@ -417,6 +422,7 @@ impl SimilarityCanvas {
             grid_rows: 0,
             col_offset: 0,
             row_offset: 0,
+            threshold: self.similarity_threshold,
         };
         grid.refilter(&self.hashes, &self.entries, self.similarity_threshold);
         for g in &mut self.grids {
@@ -501,6 +507,7 @@ impl SimilarityCanvas {
             grid_rows: rows,
             col_offset: 0,
             row_offset: 0,
+            threshold: self.similarity_threshold,
         }];
         self.next_grid_id = 1;
 
@@ -660,6 +667,7 @@ impl SimilarityCanvas {
                             grid_rows: 0,
                             col_offset: 0,
                             row_offset: 0,
+                            threshold: self.similarity_threshold,
                         };
                         self.next_grid_id += 1;
                         new_grid.refilter(&self.hashes, &self.entries, self.similarity_threshold);
@@ -702,6 +710,7 @@ impl SimilarityCanvas {
                 grid_rows: r,
                 col_offset: 0,
                 row_offset: 0,
+                threshold: self.similarity_threshold,
             });
         }
 
@@ -711,9 +720,9 @@ impl SimilarityCanvas {
             base.indices = (0..n).collect();
         }
 
-        // Refilter any search grids with current threshold
-        let threshold = self.similarity_threshold;
+        // Refilter any search grids with their own threshold
         for grid in self.grids.iter_mut().skip(1) {
+            let threshold = grid.threshold;
             grid.refilter(&self.hashes, &self.entries, threshold);
         }
 
