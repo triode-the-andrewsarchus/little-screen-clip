@@ -40,13 +40,42 @@ pub struct CanvasGrid {
     pub grid_rows: usize,
     pub col_offset: usize,
     pub row_offset: usize,
+    pub allowance: f32,
     pub threshold: f32,
 }
 
 impl CanvasGrid {
-    pub fn adjust_allowance(&mut self, delta: f32) {
-        self.threshold = (self.threshold + delta).clamp(0.01, 0.90);
+    pub fn allowance_to_threshold(allowance: f32, is_inverted: bool) -> f32 {
+        let a = allowance.clamp(0.0, 1.0);
+        if is_inverted {
+            0.01 + 0.39 * a.powf(2.5)
+        } else {
+            0.01 + 0.39 * (1.0 - a).powf(2.5)
+        }
     }
+
+    #[allow(dead_code)]
+    pub fn threshold_to_allowance(threshold: f32, is_inverted: bool) -> f32 {
+        let t = threshold.clamp(0.01, 0.40);
+        let ratio = ((t - 0.01) / 0.39).clamp(0.0, 1.0);
+        let p = 1.0 / 2.5;
+        if is_inverted {
+            ratio.powf(p).clamp(0.0, 1.0)
+        } else {
+            (1.0 - ratio.powf(p)).clamp(0.0, 1.0)
+        }
+    }
+
+    pub fn adjust_allowance(&mut self, delta: f32) {
+        self.allowance = (self.allowance + delta).clamp(0.05, 0.95);
+        self.threshold = Self::allowance_to_threshold(self.allowance, self.is_inverted);
+    }
+
+    pub fn set_allowance(&mut self, allowance: f32) {
+        self.allowance = allowance.clamp(0.05, 0.95);
+        self.threshold = Self::allowance_to_threshold(self.allowance, self.is_inverted);
+    }
+
     pub fn refilter(
         &mut self,
         hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
@@ -161,6 +190,7 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     pub hashing_progress: (usize, usize), // (completed, total)
     pub search_query: String,
     pub pending_search: Option<PendingSearchMeta>,
+    pub allowance: f32,
     pub similarity_threshold: f32,
     pub grids: Vec<CanvasGrid>,
     pub next_grid_id: usize,
@@ -188,6 +218,7 @@ impl Default for SimilarityCanvas {
             hashing_progress: (0, 0),
             search_query: String::new(),
             pending_search: None,
+            allowance: 0.50,
             similarity_threshold: 0.08,
             grids: Vec::new(),
             next_grid_id: 1,
@@ -334,6 +365,14 @@ impl SimilarityCanvas {
         self.recompute_layout();
     }
 
+    pub fn adjust_global_allowance(&mut self, delta: f32) {
+        self.allowance = (self.allowance + delta).clamp(0.05, 0.95);
+        self.similarity_threshold = CanvasGrid::allowance_to_threshold(self.allowance, false);
+        for g in self.grids.iter_mut().skip(1) {
+            g.set_allowance(self.allowance);
+        }
+    }
+
     /// Creates a new search grid searching for photos visually similar to the reference photo.
     pub fn search_from_photo(&mut self, entry_path: &std::path::Path) -> Option<usize> {
         let feature = if let Some((feat, _)) = self.hashes.get(entry_path) {
@@ -374,6 +413,8 @@ impl SimilarityCanvas {
 
         let id = self.next_grid_id;
         self.next_grid_id += 1;
+        let allowance = self.allowance;
+        let threshold = CanvasGrid::allowance_to_threshold(allowance, false);
         let mut grid = CanvasGrid {
             id,
             title: format!("Similar to {file_name}"),
@@ -387,9 +428,10 @@ impl SimilarityCanvas {
             grid_rows: 0,
             col_offset: 0,
             row_offset: 0,
-            threshold: self.similarity_threshold,
+            allowance,
+            threshold,
         };
-        grid.refilter(&self.hashes, &self.entries, self.similarity_threshold);
+        grid.refilter(&self.hashes, &self.entries, threshold);
         for g in &mut self.grids {
             g.selected_for_search = false;
         }
@@ -409,6 +451,8 @@ impl SimilarityCanvas {
     ) -> usize {
         let id = self.next_grid_id;
         self.next_grid_id += 1;
+        let allowance = self.allowance;
+        let threshold = CanvasGrid::allowance_to_threshold(allowance, is_inverted);
         let mut grid = CanvasGrid {
             id,
             title: query.to_string(),
@@ -422,9 +466,10 @@ impl SimilarityCanvas {
             grid_rows: 0,
             col_offset: 0,
             row_offset: 0,
-            threshold: self.similarity_threshold,
+            allowance,
+            threshold,
         };
-        grid.refilter(&self.hashes, &self.entries, self.similarity_threshold);
+        grid.refilter(&self.hashes, &self.entries, threshold);
         for g in &mut self.grids {
             g.selected_for_search = false;
         }
@@ -507,6 +552,7 @@ impl SimilarityCanvas {
             grid_rows: rows,
             col_offset: 0,
             row_offset: 0,
+            allowance: self.allowance,
             threshold: self.similarity_threshold,
         }];
         self.next_grid_id = 1;
@@ -654,6 +700,9 @@ impl SimilarityCanvas {
                             g.selected_for_search = false;
                         }
 
+                        let allowance = self.allowance;
+                        let threshold =
+                            CanvasGrid::allowance_to_threshold(allowance, meta.is_inverted);
                         let mut new_grid = CanvasGrid {
                             id: self.next_grid_id,
                             title: meta.query.clone(),
@@ -667,10 +716,11 @@ impl SimilarityCanvas {
                             grid_rows: 0,
                             col_offset: 0,
                             row_offset: 0,
-                            threshold: self.similarity_threshold,
+                            allowance,
+                            threshold,
                         };
                         self.next_grid_id += 1;
-                        new_grid.refilter(&self.hashes, &self.entries, self.similarity_threshold);
+                        new_grid.refilter(&self.hashes, &self.entries, threshold);
                         let new_id = new_grid.id;
                         self.grids.push(new_grid);
                         self.recompute_layout();
@@ -710,6 +760,7 @@ impl SimilarityCanvas {
                 grid_rows: r,
                 col_offset: 0,
                 row_offset: 0,
+                allowance: self.allowance,
                 threshold: self.similarity_threshold,
             });
         }

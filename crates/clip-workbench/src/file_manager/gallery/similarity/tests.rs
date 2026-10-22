@@ -680,7 +680,7 @@ fn test_search_from_photo_creates_ranked_grid() {
 
     canvas
         .hashes
-        .insert(p1.clone(), (FeatureVector::Dense(v1), 1));
+        .insert(p1.clone(), (FeatureVector::Dense(v1.clone()), 1));
     canvas
         .hashes
         .insert(p2.clone(), (FeatureVector::Dense(v2), 1));
@@ -741,7 +741,7 @@ fn test_similarity_canvas_keyboard_shortcuts() {
 #[test]
 fn test_per_grid_match_allowance_adjustment() {
     let mut canvas = SimilarityCanvas::default();
-    canvas.similarity_threshold = 0.80;
+    canvas.allowance = 0.50;
 
     let p1 = PathBuf::from("/test/photo1.jpg");
     let p2 = PathBuf::from("/test/photo2.jpg");
@@ -776,17 +776,17 @@ fn test_per_grid_match_allowance_adjustment() {
 
     // Normalized vectors:
     // v1 = [1.0, 0.0]
-    // v2 = [0.92, 0.39] (dot product with v1 ≈ 0.92)
-    // v3 = [0.75, 0.66] (dot product with v1 ≈ 0.75)
-    // v4 = [0.0, 1.0]   (dot product with v1 = 0.0)
+    // v2: dot product with v1 = 0.20
+    // v3: dot product with v1 = 0.06
+    // v4: dot product with v1 = 0.00
     let v1 = vec![1.0, 0.0];
-    let v2 = vec![0.92, 0.39];
-    let v3 = vec![0.75, 0.66];
+    let v2 = vec![0.20, (1.0f32 - 0.20 * 0.20).sqrt()];
+    let v3 = vec![0.06, (1.0f32 - 0.06 * 0.06).sqrt()];
     let v4 = vec![0.0, 1.0];
 
     canvas
         .hashes
-        .insert(p1.clone(), (FeatureVector::Dense(v1), 1));
+        .insert(p1.clone(), (FeatureVector::Dense(v1.clone()), 1));
     canvas
         .hashes
         .insert(p2.clone(), (FeatureVector::Dense(v2), 1));
@@ -799,30 +799,49 @@ fn test_per_grid_match_allowance_adjustment() {
 
     canvas.recompute_layout();
 
-    // 1. Search visual similarity to p1 with initial threshold 0.80
+    // 1. Search visual similarity to p1 with initial allowance 50% (~0.08 threshold)
     let grid_id = canvas.search_from_photo(&p1).expect("search grid created");
     assert_eq!(grid_id, 1);
     assert_eq!(canvas.grids.len(), 2);
 
     let search_grid = &canvas.grids[1];
-    assert_eq!(search_grid.threshold, 0.80);
-    // At threshold 0.80, only P1 (1.0) and P2 (0.92) match
+    assert!((search_grid.allowance - 0.50).abs() < 1e-4);
+    // At default 50% allowance, P1 (1.0) and P2 (0.20) match, while P3 (0.06) does not
     assert_eq!(search_grid.indices, vec![0, 1]);
 
-    // 2. Adjust Grid 1's match allowance to be more lenient (lower threshold by 0.10 => 0.70)
-    canvas.grids[1].adjust_allowance(-0.10);
-    assert!((canvas.grids[1].threshold - 0.70).abs() < 1e-4);
+    // 2. Click '+' to INCREASE match allowance (include more photos): +15% => 65% allowance
+    canvas.grids[1].adjust_allowance(0.15);
+    assert!((canvas.grids[1].allowance - 0.65).abs() < 1e-4);
 
     canvas.recompute_layout();
-    // At threshold 0.70, P1 (1.0), P2 (0.92), and P3 (0.75) match
+    // At 65% allowance, threshold drops to ~0.04, so P1 (1.0), P2 (0.20), and P3 (0.06) all match
     assert_eq!(canvas.grids[1].indices, vec![0, 1, 2]);
 
-    // 3. Adjust Grid 1's match allowance to be stricter (raise threshold by 0.25 => 0.95)
-    // Clamped to max 0.90
-    canvas.grids[1].adjust_allowance(0.25);
-    assert!((canvas.grids[1].threshold - 0.90).abs() < 1e-4);
+    // 3. Click '-' to DECREASE match allowance (remove photos): -50% => 15% allowance
+    canvas.grids[1].adjust_allowance(-0.50);
+    assert!((canvas.grids[1].allowance - 0.15).abs() < 1e-4);
 
     canvas.recompute_layout();
-    // At threshold 0.90, only P1 (1.0) and P2 (0.92) match
-    assert_eq!(canvas.grids[1].indices, vec![0, 1]);
+    // At 15% allowance, threshold is ~0.27, so only exact/high match P1 (1.0) remains
+    assert_eq!(canvas.grids[1].indices, vec![0]);
+
+    // 4. Test inverted search grid allowance behavior
+    // Concept vector = [1.0, 0.0] (same as p1)
+    let inv_id = canvas.add_search_grid("!p1", true, vec![0, 1, 2, 3], v1);
+    assert_eq!(inv_id, 2);
+    // At default 50% allowance, threshold is ~0.08.
+    // Inverted matches where score < 0.08: P3 (0.06) and P4 (0.00) match
+    assert_eq!(canvas.grids[2].indices, vec![3, 2]);
+
+    // Click '+' to INCREASE match allowance (include more photos): allowance up to 90%
+    canvas.grids[2].adjust_allowance(0.40);
+    canvas.recompute_layout();
+    // At 90% allowance, threshold is ~0.30, so P2 (0.20), P3 (0.06), and P4 (0.00) now all match!
+    assert_eq!(canvas.grids[2].indices, vec![3, 2, 1]);
+
+    // Click '-' to DECREASE match allowance (remove photos): allowance down to 10%
+    canvas.grids[2].adjust_allowance(-0.80);
+    canvas.recompute_layout();
+    // At 10% allowance, threshold is ~0.011, so only P4 (0.00) matches!
+    assert_eq!(canvas.grids[2].indices, vec![3]);
 }
