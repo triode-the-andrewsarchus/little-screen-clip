@@ -1,7 +1,7 @@
 //! Automatically generated compact tree ensemble classifier for audio samples.
 //! Evaluates 20 decision trees of max depth 7 over 32 acoustic DSP features.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum SampleCategory {
     Kick,

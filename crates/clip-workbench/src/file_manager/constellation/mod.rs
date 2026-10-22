@@ -5,17 +5,21 @@ pub mod classifier;
 pub mod db;
 pub mod generated_model;
 pub mod indexer;
+pub mod pack_shelf_ui;
+pub mod sample_pack;
 pub mod ui;
 
 use db::{ConstellationDb, ConstellationSample};
 use generated_model::SampleCategory;
 use indexer::{IndexProgress, run_indexing};
+use sample_pack::SamplePackBank;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Instant;
 
 pub struct IndexingJob {
     pub folder: PathBuf,
@@ -67,6 +71,16 @@ pub struct ConstellationState {
     pub hover_req_tx: Option<mpsc::Sender<HoverPreviewRequest>>,
     pub hover_res_rx: Option<mpsc::Receiver<ConstellationHoverPreview>>,
     pub pending_hover_path: Option<PathBuf>,
+    pub pack_bank: SamplePackBank,
+    pub pack_shelf_open: bool,
+    pub slot_flash: [Option<Instant>; 10],
+    pub active_players: Vec<rodio::Player>,
+    pub hovered_slot_idx: Option<usize>,
+    pub pinned_slot_idx: Option<usize>,
+    pub browser_open: bool,
+    pub browser_selected_idx: Option<usize>,
+    pub browser_packs: Vec<sample_pack::SamplePackSummary>,
+    pub browser_status: Option<(String, Instant)>,
 }
 
 impl Default for ConstellationState {
@@ -88,6 +102,16 @@ impl Default for ConstellationState {
             hover_req_tx: None,
             hover_res_rx: None,
             pending_hover_path: None,
+            pack_bank: SamplePackBank::default(),
+            pack_shelf_open: true,
+            slot_flash: [None; 10],
+            active_players: Vec::new(),
+            hovered_slot_idx: None,
+            pinned_slot_idx: None,
+            browser_open: false,
+            browser_selected_idx: None,
+            browser_packs: Vec::new(),
+            browser_status: None,
         }
     }
 }
@@ -293,9 +317,54 @@ impl ConstellationState {
         }
     }
 
+    /// Triggers audio playback for a sample slot (all layered samples play simultaneously).
+    pub fn trigger_slot(&mut self, slot_idx: usize) {
+        if slot_idx >= self.pack_bank.slots.len() {
+            return;
+        }
+        self.slot_flash[slot_idx] = Some(Instant::now());
+        let slot = &self.pack_bank.slots[slot_idx];
+        for s in &slot.samples {
+            if let Some(player) = sample_pack::play_slot_sample(s) {
+                self.active_players.push(player);
+            }
+        }
+    }
+
+    /// Adds a sample from the constellation map into a specific slot as a layer.
+    pub fn add_sample_to_slot(&mut self, slot_idx: usize, sample: &ConstellationSample) {
+        if slot_idx >= self.pack_bank.slots.len() {
+            return;
+        }
+        let slot_sample = sample_pack::SlotSample::new(
+            sample.file_path.clone(),
+            sample.filename.clone(),
+            Some(sample.category),
+            sample.duration_seconds,
+        );
+        self.pack_bank.slots[slot_idx].samples.push(slot_sample);
+    }
+
+    /// Clears all assigned samples from a specific slot.
+    pub fn clear_slot(&mut self, slot_idx: usize) {
+        if slot_idx < self.pack_bank.slots.len() {
+            self.pack_bank.slots[slot_idx].samples.clear();
+        }
+    }
+
+    /// Scans `<root>/little-screen-clip-sample-packs` for all saved packs.
+    pub fn refresh_browser_packs(&mut self, current_folder: &Path) {
+        let root = self
+            .current_indexed_folder
+            .as_deref()
+            .unwrap_or(current_folder);
+        self.browser_packs = sample_pack::list_saved_packs(root);
+    }
+
     /// Periodic tick called from the application update loop to receive indexing updates.
     pub fn tick(&mut self) {
         self.poll_hover_previews();
+        self.active_players.retain(|p| !p.empty());
         let mut job_done = false;
 
         if let Some(job) = &self.active_job {

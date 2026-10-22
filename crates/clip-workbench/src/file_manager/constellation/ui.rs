@@ -14,8 +14,14 @@ impl ConstellationState {
         on_play_sample: &mut dyn FnMut(&std::path::Path),
         on_select_sample: &mut dyn FnMut(&std::path::Path),
     ) {
+        // Handle keyboard shortcuts (keys 1-0 for slot trigger, Shift+1-0 for assigning)
+        self.handle_shelf_keyboard_shortcuts(ui.ctx());
+
         // Top Toolbar
-        self.render_toolbar(ui, on_play_sample);
+        self.render_toolbar(ui, current_folder, on_play_sample);
+
+        // Render Sample Pack Browser modal if open
+        self.render_pack_browser(ui.ctx(), current_folder);
 
         // If indexing is currently active, show progress overlay
         if let Some(progress) = self.indexing_status.clone() {
@@ -47,13 +53,25 @@ impl ConstellationState {
             return;
         }
 
-        // Main Constellation Starfield Canvas
-        self.render_starfield(ui, current_folder, on_play_sample, on_select_sample);
+        // Layout: Central starfield canvas + Right creation shelf
+        if self.pack_shelf_open {
+            egui::SidePanel::right("constellation_pack_shelf_panel")
+                .resizable(false)
+                .exact_width(280.0)
+                .show_inside(ui, |ui| {
+                    self.render_pack_shelf(ui, current_folder);
+                });
+        }
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            self.render_starfield(ui, current_folder, on_play_sample, on_select_sample);
+        });
     }
 
     fn render_toolbar(
         &mut self,
         ui: &mut egui::Ui,
+        current_folder: &std::path::Path,
         on_play_sample: &mut dyn FnMut(&std::path::Path),
     ) {
         ui.horizontal_wrapped(|ui| {
@@ -136,6 +154,67 @@ impl ConstellationState {
                     .clicked()
                 {
                     self.play_nearest_neighbor(on_play_sample);
+                }
+            }
+
+            ui.separator();
+
+            // Sample Pack Creation Shelf Toggle & Browser
+            let shelf_active = self.pack_shelf_open;
+            let shelf_label = if shelf_active {
+                "🎛️ Creation Shelf (On)"
+            } else {
+                "🎛️ Creation Shelf"
+            };
+            let shelf_btn =
+                egui::Button::new(egui::RichText::new(shelf_label).color(if shelf_active {
+                    Color32::from_rgb(120, 220, 255)
+                } else {
+                    Color32::WHITE
+                }))
+                .fill(if shelf_active {
+                    Color32::from_rgba_premultiplied(35, 65, 110, 220)
+                } else {
+                    Color32::from_black_alpha(80)
+                });
+
+            if ui
+                .add(shelf_btn)
+                .on_hover_text("Toggle sample pack creation shelf (10 slots for keys 1-0)")
+                .clicked()
+            {
+                self.pack_shelf_open = !self.pack_shelf_open;
+            }
+
+            if ui
+                .button("📦 Browse Packs")
+                .on_hover_text("Open Sample Pack Browser")
+                .clicked()
+            {
+                self.refresh_browser_packs(current_folder);
+                self.browser_open = true;
+            }
+
+            // Quick Assign to Slot if a sample is selected on map
+            if let Some(ref path) = self.selected_path.clone() {
+                if let Some(sample) = self.samples.iter().find(|s| &s.file_path == path).cloned() {
+                    ui.separator();
+                    ui.menu_button("➕ Assign Selected to Slot ▾", |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Sample: {}", sample.filename)).strong(),
+                        );
+                        ui.separator();
+                        for slot_idx in 0..super::sample_pack::NUM_SLOTS {
+                            let key_char = super::sample_pack::SLOT_KEY_CHARS[slot_idx];
+                            let slot_title = self.pack_bank.slots[slot_idx].display_title();
+                            let text = format!("[{key_char}] {slot_title}");
+                            if ui.button(text).clicked() {
+                                self.add_sample_to_slot(slot_idx, &sample);
+                                self.slot_flash[slot_idx] = Some(std::time::Instant::now());
+                                ui.close_menu();
+                            }
+                        }
+                    });
                 }
             }
         });
