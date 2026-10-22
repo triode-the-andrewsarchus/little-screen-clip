@@ -560,6 +560,7 @@ impl FileManager {
 
         let mut visible_paths = std::collections::BTreeSet::new();
         let mut hovered_path = None;
+        let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
 
         for placement in &self.similarity_canvas.placements {
             let Some(entry) = self.similarity_canvas.entries.get(placement.index) else {
@@ -598,7 +599,14 @@ impl FileManager {
                 &mut hovered_path,
             );
 
-            actions.row(ui, &tile_response, entry, selected, can_edit, count);
+            let middle_active = middle_down
+                || self.similarity_canvas.is_middle_panning
+                || tile_response.clicked_by(egui::PointerButton::Middle)
+                || tile_response.dragged_by(egui::PointerButton::Middle);
+
+            if !middle_active {
+                actions.row(ui, &tile_response, entry, selected, can_edit, count);
+            }
         }
 
         self.gallery_previews.retain(&visible_paths);

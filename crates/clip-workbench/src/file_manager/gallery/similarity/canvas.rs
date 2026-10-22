@@ -186,7 +186,8 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     scan_job: Option<PendingJob<Vec<Entry>>>,
     hash_job: Option<HashJob>,
     search_job: Option<PendingJob<Option<Vec<f32>>>>,
-    initial_fit_done: bool,
+    pub initial_fit_done: bool,
+    pub is_middle_panning: bool,
     pub hashing_progress: (usize, usize), // (completed, total)
     pub search_query: String,
     pub pending_search: Option<PendingSearchMeta>,
@@ -215,6 +216,7 @@ impl Default for SimilarityCanvas {
             hash_job: None,
             search_job: None,
             initial_fit_done: false,
+            is_middle_panning: false,
             hashing_progress: (0, 0),
             search_query: String::new(),
             pending_search: None,
@@ -970,13 +972,27 @@ impl SimilarityCanvas {
             }
         }
 
-        if response.dragged() {
-            self.pan += response.drag_delta();
+        let pointer_pos = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+        let pointer_in_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
+        let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+        let pointer_delta = ui.input(|i| i.pointer.delta());
+
+        if middle_down {
+            if pointer_in_canvas || self.is_middle_panning {
+                self.is_middle_panning = true;
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                if pointer_delta != egui::Vec2::ZERO {
+                    self.pan += pointer_delta;
+                }
+            }
+        } else {
+            self.is_middle_panning = false;
+            if response.dragged() {
+                self.pan += response.drag_delta();
+            }
         }
 
-        let pointer_pos = ui
-            .input(|i| i.pointer.hover_pos())
-            .unwrap_or(canvas_rect.center());
+        let pointer_pos = pointer_pos.unwrap_or(canvas_rect.center());
         if canvas_rect.contains(pointer_pos) {
             let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
             if scroll_delta.abs() > 0.01 {
