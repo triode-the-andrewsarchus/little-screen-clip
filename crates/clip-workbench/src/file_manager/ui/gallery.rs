@@ -334,14 +334,30 @@ impl FileManager {
             let step = (self.similarity_canvas.tile_size + self.similarity_canvas.spacing)
                 * self.similarity_canvas.zoom;
 
-            // Vertical divider line between grids
-            if grid_idx > 0 {
+            // Dividers: vertical divider between columns, horizontal divider between stacked grids
+            if grid_idx > 0 && grid.row_offset == 0 {
                 let div_x = top_left.min.x - step * 0.5;
                 let total_h = (self.similarity_canvas.grid_rows.max(1) as f32) * step;
                 ui.painter().line_segment(
                     [
-                        pos2(div_x, top_left.min.y - 36.0),
-                        pos2(div_x, top_left.min.y + total_h),
+                        pos2(
+                            div_x,
+                            canvas_rect.min.y + self.similarity_canvas.pan.y - 36.0,
+                        ),
+                        pos2(
+                            div_x,
+                            canvas_rect.min.y + self.similarity_canvas.pan.y + total_h,
+                        ),
+                    ],
+                    egui::Stroke::new(1.0, colors.border),
+                );
+            } else if grid.row_offset > 0 {
+                let div_y = top_left.min.y - step * 0.5;
+                let total_w = (grid.grid_cols.max(1) as f32) * step;
+                ui.painter().line_segment(
+                    [
+                        pos2(top_left.min.x, div_y),
+                        pos2(top_left.min.x + total_w, div_y),
                     ],
                     egui::Stroke::new(1.0, colors.border),
                 );
