@@ -113,9 +113,12 @@ impl SiglipEmbedder {
             .run(ort::inputs![input_tensor])
             .map_err(|e| format!("SigLIP 2 inference failed: {e}"))?;
 
-        let out_tensor = outputs[0]
-            .try_extract_array::<f32>()
-            .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
+        let out_tensor = if let Some(v) = outputs.get("pooler_output") {
+            v.try_extract_array::<f32>()
+        } else {
+            outputs[0].try_extract_array::<f32>()
+        }
+        .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
 
         // 3. Extract and L2-normalize embeddings for each image in batch
         let mut results = Vec::with_capacity(b);
@@ -239,9 +242,12 @@ impl SiglipTextEmbedder {
                 .map_err(|e| format!("SigLIP 2 text inference failed: {e}"))?
         };
 
-        let out_tensor = outputs[0]
-            .try_extract_array::<f32>()
-            .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
+        let out_tensor = if let Some(v) = outputs.get("pooler_output") {
+            v.try_extract_array::<f32>()
+        } else {
+            outputs[0].try_extract_array::<f32>()
+        }
+        .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
 
         let mut embedding = if out_tensor.ndim() == 2 {
             let dim = out_tensor.shape()[1];
@@ -273,5 +279,53 @@ impl SiglipTextEmbedder {
 
         normalize_l2(&mut embedding);
         Ok(embedding)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_siglip_multimodal_alignment() {
+        let mut vision = SiglipEmbedder::try_new().ok();
+        let mut text = SiglipTextEmbedder::try_new().ok();
+
+        if let (Some(vision), Some(text)) = (vision.as_mut(), text.as_mut()) {
+            let samples_dir = std::env::var("SIMILARITY_SAMPLES_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| {
+                    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+                    std::path::PathBuf::from(home).join("Pictures/similarity-samples")
+                });
+            let cat_path = samples_dir.join("n02123394_Persian_cat.JPEG");
+            let burger_path = samples_dir.join("n07697313_cheeseburger.JPEG");
+            let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+            if cat_path.exists() && burger_path.exists() {
+                let v = vision
+                    .embed_batch(&[cat_path, burger_path], &cancelled)
+                    .unwrap();
+                let cat_v = v[0].to_vec();
+                let burger_v = v[1].to_vec();
+
+                let t_cat = text.embed_text("cat").unwrap();
+                let t_food = text.embed_text("food").unwrap();
+
+                let score_cat_cat: f32 = cat_v.iter().zip(&t_cat).map(|(a, b)| a * b).sum();
+                let score_cat_food: f32 = cat_v.iter().zip(&t_food).map(|(a, b)| a * b).sum();
+                let score_burger_food: f32 = burger_v.iter().zip(&t_food).map(|(a, b)| a * b).sum();
+                let score_burger_cat: f32 = burger_v.iter().zip(&t_cat).map(|(a, b)| a * b).sum();
+
+                assert!(
+                    score_cat_cat > score_cat_food + 0.05,
+                    "Cat must match 'cat' better than 'food'"
+                );
+                assert!(
+                    score_burger_food > score_burger_cat + 0.05,
+                    "Burger must match 'food' better than 'cat'"
+                );
+            }
+        }
     }
 }
