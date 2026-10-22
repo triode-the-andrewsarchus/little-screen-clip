@@ -417,3 +417,74 @@ fn test_multi_grid_search_retention_and_chaining() {
     assert_eq!(canvas.grids[0].indices.len(), 12);
     assert!(canvas.grids[0].selected_for_search);
 }
+
+#[test]
+fn test_search_pan_to_grid_results() {
+    use super::canvas::SimilarityCanvas;
+    use super::embedding::FeatureVector;
+    use crate::file_manager::filesystem::Entry;
+    use egui::{Rect, pos2, vec2};
+    use std::path::PathBuf;
+
+    let mut canvas = SimilarityCanvas::default();
+    canvas.similarity_threshold = 0.5;
+
+    let count = 12;
+    let mut entries = Vec::new();
+    for i in 0..count {
+        let path = PathBuf::from(format!("/test_pan_img_{i}.png"));
+        entries.push(Entry {
+            path: path.clone(),
+            name: format!("img_{i}.png"),
+            directory: false,
+            regular_file: true,
+            system: None,
+            typescript: false,
+            symlink: false,
+            hidden: false,
+            size: "1 KB".to_string(),
+            size_bytes: 1024,
+            modified: "today".to_string(),
+            modified_time: None,
+            warning: None,
+            revision: 1,
+            identity: None,
+        });
+
+        let mut vec = vec![0.0f32; 1536];
+        if i < 4 {
+            vec[0] = 1.0;
+        } else {
+            vec[1] = 1.0;
+        }
+        canvas.insert_hash(path, FeatureVector::Dense(vec), 1);
+    }
+
+    canvas.set_entries(entries);
+
+    let viewport = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0));
+    canvas.fit_to_view(viewport);
+
+    // Initial state: no pending pan
+    assert_eq!(canvas.pending_pan_to_grid, None);
+
+    // Add search grid
+    let mut concept = vec![0.0f32; 1536];
+    concept[0] = 1.0;
+    let candidate_indices = canvas.grids[0].indices.clone();
+    let grid_id = canvas.add_search_grid("query", false, candidate_indices, concept);
+
+    // add_search_grid sets pending_pan_to_grid
+    assert_eq!(canvas.pending_pan_to_grid, Some(grid_id));
+
+    // Pan to grid
+    canvas.pan_to_grid(grid_id, viewport);
+
+    // Check that the top-left tile of the result grid is now in frame
+    let result_grid = canvas.grids.iter().find(|g| g.id == grid_id).unwrap();
+    let top_tile_rect = canvas.tile_screen_rect(viewport.min, 0, result_grid.row_offset);
+
+    // The tile should be positioned cleanly in the upper portion of the viewport (y == 110.0)
+    assert!((top_tile_rect.min.y - 110.0).abs() < 1.0);
+    assert!(viewport.contains(top_tile_rect.center()));
+}
