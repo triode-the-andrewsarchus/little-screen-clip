@@ -21,6 +21,14 @@ pub struct IndexingJob {
     pub receiver: mpsc::Receiver<IndexProgress>,
 }
 
+#[derive(Clone, Debug)]
+pub struct HistoryTrailPoint {
+    pub file_path: PathBuf,
+    pub x: f32,
+    pub y: f32,
+    pub category: SampleCategory,
+}
+
 pub struct ConstellationState {
     pub samples: Vec<ConstellationSample>,
     pub current_indexed_folder: Option<PathBuf>,
@@ -29,6 +37,7 @@ pub struct ConstellationState {
     pub hover_to_play: bool,
     pub selected_path: Option<PathBuf>,
     pub last_hovered_path: Option<PathBuf>,
+    pub history_trail: std::collections::VecDeque<HistoryTrailPoint>,
     pub pan: egui::Vec2,
     pub zoom: f32,
     pub active_job: Option<IndexingJob>,
@@ -45,6 +54,7 @@ impl Default for ConstellationState {
             hover_to_play: true,
             selected_path: None,
             last_hovered_path: None,
+            history_trail: std::collections::VecDeque::new(),
             pan: egui::Vec2::ZERO,
             zoom: 1.0,
             active_job: None,
@@ -56,6 +66,60 @@ impl Default for ConstellationState {
 impl ConstellationState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Records a played sample into the auditory history trail, preventing consecutive duplicates.
+    pub fn record_played_sample(&mut self, sample: &ConstellationSample) {
+        if let Some(last) = self.history_trail.back() {
+            if last.file_path == sample.file_path {
+                return;
+            }
+        }
+        self.history_trail.push_back(HistoryTrailPoint {
+            file_path: sample.file_path.clone(),
+            x: sample.x,
+            y: sample.y,
+            category: sample.category,
+        });
+        if self.history_trail.len() > 64 {
+            self.history_trail.pop_front();
+        }
+    }
+
+    /// Computes the adaptive count of recent sample waypoints to connect with a fading trajectory line.
+    ///
+    /// When tightly exploring a small localized clump at high zoom, returns a compact history (around 8-12)
+    /// to avoid visual clutter. When zoomed out or making large sweeping traverses across distant clumps,
+    /// returns a broader history (up to 45-50) so the user's journey across the constellation is clearly visible.
+    pub fn compute_trail_display_count(&self) -> usize {
+        let trail_len = self.history_trail.len();
+        if trail_len <= 2 {
+            return trail_len;
+        }
+
+        // 1. Zoom baseline: tightly bounded at high zoom, expansive when zoomed out
+        let zoom_baseline = 10.0 + (28.0 / self.zoom.sqrt()).clamp(0.0, 32.0);
+
+        // 2. Spatial distance factor based on recent consecutive steps
+        let recent_points: Vec<&HistoryTrailPoint> =
+            self.history_trail.iter().rev().take(15).collect();
+        let mut total_dist = 0.0f32;
+        let mut pair_count = 0;
+        for window in recent_points.windows(2) {
+            let dx = window[0].x - window[1].x;
+            let dy = window[0].y - window[1].y;
+            total_dist += (dx * dx + dy * dy).sqrt();
+            pair_count += 1;
+        }
+        let avg_dist = if pair_count > 0 {
+            total_dist / pair_count as f32
+        } else {
+            0.15
+        };
+
+        let dist_adjustment = ((avg_dist - 0.15) * 35.0).clamp(-4.0, 15.0);
+        let target_count = (zoom_baseline + dist_adjustment).round() as usize;
+        target_count.clamp(8, 50).min(trail_len)
     }
 
     /// Returns the path of the folder currently being indexed, if an indexing job is active.
@@ -77,6 +141,7 @@ impl ConstellationState {
         self.current_indexed_folder = Some(folder.to_path_buf());
         self.selected_path = None;
         self.last_hovered_path = None;
+        self.history_trail.clear();
 
         if let Ok(db) = ConstellationDb::new() {
             if let Ok(samples) = db.load_samples(folder) {
@@ -163,5 +228,130 @@ impl ConstellationState {
         if job_done {
             self.active_job = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_history_trail_recording_and_deduplication() {
+        let mut state = ConstellationState::new();
+
+        let s1 = ConstellationSample {
+            file_path: PathBuf::from("kick_01.wav"),
+            folder_path: PathBuf::from("/samples"),
+            filename: "kick_01.wav".to_string(),
+            category: SampleCategory::Kick,
+            confidence: 0.9,
+            duration_seconds: 0.3,
+            pitch_hz: 55.0,
+            pitch_clarity: 0.8,
+            brightness: 250.0,
+            x: -0.8,
+            y: -0.15,
+            file_size: 1000,
+            mtime: 0,
+        };
+
+        let s2 = ConstellationSample {
+            file_path: PathBuf::from("snare_01.wav"),
+            folder_path: PathBuf::from("/samples"),
+            filename: "snare_01.wav".to_string(),
+            category: SampleCategory::Snare,
+            confidence: 0.95,
+            duration_seconds: 0.25,
+            pitch_hz: 200.0,
+            pitch_clarity: 0.6,
+            brightness: 4500.0,
+            x: -0.2,
+            y: -0.08,
+            file_size: 1200,
+            mtime: 0,
+        };
+
+        // Record first sample
+        state.record_played_sample(&s1);
+        assert_eq!(state.history_trail.len(), 1);
+
+        // Record consecutive duplicate: should NOT increase trail length
+        state.record_played_sample(&s1);
+        assert_eq!(state.history_trail.len(), 1);
+
+        // Record different sample
+        state.record_played_sample(&s2);
+        assert_eq!(state.history_trail.len(), 2);
+
+        // Record s1 again (non-consecutive): should be added
+        state.record_played_sample(&s1);
+        assert_eq!(state.history_trail.len(), 3);
+    }
+
+    #[test]
+    fn test_adaptive_trail_display_count() {
+        let mut state = ConstellationState::new();
+
+        // Populate 40 trail points
+        for i in 0..40 {
+            let sample = ConstellationSample {
+                file_path: PathBuf::from(format!("sample_{:03}.wav", i)),
+                folder_path: PathBuf::from("/samples"),
+                filename: format!("sample_{:03}.wav", i),
+                category: SampleCategory::Kick,
+                confidence: 0.9,
+                duration_seconds: 0.2,
+                pitch_hz: 100.0,
+                pitch_clarity: 0.5,
+                brightness: 1000.0,
+                // Micro steps within tight cluster
+                x: -0.8 + (i as f32 * 0.005),
+                y: -0.15 + (i as f32 * 0.005),
+                file_size: 1000,
+                mtime: 0,
+            };
+            state.record_played_sample(&sample);
+        }
+
+        // At high zoom with tight clustering, count should be small (~10-14)
+        state.zoom = 20.0;
+        let tight_count = state.compute_trail_display_count();
+        assert!(
+            (8..=16).contains(&tight_count),
+            "Expected tight count around 10-14 at high zoom, got {}",
+            tight_count
+        );
+
+        // Clear and populate with wide sweeping jumps across clumps
+        state.history_trail.clear();
+        for i in 0..40 {
+            let angle = i as f32 * 0.25;
+            let sample = ConstellationSample {
+                file_path: PathBuf::from(format!("orbit_{:03}.wav", i)),
+                folder_path: PathBuf::from("/samples"),
+                filename: format!("orbit_{:03}.wav", i),
+                category: SampleCategory::Kick,
+                confidence: 0.9,
+                duration_seconds: 0.2,
+                pitch_hz: 100.0,
+                pitch_clarity: 0.5,
+                brightness: 1000.0,
+                x: angle.cos() * 0.9,
+                y: angle.sin() * 0.7,
+                file_size: 1000,
+                mtime: 0,
+            };
+            state.record_played_sample(&sample);
+        }
+
+        // At low zoom with sweeping steps, count should be large (~35-45)
+        state.zoom = 1.0;
+        let wide_count = state.compute_trail_display_count();
+        assert!(
+            wide_count >= 35,
+            "Expected wide sweeping trail >= 35, got {}",
+            wide_count
+        );
+        assert!(wide_count > tight_count);
     }
 }

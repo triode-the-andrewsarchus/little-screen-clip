@@ -125,8 +125,9 @@ impl ConstellationState {
                         .map(|d| d.subsec_nanos() as usize)
                         .unwrap_or(0);
                     let idx = nanos % self.samples.len();
-                    let s = &self.samples[idx];
+                    let s = self.samples[idx].clone();
                     self.selected_path = Some(s.file_path.clone());
+                    self.record_played_sample(&s);
                     on_play_sample(&s.file_path);
                 }
 
@@ -136,6 +137,17 @@ impl ConstellationState {
                     .clicked()
                 {
                     self.play_nearest_neighbor(on_play_sample);
+                }
+            }
+
+            // Clear playback history trail if active
+            if !self.history_trail.is_empty() {
+                if ui
+                    .button("🧹 Clear Trail")
+                    .on_hover_text("Clear playback history trail")
+                    .clicked()
+                {
+                    self.history_trail.clear();
                 }
             }
 
@@ -255,6 +267,7 @@ impl ConstellationState {
 
         // Dynamic spatial anti-overlap push when zoomed in
         let push_factor = ((self.zoom - 1.8) / 0.8).clamp(0.0, 1.0);
+        let mut relaxed_map: Option<std::collections::HashMap<&std::path::Path, Pos2>> = None;
 
         if push_factor > 0.0 {
             // Zoomed-in path: collect visible candidates and apply spatial repulsion
@@ -367,9 +380,12 @@ impl ConstellationState {
                     disp[idx] = Vec2::new(dx_acc * 0.75, dy_acc * 0.75);
                 }
 
+                let mut map = std::collections::HashMap::with_capacity(n_vis);
+
                 // Apply displacements to visible stars and render
                 for (idx, star) in vis_stars.iter_mut().enumerate() {
                     star.pos += disp[idx];
+                    map.insert(star.sample.file_path.as_path(), star.pos);
 
                     let is_selected = self.selected_path.as_ref() == Some(&star.sample.file_path);
                     let base_color = star.sample.category.color();
@@ -414,6 +430,8 @@ impl ConstellationState {
 
                     add_star_diamond(&mut star_mesh, star.pos, base_star_radius, color);
                 }
+
+                relaxed_map = Some(map);
             }
         } else {
             // High-level zoom path: direct projection with sub-pixel density capping for maximum FPS
@@ -492,6 +510,9 @@ impl ConstellationState {
             }
         }
 
+        // Render playback history trail (fades over steps and distance)
+        self.render_playback_trail(&painter, center, view_scale, relaxed_map.as_ref());
+
         // Upload and render all stars to the GPU in a single draw call!
         if !star_mesh.is_empty() {
             painter.add(egui::Shape::mesh(star_mesh));
@@ -529,6 +550,7 @@ impl ConstellationState {
             // Click to select & play
             if response.clicked() {
                 self.selected_path = Some(hovered.file_path.clone());
+                self.record_played_sample(&hovered);
                 on_select_sample(&hovered.file_path);
                 on_play_sample(&hovered.file_path);
             }
@@ -536,6 +558,7 @@ impl ConstellationState {
             // Hover-to-play audition
             if self.hover_to_play && self.last_hovered_path.as_ref() != Some(&hovered.file_path) {
                 self.last_hovered_path = Some(hovered.file_path.clone());
+                self.record_played_sample(&hovered);
                 on_play_sample(&hovered.file_path);
             }
 
@@ -672,7 +695,7 @@ impl ConstellationState {
             return;
         };
 
-        let mut closest_path = None;
+        let mut closest_sample: Option<ConstellationSample> = None;
         let mut min_dist = f32::MAX;
 
         for s in &self.samples {
@@ -684,13 +707,113 @@ impl ConstellationState {
             let dist = dx * dx + dy * dy;
             if dist < min_dist {
                 min_dist = dist;
-                closest_path = Some(s.file_path.clone());
+                closest_sample = Some(s.clone());
             }
         }
 
-        if let Some(next_path) = closest_path {
-            self.selected_path = Some(next_path.clone());
-            on_play_sample(&next_path);
+        if let Some(next_sample) = closest_sample {
+            self.selected_path = Some(next_sample.file_path.clone());
+            self.record_played_sample(&next_sample);
+            on_play_sample(&next_sample.file_path);
+        }
+    }
+
+    fn render_playback_trail(
+        &self,
+        painter: &egui::Painter,
+        center: Pos2,
+        view_scale: f32,
+        relaxed_positions: Option<&std::collections::HashMap<&std::path::Path, Pos2>>,
+    ) {
+        let trail_len = self.history_trail.len();
+        if trail_len < 2 {
+            return;
+        }
+
+        let display_count = self.compute_trail_display_count();
+        if display_count < 2 {
+            return;
+        }
+
+        // Take the most recent `display_count` points in chronological order:
+        // older points first, newest point last
+        let start_idx = trail_len.saturating_sub(display_count);
+        let active_slice: Vec<&super::HistoryTrailPoint> =
+            self.history_trail.iter().skip(start_idx).collect();
+        let n = active_slice.len();
+        if n < 2 {
+            return;
+        }
+
+        // Project each waypoint to screen coordinates (using relaxed position when available)
+        let screen_positions: Vec<Pos2> = active_slice
+            .iter()
+            .map(|pt| {
+                if let Some(map) = relaxed_positions {
+                    if let Some(&p) = map.get(pt.file_path.as_path()) {
+                        return p;
+                    }
+                }
+                Pos2::new(center.x + pt.x * view_scale, center.y - pt.y * view_scale)
+            })
+            .collect();
+
+        // Draw fading trajectory segments
+        for i in 1..n {
+            let p_prev = screen_positions[i - 1];
+            let p_curr = screen_positions[i];
+
+            // How many steps ago was this segment from the newest point?
+            let step_from_new = (n - 1) - i;
+            let t = 1.0 - (step_from_new as f32 / (n - 1) as f32); // 1.0 (newest) down to ~0.0 (oldest)
+
+            let fade = t.powf(1.25);
+            let alpha = (fade * 210.0).clamp(12.0, 210.0) as u8;
+            let width = 1.2 + fade * 1.5;
+
+            let c1 = active_slice[i - 1].category.color();
+            let c2 = active_slice[i].category.color();
+
+            // Blend colors with alpha
+            let blended_r = (((c1.r() as u16 + c2.r() as u16) / 2) * alpha as u16 / 255) as u8;
+            let blended_g = (((c1.g() as u16 + c2.g() as u16) / 2) * alpha as u16 / 255) as u8;
+            let blended_b = (((c1.b() as u16 + c2.b() as u16) / 2) * alpha as u16 / 255) as u8;
+            let line_color =
+                Color32::from_rgba_premultiplied(blended_r, blended_g, blended_b, alpha);
+
+            // Subtle outer glow for recent segments
+            if fade > 0.40 {
+                let glow_alpha = ((fade - 0.40) * 60.0) as u8;
+                let glow_r =
+                    (((c1.r() as u16 + c2.r() as u16) / 2) * glow_alpha as u16 / 255) as u8;
+                let glow_g =
+                    (((c1.g() as u16 + c2.g() as u16) / 2) * glow_alpha as u16 / 255) as u8;
+                let glow_b =
+                    (((c1.b() as u16 + c2.b() as u16) / 2) * glow_alpha as u16 / 255) as u8;
+                let glow_color =
+                    Color32::from_rgba_premultiplied(glow_r, glow_g, glow_b, glow_alpha);
+                painter.line_segment([p_prev, p_curr], Stroke::new(width + 2.5, glow_color));
+            }
+
+            // Core trail line
+            painter.line_segment([p_prev, p_curr], Stroke::new(width, line_color));
+
+            // Soft glowing node at previous waypoint
+            let node_r = 1.6 + fade * 1.8;
+            painter.circle_filled(p_prev, node_r, line_color);
+        }
+
+        // Draw prominent glowing node at newest waypoint
+        if let Some(&last_pos) = screen_positions.last() {
+            let last_color = active_slice.last().unwrap().category.color();
+            let glow = Color32::from_rgba_premultiplied(
+                last_color.r(),
+                last_color.g(),
+                last_color.b(),
+                180,
+            );
+            painter.circle_filled(last_pos, 4.0, glow);
+            painter.circle_filled(last_pos, 2.0, Color32::WHITE);
         }
     }
 }
