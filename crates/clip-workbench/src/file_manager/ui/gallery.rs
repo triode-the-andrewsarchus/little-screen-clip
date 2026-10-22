@@ -601,6 +601,7 @@ impl FileManager {
         let mut toggle_grid: Option<usize> = None;
         let mut remove_grid: Option<usize> = None;
         let mut select_all_grid: Option<usize> = None;
+        let mut adjust_grid_threshold: Option<(usize, f32)> = None;
 
         let total_selected = self
             .similarity_canvas
@@ -661,7 +662,7 @@ impl FileManager {
 
             let bar_rect = Rect::from_min_size(
                 pos2(top_left.min.x, top_left.min.y - 44.0),
-                vec2(620.0, 28.0),
+                vec2(720.0, 28.0),
             );
 
             ui.allocate_ui_at_rect(bar_rect, |ui| {
@@ -718,6 +719,40 @@ impl FileManager {
 
                             if grid.id > 0 {
                                 ui.separator();
+                                let minus_resp = ui.add(
+                                    egui::Button::image(
+                                        crate::icons::Icon::Minus
+                                            .image_tinted(10.0, colors.text_secondary),
+                                    )
+                                    .frame(true)
+                                    .min_size(vec2(16.0, 16.0)),
+                                );
+                                if minus_resp
+                                    .on_hover_text("Lower threshold (allow more matches)")
+                                    .clicked()
+                                {
+                                    adjust_grid_threshold = Some((grid.id, -0.01));
+                                }
+
+                                ui.label(format!("{:.2}", grid.threshold))
+                                    .on_hover_text("Match allowance threshold");
+
+                                let plus_resp = ui.add(
+                                    egui::Button::image(
+                                        crate::icons::Icon::Plus
+                                            .image_tinted(10.0, colors.text_secondary),
+                                    )
+                                    .frame(true)
+                                    .min_size(vec2(16.0, 16.0)),
+                                );
+                                if plus_resp
+                                    .on_hover_text("Raise threshold (stricter matches)")
+                                    .clicked()
+                                {
+                                    adjust_grid_threshold = Some((grid.id, 0.01));
+                                }
+
+                                ui.separator();
                                 let close_resp = ui.add(
                                     egui::Button::image(
                                         crate::icons::Icon::Close
@@ -763,6 +798,18 @@ impl FileManager {
 
         if let Some(id) = remove_grid {
             self.similarity_canvas.remove_grid(id);
+        }
+
+        if let Some((grid_id, delta)) = adjust_grid_threshold {
+            if let Some(grid) = self
+                .similarity_canvas
+                .grids
+                .iter_mut()
+                .find(|g| g.id == grid_id)
+            {
+                grid.adjust_allowance(delta);
+            }
+            self.similarity_canvas.recompute_layout();
         }
 
         if let Some(id) = select_all_grid {
@@ -863,6 +910,9 @@ impl FileManager {
                                     self.similarity_canvas.similarity_threshold =
                                         (self.similarity_canvas.similarity_threshold - 0.01)
                                             .max(0.01);
+                                    for g in self.similarity_canvas.grids.iter_mut().skip(1) {
+                                        g.threshold = self.similarity_canvas.similarity_threshold;
+                                    }
                                     self.similarity_canvas.recompute_layout();
                                 }
                                 ui.label(format!(
@@ -884,7 +934,10 @@ impl FileManager {
                                 {
                                     self.similarity_canvas.similarity_threshold =
                                         (self.similarity_canvas.similarity_threshold + 0.01)
-                                            .min(0.50);
+                                            .min(0.90);
+                                    for g in self.similarity_canvas.grids.iter_mut().skip(1) {
+                                        g.threshold = self.similarity_canvas.similarity_threshold;
+                                    }
                                     self.similarity_canvas.recompute_layout();
                                 }
                             }

@@ -737,3 +737,92 @@ fn test_similarity_canvas_keyboard_shortcuts() {
         canvas.zoom
     );
 }
+
+#[test]
+fn test_per_grid_match_allowance_adjustment() {
+    let mut canvas = SimilarityCanvas::default();
+    canvas.similarity_threshold = 0.80;
+
+    let p1 = PathBuf::from("/test/photo1.jpg");
+    let p2 = PathBuf::from("/test/photo2.jpg");
+    let p3 = PathBuf::from("/test/photo3.jpg");
+    let p4 = PathBuf::from("/test/photo4.jpg");
+
+    let make_test_entry = |p: &PathBuf, name: &str| Entry {
+        path: p.clone(),
+        name: name.to_string(),
+        directory: false,
+        regular_file: true,
+        system: None,
+        typescript: false,
+        symlink: false,
+        hidden: false,
+        size: "1 KB".to_string(),
+        size_bytes: 1024,
+        modified: "today".to_string(),
+        modified_time: None,
+        warning: None,
+        revision: 1,
+        identity: None,
+    };
+
+    let entries = vec![
+        make_test_entry(&p1, "photo1.jpg"),
+        make_test_entry(&p2, "photo2.jpg"),
+        make_test_entry(&p3, "photo3.jpg"),
+        make_test_entry(&p4, "photo4.jpg"),
+    ];
+    canvas.set_entries(entries);
+
+    // Normalized vectors:
+    // v1 = [1.0, 0.0]
+    // v2 = [0.92, 0.39] (dot product with v1 ≈ 0.92)
+    // v3 = [0.75, 0.66] (dot product with v1 ≈ 0.75)
+    // v4 = [0.0, 1.0]   (dot product with v1 = 0.0)
+    let v1 = vec![1.0, 0.0];
+    let v2 = vec![0.92, 0.39];
+    let v3 = vec![0.75, 0.66];
+    let v4 = vec![0.0, 1.0];
+
+    canvas
+        .hashes
+        .insert(p1.clone(), (FeatureVector::Dense(v1), 1));
+    canvas
+        .hashes
+        .insert(p2.clone(), (FeatureVector::Dense(v2), 1));
+    canvas
+        .hashes
+        .insert(p3.clone(), (FeatureVector::Dense(v3), 1));
+    canvas
+        .hashes
+        .insert(p4.clone(), (FeatureVector::Dense(v4), 1));
+
+    canvas.recompute_layout();
+
+    // 1. Search visual similarity to p1 with initial threshold 0.80
+    let grid_id = canvas.search_from_photo(&p1).expect("search grid created");
+    assert_eq!(grid_id, 1);
+    assert_eq!(canvas.grids.len(), 2);
+
+    let search_grid = &canvas.grids[1];
+    assert_eq!(search_grid.threshold, 0.80);
+    // At threshold 0.80, only P1 (1.0) and P2 (0.92) match
+    assert_eq!(search_grid.indices, vec![0, 1]);
+
+    // 2. Adjust Grid 1's match allowance to be more lenient (lower threshold by 0.10 => 0.70)
+    canvas.grids[1].adjust_allowance(-0.10);
+    assert!((canvas.grids[1].threshold - 0.70).abs() < 1e-4);
+
+    canvas.recompute_layout();
+    // At threshold 0.70, P1 (1.0), P2 (0.92), and P3 (0.75) match
+    assert_eq!(canvas.grids[1].indices, vec![0, 1, 2]);
+
+    // 3. Adjust Grid 1's match allowance to be stricter (raise threshold by 0.25 => 0.95)
+    // Clamped to max 0.90
+    canvas.grids[1].adjust_allowance(0.25);
+    assert!((canvas.grids[1].threshold - 0.90).abs() < 1e-4);
+
+    canvas.recompute_layout();
+    // At threshold 0.90, only P1 (1.0) and P2 (0.92) match
+    assert_eq!(canvas.grids[1].indices, vec![0, 1]);
+}
