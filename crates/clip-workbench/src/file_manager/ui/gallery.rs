@@ -420,6 +420,7 @@ impl FileManager {
         let mut solo_grid: Option<usize> = None;
         let mut toggle_grid: Option<usize> = None;
         let mut remove_grid: Option<usize> = None;
+        let mut select_all_grid: Option<usize> = None;
 
         let total_selected = self
             .similarity_canvas
@@ -480,7 +481,7 @@ impl FileManager {
 
             let bar_rect = Rect::from_min_size(
                 pos2(top_left.min.x, top_left.min.y - 44.0),
-                vec2(540.0, 28.0),
+                vec2(620.0, 28.0),
             );
 
             ui.allocate_ui_at_rect(bar_rect, |ui| {
@@ -526,6 +527,14 @@ impl FileManager {
                                 format!("\"{}\" ({})", grid.title, grid.indices.len())
                             };
                             ui.label(egui::RichText::new(title_text).strong());
+
+                            ui.separator();
+                            let sel_all_resp = ui.small_button("Select all").on_hover_text(
+                                "Select all photos in this grid in the file manager",
+                            );
+                            if sel_all_resp.clicked() {
+                                select_all_grid = Some(grid.id);
+                            }
 
                             if grid.id > 0 {
                                 ui.separator();
@@ -574,6 +583,22 @@ impl FileManager {
 
         if let Some(id) = remove_grid {
             self.similarity_canvas.remove_grid(id);
+        }
+
+        if let Some(id) = select_all_grid {
+            if let Some(grid) = self.similarity_canvas.grids.iter().find(|g| g.id == id) {
+                let paths: Vec<PathBuf> = grid
+                    .indices
+                    .iter()
+                    .filter_map(|&idx| {
+                        self.similarity_canvas
+                            .entries
+                            .get(idx)
+                            .map(|e| e.path.clone())
+                    })
+                    .collect();
+                self.select_all_paths(paths);
+            }
         }
 
         // Floating search HUD pill
@@ -682,6 +707,49 @@ impl FileManager {
                                             .min(0.50);
                                     self.similarity_canvas.recompute_layout();
                                 }
+                            }
+                        });
+                    });
+            });
+
+        // Floating Grid Jump Navigator
+        let nav_id = Id::new("similarity_grid_nav");
+        let nav_pos = pos2(canvas_rect.left() + 20.0, canvas_rect.bottom() - 44.0);
+        egui::Area::new(nav_id)
+            .order(egui::Order::Middle)
+            .fixed_pos(nav_pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(colors.panel)
+                    .stroke(egui::Stroke::new(1.0, colors.border))
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Grids:").size(11.0).weak());
+                            let mut jump_to_grid = None;
+                            for grid in &self.similarity_canvas.grids {
+                                let label = if grid.id == 0 {
+                                    format!("All ({})", grid.indices.len())
+                                } else {
+                                    let truncated = if grid.title.chars().count() > 14 {
+                                        let s: String = grid.title.chars().take(12).collect();
+                                        format!("{s}… ({})", grid.indices.len())
+                                    } else {
+                                        format!("{} ({})", grid.title, grid.indices.len())
+                                    };
+                                    truncated
+                                };
+                                let is_active = grid.selected_for_search;
+                                let btn = ui
+                                    .selectable_label(is_active, label)
+                                    .on_hover_text(format!("Jump to grid: {}", grid.title));
+                                if btn.clicked() {
+                                    jump_to_grid = Some(grid.id);
+                                }
+                            }
+                            if let Some(id) = jump_to_grid {
+                                self.similarity_canvas.pending_pan_to_grid = Some(id);
                             }
                         });
                     });

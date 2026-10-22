@@ -124,6 +124,17 @@ impl FileManager {
         self.selection_revision = self.selection_revision.wrapping_add(1);
     }
 
+    pub(super) fn select_all_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        let path_set: BTreeSet<PathBuf> = paths.into_iter().collect();
+        if let Some(location) = self.location_mut() {
+            location.selected = path_set.iter().next().cloned();
+            location.anchor = location.selected.clone();
+            location.selection = path_set;
+            location.selection_undo = None;
+        }
+        self.selection_revision = self.selection_revision.wrapping_add(1);
+    }
+
     pub(super) fn clear_selection(&mut self) {
         if let Some(location) = self.location_mut() {
             location.selection.clear();

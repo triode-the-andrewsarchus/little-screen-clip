@@ -58,12 +58,23 @@ impl CanvasGrid {
             let Some(entry) = entries.get(idx) else {
                 continue;
             };
-            let score = if let Some((FeatureVector::Dense(img_vec), _)) = hashes.get(&entry.path) {
-                img_vec
-                    .iter()
-                    .zip(concept_vec.iter())
-                    .map(|(&a, &b)| a * b)
-                    .sum::<f32>()
+            let score = if let Some((feat, _)) = hashes.get(&entry.path) {
+                match feat {
+                    FeatureVector::Dense(img_vec) if img_vec.len() == concept_vec.len() => img_vec
+                        .iter()
+                        .zip(concept_vec.iter())
+                        .map(|(&a, &b)| a * b)
+                        .sum::<f32>(),
+                    FeatureVector::DHash(_) if concept_vec.len() == 64 => {
+                        let img_vec = feat.to_vec();
+                        img_vec
+                            .iter()
+                            .zip(concept_vec.iter())
+                            .map(|(&a, &b)| (a * 0.25) * b)
+                            .sum::<f32>()
+                    }
+                    _ => -1.0,
+                }
             } else {
                 -1.0
             };
@@ -137,7 +148,7 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     pub placements: Vec<GridPlacement>,
     pub grid_cols: usize,
     pub grid_rows: usize,
-    hashes: HashMap<PathBuf, (FeatureVector, u64)>, // path -> (feature, revision)
+    pub(in crate::file_manager) hashes: HashMap<PathBuf, (FeatureVector, u64)>, // path -> (feature, revision)
     current_signature: Option<(PathBuf, u64, bool, usize)>,
     scan_job: Option<PendingJob<Vec<Entry>>>,
     hash_job: Option<HashJob>,
@@ -317,6 +328,70 @@ impl SimilarityCanvas {
             }
         }
         self.recompute_layout();
+    }
+
+    /// Creates a new search grid searching for photos visually similar to the reference photo.
+    pub fn search_from_photo(&mut self, entry_path: &std::path::Path) -> Option<usize> {
+        let feature = if let Some((feat, _)) = self.hashes.get(entry_path) {
+            feat.clone()
+        } else if let Some(hash) = compute_dhash_from_path(entry_path, &AtomicBool::new(false)) {
+            FeatureVector::DHash(hash)
+        } else {
+            return None;
+        };
+
+        let mut vec = feature.to_vec();
+        let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 1e-6 {
+            for x in &mut vec {
+                *x /= norm;
+            }
+        }
+
+        let selected: Vec<_> = self
+            .grids
+            .iter()
+            .filter(|g| g.selected_for_search)
+            .collect();
+        let candidate_indices: Vec<usize> = if selected.is_empty() {
+            (0..self.entries.len()).collect()
+        } else {
+            let mut set = std::collections::BTreeSet::new();
+            for g in selected {
+                set.extend(&g.indices);
+            }
+            set.into_iter().collect()
+        };
+
+        let file_name = entry_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "photo".to_string());
+
+        let id = self.next_grid_id;
+        self.next_grid_id += 1;
+        let mut grid = CanvasGrid {
+            id,
+            title: format!("Similar to {file_name}"),
+            query: None,
+            is_inverted: false,
+            candidate_indices,
+            concept_embedding: Some(vec),
+            indices: Vec::new(),
+            selected_for_search: true,
+            grid_cols: 0,
+            grid_rows: 0,
+            col_offset: 0,
+            row_offset: 0,
+        };
+        grid.refilter(&self.hashes, &self.entries, self.similarity_threshold);
+        for g in &mut self.grids {
+            g.selected_for_search = false;
+        }
+        self.grids.push(grid);
+        self.recompute_layout();
+        self.pending_pan_to_grid = Some(id);
+        Some(id)
     }
 
     #[cfg(test)]
@@ -796,6 +871,43 @@ impl SimilarityCanvas {
 
         if let Some(grid_id) = self.pending_pan_to_grid.take() {
             self.pan_to_grid(grid_id, canvas_rect);
+        }
+
+        let text_focused = ui.memory(|m| m.focused().is_some());
+        if !text_focused {
+            let (zoom_in, zoom_out, fit, escape) = ui.input(|i| {
+                let zoom_in = i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals);
+                let zoom_out = i.key_pressed(egui::Key::Minus);
+                let fit = i.key_pressed(egui::Key::F)
+                    || (i.modifiers.ctrl && i.key_pressed(egui::Key::Num0));
+                let escape = i.key_pressed(egui::Key::Escape);
+                (zoom_in, zoom_out, fit, escape)
+            });
+
+            if fit {
+                self.fit_to_view(canvas_rect);
+            }
+            if zoom_in {
+                let center = canvas_rect.center();
+                let new_zoom = (self.zoom * 1.25).clamp(0.05, 8.0);
+                let origin_offset = center - canvas_rect.min - self.pan;
+                self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
+                self.zoom = new_zoom;
+            }
+            if zoom_out {
+                let center = canvas_rect.center();
+                let new_zoom = (self.zoom / 1.25).clamp(0.05, 8.0);
+                let origin_offset = center - canvas_rect.min - self.pan;
+                self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
+                self.zoom = new_zoom;
+            }
+            if escape {
+                if !self.search_query.is_empty() {
+                    self.search_query.clear();
+                } else if self.grids.len() > 1 {
+                    self.clear_all_searches();
+                }
+            }
         }
 
         if response.dragged() {

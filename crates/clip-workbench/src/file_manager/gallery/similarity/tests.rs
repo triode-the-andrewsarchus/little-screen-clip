@@ -1,10 +1,13 @@
 //! Unit tests for perceptual similarity clustering, grid layout, and canvas transforms.
+use std::path::PathBuf;
+
 use super::{
     dhash::{compute_dhash, hamming_distance},
-    embedding::project_hashes_to_2d,
+    embedding::{FeatureVector, project_hashes_to_2d},
     grid::{grid_dimensions, snap_to_grid},
     *,
 };
+use crate::file_manager::filesystem::Entry;
 use little_clip_core::ImageThumbnail;
 
 fn create_test_thumbnail(
@@ -633,4 +636,104 @@ fn test_gallery_hover_preview_sizing_respects_original_and_window_bounds() {
     assert!(size3.x <= 800.0 - 32.0);
     assert!(size3.y <= 600.0 - 120.0);
     assert!(((size3.x / size3.y) - (4.0 / 3.0)).abs() < 0.001);
+}
+
+#[test]
+fn test_search_from_photo_creates_ranked_grid() {
+    let mut canvas = SimilarityCanvas::default();
+    let p1 = PathBuf::from("/test/photo1.jpg");
+    let p2 = PathBuf::from("/test/photo2.jpg");
+    let p3 = PathBuf::from("/test/photo3.jpg");
+
+    let make_entry = |p: &PathBuf, name: &str| Entry {
+        path: p.clone(),
+        name: name.to_string(),
+        directory: false,
+        regular_file: true,
+        system: None,
+        typescript: false,
+        symlink: false,
+        hidden: false,
+        size: "1 KB".to_string(),
+        size_bytes: 1024,
+        modified: "today".to_string(),
+        modified_time: None,
+        warning: None,
+        revision: 1,
+        identity: None,
+    };
+
+    canvas.entries = vec![
+        make_entry(&p1, "photo1.jpg"),
+        make_entry(&p2, "photo2.jpg"),
+        make_entry(&p3, "photo3.jpg"),
+    ];
+
+    // p1 and p2 are very similar; p3 is orthogonal
+    let mut v1 = vec![0.0f32; 1536];
+    v1[0] = 1.0;
+    let mut v2 = vec![0.0f32; 1536];
+    v2[0] = 0.9;
+    v2[1] = 0.43588989; // unit length
+    let mut v3 = vec![0.0f32; 1536];
+    v3[10] = 1.0;
+
+    canvas
+        .hashes
+        .insert(p1.clone(), (FeatureVector::Dense(v1), 1));
+    canvas
+        .hashes
+        .insert(p2.clone(), (FeatureVector::Dense(v2), 1));
+    canvas
+        .hashes
+        .insert(p3.clone(), (FeatureVector::Dense(v3), 1));
+
+    canvas.recompute_layout();
+    assert_eq!(canvas.grids.len(), 1);
+
+    // Search visual similarity to p1
+    let grid_id = canvas.search_from_photo(&p1);
+    assert_eq!(grid_id, Some(1));
+    assert_eq!(canvas.grids.len(), 2);
+
+    let search_grid = &canvas.grids[1];
+    assert_eq!(search_grid.id, 1);
+    assert_eq!(search_grid.title, "Similar to photo1.jpg");
+    assert_eq!(canvas.pending_pan_to_grid, Some(1));
+
+    // P1 (index 0) has score 1.0, P2 (index 1) has score 0.9 => both match threshold 0.08
+    // P3 (index 2) has score 0.0 => does not match
+    assert_eq!(search_grid.indices, vec![0, 1]);
+}
+
+#[test]
+fn test_similarity_canvas_keyboard_shortcuts() {
+    let mut canvas = SimilarityCanvas::default();
+    canvas.zoom = 1.0;
+    canvas.pan = egui::vec2(50.0, 50.0);
+
+    let canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+
+    // Test '+' key zooms in
+    let ctx = egui::Context::default();
+    let mut raw = egui::RawInput::default();
+    raw.events.push(egui::Event::Key {
+        key: egui::Key::Plus,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx.run(raw, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let resp = ui.allocate_response(egui::vec2(800.0, 600.0), egui::Sense::hover());
+            canvas.handle_input(ui, canvas_rect, &resp);
+        });
+    });
+
+    assert!(
+        canvas.zoom > 1.0,
+        "Zoom should increase with Plus key, got {}",
+        canvas.zoom
+    );
 }
