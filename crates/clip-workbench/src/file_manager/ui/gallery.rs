@@ -312,10 +312,7 @@ impl FileManager {
                 if !tile.ready || !entry.is_photo() {
                     return true;
                 }
-                self.gallery_previews
-                    .listing(entry)
-                    .and_then(|ready| ready.texture.as_ref())
-                    .is_some()
+                self.gallery_previews.is_ready(entry)
             });
 
             if all_visible_loaded {
@@ -340,13 +337,21 @@ impl FileManager {
 
                 // 3. Once settled for ~0.2s, fetch higher quality previews of only what's currently visible
                 if is_scroll_settled {
+                    let mut any_pending_upgrade = false;
                     for tile in priority.iter() {
                         let entry = &directory.entries[self.visible[tile.index]];
                         if tile.ready && entry.is_photo() {
                             let hq_edge = 1024;
                             self.gallery_previews
                                 .request_gallery(entry, hq_edge, tile.orientation);
+                            if self.gallery_previews.gallery_size(&entry.path) < hq_edge {
+                                any_pending_upgrade = true;
+                            }
                         }
+                    }
+                    if any_pending_upgrade {
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(16));
                     }
                 } else {
                     let elapsed = now - self.gallery_last_scroll_time;
@@ -357,6 +362,9 @@ impl FileManager {
                             ));
                     }
                 }
+            } else {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(16));
             }
 
             for tile in &tiles {

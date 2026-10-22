@@ -265,8 +265,8 @@ impl Previews {
         self.ready.get(&id)
     }
 
-    pub fn request(&mut self, id: uuid::Uuid, source: Source) {
-        let _ = self.start(id, source, false);
+    pub fn request(&mut self, id: uuid::Uuid, source: Source) -> bool {
+        self.start(id, source, false)
     }
     pub fn refresh(&mut self, id: uuid::Uuid, source: Source) -> bool {
         self.start(id, source, true)
