@@ -739,6 +739,55 @@ fn test_similarity_canvas_keyboard_shortcuts() {
 }
 
 #[test]
+fn test_similarity_canvas_middle_click_pans_canvas() {
+    let mut canvas = SimilarityCanvas::default();
+    canvas.initial_fit_done = true;
+    canvas.zoom = 1.0;
+    canvas.pan = egui::vec2(50.0, 50.0);
+
+    let canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+
+    let ctx = egui::Context::default();
+    // Frame 1: Press middle button down at (100, 100)
+    let mut raw1 = egui::RawInput::default();
+    raw1.events.push(egui::Event::PointerButton {
+        pos: egui::pos2(100.0, 100.0),
+        button: egui::PointerButton::Middle,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx.run(raw1, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let resp =
+                ui.allocate_response(egui::vec2(800.0, 600.0), egui::Sense::click_and_drag());
+            canvas.handle_input(ui, canvas_rect, &resp);
+        });
+    });
+
+    // Frame 2: Move pointer to (140, 120) -> pointer delta is (+40, +20)
+    let mut raw2 = egui::RawInput::default();
+    raw2.events
+        .push(egui::Event::PointerMoved(egui::pos2(140.0, 120.0)));
+    let _ = ctx.run(raw2, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let resp =
+                ui.allocate_response(egui::vec2(800.0, 600.0), egui::Sense::click_and_drag());
+            canvas.handle_input(ui, canvas_rect, &resp);
+        });
+    });
+
+    assert_eq!(
+        canvas.pan,
+        egui::vec2(90.0, 70.0),
+        "Middle click drag must pan canvas by delta (50+40, 50+20)"
+    );
+    assert!(
+        canvas.is_middle_panning,
+        "Middle drag must set is_middle_panning to true"
+    );
+}
+
+#[test]
 fn test_per_grid_match_allowance_adjustment() {
     let mut canvas = SimilarityCanvas::default();
     canvas.allowance = 0.50;

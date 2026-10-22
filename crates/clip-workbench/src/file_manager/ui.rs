@@ -1272,7 +1272,7 @@ impl ListActions {
         path: &PathBuf,
         selected: Option<&std::collections::BTreeSet<PathBuf>>,
     ) {
-        if !response.drag_started() {
+        if !response.drag_started_by(egui::PointerButton::Primary) {
             return;
         }
         let marked = selected.is_some_and(|paths| paths.contains(path));
