@@ -325,28 +325,32 @@ impl FileManager {
         let mut remove_grid = None;
 
         for (grid_idx, grid) in self.similarity_canvas.grids.iter().enumerate() {
-            let top_left =
-                self.similarity_canvas
-                    .tile_screen_rect(canvas_rect.min, 0, grid.row_offset);
+            let top_left = self.similarity_canvas.tile_screen_rect(
+                canvas_rect.min,
+                grid.col_offset,
+                grid.row_offset,
+            );
 
             let step = (self.similarity_canvas.tile_size + self.similarity_canvas.spacing)
                 * self.similarity_canvas.zoom;
 
-            // Divider line between grids
+            // Vertical divider line between grids
             if grid_idx > 0 {
-                let div_y = top_left.min.y - step * 0.5;
-                let total_w = (grid.grid_cols.max(1) as f32) * step;
+                let div_x = top_left.min.x - step * 0.5;
+                let total_h = (self.similarity_canvas.grid_rows.max(1) as f32) * step;
                 ui.painter().line_segment(
                     [
-                        pos2(top_left.min.x, div_y),
-                        pos2(top_left.min.x + total_w, div_y),
+                        pos2(div_x, top_left.min.y - 36.0),
+                        pos2(div_x, top_left.min.y + total_h),
                     ],
                     egui::Stroke::new(1.0, colors.border),
                 );
             }
 
-            if top_left.min.y < canvas_rect.min.y - 100.0
+            if top_left.min.x > canvas_rect.max.x + 100.0
+                || top_left.min.x + (grid.grid_cols as f32) * step < canvas_rect.min.x - 100.0
                 || top_left.min.y > canvas_rect.max.y + 100.0
+                || top_left.min.y + (grid.grid_rows as f32) * step < canvas_rect.min.y - 100.0
             {
                 continue;
             }

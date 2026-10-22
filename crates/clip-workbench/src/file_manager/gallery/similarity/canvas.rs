@@ -38,6 +38,7 @@ pub struct CanvasGrid {
     pub selected_for_search: bool,
     pub grid_cols: usize,
     pub grid_rows: usize,
+    pub col_offset: usize,
     pub row_offset: usize,
 }
 
@@ -339,6 +340,7 @@ impl SimilarityCanvas {
             selected_for_search: true,
             grid_cols: 0,
             grid_rows: 0,
+            col_offset: 0,
             row_offset: 0,
         };
         grid.refilter(&self.hashes, &self.entries, self.similarity_threshold);
@@ -422,6 +424,7 @@ impl SimilarityCanvas {
             selected_for_search: true,
             grid_cols: cols,
             grid_rows: rows,
+            col_offset: 0,
             row_offset: 0,
         }];
         self.next_grid_id = 1;
@@ -580,6 +583,7 @@ impl SimilarityCanvas {
                             selected_for_search: true, // Selected for next search
                             grid_cols: 0,
                             grid_rows: 0,
+                            col_offset: 0,
                             row_offset: 0,
                         };
                         self.next_grid_id += 1;
@@ -621,6 +625,7 @@ impl SimilarityCanvas {
                 selected_for_search: true,
                 grid_cols: c,
                 grid_rows: r,
+                col_offset: 0,
                 row_offset: 0,
             });
         }
@@ -655,46 +660,47 @@ impl SimilarityCanvas {
             self.base_placements = snap_to_grid(&coords_2d);
         }
 
-        const ROW_GAP: usize = 2;
-        let mut current_row = 0;
-        let mut max_cols = 0;
+        const COL_GAP: usize = 2;
+        let mut current_col = 0;
+        let mut max_rows = 0;
         let mut new_placements = Vec::new();
 
         for (grid_idx, grid) in self.grids.iter_mut().enumerate() {
-            grid.row_offset = current_row;
+            grid.col_offset = current_col;
+            grid.row_offset = 0;
             if grid_idx == 0 {
                 let (c, r) = grid_dimensions(n);
                 grid.grid_cols = c;
                 grid.grid_rows = r;
-                max_cols = max_cols.max(c);
+                max_rows = max_rows.max(r);
                 for p in &self.base_placements {
                     new_placements.push(GridPlacement {
                         index: p.index,
-                        col: p.col,
-                        row: current_row + p.row,
+                        col: current_col + p.col,
+                        row: p.row,
                     });
                 }
-                current_row += r + ROW_GAP;
+                current_col += c + COL_GAP;
             } else {
                 let count = grid.indices.len();
                 let (c, r) = grid_dimensions(count);
                 grid.grid_cols = c;
                 grid.grid_rows = r;
-                max_cols = max_cols.max(c);
+                max_rows = max_rows.max(r);
                 for (rank, &entry_idx) in grid.indices.iter().enumerate() {
                     new_placements.push(GridPlacement {
                         index: entry_idx,
-                        col: if c > 0 { rank % c } else { 0 },
-                        row: current_row + if c > 0 { rank / c } else { 0 },
+                        col: current_col + if c > 0 { rank % c } else { 0 },
+                        row: if c > 0 { rank / c } else { 0 },
                     });
                 }
-                current_row += r.max(1) + ROW_GAP;
+                current_col += c.max(1) + COL_GAP;
             }
         }
 
         self.placements = new_placements;
-        self.grid_cols = max_cols;
-        self.grid_rows = current_row;
+        self.grid_cols = current_col;
+        self.grid_rows = max_rows;
     }
 
     /// Fits the entire grid neatly inside the given viewport.
@@ -725,16 +731,16 @@ impl SimilarityCanvas {
         let step = (self.tile_size + self.spacing) * self.zoom;
         let grid_w = (grid.grid_cols as f32) * step;
 
-        let target_x = if grid_w < viewport.width() - 48.0 {
-            ((viewport.width() - grid_w) * 0.5).max(24.0)
+        let target_x = if grid_w < viewport.width() - 80.0 {
+            ((viewport.width() - grid_w) * 0.5) - (grid.col_offset as f32) * step
         } else {
-            24.0
+            40.0 - (grid.col_offset as f32) * step
         };
 
         // Position the header bar cleanly below the top HUD (at ~76px from canvas top)
         let top_offset = 76.0;
         let header_spacing = 34.0;
-        let target_y = top_offset + header_spacing - (grid.row_offset as f32) * step;
+        let target_y = top_offset + header_spacing;
 
         self.pan = egui::vec2(target_x, target_y);
     }

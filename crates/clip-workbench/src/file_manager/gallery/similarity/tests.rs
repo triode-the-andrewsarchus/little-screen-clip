@@ -347,9 +347,9 @@ fn test_multi_grid_search_retention_and_chaining() {
     assert!(!canvas.grids[0].selected_for_search);
     assert!(canvas.grids[1].selected_for_search);
 
-    // Verify layout placements: Grid 0 rows < Grid 1 row_offset
-    let base_max_row = canvas.grids[0].row_offset + canvas.grids[0].grid_rows;
-    assert!(canvas.grids[1].row_offset >= base_max_row);
+    // Verify layout placements: Grid 0 cols < Grid 1 col_offset (appears to the right)
+    let base_max_col = canvas.grids[0].col_offset + canvas.grids[0].grid_cols;
+    assert!(canvas.grids[1].col_offset >= base_max_col);
 
     // 2. Chained subset search: search for "indoors" within selected Grid 1 ("animal")
     let mut indoors_concept = vec![0.0f32; 1536];
@@ -482,7 +482,8 @@ fn test_search_pan_to_grid_results() {
 
     // Check that the top-left tile of the result grid is now in frame
     let result_grid = canvas.grids.iter().find(|g| g.id == grid_id).unwrap();
-    let top_tile_rect = canvas.tile_screen_rect(viewport.min, 0, result_grid.row_offset);
+    let top_tile_rect =
+        canvas.tile_screen_rect(viewport.min, result_grid.col_offset, result_grid.row_offset);
 
     // The tile should be positioned cleanly in the upper portion of the viewport (y == 110.0)
     assert!((top_tile_rect.min.y - 110.0).abs() < 1.0);
