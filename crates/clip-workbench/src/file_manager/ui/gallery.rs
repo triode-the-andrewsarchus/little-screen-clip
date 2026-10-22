@@ -29,6 +29,7 @@ impl FileManager {
     pub(in crate::file_manager) fn retire_media_previews(&mut self) {
         self.midi.stop();
         self.gallery_layout.retire();
+        self.similarity_canvas.retire();
         self.video_previews.clear();
         self.previews.retain(&Default::default());
         self.gallery_previews.retain(&Default::default());
@@ -67,6 +68,7 @@ impl FileManager {
                 ui.label("Select multiple: Select mode, Ctrl+click, or Shift+click.");
             }
             if self.view == super::super::BrowserView::Photos
+                && self.photo_mode == super::super::gallery::similarity::PhotoMode::Masonry
                 && ui
                     .add(
                         egui::Slider::new(&mut self.thumbnail_edge, 80.0..=280.0)
@@ -79,6 +81,13 @@ impl FileManager {
                 }
                 self.restore_scroll = true;
             }
+            if self.view == super::super::BrowserView::Photos
+                && self.photo_mode == super::super::gallery::similarity::PhotoMode::Similarity
+            {
+                if ui.button("Reset View").clicked() {
+                    self.similarity_canvas.reset_view();
+                }
+            }
         });
     }
 
@@ -88,6 +97,11 @@ impl FileManager {
         colors: WorkbenchColors,
         palette: &AppPalette,
     ) {
+        if self.photo_mode == super::super::gallery::similarity::PhotoMode::Similarity {
+            self.similarity_gallery_ui(ui, colors, palette);
+            return;
+        }
+
         self.gallery_previews.poll(ui.ctx());
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
         let width = (ui.available_width() - ui.spacing().scroll.allocated_width()).max(1.0);
@@ -217,9 +231,143 @@ impl FileManager {
         scroll
     }
 
+    pub(super) fn similarity_gallery_ui(
+        &mut self,
+        ui: &mut Ui,
+        colors: WorkbenchColors,
+        palette: &AppPalette,
+    ) {
+        self.similarity_canvas.poll(ui.ctx());
+        self.gallery_previews.poll(ui.ctx());
+
+        if let Some(directory) = &self.directory {
+            self.similarity_canvas.sync(
+                directory,
+                &self.visible,
+                self.photo_recurse,
+                self.show_hidden,
+            );
+        }
+
+        let selected = current_selection(&self.history, self.index);
+        let can_edit = self.can_edit();
+        let count = self.selection_count();
+        let mut actions = ListActions {
+            additive: self.gallery_selecting,
+            ..Default::default()
+        };
+        let check_color = crate::ui_ext::contrast_text_c32(colors.accent, None, palette);
+
+        let (canvas_rect, response) =
+            ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+
+        self.similarity_canvas
+            .handle_input(ui, canvas_rect, &response);
+
+        // Fill background
+        ui.painter().rect_filled(canvas_rect, 0.0, colors.canvas);
+
+        let clip_rect = canvas_rect.intersect(ui.clip_rect());
+        let dpi = ui.ctx().pixels_per_point();
+        let target_edge = (self.similarity_canvas.tile_size * self.similarity_canvas.zoom * dpi)
+            .ceil()
+            .clamp(64.0, 2048.0) as u32;
+
+        let mut visible_paths = std::collections::BTreeSet::new();
+
+        for placement in &self.similarity_canvas.placements {
+            let Some(entry) = self.similarity_canvas.entries.get(placement.index) else {
+                continue;
+            };
+
+            let tile_rect = self.similarity_canvas.tile_screen_rect(
+                canvas_rect.min,
+                placement.col,
+                placement.row,
+            );
+
+            if !tile_rect.intersects(clip_rect) {
+                continue;
+            }
+
+            visible_paths.insert(entry.path.clone());
+            self.gallery_previews.request_gallery(entry, target_edge, 1);
+
+            let tile_response = ui.interact(
+                tile_rect,
+                Id::new(("sim_tile", &entry.path)),
+                Sense::click_and_drag(),
+            );
+
+            let marked = selected.is_some_and(|s| s.contains(&entry.path));
+            paint_gallery_tile(
+                ui,
+                &tile_response,
+                entry,
+                marked,
+                colors,
+                check_color,
+                Some(&mut self.gallery_previews),
+            );
+
+            if !super::popup_open(ui.ctx()) {
+                tile_response.clone().on_hover_text(&entry.name);
+            }
+
+            actions.row(ui, &tile_response, entry, selected, can_edit, count);
+        }
+
+        self.gallery_previews.retain(&visible_paths);
+
+        // Floating HUD pill
+        let hud_id = Id::new("similarity_canvas_hud");
+        let hud_pos = pos2(canvas_rect.right() - 250.0, canvas_rect.bottom() - 44.0);
+        egui::Area::new(hud_id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(hud_pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(colors.panel)
+                    .stroke(egui::Stroke::new(1.0, colors.border))
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("Fit").clicked() {
+                                self.similarity_canvas.fit_to_view(canvas_rect);
+                            }
+                            ui.label(format!("{:.0}%", self.similarity_canvas.zoom * 100.0));
+                            ui.separator();
+                            if self.similarity_canvas.is_scanning() {
+                                ui.label("Scanning subfolders…");
+                            } else if self.similarity_canvas.is_hashing() {
+                                ui.label(format!(
+                                    "Clustering {}/{}…",
+                                    self.similarity_canvas.hashing_progress.0,
+                                    self.similarity_canvas.hashing_progress.1
+                                ));
+                            } else {
+                                ui.label(format!(
+                                    "{} photos",
+                                    self.similarity_canvas.entries.len()
+                                ));
+                            }
+                        });
+                    });
+            });
+
+        self.finish_listing(ui, actions, 0.0, &response);
+    }
+
     pub(in crate::file_manager) fn photo_collection(&self, path: &std::path::Path) -> Vec<PathBuf> {
         if !little_clip_core::item::is_image_path(path) {
             return Vec::new();
+        }
+        if self.photo_mode == super::super::gallery::similarity::PhotoMode::Similarity {
+            let collection = self.similarity_canvas.photo_collection();
+            if !collection.is_empty() {
+                return collection;
+            }
         }
         self.directory
             .as_ref()

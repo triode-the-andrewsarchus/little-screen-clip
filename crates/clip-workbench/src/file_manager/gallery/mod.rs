@@ -2,6 +2,7 @@
 mod jobs;
 pub(super) mod metadata;
 mod packing;
+pub(in crate::file_manager) mod similarity;
 #[cfg(test)]
 mod tests;
 pub(super) mod thumbnail;

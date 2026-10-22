@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Local};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Entry {
     pub path: PathBuf,
     pub name: String,
@@ -107,7 +107,7 @@ pub(super) fn read_directory(path: &Path, cancelled: &AtomicBool) -> Result<Dire
     })
 }
 
-fn read_entry(child: std::fs::DirEntry) -> Entry {
+pub(super) fn read_entry(child: std::fs::DirEntry) -> Entry {
     let path = child.path();
     let symlink = child.file_type().is_ok_and(|kind| kind.is_symlink());
     let metadata = std::fs::metadata(&path);

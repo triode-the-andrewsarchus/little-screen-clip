@@ -51,6 +51,10 @@ pub struct FileManagerConfig {
     pub audio_spectrum: bool,
     /// Timeline pixels per sample: 1, 2, 4, 8, or 16 (default: 1).
     pub video_timeline_decimation: u8,
+    /// Photo gallery layout mode: "masonry" (default) or "similarity".
+    pub photo_mode: String,
+    /// Whether the photo similarity canvas recurses into subdirectories.
+    pub photo_recurse: bool,
 }
 impl Default for FileManagerConfig {
     fn default() -> Self {
@@ -58,6 +62,8 @@ impl Default for FileManagerConfig {
             music_threshold_percent: 75,
             audio_spectrum: false,
             video_timeline_decimation: 1,
+            photo_mode: "masonry".to_string(),
+            photo_recurse: false,
         }
     }
 }
@@ -668,6 +674,20 @@ impl AppConfig {
         save_setting_to_file("file_manager", "audio_spectrum", spectrum)
     }
 
+    /// Save the Files photo-gallery layout mode preference ("masonry" or "similarity").
+    pub fn save_file_manager_photo_mode_to_file(
+        photo_mode: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        save_setting_to_file("file_manager", "photo_mode", photo_mode)
+    }
+
+    /// Save the Files photo-gallery subfolder recursion preference.
+    pub fn save_file_manager_photo_recurse_to_file(
+        recurse: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        save_setting_to_file("file_manager", "photo_recurse", recurse)
+    }
+
     /// URL for downloading the Big-LaMa inpainting ONNX model.
     pub fn lama_model_url(&self) -> &str {
         self.ai_models
@@ -872,6 +892,26 @@ mod tests {
             .unwrap();
             assert_eq!(configured.file_manager.video_timeline_decimation, factor);
         }
+    }
+
+    #[test]
+    fn files_photo_mode_and_recurse_defaults_and_updates() {
+        let defaults: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(defaults.file_manager.photo_mode, "masonry");
+        assert!(!defaults.file_manager.photo_recurse);
+        let original = "[file_manager]\nphoto_mode = \"similarity\"\nphoto_recurse = true\n";
+        let configured: AppConfig = toml::from_str(original).unwrap();
+        assert_eq!(configured.file_manager.photo_mode, "similarity");
+        assert!(configured.file_manager.photo_recurse);
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let updated = update_setting_in_text(original, "file_manager", "photo_mode", "masonry");
+        let updated = update_setting_in_text(&updated, "file_manager", "photo_recurse", false);
+        std::fs::write(&path, updated).unwrap();
+        let loaded = AppConfig::load_from_path(&path).unwrap();
+        assert_eq!(loaded.file_manager.photo_mode, "masonry");
+        assert!(!loaded.file_manager.photo_recurse);
     }
 
     #[test]
