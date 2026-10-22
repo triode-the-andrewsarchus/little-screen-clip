@@ -593,7 +593,7 @@ impl FileManager {
         let mut toggle_grid: Option<usize> = None;
         let mut remove_grid: Option<usize> = None;
         let mut select_all_grid: Option<usize> = None;
-        let mut adjust_grid_threshold: Option<(usize, f32)> = None;
+        let mut adjust_grid_allowance: Option<(usize, f32)> = None;
 
         let total_selected = self
             .similarity_canvas
@@ -720,14 +720,17 @@ impl FileManager {
                                     .min_size(vec2(16.0, 16.0)),
                                 );
                                 if minus_resp
-                                    .on_hover_text("Lower threshold (allow more matches)")
+                                    .on_hover_text("Decrease match allowance (fewer photos)")
                                     .clicked()
                                 {
-                                    adjust_grid_threshold = Some((grid.id, -0.01));
+                                    adjust_grid_allowance = Some((grid.id, -0.05));
                                 }
 
-                                ui.label(format!("{:.2}", grid.threshold))
-                                    .on_hover_text("Match allowance threshold");
+                                let allowance_pct = (grid.allowance * 100.0).round() as i32;
+                                ui.label(format!("{allowance_pct}%"))
+                                    .on_hover_text(format!(
+                                        "Match allowance: {allowance_pct}% (higher includes more photos)"
+                                    ));
 
                                 let plus_resp = ui.add(
                                     egui::Button::image(
@@ -738,10 +741,10 @@ impl FileManager {
                                     .min_size(vec2(16.0, 16.0)),
                                 );
                                 if plus_resp
-                                    .on_hover_text("Raise threshold (stricter matches)")
+                                    .on_hover_text("Increase match allowance (include more photos)")
                                     .clicked()
                                 {
-                                    adjust_grid_threshold = Some((grid.id, 0.01));
+                                    adjust_grid_allowance = Some((grid.id, 0.05));
                                 }
 
                                 ui.separator();
@@ -792,7 +795,7 @@ impl FileManager {
             self.similarity_canvas.remove_grid(id);
         }
 
-        if let Some((grid_id, delta)) = adjust_grid_threshold {
+        if let Some((grid_id, delta)) = adjust_grid_allowance {
             if let Some(grid) = self
                 .similarity_canvas
                 .grids
@@ -896,22 +899,18 @@ impl FileManager {
                                     .min_size(vec2(16.0, 16.0)),
                                 );
                                 if minus_resp
-                                    .on_hover_text("Lower similarity threshold")
+                                    .on_hover_text("Decrease match allowance (fewer photos)")
                                     .clicked()
                                 {
-                                    self.similarity_canvas.similarity_threshold =
-                                        (self.similarity_canvas.similarity_threshold - 0.01)
-                                            .max(0.01);
-                                    for g in self.similarity_canvas.grids.iter_mut().skip(1) {
-                                        g.threshold = self.similarity_canvas.similarity_threshold;
-                                    }
+                                    self.similarity_canvas.adjust_global_allowance(-0.05);
                                     self.similarity_canvas.recompute_layout();
                                 }
-                                ui.label(format!(
-                                    "{:.2}",
-                                    self.similarity_canvas.similarity_threshold
-                                ))
-                                .on_hover_text("Matching similarity threshold");
+                                let allowance_pct =
+                                    (self.similarity_canvas.allowance * 100.0).round() as i32;
+                                ui.label(format!("{allowance_pct}%"))
+                                    .on_hover_text(format!(
+                                        "Match allowance: {allowance_pct}% (higher includes more photos)"
+                                    ));
                                 let plus_resp = ui.add(
                                     egui::Button::image(
                                         crate::icons::Icon::Plus
@@ -921,15 +920,10 @@ impl FileManager {
                                     .min_size(vec2(16.0, 16.0)),
                                 );
                                 if plus_resp
-                                    .on_hover_text("Raise similarity threshold")
+                                    .on_hover_text("Increase match allowance (include more photos)")
                                     .clicked()
                                 {
-                                    self.similarity_canvas.similarity_threshold =
-                                        (self.similarity_canvas.similarity_threshold + 0.01)
-                                            .min(0.90);
-                                    for g in self.similarity_canvas.grids.iter_mut().skip(1) {
-                                        g.threshold = self.similarity_canvas.similarity_threshold;
-                                    }
+                                    self.similarity_canvas.adjust_global_allowance(0.05);
                                     self.similarity_canvas.recompute_layout();
                                 }
                             }
