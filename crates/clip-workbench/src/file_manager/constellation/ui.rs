@@ -15,7 +15,7 @@ impl ConstellationState {
         on_select_sample: &mut dyn FnMut(&std::path::Path),
     ) {
         // Top Toolbar
-        self.render_toolbar(ui, current_folder, on_play_sample);
+        self.render_toolbar(ui, on_play_sample);
 
         // If indexing is currently active, show progress overlay
         if let Some(progress) = self.indexing_status.clone() {
@@ -54,7 +54,6 @@ impl ConstellationState {
     fn render_toolbar(
         &mut self,
         ui: &mut egui::Ui,
-        current_folder: &std::path::Path,
         on_play_sample: &mut dyn FnMut(&std::path::Path),
     ) {
         ui.horizontal_wrapped(|ui| {
@@ -140,32 +139,10 @@ impl ConstellationState {
                 }
             }
 
-            // Clear playback history trail if active
-            if !self.history_trail.is_empty() {
-                if ui
-                    .button("🧹 Clear Trail")
-                    .on_hover_text("Clear playback history trail")
-                    .clicked()
-                {
-                    self.history_trail.clear();
-                }
-            }
-
             // Reset camera
             if ui.button("🎯 Reset View").clicked() {
                 self.pan = Vec2::ZERO;
                 self.zoom = 1.0;
-            }
-
-            // Re-index button
-            if self.active_job.is_none() {
-                if ui
-                    .button("🔄 Re-index")
-                    .on_hover_text("Recursively re-index this folder into SQLite")
-                    .clicked()
-                {
-                    self.start_indexing(current_folder);
-                }
             }
         });
         ui.separator();
@@ -280,16 +257,17 @@ impl ConstellationState {
             struct VisStar<'a> {
                 sample: &'a ConstellationSample,
                 pos: Pos2,
+                is_dimmed: bool,
             }
 
             let mut vis_stars: Vec<VisStar> = Vec::with_capacity(2048);
 
             for sample in &self.samples {
-                if let Some(cat) = self.category_filter {
-                    if sample.category != cat {
-                        continue;
-                    }
-                }
+                let is_dimmed = if let Some(cat) = self.category_filter {
+                    sample.category != cat
+                } else {
+                    false
+                };
 
                 let sx = center.x + sample.x * view_scale;
                 let sy = center.y - sample.y * view_scale;
@@ -298,6 +276,7 @@ impl ConstellationState {
                     vis_stars.push(VisStar {
                         sample,
                         pos: Pos2::new(sx, sy),
+                        is_dimmed,
                     });
                 }
             }
@@ -394,15 +373,17 @@ impl ConstellationState {
                         selected_sample_overlay = Some((star.pos, base_color));
                     }
 
-                    // Check hover directly against screen position
-                    if let Some(mp) = mouse_pos {
-                        let dx = star.pos.x - mp.x;
-                        let dy = star.pos.y - mp.y;
-                        let d2 = dx * dx + dy * dy;
-                        if d2 < closest_hover_dist_sq {
-                            closest_hover_dist_sq = d2;
-                            hovered_sample = Some(star.sample.clone());
-                            hovered_pos = star.pos;
+                    // Check hover directly against screen position (only non-dimmed samples participate in hover)
+                    if !star.is_dimmed {
+                        if let Some(mp) = mouse_pos {
+                            let dx = star.pos.x - mp.x;
+                            let dy = star.pos.y - mp.y;
+                            let d2 = dx * dx + dy * dy;
+                            if d2 < closest_hover_dist_sq {
+                                closest_hover_dist_sq = d2;
+                                hovered_sample = Some(star.sample.clone());
+                                hovered_pos = star.pos;
+                            }
                         }
                     }
 
@@ -415,9 +396,17 @@ impl ConstellationState {
                         continue;
                     }
 
-                    let color = if has_query
-                        && !star.sample.filename.to_lowercase().contains(&query_lower)
-                    {
+                    let is_query_dimmed =
+                        has_query && !star.sample.filename.to_lowercase().contains(&query_lower);
+
+                    let color = if star.is_dimmed {
+                        Color32::from_rgba_premultiplied(
+                            base_color.r() / 7,
+                            base_color.g() / 7,
+                            base_color.b() / 7,
+                            28,
+                        )
+                    } else if is_query_dimmed {
                         Color32::from_rgba_premultiplied(
                             base_color.r() / 5,
                             base_color.g() / 5,
@@ -447,11 +436,11 @@ impl ConstellationState {
             let rect_max_y = rect.bottom() + base_star_radius;
 
             for sample in &self.samples {
-                if let Some(cat) = self.category_filter {
-                    if sample.category != cat {
-                        continue;
-                    }
-                }
+                let is_category_dimmed = if let Some(cat) = self.category_filter {
+                    sample.category != cat
+                } else {
+                    false
+                };
 
                 let sx = center.x + sample.x * view_scale;
                 let sy = center.y - sample.y * view_scale;
@@ -468,15 +457,17 @@ impl ConstellationState {
                     selected_sample_overlay = Some((Pos2::new(sx, sy), base_color));
                 }
 
-                // Check hover directly against screen position
-                if let Some(mp) = mouse_pos {
-                    let dx = sx - mp.x;
-                    let dy = sy - mp.y;
-                    let d2 = dx * dx + dy * dy;
-                    if d2 < closest_hover_dist_sq {
-                        closest_hover_dist_sq = d2;
-                        hovered_sample = Some(sample.clone());
-                        hovered_pos = Pos2::new(sx, sy);
+                // Check hover directly against screen position (only non-dimmed samples participate in hover)
+                if !is_category_dimmed {
+                    if let Some(mp) = mouse_pos {
+                        let dx = sx - mp.x;
+                        let dy = sy - mp.y;
+                        let d2 = dx * dx + dy * dy;
+                        if d2 < closest_hover_dist_sq {
+                            closest_hover_dist_sq = d2;
+                            hovered_sample = Some(sample.clone());
+                            hovered_pos = Pos2::new(sx, sy);
+                        }
                     }
                 }
 
@@ -484,18 +475,29 @@ impl ConstellationState {
                     continue;
                 }
 
-                // Sub-pixel density capping: if cell already has 2 stars, skip redundant rendering
+                // Sub-pixel density capping: if cell already has 2 stars, skip redundant rendering.
+                // Soloed stars are never dropped by dimmed background stars.
                 let col = ((sx - rect.left()) / cell_size) as usize;
                 let row = ((sy - rect.top()) / cell_size) as usize;
                 if col < grid_cols && row < grid_rows {
                     let cell_idx = row * grid_cols + col;
-                    if occupancy[cell_idx] >= 2 {
+                    if is_category_dimmed && occupancy[cell_idx] >= 2 {
                         continue;
                     }
                     occupancy[cell_idx] += 1;
                 }
 
-                let color = if has_query && !sample.filename.to_lowercase().contains(&query_lower) {
+                let is_query_dimmed =
+                    has_query && !sample.filename.to_lowercase().contains(&query_lower);
+
+                let color = if is_category_dimmed {
+                    Color32::from_rgba_premultiplied(
+                        base_color.r() / 7,
+                        base_color.g() / 7,
+                        base_color.b() / 7,
+                        28,
+                    )
+                } else if is_query_dimmed {
                     Color32::from_rgba_premultiplied(
                         base_color.r() / 5,
                         base_color.g() / 5,

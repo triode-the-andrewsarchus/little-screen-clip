@@ -132,6 +132,19 @@ impl ConstellationState {
         self.indexing_folder() == Some(folder)
     }
 
+    /// Checks if a folder has already been indexed in SQLite.
+    pub fn is_folder_already_indexed(&self, folder: &Path) -> bool {
+        if self.current_indexed_folder.as_deref() == Some(folder) && !self.samples.is_empty() {
+            return true;
+        }
+        if let Ok(db) = ConstellationDb::new() {
+            if let Ok(Some(count)) = db.is_folder_indexed(folder) {
+                return count > 0;
+            }
+        }
+        false
+    }
+
     /// Loads indexed samples from SQLite for the given folder if not already loaded.
     pub fn check_and_load_folder(&mut self, folder: &Path) {
         if self.current_indexed_folder.as_deref() == Some(folder) {
