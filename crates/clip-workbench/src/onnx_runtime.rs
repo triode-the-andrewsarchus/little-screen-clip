@@ -97,6 +97,19 @@ pub fn expected_model_size(model_name: &str) -> Option<u64> {
     }
 }
 
+/// Checks whether a named ONNX model is already cached locally.
+pub fn is_model_cached(model_name: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let model_path = PathBuf::from(home)
+        .join(".cache/little-screen-clip/models")
+        .join(model_name);
+    if let Ok(meta) = std::fs::metadata(&model_path) {
+        meta.len() > 1_000_000
+    } else {
+        false
+    }
+}
+
 /// Ensure that a named ONNX model is available locally in the cache directory,
 /// downloading it from the configured or default URL if necessary.
 pub fn ensure_model(model_name: &str, url_override: Option<&str>) -> Result<PathBuf, String> {

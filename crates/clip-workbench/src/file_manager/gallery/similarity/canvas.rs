@@ -96,7 +96,7 @@ impl Default for SimilarityCanvas {
             search_query: String::new(),
             active_concept: None,
             concept_embedding: None,
-            similarity_threshold: 0.10,
+            similarity_threshold: 0.08,
             match_counts: (0, 0),
             split_row_offset: 0,
         }
@@ -125,6 +125,7 @@ impl SimilarityCanvas {
     }
 
     /// Stores a feature vector for a path (used in tests and internal cache updates).
+    #[allow(dead_code)]
     pub fn insert_hash(&mut self, path: PathBuf, feat: FeatureVector, rev: u64) {
         self.hashes.insert(path, (feat, rev));
     }
@@ -150,6 +151,7 @@ impl SimilarityCanvas {
         }
 
         self.active_concept = Some(q.clone());
+        self.schedule_hashing();
         let cancelled = Arc::new(AtomicBool::new(false));
         let c = Arc::clone(&cancelled);
         let pool = worker_pool();
@@ -257,13 +259,17 @@ impl SimilarityCanvas {
             return;
         }
 
+        let is_siglip_available =
+            crate::onnx_runtime::is_model_cached(crate::onnx_runtime::SIGLIP2_GIANT_MODEL_NAME);
+
         let missing: Vec<(PathBuf, u64)> = self
             .entries
             .iter()
             .filter(|e| {
-                self.hashes
-                    .get(&e.path)
-                    .map_or(true, |&(_, rev)| rev != e.revision)
+                self.hashes.get(&e.path).map_or(true, |(feat, rev)| {
+                    *rev != e.revision
+                        || (is_siglip_available && matches!(feat, FeatureVector::DHash(_)))
+                })
             })
             .map(|e| (e.path.clone(), e.revision))
             .collect();
@@ -361,6 +367,9 @@ impl SimilarityCanvas {
                 self.recompute_layout();
                 ctx.request_repaint();
             } else if received_any {
+                if self.concept_embedding.is_some() {
+                    self.recompute_layout();
+                }
                 ctx.request_repaint();
             }
         }

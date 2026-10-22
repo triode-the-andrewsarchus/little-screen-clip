@@ -412,6 +412,32 @@ impl FileManager {
                                     self.similarity_canvas.match_counts.0,
                                     self.similarity_canvas.match_counts.1
                                 ));
+                                ui.separator();
+                                if ui
+                                    .small_button("-")
+                                    .on_hover_text("Lower similarity threshold")
+                                    .clicked()
+                                {
+                                    self.similarity_canvas.similarity_threshold =
+                                        (self.similarity_canvas.similarity_threshold - 0.01)
+                                            .max(0.01);
+                                    self.similarity_canvas.recompute_layout();
+                                }
+                                ui.label(format!(
+                                    "{:.2}",
+                                    self.similarity_canvas.similarity_threshold
+                                ))
+                                .on_hover_text("Matching similarity threshold");
+                                if ui
+                                    .small_button("+")
+                                    .on_hover_text("Raise similarity threshold")
+                                    .clicked()
+                                {
+                                    self.similarity_canvas.similarity_threshold =
+                                        (self.similarity_canvas.similarity_threshold + 0.01)
+                                            .min(0.50);
+                                    self.similarity_canvas.recompute_layout();
+                                }
                             }
                         });
                     });
