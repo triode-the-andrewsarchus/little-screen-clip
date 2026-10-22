@@ -19,6 +19,10 @@ impl FileManager {
         if view == super::super::BrowserView::Music && self.view != view {
             self.shelf.open = false;
         }
+        if view == super::super::BrowserView::Constellation {
+            let path = self.path().to_path_buf();
+            self.constellation.check_and_load_folder(&path);
+        }
         self.view = view;
         if let Some(location) = self.location_mut() {
             location.manual_view = Some(view);
@@ -45,6 +49,7 @@ impl FileManager {
                     Tab::new(super::super::BrowserView::Photos, "Photos"),
                     Tab::new(super::super::BrowserView::Music, "Music"),
                     Tab::new(super::super::BrowserView::Videos, "Videos"),
+                    Tab::new(super::super::BrowserView::Constellation, "Constellation"),
                 ],
                 palette,
             )

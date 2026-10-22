@@ -190,10 +190,43 @@ impl FileManager {
                     self.music_ui(ui, colors);
                 } else if self.view == super::BrowserView::Videos {
                     self.video_ui(ui, colors);
+                } else if self.view == super::BrowserView::Constellation {
+                    self.constellation_ui(ui, colors, palette);
                 } else {
                     self.list_ui(ui, colors, palette);
                 }
             });
+    }
+
+    pub(super) fn constellation_ui(
+        &mut self,
+        ui: &mut Ui,
+        _colors: WorkbenchColors,
+        _palette: &AppPalette,
+    ) {
+        let current_path = self.path().to_path_buf();
+        self.constellation.check_and_load_folder(&current_path);
+
+        let mut sample_to_play: Option<PathBuf> = None;
+        let mut sample_to_select: Option<PathBuf> = None;
+
+        self.constellation.render_ui(
+            ui,
+            &current_path,
+            &mut |path| {
+                sample_to_play = Some(path.to_path_buf());
+            },
+            &mut |path| {
+                sample_to_select = Some(path.to_path_buf());
+            },
+        );
+
+        if let Some(p) = sample_to_play {
+            self.music.play(&p);
+        }
+        if let Some(p) = sample_to_select {
+            self.select(p);
+        }
     }
 
     fn sync_modal_focus(&mut self, ctx: &egui::Context) {

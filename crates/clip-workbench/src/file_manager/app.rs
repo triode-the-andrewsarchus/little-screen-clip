@@ -377,6 +377,23 @@ impl eframe::App for FileManagerApp {
                             });
                         } else if title == "Edit" {
                             self.edit_menu(ui);
+                        } else if title == "File" {
+                            let current_dir = self.browser.path().to_path_buf();
+                            let is_indexing_current =
+                                self.browser.constellation.is_indexing_folder(&current_dir);
+                            let is_busy = self.browser.constellation.active_job.is_some();
+                            let label = if is_indexing_current {
+                                "🌌 Indexing this folder in background..."
+                            } else if is_busy {
+                                "🌌 Indexing another folder in background..."
+                            } else {
+                                "🌌 Index folder into sample constellation (recursive)"
+                            };
+                            if ui.add_enabled(!is_busy, egui::Button::new(label)).clicked() {
+                                self.browser.constellation.start_indexing(&current_dir);
+                                self.browser.set_view(super::BrowserView::Constellation);
+                                ui.close_menu();
+                            }
                         } else {
                             ui.add_enabled(false, egui::Label::new("No actions yet"));
                         }

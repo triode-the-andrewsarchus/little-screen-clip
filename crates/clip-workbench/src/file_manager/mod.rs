@@ -4,6 +4,7 @@ mod app;
 mod binary_strip;
 mod blend_preview;
 mod bookmarks;
+pub(super) mod constellation;
 mod content;
 mod edit_ui;
 mod edits;
@@ -77,12 +78,13 @@ impl LastStatus {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-enum BrowserView {
+pub(in crate::file_manager) enum BrowserView {
     #[default]
     List,
     Photos,
     Music,
     Videos,
+    Constellation,
 }
 
 const VIDEO_ROW_HEIGHT: f32 = 108.0;
@@ -225,6 +227,7 @@ pub(crate) struct FileManager {
     music_selection: Option<ui::music::MusicRange>,
     fuse_mounts: fuse_binwalk::MountManager,
     mounts: mounts::Mounts,
+    pub(crate) constellation: constellation::ConstellationState,
     pub(crate) last_status: Option<LastStatus>,
 }
 
@@ -297,6 +300,7 @@ impl FileManager {
             music_selection: None,
             fuse_mounts: Default::default(),
             mounts: mounts::Mounts::new(),
+            constellation: constellation::ConstellationState::new(),
             last_status: None,
         }
     }
@@ -425,6 +429,7 @@ impl FileManager {
         }
         self.shelf.tick();
         self.bookmarks.tick(jobs);
+        self.constellation.tick();
         if let Some(text) = self.bookmarks.report.take() {
             self.set_status(Icon::Alert, text.clone(), true);
             self.edits.report = Some(edits::EditReport { text, failed: true });
