@@ -48,7 +48,7 @@ impl ConstellationState {
         }
 
         // Main Constellation Starfield Canvas
-        self.render_starfield(ui, on_play_sample, on_select_sample);
+        self.render_starfield(ui, current_folder, on_play_sample, on_select_sample);
     }
 
     fn render_toolbar(
@@ -138,12 +138,6 @@ impl ConstellationState {
                     self.play_nearest_neighbor(on_play_sample);
                 }
             }
-
-            // Reset camera
-            if ui.button("🎯 Reset View").clicked() {
-                self.pan = Vec2::ZERO;
-                self.zoom = 1.0;
-            }
         });
         ui.separator();
     }
@@ -186,6 +180,7 @@ impl ConstellationState {
     fn render_starfield(
         &mut self,
         ui: &mut egui::Ui,
+        current_folder: &std::path::Path,
         on_play_sample: &mut dyn FnMut(&std::path::Path),
         on_select_sample: &mut dyn FnMut(&std::path::Path),
     ) {
@@ -565,22 +560,60 @@ impl ConstellationState {
             }
 
             // Draw floating HUD Card for hovered sample
-            self.render_sample_hud(ui, &painter, rect, hovered_pos, &hovered);
+            self.render_sample_hud(ui, &painter, rect, hovered_pos, &hovered, current_folder);
         } else if !response.hovered() {
             self.last_hovered_path = None;
         }
     }
 
     fn render_sample_hud(
-        &self,
-        _ui: &egui::Ui,
+        &mut self,
+        ui: &egui::Ui,
         painter: &egui::Painter,
         screen_rect: Rect,
         star_pos: Pos2,
         sample: &ConstellationSample,
+        current_folder: &std::path::Path,
     ) {
-        let hud_w = 240.0;
-        let hud_h = 75.0;
+        // Poll any completed hover previews from background worker
+        self.poll_hover_previews();
+
+        let cached_preview = self.hover_previews.get(&sample.file_path).cloned();
+        if cached_preview.is_none() {
+            if self.pending_hover_path.as_ref() != Some(&sample.file_path) {
+                self.pending_hover_path = Some(sample.file_path.clone());
+                let req_tx = self.ensure_hover_worker().clone();
+                let _ = req_tx.send(super::HoverPreviewRequest {
+                    file_path: sample.file_path.clone(),
+                    duration: sample.duration_seconds,
+                    sample_rate: (sample.sample_rate > 0).then_some(sample.sample_rate),
+                    channels: (sample.channels > 0).then_some(sample.channels),
+                    bit_depth: (sample.bit_depth > 0).then_some(sample.bit_depth),
+                });
+                ui.ctx().request_repaint();
+            }
+        }
+
+        let (sr, ch, bits) = if let Some(ref prev) = cached_preview {
+            (prev.sample_rate, prev.channels, prev.bit_depth)
+        } else {
+            let sr = (sample.sample_rate > 0).then_some(sample.sample_rate);
+            let ch = (sample.channels > 0).then_some(sample.channels);
+            let bits = (sample.bit_depth > 0).then_some(sample.bit_depth);
+            if sr.is_some() && ch.is_some() && bits.is_some() {
+                (sr, ch, bits)
+            } else {
+                let probed = super::audio_probe::read_audio_format_info(&sample.file_path);
+                (
+                    probed.sample_rate.or(sr),
+                    probed.channels.or(ch),
+                    probed.bit_depth.or(bits),
+                )
+            }
+        };
+
+        let hud_w = 270.0;
+        let hud_h = 126.0;
 
         let hud_x = if star_pos.x + 20.0 + hud_w > screen_rect.right() {
             star_pos.x - 20.0 - hud_w
@@ -615,21 +648,21 @@ impl ConstellationState {
         painter.rect_filled(
             hud_rect,
             6.0,
-            Color32::from_rgba_premultiplied(18, 22, 38, 235),
+            Color32::from_rgba_premultiplied(16, 20, 34, 242),
         );
         painter.rect_stroke(
             hud_rect,
             6.0,
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(80, 120, 200, 120)),
+            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(70, 100, 180, 140)),
         );
 
-        // Filename
+        // 1. Top Row: Filename (left) + Category Pill (right)
         let name_rect = Rect::from_min_size(
             hud_rect.min + Vec2::new(10.0, 8.0),
-            Vec2::new(hud_w - 20.0, 18.0),
+            Vec2::new(hud_w - 95.0, 16.0),
         );
-        let short_name = if sample.filename.len() > 28 {
-            format!("{}...", &sample.filename[..25])
+        let short_name = if sample.filename.len() > 22 {
+            format!("{}...", &sample.filename[..19])
         } else {
             sample.filename.clone()
         };
@@ -643,8 +676,10 @@ impl ConstellationState {
 
         // Category Tag Pill
         let cat_color = sample.category.color();
-        let pill_rect =
-            Rect::from_min_size(hud_rect.min + Vec2::new(10.0, 30.0), Vec2::new(70.0, 16.0));
+        let pill_rect = Rect::from_min_size(
+            hud_rect.min + Vec2::new(hud_w - 78.0, 7.0),
+            Vec2::new(68.0, 17.0),
+        );
         painter.rect_filled(
             pill_rect,
             4.0,
@@ -664,7 +699,138 @@ impl ConstellationState {
             Color32::WHITE,
         );
 
-        // Acoustic Stats (duration, pitch, brightness)
+        // 2. Relative Path from Root
+        let root = self
+            .current_indexed_folder
+            .as_deref()
+            .unwrap_or(current_folder);
+        let rel_str = match sample.file_path.strip_prefix(root) {
+            Ok(rel) if rel.as_os_str().is_empty() => sample.filename.clone(),
+            Ok(rel) => rel.to_string_lossy().into_owned(),
+            Err(_) => {
+                if let Some(parent) = sample.file_path.parent().and_then(|p| p.file_name()) {
+                    format!("{}/{}", parent.to_string_lossy(), sample.filename)
+                } else {
+                    sample.filename.clone()
+                }
+            }
+        };
+
+        let short_rel = if rel_str.len() > 36 {
+            let mut truncated = String::from("📁 ");
+            truncated.push_str(&rel_str[..12]);
+            truncated.push_str(".../");
+            truncated.push_str(&sample.filename);
+            if truncated.len() > 38 {
+                format!("📁 .../{}", sample.filename)
+            } else {
+                truncated
+            }
+        } else {
+            format!("📁 {}", rel_str)
+        };
+
+        painter.text(
+            hud_rect.min + Vec2::new(10.0, 27.0),
+            egui::Align2::LEFT_TOP,
+            short_rel,
+            egui::FontId::proportional(10.0),
+            Color32::from_rgb(145, 185, 235),
+        );
+
+        // 3. Colored Waveform Strip
+        let wave_w = hud_w - 20.0;
+        let wave_h = 32.0;
+        let wave_rect = Rect::from_min_size(
+            hud_rect.min + Vec2::new(10.0, 44.0),
+            Vec2::new(wave_w, wave_h),
+        );
+
+        painter.rect_filled(
+            wave_rect,
+            3.0,
+            Color32::from_rgba_premultiplied(10, 14, 24, 230),
+        );
+        painter.rect_stroke(
+            wave_rect,
+            3.0,
+            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(60, 80, 130, 80)),
+        );
+
+        painter.line_segment(
+            [
+                Pos2::new(wave_rect.left() + 2.0, wave_rect.center().y),
+                Pos2::new(wave_rect.right() - 2.0, wave_rect.center().y),
+            ],
+            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(70, 90, 140, 60)),
+        );
+
+        if let Some(ref prev) = cached_preview {
+            if !prev.waveform.is_empty() {
+                let count = prev.waveform.len().max(1);
+                for (index, amplitude) in prev.waveform.iter().enumerate() {
+                    let x =
+                        wave_rect.left() + (index as f32 + 0.5) / count as f32 * wave_rect.width();
+                    let height = (amplitude * wave_rect.height() * 0.48).max(1.0);
+                    let color = prev
+                        .waveform_colors
+                        .get(index)
+                        .map_or(Color32::from_rgb(100, 200, 255), |rgb| {
+                            Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+                        });
+                    painter.line_segment(
+                        [
+                            Pos2::new(x, wave_rect.center().y - height),
+                            Pos2::new(x, wave_rect.center().y + height),
+                        ],
+                        Stroke::new(1.5_f32, color),
+                    );
+                }
+            } else {
+                painter.text(
+                    wave_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "No audio waveform",
+                    egui::FontId::proportional(10.0),
+                    Color32::from_gray(120),
+                );
+            }
+        } else {
+            painter.text(
+                wave_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Loading waveform...",
+                egui::FontId::proportional(10.0),
+                Color32::from_gray(140),
+            );
+        }
+
+        // 4. Format Specs: Bit depth, Sample rate, Channels
+        let mut specs = Vec::new();
+        if let Some(b) = bits {
+            specs.push(format!("{b}-bit"));
+        }
+        if let Some(s) = sr {
+            specs.push(super::audio_probe::format_sample_rate(s));
+        }
+        if let Some(c) = ch {
+            specs.push(super::audio_probe::format_channels(c));
+        }
+        let format_text = if specs.is_empty() {
+            "Audio".to_string()
+        } else {
+            specs.join(" · ")
+        };
+
+        painter.text(
+            hud_rect.min + Vec2::new(10.0, 83.0),
+            egui::Align2::LEFT_TOP,
+            format_text,
+            egui::FontId::proportional(10.5),
+            Color32::from_rgb(140, 215, 255),
+        );
+
+        // 5. Acoustic Stats: Duration, Frequency, Note
         let dur_str = if sample.duration_seconds < 1.0 {
             format!("{:.0} ms", sample.duration_seconds * 1000.0)
         } else {
@@ -680,11 +846,11 @@ impl ConstellationState {
 
         let stats_text = format!("{} · {:.0} Hz{}", dur_str, sample.brightness, pitch_str);
         painter.text(
-            hud_rect.min + Vec2::new(10.0, 52.0),
+            hud_rect.min + Vec2::new(10.0, 101.0),
             egui::Align2::LEFT_TOP,
             stats_text,
-            egui::FontId::proportional(11.0),
-            Color32::from_gray(170),
+            egui::FontId::proportional(10.5),
+            Color32::from_gray(175),
         );
     }
 

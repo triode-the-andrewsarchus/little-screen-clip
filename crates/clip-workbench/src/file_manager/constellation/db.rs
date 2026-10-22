@@ -20,6 +20,9 @@ pub struct ConstellationSample {
     pub y: f32,
     pub file_size: u64,
     pub mtime: i64,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub bit_depth: u16,
 }
 
 pub struct ConstellationDb {
@@ -82,7 +85,10 @@ impl ConstellationDb {
                 x REAL NOT NULL,
                 y REAL NOT NULL,
                 file_size INTEGER NOT NULL,
-                mtime INTEGER NOT NULL
+                mtime INTEGER NOT NULL,
+                sample_rate INTEGER DEFAULT 0,
+                channels INTEGER DEFAULT 0,
+                bit_depth INTEGER DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_samples_folder ON samples(folder_path);
@@ -97,6 +103,22 @@ impl ConstellationDb {
         if version < 4 {
             self.migrate_v4_clump_coordinates(&conn)?;
             let _ = conn.execute("PRAGMA user_version = 4;", []);
+        }
+
+        if version < 5 {
+            let _ = conn.execute(
+                "ALTER TABLE samples ADD COLUMN sample_rate INTEGER DEFAULT 0;",
+                [],
+            );
+            let _ = conn.execute(
+                "ALTER TABLE samples ADD COLUMN channels INTEGER DEFAULT 0;",
+                [],
+            );
+            let _ = conn.execute(
+                "ALTER TABLE samples ADD COLUMN bit_depth INTEGER DEFAULT 0;",
+                [],
+            );
+            let _ = conn.execute("PRAGMA user_version = 5;", []);
         }
 
         Ok(())
@@ -176,7 +198,8 @@ impl ConstellationDb {
         let mut stmt = conn
             .prepare(
                 "SELECT file_path, folder_path, filename, category, confidence,
-                        duration_seconds, pitch_hz, pitch_clarity, brightness, x, y, file_size, mtime
+                        duration_seconds, pitch_hz, pitch_clarity, brightness, x, y, file_size, mtime,
+                        sample_rate, channels, bit_depth
                  FROM samples
                  WHERE folder_path = ?1 OR folder_path LIKE ?2",
             )
@@ -204,6 +227,9 @@ impl ConstellationDb {
                     y: row.get::<_, f64>(10)? as f32,
                     file_size: row.get::<_, i64>(11)? as u64,
                     mtime: row.get(12)?,
+                    sample_rate: row.get::<_, Option<i64>>(13).unwrap_or(None).unwrap_or(0) as u32,
+                    channels: row.get::<_, Option<i64>>(14).unwrap_or(None).unwrap_or(0) as u16,
+                    bit_depth: row.get::<_, Option<i64>>(15).unwrap_or(None).unwrap_or(0) as u16,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -246,8 +272,9 @@ impl ConstellationDb {
                 .prepare(
                     "INSERT INTO samples (
                         file_path, folder_path, filename, category, confidence,
-                        duration_seconds, pitch_hz, pitch_clarity, brightness, x, y, file_size, mtime
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                        duration_seconds, pitch_hz, pitch_clarity, brightness, x, y, file_size, mtime,
+                        sample_rate, channels, bit_depth
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 )
                 .map_err(|e| e.to_string())?;
 
@@ -266,6 +293,9 @@ impl ConstellationDb {
                     s.y as f64,
                     s.file_size as i64,
                     s.mtime,
+                    s.sample_rate as i64,
+                    s.channels as i64,
+                    s.bit_depth as i64,
                 ])
                 .map_err(|e| e.to_string())?;
             }
@@ -319,6 +349,9 @@ mod tests {
                 y: 0.70,
                 file_size: 44100,
                 mtime: 1700000000,
+                sample_rate: 44100,
+                channels: 2,
+                bit_depth: 24,
             },
             ConstellationSample {
                 file_path: test_folder.join("crisp_snare.wav"),
@@ -334,6 +367,9 @@ mod tests {
                 y: 0.50,
                 file_size: 32000,
                 mtime: 1700000001,
+                sample_rate: 48000,
+                channels: 1,
+                bit_depth: 16,
             },
         ];
 
@@ -349,8 +385,14 @@ mod tests {
         assert_eq!(loaded[0].filename, "punchy_kick.wav");
         assert_eq!(loaded[0].category, SampleCategory::Kick);
         assert!((loaded[0].pitch_hz - 55.0).abs() < 1e-4);
+        assert_eq!(loaded[0].sample_rate, 44100);
+        assert_eq!(loaded[0].channels, 2);
+        assert_eq!(loaded[0].bit_depth, 24);
         assert_eq!(loaded[1].filename, "crisp_snare.wav");
         assert_eq!(loaded[1].category, SampleCategory::Snare);
+        assert_eq!(loaded[1].sample_rate, 48000);
+        assert_eq!(loaded[1].channels, 1);
+        assert_eq!(loaded[1].bit_depth, 16);
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir_all(&temp_dir);

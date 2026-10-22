@@ -1,5 +1,6 @@
 //! 2D sample constellation view and classification system inspired by 2D audio sample mapping tools.
 
+pub mod audio_probe;
 pub mod classifier;
 pub mod db;
 pub mod generated_model;
@@ -9,6 +10,7 @@ pub mod ui;
 use db::{ConstellationDb, ConstellationSample};
 use generated_model::SampleCategory;
 use indexer::{IndexProgress, run_indexing};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +31,25 @@ pub struct HistoryTrailPoint {
     pub category: SampleCategory,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ConstellationHoverPreview {
+    pub file_path: PathBuf,
+    pub waveform: Vec<f32>,
+    pub waveform_colors: Vec<[u8; 3]>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u16>,
+    pub bit_depth: Option<u16>,
+}
+
+#[derive(Clone, Debug)]
+pub struct HoverPreviewRequest {
+    pub file_path: PathBuf,
+    pub duration: f32,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u16>,
+    pub bit_depth: Option<u16>,
+}
+
 pub struct ConstellationState {
     pub samples: Vec<ConstellationSample>,
     pub current_indexed_folder: Option<PathBuf>,
@@ -42,6 +63,10 @@ pub struct ConstellationState {
     pub zoom: f32,
     pub active_job: Option<IndexingJob>,
     pub indexing_status: Option<String>,
+    pub hover_previews: HashMap<PathBuf, Arc<ConstellationHoverPreview>>,
+    pub hover_req_tx: Option<mpsc::Sender<HoverPreviewRequest>>,
+    pub hover_res_rx: Option<mpsc::Receiver<ConstellationHoverPreview>>,
+    pub pending_hover_path: Option<PathBuf>,
 }
 
 impl Default for ConstellationState {
@@ -59,6 +84,10 @@ impl Default for ConstellationState {
             zoom: 1.0,
             active_job: None,
             indexing_status: None,
+            hover_previews: HashMap::new(),
+            hover_req_tx: None,
+            hover_res_rx: None,
+            pending_hover_path: None,
         }
     }
 }
@@ -201,8 +230,72 @@ impl ConstellationState {
         self.indexing_status = None;
     }
 
+    /// Ensures the dedicated background worker for computing hover previews is running.
+    pub fn ensure_hover_worker(&mut self) -> &mpsc::Sender<HoverPreviewRequest> {
+        if self.hover_req_tx.is_none() {
+            let (req_tx, req_rx) = mpsc::channel::<HoverPreviewRequest>();
+            let (res_tx, res_rx) = mpsc::channel::<ConstellationHoverPreview>();
+
+            thread::Builder::new()
+                .name("constellation-hover-preview".into())
+                .spawn(move || {
+                    while let Ok(req) = req_rx.recv() {
+                        // Coalesce / drain stale requests so we only compute the newest hovered sample
+                        let mut latest = req;
+                        while let Ok(newer) = req_rx.try_recv() {
+                            latest = newer;
+                        }
+
+                        let path = &latest.file_path;
+                        let info = audio_probe::read_audio_format_info(path);
+                        let sample_rate = info.sample_rate.or(latest.sample_rate);
+                        let channels = info.channels.or(latest.channels);
+                        let bit_depth = info.bit_depth.or(latest.bit_depth);
+
+                        let (waveform, colors) = super::music::preview::waveform(
+                            path,
+                            latest.duration,
+                            64,
+                            None,
+                            &AtomicBool::new(false),
+                        )
+                        .unwrap_or_default();
+
+                        let preview = ConstellationHoverPreview {
+                            file_path: latest.file_path,
+                            waveform,
+                            waveform_colors: colors,
+                            sample_rate,
+                            channels,
+                            bit_depth,
+                        };
+                        let _ = res_tx.send(preview);
+                    }
+                })
+                .expect("Failed to spawn constellation hover preview worker");
+
+            self.hover_req_tx = Some(req_tx);
+            self.hover_res_rx = Some(res_rx);
+        }
+        self.hover_req_tx.as_ref().unwrap()
+    }
+
+    /// Drains any completed hover previews from the background worker.
+    pub fn poll_hover_previews(&mut self) {
+        if let Some(ref rx) = self.hover_res_rx {
+            while let Ok(preview) = rx.try_recv() {
+                if self.hover_previews.len() > 256 {
+                    self.hover_previews.clear();
+                }
+                self.hover_previews
+                    .insert(preview.file_path.clone(), Arc::new(preview));
+            }
+        }
+    }
+
     /// Periodic tick called from the application update loop to receive indexing updates.
     pub fn tick(&mut self) {
+        self.poll_hover_previews();
         let mut job_done = false;
 
         if let Some(job) = &self.active_job {
@@ -266,6 +359,9 @@ mod tests {
             y: -0.15,
             file_size: 1000,
             mtime: 0,
+            sample_rate: 44100,
+            channels: 2,
+            bit_depth: 16,
         };
 
         let s2 = ConstellationSample {
@@ -282,6 +378,9 @@ mod tests {
             y: -0.08,
             file_size: 1200,
             mtime: 0,
+            sample_rate: 44100,
+            channels: 2,
+            bit_depth: 16,
         };
 
         // Record first sample
@@ -322,6 +421,9 @@ mod tests {
                 y: -0.15 + (i as f32 * 0.005),
                 file_size: 1000,
                 mtime: 0,
+                sample_rate: 44100,
+                channels: 2,
+                bit_depth: 16,
             };
             state.record_played_sample(&sample);
         }
@@ -353,6 +455,9 @@ mod tests {
                 y: angle.sin() * 0.7,
                 file_size: 1000,
                 mtime: 0,
+                sample_rate: 44100,
+                channels: 2,
+                bit_depth: 16,
             };
             state.record_played_sample(&sample);
         }

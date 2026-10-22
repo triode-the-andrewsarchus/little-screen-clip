@@ -235,6 +235,13 @@ fn process_single_audio_file(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| root_folder.to_path_buf());
 
+    let format_info = super::audio_probe::read_audio_format_info(path);
+    let sample_rate_u32 = format_info
+        .sample_rate
+        .unwrap_or(decoder.sample_rate().get());
+    let channels_u16 = format_info.channels.unwrap_or(channels as u16);
+    let bit_depth_u16 = format_info.bit_depth.unwrap_or(0);
+
     Some(ConstellationSample {
         file_path: path.to_path_buf(),
         folder_path: parent_folder,
@@ -249,6 +256,9 @@ fn process_single_audio_file(
         y: classification.y,
         file_size,
         mtime,
+        sample_rate: sample_rate_u32,
+        channels: channels_u16,
+        bit_depth: bit_depth_u16,
     })
 }
 
