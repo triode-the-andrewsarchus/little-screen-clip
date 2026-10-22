@@ -150,3 +150,5 @@ workbench_triangle_limit = 150000
 constellation_pad_keys = ["zxcv", "asdf", "qwer", "1234"]
 # Pixels per video timeline sample: 1 (native resolution), 2, 4, 8, or 16.
 video_timeline_decimation = 1
+photo_mode = "similarity"
+photo_recurse = true
