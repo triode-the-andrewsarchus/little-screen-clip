@@ -489,3 +489,92 @@ fn test_search_pan_to_grid_results() {
     assert!((top_tile_rect.min.y - 110.0).abs() < 1.0);
     assert!(viewport.contains(top_tile_rect.center()));
 }
+
+#[test]
+fn test_vertical_packing_and_order_retention() {
+    use super::canvas::SimilarityCanvas;
+    use super::embedding::FeatureVector;
+    use crate::file_manager::filesystem::Entry;
+    use std::path::PathBuf;
+
+    let mut canvas = SimilarityCanvas::default();
+    canvas.similarity_threshold = 0.5;
+
+    // 100 entries => 10x10 base grid
+    let count = 100;
+    let mut entries = Vec::new();
+    for i in 0..count {
+        let path = PathBuf::from(format!("/test_pack_{i}.png"));
+        entries.push(Entry {
+            path: path.clone(),
+            name: format!("img_{i}.png"),
+            directory: false,
+            regular_file: true,
+            system: None,
+            typescript: false,
+            symlink: false,
+            hidden: false,
+            size: "1 KB".to_string(),
+            size_bytes: 1024,
+            modified: "today".to_string(),
+            modified_time: None,
+            warning: None,
+            revision: 1,
+            identity: None,
+        });
+
+        let mut vec = vec![0.0f32; 1536];
+        vec[0] = 1.0;
+        canvas.insert_hash(path, FeatureVector::Dense(vec), 1);
+    }
+
+    canvas.set_entries(entries);
+    assert_eq!(canvas.grids[0].grid_cols, 10);
+    assert_eq!(canvas.grids[0].grid_rows, 10);
+    assert_eq!(canvas.grids[0].col_offset, 0);
+    assert_eq!(canvas.grids[0].row_offset, 0);
+
+    // Search 1: 9 items => 3x3 grid
+    let mut concept1 = vec![0.0f32; 1536];
+    concept1[0] = 1.0;
+    let g1 = canvas.add_search_grid("s1", false, (0..9).collect(), concept1);
+    assert_eq!(canvas.grids[1].id, g1);
+    assert_eq!(canvas.grids[1].grid_cols, 3);
+    assert_eq!(canvas.grids[1].grid_rows, 3);
+    assert_eq!(canvas.grids[1].col_offset, 12); // 10 + COL_GAP(2)
+    assert_eq!(canvas.grids[1].row_offset, 0);
+
+    // Search 2: 9 items => 3x3 grid
+    // Fits vertically in Column 1 below Search 1 (3 + 1 + 3 = 7 <= 10)
+    let mut concept2 = vec![0.0f32; 1536];
+    concept2[0] = 1.0;
+    let g2 = canvas.add_search_grid("s2", false, (0..9).collect(), concept2);
+    assert_eq!(canvas.grids[2].id, g2);
+    assert_eq!(canvas.grids[2].grid_cols, 3);
+    assert_eq!(canvas.grids[2].grid_rows, 3);
+    assert_eq!(canvas.grids[2].col_offset, 12); // Same column!
+    assert_eq!(canvas.grids[2].row_offset, 4); // Stacked vertically: 3 + ROW_GAP(1)
+
+    // Search 3: 81 items => 9x9 grid
+    // Does NOT fit in Column 1 (4 + 3 + 1 + 9 = 17 > 10) => Starts Column 2 to the right!
+    let mut concept3 = vec![0.0f32; 1536];
+    concept3[0] = 1.0;
+    let g3 = canvas.add_search_grid("s3", false, (0..81).collect(), concept3);
+    assert_eq!(canvas.grids[3].id, g3);
+    assert_eq!(canvas.grids[3].grid_cols, 9);
+    assert_eq!(canvas.grids[3].grid_rows, 9);
+    assert_eq!(canvas.grids[3].col_offset, 17); // 12 + 3 + COL_GAP(2)
+    assert_eq!(canvas.grids[3].row_offset, 0);
+
+    // Search 4: 9 items => 3x3 grid
+    // Current Column 2 has 9 rows used; 9 + 1 + 3 = 13 > 10 => Does NOT fit in Column 2!
+    // Must NOT backfill into Column 1. Strictly retains search order and starts Column 3!
+    let mut concept4 = vec![0.0f32; 1536];
+    concept4[0] = 1.0;
+    let g4 = canvas.add_search_grid("s4", false, (0..9).collect(), concept4);
+    assert_eq!(canvas.grids[4].id, g4);
+    assert_eq!(canvas.grids[4].grid_cols, 3);
+    assert_eq!(canvas.grids[4].grid_rows, 3);
+    assert_eq!(canvas.grids[4].col_offset, 28); // 17 + 9 + COL_GAP(2)
+    assert_eq!(canvas.grids[4].row_offset, 0);
+}
