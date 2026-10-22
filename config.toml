@@ -127,6 +127,7 @@ viewer = "nomacs"
 # depth_url = "https://huggingface.co/mtbui2010/depth-anything-v2-small-ONNX/resolve/main/model.onnx"
 # sam_encoder_url = "https://huggingface.co/Acly/MobileSAM/resolve/main/mobile_sam_image_encoder.onnx"
 # sam_decoder_url = "https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx"
+# siglip2_giant_url = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_quantized.onnx"
 
 [text]
 # Preferred external text editor command for text preview escape hatch

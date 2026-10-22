@@ -5,6 +5,7 @@ pub mod dhash;
 pub mod embedding;
 pub mod grid;
 pub mod scanner;
+pub mod siglip;
 #[cfg(test)]
 pub mod tests;
 

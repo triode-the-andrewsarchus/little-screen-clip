@@ -18,6 +18,7 @@ use super::{
     embedding::{FeatureVector, project_features_to_2d},
     grid::{GridPlacement, grid_dimensions, snap_to_grid},
     scanner::scan_recursive_photos,
+    siglip::{SIGLIP_BATCH_SIZE, SiglipEmbedder},
 };
 use crate::file_manager::filesystem::{Directory, Entry};
 
@@ -37,6 +38,19 @@ impl<T> Drop for PendingJob<T> {
     }
 }
 
+struct HashJob {
+    ticket: JobTicket,
+    cancelled: Arc<AtomicBool>,
+    batch_rx: mpsc::Receiver<Vec<(PathBuf, u64, FeatureVector)>>,
+}
+
+impl Drop for HashJob {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        self.ticket.cancel();
+    }
+}
+
 pub(in crate::file_manager) struct SimilarityCanvas {
     pub pan: egui::Vec2,
     pub zoom: f32,
@@ -49,7 +63,7 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     hashes: HashMap<PathBuf, (FeatureVector, u64)>, // path -> (feature, revision)
     current_signature: Option<(PathBuf, u64, bool, usize)>,
     scan_job: Option<PendingJob<Vec<Entry>>>,
-    hash_job: Option<PendingJob<Vec<(PathBuf, u64, FeatureVector)>>>,
+    hash_job: Option<HashJob>,
     initial_fit_done: bool,
     pub hashing_progress: (usize, usize), // (completed, total)
 }
@@ -202,22 +216,48 @@ impl SimilarityCanvas {
         let cancelled = Arc::new(AtomicBool::new(false));
         let c = Arc::clone(&cancelled);
         let pool = worker_pool();
-        let (ticket, receiver) = pool.submit(Duration::from_secs(120), move || {
-            let mut results = Vec::new();
-            for (path, rev) in missing {
+        let (batch_tx, batch_rx) = mpsc::channel();
+
+        let (ticket, _completion_rx) = pool.submit(Duration::from_secs(3600), move || {
+            let mut siglip_embedder = SiglipEmbedder::try_new().ok();
+
+            for chunk in missing.chunks(SIGLIP_BATCH_SIZE) {
                 if c.load(Ordering::Relaxed) {
                     break;
                 }
-                if let Some(hash) = compute_dhash_from_path(&path, &c) {
-                    results.push((path, rev, FeatureVector::DHash(hash)));
+                let mut chunk_results = Vec::with_capacity(chunk.len());
+                let mut used_siglip = false;
+
+                if let Some(embedder) = siglip_embedder.as_mut() {
+                    let chunk_paths: Vec<PathBuf> = chunk.iter().map(|(p, _)| p.clone()).collect();
+                    if let Ok(embeddings) = embedder.embed_batch(&chunk_paths, &c) {
+                        for ((path, rev), feat) in chunk.iter().zip(embeddings.into_iter()) {
+                            chunk_results.push((path.clone(), *rev, feat));
+                        }
+                        used_siglip = true;
+                    }
+                }
+
+                if !used_siglip {
+                    for (path, rev) in chunk {
+                        if c.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        if let Some(hash) = compute_dhash_from_path(path, &c) {
+                            chunk_results.push((path.clone(), *rev, FeatureVector::DHash(hash)));
+                        }
+                    }
+                }
+
+                if !chunk_results.is_empty() && batch_tx.send(chunk_results).is_err() {
+                    break;
                 }
             }
-            results
         });
-        self.hash_job = Some(PendingJob {
+        self.hash_job = Some(HashJob {
             ticket,
             cancelled,
-            receiver,
+            batch_rx,
         });
     }
 
@@ -231,14 +271,32 @@ impl SimilarityCanvas {
             }
         }
 
-        if let Some(job) = &self.hash_job {
-            if let Ok(Ok(results)) = job.receiver.try_recv() {
-                self.hash_job = None;
-                for (path, rev, feat) in results {
-                    self.hashes.insert(path, (feat, rev));
+        if let Some(job) = &mut self.hash_job {
+            let mut received_any = false;
+            let mut finished = false;
+            loop {
+                match job.batch_rx.try_recv() {
+                    Ok(batch) => {
+                        for (path, rev, feat) in batch {
+                            self.hashes.insert(path, (feat, rev));
+                        }
+                        self.hashing_progress.0 = self.hashes.len().min(self.entries.len());
+                        received_any = true;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        finished = true;
+                        break;
+                    }
                 }
-                self.hashing_progress.0 = self.hashes.len().min(self.entries.len());
+            }
+            if finished {
+                self.hash_job = None;
                 self.recompute_layout();
+                ctx.request_repaint();
+            } else if received_any {
                 ctx.request_repaint();
             }
         }
