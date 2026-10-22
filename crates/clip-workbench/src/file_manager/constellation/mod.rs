@@ -75,8 +75,8 @@ pub struct ConstellationState {
     pub pack_shelf_open: bool,
     pub slot_flash: [Option<Instant>; 10],
     pub active_players: Vec<rodio::Player>,
-    pub hovered_slot_idx: Option<usize>,
-    pub pinned_slot_idx: Option<usize>,
+    pub single_audition_player: Option<rodio::Player>,
+    pub focus_search: bool,
     pub browser_open: bool,
     pub browser_selected_idx: Option<usize>,
     pub browser_packs: Vec<sample_pack::SamplePackSummary>,
@@ -106,8 +106,8 @@ impl Default for ConstellationState {
             pack_shelf_open: true,
             slot_flash: [None; 10],
             active_players: Vec::new(),
-            hovered_slot_idx: None,
-            pinned_slot_idx: None,
+            single_audition_player: None,
+            focus_search: false,
             browser_open: false,
             browser_selected_idx: None,
             browser_packs: Vec::new(),
@@ -361,10 +361,22 @@ impl ConstellationState {
         self.browser_packs = sample_pack::list_saved_packs(root);
     }
 
+    /// Plays an individual audition sample directly with low latency (e.g. when hovering/clicking on the map).
+    pub fn play_audition_sample(&mut self, path: &Path) {
+        if let Some(player) = sample_pack::play_audio_file_direct(path) {
+            self.single_audition_player = Some(player);
+        }
+    }
+
     /// Periodic tick called from the application update loop to receive indexing updates.
     pub fn tick(&mut self) {
         self.poll_hover_previews();
         self.active_players.retain(|p| !p.empty());
+        if let Some(ref p) = self.single_audition_player {
+            if p.empty() {
+                self.single_audition_player = None;
+            }
+        }
         let mut job_done = false;
 
         if let Some(job) = &self.active_job {

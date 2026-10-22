@@ -222,7 +222,8 @@ impl FileManager {
         );
 
         if let Some(p) = sample_to_play {
-            self.music.play(&p);
+            self.music.stop();
+            self.constellation.play_audition_sample(&p);
         }
         if let Some(p) = sample_to_select {
             self.select(p);
@@ -240,6 +241,14 @@ impl FileManager {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if self.edits.dialog.is_some() || self.transfers_modal() {
             self.type_navigation.clear();
+            return;
+        }
+        if self.view == super::BrowserView::Constellation {
+            self.type_navigation.clear();
+            if key(ctx, Modifiers::CTRL, Key::F) || key(ctx, Modifiers::NONE, Key::Slash) {
+                self.constellation.focus_search = true;
+            }
+            self.navigation_shortcuts(ctx);
             return;
         }
         self.navigation_shortcuts(ctx);

@@ -1,10 +1,11 @@
-//! UI implementation for the sample pack creation shelf, floating slot control window,
-//! and the sample pack browser.
+//! UI implementation for the sample pack creation shelf and the sample pack browser.
+//! Includes inline waveform rendering per sample layer with draggable zero-crossing start/end flags
+//! and compact volume sliders directly inside each slot card.
 
 use super::ConstellationState;
 use super::sample_pack::{
-    NUM_SLOTS, SamplePackBank, delete_sample_pack, get_sample_packs_root, load_sample_pack,
-    play_slot_sample, save_sample_pack,
+    SamplePackBank, delete_sample_pack, get_sample_packs_root, load_sample_pack, play_slot_sample,
+    save_sample_pack,
 };
 use egui::{Color32, Pos2, Rect, RichText, Stroke, Vec2};
 use std::path::Path;
@@ -12,6 +13,7 @@ use std::time::{Duration, Instant};
 
 impl ConstellationState {
     /// Handles keyboard shortcuts for triggering (keys 1-0) and assigning (Shift+1-0) sample slots.
+    /// Consumes the keypress events so they do not leak to other file manager navigation handlers.
     pub fn handle_shelf_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
             return;
@@ -33,8 +35,8 @@ impl ConstellationState {
         let shift_held = ctx.input(|i| i.modifiers.shift);
 
         for (key, slot_idx) in keys {
-            if ctx.input(|i| i.key_pressed(key)) {
-                if shift_held {
+            if shift_held {
+                if ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, key)) {
                     if let Some(ref selected_path) = self.selected_path.clone() {
                         if let Some(sample) = self
                             .samples
@@ -46,9 +48,9 @@ impl ConstellationState {
                             self.slot_flash[slot_idx] = Some(Instant::now());
                         }
                     }
-                } else {
-                    self.trigger_slot(slot_idx);
                 }
+            } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
+                self.trigger_slot(slot_idx);
             }
         }
     }
@@ -154,29 +156,25 @@ impl ConstellationState {
             ui.add_space(4.0);
 
             // 10 Slots (Keys 1..9, 0)
-            let mut hovered_slot_pos: Option<(usize, Rect)> = None;
             let mut trigger_slot_idx: Option<usize> = None;
             let mut add_selected_to_idx: Option<usize> = None;
             let mut clear_slot_idx: Option<usize> = None;
-            let mut toggle_pin_idx: Option<usize> = None;
+            let mut remove_layer: Option<(usize, usize)> = None;
+            let mut audition_sample: Option<super::sample_pack::SlotSample> = None;
 
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
-                    for slot_idx in 0..NUM_SLOTS {
+                    for (slot_idx, slot) in self.pack_bank.slots.iter_mut().enumerate() {
                         let is_flashing = self.slot_flash[slot_idx]
                             .map_or(false, |t| t.elapsed() < Duration::from_millis(220));
-                        let is_pinned = self.pinned_slot_idx == Some(slot_idx);
 
-                        let slot = &self.pack_bank.slots[slot_idx];
                         let key_char = slot.key_char;
                         let sample_count = slot.samples.len();
 
                         // Slot card frame
                         let card_fill = if is_flashing {
                             Color32::from_rgba_premultiplied(40, 80, 140, 240)
-                        } else if is_pinned {
-                            Color32::from_rgba_premultiplied(32, 42, 64, 235)
                         } else if sample_count > 0 {
                             Color32::from_rgba_premultiplied(22, 28, 42, 220)
                         } else {
@@ -185,20 +183,19 @@ impl ConstellationState {
 
                         let card_stroke = if is_flashing {
                             Stroke::new(1.5_f32, Color32::from_rgb(120, 200, 255))
-                        } else if is_pinned {
-                            Stroke::new(1.0_f32, Color32::from_rgb(90, 150, 230))
                         } else if sample_count > 0 {
                             Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(70, 95, 145, 120))
                         } else {
                             Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(45, 55, 75, 80))
                         };
 
-                        let response = egui::Frame::none()
+                        egui::Frame::none()
                             .fill(card_fill)
                             .stroke(card_stroke)
                             .rounding(6.0)
                             .inner_margin(6.0)
                             .show(ui, |ui| {
+                                // Slot Header Row
                                 ui.horizontal(|ui| {
                                     // Key badge button (clicking triggers slot)
                                     let badge_color = match slot_idx {
@@ -260,16 +257,6 @@ impl ConstellationState {
                                                 }
                                             }
 
-                                            let pin_label =
-                                                if is_pinned { "📌" } else { "🎛️" };
-                                            if ui
-                                                .small_button(pin_label)
-                                                .on_hover_text("Toggle slot controls")
-                                                .clicked()
-                                            {
-                                                toggle_pin_idx = Some(slot_idx);
-                                            }
-
                                             if ui
                                                 .small_button("➕")
                                                 .on_hover_text(
@@ -283,50 +270,323 @@ impl ConstellationState {
                                     );
                                 });
 
-                                // Layer badges row if multiple samples assigned
-                                if sample_count > 0 {
-                                    ui.horizontal_wrapped(|ui| {
-                                        for (idx, sample) in slot.samples.iter().enumerate() {
+                                // Empty slot state or Sample Layers with Waveforms
+                                if sample_count == 0 {
+                                    ui.add_space(2.0);
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new("Empty slot · Press Shift+")
+                                                .size(9.5)
+                                                .color(Color32::from_gray(120)),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!("{key_char}"))
+                                                .size(9.5)
+                                                .strong()
+                                                .color(Color32::from_gray(170)),
+                                        );
+                                        ui.label(
+                                            RichText::new("to assign selected")
+                                                .size(9.5)
+                                                .color(Color32::from_gray(120)),
+                                        );
+                                    });
+                                } else {
+                                    ui.add_space(4.0);
+
+                                    // Render each sample layer with inline waveform & draggable trim flags
+                                    for (layer_idx, sample) in slot.samples.iter_mut().enumerate() {
+                                        sample.ensure_audio_loaded();
+
+                                        // Layer sub-header
+                                        ui.horizontal(|ui| {
                                             let cat_col = sample
                                                 .category
                                                 .map(|c| c.color())
-                                                .unwrap_or(Color32::from_gray(160));
+                                                .unwrap_or(Color32::from_rgb(100, 200, 255));
 
-                                            let layer_text =
-                                                format!("L{}: {}", idx + 1, sample.filename);
-                                            let short_l = if layer_text.len() > 14 {
-                                                format!("{}...", &layer_text[..12])
+                                            let short_name = if sample.filename.len() > 22 {
+                                                format!("{}...", &sample.filename[..19])
                                             } else {
-                                                layer_text
+                                                sample.filename.clone()
                                             };
 
-                                            let pill = egui::Frame::none()
-                                                .fill(Color32::from_rgba_premultiplied(
-                                                    cat_col.r() / 4,
-                                                    cat_col.g() / 4,
-                                                    cat_col.b() / 4,
-                                                    180,
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{}: {}",
+                                                    layer_idx + 1,
+                                                    short_name
                                                 ))
-                                                .stroke(Stroke::new(0.8_f32, cat_col))
-                                                .rounding(3.0)
-                                                .inner_margin(Vec2::new(4.0, 1.0))
-                                                .show(ui, |ui| {
-                                                    ui.label(
-                                                        RichText::new(short_l)
-                                                            .size(9.0)
-                                                            .color(Color32::WHITE),
-                                                    );
-                                                });
-                                            let _ = pill.response;
-                                        }
-                                    });
-                                }
-                            })
-                            .response;
+                                                .size(10.5)
+                                                .strong()
+                                                .color(cat_col),
+                                            );
 
-                        if response.hovered() {
-                            hovered_slot_pos = Some((slot_idx, response.rect));
-                        }
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if sample_count > 1 {
+                                                        if ui
+                                                            .small_button("✕")
+                                                            .on_hover_text("Remove this layer")
+                                                            .clicked()
+                                                        {
+                                                            remove_layer =
+                                                                Some((slot_idx, layer_idx));
+                                                        }
+                                                    }
+                                                    if ui
+                                                        .small_button("↺")
+                                                        .on_hover_text("Reset start/end trim")
+                                                        .clicked()
+                                                    {
+                                                        sample.start_sec = 0.0;
+                                                        sample.end_sec = sample.duration;
+                                                    }
+                                                    if ui
+                                                        .small_button("▶")
+                                                        .on_hover_text(
+                                                            "Audition this trimmed layer",
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        audition_sample = Some(sample.clone());
+                                                    }
+                                                },
+                                            );
+                                        });
+
+                                        // Waveform display with draggable start/end flags
+                                        let wave_height = 32.0;
+                                        let wave_w = ui.available_width().max(160.0);
+                                        let (rect, wave_resp) = ui.allocate_exact_size(
+                                            Vec2::new(wave_w, wave_height),
+                                            egui::Sense::click_and_drag(),
+                                        );
+                                        let painter = ui.painter_at(rect);
+
+                                        // Waveform background box
+                                        painter.rect_filled(
+                                            rect,
+                                            4.0,
+                                            Color32::from_rgb(14, 18, 26),
+                                        );
+                                        painter.rect_stroke(
+                                            rect,
+                                            4.0,
+                                            Stroke::new(
+                                                1.0_f32,
+                                                Color32::from_rgba_premultiplied(45, 55, 75, 120),
+                                            ),
+                                        );
+
+                                        let total_dur = sample.duration.max(0.01);
+                                        let start_ratio =
+                                            (sample.start_sec / total_dur).clamp(0.0, 1.0);
+                                        let end_ratio =
+                                            (sample.end_sec / total_dur).clamp(0.0, 1.0);
+
+                                        let start_x = rect.left() + start_ratio * rect.width();
+                                        let end_x = rect.left() + end_ratio * rect.width();
+
+                                        // Draw waveform peaks
+                                        if let Some(ref cached) = sample.cached_audio {
+                                            let peaks = &cached.waveform_peaks;
+                                            let num_peaks = peaks.len();
+                                            if num_peaks > 0 {
+                                                let mid_y = rect.center().y;
+                                                let h_half = rect.height() * 0.40;
+                                                let cat_color = sample
+                                                    .category
+                                                    .map(|c| c.color())
+                                                    .unwrap_or(Color32::from_rgb(90, 210, 255));
+                                                let dim_color = Color32::from_rgb(50, 56, 68);
+
+                                                for (i, &(min_val, max_val)) in
+                                                    peaks.iter().enumerate()
+                                                {
+                                                    let px = rect.left()
+                                                        + (i as f32 / num_peaks as f32)
+                                                            * rect.width();
+                                                    let is_active = px >= start_x && px <= end_x;
+                                                    let col = if is_active {
+                                                        cat_color
+                                                    } else {
+                                                        dim_color
+                                                    };
+                                                    let top_y =
+                                                        mid_y - (max_val.abs() * h_half).max(1.0);
+                                                    let btm_y =
+                                                        mid_y + (min_val.abs() * h_half).max(1.0);
+                                                    painter.line_segment(
+                                                        [
+                                                            Pos2::new(px, top_y),
+                                                            Pos2::new(px, btm_y),
+                                                        ],
+                                                        Stroke::new(1.2_f32, col),
+                                                    );
+                                                }
+                                            }
+                                        }
+
+                                        // Dim inactive regions
+                                        if start_x > rect.left() {
+                                            let inactive_left = Rect::from_min_max(
+                                                rect.min,
+                                                Pos2::new(start_x, rect.bottom()),
+                                            );
+                                            painter.rect_filled(
+                                                inactive_left,
+                                                4.0,
+                                                Color32::from_black_alpha(110),
+                                            );
+                                        }
+                                        if end_x < rect.right() {
+                                            let inactive_right = Rect::from_min_max(
+                                                Pos2::new(end_x, rect.top()),
+                                                rect.max,
+                                            );
+                                            painter.rect_filled(
+                                                inactive_right,
+                                                4.0,
+                                                Color32::from_black_alpha(110),
+                                            );
+                                        }
+
+                                        // Midline
+                                        painter.line_segment(
+                                            [
+                                                Pos2::new(rect.left(), rect.center().y),
+                                                Pos2::new(rect.right(), rect.center().y),
+                                            ],
+                                            Stroke::new(
+                                                0.5_f32,
+                                                Color32::from_rgba_premultiplied(255, 255, 255, 25),
+                                            ),
+                                        );
+
+                                        // Start flag [S] (emerald green)
+                                        let start_col = Color32::from_rgb(50, 230, 150);
+                                        painter.line_segment(
+                                            [
+                                                Pos2::new(start_x, rect.top()),
+                                                Pos2::new(start_x, rect.bottom()),
+                                            ],
+                                            Stroke::new(2.0_f32, start_col),
+                                        );
+                                        let flag_s_rect = Rect::from_min_size(
+                                            Pos2::new(start_x - 4.0, rect.top() - 1.0),
+                                            Vec2::new(9.0, 9.0),
+                                        );
+                                        painter.rect_filled(flag_s_rect, 2.0, start_col);
+                                        painter.text(
+                                            flag_s_rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            "S",
+                                            egui::FontId::monospace(7.5),
+                                            Color32::BLACK,
+                                        );
+
+                                        // End flag [E] (coral red)
+                                        let end_col = Color32::from_rgb(255, 90, 90);
+                                        painter.line_segment(
+                                            [
+                                                Pos2::new(end_x, rect.top()),
+                                                Pos2::new(end_x, rect.bottom()),
+                                            ],
+                                            Stroke::new(2.0_f32, end_col),
+                                        );
+                                        let flag_e_rect = Rect::from_min_size(
+                                            Pos2::new(end_x - 5.0, rect.top() - 1.0),
+                                            Vec2::new(9.0, 9.0),
+                                        );
+                                        painter.rect_filled(flag_e_rect, 2.0, end_col);
+                                        painter.text(
+                                            flag_e_rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            "E",
+                                            egui::FontId::monospace(7.5),
+                                            Color32::BLACK,
+                                        );
+
+                                        // Interactive dragging of flags
+                                        let drag_id =
+                                            ui.id().with(("flag_drag", slot_idx, layer_idx));
+                                        if wave_resp.drag_started() {
+                                            if let Some(pos) = wave_resp.interact_pointer_pos() {
+                                                let dist_s = (pos.x - start_x).abs();
+                                                let dist_e = (pos.x - end_x).abs();
+                                                let chosen_flag: u8 =
+                                                    if dist_s <= dist_e { 0 } else { 1 };
+                                                ui.memory_mut(|m| {
+                                                    m.data.insert_persisted(drag_id, chosen_flag)
+                                                });
+                                            }
+                                        }
+
+                                        if wave_resp.dragged() {
+                                            let chosen_flag: u8 = ui
+                                                .memory_mut(|m| m.data.get_persisted(drag_id))
+                                                .unwrap_or(0);
+                                            if let Some(pos) = wave_resp.interact_pointer_pos() {
+                                                let ratio = ((pos.x - rect.left()) / rect.width())
+                                                    .clamp(0.0, 1.0);
+                                                let raw_t = ratio * total_dur;
+                                                if chosen_flag == 0 {
+                                                    let snapped = sample.snap_time(raw_t);
+                                                    sample.start_sec = snapped.clamp(
+                                                        0.0,
+                                                        (sample.end_sec - 0.005).max(0.0),
+                                                    );
+                                                } else {
+                                                    let snapped = sample.snap_time(raw_t);
+                                                    sample.end_sec = snapped.clamp(
+                                                        (sample.start_sec + 0.005).min(total_dur),
+                                                        total_dur,
+                                                    );
+                                                }
+                                            }
+                                        }
+
+                                        if wave_resp.drag_stopped() {
+                                            audition_sample = Some(sample.clone());
+                                        }
+
+                                        // Compact controls strip below waveform
+                                        ui.horizontal(|ui| {
+                                            let start_ms = (sample.start_sec * 1000.0) as u32;
+                                            let end_ms = (sample.end_sec * 1000.0) as u32;
+                                            ui.label(
+                                                RichText::new(format!("{start_ms}ms → {end_ms}ms"))
+                                                    .size(9.5)
+                                                    .color(Color32::from_gray(160)),
+                                            );
+
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    let vol_slider = egui::Slider::new(
+                                                        &mut sample.volume,
+                                                        0.0..=2.0,
+                                                    )
+                                                    .show_value(true)
+                                                    .custom_formatter(|v, _| {
+                                                        format!("{:.0}%", v * 100.0)
+                                                    });
+                                                    ui.add_sized(Vec2::new(55.0, 16.0), vol_slider);
+                                                    ui.label(
+                                                        RichText::new("Vol:")
+                                                            .size(9.5)
+                                                            .color(Color32::from_gray(160)),
+                                                    );
+                                                },
+                                            );
+                                        });
+
+                                        ui.add_space(2.0);
+                                    }
+                                }
+                            });
 
                         ui.add_space(3.0);
                     }
@@ -348,241 +608,19 @@ impl ConstellationState {
             if let Some(idx) = clear_slot_idx {
                 self.clear_slot(idx);
             }
-            if let Some(idx) = toggle_pin_idx {
-                if self.pinned_slot_idx == Some(idx) {
-                    self.pinned_slot_idx = None;
-                } else {
-                    self.pinned_slot_idx = Some(idx);
+            if let Some((s_idx, l_idx)) = remove_layer {
+                if s_idx < self.pack_bank.slots.len()
+                    && l_idx < self.pack_bank.slots[s_idx].samples.len()
+                {
+                    self.pack_bank.slots[s_idx].samples.remove(l_idx);
                 }
             }
-
-            // Record hovered slot
-            self.hovered_slot_idx = hovered_slot_pos.map(|(idx, _)| idx);
-
-            // Render floating control window if a slot is hovered or pinned
-            let target_slot_idx = self.pinned_slot_idx.or(self.hovered_slot_idx);
-            if let Some(idx) = target_slot_idx {
-                let anchor_y = hovered_slot_pos
-                    .map(|(_, rect)| rect.top())
-                    .unwrap_or(220.0);
-                self.render_slot_control_popup(ui.ctx(), idx, anchor_y);
+            if let Some(sample) = audition_sample {
+                if let Some(player) = play_slot_sample(&sample) {
+                    self.active_players.push(player);
+                }
             }
         });
-    }
-
-    /// Floating glass control window for adjusting start, end, and volume with zero-crossing snapping.
-    pub fn render_slot_control_popup(
-        &mut self,
-        ctx: &egui::Context,
-        slot_idx: usize,
-        anchor_y: f32,
-    ) {
-        if slot_idx >= self.pack_bank.slots.len() {
-            return;
-        }
-
-        let screen_w = ctx.screen_rect().width();
-        let popup_w = 310.0;
-        let popup_x = (screen_w - 320.0 - popup_w - 10.0).max(10.0);
-        let popup_y = anchor_y.clamp(60.0, (ctx.screen_rect().bottom() - 340.0).max(60.0));
-
-        let is_pinned = self.pinned_slot_idx == Some(slot_idx);
-        let key_char = self.pack_bank.slots[slot_idx].key_char;
-
-        let mut remove_layer_idx: Option<usize> = None;
-        let mut audition_sample: Option<super::sample_pack::SlotSample> = None;
-        let mut close_popup = false;
-        let mut toggle_pin = false;
-
-        egui::Area::new(egui::Id::new("slot_hover_control_window"))
-            .fixed_pos(Pos2::new(popup_x, popup_y))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                egui::Frame::none()
-                    .fill(Color32::from_rgba_premultiplied(16, 20, 32, 246))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(80, 130, 220, 180)))
-                    .rounding(8.0)
-                    .inner_margin(10.0)
-                    .show(ui, |ui| {
-                        ui.set_width(popup_w);
-
-                        // Header
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(format!("🎛️ Slot [{key_char}] Controls"))
-                                    .strong()
-                                    .size(13.0)
-                                    .color(Color32::from_rgb(120, 210, 255)),
-                            );
-
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("✕").on_hover_text("Close control window").clicked() {
-                                    close_popup = true;
-                                }
-
-                                let pin_color = if is_pinned {
-                                    Color32::from_rgb(255, 200, 80)
-                                } else {
-                                    Color32::from_gray(140)
-                                };
-                                if ui
-                                    .small_button(RichText::new("📌").color(pin_color))
-                                    .on_hover_text(if is_pinned { "Unpin window" } else { "Pin window open" })
-                                    .clicked()
-                                {
-                                    toggle_pin = true;
-                                }
-                            });
-                        });
-
-                        ui.separator();
-
-                        let slot = &mut self.pack_bank.slots[slot_idx];
-
-                        if slot.samples.is_empty() {
-                            ui.add_space(8.0);
-                            ui.label(
-                                RichText::new("Slot is empty.\nSelect a sample in constellation and click '+ Add Selected' or press Shift+1..0.")
-                                    .size(11.0)
-                                    .color(Color32::from_gray(150)),
-                            );
-                            ui.add_space(8.0);
-                        } else {
-                            ui.label(
-                                RichText::new(format!("{} layer(s) assigned · Plays together", slot.samples.len()))
-                                    .size(10.0)
-                                    .color(Color32::from_gray(160)),
-                            );
-                            ui.add_space(4.0);
-
-                            for (layer_idx, sample) in slot.samples.iter_mut().enumerate() {
-                                ui.group(|ui| {
-                                    ui.horizontal(|ui| {
-                                        let cat_col = sample
-                                            .category
-                                            .map(|c| c.color())
-                                            .unwrap_or(Color32::WHITE);
-
-                                        ui.label(
-                                            RichText::new(format!("L{}:", layer_idx + 1))
-                                                .strong()
-                                                .size(11.5)
-                                                .color(cat_col),
-                                        );
-
-                                        let name = if sample.filename.len() > 18 {
-                                            format!("{}...", &sample.filename[..15])
-                                        } else {
-                                            sample.filename.clone()
-                                        };
-                                        ui.label(RichText::new(name).size(11.0).color(Color32::WHITE));
-
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            if ui.small_button("🗑️").on_hover_text("Remove this layer").clicked() {
-                                                remove_layer_idx = Some(layer_idx);
-                                            }
-                                            if ui.small_button("▶").on_hover_text("Audition layer solo").clicked() {
-                                                audition_sample = Some(sample.clone());
-                                            }
-                                        });
-                                    });
-
-                                    ui.add_space(2.0);
-
-                                    // Volume slider
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new("Volume:").size(10.5));
-                                        let vol_slider = egui::Slider::new(&mut sample.volume, 0.0..=2.0)
-                                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                                            .clamp_to_range(true);
-                                        ui.add(vol_slider);
-                                    });
-
-                                    // Start point slider (snaps to zero crossing)
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new("Start:").size(10.5));
-                                        let max_start = (sample.end_sec - 0.005).max(0.0);
-                                        let mut start_val = sample.start_sec;
-                                        let start_slider = egui::Slider::new(&mut start_val, 0.0..=max_start)
-                                            .custom_formatter(|v, _| format!("{:.3} s", v))
-                                            .clamp_to_range(true);
-                                        if ui.add(start_slider).changed() {
-                                            sample.start_sec = sample.snap_time(start_val).clamp(0.0, max_start);
-                                        }
-                                    });
-
-                                    // End point slider (snaps to zero crossing)
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new("End:").size(10.5));
-                                        let min_end = (sample.start_sec + 0.005).min(sample.duration);
-                                        let mut end_val = sample.end_sec;
-                                        let end_slider = egui::Slider::new(&mut end_val, min_end..=sample.duration)
-                                            .custom_formatter(|v, _| format!("{:.3} s", v))
-                                            .clamp_to_range(true);
-                                        if ui.add(end_slider).changed() {
-                                            sample.end_sec = sample.snap_time(end_val).clamp(min_end, sample.duration);
-                                        }
-                                    });
-
-                                    // Snapped length indicator
-                                    let active_dur = (sample.end_sec - sample.start_sec).max(0.0);
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "⚡ Zero-crossing snapped (duration: {:.3} s)",
-                                            active_dur
-                                        ))
-                                        .size(9.0)
-                                        .color(Color32::from_rgb(120, 210, 255)),
-                                    );
-                                });
-                                ui.add_space(2.0);
-                            }
-                        }
-
-                        // Add selected sample button
-                        if let Some(ref path) = self.selected_path.clone() {
-                            if let Some(sample) = self.samples.iter().find(|s| &s.file_path == path) {
-                                let label = format!("➕ Add Layer ({})", sample.filename);
-                                let short_lbl = if label.len() > 30 {
-                                    format!("{}...", &label[..27])
-                                } else {
-                                    label
-                                };
-                                if ui.button(short_lbl).clicked() {
-                                    let s_clone = sample.clone();
-                                    self.add_sample_to_slot(slot_idx, &s_clone);
-                                }
-                            }
-                        }
-                    });
-            });
-
-        if let Some(idx) = remove_layer_idx {
-            if slot_idx < self.pack_bank.slots.len()
-                && idx < self.pack_bank.slots[slot_idx].samples.len()
-            {
-                self.pack_bank.slots[slot_idx].samples.remove(idx);
-            }
-        }
-
-        if let Some(sample) = audition_sample {
-            if let Some(player) = play_slot_sample(&sample) {
-                self.active_players.push(player);
-            }
-        }
-
-        if toggle_pin {
-            if self.pinned_slot_idx == Some(slot_idx) {
-                self.pinned_slot_idx = None;
-            } else {
-                self.pinned_slot_idx = Some(slot_idx);
-            }
-        }
-
-        if close_popup {
-            self.pinned_slot_idx = None;
-            self.hovered_slot_idx = None;
-        }
     }
 
     /// Renders the Sample Pack Browser window for loading and managing banks.

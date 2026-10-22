@@ -56,8 +56,9 @@ impl ConstellationState {
         // Layout: Central starfield canvas + Right creation shelf
         if self.pack_shelf_open {
             egui::SidePanel::right("constellation_pack_shelf_panel")
-                .resizable(false)
-                .exact_width(280.0)
+                .resizable(true)
+                .default_width(320.0)
+                .width_range(280.0..=480.0)
                 .show_inside(ui, |ui| {
                     self.render_pack_shelf(ui, current_folder);
                 });
@@ -121,11 +122,19 @@ impl ConstellationState {
 
             // Search input
             ui.label("🔍");
-            ui.add(
+            let search_response = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .hint_text("Filter by name...")
-                    .desired_width(120.0),
+                    .hint_text("Filter by name (Ctrl+F)...")
+                    .desired_width(130.0),
             );
+            if self.focus_search {
+                search_response.request_focus();
+                self.focus_search = false;
+            }
+            if search_response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.search_query.clear();
+                search_response.surrender_focus();
+            }
 
             // Hover to play toggle
             ui.checkbox(&mut self.hover_to_play, "Hover to audition");

@@ -12,6 +12,28 @@ pub const PACKS_DIR_NAME: &str = "little-screen-clip-sample-packs";
 pub const NUM_SLOTS: usize = 10;
 pub const SLOT_KEY_CHARS: [char; NUM_SLOTS] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 
+/// Pre-decoded PCM audio and waveform peak data stored in memory for zero-latency playback
+/// and instantaneous 60 FPS waveform painting.
+#[derive(Clone)]
+pub struct CachedAudio {
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub samples: Arc<Vec<f32>>,
+    pub mono_samples: Arc<Vec<f32>>,
+    pub waveform_peaks: Vec<(f32, f32)>,
+}
+
+impl std::fmt::Debug for CachedAudio {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedAudio")
+            .field("channels", &self.channels)
+            .field("sample_rate", &self.sample_rate)
+            .field("samples_len", &self.samples.len())
+            .field("peaks_len", &self.waveform_peaks.len())
+            .finish()
+    }
+}
+
 /// A single sample layer assigned to a pack slot.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SlotSample {
@@ -23,9 +45,7 @@ pub struct SlotSample {
     pub end_sec: f32,
     pub volume: f32,
     #[serde(skip)]
-    pub pcm_cache: Option<Arc<Vec<f32>>>,
-    #[serde(skip)]
-    pub sample_rate: u32,
+    pub cached_audio: Option<Arc<CachedAudio>>,
 }
 
 impl SlotSample {
@@ -44,52 +64,96 @@ impl SlotSample {
             start_sec: 0.0,
             end_sec: dur,
             volume: 1.0,
-            pcm_cache: None,
-            sample_rate: 0,
+            cached_audio: None,
         };
-        sample.ensure_pcm_loaded();
+        sample.ensure_audio_loaded();
         sample
     }
 
-    /// Loads the first few seconds of decoded mono PCM into memory for zero-crossing snapping.
-    pub fn ensure_pcm_loaded(&mut self) {
-        if self.pcm_cache.is_some() && self.sample_rate > 0 {
+    /// Preloads decoded audio PCM and waveform peaks into memory for zero-latency playback.
+    pub fn ensure_audio_loaded(&mut self) {
+        if self.cached_audio.is_some() {
             return;
         }
         if let Ok(file) = File::open(&self.file_path) {
             if let Ok(mut decoder) = rodio::Decoder::try_from(BufReader::new(file)) {
                 use rodio::Source;
                 let sr = decoder.sample_rate().get();
-                let channels = decoder.channels().get() as usize;
-                self.sample_rate = sr;
-                // Cache up to 5 seconds of mono PCM
-                let max_frames = (sr * 5) as usize;
-                let mut mono = Vec::with_capacity(max_frames);
-                let mut ch_idx = 0;
-                let mut frame_sum = 0.0f32;
-                for s in decoder.by_ref().take(max_frames * channels) {
-                    frame_sum += s;
-                    ch_idx += 1;
-                    if ch_idx >= channels {
-                        mono.push(frame_sum / channels as f32);
-                        frame_sum = 0.0;
-                        ch_idx = 0;
+                let channels = decoder.channels().get();
+                let ch_usize = (channels as usize).max(1);
+
+                // Preload up to 15 seconds of audio samples
+                let max_frames = (sr * 15) as usize;
+                let mut samples = Vec::with_capacity(max_frames.min(44100 * 4) * ch_usize);
+                for s in decoder.by_ref().take(max_frames * ch_usize) {
+                    samples.push(s);
+                }
+
+                let frame_count = samples.len() / ch_usize;
+                let actual_dur = (frame_count as f32 / sr as f32).max(0.01);
+                if self.duration <= 0.01 || (self.duration - actual_dur).abs() > 0.05 {
+                    self.duration = actual_dur;
+                    if self.end_sec <= 0.01 || self.end_sec > actual_dur {
+                        self.end_sec = actual_dur;
                     }
                 }
-                self.pcm_cache = Some(Arc::new(mono));
+
+                // Compute downmixed mono for zero crossing snapping
+                let mut mono = Vec::with_capacity(frame_count);
+                for frame_idx in 0..frame_count {
+                    let mut sum = 0.0f32;
+                    for c in 0..ch_usize {
+                        sum += samples[frame_idx * ch_usize + c];
+                    }
+                    mono.push(sum / ch_usize as f32);
+                }
+
+                // Compute 100 waveform peak buckets for fast UI rendering
+                let num_buckets = 100;
+                let mut waveform_peaks = Vec::with_capacity(num_buckets);
+                if frame_count > 0 {
+                    let bucket_size = (frame_count as f32 / num_buckets as f32).max(1.0);
+                    for b in 0..num_buckets {
+                        let start_i = (b as f32 * bucket_size) as usize;
+                        let end_i = (((b + 1) as f32 * bucket_size) as usize).min(frame_count);
+                        if start_i >= frame_count {
+                            waveform_peaks.push((0.0, 0.0));
+                            continue;
+                        }
+                        let mut min_val = 0.0f32;
+                        let mut max_val = 0.0f32;
+                        for &v in &mono[start_i..end_i] {
+                            if v < min_val {
+                                min_val = v;
+                            }
+                            if v > max_val {
+                                max_val = v;
+                            }
+                        }
+                        waveform_peaks.push((min_val, max_val));
+                    }
+                }
+
+                self.cached_audio = Some(Arc::new(CachedAudio {
+                    channels,
+                    sample_rate: sr,
+                    samples: Arc::new(samples),
+                    mono_samples: Arc::new(mono),
+                    waveform_peaks,
+                }));
             }
         }
     }
 
     /// Snaps a given time offset to the nearest zero crossing in the audio sample.
     pub fn snap_time(&mut self, time_sec: f32) -> f32 {
-        self.ensure_pcm_loaded();
-        if let Some(ref pcm) = self.pcm_cache {
-            if self.sample_rate > 0 && !pcm.is_empty() {
+        self.ensure_audio_loaded();
+        if let Some(ref cached) = self.cached_audio {
+            if cached.sample_rate > 0 && !cached.mono_samples.is_empty() {
                 return little_clip_core::audio::snap_samples_to_zero_crossing(
-                    pcm,
+                    &cached.mono_samples,
                     None,
-                    self.sample_rate,
+                    cached.sample_rate,
                     time_sec,
                     500, // 500 frames ≈ 11ms at 44.1kHz
                 );
@@ -286,10 +350,10 @@ pub fn load_sample_pack(pack_dir: &Path) -> Result<SamplePackBank, String> {
         bank.slots.push(PackSlot::new(key));
     }
 
-    // Re-link and preload PCM for active samples
+    // Re-link and preload audio PCM for active samples
     for slot in &mut bank.slots {
         for sample in &mut slot.samples {
-            sample.ensure_pcm_loaded();
+            sample.ensure_audio_loaded();
         }
     }
 
@@ -363,8 +427,37 @@ pub fn delete_sample_pack(pack_dir: &Path) -> Result<(), String> {
 }
 
 /// Plays a single `SlotSample` using `new_shared_audio_player` with trimmed bounds and volume.
+/// Uses preloaded in-memory PCM when available for literally instantaneous zero-latency playback.
 pub fn play_slot_sample(sample: &SlotSample) -> Option<rodio::Player> {
     let player = crate::ui_ext::new_shared_audio_player()?;
+
+    if let Some(ref cached) = sample.cached_audio {
+        let ch = std::num::NonZeroU16::new(cached.channels)
+            .unwrap_or_else(|| std::num::NonZeroU16::new(1).unwrap());
+        let sr = std::num::NonZeroU32::new(cached.sample_rate)
+            .unwrap_or_else(|| std::num::NonZeroU32::new(44100).unwrap());
+
+        let total_frames = cached.samples.len() / (cached.channels as usize).max(1);
+        let start_frame =
+            ((sample.start_sec * cached.sample_rate as f32).round() as usize).min(total_frames);
+        let end_frame = ((sample.end_sec * cached.sample_rate as f32).round() as usize)
+            .min(total_frames)
+            .max(start_frame);
+
+        let start_idx = start_frame * (cached.channels as usize);
+        let end_idx = end_frame * (cached.channels as usize);
+
+        if end_idx > start_idx && end_idx <= cached.samples.len() {
+            let slice = cached.samples[start_idx..end_idx].to_vec();
+            use rodio::Source;
+            let buffer = rodio::buffer::SamplesBuffer::new(ch, sr, slice).amplify(sample.volume);
+            player.append(buffer);
+            player.play();
+            return Some(player);
+        }
+    }
+
+    // Fallback streaming decoder from disk if not cached yet
     let file = File::open(&sample.file_path).ok()?;
     let decoder = rodio::Decoder::try_from(BufReader::new(file)).ok()?;
     use rodio::Source;
@@ -377,6 +470,16 @@ pub fn play_slot_sample(sample: &SlotSample) -> Option<rodio::Player> {
         .amplify(sample.volume);
 
     player.append(bounded);
+    player.play();
+    Some(player)
+}
+
+/// Directly plays an audio file with minimum latency.
+pub fn play_audio_file_direct(path: &Path) -> Option<rodio::Player> {
+    let player = crate::ui_ext::new_shared_audio_player()?;
+    let file = File::open(path).ok()?;
+    let decoder = rodio::Decoder::try_from(BufReader::new(file)).ok()?;
+    player.append(decoder);
     player.play();
     Some(player)
 }
@@ -415,8 +518,7 @@ mod tests {
             start_sec: 0.05,
             end_sec: 0.45,
             volume: 1.2,
-            pcm_cache: None,
-            sample_rate: 44100,
+            cached_audio: None,
         });
 
         let pack_path = save_sample_pack(&temp_dir, &bank).expect("Failed to save pack");
