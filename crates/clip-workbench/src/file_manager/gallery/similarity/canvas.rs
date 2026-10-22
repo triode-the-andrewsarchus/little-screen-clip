@@ -148,6 +148,7 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     pub similarity_threshold: f32,
     pub grids: Vec<CanvasGrid>,
     pub next_grid_id: usize,
+    pub pending_pan_to_grid: Option<usize>,
     base_placements: Vec<GridPlacement>,
 }
 
@@ -174,6 +175,7 @@ impl Default for SimilarityCanvas {
             similarity_threshold: 0.08,
             grids: Vec::new(),
             next_grid_id: 1,
+            pending_pan_to_grid: None,
             base_placements: Vec::new(),
         }
     }
@@ -345,6 +347,7 @@ impl SimilarityCanvas {
         }
         self.grids.push(grid);
         self.recompute_layout();
+        self.pending_pan_to_grid = Some(id);
         id
     }
 
@@ -581,8 +584,10 @@ impl SimilarityCanvas {
                         };
                         self.next_grid_id += 1;
                         new_grid.refilter(&self.hashes, &self.entries, self.similarity_threshold);
+                        let new_id = new_grid.id;
                         self.grids.push(new_grid);
                         self.recompute_layout();
+                        self.pending_pan_to_grid = Some(new_id);
                     }
                 }
                 ctx.request_repaint();
@@ -712,11 +717,37 @@ impl SimilarityCanvas {
         );
     }
 
+    /// Pans the canvas so that the given grid and its header bar are positioned in view.
+    pub fn pan_to_grid(&mut self, grid_id: usize, viewport: Rect) {
+        let Some(grid) = self.grids.iter().find(|g| g.id == grid_id) else {
+            return;
+        };
+        let step = (self.tile_size + self.spacing) * self.zoom;
+        let grid_w = (grid.grid_cols as f32) * step;
+
+        let target_x = if grid_w < viewport.width() - 48.0 {
+            ((viewport.width() - grid_w) * 0.5).max(24.0)
+        } else {
+            24.0
+        };
+
+        // Position the header bar cleanly below the top HUD (at ~76px from canvas top)
+        let top_offset = 76.0;
+        let header_spacing = 34.0;
+        let target_y = top_offset + header_spacing - (grid.row_offset as f32) * step;
+
+        self.pan = egui::vec2(target_x, target_y);
+    }
+
     /// Handles pan dragging and zoom mouse wheel events.
     pub fn handle_input(&mut self, ui: &mut Ui, canvas_rect: Rect, response: &egui::Response) {
         if !self.initial_fit_done && canvas_rect.width() > 100.0 && canvas_rect.height() > 100.0 {
             self.fit_to_view(canvas_rect);
             self.initial_fit_done = true;
+        }
+
+        if let Some(grid_id) = self.pending_pan_to_grid.take() {
+            self.pan_to_grid(grid_id, canvas_rect);
         }
 
         if response.dragged() {
