@@ -606,4 +606,17 @@ fn gallery_zoom_and_temporal_badge_invariants() {
     let (w, h) = (4032.0f32, 3024.0f32);
     let mp = (w * h) / 1_000_000.0;
     assert_eq!(format!("{:.1} MP", mp), "12.2 MP");
+
+    // 4. Alphabetical letter extraction for alphabetical scrolling badge
+    let extract_letter = |name: &str| -> Option<String> {
+        name.chars()
+            .find(|c| c.is_alphanumeric())
+            .map(|c| c.to_uppercase().to_string())
+            .or_else(|| name.chars().next().map(|c| c.to_uppercase().to_string()))
+    };
+    assert_eq!(extract_letter("IMG_001.jpg"), Some("I".to_string()));
+    assert_eq!(extract_letter("beach sunset.png"), Some("B".to_string()));
+    assert_eq!(extract_letter("100_photo.jpg"), Some("1".to_string()));
+    assert_eq!(extract_letter(".hidden.jpg"), Some("H".to_string()));
+    assert_eq!(extract_letter(""), None);
 }
