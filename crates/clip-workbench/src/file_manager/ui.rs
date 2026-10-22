@@ -625,6 +625,19 @@ impl FileManager {
             self.fuse_mounts
                 .request_unmount(mount_point, super::BackgroundJobs::global());
         }
+        if let Some(path) = actions.search_similar {
+            self.set_view(super::BrowserView::Photos);
+            self.photo_mode = super::gallery::similarity::PhotoMode::Similarity;
+            if let Some(directory) = &self.directory {
+                self.similarity_canvas.sync(
+                    directory,
+                    &self.visible,
+                    self.photo_recurse,
+                    self.show_hidden,
+                );
+            }
+            self.similarity_canvas.search_from_photo(&path);
+        }
     }
 
     fn list_scroll(&mut self, row_height: f32) -> egui::ScrollArea {
@@ -1230,6 +1243,7 @@ struct ListActions {
     transfer: Option<(Vec<PathBuf>, PathBuf, bool)>,
     mount_binary: Option<(PathBuf, bool)>,
     unmount_binary: Option<PathBuf>,
+    search_similar: Option<PathBuf>,
 }
 
 impl ListActions {
@@ -1350,6 +1364,11 @@ impl ListActions {
             if !entry.directory && entry.system.is_none() && ui.button("Open externally").clicked()
             {
                 let _ = super::viewers::external(entry.path.clone());
+                ui.close_menu();
+            }
+
+            if entry.is_photo() && ui.button("Find similar photos in canvas").clicked() {
+                self.search_similar = Some(entry.path.clone());
                 ui.close_menu();
             }
 
