@@ -69,17 +69,105 @@ impl FileManager {
             }
             if self.view == super::super::BrowserView::Photos
                 && self.photo_mode == super::super::gallery::similarity::PhotoMode::Masonry
-                && ui
+            {
+                let is_time = self.sort.column == super::super::sorting::Column::Modified;
+                let sort_label = match (self.sort.column, self.sort.descending) {
+                    (super::super::sorting::Column::Modified, true) => "Sort: Date ↓",
+                    (super::super::sorting::Column::Modified, false) => "Sort: Date ↑",
+                    (super::super::sorting::Column::Name, false) => "Sort: Name (A-Z)",
+                    (super::super::sorting::Column::Name, true) => "Sort: Name (Z-A)",
+                    _ => "Sort: Date ↓",
+                };
+                let sort_resp = ui.button(sort_label).on_hover_text(
+                    "Switch photo sorting between Date and Name. Right-click for options.",
+                );
+                if sort_resp.clicked() {
+                    let next_col = if is_time {
+                        super::super::sorting::Column::Name
+                    } else {
+                        super::super::sorting::Column::Modified
+                    };
+                    self.sort_by(next_col);
+                }
+                sort_resp.context_menu(|ui| {
+                    if ui
+                        .selectable_label(
+                            self.sort.column == super::super::sorting::Column::Modified
+                                && self.sort.descending,
+                            "Date (Newest first)",
+                        )
+                        .clicked()
+                    {
+                        self.sort = super::super::sorting::Sort {
+                            column: super::super::sorting::Column::Modified,
+                            descending: true,
+                        };
+                        self.gallery_layout.invalidate_order();
+                        self.rebuild_visible();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(
+                            self.sort.column == super::super::sorting::Column::Modified
+                                && !self.sort.descending,
+                            "Date (Oldest first)",
+                        )
+                        .clicked()
+                    {
+                        self.sort = super::super::sorting::Sort {
+                            column: super::super::sorting::Column::Modified,
+                            descending: false,
+                        };
+                        self.gallery_layout.invalidate_order();
+                        self.rebuild_visible();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(
+                            self.sort.column == super::super::sorting::Column::Name
+                                && !self.sort.descending,
+                            "Name (A to Z)",
+                        )
+                        .clicked()
+                    {
+                        self.sort = super::super::sorting::Sort {
+                            column: super::super::sorting::Column::Name,
+                            descending: false,
+                        };
+                        self.gallery_layout.invalidate_order();
+                        self.rebuild_visible();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .selectable_label(
+                            self.sort.column == super::super::sorting::Column::Name
+                                && self.sort.descending,
+                            "Name (Z to A)",
+                        )
+                        .clicked()
+                    {
+                        self.sort = super::super::sorting::Sort {
+                            column: super::super::sorting::Column::Name,
+                            descending: true,
+                        };
+                        self.gallery_layout.invalidate_order();
+                        self.rebuild_visible();
+                        ui.close_menu();
+                    }
+                });
+
+                if ui
                     .add(
                         egui::Slider::new(&mut self.thumbnail_edge, 80.0..=280.0)
                             .text("Thumbnail size"),
                     )
                     .changed()
-            {
-                if let Some(location) = self.location_mut() {
-                    location.scroll = 0.0;
+                {
+                    if let Some(location) = self.location_mut() {
+                        location.scroll = 0.0;
+                    }
+                    self.restore_scroll = true;
                 }
-                self.restore_scroll = true;
             }
             if self.view == super::super::BrowserView::Photos
                 && self.photo_mode == super::super::gallery::similarity::PhotoMode::Similarity
@@ -310,10 +398,24 @@ impl FileManager {
                 actions.row(ui, &response, entry, selected, can_edit, count);
             }
 
+            let is_alpha = self.sort.column == super::super::sorting::Column::Name;
             let top_tile = tiles.iter().min_by(|a, b| a.y.total_cmp(&b.y));
-            let top_date = top_tile.and_then(|t| {
+            let badge_content = top_tile.and_then(|t| {
                 let entry = &directory.entries[self.visible[t.index]];
-                if let Some(time) = entry.modified_time {
+                if is_alpha {
+                    entry
+                        .name
+                        .chars()
+                        .find(|c| c.is_alphanumeric())
+                        .map(|c| c.to_uppercase().to_string())
+                        .or_else(|| {
+                            entry
+                                .name
+                                .chars()
+                                .next()
+                                .map(|c| c.to_uppercase().to_string())
+                        })
+                } else if let Some(time) = entry.modified_time {
                     Some(
                         chrono::DateTime::<chrono::Local>::from(time)
                             .format("%B %Y")
@@ -326,15 +428,28 @@ impl FileManager {
                 }
             });
 
-            if let Some(date_text) = top_date {
+            if let Some(text) = badge_content {
                 let time_since_scroll = now - self.gallery_last_scroll_time;
                 if time_since_scroll < 1.2 {
                     let alpha = ((1.2 - time_since_scroll) / 0.3).clamp(0.0, 1.0) as f32;
                     let clip = ui.clip_rect();
-                    let badge_rect = Rect::from_min_size(
-                        pos2(clip.right() - 170.0, clip.top() + 16.0),
-                        vec2(150.0, 30.0),
-                    );
+                    let (badge_rect, font_size) = if is_alpha {
+                        (
+                            Rect::from_min_size(
+                                pos2(clip.right() - 56.0, clip.top() + 16.0),
+                                vec2(40.0, 40.0),
+                            ),
+                            20.0,
+                        )
+                    } else {
+                        (
+                            Rect::from_min_size(
+                                pos2(clip.right() - 170.0, clip.top() + 16.0),
+                                vec2(150.0, 30.0),
+                            ),
+                            13.0,
+                        )
+                    };
                     let fill = colors.panel.gamma_multiply(0.92 * alpha);
                     let text_color = colors.text_primary.gamma_multiply(alpha);
                     let stroke_color = colors.border.gamma_multiply(alpha);
@@ -344,8 +459,8 @@ impl FileManager {
                     ui.painter().text(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        date_text,
-                        egui::FontId::proportional(13.0),
+                        text,
+                        egui::FontId::proportional(font_size),
                         text_color,
                     );
                     ui.ctx().request_repaint();
