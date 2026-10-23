@@ -735,19 +735,37 @@ impl FileManager {
 
                             if grid.id > 0 {
                                 ui.separator();
-                                let minus_resp = ui.add(
+                                let can_decrease =
+                                    self.similarity_canvas.can_decrease_grid_allowance(grid.id);
+                                let can_increase =
+                                    self.similarity_canvas.can_increase_grid_allowance(grid.id);
+
+                                let minus_resp = ui.add_enabled(
+                                    can_decrease,
                                     egui::Button::image(
-                                        crate::icons::Icon::Minus
-                                            .image_tinted(10.0, colors.text_secondary),
+                                        crate::icons::Icon::Minus.image_tinted(
+                                            10.0,
+                                            if can_decrease {
+                                                colors.text_secondary
+                                            } else {
+                                                colors.text_secondary.gamma_multiply(0.3)
+                                            },
+                                        ),
                                     )
                                     .frame(true)
                                     .min_size(vec2(16.0, 16.0)),
                                 );
-                                if minus_resp
-                                    .on_hover_text("Decrease match allowance (fewer photos)")
-                                    .clicked()
-                                {
-                                    adjust_grid_allowance = Some((grid.id, -0.05));
+                                if can_decrease {
+                                    if minus_resp
+                                        .on_hover_text("Decrease match allowance (fewer photos)")
+                                        .clicked()
+                                    {
+                                        adjust_grid_allowance = Some((grid.id, -0.05));
+                                    }
+                                } else {
+                                    minus_resp.on_hover_text(
+                                        "Cannot decrease: further reduction would yield no matching photos",
+                                    );
                                 }
 
                                 let allowance_pct = (grid.allowance * 100.0).round() as i32;
@@ -756,19 +774,39 @@ impl FileManager {
                                         "Match allowance: {allowance_pct}% (higher includes more photos)"
                                     ));
 
-                                let plus_resp = ui.add(
+                                let plus_resp = ui.add_enabled(
+                                    can_increase,
                                     egui::Button::image(
-                                        crate::icons::Icon::Plus
-                                            .image_tinted(10.0, colors.text_secondary),
+                                        crate::icons::Icon::Plus.image_tinted(
+                                            10.0,
+                                            if can_increase {
+                                                colors.text_secondary
+                                            } else {
+                                                colors.text_secondary.gamma_multiply(0.3)
+                                            },
+                                        ),
                                     )
                                     .frame(true)
                                     .min_size(vec2(16.0, 16.0)),
                                 );
-                                if plus_resp
-                                    .on_hover_text("Increase match allowance (include more photos)")
-                                    .clicked()
-                                {
-                                    adjust_grid_allowance = Some((grid.id, 0.05));
+                                if can_increase {
+                                    if plus_resp
+                                        .on_hover_text(
+                                            "Increase match allowance (include more photos)",
+                                        )
+                                        .clicked()
+                                    {
+                                        adjust_grid_allowance = Some((grid.id, 0.05));
+                                    }
+                                } else {
+                                    let reason = if !grid.candidate_indices.is_empty()
+                                        && grid.indices.len() >= grid.candidate_indices.len()
+                                    {
+                                        "Match allowance includes all photos from the search"
+                                    } else {
+                                        "No additional matching photos found at higher allowance"
+                                    };
+                                    plus_resp.on_hover_text(reason);
                                 }
 
                                 ui.separator();
@@ -820,15 +858,9 @@ impl FileManager {
         }
 
         if let Some((grid_id, delta)) = adjust_grid_allowance {
-            if let Some(grid) = self
-                .similarity_canvas
-                .grids
-                .iter_mut()
-                .find(|g| g.id == grid_id)
-            {
-                grid.adjust_allowance(delta);
+            if self.similarity_canvas.adjust_grid_allowance(grid_id, delta) {
+                self.similarity_canvas.recompute_layout();
             }
-            self.similarity_canvas.recompute_layout();
         }
 
         if let Some(id) = select_all_grid {
@@ -913,43 +945,6 @@ impl FileManager {
                                 ui.label(format!(
                                     "{target_grids} target grid(s) ({target_photos} photos)"
                                 ));
-                                ui.separator();
-                                let minus_resp = ui.add(
-                                    egui::Button::image(
-                                        crate::icons::Icon::Minus
-                                            .image_tinted(10.0, colors.text_secondary),
-                                    )
-                                    .frame(true)
-                                    .min_size(vec2(16.0, 16.0)),
-                                );
-                                if minus_resp
-                                    .on_hover_text("Decrease match allowance (fewer photos)")
-                                    .clicked()
-                                {
-                                    self.similarity_canvas.adjust_global_allowance(-0.05);
-                                    self.similarity_canvas.recompute_layout();
-                                }
-                                let allowance_pct =
-                                    (self.similarity_canvas.allowance * 100.0).round() as i32;
-                                ui.label(format!("{allowance_pct}%"))
-                                    .on_hover_text(format!(
-                                        "Match allowance: {allowance_pct}% (higher includes more photos)"
-                                    ));
-                                let plus_resp = ui.add(
-                                    egui::Button::image(
-                                        crate::icons::Icon::Plus
-                                            .image_tinted(10.0, colors.text_secondary),
-                                    )
-                                    .frame(true)
-                                    .min_size(vec2(16.0, 16.0)),
-                                );
-                                if plus_resp
-                                    .on_hover_text("Increase match allowance (include more photos)")
-                                    .clicked()
-                                {
-                                    self.similarity_canvas.adjust_global_allowance(0.05);
-                                    self.similarity_canvas.recompute_layout();
-                                }
                             }
                         });
                     });

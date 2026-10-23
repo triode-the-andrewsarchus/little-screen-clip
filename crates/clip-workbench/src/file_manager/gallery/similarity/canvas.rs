@@ -66,27 +66,27 @@ impl CanvasGrid {
         }
     }
 
+    pub const ALLOWANCE_STEP: f32 = 0.05;
+
     pub fn adjust_allowance(&mut self, delta: f32) {
-        self.allowance = (self.allowance + delta).clamp(0.05, 0.95);
+        let new_val = ((self.allowance + delta) * 100.0).round() / 100.0;
+        self.allowance = new_val.clamp(0.05, 0.95);
         self.threshold = Self::allowance_to_threshold(self.allowance, self.is_inverted);
     }
 
     pub fn set_allowance(&mut self, allowance: f32) {
-        self.allowance = allowance.clamp(0.05, 0.95);
+        let new_val = (allowance * 100.0).round() / 100.0;
+        self.allowance = new_val.clamp(0.05, 0.95);
         self.threshold = Self::allowance_to_threshold(self.allowance, self.is_inverted);
     }
 
-    pub fn refilter(
-        &mut self,
+    fn compute_candidate_scores(
+        &self,
         hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
         entries: &[Entry],
-        threshold: f32,
-    ) {
-        let Some(ref concept_vec) = self.concept_embedding else {
-            return;
-        };
-
-        let mut scored: Vec<(usize, f32)> = Vec::with_capacity(self.candidate_indices.len());
+    ) -> Option<Vec<(usize, f32)>> {
+        let concept_vec = self.concept_embedding.as_ref()?;
+        let mut scored = Vec::with_capacity(self.candidate_indices.len());
         for &idx in &self.candidate_indices {
             let Some(entry) = entries.get(idx) else {
                 continue;
@@ -113,13 +113,24 @@ impl CanvasGrid {
             };
             scored.push((idx, score));
         }
+        Some(scored)
+    }
+
+    pub fn refilter(
+        &mut self,
+        hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
+        entries: &[Entry],
+        threshold: f32,
+    ) {
+        let Some(scored) = self.compute_candidate_scores(hashes, entries) else {
+            return;
+        };
 
         if self.is_inverted {
             // Inverted search: match items where score < threshold (and valid score >= 0.0)
             let mut matches: Vec<(usize, f32)> = scored
-                .iter()
-                .filter(|&&(_, s)| s >= 0.0 && s < threshold)
-                .copied()
+                .into_iter()
+                .filter(|&(_, s)| s >= 0.0 && s < threshold)
                 .collect();
             // Sort ascending: lowest score (least similar to inverted concept) comes first
             matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -127,14 +138,74 @@ impl CanvasGrid {
         } else {
             // Normal search: match items where score >= threshold
             let mut matches: Vec<(usize, f32)> = scored
-                .iter()
-                .filter(|&&(_, s)| s >= threshold)
-                .copied()
+                .into_iter()
+                .filter(|&(_, s)| s >= threshold)
                 .collect();
             // Sort descending: highest score (most similar to concept) comes first
             matches.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             self.indices = matches.into_iter().map(|(idx, _)| idx).collect();
         }
+    }
+
+    pub fn count_matches_at_allowance(
+        &self,
+        hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
+        entries: &[Entry],
+        allowance: f32,
+    ) -> usize {
+        let Some(scored) = self.compute_candidate_scores(hashes, entries) else {
+            return self.indices.len();
+        };
+        let threshold = Self::allowance_to_threshold(allowance, self.is_inverted);
+        if self.is_inverted {
+            scored
+                .iter()
+                .filter(|&&(_, s)| s >= 0.0 && s < threshold)
+                .count()
+        } else {
+            scored.iter().filter(|&&(_, s)| s >= threshold).count()
+        }
+    }
+
+    pub fn can_decrease_allowance(
+        &self,
+        hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
+        entries: &[Entry],
+    ) -> bool {
+        if self.concept_embedding.is_none() || self.indices.is_empty() {
+            return false;
+        }
+        if self.allowance <= 0.05 + 1e-4 {
+            return false;
+        }
+        let next_allowance = (self.allowance - Self::ALLOWANCE_STEP).max(0.05);
+        let next_count = self.count_matches_at_allowance(hashes, entries, next_allowance);
+        // Gray out and prevent pressing (-) right before pressing it would mean 0 results
+        next_count > 0
+    }
+
+    pub fn can_increase_allowance(
+        &self,
+        hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
+        entries: &[Entry],
+    ) -> bool {
+        if self.concept_embedding.is_none() {
+            return false;
+        }
+        // 1. When it's now so broad that it includes all of the original search
+        if !self.candidate_indices.is_empty() && self.indices.len() >= self.candidate_indices.len()
+        {
+            return false;
+        }
+        if self.allowance >= 0.95 - 1e-4 {
+            return false;
+        }
+        // 2. Or if no matter how high the value goes it wouldn't include more photos
+        let max_count = self.count_matches_at_allowance(hashes, entries, 1.0);
+        if max_count <= self.indices.len() {
+            return false;
+        }
+        true
     }
 }
 
@@ -367,12 +438,71 @@ impl SimilarityCanvas {
         self.recompute_layout();
     }
 
+    #[allow(dead_code)]
     pub fn adjust_global_allowance(&mut self, delta: f32) {
         self.allowance = (self.allowance + delta).clamp(0.05, 0.95);
         self.similarity_threshold = CanvasGrid::allowance_to_threshold(self.allowance, false);
         for g in self.grids.iter_mut().skip(1) {
             g.set_allowance(self.allowance);
         }
+    }
+
+    pub fn can_decrease_grid_allowance(&self, grid_id: usize) -> bool {
+        let Some(grid) = self.grids.iter().find(|g| g.id == grid_id) else {
+            return false;
+        };
+        grid.can_decrease_allowance(&self.hashes, &self.entries)
+    }
+
+    pub fn can_increase_grid_allowance(&self, grid_id: usize) -> bool {
+        let Some(grid) = self.grids.iter().find(|g| g.id == grid_id) else {
+            return false;
+        };
+        grid.can_increase_allowance(&self.hashes, &self.entries)
+    }
+
+    pub fn adjust_grid_allowance(&mut self, grid_id: usize, delta: f32) -> bool {
+        if delta < 0.0 && !self.can_decrease_grid_allowance(grid_id) {
+            return false;
+        }
+        if delta > 0.0 && !self.can_increase_grid_allowance(grid_id) {
+            return false;
+        }
+        if let Some(grid) = self.grids.iter_mut().find(|g| g.id == grid_id) {
+            grid.adjust_allowance(delta);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn result_grid_at_pos(&self, canvas_origin: Pos2, pointer_pos: Pos2) -> Option<usize> {
+        let step = (self.tile_size + self.spacing) * self.zoom;
+        // Search result grids have id > 0
+        // Check tile areas first for exact hit testing
+        for grid in self.grids.iter().filter(|g| g.id > 0) {
+            let top_left = self.tile_screen_rect(canvas_origin, grid.col_offset, grid.row_offset);
+            let w = (grid.grid_cols.max(1) as f32) * step;
+            let h = (grid.grid_rows.max(1) as f32) * step;
+            let tiles_rect = Rect::from_min_size(top_left.min, vec2(w, h));
+            if tiles_rect.contains(pointer_pos) {
+                return Some(grid.id);
+            }
+        }
+        // If not directly over tiles, check header bars
+        for grid in self.grids.iter().filter(|g| g.id > 0) {
+            let top_left = self.tile_screen_rect(canvas_origin, grid.col_offset, grid.row_offset);
+            let w = (grid.grid_cols.max(1) as f32) * step;
+            let bar_w = w.max(300.0 * self.zoom.clamp(0.5, 1.0));
+            let header_rect = Rect::from_min_size(
+                egui::pos2(top_left.min.x, top_left.min.y - 48.0),
+                vec2(bar_w, 48.0),
+            );
+            if header_rect.contains(pointer_pos) {
+                return Some(grid.id);
+            }
+        }
+        None
     }
 
     /// Creates a new search grid searching for photos visually similar to the reference photo.
@@ -935,33 +1065,54 @@ impl SimilarityCanvas {
             self.pan_to_grid(grid_id, canvas_rect);
         }
 
+        let pointer_pos_raw = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+        let pointer_in_canvas = pointer_pos_raw.map_or(false, |p| canvas_rect.contains(p));
+
         let text_focused = ui.memory(|m| m.focused().is_some());
         if !text_focused {
-            let (zoom_in, zoom_out, fit, escape) = ui.input(|i| {
-                let zoom_in = i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals);
-                let zoom_out = i.key_pressed(egui::Key::Minus);
+            let hovered_result_grid = pointer_pos_raw
+                .filter(|&p| canvas_rect.contains(p))
+                .and_then(|p| self.result_grid_at_pos(canvas_rect.min, p));
+
+            let (plus_pressed, minus_pressed, fit, escape) = ui.input(|i| {
+                let plus = i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals);
+                let minus = i.key_pressed(egui::Key::Minus);
                 let fit = i.key_pressed(egui::Key::F)
                     || (i.modifiers.ctrl && i.key_pressed(egui::Key::Num0));
                 let escape = i.key_pressed(egui::Key::Escape);
-                (zoom_in, zoom_out, fit, escape)
+                (plus, minus, fit, escape)
             });
 
             if fit {
                 self.fit_to_view(canvas_rect);
             }
-            if zoom_in {
-                let center = canvas_rect.center();
-                let new_zoom = (self.zoom * 1.25).clamp(0.05, 8.0);
-                let origin_offset = center - canvas_rect.min - self.pan;
-                self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
-                self.zoom = new_zoom;
+            if plus_pressed {
+                if let Some(grid_id) = hovered_result_grid {
+                    if self.adjust_grid_allowance(grid_id, 0.05) {
+                        self.recompute_layout();
+                        ui.ctx().request_repaint();
+                    }
+                } else {
+                    let center = canvas_rect.center();
+                    let new_zoom = (self.zoom * 1.25).clamp(0.05, 8.0);
+                    let origin_offset = center - canvas_rect.min - self.pan;
+                    self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
+                    self.zoom = new_zoom;
+                }
             }
-            if zoom_out {
-                let center = canvas_rect.center();
-                let new_zoom = (self.zoom / 1.25).clamp(0.05, 8.0);
-                let origin_offset = center - canvas_rect.min - self.pan;
-                self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
-                self.zoom = new_zoom;
+            if minus_pressed {
+                if let Some(grid_id) = hovered_result_grid {
+                    if self.adjust_grid_allowance(grid_id, -0.05) {
+                        self.recompute_layout();
+                        ui.ctx().request_repaint();
+                    }
+                } else {
+                    let center = canvas_rect.center();
+                    let new_zoom = (self.zoom / 1.25).clamp(0.05, 8.0);
+                    let origin_offset = center - canvas_rect.min - self.pan;
+                    self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
+                    self.zoom = new_zoom;
+                }
             }
             if escape {
                 if !self.search_query.is_empty() {
@@ -972,8 +1123,6 @@ impl SimilarityCanvas {
             }
         }
 
-        let pointer_pos = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
-        let pointer_in_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
         let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
         let pointer_delta = ui.input(|i| i.pointer.delta());
 
@@ -992,7 +1141,7 @@ impl SimilarityCanvas {
             }
         }
 
-        let pointer_pos = pointer_pos.unwrap_or(canvas_rect.center());
+        let pointer_pos = pointer_pos_raw.unwrap_or(canvas_rect.center());
         if canvas_rect.contains(pointer_pos) {
             let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
             if scroll_delta.abs() > 0.01 {
