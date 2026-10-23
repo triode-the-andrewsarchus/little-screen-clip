@@ -1,0 +1,95 @@
+# Sample constellation branch review
+
+Reviewed the six feature commits after `main` (`999cd24`), in their original order.
+Fixes are appended to the branch; the feature history is preserved.
+
+## Commit-by-commit findings
+
+| Feature commit | Findings and changes |
+| --- | --- |
+| `d6aa9b6` — initial map/indexer | Fixed subtree queries that matched similarly named siblings and interpreted `%`/`_` as wildcards. Prevented an index completion for another folder from replacing the visible map. Guarded directory/audio inputs through core's ordinary-content policy, retained complete source duration when available, persisted empty re-indexes, and reported worker disconnection/spawn failures. Removed a test that indexed a personal directory into the real database. Folder database loads now run on the bounded executor. |
+| `4daf65e` — history trail | Reviewed the adaptive count and duplicate suppression; existing tests pass. Refreshes reset obsolete trail/selection state, and the newest-point glow uses the correct alpha representation. |
+| `be74200` — dimmed stars/File menu | Fixed an overflowing `u8` density counter in dense active clusters. Dimmed search/category results no longer capture audition targets. Pointer interaction respects the canvas response, including overlapping windows and dragging. The File menu delegates indexing controls to a focused menu method. |
+| `9f587a7` — hover waveforms/specifications | Removed synchronous fallback probes from the HUD. Hover requests/results have bounded queues, cooperative cancellation, generation checks, guarded inputs, and a 15-second waveform limit. Consolidated WAV/AIFF chunk scanning, validated FLAC STREAMINFO length and AIFF sample rate, and removed unsafe UTF-8 slicing from paths/names. |
+| `b86426b` — pack shelf | Replaced destructive in-place saves with staged atomic no-overwrite installation; repeated saves create numbered directories. Rejected `.`/`..` names, propagated link/write failures, validated bank sizes/slots/layers/trim values, and guarded output/source handles. Pack listing/loading/saving/deleting run on workers. Browser metadata is retained instead of reloaded every frame. Accepted mutations retain completion and defer application close. |
+| `82e72a0` — inline trims/direct playback | Reverted the forced shared 512/1024-frame output buffers and restored the browser's background audition loader. Connected slot voices to navigation/view/studio/Escape stop hooks. Playback references shared, frame-aligned PCM instead of copying trim buffers. PCM preparation is bounded and off the UI thread, stale bank/list/audio results are rejected, Unicode labels are safe, and Escape clears constellation search after egui drops focus. |
+
+The fixed output buffers are the leading explanation for the reported ALSA
+`alsa::poll()`/`POLLERR` regression: that commit changed the application-wide sink.
+The private acceptance run uses an ALSA null device and cannot establish that a
+particular physical audio backend no longer produces the error. Restart Files to
+replace an already-open stream with the restored backend configuration.
+
+## Architecture comparison against current main
+
+The baseline was measured from a clean detached worktree at `999cd24`, not from
+the feature branch. The same fast profile was used for every measurement.
+
+| Metric | Main | Original feature branch (`82e72a0`) | Reviewed branch |
+| --- | ---: | ---: | ---: |
+| Total cyclomatic complexity | 27,909 | 30,006 | 28,700 |
+| Average cyclomatic complexity | 4.02 | 4.26 | 4.06 |
+| Maximum cyclomatic complexity | 196 | 196 | 196 |
+| Lines of code | 227,320 | 238,554 | 235,263 |
+| Duplication | 5.98% | 5.76% | 5.82% |
+| Clone groups | 1,382 | 1,390 | 1,391 |
+| Reported cycles | 5 | 5 | 6 |
+| Valknut health | 73.88 | 62.65 | 62.72 |
+
+The architecture tool still classifies the whole feature branch as **REGRESSION**
+against main. This is not a clean architecture acceptance result.
+
+The largest simplification replaces twenty nested generated tree evaluators
+(CCN 52–84 each) with static model nodes and one shared traversal. Original and
+converted predictions matched bit for bit for 5,452 reachable-leaf and adjacent
+split-boundary inputs. A committed golden fingerprint and topology checks guard
+that conversion; `scripts/compact_constellation_model.py` reproduces it from the
+original export. Classification weights, thresholds, category order, and floating
+point addition order are preserved. Naming priors now use an ordered table, with
+word boundaries for short abbreviations (`subdivision` and `what` are regression
+fixtures). Its CCN fell from 82 to 9. PCM loading fell from 17 to 3; shared chunk
+parsing removes duplicated container traversal.
+
+Remaining hotspots include feature extraction (CCN 56), map rendering (62), shelf
+rendering (50), pack browser rendering (24), and SQL record decoding (20). The
+record decoder now reports invalid rows rather than silently discarding them.
+These are disclosed maintenance costs; this review does not claim they disappeared.
+
+The extra reported cycle is the converter's local recursive `block` parser for a
+bounded-depth tree, not a Rust module dependency cycle. Other added/resolved cycle
+entries name unchanged scripts under different absolute worktree prefixes; they
+must not be interpreted as new cross-module dependencies. Clone findings include
+static model data and existing clones in touched files, as well as test fixtures.
+
+## Validation and evidence
+
+- `cargo test --workspace -- --test-threads=2`: 2,498 passed, zero failed, 23 ignored,
+  including workspace doctests.
+- All 30 focused constellation regression tests pass and cover database boundaries, stale results,
+  protected inputs, malformed audio/banks, save preservation, shared trim storage,
+  Unicode labels, Escape handling, model equivalence, and mutation completion.
+- `cargo build -p clip-workbench --bin clip-file-manager` passes.
+- `cargo fmt --all --check` and `git diff --check` pass.
+- `cargo doc -p clip-workbench --lib --no-deps --document-private-items` passes.
+  Rendered module, save, and slot documentation was inspected. Rustdoc reports one
+  pre-existing bare-URL warning in `file_manager/image_strip/hilbert.rs`.
+- The private Weston/Niri constellation acceptance workflow passes indexing,
+  Ctrl+F/search dismissal, slot assignment, repeated saves preserving owned files,
+  pack browsing, navigation, and clean exit. It uses isolated HOME/XDG directories
+  and an ALSA null device; it never injects input into the user's compositor.
+
+Private-run screenshots and its machine-readable report are retained at
+`/tmp/constellation-acceptance-review-final/`. The full test log is
+`/tmp/constellation-workspace-final.log`. Run the UI scenario with an installed
+Tesseract English model, or point `TESSDATA_PREFIX` at one:
+
+```bash
+python3 scripts/constellation_acceptance.py \
+  --output-dir /tmp/constellation-acceptance-new --appearance dark
+```
+
+Pack persistence remains reference-based: symlinks refer to complete source files,
+while trimming and volume live in `bank.json`. It is not a trimmed-WAV exporter.
+PCM caches retain at most 15 seconds/two million interleaved values per source and
+use an aggregate admission budget. Model training provenance and perceptual
+classification quality cannot be established from the checked-in export alone.
