@@ -109,6 +109,9 @@ impl ConstellationState {
         if !drop.append {
             slot.samples.clear();
         }
+        for sample in &drop.samples {
+            self.failed_audio.remove(&sample.file_path);
+        }
         slot.samples.extend(drop.samples);
         self.selected_slot = drop.index;
         self.checkpoint_bank(false);

@@ -170,6 +170,10 @@ impl ConstellationState {
 
     fn render_pad_grid(&mut self, ui: &mut egui::Ui) {
         self.pad_drop_targets.clear();
+        let playing: [bool; super::sample_pack::NUM_SLOTS] = {
+            let rack = self.playback.lock().unwrap();
+            std::array::from_fn(|index| rack.voices[index].iter().any(|player| !player.empty()))
+        };
         let gap = 5.0;
         let width = ((ui.available_width() - gap * 3.0) / 4.0).max(24.0);
         for row in (0..4).rev() {
@@ -179,23 +183,36 @@ impl ConstellationState {
                     let index = row * 4 + col;
                     let slot = &self.pack_bank.slots[index];
                     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 44.0), egui::Sense::click());
+                    let unavailable = slot.samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path));
+                    let loading = slot.samples.iter().any(|sample| sample.cached_audio.is_none() && !self.failed_audio.contains(&sample.file_path));
                     let flashing = self.slot_flash[index].is_some_and(|time| time.elapsed() < Duration::from_millis(150));
                     if flashing { ui.ctx().request_repaint_after(Duration::from_millis(16)); }
                     let painter = ui.painter_at(rect);
-                    let visuals = ui.visuals();
+                    let visuals = ui.visuals().clone();
                     let fill = if flashing || response.hovered() { visuals.widgets.hovered.bg_fill } else { visuals.widgets.inactive.weak_bg_fill };
                     let stroke = if self.selected_slot == index { Stroke::new(1.5_f32, visuals.text_color()) } else { visuals.widgets.noninteractive.bg_stroke };
                     painter.rect(rect, 4.0, fill, stroke);
                     let key = self.pad_keys[index].to_ascii_uppercase().to_string();
                     painter.text(rect.min + Vec2::new(7.0, 5.0), egui::Align2::LEFT_TOP, key, egui::FontId::monospace(11.0), visuals.text_color());
-                    painter.text(rect.right_top() + Vec2::new(-6.0, 6.0), egui::Align2::RIGHT_TOP, format!("{}", 36 + index), egui::FontId::monospace(9.0), visuals.weak_text_color());
+                    if slot.choke_group != 0 {
+                        painter.text(rect.right_top() + Vec2::new(-6.0, 6.0), egui::Align2::RIGHT_TOP, format!("C{}", slot.choke_group), egui::FontId::monospace(9.0), visuals.weak_text_color());
+                    }
+                    let state_pos = rect.right_top() + Vec2::new(-28.0, 10.0);
+                    if unavailable { painter.circle_filled(state_pos, 3.0, visuals.error_fg_color); }
+                    else if loading { ui.put(Rect::from_center_size(state_pos, Vec2::splat(10.0)), egui::Spinner::new().size(10.0)); }
+                    else if playing[index] { painter.circle_filled(state_pos, 3.0, visuals.selection.stroke.color); }
                     let title = slot.samples.first().map_or("—", |sample| sample.filename.as_str());
                     let label = super::ui::short_label(title, ((width - 12.0) / 5.5).max(3.0) as usize);
                     painter.text(rect.left_bottom() + Vec2::new(7.0, -9.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(10.0), visuals.text_color());
                     if let Some(category) = slot.samples.first().and_then(|sample| sample.category) {
                         painter.line_segment([rect.left_bottom() + Vec2::new(5.0, -3.0), rect.right_bottom() + Vec2::new(-5.0, -3.0)], Stroke::new(2.0_f32, category.color()));
                     }
-                    let title = slot.display_title();
+                    let mut title = slot.display_title();
+                    if unavailable { title.push_str("\nSome sources are unavailable or could not be decoded."); }
+                    if loading { title.push_str("\nPreparing audio…"); }
+                    if playing[index] { title.push_str("\nPlaying"); }
+                    if slot.choke_group != 0 { title.push_str(&format!("\nChoke group {}", slot.choke_group)); }
+
                     self.pad_drop_targets.push((rect.intersect(ui.clip_rect()), index));
                     let native_hover = self.pad_drop_hover.is_some_and(|pos| rect.contains(pos));
                     if response.dnd_hover_payload::<crate::file_manager::transfers::FileDrag>().is_some() || native_hover {
@@ -309,6 +326,9 @@ impl ConstellationState {
             }).response.on_hover_text("Pads in the same group cut each other off; useful for open and closed hi-hats.");
             if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add selected")).clicked() { self.assign_selected_to_pad(index); }
             if ui.small_button("Clear").clicked() { self.clear_slot(index); }
+            if self.pack_bank.slots[index].samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path)) && ui.small_button("Retry audio").clicked() {
+                for sample in &self.pack_bank.slots[index].samples { self.failed_audio.remove(&sample.file_path); }
+            }
         });
         let slot = &mut self.pack_bank.slots[index];
         if slot.samples.is_empty() {

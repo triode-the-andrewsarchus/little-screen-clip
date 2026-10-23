@@ -24,7 +24,10 @@ architecture, and private compositor validation.
   Float WAV layers bake trim/gain, relative manifests survive relocation, and
   optional originals are regular copies. Shares pinned atomic installer; accepted
   exports retain completion. Relocation/failure/version tests: 55 focused pass.
-- [ ] Pad loading/missing/playing/choke indicators without permanent visual clutter.
+- [x] Pad loading/missing/playing/choke indicators without permanent visual clutter.
+  Compact loading spinner, unavailable/playing dots, and nonzero choke labels.
+  Failure tooltips and selected-pad Retry audio action use existing worker state,
+  with no filesystem probing in paint. Focused suite: 55 passed.
 - [ ] Selected-pad editor with visible essential controls, numeric trim, mute/solo, pan, fades.
 - [ ] Incremental indexing and duration/channel filters, with indexed/new status.
 
