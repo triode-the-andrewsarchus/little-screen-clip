@@ -1234,3 +1234,18 @@ fn test_paint_canvas_edge_fade_handles_zero_and_negative_size() {
         "No mesh should be generated for empty canvas"
     );
 }
+
+#[test]
+fn test_pca_handles_ragged_feature_dimensions_safely() {
+    let features = vec![
+        vec![1.0, 2.0, 3.0],
+        vec![4.0, 5.0],            // Shorter feature vector
+        vec![7.0, 8.0, 9.0, 10.0], // Longer feature vector
+    ];
+    let coords = super::embedding::project_features_to_2d(&features);
+    assert_eq!(coords.len(), 3);
+    for (x, y) in coords {
+        assert!(x >= -1.0 && x <= 1.0);
+        assert!(y >= -1.0 && y <= 1.0);
+    }
+}

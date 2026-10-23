@@ -3,6 +3,14 @@
 //! Supports arbitrary feature dimensions (e.g. 64-bit d-hash bit-vectors, or 728-dimensional
 //! neural embeddings like EmbeddingGemma2) without materializing large covariance matrices.
 
+pub const DHASH_DIMENSION: usize = 64;
+const POWER_ITERATION_MAX_STEPS: usize = 40;
+const MIN_NORM_EPSILON: f32 = 1e-7;
+const MIN_SPAN_EPSILON: f32 = 1e-5;
+const PAIRWISE_DIFF_EPSILON: f32 = 1e-6;
+const JITTER_SCALE: f32 = 0.001;
+const JITTER_FREQUENCY: f32 = 0.0001;
+
 /// A generalized feature vector representation for similarity clustering.
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
@@ -17,8 +25,8 @@ impl FeatureVector {
     pub fn to_vec(&self) -> Vec<f32> {
         match self {
             Self::DHash(hash) => {
-                let mut v = Vec::with_capacity(64);
-                for b in 0..64 {
+                let mut v = Vec::with_capacity(DHASH_DIMENSION);
+                for b in 0..DHASH_DIMENSION {
                     v.push(if (hash & (1u64 << b)) != 0 { 0.5 } else { -0.5 });
                 }
                 v
@@ -30,7 +38,7 @@ impl FeatureVector {
     #[allow(dead_code)]
     pub fn dimension(&self) -> usize {
         match self {
-            Self::DHash(_) => 64,
+            Self::DHash(_) => DHASH_DIMENSION,
             Self::Dense(dense) => dense.len(),
         }
     }
@@ -64,7 +72,7 @@ pub fn project_features_to_2d(features: &[Vec<f32>]) -> Vec<(f32, f32)> {
                 (a - b).powi(2)
             })
             .sum();
-        if diff < 1e-6 {
+        if diff < PAIRWISE_DIFF_EPSILON {
             return vec![(-0.5, 0.0), (0.5, 0.0)];
         }
         return vec![(-1.0, 0.0), (1.0, 0.0)];
@@ -116,9 +124,9 @@ pub fn project_features_to_2d(features: &[Vec<f32>]) -> Vec<(f32, f32)> {
         let mut y: f32 = row.iter().zip(e2.iter()).map(|(a, b)| a * b).sum();
 
         // Deterministic tiny jitter so duplicate points don't occupy identical float coords
-        let jitter = (i as f32 * 0.0001).sin() * 0.001;
+        let jitter = (i as f32 * JITTER_FREQUENCY).sin() * JITTER_SCALE;
         x += jitter;
-        y += (i as f32 * 0.0001).cos() * 0.001;
+        y += (i as f32 * JITTER_FREQUENCY).cos() * JITTER_SCALE;
 
         min_x = min_x.min(x);
         max_x = max_x.max(x);
@@ -128,8 +136,8 @@ pub fn project_features_to_2d(features: &[Vec<f32>]) -> Vec<(f32, f32)> {
     }
 
     // 6. Normalize to [-1.0, 1.0]
-    let span_x = (max_x - min_x).max(1e-5);
-    let span_y = (max_y - min_y).max(1e-5);
+    let span_x = (max_x - min_x).max(MIN_SPAN_EPSILON);
+    let span_y = (max_y - min_y).max(MIN_SPAN_EPSILON);
     for (x, y) in &mut coords {
         *x = ((*x - min_x) / span_x) * 2.0 - 1.0;
         *y = ((*y - min_y) / span_y) * 2.0 - 1.0;
@@ -166,7 +174,7 @@ fn power_iteration(
     let n = x_centered.len();
     let inv_n = 1.0 / (n as f32);
 
-    for _ in 0..40 {
+    for _ in 0..POWER_ITERATION_MAX_STEPS {
         // y = X * v (N x 1)
         let y = mat_vec_mul(x_centered, &v);
 
@@ -186,8 +194,8 @@ fn power_iteration(
         if let Some(other) = deflate_against {
             let dot: f32 = other.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
             let factor = deflate_lambda * dot;
-            for j in 0..d {
-                w[j] -= factor * other[j];
+            for (wj, &oj) in w.iter_mut().zip(other.iter()) {
+                *wj -= factor * oj;
             }
             orthogonalize(&mut w, other);
         }
@@ -208,15 +216,15 @@ fn mat_vec_mul(x: &[Vec<f32>], v: &[f32]) -> Vec<f32> {
 
 fn orthogonalize(v: &mut [f32], other: &[f32]) {
     let dot: f32 = v.iter().zip(other.iter()).map(|(a, b)| a * b).sum();
-    for i in 0..v.len() {
-        v[i] -= dot * other[i];
+    for (vi, &oi) in v.iter_mut().zip(other.iter()) {
+        *vi -= dot * oi;
     }
 }
 
 fn normalize(v: &mut [f32]) -> bool {
     let norm_sq: f32 = v.iter().map(|&x| x * x).sum();
     let norm = norm_sq.sqrt();
-    if norm < 1e-7 {
+    if norm < MIN_NORM_EPSILON {
         return false;
     }
     let inv_norm = 1.0 / norm;
