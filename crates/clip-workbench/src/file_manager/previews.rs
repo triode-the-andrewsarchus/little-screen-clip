@@ -579,13 +579,20 @@ impl EntryPreviews {
         self.cache.get(id).is_some()
     }
 
+    pub const MIN_GALLERY_EDGE: u32 = 128;
+    pub const MAX_GALLERY_EDGE: u32 = 4096;
+    pub const GALLERY_EDGE_STEP: u32 = 128;
+
     pub fn gallery_size(&self, path: &std::path::Path) -> u32 {
         self.gallery_sizes.get(path).copied().unwrap_or(0)
     }
 
     pub fn request_gallery(&mut self, entry: &Entry, edge: u32, orientation: u8) {
         let id = self.identity(entry);
-        let edge = edge.clamp(128, 4096).div_ceil(128) * 128;
+        let edge = edge
+            .clamp(Self::MIN_GALLERY_EDGE, Self::MAX_GALLERY_EDGE)
+            .div_ceil(Self::GALLERY_EDGE_STEP)
+            * Self::GALLERY_EDGE_STEP;
         let previous = self.gallery_sizes.entry(entry.path.clone()).or_default();
         if edge > *previous {
             let started = self.cache.refresh(

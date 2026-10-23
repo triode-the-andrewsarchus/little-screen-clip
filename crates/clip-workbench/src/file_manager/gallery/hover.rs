@@ -1,6 +1,12 @@
 //! Dedicated native-resolution hover preview cache for gallery and similarity grid tiles.
 use super::super::shelf::preview::{Previews, Source};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const UNHOVER_GRACE_PERIOD: Duration = Duration::from_millis(250);
+pub const MIN_HOVER_EDGE: u32 = 128;
+pub const MAX_HOVER_EDGE: u32 = 4096;
+pub const HOVER_EDGE_STEP: u32 = 128;
 
 #[derive(Default)]
 pub(in crate::file_manager) struct GalleryHover {
@@ -29,7 +35,7 @@ impl GalleryHover {
         } else if self.key.is_some() {
             let now = std::time::Instant::now();
             if let Some(unhover_time) = self.unhover_time {
-                if now.duration_since(unhover_time) > std::time::Duration::from_millis(250) {
+                if now.duration_since(unhover_time) > UNHOVER_GRACE_PERIOD {
                     self.clear();
                 }
             } else {
@@ -46,7 +52,10 @@ impl GalleryHover {
         fallback: Option<(egui::TextureId, egui::Vec2)>,
     ) -> Option<(egui::TextureId, egui::Vec2)> {
         self.unhover_time = None;
-        let edge = edge.clamp(128, 4096).div_ceil(128) * 128;
+        let edge = edge
+            .clamp(MIN_HOVER_EDGE, MAX_HOVER_EDGE)
+            .div_ceil(HOVER_EDGE_STEP)
+            * HOVER_EDGE_STEP;
         if !self
             .key
             .as_ref()
@@ -55,7 +64,9 @@ impl GalleryHover {
             self.clear();
             self.key = Some((path.to_path_buf(), edge, uuid::Uuid::new_v4()));
         }
-        let id = self.key.as_ref().unwrap().2;
+        let Some((_, _, id)) = self.key else {
+            return fallback;
+        };
         if self.cache.needs(id) {
             self.cache.request(
                 id,
