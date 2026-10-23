@@ -1,5 +1,17 @@
 //! Virtualized tiles share selection, drag/drop, menus and file operations with the list.
 use super::*;
+use crate::file_manager::gallery::similarity::canvas::CanvasGrid;
+
+const MIN_THUMBNAIL_EDGE: f32 = 80.0;
+const MAX_THUMBNAIL_EDGE: f32 = 280.0;
+const CTRL_ZOOM_SPEED: f32 = 0.4;
+const SCROLL_SETTLE_SECONDS: f64 = 0.2;
+const BADGE_DISPLAY_DURATION: f64 = 1.2;
+const BADGE_FADE_DURATION: f64 = 0.3;
+const CANVAS_EDGE_FADE_SIZE: f32 = 28.0;
+const HUD_INSET_X: f32 = 20.0;
+const SEARCH_HUD_INSET_Y: f32 = 16.0;
+const BOTTOM_HUD_HEIGHT: f32 = 44.0;
 
 impl FileManager {
     pub(in crate::file_manager) fn set_view(&mut self, view: super::super::BrowserView) {
@@ -213,7 +225,8 @@ impl FileManager {
             });
             if let Some(delta) = ctrl_zoom {
                 let old_edge = self.thumbnail_edge;
-                let new_edge = (old_edge + delta * 0.4).clamp(80.0, 280.0);
+                let new_edge = (old_edge + delta * CTRL_ZOOM_SPEED)
+                    .clamp(MIN_THUMBNAIL_EDGE, MAX_THUMBNAIL_EDGE);
                 if (new_edge - old_edge).abs() > 0.1 {
                     self.thumbnail_edge = new_edge;
                 }
@@ -302,7 +315,7 @@ impl FileManager {
                 self.gallery_last_scroll_y = current_scroll_y;
                 self.gallery_last_scroll_time = now;
             }
-            let is_scroll_settled = (now - self.gallery_last_scroll_time) >= 0.2;
+            let is_scroll_settled = (now - self.gallery_last_scroll_time) >= SCROLL_SETTLE_SECONDS;
 
             // 1. Request base thumbnails for visible tiles
             for tile in priority.iter() {
@@ -446,8 +459,9 @@ impl FileManager {
 
             if let Some(text) = badge_content {
                 let time_since_scroll = now - self.gallery_last_scroll_time;
-                if time_since_scroll < 1.2 {
-                    let alpha = ((1.2 - time_since_scroll) / 0.3).clamp(0.0, 1.0) as f32;
+                if time_since_scroll < BADGE_DISPLAY_DURATION {
+                    let alpha = ((BADGE_DISPLAY_DURATION - time_since_scroll) / BADGE_FADE_DURATION)
+                        .clamp(0.0, 1.0) as f32;
                     let clip = ui.clip_rect();
                     let (badge_rect, font_size) = if is_alpha {
                         (
@@ -766,7 +780,8 @@ impl FileManager {
                                         .on_hover_text("Decrease match allowance (fewer photos)")
                                         .clicked()
                                     {
-                                        adjust_grid_allowance = Some((grid.id, -0.05));
+                                        adjust_grid_allowance =
+                                            Some((grid.id, -CanvasGrid::ALLOWANCE_STEP));
                                     }
                                 } else {
                                     minus_resp.on_hover_text(
@@ -802,7 +817,8 @@ impl FileManager {
                                         )
                                         .clicked()
                                     {
-                                        adjust_grid_allowance = Some((grid.id, 0.05));
+                                        adjust_grid_allowance =
+                                            Some((grid.id, CanvasGrid::ALLOWANCE_STEP));
                                     }
                                 } else {
                                     let reason = if !grid.candidate_indices.is_empty()
@@ -890,11 +906,19 @@ impl FileManager {
         }
 
         // Paint edge fade vignette on top of canvas tiles, dividers and headers
-        paint_canvas_edge_fade(ui.painter(), clip_rect, colors.canvas, 28.0);
+        paint_canvas_edge_fade(
+            ui.painter(),
+            clip_rect,
+            colors.canvas,
+            CANVAS_EDGE_FADE_SIZE,
+        );
 
         // Floating search HUD pill
         let search_id = Id::new("similarity_canvas_search");
-        let search_pos = pos2(canvas_rect.left() + 20.0, canvas_rect.top() + 16.0);
+        let search_pos = pos2(
+            canvas_rect.left() + HUD_INSET_X,
+            canvas_rect.top() + SEARCH_HUD_INSET_Y,
+        );
         egui::Area::new(search_id)
             .order(egui::Order::Middle)
             .fixed_pos(search_pos)
@@ -971,7 +995,10 @@ impl FileManager {
 
         // Floating Grid Jump Navigator
         let nav_id = Id::new("similarity_grid_nav");
-        let nav_pos = pos2(canvas_rect.left() + 20.0, canvas_rect.bottom() - 44.0);
+        let nav_pos = pos2(
+            canvas_rect.left() + HUD_INSET_X,
+            canvas_rect.bottom() - BOTTOM_HUD_HEIGHT,
+        );
         egui::Area::new(nav_id)
             .order(egui::Order::Middle)
             .fixed_pos(nav_pos)
