@@ -26,33 +26,35 @@ pub fn compute_dhash(thumbnail: &ImageThumbnail) -> u64 {
     }
 
     let mut gray = [[0u16; GRID_COLS]; GRID_ROWS];
-    for y in 0..GRID_ROWS {
+    for (y, gray_row) in gray.iter_mut().enumerate() {
         let src_y = (y * height) / GRID_ROWS;
         let row_offset = src_y * width * 4;
-        for x in 0..GRID_COLS {
+        for (x, gray_val) in gray_row.iter_mut().enumerate() {
             let src_x = (x * width) / GRID_COLS;
             let idx = row_offset + src_x * 4;
             if idx + 3 < thumbnail.premultiplied_rgba.len() {
                 let a = thumbnail.premultiplied_rgba[idx + 3] as u32;
-                let (r, g, b) = if a > 0 {
+                let (r, g, b) = if let Some(a_val) = std::num::NonZeroU32::new(a) {
                     (
-                        ((thumbnail.premultiplied_rgba[idx] as u32) * 255 / a).min(255),
-                        ((thumbnail.premultiplied_rgba[idx + 1] as u32) * 255 / a).min(255),
-                        ((thumbnail.premultiplied_rgba[idx + 2] as u32) * 255 / a).min(255),
+                        ((thumbnail.premultiplied_rgba[idx] as u32 * 255) / a_val.get()).min(255),
+                        ((thumbnail.premultiplied_rgba[idx + 1] as u32 * 255) / a_val.get())
+                            .min(255),
+                        ((thumbnail.premultiplied_rgba[idx + 2] as u32 * 255) / a_val.get())
+                            .min(255),
                     )
                 } else {
                     (0, 0, 0)
                 };
-                gray[y][x] = ((r * LUMA_RED_WEIGHT + g * LUMA_GREEN_WEIGHT + b * LUMA_BLUE_WEIGHT)
+                *gray_val = ((r * LUMA_RED_WEIGHT + g * LUMA_GREEN_WEIGHT + b * LUMA_BLUE_WEIGHT)
                     / LUMA_DENOMINATOR) as u16;
             }
         }
     }
 
     let mut hash = 0u64;
-    for y in 0..HASH_HEIGHT {
+    for (y, gray_row) in gray.iter().enumerate().take(HASH_HEIGHT) {
         for x in 0..HASH_WIDTH {
-            if gray[y][x] < gray[y][x + 1] {
+            if gray_row[x] < gray_row[x + 1] {
                 hash |= 1u64 << (y * HASH_WIDTH + x);
             }
         }
