@@ -244,6 +244,9 @@ pub(in crate::file_manager) struct Previews {
 }
 
 impl Previews {
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
     pub fn needs(&self, id: uuid::Uuid) -> bool {
         !self.pending.contains_key(&id) && !self.ready.contains_key(&id)
     }

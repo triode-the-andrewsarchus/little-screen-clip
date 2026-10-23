@@ -578,6 +578,9 @@ impl EntryPreviews {
         let id = self.identity(entry);
         self.cache.get(id).is_some()
     }
+    pub fn has_pending(&self) -> bool {
+        self.cache.has_pending()
+    }
 
     pub const MIN_GALLERY_EDGE: u32 = 128;
     pub const MAX_GALLERY_EDGE: u32 = 4096;

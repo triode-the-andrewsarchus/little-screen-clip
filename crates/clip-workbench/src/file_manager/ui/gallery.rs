@@ -355,23 +355,24 @@ impl FileManager {
                         let entry = &directory.entries[self.visible[tile.index]];
                         if tile.ready && entry.is_photo() {
                             let hq_edge = 1024;
-                            self.gallery_previews
-                                .request_gallery(entry, hq_edge, tile.orientation);
-                            if self.gallery_previews.gallery_size(&entry.path) < hq_edge {
+                            let current_size = self.gallery_previews.gallery_size(&entry.path);
+                            if current_size < hq_edge {
                                 any_pending_upgrade = true;
                             }
+                            self.gallery_previews
+                                .request_gallery(entry, hq_edge, tile.orientation);
                         }
                     }
-                    if any_pending_upgrade {
+                    if any_pending_upgrade || self.gallery_previews.has_pending() {
                         ui.ctx()
                             .request_repaint_after(std::time::Duration::from_millis(16));
                     }
                 } else {
                     let elapsed = now - self.gallery_last_scroll_time;
-                    if elapsed < 0.2 {
+                    if elapsed < SCROLL_SETTLE_SECONDS {
                         ui.ctx()
                             .request_repaint_after(std::time::Duration::from_secs_f64(
-                                (0.2 - elapsed).max(0.001),
+                                (SCROLL_SETTLE_SECONDS - elapsed).max(0.001),
                             ));
                     }
                 }
@@ -1207,8 +1208,13 @@ fn paint_gallery_tile(
             .min(1.0);
         let display_size = vec2(orig_w * scale, orig_h * scale);
 
-        let needed_edge = (orig_w.max(orig_h) as u32).clamp(128, 4096);
-        let needed_edge = needed_edge.div_ceil(128) * 128;
+        let needed_edge = (orig_w.max(orig_h) as u32).clamp(
+            crate::file_manager::gallery::hover::MIN_HOVER_EDGE,
+            crate::file_manager::gallery::hover::MAX_HOVER_EDGE,
+        );
+        let needed_edge = needed_edge
+            .div_ceil(crate::file_manager::gallery::hover::HOVER_EDGE_STEP)
+            * crate::file_manager::gallery::hover::HOVER_EDGE_STEP;
 
         let active_texture = if let Some(ref mut hover) = hover {
             hover.texture_for(&entry.path, needed_edge, 1, texture_info)
