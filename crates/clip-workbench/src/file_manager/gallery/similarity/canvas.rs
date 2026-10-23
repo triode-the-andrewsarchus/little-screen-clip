@@ -22,12 +22,19 @@ use super::{
 };
 use crate::file_manager::filesystem::{Directory, Entry};
 
+/// Default tile edge size in logical points at 1.0 zoom.
 pub const DEFAULT_TILE_SIZE: f32 = 128.0;
+/// Spacing between adjacent tiles in logical points.
 pub const TILE_SPACING: f32 = 4.0;
+/// Minimum search match allowance (0.05 = 5%).
 pub const MIN_ALLOWANCE: f32 = 0.05;
+/// Maximum search match allowance (0.95 = 95%).
 pub const MAX_ALLOWANCE: f32 = 0.95;
+/// Minimum canvas zoom factor.
 pub const MIN_ZOOM: f32 = 0.05;
+/// Maximum canvas zoom factor.
 pub const MAX_ZOOM: f32 = 8.0;
+/// Keyboard zoom multiplier per step.
 pub const KEYBOARD_ZOOM_STEP: f32 = 1.25;
 const MIN_FIT_ZOOM: f32 = 0.05;
 const MAX_FIT_ZOOM: f32 = 2.5;
@@ -45,6 +52,7 @@ const GRID_PAN_HEADER_SPACING: f32 = 46.0;
 const GRID_PAN_SIDE_PADDING: f32 = 80.0;
 const GRID_PAN_LEFT_MARGIN: f32 = 40.0;
 
+/// A sub-grid of image tiles on the canvas representing a search result or base set.
 #[derive(Clone, Debug)]
 pub struct CanvasGrid {
     pub id: usize,
@@ -65,6 +73,7 @@ pub struct CanvasGrid {
 }
 
 impl CanvasGrid {
+    /// Converts a user-facing match allowance `[0.05, 0.95]` to an internal cosine threshold.
     pub fn allowance_to_threshold(allowance: f32, is_inverted: bool) -> f32 {
         let a = allowance.clamp(0.0, 1.0);
         if is_inverted {
@@ -74,6 +83,7 @@ impl CanvasGrid {
         }
     }
 
+    /// Converts an internal cosine threshold to a user-facing match allowance `[0.05, 0.95]`.
     #[allow(dead_code)]
     pub fn threshold_to_allowance(threshold: f32, is_inverted: bool) -> f32 {
         let t = threshold.clamp(0.01, 0.40);
@@ -86,14 +96,17 @@ impl CanvasGrid {
         }
     }
 
+    /// Incremental step size for match allowance adjustments.
     pub const ALLOWANCE_STEP: f32 = 0.05;
 
+    /// Adjusts the match allowance by `delta` and updates the internal similarity threshold.
     pub fn adjust_allowance(&mut self, delta: f32) {
         let new_val = ((self.allowance + delta) * 100.0).round() / 100.0;
         self.allowance = new_val.clamp(MIN_ALLOWANCE, MAX_ALLOWANCE);
         self.threshold = Self::allowance_to_threshold(self.allowance, self.is_inverted);
     }
 
+    /// Sets the match allowance and updates the internal similarity threshold.
     pub fn set_allowance(&mut self, allowance: f32) {
         let new_val = (allowance * 100.0).round() / 100.0;
         self.allowance = new_val.clamp(MIN_ALLOWANCE, MAX_ALLOWANCE);
@@ -136,6 +149,7 @@ impl CanvasGrid {
         Some(scored)
     }
 
+    /// Filters candidate entries according to cosine similarity against the concept embedding.
     pub fn refilter(
         &mut self,
         hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
@@ -187,6 +201,7 @@ impl CanvasGrid {
         }
     }
 
+    /// Returns `true` if decreasing the allowance would still leave at least one matching photo.
     pub fn can_decrease_allowance(
         &self,
         hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
@@ -204,6 +219,7 @@ impl CanvasGrid {
         next_count > 0
     }
 
+    /// Returns `true` if increasing the allowance would yield more matching photos.
     pub fn can_increase_allowance(
         &self,
         hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
@@ -263,6 +279,7 @@ impl Drop for HashJob {
     }
 }
 
+/// Interactive 2D canvas displaying clustered photo similarity grids.
 pub(in crate::file_manager) struct SimilarityCanvas {
     pub pan: egui::Vec2,
     pub zoom: f32,
@@ -348,19 +365,22 @@ impl SimilarityCanvas {
         self.hashes.insert(path, (feat, rev));
     }
 
+    /// Returns `true` if a background recursive photo scan is in progress.
     pub fn is_scanning(&self) -> bool {
         self.scan_job.is_some()
     }
 
+    /// Returns `true` if background feature hashing/embedding is in progress.
     pub fn is_hashing(&self) -> bool {
         self.hash_job.is_some()
     }
 
+    /// Returns `true` if a background text search embedding query is in flight.
     pub fn is_searching(&self) -> bool {
         self.search_job.is_some()
     }
 
-    /// Triggers an asynchronous concept search by embedding the search query.
+    /// Dispatches an asynchronous concept search by embedding the search query.
     pub fn trigger_search(&mut self) {
         let q = self.search_query.trim().to_string();
         if q.is_empty() {
