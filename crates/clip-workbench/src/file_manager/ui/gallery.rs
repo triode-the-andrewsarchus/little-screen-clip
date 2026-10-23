@@ -546,13 +546,15 @@ impl FileManager {
         let (canvas_rect, response) =
             ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
 
+        let prev_clip = ui.clip_rect();
+        let clip_rect = canvas_rect.intersect(prev_clip);
+        ui.set_clip_rect(clip_rect);
+
         self.similarity_canvas
             .handle_input(ui, canvas_rect, &response);
 
         // Fill background
         ui.painter().rect_filled(canvas_rect, 0.0, colors.canvas);
-
-        let clip_rect = canvas_rect.intersect(ui.clip_rect());
         let dpi = ui.ctx().pixels_per_point();
         let target_edge = (self.similarity_canvas.tile_size * self.similarity_canvas.zoom * dpi)
             .ceil()
@@ -640,29 +642,32 @@ impl FileManager {
             if grid_idx > 0 && grid.row_offset == 0 {
                 let div_x = top_left.min.x - step * 0.5;
                 let total_h = (self.similarity_canvas.grid_rows.max(1) as f32) * step;
-                ui.painter().line_segment(
-                    [
-                        pos2(
-                            div_x,
-                            canvas_rect.min.y + self.similarity_canvas.pan.y - 48.0,
-                        ),
-                        pos2(
-                            div_x,
-                            canvas_rect.min.y + self.similarity_canvas.pan.y + total_h,
-                        ),
-                    ],
-                    egui::Stroke::new(1.0, colors.border),
-                );
+                if div_x >= clip_rect.left() && div_x <= clip_rect.right() {
+                    let y_start = (canvas_rect.min.y + self.similarity_canvas.pan.y - 48.0)
+                        .clamp(clip_rect.top(), clip_rect.bottom());
+                    let y_end = (canvas_rect.min.y + self.similarity_canvas.pan.y + total_h)
+                        .clamp(clip_rect.top(), clip_rect.bottom());
+                    if y_end > y_start {
+                        ui.painter().line_segment(
+                            [pos2(div_x, y_start), pos2(div_x, y_end)],
+                            egui::Stroke::new(1.0, colors.border),
+                        );
+                    }
+                }
             } else if grid.row_offset > 0 {
                 let div_y = top_left.min.y - step * 0.5;
                 let total_w = (grid.grid_cols.max(1) as f32) * step;
-                ui.painter().line_segment(
-                    [
-                        pos2(top_left.min.x, div_y),
-                        pos2(top_left.min.x + total_w, div_y),
-                    ],
-                    egui::Stroke::new(1.0, colors.border),
-                );
+                if div_y >= clip_rect.top() && div_y <= clip_rect.bottom() {
+                    let x_start = top_left.min.x.clamp(clip_rect.left(), clip_rect.right());
+                    let x_end =
+                        (top_left.min.x + total_w).clamp(clip_rect.left(), clip_rect.right());
+                    if x_end > x_start {
+                        ui.painter().line_segment(
+                            [pos2(x_start, div_y), pos2(x_end, div_y)],
+                            egui::Stroke::new(1.0, colors.border),
+                        );
+                    }
+                }
             }
 
             if top_left.min.x > canvas_rect.max.x + 100.0
@@ -681,7 +686,8 @@ impl FileManager {
                 vec2(720.0, 28.0),
             );
 
-            ui.allocate_ui_at_rect(bar_rect, |ui| {
+            if bar_rect.intersects(clip_rect) {
+                ui.allocate_ui_at_rect(bar_rect, |ui| {
                 egui::Frame::popup(ui.style())
                     .fill(colors.panel.gamma_multiply(0.95))
                     .stroke(egui::Stroke::new(
@@ -827,17 +833,21 @@ impl FileManager {
                             }
                         });
                     });
-            });
+                });
+            }
 
             if grid.indices.is_empty() && grid.id > 0 {
                 let msg_pos = pos2(top_left.min.x + 12.0, top_left.min.y + 8.0);
-                ui.painter().text(
-                    msg_pos,
-                    egui::Align2::LEFT_TOP,
-                    "No matching photos found in target grid.",
-                    egui::FontId::proportional(13.0),
-                    colors.text_secondary,
-                );
+                let msg_rect = Rect::from_min_size(msg_pos, vec2(260.0, 20.0));
+                if msg_rect.intersects(clip_rect) {
+                    ui.painter().text(
+                        msg_pos,
+                        egui::Align2::LEFT_TOP,
+                        "No matching photos found in target grid.",
+                        egui::FontId::proportional(13.0),
+                        colors.text_secondary,
+                    );
+                }
             }
         }
 
@@ -878,6 +888,9 @@ impl FileManager {
                 self.select_all_paths(paths);
             }
         }
+
+        // Paint edge fade vignette on top of canvas tiles, dividers and headers
+        paint_canvas_edge_fade(ui.painter(), clip_rect, colors.canvas, 28.0);
 
         // Floating search HUD pill
         let search_id = Id::new("similarity_canvas_search");
@@ -1037,6 +1050,7 @@ impl FileManager {
             });
 
         self.finish_listing(ui, actions, 0.0, &response);
+        ui.set_clip_rect(prev_clip);
     }
 
     pub(in crate::file_manager) fn photo_collection(&self, path: &std::path::Path) -> Vec<PathBuf> {
@@ -1297,4 +1311,155 @@ fn paint_tile_hover_preview(
             }
         }
     });
+}
+
+/// Smoothly fades canvas edges to transparent using an 8-quad mesh vignette.
+///
+/// Elements underneath (tiles, headers, grid lines) dissolve smoothly into `canvas_color`
+/// before reaching `rect`'s outer borders, preventing abrupt cutoffs when panning.
+pub(crate) fn paint_canvas_edge_fade(
+    painter: &egui::Painter,
+    rect: Rect,
+    canvas_color: Color32,
+    fade_size: f32,
+) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return;
+    }
+
+    let fade_h = fade_size.min(rect.height() * 0.25).max(0.0);
+    let fade_w = fade_size.min(rect.width() * 0.25).max(0.0);
+    if fade_h <= 0.0 || fade_w <= 0.0 {
+        return;
+    }
+
+    let solid = canvas_color;
+    let transparent = canvas_color.gamma_multiply(0.0);
+
+    let x0 = rect.left();
+    let x1 = rect.left() + fade_w;
+    let x2 = rect.right() - fade_w;
+    let x3 = rect.right();
+
+    let y0 = rect.top();
+    let y1 = rect.top() + fade_h;
+    let y2 = rect.bottom() - fade_h;
+    let y3 = rect.bottom();
+
+    let mut mesh = egui::Mesh::default();
+
+    let mut add_quad = |tl: egui::Pos2,
+                        tr: egui::Pos2,
+                        br: egui::Pos2,
+                        bl: egui::Pos2,
+                        c_tl: Color32,
+                        c_tr: Color32,
+                        c_br: Color32,
+                        c_bl: Color32| {
+        let idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(tl, c_tl);
+        mesh.colored_vertex(tr, c_tr);
+        mesh.colored_vertex(br, c_br);
+        mesh.colored_vertex(bl, c_bl);
+        mesh.add_triangle(idx, idx + 1, idx + 2);
+        mesh.add_triangle(idx, idx + 2, idx + 3);
+    };
+
+    // 1. Top-Left Corner
+    add_quad(
+        pos2(x0, y0),
+        pos2(x1, y0),
+        pos2(x1, y1),
+        pos2(x0, y1),
+        solid,
+        solid,
+        transparent,
+        solid,
+    );
+
+    // 2. Top Edge
+    add_quad(
+        pos2(x1, y0),
+        pos2(x2, y0),
+        pos2(x2, y1),
+        pos2(x1, y1),
+        solid,
+        solid,
+        transparent,
+        transparent,
+    );
+
+    // 3. Top-Right Corner
+    add_quad(
+        pos2(x2, y0),
+        pos2(x3, y0),
+        pos2(x3, y1),
+        pos2(x2, y1),
+        solid,
+        solid,
+        solid,
+        transparent,
+    );
+
+    // 4. Right Edge
+    add_quad(
+        pos2(x2, y1),
+        pos2(x3, y1),
+        pos2(x3, y2),
+        pos2(x2, y2),
+        transparent,
+        solid,
+        solid,
+        transparent,
+    );
+
+    // 5. Bottom-Right Corner
+    add_quad(
+        pos2(x2, y2),
+        pos2(x3, y2),
+        pos2(x3, y3),
+        pos2(x2, y3),
+        transparent,
+        solid,
+        solid,
+        solid,
+    );
+
+    // 6. Bottom Edge
+    add_quad(
+        pos2(x1, y2),
+        pos2(x2, y2),
+        pos2(x2, y3),
+        pos2(x1, y3),
+        transparent,
+        transparent,
+        solid,
+        solid,
+    );
+
+    // 7. Bottom-Left Corner
+    add_quad(
+        pos2(x0, y2),
+        pos2(x1, y2),
+        pos2(x1, y3),
+        pos2(x0, y3),
+        solid,
+        transparent,
+        solid,
+        solid,
+    );
+
+    // 8. Left Edge
+    add_quad(
+        pos2(x0, y1),
+        pos2(x1, y1),
+        pos2(x1, y2),
+        pos2(x0, y2),
+        solid,
+        transparent,
+        transparent,
+        solid,
+    );
+
+    painter.add(egui::Shape::mesh(mesh));
 }
