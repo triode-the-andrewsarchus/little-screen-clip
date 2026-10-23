@@ -220,7 +220,10 @@ impl ConstellationState {
         Self::default()
     }
 
-    /// Records a played sample into the auditory history trail, preventing consecutive duplicates.
+    /// Records an audition and excludes its sample from subsequent neighbor steps.
+    ///
+    /// The fading trail keeps at most 64 waypoints and omits consecutive duplicates.
+    /// The exploration set resets on a map click or a folder/index reload.
     pub fn record_played_sample(&mut self, sample: &ConstellationSample) {
         self.visited_samples.insert(sample.file_path.clone());
         if let Some(last) = self.history_trail.back() {

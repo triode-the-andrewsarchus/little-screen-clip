@@ -7,7 +7,9 @@ Indexing uses the same themed progress-bar treatment as Image Studio depth work.
 
 Rack and Packs are tabs in the right panel. Packs never opens a floating browser.
 Selecting a pad exposes its layer editor below the map; resize or hide that editor
-to give the map more room. Only this pad's layers are expanded. The footer holds
+to reveal more of the map. Docks obscure the full map canvas without moving or
+rescaling its points, including at zoom levels with point relaxation. The editor
+shows one layer at a time, with layer tabs for layered pads. The footer holds
 MIDI input, velocity override, and shared output dynamics. The Editor toggle sits
 beside Undo/Redo. Pad heights adapt to keep all sixteen visible in a compact rack.
 
@@ -25,6 +27,13 @@ Z X C V
 Press a key to play a pad; Shift+key adds the selected map sample as a layer.
 Click a pad to select and play it, or Shift+click to assign the map selection.
 Text fields keep their normal keys. Ctrl/Alt/Command combinations do not play pads.
+
+Space retriggers the selected map sample. Shift+Space and Neighbor select and play
+the nearest filtered sample not auditioned since the last map click. Hover and
+Random auditions also mark samples visited. Once all matching samples have been
+visited, advancing leaves the selection unchanged. Clicking a sample starts a new
+exploration; folder changes and index reloads clear it too. This visited set is independent of the
+short, fading playback trail.
 
 Set four strings of four characters under `[file_manager]` in `config.toml`:
 
@@ -79,14 +88,18 @@ existing shared device sink. This is an internal mixing rate; hardware buffer
 sizes and backend selection remain unchanged. Playback shares cached PCM rather
 than copying it when a pad is hit.
 
-Every audition and pad layer has 2 dB of input headroom. Glue uses linked stereo 2:1 compression,
-a threshold of 0.85, 5 ms attack, 120 ms release, and no makeup gain. A linked peak
+Every audition and pad layer has 2 dB of input headroom. Glue uses linked stereo
+compression with an adjustable threshold (-48 to 0 dBFS) and ratio (1:1 to 12:1).
+Defaults preserve the previous subtle behavior: about -1.4 dBFS (0.85 linear),
+2:1 ratio, 5 ms attack, 120 ms release, and no makeup gain. Lower the threshold
+and raise the ratio for more audible compression. A linked peak
 ceiling at 0.98 catches transient overloads. A normal full-scale single layer at
 default gain stays below the compressor threshold. Layered or boosted samples can
 engage it. The footer shows gain reduction.
 
 Bypass disables compression and the ceiling while keeping input headroom unchanged.
-Choke groups, velocity override, and bypass are saved with the pack. The bus also
+A 1:1 ratio retains only the peak ceiling. Threshold, ratio, choke groups, velocity
+override, and bypass are saved with the pack; older packs inherit the defaults. The bus also
 protects map, individual-layer, and saved-pack auditions. Map auditions retain the
 guarded streaming loader, so long samples are not truncated to pad-cache length.
 
@@ -98,6 +111,11 @@ Worker decoding must succeed for every dropped sample before assignment, and a
 pad edited during that load rejects its stale completion. Unavailable sources show
 a compact error dot and offer Retry audio; loading and playing have transient cues.
 Choke labels appear only for nonzero groups.
+
+The frequency-colored waveform shares the app's bass/mid/treble crossover. Drag
+IN or OUT to trim, or double-click the waveform to reset its range. Handles are
+inset from the edges; any overflow scrollbar occupies a separate gutter. Audio
+preparation computes up to 512 waveform buckets off the UI thread.
 
 The selected pad exposes numeric trim, gain, stereo balance, and linear attack and
 release fades (0–500 ms). Mute and Solo gate active pad voices without restarting

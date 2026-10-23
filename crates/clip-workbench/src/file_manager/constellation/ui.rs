@@ -1091,7 +1091,8 @@ impl ConstellationState {
     }
 
     /// Retriggers the selection, or advances without revisiting an auditioned sample.
-    /// Exhausting visible, filtered neighbors leaves the current selection unchanged.
+    ///
+    /// Exhausting filtered neighbors leaves the current selection unchanged.
     pub(crate) fn space_audition(&mut self, advance: bool) -> Option<std::path::PathBuf> {
         if self.browser_open {
             return None;
