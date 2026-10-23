@@ -108,6 +108,20 @@ pub struct SlotSample {
     pub cached_audio: Option<Arc<CachedAudio>>,
 }
 
+// Preparation state is not a document edit. Native path comparison also retains
+// non-UTF-8 identity, unlike using serialized JSON as an undo/dirty fingerprint.
+impl PartialEq for SlotSample {
+    fn eq(&self, other: &Self) -> bool {
+        self.file_path == other.file_path
+            && self.filename == other.filename
+            && self.category == other.category
+            && self.duration == other.duration
+            && self.start_sec == other.start_sec
+            && self.end_sec == other.end_sec
+            && self.volume == other.volume
+    }
+}
+
 impl SlotSample {
     pub fn new(
         file_path: PathBuf,
@@ -192,7 +206,7 @@ impl SlotSample {
 }
 
 /// One of sixteen pads, ordered left to right from the bottom row in the sample pack bank.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PackSlot {
     /// Legacy bank metadata; active keyboard bindings come from local configuration.
     pub key_char: char,
@@ -233,7 +247,7 @@ impl PackSlot {
 }
 
 /// A sixteen-pad bank. Legacy ten-slot banks keep their original shortcut positions.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SamplePackBank {
     pub name: String,
     pub created_at: u64,

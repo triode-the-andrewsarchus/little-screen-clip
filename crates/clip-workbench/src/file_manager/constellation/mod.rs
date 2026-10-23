@@ -20,6 +20,7 @@ mod background;
 pub mod classifier;
 pub mod db;
 pub mod generated_model;
+mod history;
 pub mod indexer;
 mod midi;
 mod output;
@@ -104,6 +105,13 @@ pub struct ConstellationState {
     pub pending_hover_path: Option<PathBuf>,
     hover_cancelled: Arc<AtomicBool>,
     pub pack_bank: SamplePackBank,
+    history: history::BankHistory,
+    pending_bank_action: Option<history::BankAction>,
+    pending_saved_bank: Option<SamplePackBank>,
+    pending_load_bank: Option<SamplePackBank>,
+    guard_saving: bool,
+    load_approved: bool,
+    pub(crate) close_approved: bool,
     pub pack_shelf_open: bool,
     pub slot_flash: [Option<Instant>; sample_pack::NUM_SLOTS],
     selected_slot: usize,
@@ -130,6 +138,8 @@ pub struct ConstellationState {
 
 impl Default for ConstellationState {
     fn default() -> Self {
+        let pack_bank = SamplePackBank::default();
+        let history = history::BankHistory::new(&pack_bank);
         Self {
             samples: Vec::new(),
             current_indexed_folder: None,
@@ -150,7 +160,14 @@ impl Default for ConstellationState {
             hover_res_rx: None,
             pending_hover_path: None,
             hover_cancelled: Arc::new(AtomicBool::new(false)),
-            pack_bank: SamplePackBank::default(),
+            pack_bank,
+            history,
+            pending_bank_action: None,
+            pending_saved_bank: None,
+            pending_load_bank: None,
+            guard_saving: false,
+            load_approved: false,
+            close_approved: false,
             pack_shelf_open: true,
             slot_flash: [None; sample_pack::NUM_SLOTS],
             selected_slot: 0,
@@ -515,6 +532,7 @@ impl ConstellationState {
 
     /// Adds a sample from the constellation map into a specific slot as a layer.
     pub fn add_sample_to_slot(&mut self, slot_idx: usize, sample: &ConstellationSample) {
+        self.checkpoint_bank(false);
         if slot_idx >= self.pack_bank.slots.len() {
             return;
         }
@@ -538,6 +556,7 @@ impl ConstellationState {
 
     /// Clears all assigned samples from a specific slot.
     pub fn clear_slot(&mut self, slot_idx: usize) {
+        self.checkpoint_bank(false);
         if slot_idx < self.pack_bank.slots.len() {
             self.pack_bank.slots[slot_idx].samples.clear();
             for player in self.slot_players[slot_idx].drain(..) {

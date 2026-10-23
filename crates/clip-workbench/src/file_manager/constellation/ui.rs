@@ -105,6 +105,11 @@ impl ConstellationState {
                 }
                 self.render_starfield(ui, current_folder, on_play_sample, on_select_sample);
             });
+        let text_focused = ui
+            .ctx()
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
+        self.checkpoint_bank(ui.input(|input| input.pointer.any_down()) || text_focused);
     }
 
     fn render_indexing_progress(&mut self, ui: &mut egui::Ui) {

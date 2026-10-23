@@ -20,6 +20,17 @@ impl ConstellationState {
         if editing_text || self.browser_open || self.focus_search {
             return;
         }
+        if ctx.input_mut(|input| {
+            input.consume_key(egui::Modifiers::CTRL, egui::Key::Y)
+                || input.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::Z)
+        }) {
+            self.undo_bank(true);
+            return;
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Z)) {
+            self.undo_bank(false);
+            return;
+        }
         let presses: Vec<_> = if native.is_empty() {
             // Also support synthetic egui input. Native input above retains full
             // logical punctuation, including apostrophes absent from egui::Key.
@@ -102,6 +113,7 @@ impl ConstellationState {
 
     /// Renders the sixteen-pad rack and only the selected pad's layer controls.
     pub fn render_pack_shelf(&mut self, ui: &mut egui::Ui, current_folder: &Path) {
+        self.render_history_controls(ui);
         ui.horizontal(|ui| {
             let width = (ui.available_width() - 110.0).max(40.0);
             ui.add(

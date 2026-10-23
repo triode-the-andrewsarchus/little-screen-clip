@@ -340,6 +340,11 @@ impl FileManagerApp {
                 failed: false,
             });
         } else {
+            if !self.browser.constellation.allow_close() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.request_repaint();
+                return;
+            }
             self.browser.stop_previews();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -454,11 +459,13 @@ impl eframe::App for FileManagerApp {
                     );
                 });
         }
+        let folder = self.browser.path().to_path_buf();
+        self.browser.constellation.render_bank_guard(ctx, &folder);
         self.main_content(ctx);
         self.native_start(ctx);
         let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q))
             || ctx.input(|input| input.viewport().close_requested());
-        if close {
+        if close || self.browser.constellation.close_approved {
             self.request_app_close(ctx);
         }
     }

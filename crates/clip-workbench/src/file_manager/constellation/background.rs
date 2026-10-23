@@ -154,6 +154,7 @@ impl ConstellationState {
 
     /// Replaces the editable bank and invalidates older asynchronous loads.
     pub fn clear_bank(&mut self) {
+        self.checkpoint_bank(false);
         self.bank_generation = self.bank_generation.wrapping_add(1);
         self.stop_playback();
         self.pack_bank = SamplePackBank::default();
@@ -163,6 +164,13 @@ impl ConstellationState {
     /// Requests metadata for a browser preview or an explicit bank replacement.
     pub fn load_browser_bank(&mut self, path: PathBuf, install: bool) {
         if install {
+            self.checkpoint_bank(false);
+            let approved = std::mem::take(&mut self.load_approved);
+            if self.bank_dirty() && !approved {
+                self.pending_bank_action = Some(history::BankAction::Load(path));
+                return;
+            }
+            self.pending_load_bank = Some(history::metadata(&self.pack_bank));
             self.bank_generation = self.bank_generation.wrapping_add(1);
         }
         self.submit_background(
@@ -181,9 +189,16 @@ impl ConstellationState {
 
     /// Submits an immutable bank snapshot; later edits do not alter the accepted save.
     pub fn save_bank(&mut self, root: PathBuf, bank: SamplePackBank) {
+        if self.writing_pack() {
+            return;
+        }
+        let snapshot = history::metadata(&bank);
         self.submit_background(Task::Save, move || {
             sample_pack::save_sample_pack(&root, &bank).map(Output::Saved)
         });
+        if self.writing_pack() {
+            self.pending_saved_bank = Some(snapshot);
+        }
     }
 
     /// Submits deletion while retaining its completion through navigation and close.
@@ -210,6 +225,10 @@ impl ConstellationState {
             {
                 Ok(output) => self.accept_background(job.task, output),
                 Err(error) => {
+                    if job.task == Task::Save {
+                        self.pending_saved_bank = None;
+                        self.guard_saving = false;
+                    }
                     if let Task::Audio(path, _) = job.task {
                         self.failed_audio.insert(path);
                     }
@@ -234,7 +253,16 @@ impl ConstellationState {
             }
             (Task::Bank(path, install, _), Output::Bank(bank)) => {
                 if install {
+                    if self
+                        .pending_load_bank
+                        .take()
+                        .is_some_and(|snapshot| snapshot != self.pack_bank)
+                    {
+                        self.pending_bank_action = Some(history::BankAction::Load(path));
+                        return;
+                    }
                     self.stop_playback();
+                    self.history = history::BankHistory::new(&bank);
                     self.pack_bank = bank;
                     self.failed_audio.clear();
                     self.close_pack_browser();
@@ -244,6 +272,7 @@ impl ConstellationState {
                 }
             }
             (Task::Audio(path, _), Output::Audio(decoded)) => {
+                let was_clean = !self.bank_dirty();
                 for bank in std::iter::once(&mut self.pack_bank)
                     .chain(self.browser_preview.iter_mut().map(|(_, bank)| bank))
                 {
@@ -258,8 +287,18 @@ impl ConstellationState {
                         }
                     }
                 }
+                self.history.prepared(&self.pack_bank, was_clean);
             }
             (Task::Save, Output::Saved(path)) => {
+                if let Some(snapshot) = self.pending_saved_bank.take() {
+                    self.history.saved(snapshot);
+                }
+                if self.guard_saving || self.pending_bank_action.is_some() {
+                    self.guard_saving = false;
+                    if !self.bank_dirty() {
+                        self.continue_bank_action();
+                    }
+                }
                 self.browser_status = Some((format!("Saved {}", path.display()), Instant::now()));
                 if let Some(root) = self.current_indexed_folder.clone() {
                     self.refresh_browser_packs(&root);
