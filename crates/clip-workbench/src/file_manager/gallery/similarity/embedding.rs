@@ -94,8 +94,8 @@ pub fn project_features_to_2d(features: &[Vec<f32>]) -> Vec<(f32, f32)> {
     let mut x_centered = Vec::with_capacity(n);
     for feat in features {
         let mut row = Vec::with_capacity(d);
-        for j in 0..d {
-            let val = feat.get(j).copied().unwrap_or(0.0) - means[j];
+        for (j, &mean) in means.iter().enumerate().take(d) {
+            let val = feat.get(j).copied().unwrap_or(0.0) - mean;
             row.push(val);
         }
         x_centered.push(row);

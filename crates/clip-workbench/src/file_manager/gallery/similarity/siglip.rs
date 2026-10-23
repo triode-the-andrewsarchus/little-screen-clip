@@ -81,14 +81,14 @@ impl SiglipEmbedder {
                             .get(p_idx + 3)
                             .copied()
                             .unwrap_or(255) as u32;
-                        let (r, g, b_val) = if a > 0 {
+                        let (r, g, b_val) = if let Some(a_val) = std::num::NonZeroU32::new(a) {
                             (
-                                ((thumb.premultiplied_rgba[p_idx] as u32) * 255 / a).min(255)
-                                    as f32,
-                                ((thumb.premultiplied_rgba[p_idx + 1] as u32) * 255 / a).min(255)
-                                    as f32,
-                                ((thumb.premultiplied_rgba[p_idx + 2] as u32) * 255 / a).min(255)
-                                    as f32,
+                                ((thumb.premultiplied_rgba[p_idx] as u32 * 255) / a_val.get())
+                                    .min(255) as f32,
+                                ((thumb.premultiplied_rgba[p_idx + 1] as u32 * 255) / a_val.get())
+                                    .min(255) as f32,
+                                ((thumb.premultiplied_rgba[p_idx + 2] as u32 * 255) / a_val.get())
+                                    .min(255) as f32,
                             )
                         } else {
                             (0.0, 0.0, 0.0)
@@ -160,8 +160,8 @@ fn extract_normalized_embeddings(
                     vec[d] += out_tensor[[i, t, d]];
                 }
             }
-            for d in 0..dim {
-                vec[d] *= inv_tokens;
+            for val in &mut vec {
+                *val *= inv_tokens;
             }
             normalize_l2(&mut vec);
             results.push(vec);

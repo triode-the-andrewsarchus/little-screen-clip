@@ -18,7 +18,7 @@ pub fn grid_dimensions(n: usize) -> (usize, usize) {
         return (0, 0);
     }
     let cols = (n as f64).sqrt().ceil() as usize;
-    let rows = (n + cols - 1) / cols;
+    let rows = n.div_ceil(cols);
     (cols.max(1), rows.max(1))
 }
 

@@ -450,17 +450,17 @@ impl SimilarityCanvas {
             return;
         }
         self.grids.retain(|g| g.id != id);
-        if !self.grids.iter().any(|g| g.selected_for_search) {
-            if let Some(base) = self.grids.first_mut() {
-                base.selected_for_search = true;
-            }
+        if !self.grids.iter().any(|g| g.selected_for_search)
+            && let Some(base) = self.grids.first_mut()
+        {
+            base.selected_for_search = true;
         }
         self.recompute_layout();
     }
 
     #[allow(dead_code)]
     pub fn adjust_global_allowance(&mut self, delta: f32) {
-        self.allowance = (self.allowance + delta).clamp(0.05, 0.95);
+        self.allowance = (self.allowance + delta).clamp(MIN_ALLOWANCE, MAX_ALLOWANCE);
         self.similarity_threshold = CanvasGrid::allowance_to_threshold(self.allowance, false);
         for g in self.grids.iter_mut().skip(1) {
             g.set_allowance(self.allowance);
@@ -709,11 +709,12 @@ impl SimilarityCanvas {
         }];
         self.next_grid_id = 1;
 
+        let safe_cols = cols.max(1);
         self.placements = (0..n)
             .map(|i| GridPlacement {
                 index: i,
-                col: if cols > 0 { i % cols } else { 0 },
-                row: if cols > 0 { i / cols } else { 0 },
+                col: i % safe_cols,
+                row: i / safe_cols,
             })
             .collect();
 
@@ -733,7 +734,7 @@ impl SimilarityCanvas {
             .entries
             .iter()
             .filter(|e| {
-                self.hashes.get(&e.path).map_or(true, |(feat, rev)| {
+                self.hashes.get(&e.path).is_none_or(|(feat, rev)| {
                     *rev != e.revision
                         || (is_siglip_available && matches!(feat, FeatureVector::DHash(_)))
                 })
@@ -768,7 +769,7 @@ impl SimilarityCanvas {
                 if let Some(embedder) = siglip_embedder.as_mut() {
                     let chunk_paths: Vec<PathBuf> = chunk.iter().map(|(p, _)| p.clone()).collect();
                     if let Ok(embeddings) = embedder.embed_batch(&chunk_paths, &c) {
-                        for ((path, rev), feat) in chunk.iter().zip(embeddings.into_iter()) {
+                        for ((path, rev), feat) in chunk.iter().zip(embeddings) {
                             chunk_results.push((path.clone(), *rev, feat));
                         }
                         used_siglip = true;
@@ -800,12 +801,12 @@ impl SimilarityCanvas {
 
     /// Polls background jobs and requests repaints.
     pub fn poll(&mut self, ctx: &egui::Context) {
-        if let Some(job) = &self.scan_job {
-            if let Ok(Ok(entries)) = job.receiver.try_recv() {
-                self.scan_job = None;
-                self.set_entries(entries);
-                ctx.request_repaint();
-            }
+        if let Some(job) = &self.scan_job
+            && let Ok(Ok(entries)) = job.receiver.try_recv()
+        {
+            self.scan_job = None;
+            self.set_entries(entries);
+            ctx.request_repaint();
         }
 
         if let Some(job) = &mut self.hash_job {
@@ -842,45 +843,44 @@ impl SimilarityCanvas {
             }
         }
 
-        if let Some(job) = &self.search_job {
-            if let Ok(res) = job.receiver.try_recv() {
-                self.search_job = None;
-                if let Ok(Some(emb)) = res {
-                    if let Some(meta) = self.pending_search.take() {
-                        // Deselect other grids so consecutive searches chain to this new grid by default
-                        for g in &mut self.grids {
-                            g.selected_for_search = false;
-                        }
-
-                        let allowance = self.allowance;
-                        let threshold =
-                            CanvasGrid::allowance_to_threshold(allowance, meta.is_inverted);
-                        let mut new_grid = CanvasGrid {
-                            id: self.next_grid_id,
-                            title: meta.query.clone(),
-                            query: Some(meta.query),
-                            is_inverted: meta.is_inverted,
-                            candidate_indices: meta.candidate_indices,
-                            concept_embedding: Some(emb),
-                            indices: Vec::new(),
-                            selected_for_search: true, // Selected for next search
-                            grid_cols: 0,
-                            grid_rows: 0,
-                            col_offset: 0,
-                            row_offset: 0,
-                            allowance,
-                            threshold,
-                        };
-                        self.next_grid_id += 1;
-                        new_grid.refilter(&self.hashes, &self.entries, threshold);
-                        let new_id = new_grid.id;
-                        self.grids.push(new_grid);
-                        self.recompute_layout();
-                        self.pending_pan_to_grid = Some(new_id);
-                    }
+        if let Some(job) = &self.search_job
+            && let Ok(res) = job.receiver.try_recv()
+        {
+            self.search_job = None;
+            if let Ok(Some(emb)) = res
+                && let Some(meta) = self.pending_search.take()
+            {
+                // Deselect other grids so consecutive searches chain to this new grid by default
+                for g in &mut self.grids {
+                    g.selected_for_search = false;
                 }
-                ctx.request_repaint();
+
+                let allowance = self.allowance;
+                let threshold = CanvasGrid::allowance_to_threshold(allowance, meta.is_inverted);
+                let mut new_grid = CanvasGrid {
+                    id: self.next_grid_id,
+                    title: meta.query.clone(),
+                    query: Some(meta.query),
+                    is_inverted: meta.is_inverted,
+                    candidate_indices: meta.candidate_indices,
+                    concept_embedding: Some(emb),
+                    indices: Vec::new(),
+                    selected_for_search: true, // Selected for next search
+                    grid_cols: 0,
+                    grid_rows: 0,
+                    col_offset: 0,
+                    row_offset: 0,
+                    allowance,
+                    threshold,
+                };
+                self.next_grid_id += 1;
+                new_grid.refilter(&self.hashes, &self.entries, threshold);
+                let new_id = new_grid.id;
+                self.grids.push(new_grid);
+                self.recompute_layout();
+                self.pending_pan_to_grid = Some(new_id);
             }
+            ctx.request_repaint();
         }
 
         if self.scan_job.is_some() || self.hash_job.is_some() || self.search_job.is_some() {
@@ -1014,11 +1014,12 @@ impl SimilarityCanvas {
                 max_overall_rows = max_overall_rows.max(col_used_height);
                 max_overall_cols = max_overall_cols.max(col_start_x + col_width);
 
+                let safe_c = eff_c;
                 for (rank, &entry_idx) in grid.indices.iter().enumerate() {
                     new_placements.push(GridPlacement {
                         index: entry_idx,
-                        col: col_start_x + if c > 0 { rank % c } else { 0 },
-                        row: row_offset + if c > 0 { rank / c } else { 0 },
+                        col: col_start_x + (rank % safe_c),
+                        row: row_offset + (rank / safe_c),
                     });
                 }
             }
@@ -1082,7 +1083,7 @@ impl SimilarityCanvas {
         }
 
         let pointer_pos_raw = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
-        let pointer_in_canvas = pointer_pos_raw.map_or(false, |p| canvas_rect.contains(p));
+        let pointer_in_canvas = pointer_pos_raw.is_some_and(|p| canvas_rect.contains(p));
 
         let (plus_pressed, minus_pressed, fit, escape) = ui.input(|i| {
             let plus = i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals);
