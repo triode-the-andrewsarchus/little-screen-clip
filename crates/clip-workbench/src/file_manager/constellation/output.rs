@@ -70,18 +70,26 @@ impl PadOutput {
     }
 
     /// Updates live controls without restarting any voices or touching the device.
+    ///
+    /// Non-finite numeric edits retain the last valid threshold and ratio.
     pub fn set_dynamics(&self, bank: &super::sample_pack::SamplePackBank) {
         self.bypass.store(bank.compressor_bypass, Ordering::Relaxed);
-        self.threshold.store(
-            10.0_f32
-                .powf(bank.compressor_threshold_db.clamp(-48.0, 0.0) / 20.0)
-                .to_bits(),
-            Ordering::Relaxed,
-        );
-        self.exponent.store(
-            (1.0 - bank.compressor_ratio.clamp(1.0, 12.0).recip()).to_bits(),
-            Ordering::Relaxed,
-        );
+        // Numeric text edits can temporarily contain NaN/Inf. Retain the last
+        // valid controls so they cannot poison the compressor envelope.
+        if bank.compressor_threshold_db.is_finite() {
+            self.threshold.store(
+                10.0_f32
+                    .powf(bank.compressor_threshold_db.clamp(-48.0, 0.0) / 20.0)
+                    .to_bits(),
+                Ordering::Relaxed,
+            );
+        }
+        if bank.compressor_ratio.is_finite() {
+            self.exponent.store(
+                (1.0 - bank.compressor_ratio.clamp(1.0, 12.0).recip()).to_bits(),
+                Ordering::Relaxed,
+            );
+        }
     }
 
     pub fn reduction_db(&self) -> f32 {
@@ -284,6 +292,13 @@ mod tests {
         let (left, right) = glue.frame(0.5, 0.25);
         assert!((left - 0.5 * 0.2_f32.powf(0.75)).abs() < 0.00001);
         assert!((left - 2.0 * right).abs() < 0.00001);
+        bank.compressor_threshold_db = f32::NAN;
+        bank.compressor_ratio = f32::INFINITY;
+        output.set_dynamics(&bank);
+        assert!(
+            (glue.frame(0.5, 0.25).0 - left).abs() < 0.00001,
+            "invalid live edits retain the last valid envelope"
+        );
         bank.compressor_ratio = 1.0;
         output.set_dynamics(&bank);
         for _ in 0..96000 {
