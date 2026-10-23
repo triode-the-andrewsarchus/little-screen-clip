@@ -362,11 +362,19 @@ impl ConstellationState {
                 .on_hover_text(
                     "Force all hits to MIDI velocity 127. Keyboard and mouse hits already use 127.",
                 );
-            ui.separator();
-            ui.label("Glue");
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Compressor");
             ui.toggle_value(&mut self.pack_bank.compressor_bypass, "Bypass").on_hover_text("Bypass the stereo pad compressor and peak ceiling. Pad input headroom stays unchanged.");
             let reduction = self.playback.lock().unwrap().output.as_ref().map_or(0.0, |output| output.reduction_db());
-            ui.weak(format!("{reduction:.1} dB reduction"));
+            ui.add_enabled_ui(!self.pack_bank.compressor_bypass, |ui| {
+                ui.label("Threshold");
+                ui.add(egui::DragValue::new(&mut self.pack_bank.compressor_threshold_db).speed(0.2).clamp_range(-48.0..=0.0).fixed_decimals(1).suffix(" dB"));
+                ui.label("Ratio");
+                ui.add(egui::DragValue::new(&mut self.pack_bank.compressor_ratio).speed(0.1).clamp_range(1.0..=12.0).fixed_decimals(1).suffix(":1"));
+            });
+            ui.add(egui::ProgressBar::new((reduction / 18.0).clamp(0.0, 1.0)).desired_width(120.0).text(format!("{reduction:.1} dB reduction")));
+
         });
     }
 

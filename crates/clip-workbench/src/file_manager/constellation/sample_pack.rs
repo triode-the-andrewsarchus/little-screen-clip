@@ -290,6 +290,19 @@ pub struct SamplePackBank {
     /// Bypasses dynamics processing on the pad output bus.
     #[serde(default)]
     pub compressor_bypass: bool,
+    /// Stereo bus threshold in dBFS, after the fixed 2 dB input headroom.
+    #[serde(default = "default_compressor_threshold")]
+    pub compressor_threshold_db: f32,
+    /// Compression ratio; one disables compression but retains the peak ceiling.
+    #[serde(default = "default_compressor_ratio")]
+    pub compressor_ratio: f32,
+}
+
+fn default_compressor_threshold() -> f32 {
+    -1.411_621_5
+}
+fn default_compressor_ratio() -> f32 {
+    2.0
 }
 
 impl Default for SamplePackBank {
@@ -311,10 +324,17 @@ impl SamplePackBank {
             slots,
             override_velocity: false,
             compressor_bypass: false,
+            compressor_threshold_db: default_compressor_threshold(),
+            compressor_ratio: default_compressor_ratio(),
         }
     }
 
     pub(super) fn validate(&mut self, pack_dir: &Path) -> Result<(), String> {
+        if !(-48.0..=0.0).contains(&self.compressor_threshold_db)
+            || !(1.0..=12.0).contains(&self.compressor_ratio)
+        {
+            return Err("Compressor threshold must be -48 to 0 dBFS and ratio 1 to 12".into());
+        }
         if self.slots.len() > NUM_SLOTS {
             return Err("Pack has more than sixteen pads".into());
         }
@@ -762,6 +782,10 @@ mod tests {
         let mut json = serde_json::to_value(&bank).unwrap();
         json.as_object_mut().unwrap().remove("override_velocity");
         json.as_object_mut().unwrap().remove("compressor_bypass");
+        json.as_object_mut()
+            .unwrap()
+            .remove("compressor_threshold_db");
+        json.as_object_mut().unwrap().remove("compressor_ratio");
         for slot in json["slots"].as_array_mut().unwrap() {
             slot.as_object_mut().unwrap().remove("choke_group");
         }
@@ -776,12 +800,24 @@ mod tests {
         assert!(loaded.slots[10..].iter().all(PackSlot::is_empty));
         assert!(!loaded.override_velocity && !loaded.compressor_bypass);
         loaded.override_velocity = true;
+        assert_eq!(
+            loaded.compressor_threshold_db,
+            default_compressor_threshold()
+        );
+        assert_eq!(loaded.compressor_ratio, 2.0);
+        loaded.compressor_threshold_db = -18.0;
+        loaded.compressor_ratio = 6.0;
         loaded.compressor_bypass = true;
         loaded.slots[15].choke_group = 8;
         let mut copy: SamplePackBank =
             serde_json::from_str(&serde_json::to_string(&loaded).unwrap()).unwrap();
         copy.validate(Path::new("/samples")).unwrap();
         assert!(copy.override_velocity && copy.compressor_bypass);
+        assert_eq!(copy.compressor_threshold_db, -18.0);
+        assert_eq!(copy.compressor_ratio, 6.0);
+        copy.compressor_ratio = f32::NAN;
+        assert!(copy.validate(Path::new("/samples")).is_err());
+        copy.compressor_ratio = 6.0;
         assert_eq!(copy.slots[15].choke_group, 8);
         copy.slots[15].choke_group = 9;
         assert!(copy.validate(Path::new("/samples")).is_err());

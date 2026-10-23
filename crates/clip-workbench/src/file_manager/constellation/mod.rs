@@ -508,7 +508,9 @@ impl ConstellationState {
         if rack.output.is_none() {
             rack.output = output::PadOutput::new(self.pack_bank.compressor_bypass);
         }
-        let player = rack.output.as_ref()?.play_source(source);
+        let output = rack.output.as_ref()?;
+        output.set_dynamics(&self.pack_bank);
+        let player = output.play_source(source);
         rack.map_playing = true;
         Some(player)
     }

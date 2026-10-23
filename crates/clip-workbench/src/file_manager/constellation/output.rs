@@ -2,7 +2,7 @@
 //!
 //! Layers have 2 dB of headroom. The linked stereo compressor has no makeup gain:
 //! a normal single layer stays below its threshold, while overlapping hits receive
-//! gentle 2:1 compression (5 ms attack, 120 ms release). A linked peak ceiling catches
+//! adjustable compression (default 2:1, 5 ms attack, 120 ms release). A linked peak ceiling catches
 //! fast overloads. Bypass removes both stages; it retains the same input headroom.
 
 use super::sample_pack::{SharedPcm, SlotSample};
@@ -24,6 +24,8 @@ pub(super) struct PadOutput {
     player: Player,
     bypass: Arc<AtomicBool>,
     reduction: Arc<AtomicU32>,
+    threshold: Arc<AtomicU32>,
+    exponent: Arc<AtomicU32>,
 }
 
 impl PadOutput {
@@ -45,12 +47,17 @@ impl PadOutput {
         ));
         let bypass = Arc::new(AtomicBool::new(bypass));
         let reduction = Arc::new(AtomicU32::new(0.0_f32.to_bits()));
-        player.append(Glue::new(source, bypass.clone(), reduction.clone()));
+        let glue = Glue::new(source, bypass.clone(), reduction.clone());
+        let threshold = glue.threshold.clone();
+        let exponent = glue.exponent.clone();
+        player.append(glue);
         Self {
             mixer,
             player,
             bypass,
             reduction,
+            threshold,
+            exponent,
         }
     }
 
@@ -62,8 +69,19 @@ impl PadOutput {
         player
     }
 
-    pub fn set_bypass(&self, bypass: bool) {
-        self.bypass.store(bypass, Ordering::Relaxed);
+    /// Updates live controls without restarting any voices or touching the device.
+    pub fn set_dynamics(&self, bank: &super::sample_pack::SamplePackBank) {
+        self.bypass.store(bank.compressor_bypass, Ordering::Relaxed);
+        self.threshold.store(
+            10.0_f32
+                .powf(bank.compressor_threshold_db.clamp(-48.0, 0.0) / 20.0)
+                .to_bits(),
+            Ordering::Relaxed,
+        );
+        self.exponent.store(
+            (1.0 - bank.compressor_ratio.clamp(1.0, 12.0).recip()).to_bits(),
+            Ordering::Relaxed,
+        );
     }
 
     pub fn reduction_db(&self) -> f32 {
@@ -95,6 +113,8 @@ struct Glue<S> {
     source: S,
     bypass: Arc<AtomicBool>,
     reduction: Arc<AtomicU32>,
+    threshold: Arc<AtomicU32>,
+    exponent: Arc<AtomicU32>,
     gain: f32,
     right: Option<f32>,
     meter_frames: u16,
@@ -106,6 +126,8 @@ impl<S> Glue<S> {
             source,
             bypass,
             reduction,
+            threshold: Arc::new(AtomicU32::new(0.85_f32.to_bits())),
+            exponent: Arc::new(AtomicU32::new(0.5_f32.to_bits())),
             gain: 1.0,
             right: None,
             meter_frames: 0,
@@ -116,8 +138,10 @@ impl<S> Glue<S> {
         let left = if left.is_finite() { left } else { 0.0 };
         let right = if right.is_finite() { right } else { 0.0 };
         let peak = left.abs().max(right.abs());
-        let target = if peak > 0.85 {
-            (0.85 / peak).sqrt()
+        let threshold = f32::from_bits(self.threshold.load(Ordering::Relaxed));
+        let exponent = f32::from_bits(self.exponent.load(Ordering::Relaxed));
+        let target = if peak > threshold {
+            (threshold / peak).powf(exponent)
         } else {
             1.0
         };
@@ -240,6 +264,38 @@ mod tests {
     }
 
     #[test]
+    fn live_threshold_and_ratio_change_linked_compression_without_restarting() {
+        let (mixer, _source) = rodio::mixer::mixer(2.try_into().unwrap(), RATE.try_into().unwrap());
+        let output = PadOutput::with_player(Player::connect_new(&mixer), false);
+        let mut bank = super::super::sample_pack::SamplePackBank::default();
+        bank.compressor_threshold_db = -20.0;
+        bank.compressor_ratio = 4.0;
+        output.set_dynamics(&bank);
+        let mut glue = Glue::new(
+            std::iter::empty::<f32>(),
+            output.bypass.clone(),
+            output.reduction.clone(),
+        );
+        glue.threshold = output.threshold.clone();
+        glue.exponent = output.exponent.clone();
+        for _ in 0..48000 {
+            glue.frame(0.5, 0.25);
+        }
+        let (left, right) = glue.frame(0.5, 0.25);
+        assert!((left - 0.5 * 0.2_f32.powf(0.75)).abs() < 0.00001);
+        assert!((left - 2.0 * right).abs() < 0.00001);
+        bank.compressor_ratio = 1.0;
+        output.set_dynamics(&bank);
+        for _ in 0..96000 {
+            glue.frame(0.5, 0.25);
+        }
+        assert!((glue.frame(0.5, 0.25).0 - 0.5).abs() < 0.001);
+        bank.compressor_bypass = true;
+        output.set_dynamics(&bank);
+        assert_eq!(glue.frame(2.0, 1.0), (2.0, 1.0));
+    }
+
+    #[test]
     fn glue_preserves_single_hits_links_stereo_and_bounds_overlaps() {
         let mut glue = Glue::new(
             std::iter::empty::<f32>(),
@@ -309,7 +365,7 @@ impl Rack {
             voices.iter().for_each(|voice| voice.set_volume(gain));
         }
         if let Some(output) = &self.output {
-            output.set_bypass(bank.compressor_bypass);
+            output.set_dynamics(bank);
         }
     }
     pub fn retire(&mut self) {
@@ -335,6 +391,7 @@ impl Rack {
             self.output = PadOutput::new(self.bank.compressor_bypass);
         }
         if let Some(output) = &self.output {
+            output.set_dynamics(&self.bank);
             self.auditions
                 .extend(samples.iter().filter_map(|sample| output.play(sample, 127)));
         }
@@ -369,7 +426,7 @@ impl Rack {
         let Some(output) = &self.output else {
             return false;
         };
-        output.set_bypass(self.bank.compressor_bypass);
+        output.set_dynamics(&self.bank);
         let velocity = if self.bank.override_velocity {
             127
         } else {
