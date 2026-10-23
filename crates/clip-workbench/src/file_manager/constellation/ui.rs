@@ -7,6 +7,12 @@ use super::generated_model::SampleCategory;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 impl ConstellationState {
+    fn matches_filters(&self, sample: &ConstellationSample, lowercase_query: &str) -> bool {
+        self.category_filter
+            .is_none_or(|category| sample.category == category)
+            && sample.filename.to_lowercase().contains(lowercase_query)
+    }
+
     pub fn render_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -14,6 +20,11 @@ impl ConstellationState {
         on_play_sample: &mut dyn FnMut(&std::path::Path),
         on_select_sample: &mut dyn FnMut(&std::path::Path),
     ) {
+        if self.browser_open
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.browser_open = false;
+        }
         // Handle keyboard shortcuts (keys 1-0 for slot trigger, Shift+1-0 for assigning)
         self.handle_shelf_keyboard_shortcuts(ui.ctx());
 
@@ -47,12 +58,6 @@ impl ConstellationState {
             ui.separator();
         }
 
-        // Empty state if no samples indexed for current folder
-        if self.samples.is_empty() && self.active_job.is_none() {
-            self.render_empty_state(ui, current_folder);
-            return;
-        }
-
         // Layout: Central starfield canvas + Right creation shelf
         if self.pack_shelf_open {
             egui::SidePanel::right("constellation_pack_shelf_panel")
@@ -65,6 +70,10 @@ impl ConstellationState {
         }
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            if self.samples.is_empty() && self.active_job.is_none() {
+                self.render_empty_state(ui, current_folder);
+                return;
+            }
             self.render_starfield(ui, current_folder, on_play_sample, on_select_sample);
         });
     }
@@ -120,10 +129,10 @@ impl ConstellationState {
 
             ui.separator();
 
-            // Search input
-            ui.label("🔍");
+            let search_id = ui.make_persistent_id("constellation-search");
             let search_response = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
+                    .id(search_id)
                     .hint_text("Filter by name (Ctrl+F)...")
                     .desired_width(130.0),
             );
@@ -131,9 +140,14 @@ impl ConstellationState {
                 search_response.request_focus();
                 self.focus_search = false;
             }
-            if search_response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            // egui clears keyboard focus at frame start for Escape, so include
+            // the response's previous focus when handling search dismissal.
+            if (search_response.has_focus() || search_response.lost_focus())
+                && ui.input(|input| input.key_pressed(egui::Key::Escape))
+            {
                 self.search_query.clear();
                 search_response.surrender_focus();
+                ui.ctx().request_repaint();
             }
 
             // Hover to play toggle
@@ -142,7 +156,7 @@ impl ConstellationState {
             // Creative features
             if !self.samples.is_empty() {
                 if ui
-                    .button("🎲 Random")
+                    .button("Random")
                     .on_hover_text("Play random sample")
                     .clicked()
                 {
@@ -150,15 +164,25 @@ impl ConstellationState {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.subsec_nanos() as usize)
                         .unwrap_or(0);
-                    let idx = nanos % self.samples.len();
-                    let s = self.samples[idx].clone();
+                    let query = self.search_query.to_lowercase();
+                    let eligible: Vec<_> = self
+                        .samples
+                        .iter()
+                        .filter(|sample| self.matches_filters(sample, &query))
+                        .collect();
+                    let Some(s) = eligible
+                        .get(nanos % eligible.len().max(1))
+                        .map(|sample| (*sample).clone())
+                    else {
+                        return;
+                    };
                     self.selected_path = Some(s.file_path.clone());
                     self.record_played_sample(&s);
                     on_play_sample(&s.file_path);
                 }
 
                 if ui
-                    .button("✨ Nearest Neighbor")
+                    .button("Nearest Neighbor")
                     .on_hover_text("Find acoustically closest sample")
                     .clicked()
                 {
@@ -171,9 +195,9 @@ impl ConstellationState {
             // Sample Pack Creation Shelf Toggle & Browser
             let shelf_active = self.pack_shelf_open;
             let shelf_label = if shelf_active {
-                "🎛️ Creation Shelf (On)"
+                "Creation Shelf (On)"
             } else {
-                "🎛️ Creation Shelf"
+                "Creation Shelf"
             };
             let shelf_btn =
                 egui::Button::new(egui::RichText::new(shelf_label).color(if shelf_active {
@@ -196,7 +220,7 @@ impl ConstellationState {
             }
 
             if ui
-                .button("📦 Browse Packs")
+                .button("Browse Packs")
                 .on_hover_text("Open Sample Pack Browser")
                 .clicked()
             {
@@ -208,7 +232,7 @@ impl ConstellationState {
             if let Some(ref path) = self.selected_path.clone() {
                 if let Some(sample) = self.samples.iter().find(|s| &s.file_path == path).cloned() {
                     ui.separator();
-                    ui.menu_button("➕ Assign Selected to Slot ▾", |ui| {
+                    ui.menu_button("Assign Selected to Slot ▾", |ui| {
                         ui.label(
                             egui::RichText::new(format!("Sample: {}", sample.filename)).strong(),
                         );
@@ -234,7 +258,7 @@ impl ConstellationState {
         ui.vertical_centered(|ui| {
             ui.add_space(60.0);
             ui.heading(
-                egui::RichText::new("🌌 Sample Constellation Map")
+                egui::RichText::new("Sample Constellation Map")
                     .size(24.0)
                     .color(Color32::from_rgb(100, 200, 255)),
             );
@@ -250,7 +274,7 @@ impl ConstellationState {
             ui.add_space(20.0);
 
             let btn = egui::Button::new(
-                egui::RichText::new("🚀 Index folder into sample constellation (recursive)")
+                egui::RichText::new("Index folder into sample constellation (recursive)")
                     .size(15.0)
                     .color(Color32::WHITE),
             )
@@ -305,9 +329,7 @@ impl ConstellationState {
         let mut hovered_sample: Option<ConstellationSample> = None;
         let mut hovered_pos = Pos2::ZERO;
 
-        let mouse_pos = ui
-            .input(|i| i.pointer.hover_pos())
-            .filter(|p| rect.contains(*p));
+        let mouse_pos = response.hover_pos().filter(|_| !response.dragged());
 
         // Allocate a single batched GPU mesh
         let mut star_mesh = egui::Mesh::default();
@@ -457,7 +479,7 @@ impl ConstellationState {
                     }
 
                     // Check hover directly against screen position (only non-dimmed samples participate in hover)
-                    if !star.is_dimmed {
+                    if self.matches_filters(star.sample, &query_lower) {
                         if let Some(mp) = mouse_pos {
                             let dx = star.pos.x - mp.x;
                             let dy = star.pos.y - mp.y;
@@ -541,7 +563,7 @@ impl ConstellationState {
                 }
 
                 // Check hover directly against screen position (only non-dimmed samples participate in hover)
-                if !is_category_dimmed {
+                if self.matches_filters(sample, &query_lower) {
                     if let Some(mp) = mouse_pos {
                         let dx = sx - mp.x;
                         let dy = sy - mp.y;
@@ -567,7 +589,7 @@ impl ConstellationState {
                     if is_category_dimmed && occupancy[cell_idx] >= 2 {
                         continue;
                     }
-                    occupancy[cell_idx] += 1;
+                    occupancy[cell_idx] = occupancy[cell_idx].saturating_add(1);
                 }
 
                 let is_query_dimmed =
@@ -610,7 +632,7 @@ impl ConstellationState {
             painter.circle_filled(
                 pos,
                 r + 8.0,
-                Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 80),
+                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 80),
             );
             painter.circle_filled(pos, r, color);
             painter.circle_filled(pos, r * 0.45, Color32::WHITE);
@@ -624,7 +646,7 @@ impl ConstellationState {
             painter.circle_filled(
                 hovered_pos,
                 r + 7.0,
-                Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 60),
+                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 60),
             );
             painter.circle_filled(hovered_pos, r, color);
             painter.circle_filled(hovered_pos, r * 0.45, Color32::WHITE);
@@ -649,7 +671,7 @@ impl ConstellationState {
 
             // Draw floating HUD Card for hovered sample
             self.render_sample_hud(ui, &painter, rect, hovered_pos, &hovered, current_folder);
-        } else if !response.hovered() {
+        } else {
             self.last_hovered_path = None;
         }
     }
@@ -670,14 +692,25 @@ impl ConstellationState {
         if cached_preview.is_none() {
             if self.pending_hover_path.as_ref() != Some(&sample.file_path) {
                 self.pending_hover_path = Some(sample.file_path.clone());
-                let req_tx = self.ensure_hover_worker().clone();
-                let _ = req_tx.send(super::HoverPreviewRequest {
+                self.hover_cancelled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.hover_cancelled =
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let request = super::HoverPreviewRequest {
+                    generation: self.folder_generation,
+                    cancelled: self.hover_cancelled.clone(),
                     file_path: sample.file_path.clone(),
                     duration: sample.duration_seconds,
                     sample_rate: (sample.sample_rate > 0).then_some(sample.sample_rate),
                     channels: (sample.channels > 0).then_some(sample.channels),
                     bit_depth: (sample.bit_depth > 0).then_some(sample.bit_depth),
-                });
+                };
+                if self
+                    .ensure_hover_worker()
+                    .is_none_or(|sender| sender.try_send(request).is_err())
+                {
+                    self.pending_hover_path = None;
+                }
                 ui.ctx().request_repaint();
             }
         }
@@ -688,16 +721,7 @@ impl ConstellationState {
             let sr = (sample.sample_rate > 0).then_some(sample.sample_rate);
             let ch = (sample.channels > 0).then_some(sample.channels);
             let bits = (sample.bit_depth > 0).then_some(sample.bit_depth);
-            if sr.is_some() && ch.is_some() && bits.is_some() {
-                (sr, ch, bits)
-            } else {
-                let probed = super::audio_probe::read_audio_format_info(&sample.file_path);
-                (
-                    probed.sample_rate.or(sr),
-                    probed.channels.or(ch),
-                    probed.bit_depth.or(bits),
-                )
-            }
+            (sr, ch, bits)
         };
 
         let hud_w = 270.0;
@@ -749,11 +773,7 @@ impl ConstellationState {
             hud_rect.min + Vec2::new(10.0, 8.0),
             Vec2::new(hud_w - 95.0, 16.0),
         );
-        let short_name = if sample.filename.len() > 22 {
-            format!("{}...", &sample.filename[..19])
-        } else {
-            sample.filename.clone()
-        };
+        let short_name = short_label(&sample.filename, 22);
         painter.text(
             name_rect.min,
             egui::Align2::LEFT_TOP,
@@ -805,17 +825,17 @@ impl ConstellationState {
         };
 
         let short_rel = if rel_str.len() > 36 {
-            let mut truncated = String::from("📁 ");
-            truncated.push_str(&rel_str[..12]);
+            let mut truncated = String::from("");
+            truncated.extend(rel_str.chars().take(12));
             truncated.push_str(".../");
             truncated.push_str(&sample.filename);
             if truncated.len() > 38 {
-                format!("📁 .../{}", sample.filename)
+                format!(".../{}", sample.filename)
             } else {
                 truncated
             }
         } else {
-            format!("📁 {}", rel_str)
+            format!("{}", rel_str)
         };
 
         painter.text(
@@ -954,8 +974,9 @@ impl ConstellationState {
         let mut closest_sample: Option<ConstellationSample> = None;
         let mut min_dist = f32::MAX;
 
+        let query = self.search_query.to_lowercase();
         for s in &self.samples {
-            if &s.file_path == selected {
+            if &s.file_path == selected || !self.matches_filters(s, &query) {
                 continue;
             }
             let dx = s.x - curr.x;
@@ -1062,7 +1083,7 @@ impl ConstellationState {
         // Draw prominent glowing node at newest waypoint
         if let Some(&last_pos) = screen_positions.last() {
             let last_color = active_slice.last().unwrap().category.color();
-            let glow = Color32::from_rgba_premultiplied(
+            let glow = Color32::from_rgba_unmultiplied(
                 last_color.r(),
                 last_color.g(),
                 last_color.b(),
@@ -1071,6 +1092,21 @@ impl ConstellationState {
             painter.circle_filled(last_pos, 4.0, glow);
             painter.circle_filled(last_pos, 2.0, Color32::WHITE);
         }
+    }
+}
+
+/// Shortens a label at Unicode scalar boundaries, including room for an ASCII ellipsis.
+pub(super) fn short_label(value: &str, limit: usize) -> String {
+    if value.chars().nth(limit).is_some() {
+        format!(
+            "{}...",
+            value
+                .chars()
+                .take(limit.saturating_sub(3))
+                .collect::<String>()
+        )
+    } else {
+        value.to_owned()
     }
 }
 
@@ -1116,4 +1152,48 @@ fn add_star_diamond(mesh: &mut egui::Mesh, pos: Pos2, r: f32, color: Color32) {
         v_start + 2,
         v_start + 3,
     ]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_clears_search_before_the_text_edit_surrenders_focus() {
+        let ctx = egui::Context::default();
+        let mut state = ConstellationState::new();
+        state.search_query = "kick".into();
+        state.focus_search = true;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                state.render_toolbar(ui, std::path::Path::new("/samples"), &mut |_| {});
+            });
+        });
+        assert!(ctx.wants_keyboard_input());
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                state.render_toolbar(ui, std::path::Path::new("/samples"), &mut |_| {});
+            });
+        });
+        assert!(state.search_query.is_empty());
+    }
+
+    #[test]
+    fn unicode_sample_names_are_shortened_without_splitting_utf8() {
+        let name = "打楽器のサンプル🎵_café_very_long_sample.wav";
+        let short = short_label(name, 22);
+        assert_eq!(short.chars().count(), 22);
+        assert!(short.ends_with("..."));
+        assert_eq!(short_label("短い.wav", 22), "短い.wav");
+    }
 }

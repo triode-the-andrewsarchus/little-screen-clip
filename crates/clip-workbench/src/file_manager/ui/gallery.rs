@@ -8,10 +8,12 @@ impl FileManager {
         }
         self.type_navigation.clear();
         self.retire_media_previews();
-        if view != self.view
-            && matches!(
+        if self.view == super::super::BrowserView::Constellation
+            || matches!(
                 view,
-                super::super::BrowserView::List | super::super::BrowserView::Videos
+                super::super::BrowserView::List
+                    | super::super::BrowserView::Videos
+                    | super::super::BrowserView::Constellation
             )
         {
             self.stop_previews();

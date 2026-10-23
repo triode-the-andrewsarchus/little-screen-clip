@@ -1,5 +1,9 @@
-//! Sample pack creation shelf, slot layering, zero-crossing trimming, and bank persistence.
-//! Saves banks to `little-screen-clip-sample-packs` via symlinks and metadata JSON.
+//! Layered sample references, bounded PCM preparation, and atomic pack persistence.
+//!
+//! Banks contain ten slots with up to eight layers each. Saved packs retain original
+//! source paths through symlinks and `bank.json`; trim/volume edits are metadata, not
+//! rendered audio. Existing packs remain intact: repeated saves create numbered
+//! versions, and the new directory appears only after staging succeeds.
 
 use super::generated_model::SampleCategory;
 use std::fs::File;
@@ -12,8 +16,10 @@ pub const PACKS_DIR_NAME: &str = "little-screen-clip-sample-packs";
 pub const NUM_SLOTS: usize = 10;
 pub const SLOT_KEY_CHARS: [char; NUM_SLOTS] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 
-/// Pre-decoded PCM audio and waveform peak data stored in memory for zero-latency playback
-/// and instantaneous 60 FPS waveform painting.
+/// Prepared interleaved PCM, mono snapping data, and 100 min/max waveform buckets.
+///
+/// Slot layers share this allocation through [`Arc<T>`]. Playback owns a frame-aligned
+/// view of its PCM and never copies the trimmed payload on the UI thread.
 #[derive(Clone)]
 pub struct CachedAudio {
     pub channels: u16,
@@ -31,6 +37,58 @@ impl std::fmt::Debug for CachedAudio {
             .field("samples_len", &self.samples.len())
             .field("peaks_len", &self.waveform_peaks.len())
             .finish()
+    }
+}
+
+impl CachedAudio {
+    /// Decodes one ordinary source, rejecting a source replaced during the read.
+    fn load(path: &Path) -> Option<Self> {
+        use rodio::Source;
+        use std::os::fd::AsRawFd;
+        let file = little_clip_core::kernel_interface::open_content(path, true).ok()?;
+        let source = crate::file_source::FileSource::capture(Path::new(&format!(
+            "/proc/self/fd/{}",
+            file.as_raw_fd()
+        )))
+        .ok()?;
+        let decoder = rodio::Decoder::try_from(BufReader::new(file)).ok()?;
+        let sample_rate = decoder.sample_rate().get();
+        let channels = decoder.channels().get();
+        if sample_rate > 384_000 || channels > 8 {
+            return None;
+        }
+        let width = channels as usize;
+        let frames = (sample_rate as usize * 15).min(2_000_000 / width);
+        let mut samples: Vec<_> = decoder.take(frames * width).collect();
+        samples.truncate(samples.len() / width * width);
+        if samples.is_empty() || samples.iter().any(|sample| !sample.is_finite()) {
+            return None;
+        }
+        let mono: Vec<f32> = samples
+            .chunks_exact(width)
+            .map(|frame| frame.iter().sum::<f32>() / width as f32)
+            .collect();
+        let waveform_peaks = (0..100)
+            .map(|bucket| {
+                let start = bucket * mono.len() / 100;
+                let end = ((bucket + 1) * mono.len() / 100)
+                    .max(start + 1)
+                    .min(mono.len());
+                mono[start..end]
+                    .iter()
+                    .fold((0.0_f32, 0.0_f32), |(low, high), &value| {
+                        (low.min(value), high.max(value))
+                    })
+            })
+            .collect();
+        source.check().ok()?;
+        Some(Self {
+            channels,
+            sample_rate,
+            samples: Arc::new(samples),
+            mono_samples: Arc::new(mono),
+            waveform_peaks,
+        })
     }
 }
 
@@ -56,7 +114,7 @@ impl SlotSample {
         duration: f32,
     ) -> Self {
         let dur = duration.max(0.01);
-        let mut sample = Self {
+        Self {
             file_path,
             filename,
             category,
@@ -65,89 +123,57 @@ impl SlotSample {
             end_sec: dur,
             volume: 1.0,
             cached_audio: None,
-        };
-        sample.ensure_audio_loaded();
-        sample
+        }
     }
 
-    /// Preloads decoded audio PCM and waveform peaks into memory for zero-latency playback.
+    /// Loads bounded PCM and peaks on a background worker if they are not cached.
+    ///
+    /// Reads at most 15 seconds and two million interleaved values. Unsupported,
+    /// replaced, or undecodable sources leave the cache empty. This performs
+    /// filesystem I/O and decoding; callers must keep it off the UI thread.
     pub fn ensure_audio_loaded(&mut self) {
-        if self.cached_audio.is_some() {
-            return;
-        }
-        if let Ok(file) = File::open(&self.file_path) {
-            if let Ok(mut decoder) = rodio::Decoder::try_from(BufReader::new(file)) {
-                use rodio::Source;
-                let sr = decoder.sample_rate().get();
-                let channels = decoder.channels().get();
-                let ch_usize = (channels as usize).max(1);
-
-                // Preload up to 15 seconds of audio samples
-                let max_frames = (sr * 15) as usize;
-                let mut samples = Vec::with_capacity(max_frames.min(44100 * 4) * ch_usize);
-                for s in decoder.by_ref().take(max_frames * ch_usize) {
-                    samples.push(s);
-                }
-
-                let frame_count = samples.len() / ch_usize;
-                let actual_dur = (frame_count as f32 / sr as f32).max(0.01);
-                if self.duration <= 0.01 || (self.duration - actual_dur).abs() > 0.05 {
-                    self.duration = actual_dur;
-                    if self.end_sec <= 0.01 || self.end_sec > actual_dur {
-                        self.end_sec = actual_dur;
-                    }
-                }
-
-                // Compute downmixed mono for zero crossing snapping
-                let mut mono = Vec::with_capacity(frame_count);
-                for frame_idx in 0..frame_count {
-                    let mut sum = 0.0f32;
-                    for c in 0..ch_usize {
-                        sum += samples[frame_idx * ch_usize + c];
-                    }
-                    mono.push(sum / ch_usize as f32);
-                }
-
-                // Compute 100 waveform peak buckets for fast UI rendering
-                let num_buckets = 100;
-                let mut waveform_peaks = Vec::with_capacity(num_buckets);
-                if frame_count > 0 {
-                    let bucket_size = (frame_count as f32 / num_buckets as f32).max(1.0);
-                    for b in 0..num_buckets {
-                        let start_i = (b as f32 * bucket_size) as usize;
-                        let end_i = (((b + 1) as f32 * bucket_size) as usize).min(frame_count);
-                        if start_i >= frame_count {
-                            waveform_peaks.push((0.0, 0.0));
-                            continue;
-                        }
-                        let mut min_val = 0.0f32;
-                        let mut max_val = 0.0f32;
-                        for &v in &mono[start_i..end_i] {
-                            if v < min_val {
-                                min_val = v;
-                            }
-                            if v > max_val {
-                                max_val = v;
-                            }
-                        }
-                        waveform_peaks.push((min_val, max_val));
-                    }
-                }
-
-                self.cached_audio = Some(Arc::new(CachedAudio {
-                    channels,
-                    sample_rate: sr,
-                    samples: Arc::new(samples),
-                    mono_samples: Arc::new(mono),
-                    waveform_peaks,
-                }));
+        if self.cached_audio.is_none() {
+            if let Some(audio) = CachedAudio::load(&self.file_path) {
+                self.set_cached_audio(Arc::new(audio));
             }
         }
     }
 
-    /// Snaps a given time offset to the nearest zero crossing in the audio sample.
-    pub fn snap_time(&mut self, time_sec: f32) -> f32 {
-        self.ensure_audio_loaded();
+    /// Adopts prepared PCM while preserving user trim bounds that still fit.
+    pub(super) fn set_cached_audio(&mut self, audio: Arc<CachedAudio>) {
+        let duration =
+            (audio.samples.len() as f32 / audio.channels as f32 / audio.sample_rate as f32)
+                .max(0.01);
+        if self.end_sec == self.duration {
+            self.end_sec = duration;
+        }
+        self.duration = duration;
+        self.end_sec = self.end_sec.min(duration);
+        self.start_sec = self.start_sec.min((self.end_sec - 0.005).max(0.0));
+        self.cached_audio = Some(audio);
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if !self.duration.is_finite()
+            || self.duration <= 0.0
+            || !self.start_sec.is_finite()
+            || !self.end_sec.is_finite()
+            || self.start_sec < 0.0
+            || self.end_sec <= self.start_sec
+            || self.end_sec > self.duration
+            || !self.volume.is_finite()
+            || !(0.0..=2.0).contains(&self.volume)
+        {
+            return Err("Pack contains invalid trim bounds or volume".into());
+        }
+        Ok(())
+    }
+
+    /// Returns the nearest mono zero crossing within 500 frames of `time_sec`.
+    ///
+    /// Uses core's shared search and returns the input unchanged until PCM is ready.
+    /// This method does no I/O; callers clamp the result to their active trim range.
+    pub fn snap_time(&self, time_sec: f32) -> f32 {
         if let Some(ref cached) = self.cached_audio {
             if cached.sample_rate > 0 && !cached.mono_samples.is_empty() {
                 return little_clip_core::audio::snap_samples_to_zero_crossing(
@@ -227,6 +253,66 @@ impl SamplePackBank {
         }
     }
 
+    fn validate(&mut self, pack_dir: &Path) -> Result<(), String> {
+        if self.slots.len() > NUM_SLOTS {
+            return Err("Pack has more than ten slots".into());
+        }
+        while self.slots.len() < NUM_SLOTS {
+            self.slots
+                .push(PackSlot::new(SLOT_KEY_CHARS[self.slots.len()]));
+        }
+        for (idx, slot) in self.slots.iter_mut().enumerate() {
+            slot.key_char = SLOT_KEY_CHARS[idx];
+            if slot.samples.len() > 8 {
+                return Err("A slot supports at most eight layers".into());
+            }
+            for sample in &mut slot.samples {
+                sample.validate()?;
+                if sample.file_path.is_relative() {
+                    sample.file_path = pack_dir.join(&sample.file_path);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Stages metadata and links while retaining every validated source handle.
+    fn stage_references(&self, staged: &Path) -> Result<Vec<File>, String> {
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        let mut saved = self.clone();
+        saved.validate(staged)?;
+        let mut sources = Vec::new();
+        for (slot_idx, slot) in saved.slots.iter_mut().enumerate() {
+            for (layer_idx, sample) in slot.samples.iter_mut().enumerate() {
+                let source =
+                    little_clip_core::kernel_interface::open_content(&sample.file_path, true)
+                        .map_err(|e| format!("Cannot save {}: {e}", sample.filename))?;
+                sample.file_path =
+                    std::fs::read_link(format!("/proc/self/fd/{}", source.as_raw_fd()))
+                        .map_err(|e| e.to_string())?;
+                let filename = sample
+                    .file_path
+                    .file_name()
+                    .ok_or("Missing sample filename")?
+                    .to_string_lossy();
+                let name = format!("{:02}_layer{}_{}", slot_idx + 1, layer_idx + 1, filename);
+                std::os::unix::fs::symlink(&sample.file_path, staged.join(name))
+                    .map_err(|e| e.to_string())?;
+                sources.push(source);
+            }
+        }
+        let mut json = File::create(staged.join("bank.json")).map_err(|e| e.to_string())?;
+        json.write_all(
+            serde_json::to_string_pretty(&saved)
+                .map_err(|e| e.to_string())?
+                .as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
+        json.sync_all().map_err(|e| e.to_string())?;
+        Ok(sources)
+    }
+
     pub fn total_samples(&self) -> usize {
         self.slots.iter().map(|s| s.samples.len()).sum()
     }
@@ -251,112 +337,79 @@ pub fn get_sample_packs_root(constellation_root: &Path) -> PathBuf {
     constellation_root.join(PACKS_DIR_NAME)
 }
 
-/// Saves a sample pack bank to `<constellation_root>/little-screen-clip-sample-packs/<bank_name>/`.
-/// Generates symlinks for every assigned sample and writes `bank.json`.
+/// Stages a complete reference pack and atomically installs it under the sample root.
+///
+/// Keeps validated output-directory and source handles until installation. Existing
+/// names are never overwritten; numbered suffixes retain previous versions. This
+/// performs filesystem I/O and must run off the UI thread with an unbounded job
+/// lifetime so a timeout cannot hide a completed mutation.
+///
+/// # Errors
+/// Returns an error for invalid banks/names, protected or missing sources/output
+/// directories, serialization failures, or failed staging/installation.
 pub fn save_sample_pack(
     constellation_root: &Path,
     bank: &SamplePackBank,
 ) -> Result<PathBuf, String> {
+    use std::os::fd::AsRawFd;
     let sanitized_name = bank
         .name
         .trim()
         .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+    if matches!(sanitized_name.as_str(), "." | "..") {
+        return Err("Choose a pack name other than '.' or '..'".into());
+    }
     let folder_name = if sanitized_name.is_empty() {
-        "Default_Pack".to_string()
+        "Default_Pack"
     } else {
-        sanitized_name
+        &sanitized_name
     };
-
     let packs_root = get_sample_packs_root(constellation_root);
-    let pack_dir = packs_root.join(&folder_name);
-    std::fs::create_dir_all(&pack_dir)
-        .map_err(|e| format!("Failed to create sample pack directory: {e}"))?;
-
-    // Clean existing symlinks in pack_dir so stale files don't linger
-    if let Ok(entries) = std::fs::read_dir(&pack_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.file_name().and_then(|n| n.to_str()) != Some("bank.json") {
-                let _ = std::fs::remove_file(&path);
-            }
+    let directory = little_clip_core::kernel_interface::create_content_directory(&packs_root)
+        .map_err(|e| e.to_string())?;
+    let parent = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let staged = tempfile::Builder::new()
+        .prefix(".pack-")
+        .tempdir_in(&parent)
+        .map_err(|e| e.to_string())?;
+    let _sources = bank.stage_references(staged.path())?;
+    // Publish a complete pack atomically. Repeated saves retain previous versions.
+    for suffix in 0..10_000 {
+        let name = if suffix == 0 {
+            folder_name.to_string()
+        } else {
+            format!("{folder_name} ({suffix})")
+        };
+        match super::super::filesystem::rename_noreplace(staged.path(), &parent.join(&name)) {
+            Ok(()) => return Ok(packs_root.join(name)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Cannot install sample pack: {error}")),
         }
     }
-
-    // Create numbered symlinks for each assigned sample
-    for (slot_idx, slot) in bank.slots.iter().enumerate() {
-        for (layer_idx, sample) in slot.samples.iter().enumerate() {
-            let ext = sample
-                .file_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("wav");
-            let stem = sample
-                .file_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("sample");
-
-            let symlink_name = if slot.samples.len() == 1 {
-                format!("{:02}_{}_{}.{}", slot_idx + 1, slot.key_char, stem, ext)
-            } else {
-                format!(
-                    "{:02}_{}_layer{}_{}.{}",
-                    slot_idx + 1,
-                    slot.key_char,
-                    layer_idx + 1,
-                    stem,
-                    ext
-                )
-            };
-
-            let symlink_path = pack_dir.join(&symlink_name);
-            let _ = std::fs::remove_file(&symlink_path);
-
-            #[cfg(unix)]
-            {
-                let _ = std::os::unix::fs::symlink(&sample.file_path, &symlink_path);
-            }
-            #[cfg(windows)]
-            {
-                let _ = std::os::windows::fs::symlink_file(&sample.file_path, &symlink_path);
-            }
-        }
-    }
-
-    // Save bank.json
-    let json_path = pack_dir.join("bank.json");
-    let json_str = serde_json::to_string_pretty(bank)
-        .map_err(|e| format!("Failed to serialize pack bank: {e}"))?;
-    std::fs::write(&json_path, json_str).map_err(|e| format!("Failed to write bank.json: {e}"))?;
-
-    Ok(pack_dir)
+    Err("Too many saved versions; choose another pack name".into())
 }
 
-/// Loads a sample pack bank from its directory containing `bank.json`.
+/// Loads and validates at most 1 MiB of bank metadata without decoding audio.
+///
+/// Pads missing slots, restores canonical shortcut keys, and resolves relative
+/// source references against `pack_dir`. PCM is prepared separately on workers.
+///
+/// # Errors
+/// Returns an error for unavailable/protected metadata, malformed JSON, excessive
+/// slot/layer counts, or non-finite/out-of-range trim, duration, and volume values.
 pub fn load_sample_pack(pack_dir: &Path) -> Result<SamplePackBank, String> {
-    let json_path = pack_dir.join("bank.json");
-    if !json_path.is_file() {
-        return Err(format!("No bank.json found in {}", pack_dir.display()));
+    use std::io::Read;
+    let file = little_clip_core::kernel_interface::open_content(&pack_dir.join("bank.json"), true)
+        .map_err(|e| e.to_string())?;
+    let mut json = String::new();
+    file.take(1_048_577)
+        .read_to_string(&mut json)
+        .map_err(|e| e.to_string())?;
+    if json.len() > 1_048_576 {
+        return Err("Pack metadata exceeds 1 MiB".into());
     }
-
-    let json_str = std::fs::read_to_string(&json_path)
-        .map_err(|e| format!("Failed to read bank.json: {e}"))?;
-    let mut bank: SamplePackBank =
-        serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse bank.json: {e}"))?;
-
-    // Ensure all 10 slots are present
-    while bank.slots.len() < NUM_SLOTS {
-        let key = SLOT_KEY_CHARS[bank.slots.len()];
-        bank.slots.push(PackSlot::new(key));
-    }
-
-    // Re-link and preload audio PCM for active samples
-    for slot in &mut bank.slots {
-        for sample in &mut slot.samples {
-            sample.ensure_audio_loaded();
-        }
-    }
-
+    let mut bank: SamplePackBank = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    bank.validate(pack_dir)?;
     Ok(bank)
 }
 
@@ -368,11 +421,9 @@ pub fn list_saved_packs(constellation_root: &Path) -> Vec<SamplePackSummary> {
     if let Ok(entries) = std::fs::read_dir(&packs_root) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "Pack".to_string());
+            if entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && !entry.file_name().to_string_lossy().starts_with('.')
+            {
                 let meta = entry.metadata().ok();
                 let modified = meta.and_then(|m| m.modified().ok()).unwrap_or(UNIX_EPOCH);
 
@@ -387,25 +438,6 @@ pub fn list_saved_packs(constellation_root: &Path) -> Vec<SamplePackSummary> {
                         sample_count,
                         modified,
                     });
-                } else {
-                    // Check for loose audio files or symlinks
-                    let mut file_count = 0;
-                    if let Ok(sub) = std::fs::read_dir(&path) {
-                        for sub_entry in sub.flatten() {
-                            if sub_entry.path().is_file() {
-                                file_count += 1;
-                            }
-                        }
-                    }
-                    if file_count > 0 {
-                        packs.push(SamplePackSummary {
-                            name,
-                            folder_path: path,
-                            slot_count: file_count.min(10),
-                            sample_count: file_count,
-                            modified,
-                        });
-                    }
                 }
             }
         }
@@ -415,71 +447,112 @@ pub fn list_saved_packs(constellation_root: &Path) -> Vec<SamplePackSummary> {
     packs
 }
 
-/// Deletes a saved sample pack directory.
+/// Deletes an ordinary, validated pack directory inside [`PACKS_DIR_NAME`].
+///
+/// # Errors
+/// Returns an error for linked directories, invalid metadata, protected payload
+/// trees, or filesystem failures. Callers must preserve accepted completions.
 pub fn delete_sample_pack(pack_dir: &Path) -> Result<(), String> {
-    if pack_dir.is_dir() {
-        std::fs::remove_dir_all(pack_dir)
-            .map_err(|e| format!("Failed to delete pack directory: {e}"))?;
-        Ok(())
-    } else {
-        Err("Directory does not exist".into())
+    use std::os::fd::AsRawFd;
+    let parent_path = pack_dir
+        .parent()
+        .filter(|parent| {
+            parent
+                .file_name()
+                .is_some_and(|name| name == PACKS_DIR_NAME)
+        })
+        .ok_or("Not a sample pack directory")?;
+    let directory = little_clip_core::kernel_interface::pin_content_directory(parent_path)
+        .map_err(|e| e.to_string())?;
+    let parent = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let target = parent.join(pack_dir.file_name().ok_or("Missing pack name")?);
+    if std::fs::symlink_metadata(&target)
+        .map_err(|e| e.to_string())?
+        .file_type()
+        .is_symlink()
+    {
+        return Err("Refusing to delete a linked pack directory".into());
     }
+    load_sample_pack(&target)?;
+    super::super::system_route::tree(&target, &std::sync::atomic::AtomicBool::new(false))?;
+    std::fs::remove_dir_all(&target).map_err(|e| format!("Failed to delete pack directory: {e}"))
 }
 
-/// Plays a single `SlotSample` using `new_shared_audio_player` with trimmed bounds and volume.
-/// Uses preloaded in-memory PCM when available for literally instantaneous zero-latency playback.
-pub fn play_slot_sample(sample: &SlotSample) -> Option<rodio::Player> {
-    let player = crate::ui_ext::new_shared_audio_player()?;
-
-    if let Some(ref cached) = sample.cached_audio {
-        let ch = std::num::NonZeroU16::new(cached.channels)
-            .unwrap_or_else(|| std::num::NonZeroU16::new(1).unwrap());
-        let sr = std::num::NonZeroU32::new(cached.sample_rate)
-            .unwrap_or_else(|| std::num::NonZeroU32::new(44100).unwrap());
-
-        let total_frames = cached.samples.len() / (cached.channels as usize).max(1);
-        let start_frame =
-            ((sample.start_sec * cached.sample_rate as f32).round() as usize).min(total_frames);
-        let end_frame = ((sample.end_sec * cached.sample_rate as f32).round() as usize)
-            .min(total_frames)
-            .max(start_frame);
-
-        let start_idx = start_frame * (cached.channels as usize);
-        let end_idx = end_frame * (cached.channels as usize);
-
-        if end_idx > start_idx && end_idx <= cached.samples.len() {
-            let slice = cached.samples[start_idx..end_idx].to_vec();
-            use rodio::Source;
-            let buffer = rodio::buffer::SamplesBuffer::new(ch, sr, slice).amplify(sample.volume);
-            player.append(buffer);
-            player.play();
-            return Some(player);
+/// A frame-aligned view over shared PCM. Triggering a slot never copies the audio buffer.
+struct SharedPcm {
+    audio: Arc<CachedAudio>,
+    position: usize,
+    end: usize,
+    length: usize,
+}
+impl SharedPcm {
+    fn trimmed(sample: &SlotSample) -> Option<Self> {
+        let audio = sample.cached_audio.as_ref()?.clone();
+        if audio.channels == 0
+            || audio.sample_rate == 0
+            || !sample.start_sec.is_finite()
+            || !sample.end_sec.is_finite()
+            || sample.start_sec < 0.0
+            || sample.end_sec <= sample.start_sec
+        {
+            return None;
         }
+        let channels = audio.channels as usize;
+        let frames = audio.samples.len() / channels;
+        let start = ((sample.start_sec as f64 * audio.sample_rate as f64).round() as usize)
+            .min(frames)
+            * channels;
+        let end = ((sample.end_sec as f64 * audio.sample_rate as f64).round() as usize).min(frames)
+            * channels;
+        (end > start).then_some(Self {
+            audio,
+            position: start,
+            end,
+            length: end - start,
+        })
     }
-
-    // Fallback streaming decoder from disk if not cached yet
-    let file = File::open(&sample.file_path).ok()?;
-    let decoder = rodio::Decoder::try_from(BufReader::new(file)).ok()?;
-    use rodio::Source;
-
-    let start = Duration::from_secs_f32(sample.start_sec.max(0.0));
-    let dur = Duration::from_secs_f32((sample.end_sec - sample.start_sec).max(0.005));
-    let bounded = decoder
-        .skip_duration(start)
-        .take_duration(dur)
-        .amplify(sample.volume);
-
-    player.append(bounded);
-    player.play();
-    Some(player)
+}
+impl Iterator for SharedPcm {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        if self.position >= self.end {
+            return None;
+        }
+        let sample = self.audio.samples[self.position];
+        self.position += 1;
+        Some(sample)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.end - self.position;
+        (remaining, Some(remaining))
+    }
+}
+impl rodio::Source for SharedPcm {
+    fn current_span_len(&self) -> Option<usize> {
+        Some(self.end - self.position)
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        std::num::NonZeroU16::new(self.audio.channels).unwrap()
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        std::num::NonZeroU32::new(self.audio.sample_rate).unwrap()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs_f64(
+            self.length as f64 / self.audio.channels as f64 / self.audio.sample_rate as f64,
+        ))
+    }
 }
 
-/// Directly plays an audio file with minimum latency.
-pub fn play_audio_file_direct(path: &Path) -> Option<rodio::Player> {
+/// Plays a prepared layer with frame-aligned trim bounds and volume.
+pub fn play_slot_sample(sample: &SlotSample) -> Option<rodio::Player> {
+    use rodio::Source;
+    if !sample.volume.is_finite() {
+        return None;
+    }
+    let source = SharedPcm::trimmed(sample)?;
     let player = crate::ui_ext::new_shared_audio_player()?;
-    let file = File::open(path).ok()?;
-    let decoder = rodio::Decoder::try_from(BufReader::new(file)).ok()?;
-    player.append(decoder);
+    player.append(source.amplify(sample.volume.clamp(0.0, 2.0)));
     player.play();
     Some(player)
 }
@@ -487,6 +560,87 @@ pub fn play_audio_file_direct(path: &Path) -> Option<rodio::Player> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_saves_preserve_existing_files_and_versions() {
+        let root = tempfile::tempdir().unwrap();
+        let bank = SamplePackBank::new("Kit");
+        let first = save_sample_pack(root.path(), &bank).unwrap();
+        std::fs::write(first.join("precious.txt"), b"keep me").unwrap();
+        let original = std::fs::read(first.join("bank.json")).unwrap();
+        let second = save_sample_pack(root.path(), &bank).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(
+            std::fs::read(first.join("precious.txt")).unwrap(),
+            b"keep me"
+        );
+        assert_eq!(std::fs::read(first.join("bank.json")).unwrap(), original);
+        assert!(second.join("bank.json").is_file());
+        assert!(save_sample_pack(root.path(), &SamplePackBank::new("..")).is_err());
+        assert!(save_sample_pack(root.path(), &SamplePackBank::new(".")).is_err());
+    }
+
+    #[test]
+    fn linked_pack_destinations_are_never_overwritten_or_deleted() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("precious"), b"untouched").unwrap();
+        std::fs::create_dir(root.path().join(PACKS_DIR_NAME)).unwrap();
+        let linked = root.path().join(PACKS_DIR_NAME).join("Kit");
+        std::os::unix::fs::symlink(outside.path(), &linked).unwrap();
+        let saved = save_sample_pack(root.path(), &SamplePackBank::new("Kit")).unwrap();
+        assert_ne!(saved, linked);
+        assert!(delete_sample_pack(&linked).is_err());
+        assert_eq!(
+            std::fs::read(outside.path().join("precious")).unwrap(),
+            b"untouched"
+        );
+    }
+
+    #[test]
+    fn bank_loading_validates_slot_count_and_audio_bounds() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("bank.json");
+        let mut bank = SamplePackBank::new("Malformed");
+        bank.slots.push(PackSlot::new('x'));
+        std::fs::write(&path, serde_json::to_vec(&bank).unwrap()).unwrap();
+        assert!(load_sample_pack(root.path()).is_err());
+        bank.slots.pop();
+        let mut sample = SlotSample::new("missing.wav".into(), "missing.wav".into(), None, 1.0);
+        sample.start_sec = 2.0;
+        bank.slots[0].samples.push(sample);
+        std::fs::write(&path, serde_json::to_vec(&bank).unwrap()).unwrap();
+        assert!(load_sample_pack(root.path()).is_err());
+        bank.slots[0].samples[0].start_sec = 0.0;
+        std::fs::write(&path, serde_json::to_vec(&bank).unwrap()).unwrap();
+        let loaded = load_sample_pack(root.path()).unwrap();
+        assert!(loaded.slots[0].samples[0].cached_audio.is_none());
+        assert!(loaded.slots[0].samples[0].file_path.is_absolute());
+    }
+
+    #[test]
+    fn shared_pcm_keeps_frame_alignment_and_reuses_storage() {
+        let mut sample = SlotSample::new("sample.wav".into(), "sample.wav".into(), None, 1.0);
+        let audio = Arc::new(CachedAudio {
+            channels: 2,
+            sample_rate: 4,
+            samples: Arc::new(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]),
+            mono_samples: Arc::new(vec![0.5, 2.5, 4.5, 6.5]),
+            waveform_peaks: vec![],
+        });
+        sample.cached_audio = Some(audio.clone());
+        sample.start_sec = 0.25;
+        sample.end_sec = 0.75;
+        let source = SharedPcm::trimmed(&sample).unwrap();
+        assert!(Arc::ptr_eq(&source.audio, &audio));
+        use rodio::Source;
+        assert_eq!(source.total_duration(), Some(Duration::from_millis(500)));
+        assert_eq!(source.collect::<Vec<_>>(), vec![2.0, 3.0, 4.0, 5.0]);
+        sample.end_sec = sample.start_sec;
+        assert!(SharedPcm::trimmed(&sample).is_none());
+        sample.start_sec = f32::NAN;
+        assert!(SharedPcm::trimmed(&sample).is_none());
+    }
 
     #[test]
     fn test_sample_pack_bank_initialization() {

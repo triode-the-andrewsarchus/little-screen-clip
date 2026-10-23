@@ -1,6 +1,22 @@
-//! 2D sample constellation view and classification system inspired by 2D audio sample mapping tools.
+//! Maps recursively indexed audio samples and assembles reference-based sample packs.
+//!
+//! [`indexer`] performs bounded acoustic analysis and persists snapshots in [`db`].
+//! Folder loads and pack operations use core's bounded background executor; the UI
+//! accepts folder results only for the current folder generation. Indexing may
+//! finish after navigation and still update its own database without changing the
+//! visible map. Dropping the state cancels its read-only index/hover work.
+//!
+//! [`sample_pack`] owns ten layered slots. PCM is prepared off the UI thread, shared
+//! by playback sources, and limited to the first 15 seconds/two million values per
+//! layer. Bank metadata and symlinks preserve source references and trim settings;
+//! saving a pack does not render or export trimmed audio. Accepted save/delete jobs
+//! have no timeout and keep application close deferred until their results arrive.
+//!
+//! [`generated_model`] contains a fixed heuristic ensemble. Its scores and naming
+//! priors group similar samples; they are not a calibrated instrument classifier.
 
 pub mod audio_probe;
+mod background;
 pub mod classifier;
 pub mod db;
 pub mod generated_model;
@@ -43,10 +59,13 @@ pub struct ConstellationHoverPreview {
     pub sample_rate: Option<u32>,
     pub channels: Option<u16>,
     pub bit_depth: Option<u16>,
+    generation: u64,
 }
 
 #[derive(Clone, Debug)]
 pub struct HoverPreviewRequest {
+    generation: u64,
+    cancelled: Arc<AtomicBool>,
     pub file_path: PathBuf,
     pub duration: f32,
     pub sample_rate: Option<u32>,
@@ -54,6 +73,10 @@ pub struct HoverPreviewRequest {
     pub bit_depth: Option<u16>,
 }
 
+/// Owns map snapshots, cooperative read workers, and the editable sample bank.
+///
+/// Call [`Self::tick`] even while the view is hidden so accepted mutations finish.
+/// UI entry points only submit work; decoded PCM and SQLite reads stay on workers.
 pub struct ConstellationState {
     pub samples: Vec<ConstellationSample>,
     pub current_indexed_folder: Option<PathBuf>,
@@ -68,14 +91,20 @@ pub struct ConstellationState {
     pub active_job: Option<IndexingJob>,
     pub indexing_status: Option<String>,
     pub hover_previews: HashMap<PathBuf, Arc<ConstellationHoverPreview>>,
-    pub hover_req_tx: Option<mpsc::Sender<HoverPreviewRequest>>,
+    pub hover_req_tx: Option<mpsc::SyncSender<HoverPreviewRequest>>,
     pub hover_res_rx: Option<mpsc::Receiver<ConstellationHoverPreview>>,
     pub pending_hover_path: Option<PathBuf>,
+    hover_cancelled: Arc<AtomicBool>,
     pub pack_bank: SamplePackBank,
     pub pack_shelf_open: bool,
     pub slot_flash: [Option<Instant>; 10],
     pub active_players: Vec<rodio::Player>,
-    pub single_audition_player: Option<rodio::Player>,
+    background: Vec<background::Pending>,
+    folder_generation: u64,
+    bank_generation: u64,
+    browser_generation: u64,
+    pub browser_preview: Option<(PathBuf, SamplePackBank)>,
+    failed_audio: std::collections::HashSet<PathBuf>,
     pub focus_search: bool,
     pub browser_open: bool,
     pub browser_selected_idx: Option<usize>,
@@ -102,11 +131,17 @@ impl Default for ConstellationState {
             hover_req_tx: None,
             hover_res_rx: None,
             pending_hover_path: None,
+            hover_cancelled: Arc::new(AtomicBool::new(false)),
             pack_bank: SamplePackBank::default(),
             pack_shelf_open: true,
             slot_flash: [None; 10],
             active_players: Vec::new(),
-            single_audition_player: None,
+            background: Vec::new(),
+            folder_generation: 0,
+            bank_generation: 0,
+            browser_generation: 0,
+            browser_preview: None,
+            failed_audio: Default::default(),
             focus_search: false,
             browser_open: false,
             browser_selected_idx: None,
@@ -185,20 +220,20 @@ impl ConstellationState {
         self.indexing_folder() == Some(folder)
     }
 
-    /// Checks if a folder has already been indexed in SQLite.
+    /// Reports whether the displayed folder has a nonempty loaded index snapshot.
+    ///
+    /// This is a cached menu hint and never opens SQLite on the UI thread.
     pub fn is_folder_already_indexed(&self, folder: &Path) -> bool {
         if self.current_indexed_folder.as_deref() == Some(folder) && !self.samples.is_empty() {
             return true;
         }
-        if let Ok(db) = ConstellationDb::new() {
-            if let Ok(Some(count)) = db.is_folder_indexed(folder) {
-                return count > 0;
-            }
-        }
         false
     }
 
-    /// Loads indexed samples from SQLite for the given folder if not already loaded.
+    /// Requests a background SQLite snapshot when the displayed folder changes.
+    ///
+    /// Clears view-specific selection, preview, and camera state immediately;
+    /// generation checks prevent older completions from replacing the new view.
     pub fn check_and_load_folder(&mut self, folder: &Path) {
         if self.current_indexed_folder.as_deref() == Some(folder) {
             return;
@@ -209,14 +244,22 @@ impl ConstellationState {
         self.last_hovered_path = None;
         self.history_trail.clear();
 
-        if let Ok(db) = ConstellationDb::new() {
-            if let Ok(samples) = db.load_samples(folder) {
-                self.samples = samples;
-                return;
-            }
-        }
-
         self.samples.clear();
+        self.hover_cancelled.store(true, Ordering::Relaxed);
+        self.hover_previews.clear();
+        self.pending_hover_path = None;
+        self.pan = egui::Vec2::ZERO;
+        self.zoom = 1.0;
+        self.folder_generation = self.folder_generation.wrapping_add(1);
+        let path = folder.to_path_buf();
+        self.submit_background(
+            background::Task::Folder(path.clone(), self.folder_generation),
+            move || {
+                ConstellationDb::new()?
+                    .load_samples(&path)
+                    .map(background::Output::Samples)
+            },
+        );
     }
 
     /// Starts recursive indexing of the target folder in a background worker thread.
@@ -257,13 +300,15 @@ impl ConstellationState {
         self.indexing_status = None;
     }
 
-    /// Ensures the dedicated background worker for computing hover previews is running.
-    pub fn ensure_hover_worker(&mut self) -> &mpsc::Sender<HoverPreviewRequest> {
+    /// Starts a single hover worker with one queued request and one queued result.
+    ///
+    /// Returns `None` and records a status message if thread creation fails.
+    pub fn ensure_hover_worker(&mut self) -> Option<&mpsc::SyncSender<HoverPreviewRequest>> {
         if self.hover_req_tx.is_none() {
-            let (req_tx, req_rx) = mpsc::channel::<HoverPreviewRequest>();
-            let (res_tx, res_rx) = mpsc::channel::<ConstellationHoverPreview>();
+            let (req_tx, req_rx) = mpsc::sync_channel::<HoverPreviewRequest>(1);
+            let (res_tx, res_rx) = mpsc::sync_channel::<ConstellationHoverPreview>(1);
 
-            thread::Builder::new()
+            let worker = thread::Builder::new()
                 .name("constellation-hover-preview".into())
                 .spawn(move || {
                     while let Ok(req) = req_rx.recv() {
@@ -273,7 +318,11 @@ impl ConstellationState {
                             latest = newer;
                         }
 
+                        if latest.cancelled.load(Ordering::Relaxed) {
+                            continue;
+                        }
                         let path = &latest.file_path;
+                        let source = crate::file_source::FileSource::capture(path).ok();
                         let info = audio_probe::read_audio_format_info(path);
                         let sample_rate = info.sample_rate.or(latest.sample_rate);
                         let channels = info.channels.or(latest.channels);
@@ -283,12 +332,24 @@ impl ConstellationState {
                             path,
                             latest.duration,
                             64,
-                            None,
-                            &AtomicBool::new(false),
+                            Some(15.0),
+                            &latest.cancelled,
                         )
                         .unwrap_or_default();
 
+                        if latest.cancelled.load(Ordering::Relaxed) {
+                            continue;
+                        }
+                        if source.is_none_or(|source| source.check().is_err()) {
+                            let _ = res_tx.send(ConstellationHoverPreview {
+                                file_path: latest.file_path,
+                                generation: latest.generation,
+                                ..Default::default()
+                            });
+                            continue;
+                        }
                         let preview = ConstellationHoverPreview {
+                            generation: latest.generation,
                             file_path: latest.file_path,
                             waveform,
                             waveform_colors: colors,
@@ -298,19 +359,31 @@ impl ConstellationState {
                         };
                         let _ = res_tx.send(preview);
                     }
-                })
-                .expect("Failed to spawn constellation hover preview worker");
+                });
+            if let Err(error) = worker {
+                self.browser_status = Some((
+                    format!("Error starting preview worker: {error}"),
+                    Instant::now(),
+                ));
+                return None;
+            }
 
             self.hover_req_tx = Some(req_tx);
             self.hover_res_rx = Some(res_rx);
         }
-        self.hover_req_tx.as_ref().unwrap()
+        self.hover_req_tx.as_ref()
     }
 
     /// Drains any completed hover previews from the background worker.
     pub fn poll_hover_previews(&mut self) {
         if let Some(ref rx) = self.hover_res_rx {
             while let Ok(preview) = rx.try_recv() {
+                if preview.generation != self.folder_generation {
+                    continue;
+                }
+                if self.pending_hover_path.as_ref() == Some(&preview.file_path) {
+                    self.pending_hover_path = None;
+                }
                 if self.hover_previews.len() > 256 {
                     self.hover_previews.clear();
                 }
@@ -320,15 +393,16 @@ impl ConstellationState {
         }
     }
 
-    /// Retires all audition and layered playback when leaving the view or stopping previews.
+    /// Stops slot voices and retires hover work through the shared preview lifecycle.
+    ///
+    /// Map auditions use the browser's `Music` player, stopped by its owner alongside
+    /// this method. Retains the hovered path so Escape cannot immediately retrigger it.
     pub fn stop_playback(&mut self) {
-        if let Some(player) = self.single_audition_player.take() {
-            player.stop();
-        }
         for player in self.active_players.drain(..) {
             player.stop();
         }
-        self.last_hovered_path = None;
+        self.hover_cancelled.store(true, Ordering::Relaxed);
+        self.pending_hover_path = None;
     }
 
     /// Triggers audio playback for a sample slot (all layered samples play simultaneously).
@@ -356,7 +430,15 @@ impl ConstellationState {
             Some(sample.category),
             sample.duration_seconds,
         );
-        self.pack_bank.slots[slot_idx].samples.push(slot_sample);
+        if self.pack_bank.slots[slot_idx].samples.len() < 8 {
+            self.failed_audio.remove(&sample.file_path);
+            self.pack_bank.slots[slot_idx].samples.push(slot_sample);
+        } else {
+            self.browser_status = Some((
+                "A slot supports at most eight layers".into(),
+                Instant::now(),
+            ));
+        }
     }
 
     /// Clears all assigned samples from a specific slot.
@@ -371,18 +453,32 @@ impl ConstellationState {
         let root = self
             .current_indexed_folder
             .as_deref()
-            .unwrap_or(current_folder);
-        self.browser_packs = sample_pack::list_saved_packs(root);
+            .unwrap_or(current_folder)
+            .to_path_buf();
+        self.browser_selected_idx = None;
+        self.browser_preview = None;
+        self.browser_generation = self.browser_generation.wrapping_add(1);
+        self.submit_background(
+            background::Task::List(root.clone(), self.browser_generation),
+            move || {
+                Ok(background::Output::Packs(sample_pack::list_saved_packs(
+                    &root,
+                )))
+            },
+        );
     }
 
-    /// Periodic tick called from the application update loop to receive indexing updates.
+    /// Accepts worker results, schedules bounded PCM loads, and retires ended voices.
+    ///
+    /// Must run while the view is hidden to preserve accepted mutation completions.
     pub fn tick(&mut self) {
+        self.poll_background();
+        self.queue_audio_loads();
         self.poll_hover_previews();
         self.active_players.retain(|p| !p.empty());
-        if let Some(ref p) = self.single_audition_player {
-            if p.empty() {
-                self.single_audition_player = None;
-            }
+        let excess = self.active_players.len().saturating_sub(64);
+        for player in self.active_players.drain(..excess) {
+            player.stop();
         }
         let mut job_done = false;
 
@@ -415,6 +511,7 @@ impl ConstellationState {
                     }
                     IndexProgress::Complete { samples, .. } => {
                         if self.current_indexed_folder.as_ref() == Some(&job.folder) {
+                            self.folder_generation = self.folder_generation.wrapping_add(1);
                             self.samples = samples;
                             self.selected_path = None;
                             self.last_hovered_path = None;
@@ -438,6 +535,13 @@ impl ConstellationState {
         if job_done {
             self.active_job = None;
         }
+    }
+}
+
+impl Drop for ConstellationState {
+    fn drop(&mut self) {
+        self.cancel_indexing();
+        self.stop_playback();
     }
 }
 
@@ -479,7 +583,7 @@ mod tests {
         });
         state.tick();
         assert!(state.active_job.is_none());
-        assert!(state.indexing_status.unwrap().contains("stopped"));
+        assert!(state.indexing_status.as_ref().unwrap().contains("stopped"));
     }
 
     #[test]

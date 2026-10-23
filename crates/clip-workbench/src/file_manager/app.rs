@@ -298,12 +298,33 @@ impl FileManagerApp {
         }
         false
     }
+    fn constellation_index_menu(&mut self, ui: &mut egui::Ui) {
+        let folder = self.browser.path().to_path_buf();
+        let state = &self.browser.constellation;
+        let busy = state.active_job.is_some();
+        let label = if state.is_indexing_folder(&folder) {
+            "Indexing this folder in background..."
+        } else if busy {
+            "Indexing another folder in background..."
+        } else if state.is_folder_already_indexed(&folder) {
+            "Re-index folder into sample constellation (recursive)"
+        } else {
+            "Index folder into sample constellation (recursive)"
+        };
+        if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+            self.browser.constellation.start_indexing(&folder);
+            self.browser.set_view(super::BrowserView::Constellation);
+            ui.close_menu();
+        }
+    }
+
     fn request_app_close(&mut self, ctx: &egui::Context) {
         if self.viewers.active() && !self.viewers.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
         if self.browser.filesystem_busy()
+            || self.browser.constellation.writing_pack()
             || self.browser.bookmarks.busy()
             || self.browser.music.copying()
             || self.browser.midi.copying()
@@ -378,48 +399,7 @@ impl eframe::App for FileManagerApp {
                         } else if title == "Edit" {
                             self.edit_menu(ui);
                         } else if title == "File" {
-                            let current_dir = self.browser.path().to_path_buf();
-                            let is_indexing_current =
-                                self.browser.constellation.is_indexing_folder(&current_dir);
-                            let is_busy = self.browser.constellation.active_job.is_some();
-                            let is_indexed = self
-                                .browser
-                                .constellation
-                                .is_folder_already_indexed(&current_dir);
-
-                            if is_indexing_current {
-                                ui.add_enabled(
-                                    false,
-                                    egui::Button::new("🌌 Indexing this folder in background..."),
-                                );
-                            } else if is_busy {
-                                ui.add_enabled(
-                                    false,
-                                    egui::Button::new(
-                                        "🌌 Indexing another folder in background...",
-                                    ),
-                                );
-                            } else if is_indexed {
-                                if ui
-                                    .button(
-                                        "🔄 Re-index folder into sample constellation (recursive)",
-                                    )
-                                    .clicked()
-                                {
-                                    self.browser.constellation.start_indexing(&current_dir);
-                                    self.browser.set_view(super::BrowserView::Constellation);
-                                    ui.close_menu();
-                                }
-                            } else {
-                                if ui
-                                    .button("🌌 Index folder into sample constellation (recursive)")
-                                    .clicked()
-                                {
-                                    self.browser.constellation.start_indexing(&current_dir);
-                                    self.browser.set_view(super::BrowserView::Constellation);
-                                    ui.close_menu();
-                                }
-                            }
+                            self.constellation_index_menu(ui);
                         } else {
                             ui.add_enabled(false, egui::Label::new("No actions yet"));
                         }

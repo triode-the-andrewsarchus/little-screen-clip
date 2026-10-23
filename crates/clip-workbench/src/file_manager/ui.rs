@@ -222,7 +222,6 @@ impl FileManager {
         );
 
         if let Some(p) = sample_to_play {
-            self.constellation.stop_playback();
             self.music.play(&p);
         }
         if let Some(p) = sample_to_select {
@@ -244,11 +243,7 @@ impl FileManager {
             return;
         }
         if self.view == super::BrowserView::Constellation {
-            self.type_navigation.clear();
-            if key(ctx, Modifiers::CTRL, Key::F) || key(ctx, Modifiers::NONE, Key::Slash) {
-                self.constellation.focus_search = true;
-            }
-            self.navigation_shortcuts(ctx);
+            self.constellation_shortcuts(ctx);
             return;
         }
         self.navigation_shortcuts(ctx);
@@ -296,6 +291,16 @@ impl FileManager {
                 self.open_selected();
             }
         }
+    }
+
+    fn constellation_shortcuts(&mut self, ctx: &egui::Context) {
+        self.type_navigation.clear();
+        if key(ctx, Modifiers::CTRL, Key::F)
+            || (!ctx.wants_keyboard_input() && key(ctx, Modifiers::NONE, Key::Slash))
+        {
+            self.constellation.focus_search = true;
+        }
+        self.navigation_shortcuts(ctx);
     }
 
     fn navigation_shortcuts(&mut self, ctx: &egui::Context) {

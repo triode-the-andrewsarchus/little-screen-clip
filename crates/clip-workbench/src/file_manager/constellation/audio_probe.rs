@@ -1,7 +1,6 @@
-//! Fast audio format header inspection for constellation hover tooltips and indexer.
+//! Audio format header inspection for constellation hover tooltips and indexer.
 //! Extracts bit depth, sample rate, and channel count directly from container headers.
 
-use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
@@ -13,9 +12,10 @@ pub struct AudioFormatInfo {
 }
 
 /// Reads bit depth, sample rate, and channels from an audio file.
-/// Uses sub-millisecond container header inspection with Symphonia metadata fallback.
+/// Inspects container headers with a bounded chunk search, then falls back to core
+/// audio metadata. Must run on a worker because ordinary files may live on slow mounts.
 pub fn read_audio_format_info(path: &Path) -> AudioFormatInfo {
-    if let Ok(mut f) = File::open(path) {
+    if let Ok(mut f) = little_clip_core::kernel_interface::open_content(path, true) {
         if let Some(info) = read_wav_info(&mut f) {
             return info;
         }
@@ -47,54 +47,51 @@ pub fn read_wav_info(file: &mut (impl Read + Seek)) -> Option<AudioFormatInfo> {
         return None;
     }
 
-    let mut scanned_bytes = 12u64;
-    while scanned_bytes < 65536 {
-        let mut chunk_hdr = [0u8; 8];
-        if file.read_exact(&mut chunk_hdr).is_err() {
-            break;
+    let fmt_data = read_chunk(file, b"fmt ", false)?;
+    if fmt_data.len() < 16 {
+        return None;
+    }
+    let format_tag = u16::from_le_bytes([fmt_data[0], fmt_data[1]]);
+    let channels = u16::from_le_bytes([fmt_data[2], fmt_data[3]]);
+    let sample_rate = u32::from_le_bytes(fmt_data[4..8].try_into().ok()?);
+    let mut bit_depth = u16::from_le_bytes([fmt_data[14], fmt_data[15]]);
+    if format_tag == 0xFFFE && fmt_data.len() >= 20 {
+        let valid_bits = u16::from_le_bytes([fmt_data[18], fmt_data[19]]);
+        if valid_bits > 0 {
+            bit_depth = valid_bits;
         }
-        scanned_bytes += 8;
-        let chunk_id = &chunk_hdr[0..4];
-        let chunk_len =
-            u32::from_le_bytes([chunk_hdr[4], chunk_hdr[5], chunk_hdr[6], chunk_hdr[7]]) as u64;
+    }
+    Some(AudioFormatInfo {
+        sample_rate: (sample_rate > 0).then_some(sample_rate),
+        channels: (channels > 0).then_some(channels),
+        bit_depth: (bit_depth > 0).then_some(bit_depth),
+    })
+}
 
-        if chunk_id == b"fmt " {
-            let read_len = chunk_len.min(64) as usize;
-            let mut fmt_data = vec![0u8; read_len];
-            file.read_exact(&mut fmt_data).ok()?;
-            if fmt_data.len() >= 16 {
-                let format_tag = u16::from_le_bytes([fmt_data[0], fmt_data[1]]);
-                let channels = u16::from_le_bytes([fmt_data[2], fmt_data[3]]);
-                let sample_rate =
-                    u32::from_le_bytes([fmt_data[4], fmt_data[5], fmt_data[6], fmt_data[7]]);
-                let mut bit_depth = u16::from_le_bytes([fmt_data[14], fmt_data[15]]);
-
-                // If WAVE_FORMAT_EXTENSIBLE (0xFFFE), extract valid bits per sample
-                if format_tag == 0xFFFE && fmt_data.len() >= 20 {
-                    let valid_bits = u16::from_le_bytes([fmt_data[18], fmt_data[19]]);
-                    if valid_bits > 0 {
-                        bit_depth = valid_bits;
-                    }
-                }
-
-                return Some(AudioFormatInfo {
-                    sample_rate: (sample_rate > 0).then_some(sample_rate),
-                    channels: (channels > 0).then_some(channels),
-                    bit_depth: (bit_depth > 0).then_some(bit_depth),
-                });
-            }
-            break;
+/// Finds a bounded chunk after a RIFF/FORM header, respecting odd-length padding.
+fn read_chunk(
+    file: &mut (impl Read + Seek),
+    wanted: &[u8; 4],
+    big_endian: bool,
+) -> Option<Vec<u8>> {
+    let mut scanned = 12u64;
+    while scanned < 65536 {
+        let mut header = [0; 8];
+        file.read_exact(&mut header).ok()?;
+        let bytes = header[4..8].try_into().ok()?;
+        let length = if big_endian {
+            u32::from_be_bytes(bytes)
         } else {
-            let padded_len = if chunk_len % 2 == 1 {
-                chunk_len + 1
-            } else {
-                chunk_len
-            };
-            scanned_bytes += padded_len;
-            if file.seek(SeekFrom::Current(padded_len as i64)).is_err() {
-                break;
-            }
+            u32::from_le_bytes(bytes)
+        } as u64;
+        if &header[..4] == wanted {
+            let mut data = vec![0; length.min(64) as usize];
+            file.read_exact(&mut data).ok()?;
+            return Some(data);
         }
+        let padded = length + length % 2;
+        scanned += 8 + padded;
+        file.seek(SeekFrom::Current(padded as i64)).ok()?;
     }
     None
 }
@@ -111,7 +108,8 @@ pub fn read_flac_info(file: &mut (impl Read + Seek)) -> Option<AudioFormatInfo> 
     let mut block_hdr = [0u8; 4];
     file.read_exact(&mut block_hdr).ok()?;
     let block_type = block_hdr[0] & 0x7F;
-    if block_type != 0 {
+    let block_len = u32::from_be_bytes([0, block_hdr[1], block_hdr[2], block_hdr[3]]);
+    if block_type != 0 || block_len != 34 {
         return None;
     }
 
@@ -138,45 +136,21 @@ pub fn read_aiff_info(file: &mut (impl Read + Seek)) -> Option<AudioFormatInfo> 
         return None;
     }
 
-    let mut scanned_bytes = 12u64;
-    while scanned_bytes < 65536 {
-        let mut chunk_hdr = [0u8; 8];
-        if file.read_exact(&mut chunk_hdr).is_err() {
-            break;
-        }
-        scanned_bytes += 8;
-        let chunk_id = &chunk_hdr[0..4];
-        let chunk_len =
-            u32::from_be_bytes([chunk_hdr[4], chunk_hdr[5], chunk_hdr[6], chunk_hdr[7]]) as u64;
-
-        if chunk_id == b"COMM" {
-            let read_len = chunk_len.min(32) as usize;
-            let mut comm_data = vec![0u8; read_len];
-            file.read_exact(&mut comm_data).ok()?;
-            if comm_data.len() >= 18 {
-                let channels = u16::from_be_bytes([comm_data[0], comm_data[1]]);
-                let bit_depth = u16::from_be_bytes([comm_data[6], comm_data[7]]);
-                let sr = parse_extended_float(&comm_data[8..18]).unwrap_or(44100.0) as u32;
-                return Some(AudioFormatInfo {
-                    sample_rate: (sr > 0).then_some(sr),
-                    channels: (channels > 0).then_some(channels),
-                    bit_depth: (bit_depth > 0).then_some(bit_depth),
-                });
-            }
-            break;
-        } else {
-            let padded_len = if chunk_len % 2 == 1 {
-                chunk_len + 1
-            } else {
-                chunk_len
-            };
-            scanned_bytes += padded_len;
-            if file.seek(SeekFrom::Current(padded_len as i64)).is_err() {
-                break;
-            }
-        }
+    let comm_data = read_chunk(file, b"COMM", true)?;
+    if comm_data.len() < 18 {
+        return None;
     }
-    None
+    let channels = u16::from_be_bytes([comm_data[0], comm_data[1]]);
+    let bit_depth = u16::from_be_bytes([comm_data[6], comm_data[7]]);
+    let rate = parse_extended_float(&comm_data[8..18])?;
+    let sample_rate = (1.0..=u32::MAX as f64)
+        .contains(&rate)
+        .then_some(rate as u32)?;
+    Some(AudioFormatInfo {
+        sample_rate: Some(sample_rate),
+        channels: (channels > 0).then_some(channels),
+        bit_depth: (bit_depth > 0).then_some(bit_depth),
+    })
 }
 
 /// Converts 80-bit IEEE 754 extended precision float to f64.
@@ -220,6 +194,22 @@ pub fn format_channels(channels: u16) -> String {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn malformed_flac_block_length_is_rejected() {
+        let mut data = b"fLaC".to_vec();
+        data.extend_from_slice(&[0, 0, 0, 1]);
+        data.extend_from_slice(&[0; 34]);
+        assert!(read_flac_info(&mut Cursor::new(data)).is_none());
+    }
+
+    #[test]
+    fn protected_inputs_are_not_probed() {
+        assert_eq!(
+            read_audio_format_info(Path::new("/dev/zero")),
+            AudioFormatInfo::default()
+        );
+    }
 
     #[test]
     fn test_format_sample_rate() {

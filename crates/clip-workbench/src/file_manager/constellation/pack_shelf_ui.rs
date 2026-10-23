@@ -3,10 +3,7 @@
 //! and compact volume sliders directly inside each slot card.
 
 use super::ConstellationState;
-use super::sample_pack::{
-    SamplePackBank, delete_sample_pack, get_sample_packs_root, load_sample_pack, play_slot_sample,
-    save_sample_pack,
-};
+use super::sample_pack::{SamplePackBank, get_sample_packs_root, play_slot_sample};
 use egui::{Color32, Pos2, Rect, RichText, Stroke, Vec2};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -15,7 +12,7 @@ impl ConstellationState {
     /// Handles keyboard shortcuts for triggering (keys 1-0) and assigning (Shift+1-0) sample slots.
     /// Consumes the keypress events so they do not leak to other file manager navigation handlers.
     pub fn handle_shelf_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.wants_keyboard_input() {
+        if ctx.wants_keyboard_input() || self.browser_open {
             return;
         }
 
@@ -61,9 +58,9 @@ impl ConstellationState {
             // Header: Bank Title & Persistence Toolbar
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🎛️ Pack Shelf").strong().size(14.0));
+                ui.label(RichText::new("Pack Shelf").strong().size(14.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("✕").on_hover_text("Collapse shelf").clicked() {
+                    if ui.button("Close").on_hover_text("Collapse shelf").clicked() {
                         self.pack_shelf_open = false;
                     }
                 });
@@ -85,7 +82,7 @@ impl ConstellationState {
 
             ui.horizontal(|ui| {
                 if ui
-                    .button("💾 Save")
+                    .add_enabled(!self.writing_pack(), egui::Button::new("Save"))
                     .on_hover_text(
                         "Save sample pack to little-screen-clip-sample-packs (symlinks + JSON)",
                     )
@@ -95,24 +92,11 @@ impl ConstellationState {
                         .current_indexed_folder
                         .as_deref()
                         .unwrap_or(current_folder);
-                    match save_sample_pack(root, &self.pack_bank) {
-                        Ok(dir) => {
-                            let name = dir
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                                .unwrap_or_default();
-                            self.browser_status =
-                                Some((format!("✓ Saved pack '{name}'"), Instant::now()));
-                            self.refresh_browser_packs(current_folder);
-                        }
-                        Err(e) => {
-                            self.browser_status = Some((format!("Error: {e}"), Instant::now()));
-                        }
-                    }
+                    self.save_bank(root.to_path_buf(), self.pack_bank.clone());
                 }
 
                 if ui
-                    .button("📂 Browse")
+                    .button("Browse")
                     .on_hover_text("Open Sample Pack Browser")
                     .clicked()
                 {
@@ -121,11 +105,11 @@ impl ConstellationState {
                 }
 
                 if ui
-                    .button("✨ Clear")
+                    .button("Clear")
                     .on_hover_text("Clear all 10 slots to start a fresh bank")
                     .clicked()
                 {
-                    self.pack_bank = SamplePackBank::new("Untitled Pack");
+                    self.clear_bank();
                     self.browser_status = Some(("Cleared all slots".to_string(), Instant::now()));
                 }
             });
@@ -149,7 +133,7 @@ impl ConstellationState {
 
             // Quick instruction badge
             ui.label(
-                RichText::new("⌨ Keys 1-0 trigger · Shift+1-0 assign selected")
+                RichText::new("Keys 1-0 trigger · Shift+1-0 assign selected")
                     .size(10.0)
                     .color(Color32::from_gray(140)),
             );
@@ -223,17 +207,13 @@ impl ConstellationState {
                                     }
 
                                     // Play icon button
-                                    if ui.button("▶").on_hover_text("Play slot").clicked() {
+                                    if ui.button("Play").on_hover_text("Play slot").clicked() {
                                         trigger_slot_idx = Some(slot_idx);
                                     }
 
                                     // Slot title / layers summary
                                     let title = slot.display_title();
-                                    let short_title = if title.len() > 18 {
-                                        format!("{}...", &title[..15])
-                                    } else {
-                                        title
-                                    };
+                                    let short_title = super::ui::short_label(&title, 18);
 
                                     ui.label(RichText::new(short_title).size(11.0).color(
                                         if sample_count > 0 {
@@ -249,7 +229,7 @@ impl ConstellationState {
                                         |ui| {
                                             if sample_count > 0 {
                                                 if ui
-                                                    .small_button("✕")
+                                                    .small_button("Clear")
                                                     .on_hover_text("Clear slot")
                                                     .clicked()
                                                 {
@@ -258,7 +238,7 @@ impl ConstellationState {
                                             }
 
                                             if ui
-                                                .small_button("➕")
+                                                .small_button("Add")
                                                 .on_hover_text(
                                                     "Add currently selected sample to this slot",
                                                 )
@@ -296,8 +276,6 @@ impl ConstellationState {
 
                                     // Render each sample layer with inline waveform & draggable trim flags
                                     for (layer_idx, sample) in slot.samples.iter_mut().enumerate() {
-                                        sample.ensure_audio_loaded();
-
                                         // Layer sub-header
                                         ui.horizontal(|ui| {
                                             let cat_col = sample
@@ -305,11 +283,8 @@ impl ConstellationState {
                                                 .map(|c| c.color())
                                                 .unwrap_or(Color32::from_rgb(100, 200, 255));
 
-                                            let short_name = if sample.filename.len() > 22 {
-                                                format!("{}...", &sample.filename[..19])
-                                            } else {
-                                                sample.filename.clone()
-                                            };
+                                            let short_name =
+                                                super::ui::short_label(&sample.filename, 22);
 
                                             ui.label(
                                                 RichText::new(format!(
@@ -327,7 +302,7 @@ impl ConstellationState {
                                                 |ui| {
                                                     if sample_count > 1 {
                                                         if ui
-                                                            .small_button("✕")
+                                                            .small_button("Remove")
                                                             .on_hover_text("Remove this layer")
                                                             .clicked()
                                                         {
@@ -336,7 +311,7 @@ impl ConstellationState {
                                                         }
                                                     }
                                                     if ui
-                                                        .small_button("↺")
+                                                        .small_button("Reset")
                                                         .on_hover_text("Reset start/end trim")
                                                         .clicked()
                                                     {
@@ -344,7 +319,7 @@ impl ConstellationState {
                                                         sample.end_sec = sample.duration;
                                                     }
                                                     if ui
-                                                        .small_button("▶")
+                                                        .small_button("Play")
                                                         .on_hover_text(
                                                             "Audition this trimmed layer",
                                                         )
@@ -630,13 +605,14 @@ impl ConstellationState {
         }
 
         let mut load_bank_path: Option<std::path::PathBuf> = None;
+        let mut preview_bank_path: Option<std::path::PathBuf> = None;
         let mut delete_bank_path: Option<std::path::PathBuf> = None;
         let mut overwrite_bank: Option<SamplePackBank> = None;
         let mut refresh_packs = false;
         let mut new_empty_pack = false;
         let mut is_open = self.browser_open;
 
-        egui::Window::new("📦 Sample Pack Browser")
+        egui::Window::new("Sample Pack Browser")
             .id(egui::Id::new("constellation_pack_browser_window"))
             .open(&mut is_open)
             .default_size(Vec2::new(740.0, 520.0))
@@ -652,7 +628,7 @@ impl ConstellationState {
                 // Top banner
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("📁 Packs directory:")
+                        RichText::new("Packs directory:")
                             .size(11.5)
                             .color(Color32::from_gray(180)),
                     );
@@ -663,10 +639,10 @@ impl ConstellationState {
                     );
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("🔄 Refresh").clicked() {
+                        if ui.button("Refresh").clicked() {
                             refresh_packs = true;
                         }
-                        if ui.button("➕ New Empty Pack").clicked() {
+                        if ui.button("New Empty Pack").clicked() {
                             new_empty_pack = true;
                         }
                     });
@@ -682,7 +658,7 @@ impl ConstellationState {
                         ui.add_space(4.0);
 
                         if self.browser_packs.is_empty() {
-                            ui.label("No saved packs found yet.\nUse '💾 Save' on the creation shelf to save a pack.");
+                            ui.label("No saved packs found yet.\nUse 'Save' on the creation shelf to save a pack.");
                         } else {
                             egui::ScrollArea::vertical()
                                 .max_height(400.0)
@@ -697,6 +673,8 @@ impl ConstellationState {
                                         let label = egui::SelectableLabel::new(is_selected, text);
                                         if ui.add(label).clicked() {
                                             self.browser_selected_idx = Some(idx);
+                                            self.browser_preview = None;
+                                            preview_bank_path = Some(summary.folder_path.clone());
                                         }
                                     }
                                 });
@@ -721,15 +699,15 @@ impl ConstellationState {
                                 ui.add_space(6.0);
                                 ui.horizontal(|ui| {
                                     if ui
-                                        .button(RichText::new("📥 Load into Creation Shelf").strong())
+                                        .button(RichText::new("Load into Creation Shelf").strong())
                                         .clicked()
                                     {
                                         load_bank_path = Some(summary.folder_path.clone());
                                     }
 
                                     if ui
-                                        .button("💾 Overwrite")
-                                        .on_hover_text("Overwrite this pack with current shelf slots")
+                                        .add_enabled(!self.writing_pack(), egui::Button::new("Save Copy"))
+                                        .on_hover_text("Save current shelf slots as a new version of this pack")
                                         .clicked()
                                     {
                                         let mut updated = self.pack_bank.clone();
@@ -738,7 +716,7 @@ impl ConstellationState {
                                     }
 
                                     if ui
-                                        .button(RichText::new("🗑️ Delete").color(Color32::from_rgb(255, 120, 120)))
+                                        .button(RichText::new("Delete").color(Color32::from_rgb(255, 120, 120)))
                                         .clicked()
                                     {
                                         delete_bank_path = Some(summary.folder_path.clone());
@@ -748,8 +726,8 @@ impl ConstellationState {
                                 ui.separator();
 
                                 // Preview 10 slots of this pack
-                                if let Ok(bank) = load_sample_pack(&summary.folder_path) {
-                                    ui.label(RichText::new("Slot Preview (Click ▶ to audition):").size(11.0).strong());
+                                if let Some((_, bank)) = self.browser_preview.as_ref().filter(|(path, _)| path == &summary.folder_path) {
+                                    ui.label(RichText::new("Slot Preview (Click Play to audition):").size(11.0).strong());
                                     ui.add_space(4.0);
 
                                     egui::ScrollArea::vertical()
@@ -759,7 +737,7 @@ impl ConstellationState {
                                                 ui.horizontal(|ui| {
                                                     ui.label(RichText::new(format!("[{}]", slot.key_char)).strong().size(11.0));
                                                     if !slot.samples.is_empty() {
-                                                        if ui.small_button("▶").clicked() {
+                                                        if ui.small_button("Play").clicked() {
                                                             for s in &slot.samples {
                                                                 if let Some(p) = play_slot_sample(s) {
                                                                     self.active_players.push(p);
@@ -790,50 +768,27 @@ impl ConstellationState {
         }
 
         if new_empty_pack {
-            self.pack_bank = SamplePackBank::new("Untitled Pack");
+            self.clear_bank();
             self.browser_status = Some(("Started new empty pack".into(), Instant::now()));
         }
 
         // Apply deferred actions
-        if let Some(path) = load_bank_path {
-            match load_sample_pack(&path) {
-                Ok(bank) => {
-                    self.pack_bank = bank;
-                    self.browser_status = Some((
-                        format!("✓ Loaded pack '{}'", self.pack_bank.name),
-                        Instant::now(),
-                    ));
-                    self.browser_open = false;
-                }
-                Err(e) => {
-                    self.browser_status =
-                        Some((format!("Error loading pack: {e}"), Instant::now()));
-                }
-            }
+        if let Some(path) = preview_bank_path {
+            self.load_browser_bank(path, false);
         }
-
+        if let Some(path) = load_bank_path {
+            self.load_browser_bank(path, true);
+        }
         if let Some(bank) = overwrite_bank {
             let root = self
                 .current_indexed_folder
                 .as_deref()
-                .unwrap_or(current_folder);
-            match save_sample_pack(root, &bank) {
-                Ok(_) => {
-                    self.browser_status =
-                        Some((format!("✓ Overwrote pack '{}'", bank.name), Instant::now()));
-                    self.refresh_browser_packs(current_folder);
-                }
-                Err(e) => {
-                    self.browser_status = Some((format!("Error saving pack: {e}"), Instant::now()));
-                }
-            }
+                .unwrap_or(current_folder)
+                .to_path_buf();
+            self.save_bank(root, bank);
         }
-
         if let Some(path) = delete_bank_path {
-            let _ = delete_sample_pack(&path);
-            self.browser_selected_idx = None;
-            self.refresh_browser_packs(current_folder);
-            self.browser_status = Some(("Deleted sample pack".into(), Instant::now()));
+            self.delete_bank(path);
         }
     }
 }

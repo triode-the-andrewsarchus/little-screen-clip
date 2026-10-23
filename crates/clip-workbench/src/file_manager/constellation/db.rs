@@ -199,7 +199,7 @@ impl ConstellationDb {
             .prepare(
                 "SELECT file_path, folder_path, filename, category, confidence,
                         duration_seconds, pitch_hz, pitch_clarity, brightness, x, y, file_size, mtime,
-                        sample_rate, channels, bit_depth
+                        COALESCE(sample_rate, 0), COALESCE(channels, 0), COALESCE(bit_depth, 0)
                  FROM samples
                  WHERE folder_path = ?1 OR substr(folder_path, 1, length(?2)) = ?2 ORDER BY file_path",
             )
@@ -227,20 +227,15 @@ impl ConstellationDb {
                     y: row.get::<_, f64>(10)? as f32,
                     file_size: row.get::<_, i64>(11)? as u64,
                     mtime: row.get(12)?,
-                    sample_rate: row.get::<_, Option<i64>>(13).unwrap_or(None).unwrap_or(0) as u32,
-                    channels: row.get::<_, Option<i64>>(14).unwrap_or(None).unwrap_or(0) as u16,
-                    bit_depth: row.get::<_, Option<i64>>(15).unwrap_or(None).unwrap_or(0) as u16,
+                    sample_rate: row.get(13)?,
+                    channels: row.get(14)?,
+                    bit_depth: row.get(15)?,
                 })
             })
             .map_err(|e| e.to_string())?;
 
-        let mut samples = Vec::new();
-        for sample in rows {
-            if let Ok(s) = sample {
-                samples.push(s);
-            }
-        }
-        Ok(samples)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     pub fn save_samples(
