@@ -18,17 +18,25 @@ use crate::{
 
 /// Batch size for SigLIP 2 vision inference.
 pub const SIGLIP_BATCH_SIZE: usize = 8;
+/// Pixel dimension (width and height) for input images fed to the SigLIP 2 vision encoder.
 pub const SIGLIP_INPUT_SIZE: u32 = 256;
+/// Maximum sequence length for tokenized text inputs.
 pub const SIGLIP_MAX_SEQ_LEN: usize = 64;
 const PIXEL_SCALE: f32 = 127.5;
 const MIN_NORM_EPSILON: f32 = 1e-7;
 
+/// Vision feature extractor backed by a SigLIP 2 Giant ONNX model.
 pub struct SiglipEmbedder {
     session: ort::session::Session,
 }
 
 impl SiglipEmbedder {
     /// Attempts to load the SigLIP 2 Giant ONNX vision model from local cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the model file cannot be located, downloaded, or initialized into an
+    /// ONNX Runtime session.
     pub fn try_new() -> Result<Self, String> {
         let model_path = ensure_model(SIGLIP2_GIANT_MODEL_NAME, None)
             .map_err(|e| format!("Failed to ensure SigLIP 2 model: {e}"))?;
@@ -43,6 +51,10 @@ impl SiglipEmbedder {
     }
 
     /// Embeds a batch of images into L2-normalized feature vectors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if ONNX tensor execution fails.
     pub fn embed_batch(
         &mut self,
         paths: &[PathBuf],
@@ -176,7 +188,9 @@ fn extract_normalized_embeddings(
     Ok(results)
 }
 
-/// L2-normalizes an embedding vector in-place.
+/// Normalizes a floating-point slice to unit L2 length in-place.
+///
+/// If the vector norm is below an epsilon threshold, the slice is left unchanged.
 pub fn normalize_l2(vec: &mut [f32]) {
     let norm_sq: f32 = vec.iter().map(|&x| x * x).sum();
     let norm = norm_sq.sqrt();
@@ -188,6 +202,7 @@ pub fn normalize_l2(vec: &mut [f32]) {
     }
 }
 
+/// Text feature extractor backed by a SigLIP 2 Giant ONNX model and tokenizer.
 pub struct SiglipTextEmbedder {
     session: ort::session::Session,
     tokenizer: tokenizers::Tokenizer,
@@ -195,6 +210,10 @@ pub struct SiglipTextEmbedder {
 
 impl SiglipTextEmbedder {
     /// Attempts to load the SigLIP 2 Giant text encoder and tokenizer from local cache or downloads.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the model or tokenizer cannot be loaded.
     pub fn try_new() -> Result<Self, String> {
         let model_path = ensure_model(SIGLIP2_GIANT_TEXT_MODEL_NAME, None)
             .map_err(|e| format!("Failed to ensure SigLIP 2 text model: {e}"))?;
@@ -214,6 +233,10 @@ impl SiglipTextEmbedder {
     }
 
     /// Encodes a text query (e.g. "cat", "nature") into a normalized 1536-d feature vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query text is empty, tokenization fails, or tensor execution fails.
     pub fn embed_text(&mut self, text: &str) -> Result<Vec<f32>, String> {
         let text = text.trim();
         if text.is_empty() {

@@ -26,13 +26,19 @@ pub const MOBILE_SAM_ENCODER_MODEL_URL: &str = DEFAULT_MOBILE_SAM_ENCODER_MODEL_
 pub const MOBILE_SAM_DECODER_MODEL_NAME: &str = "mobile_sam_decoder.onnx";
 pub const MOBILE_SAM_DECODER_MODEL_URL: &str = DEFAULT_MOBILE_SAM_DECODER_MODEL_URL;
 
+/// File name for the SigLIP 2 Giant vision encoder ONNX model.
 pub const SIGLIP2_GIANT_MODEL_NAME: &str = "siglip2-giant-vision.onnx";
+/// Default download URL for the SigLIP 2 Giant vision encoder ONNX model.
 pub const SIGLIP2_GIANT_MODEL_URL: &str = DEFAULT_SIGLIP2_GIANT_MODEL_URL;
 
+/// File name for the SigLIP 2 Giant text encoder ONNX model.
 pub const SIGLIP2_GIANT_TEXT_MODEL_NAME: &str = "siglip2-giant-text.onnx";
+/// Default download URL for the SigLIP 2 Giant text encoder ONNX model.
 pub const SIGLIP2_GIANT_TEXT_MODEL_URL: &str = DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL;
 
+/// File name for the SigLIP 2 Giant tokenizer JSON configuration.
 pub const SIGLIP2_GIANT_TOKENIZER_NAME: &str = "siglip2-giant-tokenizer.json";
+/// Default download URL for the SigLIP 2 Giant tokenizer JSON configuration.
 pub const SIGLIP2_GIANT_TOKENIZER_URL: &str = DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL;
 
 /// Get or initialize the global ONNX Runtime environment.
@@ -120,14 +126,22 @@ pub fn is_model_cached(model_name: &str) -> bool {
     }
 }
 
-/// Ensure that a named ONNX model is available locally in the cache directory,
+/// Ensures that a named ONNX model is available locally in the cache directory,
 /// downloading it from the configured or default URL if necessary.
+///
+/// # Errors
+///
+/// Returns an error if the model download or file write operation fails.
 pub fn ensure_model(model_name: &str, url_override: Option<&str>) -> Result<PathBuf, String> {
     ensure_model_with_progress(model_name, url_override, |_, _| {})
 }
 
-/// Ensure that a named ONNX model is available locally in the cache directory,
+/// Ensures that a named ONNX model is available locally in the cache directory,
 /// downloading it with progress reporting if necessary.
+///
+/// # Errors
+///
+/// Returns an error if the model download or file write operation fails.
 pub fn ensure_model_with_progress<F>(
     model_name: &str,
     url_override: Option<&str>,

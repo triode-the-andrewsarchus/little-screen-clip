@@ -2,10 +2,15 @@
 use little_clip_core::ImageThumbnail;
 use std::{path::Path, sync::atomic::AtomicBool};
 
+/// Horizontal bit dimension of the difference hash.
 pub const HASH_WIDTH: usize = 8;
+/// Vertical bit dimension of the difference hash.
 pub const HASH_HEIGHT: usize = 8;
-pub const GRID_COLS: usize = HASH_WIDTH + 1; // 9 columns to yield 8 horizontal differences
-pub const GRID_ROWS: usize = HASH_HEIGHT; // 8 rows
+/// Number of sample columns (9 columns yield 8 horizontal differences).
+pub const GRID_COLS: usize = HASH_WIDTH + 1;
+/// Number of sample rows in the luminance grid.
+pub const GRID_ROWS: usize = HASH_HEIGHT;
+/// Target thumbnail edge length in pixels used for d-hash generation.
 pub const DHASH_THUMBNAIL_EDGE: u32 = 64;
 
 // ITU-R BT.601 luma coefficients: Y = 0.299 R + 0.587 G + 0.114 B
@@ -62,14 +67,16 @@ pub fn compute_dhash(thumbnail: &ImageThumbnail) -> u64 {
     hash
 }
 
-/// Computes the d-hash directly from a regular image file using thumbnail loading.
+/// Computes a difference hash directly from an image file path.
+///
+/// Returns [`None`] if the thumbnail cannot be decoded or if `cancelled` is set.
 pub fn compute_dhash_from_path(path: &Path, cancelled: &AtomicBool) -> Option<u64> {
     // 64px is sufficient resolution for a 9x8 gradient hash and is extremely fast.
     let thumb = super::super::thumbnail::load(path, DHASH_THUMBNAIL_EDGE, 1, cancelled)?;
     Some(compute_dhash(&thumb))
 }
 
-/// Computes the Hamming distance (number of bit differences) between two 64-bit hashes.
+/// Computes the Hamming distance (number of differing bits) between two 64-bit hashes.
 #[allow(dead_code)]
 #[inline]
 pub fn hamming_distance(a: u64, b: u64) -> u32 {

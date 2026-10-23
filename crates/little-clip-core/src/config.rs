@@ -151,12 +151,17 @@ pub const DEFAULT_FEYNOBG_FP16_MODEL_URL: &str =
 pub const DEFAULT_RMBG_14_MODEL_URL: &str = DEFAULT_FEYNOBG_FP16_MODEL_URL;
 pub const DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL: &str =
     "https://huggingface.co/mtbui2010/depth-anything-v2-small-ONNX/resolve/main/model.onnx";
+/// Default download URL for the MobileSAM encoder ONNX model.
 pub const DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL: &str =
     "https://huggingface.co/Acly/MobileSAM/resolve/main/mobile_sam_image_encoder.onnx";
+/// Default download URL for the MobileSAM decoder ONNX model.
 pub const DEFAULT_MOBILE_SAM_DECODER_MODEL_URL: &str =
     "https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx";
+/// Default download URL for the SigLIP 2 Giant vision encoder ONNX model.
 pub const DEFAULT_SIGLIP2_GIANT_MODEL_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_quantized.onnx";
+/// Default download URL for the SigLIP 2 Giant text encoder ONNX model.
 pub const DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/text_model_quantized.onnx";
+/// Default download URL for the SigLIP 2 Giant tokenizer JSON configuration.
 pub const DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/tokenizer.json";
 
 /// AI/ONNX model download URL overrides.
@@ -727,21 +732,29 @@ impl AppConfig {
         save_setting_to_file("file_manager", "audio_spectrum", spectrum)
     }
 
-    /// Save the Files photo-gallery layout mode preference ("masonry" or "similarity").
+    /// Saves the Files photo-gallery layout mode preference ("masonry" or "similarity").
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the configuration file fails.
     pub fn save_file_manager_photo_mode_to_file(
         photo_mode: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         save_setting_to_file("file_manager", "photo_mode", photo_mode)
     }
 
-    /// Save the Files photo-gallery subfolder recursion preference.
+    /// Saves the Files photo-gallery subfolder recursion preference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the configuration file fails.
     pub fn save_file_manager_photo_recurse_to_file(
         recurse: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         save_setting_to_file("file_manager", "photo_recurse", recurse)
     }
 
-    /// URL for downloading the Big-LaMa inpainting ONNX model.
+    /// Returns the URL for downloading the Big-LaMa inpainting ONNX model.
     pub fn lama_model_url(&self) -> &str {
         self.ai_models
             .lama_url
@@ -750,7 +763,7 @@ impl AppConfig {
             .unwrap_or(DEFAULT_BIG_LAMA_MODEL_URL)
     }
 
-    /// URL for downloading the background removal (FeyNoBg) ONNX model.
+    /// Returns the URL for downloading the background removal (FeyNoBg) ONNX model.
     pub fn rmbg_model_url(&self) -> &str {
         self.ai_models
             .rmbg_url
@@ -759,12 +772,12 @@ impl AppConfig {
             .unwrap_or(DEFAULT_FEYNOBG_FP16_MODEL_URL)
     }
 
-    /// URL for downloading the background removal (FeyNoBg) ONNX model.
+    /// Returns the URL for downloading the background removal (FeyNoBg) ONNX model.
     pub fn bg_removal_model_url(&self) -> &str {
         self.rmbg_model_url()
     }
 
-    /// URL for downloading the Depth-Anything-V2 depth estimation ONNX model.
+    /// Returns the URL for downloading the Depth-Anything-V2 depth estimation ONNX model.
     pub fn depth_model_url(&self) -> &str {
         self.ai_models
             .depth_url
@@ -773,7 +786,7 @@ impl AppConfig {
             .unwrap_or(DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL)
     }
 
-    /// URL for downloading the MobileSAM encoder ONNX model.
+    /// Returns the URL for downloading the MobileSAM encoder ONNX model.
     pub fn sam_encoder_model_url(&self) -> &str {
         self.ai_models
             .sam_encoder_url
@@ -782,7 +795,7 @@ impl AppConfig {
             .unwrap_or(DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL)
     }
 
-    /// URL for downloading the MobileSAM decoder ONNX model.
+    /// Returns the URL for downloading the MobileSAM decoder ONNX model.
     pub fn sam_decoder_model_url(&self) -> &str {
         self.ai_models
             .sam_decoder_url
@@ -791,7 +804,7 @@ impl AppConfig {
             .unwrap_or(DEFAULT_MOBILE_SAM_DECODER_MODEL_URL)
     }
 
-    /// URL for downloading the SigLIP 2 Giant vision encoder ONNX model.
+    /// Returns the URL for downloading the SigLIP 2 Giant vision encoder ONNX model.
     pub fn siglip2_giant_model_url(&self) -> &str {
         self.ai_models
             .siglip2_giant_url
@@ -799,7 +812,7 @@ impl AppConfig {
             .unwrap_or(DEFAULT_SIGLIP2_GIANT_MODEL_URL)
     }
 
-    /// URL for downloading the SigLIP 2 Giant text encoder ONNX model.
+    /// Returns the URL for downloading the SigLIP 2 Giant text encoder ONNX model.
     pub fn siglip2_giant_text_model_url(&self) -> &str {
         self.ai_models
             .siglip2_giant_text_url
@@ -807,7 +820,7 @@ impl AppConfig {
             .unwrap_or(DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL)
     }
 
-    /// URL for downloading the SigLIP 2 Giant tokenizer JSON.
+    /// Returns the URL for downloading the SigLIP 2 Giant tokenizer JSON.
     pub fn siglip2_giant_tokenizer_url(&self) -> &str {
         self.ai_models
             .siglip2_giant_tokenizer_url
