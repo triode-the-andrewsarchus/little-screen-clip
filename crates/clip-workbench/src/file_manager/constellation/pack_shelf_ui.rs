@@ -745,3 +745,56 @@ impl ConstellationState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inset_end_handle_trims_without_moving_the_start() {
+        let ctx = egui::Context::default();
+        let mut sample = super::super::sample_pack::SlotSample::new(
+            "hit.wav".into(),
+            "hit.wav".into(),
+            None,
+            1.0,
+        );
+        let mut frame = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 180.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::none())
+                        .show(ctx, |ui| {
+                            ConstellationState::render_layer_waveform(ui, &mut sample);
+                        });
+                },
+            )
+        };
+        frame(vec![]);
+        let end = Pos2::new(628.0, 40.0);
+        frame(vec![
+            egui::Event::PointerMoved(end),
+            egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let trimmed = Pos2::new(420.0, 40.0);
+        frame(vec![egui::Event::PointerMoved(trimmed)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: trimmed,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(sample.start_sec, 0.0);
+        assert!((sample.end_sec - 408.0 / 616.0).abs() < 0.001);
+    }
+}
