@@ -146,5 +146,7 @@ preview_triangle_limit = 10000
 workbench_triangle_limit = 150000
 
 [file_manager]
+# Drum-pad rows, bottom to top. Logical characters respect hardware remapping.
+constellation_pad_keys = ["zxcv", "asdf", "qwer", "1234"]
 # Pixels per video timeline sample: 1 (native resolution), 2, 4, 8, or 16.
 video_timeline_decimation = 1

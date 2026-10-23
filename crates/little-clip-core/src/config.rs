@@ -51,6 +51,10 @@ pub struct FileManagerConfig {
     pub audio_spectrum: bool,
     /// Timeline pixels per sample: 1, 2, 4, 8, or 16 (default: 1).
     pub video_timeline_decimation: u8,
+    /// Four rows of four logical characters, bottom to top, for constellation pads.
+    /// Letters are case-insensitive; Shift assigns a sample instead of playing it.
+    #[serde(deserialize_with = "deserialize_constellation_pad_keys")]
+    pub constellation_pad_keys: [String; 4],
 }
 impl Default for FileManagerConfig {
     fn default() -> Self {
@@ -58,8 +62,32 @@ impl Default for FileManagerConfig {
             music_threshold_percent: 75,
             audio_spectrum: false,
             video_timeline_decimation: 1,
+            constellation_pad_keys: ["zxcv", "asdf", "qwer", "1234"].map(str::to_owned),
         }
     }
+}
+
+/// Rejects ambiguous bindings before application startup; no layout presets are needed.
+fn deserialize_constellation_pad_keys<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<[String; 4], D::Error> {
+    let rows = <[String; 4]>::deserialize(deserializer)?;
+    let mut seen = std::collections::HashSet::new();
+    for row in &rows {
+        if row.chars().count() != 4 {
+            return Err(serde::de::Error::custom(
+                "constellation_pad_keys needs four rows of four characters, bottom to top",
+            ));
+        }
+        for key in row.chars() {
+            if !key.is_ascii_graphic() || !seen.insert(key.to_ascii_lowercase()) {
+                return Err(serde::de::Error::custom(
+                    "constellation_pad_keys must contain 16 distinct ASCII letters, digits, or punctuation characters",
+                ));
+            }
+        }
+    }
+    Ok(rows)
 }
 
 /// Slot depth configuration for the dual-stack model.
@@ -825,6 +853,38 @@ pub fn get_user_config_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn constellation_pad_keys_support_direct_hardware_remaps_and_reject_ambiguity() {
+        let default = AppConfig::default();
+        assert_eq!(
+            default.file_manager.constellation_pad_keys,
+            ["zxcv", "asdf", "qwer", "1234"]
+        );
+        let configured: AppConfig = toml::from_str(
+            r#"[file_manager]
+constellation_pad_keys = [";qjk", "aoeu", "',.p", "1234"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            configured.file_manager.constellation_pad_keys,
+            [";qjk", "aoeu", "',.p", "1234"]
+        );
+        for rows in [
+            r#"["zxcv", "asdf", "qwer", "123z"]"#,
+            r#"["zxcv", "asdf", "qwer", "123Z"]"#,
+            r#"["zxc", "asdf", "qwer", "1234"]"#,
+            r#"["zx v", "asdf", "qwer", "1234"]"#,
+        ] {
+            assert!(
+                toml::from_str::<AppConfig>(&format!(
+                    "[file_manager]\nconstellation_pad_keys = {rows}"
+                ))
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn audio_spectrum_persists_as_a_boolean_without_rewriting_other_settings() {

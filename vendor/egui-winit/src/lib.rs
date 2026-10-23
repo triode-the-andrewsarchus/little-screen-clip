@@ -108,6 +108,36 @@ pub struct State {
 /// clipboard read. Text editors should leave this false.
 pub const CLIPBOARD_SHORTCUTS_AS_KEYS: &str = "egui_winit_clipboard_shortcuts_as_keys";
 
+/// One layout-aware printable key press before Shift/Caps Lock are applied.
+///
+/// This preserves keys that egui's fixed `Key` enum cannot represent (e.g. an
+/// apostrophe). Consumers must still yield to focused text editors.
+#[derive(Clone, Debug)]
+pub struct LogicalKeyPress {
+    pub character: char,
+    pub modifiers: egui::Modifiers,
+    pub egui_key: Option<egui::Key>,
+}
+
+const LOGICAL_KEY_PRESSES: &str = "egui_winit_logical_key_presses";
+const LOGICAL_KEY_CONSUMER: &str = "egui_winit_logical_key_consumer";
+
+/// Drains recent logical presses and registers interest for the next frame.
+///
+/// Input collection expires when this is not called for a frame. Events from a
+/// hidden view are never replayed on return. The queue holds at most 128 presses.
+pub fn take_logical_key_presses(ctx: &egui::Context) -> Vec<LogicalKeyPress> {
+    let frame = ctx.frame_nr();
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::new(LOGICAL_KEY_CONSUMER), frame);
+        data.remove_temp::<Vec<(u64, LogicalKeyPress)>>(egui::Id::new(LOGICAL_KEY_PRESSES))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(observed, event)| (observed.saturating_add(1) >= frame).then_some(event))
+            .collect()
+    })
+}
+
 impl State {
     /// Construct a new instance
     pub fn new(
@@ -761,6 +791,9 @@ impl State {
             physical_key
         );
 
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+        self.record_logical_key_press(event, logical_key);
+
         if let Some(logical_key) = logical_key {
             if self.handle_clipboard_shortcut(logical_key, pressed) {
                 return;
@@ -791,6 +824,43 @@ impl State {
                         .events
                         .push(egui::Event::Text(text.to_string()));
                 }
+            }
+        }
+    }
+
+    /// Keeps optional character shortcuts separate from egui's fixed-key translation.
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+    fn record_logical_key_press(
+        &self,
+        event: &winit::event::KeyEvent,
+        logical_key: Option<egui::Key>,
+    ) {
+        if event.state != winit::event::ElementState::Pressed {
+            return;
+        }
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        if let winit::keyboard::Key::Character(text) = event.key_without_modifiers() {
+            if let Some(character) = text.chars().next().filter(|_| text.chars().count() == 1) {
+                let frame = self.egui_ctx.frame_nr();
+                self.egui_ctx.data_mut(|data| {
+                    let recent = data.get_temp::<u64>(egui::Id::new(LOGICAL_KEY_CONSUMER));
+                    if recent.is_some_and(|observed| observed.saturating_add(1) >= frame) {
+                        let presses = data.get_temp_mut_or_default::<Vec<(u64, LogicalKeyPress)>>(
+                            egui::Id::new(LOGICAL_KEY_PRESSES),
+                        );
+                        presses.retain(|(observed, _)| observed.saturating_add(1) >= frame);
+                        if presses.len() < 128 {
+                            presses.push((
+                                frame,
+                                LogicalKeyPress {
+                                    character,
+                                    modifiers: self.egui_input.modifiers,
+                                    egui_key: logical_key,
+                                },
+                            ));
+                        }
+                    }
+                });
             }
         }
     }
@@ -1838,4 +1908,43 @@ mod profiling_scopes {
         };
     }
     pub(crate) use profile_scope;
+}
+
+#[cfg(test)]
+mod logical_key_tests {
+    use super::*;
+
+    #[test]
+    fn logical_punctuation_is_preserved_and_hidden_consumers_drop_old_keys() {
+        let ctx = egui::Context::default();
+        assert!(take_logical_key_presses(&ctx).is_empty());
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new(LOGICAL_KEY_PRESSES),
+                vec![(
+                    0_u64,
+                    LogicalKeyPress {
+                        character: '\'',
+                        modifiers: egui::Modifiers::SHIFT,
+                        egui_key: None,
+                    },
+                )],
+            )
+        });
+        let presses = take_logical_key_presses(&ctx);
+        assert_eq!(presses.len(), 1);
+        assert_eq!(presses[0].character, '\'');
+        assert!(presses[0].modifiers.shift);
+        assert!(presses[0].egui_key.is_none());
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new(LOGICAL_KEY_PRESSES),
+                vec![(0_u64, presses[0].clone())],
+            )
+        });
+        for _ in 0..3 {
+            let _ = ctx.run(Default::default(), |_| {});
+        }
+        assert!(take_logical_key_presses(&ctx).is_empty());
+    }
 }
