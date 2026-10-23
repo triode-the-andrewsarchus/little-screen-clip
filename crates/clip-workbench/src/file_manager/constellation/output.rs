@@ -1,4 +1,4 @@
-//! One stereo bus for the drum rack, using the application's shared hardware sink.
+//! One stereo bus for pads and all auditions, using the shared hardware sink.
 //!
 //! Layers have 2 dB of headroom. The linked stereo compressor has no makeup gain:
 //! a normal single layer stays below its threshold, while overlapping hits receive

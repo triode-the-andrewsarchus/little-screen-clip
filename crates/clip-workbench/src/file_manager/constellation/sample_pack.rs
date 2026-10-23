@@ -141,7 +141,7 @@ impl SlotSample {
         category: Option<SampleCategory>,
         duration: f32,
     ) -> Self {
-        let dur = duration.max(0.01);
+        let dur = duration.max(0.000_001);
         Self {
             file_path,
             filename,
@@ -173,14 +173,15 @@ impl SlotSample {
     /// Adopts prepared PCM while preserving user trim bounds that still fit.
     pub(super) fn set_cached_audio(&mut self, audio: Arc<CachedAudio>) {
         let duration =
-            (audio.samples.len() as f32 / audio.channels as f32 / audio.sample_rate as f32)
-                .max(0.01);
+            audio.samples.len() as f32 / audio.channels as f32 / audio.sample_rate as f32;
         if self.end_sec == self.duration {
             self.end_sec = duration;
         }
         self.duration = duration;
         self.end_sec = self.end_sec.min(duration);
-        self.start_sec = self.start_sec.min((self.end_sec - 0.005).max(0.0));
+        self.start_sec = self
+            .start_sec
+            .min((self.end_sec - 1.0 / audio.sample_rate as f32).max(0.0));
         self.cached_audio = Some(audio);
     }
 

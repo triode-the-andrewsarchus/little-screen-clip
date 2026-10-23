@@ -334,8 +334,19 @@ impl FileManager {
             .map_or(&self.home, |location| &location.path)
     }
 
+    /// Retires the browser-owned streaming load after an internal rack stop.
+    /// Consume hidden-view requests without cancelling a newly chosen Music track.
+    fn retire_constellation_audition(&mut self) {
+        if std::mem::take(&mut self.constellation.stop_map_audition)
+            && self.view == BrowserView::Constellation
+        {
+            self.music.stop();
+        }
+    }
+
     fn stop_previews(&mut self) {
         self.constellation.stop_playback();
+        self.constellation.stop_map_audition = false;
         self.music.stop();
         self.midi.stop();
     }

@@ -23,12 +23,18 @@ enum Command {
     Disconnect,
 }
 
+/// Visibility and its retirement epoch travel together to every callback.
+#[derive(Clone, Default)]
+struct Gate {
+    active: Arc<AtomicBool>,
+    epoch: Arc<AtomicU64>,
+}
+
 pub(super) struct Controller {
     commands: mpsc::SyncSender<Command>,
     notes: mpsc::Receiver<(u64, usize, u8)>,
     status: Arc<Mutex<Status>>,
-    active: Arc<AtomicBool>,
-    epoch: Arc<AtomicU64>,
+    gate: Gate,
 }
 
 impl Controller {
@@ -39,11 +45,9 @@ impl Controller {
         let (commands, requests) = mpsc::sync_channel(8);
         let (events, notes) = mpsc::sync_channel(128);
         let status = Arc::new(Mutex::new(Status::default()));
-        let active = Arc::new(AtomicBool::new(false));
-        let epoch = Arc::new(AtomicU64::new(0));
+        let gate = Gate::default();
         let state = status.clone();
-        let gate = active.clone();
-        let generation = epoch.clone();
+        let worker_gate = gate.clone();
         std::thread::Builder::new()
             .name("constellation-midi".into())
             .spawn(move || {
@@ -55,8 +59,7 @@ impl Controller {
                         &mut connection,
                         &state,
                         &events,
-                        &gate,
-                        &generation,
+                        &worker_gate,
                         &ctx,
                         &playback,
                     );
@@ -77,8 +80,7 @@ impl Controller {
             commands,
             notes,
             status,
-            active,
-            epoch,
+            gate,
         })
     }
 
@@ -109,15 +111,15 @@ impl Controller {
     }
 
     pub fn suspend(&self) {
-        self.active.store(false, Ordering::SeqCst);
-        self.epoch.fetch_add(1, Ordering::SeqCst);
+        self.gate.active.store(false, Ordering::SeqCst);
+        self.gate.epoch.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn poll(&self, visible: bool) -> Vec<(usize, u8)> {
         if !visible {
             self.suspend();
         }
-        let epoch = self.epoch.load(Ordering::SeqCst);
+        let epoch = self.gate.epoch.load(Ordering::SeqCst);
         let notes = self
             .notes
             .try_iter()
@@ -125,7 +127,7 @@ impl Controller {
                 (visible && generation == epoch).then_some((pad, velocity))
             })
             .collect();
-        self.active.store(visible, Ordering::SeqCst);
+        self.gate.active.store(visible, Ordering::SeqCst);
         notes
     }
 }
@@ -141,8 +143,7 @@ fn execute(
     connection: &mut Option<midir::MidiInputConnection<()>>,
     state: &Mutex<Status>,
     events: &mpsc::SyncSender<(u64, usize, u8)>,
-    active: &Arc<AtomicBool>,
-    epoch: &Arc<AtomicU64>,
+    gate: &Gate,
     ctx: &egui::Context,
     playback: &Arc<Mutex<super::output::Rack>>,
 ) -> Result<(), String> {
@@ -171,8 +172,7 @@ fn execute(
         *connection = None;
         state.lock().map_err(|e| e.to_string())?.connected = None;
         let events = events.clone();
-        let active = active.clone();
-        let epoch = epoch.clone();
+        let gate = gate.clone();
         let ctx = ctx.clone();
         let playback = playback.clone();
         *connection = Some(
@@ -181,7 +181,9 @@ fn execute(
                     &ports[index],
                     "Little Clip drum rack",
                     move |_, message, _| {
-                        if let Some(event) = dispatch_hit(message, &active, &epoch, &playback) {
+                        if let Some(event) =
+                            dispatch_hit(message, &gate.active, &gate.epoch, &playback)
+                        {
                             let _ = events.try_send(event);
                             ctx.request_repaint();
                         }
@@ -315,8 +317,10 @@ mod tests {
             commands,
             notes,
             status: Default::default(),
-            active: Arc::new(AtomicBool::new(true)),
-            epoch: Arc::new(AtomicU64::new(0)),
+            gate: Gate {
+                active: Arc::new(AtomicBool::new(true)),
+                epoch: Arc::new(AtomicU64::new(0)),
+            },
         };
         events.send((0, 0, 100)).unwrap();
         controller.suspend();

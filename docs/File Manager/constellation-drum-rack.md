@@ -8,11 +8,12 @@ Indexing uses the same themed progress-bar treatment as Image Studio depth work.
 Rack and Packs are tabs in the right panel. Packs never opens a floating browser.
 Selecting a pad exposes its layer editor below the map; resize or hide that editor
 to give the map more room. Only this pad's layers are expanded. The footer holds
-MIDI input, velocity override, and pad-output dynamics.
+MIDI input, velocity override, and shared output dynamics. The Editor toggle sits
+beside Undo/Redo. Pad heights adapt to keep all sixteen visible in a compact rack.
 
 ## Keyboard configuration
 
-The default keyboard rows are, from bottom to top:
+The default rack is arranged as follows (the configuration stores rows bottom to top):
 
 ```text
 1 2 3 4
@@ -55,7 +56,8 @@ retain their sample positions and acquire six empty pads when loaded. Their old
 ## MIDI and pad behavior
 
 Choose an input from MIDI input in the footer. Enumeration and connection teardown
-run on a dedicated worker. Refresh inputs after plugging in or removing a device.
+run on a dedicated worker. Ready pads trigger directly from MIDI callbacks using
+a shared playback state; repaint timing does not schedule their audio. Refresh inputs after plugging in or removing a device.
 Notes 36–51 map consecutively left to right, bottom to top; the lower-left pad is
 note 36 and the upper-right pad is note 51. All MIDI channels are accepted.
 
@@ -77,17 +79,60 @@ existing shared device sink. This is an internal mixing rate; hardware buffer
 sizes and backend selection remain unchanged. Playback shares cached PCM rather
 than copying it when a pad is hit.
 
-Each pad layer has 2 dB of input headroom. Glue uses linked stereo 2:1 compression,
+Every audition and pad layer has 2 dB of input headroom. Glue uses linked stereo 2:1 compression,
 a threshold of 0.85, 5 ms attack, 120 ms release, and no makeup gain. A linked peak
 ceiling at 0.98 catches transient overloads. A normal full-scale single layer at
 default gain stays below the compressor threshold. Layered or boosted samples can
 engage it. The footer shows gain reduction.
 
 Bypass disables compression and the ceiling while keeping input headroom unchanged.
-Choke groups, velocity override, and bypass are saved with the pack. The bus applies
-to rack playback; the map's browser audition and individual layer/library auditions
-retain their existing preview players. Pack saves remain source references and
-trim/gain metadata, not processed audio exports.
+Choke groups, velocity override, and bypass are saved with the pack. The bus also
+protects map, individual-layer, and saved-pack auditions. Map auditions retain the
+guarded streaming loader, so long samples are not truncated to pad-cache length.
+
+## Editing and persistence
+
+Drop samples onto pads to replace their layers; Shift+drop adds layers instead.
+A pad holds up to eight layers. Drops collect references, never move the source.
+Worker decoding must succeed for every dropped sample before assignment, and a
+pad edited during that load rejects its stale completion. Unavailable sources show
+a compact error dot and offer Retry audio; loading and playing have transient cues.
+Choke labels appear only for nonzero groups.
+
+The selected pad exposes numeric trim, gain, stereo balance, and linear attack and
+release fades (0–500 ms). Mute and Solo gate active pad voices without restarting
+them. Layer changes affect subsequent hits. Fades follow the trimmed boundaries;
+overlapping fades use the lower envelope. Center balance preserves existing stereo
+level; mono is duplicated before balance. These settings also apply to exports.
+
+Undo/Redo keep 32 metadata snapshots and coalesce pointer gestures/text editing.
+Ctrl+Z undoes, Ctrl+Y or Ctrl+Shift+Z redoes; text editors retain their own undo.
+The rack indicates Saved/Unsaved changes. Loading another pack or closing Files
+with unsaved edits opens an inline Save and continue/Discard/Keep editing bar.
+Saving records the submitted snapshot; edits made during a save stay unsaved.
+
+Save pack retains source references and edit metadata in a versioned folder.
+Export → WAV kit renders each layer's trim, gain, balance, and fades into stereo
+32-bit float WAV files with a relative-path bank manifest. WAV kit + originals
+also copies the complete unmodified input files. The exported kit can be moved to
+another machine without the original paths. Glue is a live bus effect and is not
+baked into individual layers. Exports do not change the current pack's Saved state.
+Both formats stage under a pinned output directory and install atomically without
+overwriting existing names. Accepted writes survive navigation and defer close.
+
+## Indexing and filtering
+
+Index folder again inventories the complete tree and reuses classified observations
+whose device/inode, size, and nanosecond mtime/ctime still match. New or changed
+files are analyzed; disappeared files leave the next committed snapshot. Progress
+and completion show reused and newly analyzed counts. Legacy rows without precise
+revision keys, and previously unclassified files, are analyzed again. Discovery or
+analysis failures and cancellation retain the prior snapshot.
+
+Duration limits, channel count, category, and filename filtering share one predicate
+for painting, picking, Random, and Neighbor. A maximum duration of zero means no
+upper limit. Filtered stars remain dim for spatial context. Reset filters clears
+all four filter types.
 
 ## Verification
 

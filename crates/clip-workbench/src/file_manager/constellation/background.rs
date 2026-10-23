@@ -65,10 +65,10 @@ impl Task {
 
 impl Pending {
     pub(super) fn cancel_read(&self) {
-        if !matches!(self.task, Task::Save | Task::Export | Task::Delete) {
-            if let Some(ticket) = &self.ticket {
-                ticket.cancel();
-            }
+        if !matches!(self.task, Task::Save | Task::Export | Task::Delete)
+            && let Some(ticket) = &self.ticket
+        {
+            ticket.cancel();
         }
     }
 

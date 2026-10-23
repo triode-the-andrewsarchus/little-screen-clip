@@ -223,6 +223,7 @@ impl FileManager {
             },
         );
 
+        self.retire_constellation_audition();
         if let Some(p) = sample_to_play {
             self.music.play(&p);
         }

@@ -1422,6 +1422,14 @@ mod tests {
                         )
                     });
                 });
+                assert_eq!(state.pad_drop_targets.len(), 16);
+                assert!(
+                    state
+                        .pad_drop_targets
+                        .iter()
+                        .all(|(rect, _)| rect.height() >= 27.9),
+                    "every pad must remain visible at the compact window size"
+                );
                 let panel = egui::containers::panel::PanelState::load(
                     &ctx,
                     egui::Id::new("constellation_pack_shelf_panel"),

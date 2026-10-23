@@ -23,6 +23,11 @@ impl FileSource {
             little_clip_core::kernel_interface::pin(path, true).map_err(|e| e.to_string())?;
         Self::capture_file(&source)
     }
+    /// Captures identity from a retained ordinary-file handle without reopening its name.
+    ///
+    /// # Errors
+    /// Returns an error for protected or non-regular handles, unavailable metadata,
+    /// or a descriptor whose resolved name cannot be obtained.
     pub(crate) fn capture_file(source: &File) -> Result<Self, String> {
         if little_clip_core::kernel_interface::classify_handle(source)
             .map_err(|e| e.to_string())?
@@ -52,6 +57,8 @@ impl FileSource {
     }
     /// Returns a stable, byte-exact cache revision from the pinned file metadata.
     /// Includes device/inode, size, and mtime/ctime with nanosecond precision.
+    /// This is a metadata cache token, not a content digest or read authorization;
+    /// content readers must still open their inputs through the guarded path.
     pub(crate) fn revision_key(&self) -> Vec<u8> {
         self.version
             .iter()

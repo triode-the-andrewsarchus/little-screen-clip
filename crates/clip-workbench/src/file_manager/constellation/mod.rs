@@ -130,6 +130,8 @@ pub struct ConstellationState {
     pad_keys: [char; sample_pack::NUM_SLOTS],
     midi: Option<midi::Controller>,
     playback: Arc<std::sync::Mutex<output::Rack>>,
+    /// The browser owns the map stream/loader; internal rack stops must retire it too.
+    pub(crate) stop_map_audition: bool,
     background: Vec<background::Pending>,
     folder_generation: u64,
     bank_generation: u64,
@@ -191,6 +193,7 @@ impl Default for ConstellationState {
             ],
             midi: None,
             playback: Default::default(),
+            stop_map_audition: false,
             background: Vec::new(),
             folder_generation: 0,
             bank_generation: 0,
@@ -471,9 +474,11 @@ impl ConstellationState {
 
     /// Stops slot voices and retires hover work through the shared preview lifecycle.
     ///
-    /// Map auditions use the browser's `Music` player, stopped by its owner alongside
-    /// this method. Retains the hovered path so Escape cannot immediately retrigger it.
+    /// Requests retirement of the browser-owned map stream and its pending load.
+    /// The browser consumes that request before accepting loader results and after
+    /// rack UI actions. Retains the hovered path so Escape cannot retrigger it.
     pub fn stop_playback(&mut self) {
+        self.stop_map_audition = true;
         if let Some(midi) = &self.midi {
             midi.suspend();
         }

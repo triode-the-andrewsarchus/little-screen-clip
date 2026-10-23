@@ -14,6 +14,10 @@ use std::{
 /// Sources and the output directory stay pinned through staging and publication.
 /// Float PCM preserves gain above unity without integer clipping. The bus compressor
 /// is a live performance effect and is not baked into individual layer files.
+///
+/// # Errors
+/// Returns an error for invalid banks, unavailable/protected or changed sources,
+/// trims beyond decoded audio, RIFF size limits, or staging/installation failures.
 pub(super) fn export(
     root: &Path,
     bank: &SamplePackBank,
@@ -104,7 +108,7 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
     let frames = end.saturating_sub(start);
     let bytes = frames
         .checked_mul(2 * 4)
-        .filter(|bytes| *bytes <= u32::MAX as u64 - 36)
+        .filter(|bytes| *bytes <= u32::MAX as u64 - 128)
         .ok_or("WAV layer exceeds RIFF size limit")? as u32;
     if frames == 0 {
         return Err("Trim contains no complete audio frames".into());
@@ -141,6 +145,25 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sub_millisecond_hits_keep_their_actual_duration_through_cache_and_export() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("click.wav");
+        let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(1, 48000, 1);
+        buffer.push_samples(&[8192; 16]);
+        buffer.write_wav(&path).unwrap();
+        let mut sample = SlotSample::new(path, "click.wav".into(), None, 16.0 / 48000.0);
+        sample.ensure_audio_loaded();
+        assert!((sample.duration - 16.0 / 48000.0).abs() < 0.000001);
+        let mut bank = SamplePackBank::new("Short");
+        bank.slots[0].samples.push(sample);
+        let exported = export(root.path(), &bank, false).unwrap();
+        let decoder =
+            rodio::Decoder::try_from(File::open(exported.join("pad01_layer1.wav")).unwrap())
+                .unwrap();
+        assert_eq!(decoder.count(), 32);
+    }
 
     #[test]
     fn exported_kit_survives_original_removal_and_preserves_trim_and_gain() {

@@ -406,6 +406,7 @@ impl eframe::App for FileManagerApp {
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.preview_keys(ctx);
+        self.browser.retire_constellation_audition();
         if self.browser.view == super::BrowserView::Constellation {
             let constellation = &mut self.browser.constellation;
             self.browser

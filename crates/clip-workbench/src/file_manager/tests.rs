@@ -58,6 +58,33 @@ fn system_reveal_fixture(
 }
 
 #[test]
+fn internal_rack_stop_cancels_pending_map_load_without_poisoning_other_music() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("pending.wav");
+    std::fs::write(&path, b"pending audio fixture").unwrap();
+    let (mut manager, _jobs) = loaded(root.path());
+    manager.view = BrowserView::Constellation;
+    manager.music.play(&path);
+    assert!(manager.music.busy());
+    manager.constellation.stop_playback();
+    manager.retire_constellation_audition();
+    assert!(!manager.music.busy());
+    assert!(manager.music.current().is_none());
+    // A request left by the old view cannot retire an explicit new Music preview.
+    manager.constellation.stop_playback();
+    manager.view = BrowserView::Music;
+    manager.music.play(&path);
+    manager.retire_constellation_audition();
+    assert_eq!(manager.music.current(), Some(&path));
+    // Owner-level stop already handles Music and must consume its own signal.
+    manager.view = BrowserView::Constellation;
+    manager.stop_previews();
+    manager.music.play(&path);
+    manager.retire_constellation_audition();
+    assert_eq!(manager.music.current(), Some(&path));
+}
+
+#[test]
 fn system_reveal_preserves_browser_history_and_selects_target() {
     let (_temp, mut manager, jobs, original, target) = system_reveal_fixture(false);
     let first = original.parent().unwrap();

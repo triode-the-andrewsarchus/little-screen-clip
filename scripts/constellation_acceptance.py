@@ -4,6 +4,8 @@ import json
 import math
 import sqlite3
 import struct
+import subprocess
+import time
 import wave
 from pathlib import Path
 
@@ -16,7 +18,7 @@ def exercise(session, root, hardware_keys=False):
     session.observe("folder", ["Constellation", "File"])
     session.click(*session.word("folder", "Constellation"))
     session.observe("empty-map", ["Sample constellation", "Rack", "Override velocity"])
-    session.click(580, 535)
+    session.click(*(session.word("empty-map", "Index", required=False) or (580, 565)))
     database = session.output / "data/little-screen-clip/constellation.sqlite"
     def indexed():
         if not database.exists():
@@ -35,28 +37,53 @@ def exercise(session, root, hardware_keys=False):
     # exercises the map's focus behavior before Shift+1 on a real Wayland keyboard.
     from PIL import Image
     image = Image.open(session.output / "search-cleared.png").convert("RGB")
-    stars = [(x, y) for y in range(310, 715) for x in range(355, 840)
+    stars = [(x, y) for y in range(400, 680) for x in range(355, 840)
              if (lambda c: c[0] > 140 and c[0] > c[1] * 1.5 and c[0] > c[2] * 1.5)(image.getpixel((x, y)))]
     assert stars, "owned kick star must be visible in the map"
     session.click(sum(x for x, _ in stars) // len(stars), sum(y for _, y in stars) // len(stars))
     session.key("semicolon" if hardware_keys else "z", "shift")
-    session.observe("assigned-slot", ["kick.wav"])
+    session.observe("assigned-slot", ["kick.wav", "Mute", "Solo", "Attack", "Release"])
     session.key("q" if hardware_keys else "x", "shift")
     if hardware_keys:
         session.key("apostrophe", "shift")
     for key in (["semicolon", "semicolon", "q", "apostrophe"] if hardware_keys else ["z", "z", "x", "z"]):
         session.key(key)
     session.observe("retriggered-slots", ["kick.wav"])
+    # Exercise real Copy-only Wayland map drags, including Shift layering.
+    image = Image.open(session.output / "retriggered-slots.png").convert("RGB")
+    editor_y = (session.word("assigned-slot", "Mute", required=False) or (420, 486))[1]
+    red = lambda c: c[0] > 140 and c[0] > c[1] * 1.5 and c[0] > c[2] * 1.5
+    star = [(x, y) for y in range(400, editor_y - 20) for x in range(355, 805) if red(image.getpixel((x, y)))]
+    pad_line = [(x, y) for y in range(550, 680) for x in range(822, 904) if red(image.getpixel((x, y)))]
+    assert star and pad_line, "owned map star and first-pad category line must be visible"
+    source = tuple(sum(point[axis] for point in star) // len(star) for axis in (0, 1))
+    bottom = max(y for _, y in pad_line)
+    pad_line = [(x, y) for x, y in pad_line if y >= bottom - 2]
+    destination = (sum(x for x, _ in pad_line) // len(pad_line), bottom - 10)
+    def drag():
+        private.run_checked([str(session.pointer), "drag", "1280", "800", *map(str, (*source, *destination))], env=session.env)
+        time.sleep(0.4)
+    drag()
+    session.observe("replace-drop", ["kick.wav"])
+    modifier = subprocess.Popen(["wtype", "-M", "shift", "-s", "2500", "-m", "shift"], env=session.env)
+    try:
+        time.sleep(0.15)
+        drag()
+    finally:
+        modifier.wait(timeout=4)
+    session.observe("layer-drop", ["kick.wav"])
+    assert (root / "kick.wav").is_file(), "pad assignment must preserve its source"
     session.click(500, 708)  # Override velocity, in the shared footer.
     session.click(690, 708)  # Compressor bypass.
     session.observe("performance-controls", ["kick.wav"])
-    session.click(1110, 376)
+    session.click(*(session.word("performance-controls", "Save", required=False) or (1038, 514)))
     packs = root / "little-screen-clip-sample-packs"
     wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 1, "first atomic pack save")
     first = next(packs.glob("*/bank.json"))
     bank = json.loads(first.read_text())
     assert len(bank["slots"]) == 16
-    assert len(bank["slots"][0]["samples"]) == 1
+    assert {i for i, slot in enumerate(bank["slots"]) if slot["samples"]} == ({0, 1, 8} if hardware_keys else {0, 1})
+    assert len(bank["slots"][0]["samples"]) == 2
     assert len(bank["slots"][1]["samples"]) == 1
     assert bank["slots"][0]["samples"][0]["end_sec"] > 0
     assert bank["override_velocity"] and bank["compressor_bypass"]
@@ -66,12 +93,39 @@ def exercise(session, root, hardware_keys=False):
     marker.write_text("preserve this owned fixture")
     before = first.read_bytes()
     session.observe("first-save", ["kick.wav"])
-    session.click(1110, 376)
+    session.click(*(session.word("first-save", "Save", required=False) or (1038, 514)))
     wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 2, "versioned second pack save")
     assert first.read_bytes() == before
     assert marker.read_text() == "preserve this owned fixture"
     session.observe("second-save", ["kick.wav"])
-    session.click(1080, 326)
+    session.click(*(session.word("second-save", "Map", required=False) or (987, 222)))
+    session.observe("index-menu", ["Index folder again"])
+    session.click(*session.word("index-menu", "Index"))
+    session.observe("reused-index", ["1 reused", "0 analyzed"])
+    session.click(*(session.word("reused-index", "channels", required=False) or (635, 263)))
+    session.observe("channel-menu", ["Mono", "Stereo"])
+    session.click(*session.word("channel-menu", "Stereo"))
+    session.observe("stereo-filter", ["0 / 1"])
+    session.click(*(session.word("stereo-filter", "Reset", required=False) or (751, 263)))
+    session.observe("filters-reset", ["1 / 1"])
+    session.click(*(session.word("filters-reset", "Export", required=False) or (1125, 514)))
+    session.observe("export-menu", ["WAV kit"])
+    session.click(*session.word("export-menu", "WAV"))
+    wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 3, "portable WAV kit export")
+    exported = next(path for path in packs.glob("*/bank.json") if (path.parent / "pad01_layer1.wav").exists())
+    portable = json.loads(exported.read_text())
+    assert not Path(portable["slots"][0]["samples"][0]["file_path"]).is_absolute()
+    assert not (exported.parent / "pad01_layer1.wav").is_symlink()
+    assert (exported.parent / "pad01_layer1.wav").read_bytes()[:4] == b"RIFF"
+    session.observe("portable-export", ["kick.wav"])
+    session.key("z", "ctrl")
+    session.observe("undo-edit", ["Unsaved changes"])
+    private.run_checked([str(session.niri), "msg", "action", "close-window"], env=session.env)
+    session.observe("close-guard", ["This sample pack has unsaved changes."])
+    session.click(*(session.word("close-guard", "Keep", required=False) or (745, 112)))
+    session.key("y", "ctrl")
+    session.observe("redo-edit", ["Saved"])
+    session.click(*(session.word("redo-edit", "Packs", required=False) or (1080, 422)))
     session.observe("pack-browser", ["Saved packs", "Untitled", "Hover to audition"])
     session.key("Escape")
     session.address(root.parent)
@@ -100,7 +154,7 @@ def main():
                 file.write('\n[file_manager]\nconstellation_pad_keys = [";qjk", "aoeu", "\',.p", "1234"]\n')
 
     return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.hardware_keys),
-                                      "constellation indexing, slots, search, and non-destructive pack saves",
+                                      "constellation pads, native drops, filters, export, undo and close protection",
                                       prepare_environment)
 
 

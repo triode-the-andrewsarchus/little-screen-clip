@@ -187,8 +187,9 @@ python3 scripts/constellation_acceptance.py \
   --output-dir /tmp/constellation-acceptance-new --appearance dark
 ```
 
-Pack persistence remains reference-based: symlinks refer to complete source files,
-while trimming and volume live in `bank.json`. It is not a trimmed-WAV exporter.
+Save pack remains reference-based: symlinks refer to complete source files and
+layer edits live in `bank.json`. The subsequent eight-improvement pass also adds
+portable WAV export; see `constellation-drum-rack.md`.
 PCM caches retain at most 15 seconds/two million interleaved values per source and
 use an aggregate admission budget. Model training provenance and perceptual
 classification quality cannot be established from the checked-in export alone.

@@ -114,7 +114,7 @@ impl ConstellationState {
     pub fn render_pack_shelf(&mut self, ui: &mut egui::Ui, current_folder: &Path) {
         self.render_history_controls(ui);
         ui.horizontal(|ui| {
-            let width = (ui.available_width() - 110.0).max(40.0);
+            let width = (ui.available_width() - 190.0).max(40.0);
             ui.add(
                 egui::TextEdit::singleline(&mut self.pack_bank.name)
                     .desired_width(width)
@@ -130,30 +130,32 @@ impl ConstellationState {
                     .unwrap_or(current_folder);
                 self.save_bank(root.to_path_buf(), self.pack_bank.clone());
             }
-        });
-        ui.horizontal(|ui| {
             ui.add_enabled_ui(!self.writing_pack(), |ui| {
-                if ui.button("Export WAV kit").on_hover_text("Trim and gain are rendered into portable 32-bit float WAV layers. Outputs never overwrite previous kits.").clicked() {
-                    self.export_bank(current_folder.to_path_buf(), false);
-                }
-                if ui.button("+ originals").on_hover_text("Export a WAV kit and collect the unmodified source files too.").clicked() {
-                    self.export_bank(current_folder.to_path_buf(), true);
-                }
+                ui.menu_button("Export", |ui| {
+                    if ui
+                        .button("WAV kit")
+                        .on_hover_text(
+                            "Render trim, gain, pan and fades into portable float WAV layers.",
+                        )
+                        .clicked()
+                    {
+                        self.export_bank(current_folder.to_path_buf(), false);
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("WAV kit + originals")
+                        .on_hover_text("Also collect the unmodified source files.")
+                        .clicked()
+                    {
+                        self.export_bank(current_folder.to_path_buf(), true);
+                        ui.close_menu();
+                    }
+                });
             });
         });
         ui.add_space(4.0);
         self.render_pad_grid(ui);
         ui.add_space(4.0);
-        if !self.pack_bank.slots[self.selected_slot].is_empty() {
-            let label = if self.pad_editor_open {
-                "Hide pad editor".to_string()
-            } else {
-                format!("Edit pad {}", self.selected_slot + 1)
-            };
-            if ui.button(label).clicked() {
-                self.pad_editor_open = !self.pad_editor_open;
-            }
-        }
         // Errors and persistence completions remain visible below the rack.
         egui::ScrollArea::vertical()
             .id_source("selected_pad_editor")
@@ -175,14 +177,28 @@ impl ConstellationState {
             std::array::from_fn(|index| rack.voices[index].iter().any(|player| !player.empty()))
         };
         let gap = 5.0;
+        let status_height = if self
+            .browser_status
+            .as_ref()
+            .is_some_and(|(_, time)| time.elapsed() < Duration::from_secs(5))
+        {
+            28.0
+        } else {
+            0.0
+        };
+        let pad_height =
+            ((ui.available_height() - status_height - gap * 3.0 - 8.0) / 4.0).clamp(28.0, 44.0);
         let width = ((ui.available_width() - gap * 3.0) / 4.0).max(24.0);
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = pad_height;
+            ui.spacing_mut().item_spacing = Vec2::new(gap, gap);
         for row in (0..4).rev() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
                 for col in 0..4 {
                     let index = row * 4 + col;
                     let slot = &self.pack_bank.slots[index];
-                    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 44.0), egui::Sense::click());
+                    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, pad_height), egui::Sense::click());
                     let unavailable = slot.samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path));
                     let loading = slot.samples.iter().any(|sample| sample.cached_audio.is_none() && !self.failed_audio.contains(&sample.file_path));
                     let flashing = self.slot_flash[index].is_some_and(|time| time.elapsed() < Duration::from_millis(150));
@@ -193,13 +209,13 @@ impl ConstellationState {
                     let stroke = if self.selected_slot == index { Stroke::new(1.5_f32, visuals.text_color()) } else { visuals.widgets.noninteractive.bg_stroke };
                     painter.rect(rect, 4.0, fill, stroke);
                     let key = self.pad_keys[index].to_ascii_uppercase().to_string();
-                    painter.text(rect.min + Vec2::new(7.0, 5.0), egui::Align2::LEFT_TOP, key, egui::FontId::monospace(11.0), visuals.text_color());
+                    painter.text(rect.min + Vec2::new(7.0, 4.0), egui::Align2::LEFT_TOP, key, egui::FontId::monospace(if pad_height < 36.0 { 9.0 } else { 11.0 }), visuals.text_color());
                     Self::paint_pad_status(ui, rect, slot, unavailable, loading, playing[index]);
                     let title = slot.samples.first().map_or("—", |sample| sample.filename.as_str());
                     let label = super::ui::short_label(title, ((width - 12.0) / 5.5).max(3.0) as usize);
-                    painter.text(rect.left_bottom() + Vec2::new(7.0, -9.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(10.0), visuals.text_color());
+                    painter.text(rect.left_bottom() + Vec2::new(7.0, -4.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(10.0), visuals.text_color());
                     if let Some(category) = slot.samples.first().and_then(|sample| sample.category) {
-                        painter.line_segment([rect.left_bottom() + Vec2::new(5.0, -3.0), rect.right_bottom() + Vec2::new(-5.0, -3.0)], Stroke::new(2.0_f32, category.color()));
+                        painter.line_segment([rect.left_bottom() + Vec2::new(5.0, -2.0), rect.right_bottom() + Vec2::new(-5.0, -2.0)], Stroke::new(2.0_f32, category.color()));
                     }
                     let title = Self::pad_tooltip(slot, unavailable, loading, playing[index]);
                     self.pad_drop_targets.push((rect.intersect(ui.clip_rect()), index));
@@ -222,22 +238,7 @@ impl ConstellationState {
                 ui.add_space(gap - ui.spacing().item_spacing.y.min(gap));
             }
         }
-        ui.add_space(2.0);
-        ui.label(
-            RichText::new(format!(
-                "{} · Shift = assign",
-                self.pad_keys
-                    .chunks(4)
-                    .map(|row| row
-                        .iter()
-                        .map(|key| key.to_ascii_uppercase())
-                        .collect::<String>())
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            ))
-            .size(10.0)
-            .color(ui.visuals().weak_text_color()),
-        );
+        });
     }
 
     /// Keeps transient readiness and explicit pad flags out of the assignment logic.
@@ -370,6 +371,11 @@ impl ConstellationState {
     }
 
     pub(super) fn render_selected_pad(&mut self, ui: &mut egui::Ui) {
+        // Parameter rows use compact chrome so the essential controls and fades
+        // fit above the waveform at ordinary file-manager window sizes.
+        ui.spacing_mut().interact_size.y = 22.0;
+        ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
+        ui.spacing_mut().item_spacing.y = 4.0;
         let index = self.selected_slot;
         self.render_selected_pad_header(ui, index);
         let slot = &mut self.pack_bank.slots[index];
@@ -379,6 +385,10 @@ impl ConstellationState {
         let mut remove = None;
         let mut audition = None;
         for (layer, sample) in slot.samples.iter_mut().enumerate() {
+            let frame_duration = sample
+                .cached_audio
+                .as_ref()
+                .map_or(0.000_001, |audio| 1.0 / audio.sample_rate as f32);
             ui.push_id((index, layer), |ui| {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
@@ -407,8 +417,8 @@ impl ConstellationState {
                     ui.add(
                         egui::DragValue::new(&mut sample.start_sec)
                             .speed(0.001)
-                            .clamp_range(0.0..=(sample.end_sec - 0.0001).max(0.0))
-                            .max_decimals(4)
+                            .clamp_range(0.0..=(sample.end_sec - frame_duration).max(0.0))
+                            .max_decimals(6)
                             .suffix(" s"),
                     );
                     ui.label("End");
@@ -416,9 +426,10 @@ impl ConstellationState {
                         egui::DragValue::new(&mut sample.end_sec)
                             .speed(0.001)
                             .clamp_range(
-                                (sample.start_sec + 0.0001).min(sample.duration)..=sample.duration,
+                                (sample.start_sec + frame_duration).min(sample.duration)
+                                    ..=sample.duration,
                             )
-                            .max_decimals(4)
+                            .max_decimals(6)
                             .suffix(" s"),
                     );
                     ui.add(
@@ -490,7 +501,11 @@ impl ConstellationState {
         );
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
-        let duration = sample.duration.max(0.01);
+        let duration = sample.duration.max(f32::EPSILON);
+        let frame_duration = sample
+            .cached_audio
+            .as_ref()
+            .map_or(0.000_001, |audio| 1.0 / audio.sample_rate as f32);
         let start = rect.left() + sample.start_sec / duration * rect.width();
         let end = rect.left() + sample.end_sec / duration * rect.width();
         if let Some(audio) = &sample.cached_audio {
@@ -553,9 +568,10 @@ impl ConstellationState {
                 .data(|data| data.get_temp::<bool>(response.id.with("trim_start")))
                 .unwrap_or(true)
             {
-                sample.start_sec = time.clamp(0.0, (sample.end_sec - 0.005).max(0.0));
+                sample.start_sec = time.clamp(0.0, (sample.end_sec - frame_duration).max(0.0));
             } else {
-                sample.end_sec = time.clamp((sample.start_sec + 0.005).min(duration), duration);
+                sample.end_sec =
+                    time.clamp((sample.start_sec + frame_duration).min(duration), duration);
             }
         }
         ui.weak(format!(
