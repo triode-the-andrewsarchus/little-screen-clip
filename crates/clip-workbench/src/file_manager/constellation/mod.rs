@@ -98,6 +98,8 @@ pub struct ConstellationState {
     pub search_query: String,
     pub hover_to_play: bool,
     pub selected_path: Option<PathBuf>,
+    /// Samples auditioned since the most recent explicit map click.
+    visited_samples: std::collections::HashSet<PathBuf>,
     pub last_hovered_path: Option<PathBuf>,
     pub history_trail: std::collections::VecDeque<HistoryTrailPoint>,
     /// Full canvas before docks obscure it; projection must not depend on dock visibility.
@@ -161,6 +163,7 @@ impl Default for ConstellationState {
             search_query: String::new(),
             hover_to_play: true,
             selected_path: None,
+            visited_samples: std::collections::HashSet::new(),
             last_hovered_path: None,
             history_trail: std::collections::VecDeque::new(),
             map_viewport: None,
@@ -219,6 +222,7 @@ impl ConstellationState {
 
     /// Records a played sample into the auditory history trail, preventing consecutive duplicates.
     pub fn record_played_sample(&mut self, sample: &ConstellationSample) {
+        self.visited_samples.insert(sample.file_path.clone());
         if let Some(last) = self.history_trail.back() {
             if last.file_path == sample.file_path {
                 return;
@@ -304,6 +308,7 @@ impl ConstellationState {
         self.selected_path = None;
         self.last_hovered_path = None;
         self.history_trail.clear();
+        self.visited_samples.clear();
 
         self.samples.clear();
         self.hover_cancelled.store(true, Ordering::Relaxed);
@@ -655,6 +660,7 @@ impl ConstellationState {
                             self.selected_path = None;
                             self.last_hovered_path = None;
                             self.history_trail.clear();
+                            self.visited_samples.clear();
                             self.hover_previews.clear();
                             self.pending_hover_path = None;
                         }

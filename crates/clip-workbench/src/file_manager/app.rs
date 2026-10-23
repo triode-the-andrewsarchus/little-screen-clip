@@ -324,7 +324,8 @@ impl FileManagerApp {
                 .is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
             if !self.viewers.active() && !focused_text && self.play_space_selection(ctx) {
                 ctx.input_mut(|input| {
-                    input.consume_key(egui::Modifiers::NONE, Key::Space);
+                    let modifiers = input.modifiers;
+                    input.consume_key(modifiers, Key::Space);
                 });
             } else {
                 self.browser.stop_previews();
@@ -335,6 +336,21 @@ impl FileManagerApp {
         }
     }
     fn play_space_selection(&mut self, ctx: &egui::Context) -> bool {
+        if self.browser.view == super::BrowserView::Constellation {
+            let modifiers = ctx.input(|input| input.modifiers);
+            if modifiers.ctrl
+                || modifiers.alt
+                || modifiers.command
+                || self.browser.constellation.browser_open
+            {
+                return false;
+            }
+            if let Some(path) = self.browser.constellation.space_audition(modifiers.shift) {
+                self.browser.music.play(&path);
+            }
+            return true;
+        }
+
         if ctx.memory(|memory| memory.has_focus(super::midi_strip::focus_id())) {
             self.browser.music.stop();
             return self.browser.midi.play_selection();

@@ -214,7 +214,7 @@ impl ConstellationState {
             }
             if ui
                 .add_enabled(self.selected_path.is_some(), egui::Button::new("Neighbor"))
-                .on_hover_text("Audition the acoustically nearest sample")
+                .on_hover_text("Audition the nearest unplayed sample (Shift+Space); click a sample to start a new exploration")
                 .clicked()
             {
                 self.play_nearest_neighbor(on_play_sample);
@@ -789,6 +789,7 @@ impl ConstellationState {
         if let Some(hovered) = hovered_sample {
             // Click to select & play
             if response.clicked() {
+                self.visited_samples.clear();
                 self.selected_path = Some(hovered.file_path.clone());
                 self.record_played_sample(&hovered);
                 on_select_sample(&hovered.file_path);
@@ -1087,6 +1088,27 @@ impl ConstellationState {
         );
     }
 
+    /// Retriggers the selection, or advances without revisiting an auditioned sample.
+    /// Exhausting visible, filtered neighbors leaves the current selection unchanged.
+    pub(crate) fn space_audition(&mut self, advance: bool) -> Option<std::path::PathBuf> {
+        if self.browser_open {
+            return None;
+        }
+        if advance {
+            let mut next = None;
+            self.play_nearest_neighbor(&mut |path| next = Some(path.to_path_buf()));
+            next
+        } else {
+            let sample = self
+                .samples
+                .iter()
+                .find(|sample| Some(&sample.file_path) == self.selected_path.as_ref())?
+                .clone();
+            self.record_played_sample(&sample);
+            Some(sample.file_path)
+        }
+    }
+
     fn play_nearest_neighbor(&mut self, on_play_sample: &mut dyn FnMut(&std::path::Path)) {
         let Some(selected) = &self.selected_path else {
             return;
@@ -1101,7 +1123,10 @@ impl ConstellationState {
 
         let query = self.search_query.to_lowercase();
         for s in &self.samples {
-            if &s.file_path == selected || !self.matches_filters(s, &query) {
+            if &s.file_path == selected
+                || self.visited_samples.contains(&s.file_path)
+                || !self.matches_filters(s, &query)
+            {
                 continue;
             }
             let dx = s.x - curr.x;
@@ -1312,38 +1337,75 @@ mod tests {
             .collect()
     }
 
+    fn sample_fixture(index: usize) -> ConstellationSample {
+        ConstellationSample {
+            file_path: std::path::PathBuf::from(format!("/samples/{index}.wav")),
+            folder_path: "/samples".into(),
+            filename: if index == 999 {
+                "target.wav".into()
+            } else {
+                "background.wav".into()
+            },
+            category: if index == 999 {
+                SampleCategory::Snare
+            } else {
+                SampleCategory::Kick
+            },
+            confidence: 1.0,
+            duration_seconds: 0.5,
+            pitch_hz: 0.0,
+            pitch_clarity: 0.0,
+            brightness: 0.0,
+            x: 0.0,
+            y: 0.0,
+            file_size: 100,
+            mtime: 0,
+            sample_rate: 44100,
+            channels: 1,
+            bit_depth: 16,
+            source_revision: None,
+        }
+    }
+
+    #[test]
+    fn space_retriggers_and_neighbors_never_revisit_until_click_reset() {
+        let mut state = ConstellationState::new();
+        state.samples = (0..4)
+            .map(|index| {
+                let mut sample = sample_fixture(index);
+                sample.x = index as f32 * 0.1;
+                sample
+            })
+            .collect();
+        state.selected_path = Some(state.samples[0].file_path.clone());
+        let first = state.space_audition(false).unwrap();
+        assert_eq!(state.space_audition(false), Some(first.clone()));
+        for index in 1..4 {
+            assert_eq!(
+                state.space_audition(true),
+                Some(state.samples[index].file_path.clone())
+            );
+        }
+        assert_eq!(state.space_audition(true), None);
+        state.visited_samples.clear(); // Explicit click starts a new exploration.
+        state.selected_path = Some(first.clone());
+        let sample = state.samples[0].clone();
+        state.record_played_sample(&sample);
+        state.channel_filter = 2;
+        assert_eq!(state.space_audition(true), None, "respect active filters");
+        state.channel_filter = 0;
+        assert_eq!(
+            state.space_audition(true),
+            Some(state.samples[1].file_path.clone())
+        );
+        state.browser_open = true;
+        assert_eq!(state.space_audition(false), None);
+    }
+
     #[test]
     fn dense_coarse_mesh_is_bounded_without_hiding_category_or_search_matches() {
         let mut state = ConstellationState::new();
-        state.samples = (0..1000)
-            .map(|index| ConstellationSample {
-                file_path: std::path::PathBuf::from(format!("/samples/{index}.wav")),
-                folder_path: "/samples".into(),
-                filename: if index == 999 {
-                    "target.wav".into()
-                } else {
-                    "background.wav".into()
-                },
-                category: if index == 999 {
-                    SampleCategory::Snare
-                } else {
-                    SampleCategory::Kick
-                },
-                confidence: 1.0,
-                duration_seconds: 0.5,
-                pitch_hz: 0.0,
-                pitch_clarity: 0.0,
-                brightness: 0.0,
-                x: 0.0,
-                y: 0.0,
-                file_size: 100,
-                mtime: 0,
-                sample_rate: 44100,
-                channels: 1,
-                bit_depth: 16,
-                source_revision: None,
-            })
-            .collect();
+        state.samples = (0..1000).map(sample_fixture).collect();
         assert_eq!(
             coarse_mesh(&mut state).len(),
             8,
