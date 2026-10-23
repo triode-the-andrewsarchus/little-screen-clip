@@ -893,6 +893,12 @@ impl FileManager {
                                 .hint_text("Search concept (e.g. cat, !dog, indoors)…")
                                 .desired_width(200.0),
                             );
+                            if self.similarity_canvas.search_query == "+"
+                                || self.similarity_canvas.search_query == "="
+                                || self.similarity_canvas.search_query == "-"
+                            {
+                                self.similarity_canvas.search_query.clear();
+                            }
                             if (edit_res.lost_focus()
                                 && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                                 || ui.small_button("Search").clicked()

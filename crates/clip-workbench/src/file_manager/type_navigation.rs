@@ -35,7 +35,7 @@ impl TypeNavigation {
         })
     }
 
-    fn consume(&mut self, events: &mut Vec<Event>, now: f64) -> (bool, bool) {
+    fn consume(&mut self, events: &mut Vec<Event>, now: f64, is_similarity: bool) -> (bool, bool) {
         let mut changed = false;
         let mut finish = false;
         events.retain(|event| {
@@ -43,6 +43,13 @@ impl TypeNavigation {
                 Event::Text(text) if !text.is_empty() && !text.chars().any(char::is_control) => {
                     // A bare Space retains its media-playback meaning.
                     if self.query.is_empty() && text.chars().all(char::is_whitespace) {
+                        return true;
+                    }
+                    // In similarity view, -, +, and = override the find bar.
+                    if is_similarity
+                        && self.query.is_empty()
+                        && (text == "-" || text == "+" || text == "=")
+                    {
                         return true;
                     }
                     self.query.push_str(text);
@@ -128,8 +135,12 @@ impl FileManager {
             self.type_navigation.clear();
             return;
         }
-        let (changed, finish) =
-            ctx.input_mut(|input| self.type_navigation.consume(&mut input.events, now));
+        let is_similarity = self.view == super::BrowserView::Photos
+            && self.photo_mode == super::gallery::similarity::PhotoMode::Similarity;
+        let (changed, finish) = ctx.input_mut(|input| {
+            self.type_navigation
+                .consume(&mut input.events, now, is_similarity)
+        });
         if changed {
             self.match_typed_name();
             if !self.type_navigation.query.is_empty() {
@@ -194,7 +205,7 @@ mod tests {
     fn hint_expires_and_backspace_removes_a_unicode_character() {
         let mut state = TypeNavigation::default();
         let mut text = vec![Event::Text("café".into())];
-        assert_eq!(state.consume(&mut text, 10.0), (true, false));
+        assert_eq!(state.consume(&mut text, 10.0, false), (true, false));
         assert!(text.is_empty());
         assert!(state.hint(11.9).is_some());
         assert!(state.hint(12.0).is_none());
@@ -205,8 +216,25 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }];
-        state.consume(&mut backspace, 11.0);
+        state.consume(&mut backspace, 11.0, false);
         assert_eq!(state.query, "caf");
         assert!(backspace.is_empty());
+    }
+
+    #[test]
+    fn similarity_view_overrides_plus_minus_equals_when_query_empty() {
+        let mut state = TypeNavigation::default();
+        let mut text = vec![
+            Event::Text("-".into()),
+            Event::Text("+".into()),
+            Event::Text("=".into()),
+        ];
+        assert_eq!(state.consume(&mut text, 10.0, true), (false, false));
+        assert_eq!(
+            text.len(),
+            3,
+            "Events must not be consumed in similarity view"
+        );
+        assert!(state.query.is_empty());
     }
 }
