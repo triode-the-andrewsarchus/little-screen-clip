@@ -27,6 +27,7 @@ tokio = { workspace = true, features = ["net", "io-util", "sync"] }
 thiserror.workspace = true
 tracing.workspace = true
 rodio = "0.22.2"
+hound = "3.5.1"
 image = { workspace = true }
 imagesize = "0.12"
 kamadak-exif = "0.6.1"

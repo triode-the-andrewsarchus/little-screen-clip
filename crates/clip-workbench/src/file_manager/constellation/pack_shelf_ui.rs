@@ -131,6 +131,16 @@ impl ConstellationState {
                 self.save_bank(root.to_path_buf(), self.pack_bank.clone());
             }
         });
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(!self.writing_pack(), |ui| {
+                if ui.button("Export WAV kit").on_hover_text("Trim and gain are rendered into portable 32-bit float WAV layers. Outputs never overwrite previous kits.").clicked() {
+                    self.export_bank(current_folder.to_path_buf(), false);
+                }
+                if ui.button("+ originals").on_hover_text("Export a WAV kit and collect the unmodified source files too.").clicked() {
+                    self.export_bank(current_folder.to_path_buf(), true);
+                }
+            });
+        });
         ui.add_space(4.0);
         self.render_pad_grid(ui);
         ui.add_space(4.0);

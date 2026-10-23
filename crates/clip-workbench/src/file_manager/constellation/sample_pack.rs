@@ -282,7 +282,7 @@ impl SamplePackBank {
         }
     }
 
-    fn validate(&mut self, pack_dir: &Path) -> Result<(), String> {
+    pub(super) fn validate(&mut self, pack_dir: &Path) -> Result<(), String> {
         if self.slots.len() > NUM_SLOTS {
             return Err("Pack has more than sixteen pads".into());
         }
@@ -383,6 +383,17 @@ pub fn save_sample_pack(
     constellation_root: &Path,
     bank: &SamplePackBank,
 ) -> Result<PathBuf, String> {
+    install_pack(constellation_root, bank, |staged| {
+        bank.stage_references(staged)
+    })
+}
+
+/// Shares pinned-directory staging and no-overwrite publication across pack formats.
+pub(super) fn install_pack(
+    constellation_root: &Path,
+    bank: &SamplePackBank,
+    stage: impl FnOnce(&Path) -> Result<Vec<File>, String>,
+) -> Result<PathBuf, String> {
     use std::os::fd::AsRawFd;
     let sanitized_name = bank
         .name
@@ -404,7 +415,7 @@ pub fn save_sample_pack(
         .prefix(".pack-")
         .tempdir_in(&parent)
         .map_err(|e| e.to_string())?;
-    let _sources = bank.stage_references(staged.path())?;
+    let _sources = stage(staged.path())?;
     // Publish a complete pack atomically. Repeated saves retain previous versions.
     for suffix in 0..10_000 {
         let name = if suffix == 0 {

@@ -20,7 +20,10 @@ architecture, and private compositor validation.
   Music retains its guarded streaming loader and delegates only playback to the
   rack bus. Layer/library auditions share pad headroom, Glue and bypass. Audio
   comparison regression plus file-manager suite: 602 passed, one ignored.
-- [ ] Portable trimmed-WAV kit export, with optional collected original files.
+- [x] Portable trimmed-WAV kit export, with optional collected original files.
+  Float WAV layers bake trim/gain, relative manifests survive relocation, and
+  optional originals are regular copies. Shares pinned atomic installer; accepted
+  exports retain completion. Relocation/failure/version tests: 55 focused pass.
 - [ ] Pad loading/missing/playing/choke indicators without permanent visual clutter.
 - [ ] Selected-pad editor with visible essential controls, numeric trim, mute/solo, pan, fades.
 - [ ] Incremental indexing and duration/channel filters, with indexed/new status.

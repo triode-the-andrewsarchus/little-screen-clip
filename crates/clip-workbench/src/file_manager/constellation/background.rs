@@ -10,6 +10,7 @@ pub(super) enum Task {
     Bank(PathBuf, bool, u64),
     Audio(PathBuf, u64),
     Drop(u64, u64, Option<u64>),
+    Export,
     Save,
     Delete,
 }
@@ -19,6 +20,7 @@ pub(super) enum Output {
     Bank(SamplePackBank),
     Audio(sample_pack::SlotSample),
     Dropped(super::pad_drop::PreparedDrop),
+    Exported(PathBuf),
     Saved(PathBuf),
     Deleted,
 }
@@ -56,14 +58,14 @@ impl Task {
                 *generation == state.bank_generation
             }
             Self::Drop(_, generation, _) => *generation == state.bank_generation,
-            Self::Save | Self::Delete => true,
+            Self::Save | Self::Export | Self::Delete => true,
         }
     }
 }
 
 impl Pending {
     pub(super) fn cancel_read(&self) {
-        if !matches!(self.task, Task::Save | Task::Delete) {
+        if !matches!(self.task, Task::Save | Task::Export | Task::Delete) {
             if let Some(ticket) = &self.ticket {
                 ticket.cancel();
             }
@@ -115,7 +117,7 @@ impl ConstellationState {
     pub fn writing_pack(&self) -> bool {
         self.background
             .iter()
-            .any(|job| matches!(job.task, Task::Save | Task::Delete))
+            .any(|job| matches!(job.task, Task::Save | Task::Export | Task::Delete))
     }
 
     pub(super) fn submit_background(
@@ -211,6 +213,17 @@ impl ConstellationState {
         if self.writing_pack() {
             self.pending_saved_bank = Some(snapshot);
         }
+    }
+
+    /// Exports a snapshot without changing the editable pack's save baseline.
+    pub(super) fn export_bank(&mut self, root: PathBuf, originals: bool) {
+        if self.writing_pack() {
+            return;
+        }
+        let bank = self.pack_bank.clone();
+        self.submit_background(Task::Export, move || {
+            super::pack_export::export(&root, &bank, originals).map(Output::Exported)
+        });
     }
 
     /// Submits deletion while retaining its completion through navigation and close.
@@ -324,6 +337,13 @@ impl ConstellationState {
                     }
                 }
                 self.browser_status = Some((format!("Saved {}", path.display()), Instant::now()));
+                if let Some(root) = self.current_indexed_folder.clone() {
+                    self.refresh_browser_packs(&root);
+                }
+            }
+            (Task::Export, Output::Exported(path)) => {
+                self.browser_status =
+                    Some((format!("Exported {}", path.display()), Instant::now()));
                 if let Some(root) = self.current_indexed_folder.clone() {
                     self.refresh_browser_packs(&root);
                 }

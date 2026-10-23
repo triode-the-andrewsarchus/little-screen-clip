@@ -9,7 +9,8 @@
 //! [`sample_pack`] owns sixteen layered pads. PCM is prepared off the UI thread, shared
 //! by playback sources, and limited to the first 15 seconds/two million values per
 //! layer. Bank metadata and symlinks preserve source references and trim settings;
-//! saving a pack does not render or export trimmed audio. Accepted save/delete jobs
+//! reference saves retain edits as metadata; portable exports render WAV layers.
+//! Accepted save/export/delete jobs
 //! have no timeout and keep application close deferred until their results arrive.
 //!
 //! [`generated_model`] contains a fixed heuristic ensemble. Its scores and naming
@@ -24,6 +25,7 @@ mod history;
 pub mod indexer;
 mod midi;
 mod output;
+mod pack_export;
 pub mod pack_shelf_ui;
 mod pad_drop;
 pub mod sample_pack;
