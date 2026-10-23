@@ -1,7 +1,6 @@
 //! Compact drum rack, selected-pad editor, and reference-pack browser.
 
 use super::ConstellationState;
-use super::sample_pack::play_slot_sample;
 use egui::{Pos2, Rect, RichText, Stroke, Vec2};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -338,10 +337,8 @@ impl ConstellationState {
         if let Some(layer) = remove {
             slot.samples.remove(layer);
         }
-        if let Some(sample) = audition
-            && let Some(player) = play_slot_sample(&sample)
-        {
-            self.active_players.push(player);
+        if let Some(sample) = audition {
+            self.audition_layers(&[sample]);
         }
     }
 
@@ -533,11 +530,7 @@ impl ConstellationState {
             });
         if let Some(samples) = audition {
             self.stop_playback();
-            for sample in samples {
-                if let Some(player) = play_slot_sample(&sample) {
-                    self.active_players.push(player);
-                }
-            }
+            self.audition_layers(&samples);
         }
     }
 }

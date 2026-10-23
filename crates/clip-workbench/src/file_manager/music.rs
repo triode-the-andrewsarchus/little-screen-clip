@@ -131,6 +131,19 @@ impl Music {
         self.loading = Some(Loading { ticket, receiver });
     }
     pub fn tick(&mut self, ctx: &egui::Context, selection: &mut Option<MusicRange>) {
+        self.tick_with_output(ctx, selection, |source| {
+            let player = crate::ui_ext::new_shared_audio_player()?;
+            player.append(source);
+            Some(player)
+        });
+    }
+    /// Uses the existing guarded streaming loader with the caller's output bus.
+    pub(super) fn tick_with_output(
+        &mut self,
+        ctx: &egui::Context,
+        selection: &mut Option<MusicRange>,
+        mut output: impl FnMut(Box<dyn Source<Item = f32> + Send>) -> Option<Player>,
+    ) {
         self.poll_selection(selection);
         if ctx.input(|input| input.pointer.any_released())
             && let Some(range) = selection.as_ref().filter(|range| !range.snapped).cloned()
@@ -158,9 +171,8 @@ impl Music {
                 Ok(prepared) => {
                     self.duration = prepared.duration;
                     self.offset = prepared.offset;
-                    if let Some(player) = crate::ui_ext::new_shared_audio_player() {
+                    if let Some(player) = output(prepared.audio) {
                         player.pause();
-                        player.append(prepared.audio);
                         if let Some(time) = self.seek_pending.take() {
                             if let Err(error) = player
                                 .try_seek(Duration::from_secs_f32(time.clamp(0.0, self.duration)))

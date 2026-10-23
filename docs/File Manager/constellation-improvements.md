@@ -16,7 +16,10 @@ architecture, and private compositor validation.
   Shared prepared rack dispatches directly from the input callback; UI telemetry
   is best effort. Stop and callback epoch checks share the playback lock. No PCM
   decoding occurs in callbacks. Device-free callback/audio regression: 53 tests pass.
-- [ ] Shared output for map, layer, library, and pad auditions with consistent loudness/protection.
+- [x] Shared output for map, layer, library, and pad auditions with consistent loudness/protection.
+  Music retains its guarded streaming loader and delegates only playback to the
+  rack bus. Layer/library auditions share pad headroom, Glue and bypass. Audio
+  comparison regression plus file-manager suite: 602 passed, one ignored.
 - [ ] Portable trimmed-WAV kit export, with optional collected original files.
 - [ ] Pad loading/missing/playing/choke indicators without permanent visual clutter.
 - [ ] Selected-pad editor with visible essential controls, numeric trim, mute/solo, pan, fades.

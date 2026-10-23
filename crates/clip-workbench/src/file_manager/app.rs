@@ -406,9 +406,21 @@ impl eframe::App for FileManagerApp {
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.preview_keys(ctx);
-        self.browser
-            .music
-            .tick(ctx, &mut self.browser.music_selection);
+        if self.browser.view == super::BrowserView::Constellation {
+            let constellation = &mut self.browser.constellation;
+            self.browser
+                .music
+                .tick_with_output(ctx, &mut self.browser.music_selection, |source| {
+                    constellation.play_map_source(source)
+                });
+            self.browser
+                .constellation
+                .set_map_playing(self.browser.music.playing());
+        } else {
+            self.browser
+                .music
+                .tick(ctx, &mut self.browser.music_selection);
+        }
         self.browser.midi.tick(ctx);
         if self.viewers.active() {
             self.browser.drop_targets.clear();

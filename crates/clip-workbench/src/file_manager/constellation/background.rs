@@ -101,7 +101,7 @@ impl ConstellationState {
         !self.background.is_empty()
             || self.active_job.is_some()
             || self.pending_hover_path.is_some()
-            || !self.active_players.is_empty()
+            || !self.playback.lock().unwrap().auditions.is_empty()
             || self
                 .playback
                 .lock()

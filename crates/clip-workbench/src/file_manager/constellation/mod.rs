@@ -124,8 +124,6 @@ pub struct ConstellationState {
     pad_keys: [char; sample_pack::NUM_SLOTS],
     midi: Option<midi::Controller>,
     playback: Arc<std::sync::Mutex<output::Rack>>,
-    /// Independent auditions outside the numbered pads.
-    pub active_players: Vec<rodio::Player>,
     background: Vec<background::Pending>,
     folder_generation: u64,
     bank_generation: u64,
@@ -184,7 +182,6 @@ impl Default for ConstellationState {
             ],
             midi: None,
             playback: Default::default(),
-            active_players: Vec::new(),
             background: Vec::new(),
             folder_generation: 0,
             bank_generation: 0,
@@ -475,11 +472,31 @@ impl ConstellationState {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .stop();
-        for player in self.active_players.drain(..) {
-            player.stop();
-        }
         self.hover_cancelled.store(true, Ordering::Relaxed);
         self.pending_hover_path = None;
+    }
+
+    /// Routes a prepared map stream through the rack without truncating long samples.
+    pub(crate) fn play_map_source(
+        &mut self,
+        source: Box<dyn rodio::Source<Item = f32> + Send>,
+    ) -> Option<rodio::Player> {
+        let mut rack = self.playback.lock().unwrap();
+        rack.sync(&self.pack_bank);
+        if rack.output.is_none() {
+            rack.output = output::PadOutput::new(self.pack_bank.compressor_bypass);
+        }
+        let player = rack.output.as_ref()?.play_source(source);
+        rack.map_playing = true;
+        Some(player)
+    }
+    pub(crate) fn set_map_playing(&mut self, playing: bool) {
+        self.playback.lock().unwrap().map_playing = playing;
+    }
+    fn audition_layers(&mut self, samples: &[sample_pack::SlotSample]) {
+        let mut rack = self.playback.lock().unwrap();
+        rack.sync(&self.pack_bank);
+        rack.audition(samples);
     }
 
     /// Restarts all ready layers in one slot without interrupting other slots.
@@ -573,11 +590,6 @@ impl ConstellationState {
                 .unwrap_or_else(|error| error.into_inner());
             playback.sync(&self.pack_bank);
             playback.retire();
-        }
-        self.active_players.retain(|p| !p.empty());
-        let excess = self.active_players.len().saturating_sub(64);
-        for player in self.active_players.drain(..excess) {
-            player.stop();
         }
         let mut job_done = false;
 

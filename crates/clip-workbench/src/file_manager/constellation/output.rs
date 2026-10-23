@@ -54,6 +54,14 @@ impl PadOutput {
         }
     }
 
+    /// Attaches a guarded streaming audition to the same headroom/dynamics bus.
+    pub fn play_source(&self, source: Box<dyn Source<Item = f32> + Send>) -> Player {
+        let player = Player::connect_new(&self.mixer);
+        player.pause();
+        player.append(source.amplify(HEADROOM));
+        player
+    }
+
     pub fn set_bypass(&self, bypass: bool) {
         self.bypass.store(bypass, Ordering::Relaxed);
     }
@@ -173,6 +181,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn streaming_and_cached_auditions_share_pad_headroom_and_protection() {
+        for streaming in [true, false] {
+            let (player, mut audio) = Player::new();
+            let bus = PadOutput::with_player(player, false);
+            let pcm = Arc::new(vec![0.5; RATE as usize]);
+            let mut sample = SlotSample::new("hit.wav".into(), "hit.wav".into(), None, 1.0);
+            sample.cached_audio = Some(Arc::new(super::super::sample_pack::CachedAudio {
+                channels: 1,
+                sample_rate: RATE,
+                samples: pcm.clone(),
+                mono_samples: pcm,
+                waveform_peaks: vec![],
+            }));
+            let voice = if streaming {
+                bus.play_source(Box::new(rodio::buffer::SamplesBuffer::new(
+                    1.try_into().unwrap(),
+                    RATE.try_into().unwrap(),
+                    vec![0.5; RATE as usize],
+                )))
+            } else {
+                bus.play(&sample, 127).unwrap()
+            };
+            voice.play();
+            for _ in 0..4000 {
+                audio.next();
+            }
+            assert!((audio.next().unwrap() - 0.5 * HEADROOM).abs() < 0.00001);
+        }
+    }
+    #[test]
     fn pad_output_scales_midi_velocity_without_touching_cached_pcm() {
         let mut sample = SlotSample::new("kick.wav".into(), "kick.wav".into(), None, 1.0);
         let pcm = Arc::new(vec![0.5; RATE as usize]);
@@ -233,6 +271,8 @@ pub(super) struct Rack {
     bank: super::sample_pack::SamplePackBank,
     pub output: Option<PadOutput>,
     pub voices: [Vec<Player>; super::sample_pack::NUM_SLOTS],
+    pub auditions: Vec<Player>,
+    pub map_playing: bool,
 }
 impl Default for Rack {
     fn default() -> Self {
@@ -240,6 +280,8 @@ impl Default for Rack {
             bank: Default::default(),
             output: None,
             voices: std::array::from_fn(|_| Vec::new()),
+            auditions: Vec::new(),
+            map_playing: false,
         }
     }
 }
@@ -265,7 +307,8 @@ impl Rack {
         self.voices
             .iter_mut()
             .for_each(|voices| voices.retain(|player| !player.empty()));
-        if self.voices.iter().all(Vec::is_empty) {
+        self.auditions.retain(|player| !player.empty());
+        if !self.map_playing && self.auditions.is_empty() && self.voices.iter().all(Vec::is_empty) {
             self.output = None;
         }
     }
@@ -273,7 +316,19 @@ impl Rack {
         for player in self.voices.iter_mut().flat_map(|voices| voices.drain(..)) {
             player.stop();
         }
+        self.auditions.drain(..).for_each(|player| player.stop());
+        self.map_playing = false;
         self.output = None;
+    }
+    pub fn audition(&mut self, samples: &[SlotSample]) {
+        self.auditions.drain(..).for_each(|player| player.stop());
+        if self.output.is_none() {
+            self.output = PadOutput::new(self.bank.compressor_bypass);
+        }
+        if let Some(output) = &self.output {
+            self.auditions
+                .extend(samples.iter().filter_map(|sample| output.play(sample, 127)));
+        }
     }
     pub fn trigger(&mut self, slot_idx: usize, velocity: u8) -> bool {
         if slot_idx >= self.bank.slots.len() || velocity == 0 {

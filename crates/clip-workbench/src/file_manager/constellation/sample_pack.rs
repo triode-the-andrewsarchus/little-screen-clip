@@ -576,19 +576,6 @@ impl rodio::Source for SharedPcm {
     }
 }
 
-/// Plays a prepared layer with frame-aligned trim bounds and volume.
-pub fn play_slot_sample(sample: &SlotSample) -> Option<rodio::Player> {
-    use rodio::Source;
-    if !sample.volume.is_finite() {
-        return None;
-    }
-    let source = SharedPcm::trimmed(sample)?;
-    let player = crate::ui_ext::new_shared_audio_player()?;
-    player.append(source.amplify(sample.volume.clamp(0.0, 2.0)));
-    player.play();
-    Some(player)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
