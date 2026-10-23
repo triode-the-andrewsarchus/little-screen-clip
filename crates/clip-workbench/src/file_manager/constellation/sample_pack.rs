@@ -104,6 +104,15 @@ pub struct SlotSample {
     pub start_sec: f32,
     pub end_sec: f32,
     pub volume: f32,
+    /// Stereo balance: -1 is left, 0 preserves both channels, 1 is right.
+    #[serde(default)]
+    pub pan: f32,
+    /// Linear fade at the trimmed start, in milliseconds (0–500).
+    #[serde(default)]
+    pub attack_ms: f32,
+    /// Linear fade ending at the trimmed end, in milliseconds (0–500).
+    #[serde(default)]
+    pub release_ms: f32,
     #[serde(skip)]
     pub cached_audio: Option<Arc<CachedAudio>>,
 }
@@ -119,6 +128,9 @@ impl PartialEq for SlotSample {
             && self.start_sec == other.start_sec
             && self.end_sec == other.end_sec
             && self.volume == other.volume
+            && self.pan == other.pan
+            && self.attack_ms == other.attack_ms
+            && self.release_ms == other.release_ms
     }
 }
 
@@ -138,6 +150,9 @@ impl SlotSample {
             start_sec: 0.0,
             end_sec: dur,
             volume: 1.0,
+            pan: 0.0,
+            attack_ms: 0.0,
+            release_ms: 0.0,
             cached_audio: None,
         }
     }
@@ -179,6 +194,9 @@ impl SlotSample {
             || self.end_sec > self.duration
             || !self.volume.is_finite()
             || !(0.0..=2.0).contains(&self.volume)
+            || !(-1.0..=1.0).contains(&self.pan)
+            || !(0.0..=500.0).contains(&self.attack_ms)
+            || !(0.0..=500.0).contains(&self.release_ms)
         {
             return Err("Pack contains invalid trim bounds or volume".into());
         }
@@ -215,6 +233,10 @@ pub struct PackSlot {
     /// Zero disables choking; pads in the same group (1–8) cut each other off.
     #[serde(default)]
     pub choke_group: u8,
+    #[serde(default)]
+    pub mute: bool,
+    #[serde(default)]
+    pub solo: bool,
 }
 
 impl PackSlot {
@@ -224,6 +246,8 @@ impl PackSlot {
             name: format!("Slot {}", key_char),
             samples: Vec::new(),
             choke_group: 0,
+            mute: false,
+            solo: false,
         }
     }
 
@@ -592,6 +616,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_layers_default_to_neutral_effects_and_invalid_controls_are_rejected() {
+        let layer = SlotSample::new("hit.wav".into(), "hit.wav".into(), None, 1.0);
+        let mut value = serde_json::to_value(&layer).unwrap();
+        for key in ["pan", "attack_ms", "release_ms"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        let mut loaded: SlotSample = serde_json::from_value(value).unwrap();
+        assert_eq!(loaded, layer);
+        loaded.pan = f32::NAN;
+        assert!(loaded.validate().is_err());
+        loaded.pan = 0.0;
+        loaded.release_ms = 501.0;
+        assert!(loaded.validate().is_err());
+    }
+
+    #[test]
     fn repeated_saves_preserve_existing_files_and_versions() {
         let root = tempfile::tempdir().unwrap();
         let bank = SamplePackBank::new("Kit");
@@ -740,6 +780,9 @@ mod tests {
             start_sec: 0.05,
             end_sec: 0.45,
             volume: 1.2,
+            pan: 0.0,
+            attack_ms: 0.0,
+            release_ms: 0.0,
             cached_audio: None,
         });
 

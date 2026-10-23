@@ -92,8 +92,8 @@ impl ConstellationState {
                 {
                     egui::TopBottomPanel::bottom("constellation_selected_pad")
                         .resizable(true)
-                        .default_height(168.0)
-                        .height_range(110.0..=240.0)
+                        .default_height(220.0)
+                        .height_range(160.0..=320.0)
                         .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 6.0)))
                         .show_inside(ui, |ui| {
                             ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));

@@ -28,7 +28,12 @@ architecture, and private compositor validation.
   Compact loading spinner, unavailable/playing dots, and nonzero choke labels.
   Failure tooltips and selected-pad Retry audio action use existing worker state,
   with no filesystem probing in paint. Focused suite: 55 passed.
-- [ ] Selected-pad editor with visible essential controls, numeric trim, mute/solo, pan, fades.
+- [x] Selected-pad editor with visible essential controls, numeric trim, mute/solo, pan, fades.
+  Essential controls precede the waveform. Shared stereo balance/envelope rendering
+  feeds both live layers and export; mute/solo gates active voices immediately.
+  Legacy serde defaults preserve sound. DSP, export, validation and live-gate
+  regressions pass (58 focused tests). Pad painting/header responsibilities were
+  separated after measurement flagged growth in the interaction handlers.
 - [ ] Incremental indexing and duration/channel filters, with indexed/new status.
 
 Baseline: `constellation-eight-improvements` at `c5524ae`.

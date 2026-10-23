@@ -194,25 +194,14 @@ impl ConstellationState {
                     painter.rect(rect, 4.0, fill, stroke);
                     let key = self.pad_keys[index].to_ascii_uppercase().to_string();
                     painter.text(rect.min + Vec2::new(7.0, 5.0), egui::Align2::LEFT_TOP, key, egui::FontId::monospace(11.0), visuals.text_color());
-                    if slot.choke_group != 0 {
-                        painter.text(rect.right_top() + Vec2::new(-6.0, 6.0), egui::Align2::RIGHT_TOP, format!("C{}", slot.choke_group), egui::FontId::monospace(9.0), visuals.weak_text_color());
-                    }
-                    let state_pos = rect.right_top() + Vec2::new(-28.0, 10.0);
-                    if unavailable { painter.circle_filled(state_pos, 3.0, visuals.error_fg_color); }
-                    else if loading { ui.put(Rect::from_center_size(state_pos, Vec2::splat(10.0)), egui::Spinner::new().size(10.0)); }
-                    else if playing[index] { painter.circle_filled(state_pos, 3.0, visuals.selection.stroke.color); }
+                    Self::paint_pad_status(ui, rect, slot, unavailable, loading, playing[index]);
                     let title = slot.samples.first().map_or("—", |sample| sample.filename.as_str());
                     let label = super::ui::short_label(title, ((width - 12.0) / 5.5).max(3.0) as usize);
                     painter.text(rect.left_bottom() + Vec2::new(7.0, -9.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(10.0), visuals.text_color());
                     if let Some(category) = slot.samples.first().and_then(|sample| sample.category) {
                         painter.line_segment([rect.left_bottom() + Vec2::new(5.0, -3.0), rect.right_bottom() + Vec2::new(-5.0, -3.0)], Stroke::new(2.0_f32, category.color()));
                     }
-                    let mut title = slot.display_title();
-                    if unavailable { title.push_str("\nSome sources are unavailable or could not be decoded."); }
-                    if loading { title.push_str("\nPreparing audio…"); }
-                    if playing[index] { title.push_str("\nPlaying"); }
-                    if slot.choke_group != 0 { title.push_str(&format!("\nChoke group {}", slot.choke_group)); }
-
+                    let title = Self::pad_tooltip(slot, unavailable, loading, playing[index]);
                     self.pad_drop_targets.push((rect.intersect(ui.clip_rect()), index));
                     let native_hover = self.pad_drop_hover.is_some_and(|pos| rect.contains(pos));
                     if response.dnd_hover_payload::<crate::file_manager::transfers::FileDrag>().is_some() || native_hover {
@@ -249,6 +238,71 @@ impl ConstellationState {
             .size(10.0)
             .color(ui.visuals().weak_text_color()),
         );
+    }
+
+    /// Keeps transient readiness and explicit pad flags out of the assignment logic.
+    fn paint_pad_status(
+        ui: &mut egui::Ui,
+        rect: Rect,
+        slot: &super::sample_pack::PackSlot,
+        unavailable: bool,
+        loading: bool,
+        playing: bool,
+    ) {
+        let painter = ui.painter_at(rect);
+        let visuals = ui.visuals().clone();
+        if slot.choke_group != 0 {
+            painter.text(
+                rect.right_top() + Vec2::new(-6.0, 6.0),
+                egui::Align2::RIGHT_TOP,
+                format!("C{}", slot.choke_group),
+                egui::FontId::monospace(9.0),
+                visuals.weak_text_color(),
+            );
+        }
+        if slot.mute || slot.solo {
+            painter.text(
+                rect.min + Vec2::new(22.0, 6.0),
+                egui::Align2::LEFT_TOP,
+                if slot.mute { "M" } else { "S" },
+                egui::FontId::monospace(9.0),
+                visuals.weak_text_color(),
+            );
+        }
+        let state_pos = rect.right_top() + Vec2::new(-28.0, 10.0);
+        if unavailable {
+            painter.circle_filled(state_pos, 3.0, visuals.error_fg_color);
+        } else if loading {
+            ui.put(
+                Rect::from_center_size(state_pos, Vec2::splat(10.0)),
+                egui::Spinner::new().size(10.0),
+            );
+        } else if playing {
+            painter.circle_filled(state_pos, 3.0, visuals.selection.stroke.color);
+        }
+    }
+
+    fn pad_tooltip(
+        slot: &super::sample_pack::PackSlot,
+        unavailable: bool,
+        loading: bool,
+        playing: bool,
+    ) -> String {
+        let mut title = slot.display_title();
+        if unavailable {
+            title.push_str("\nSome sources are unavailable or could not be decoded.");
+        }
+        if loading {
+            title.push_str("\nPreparing audio…");
+        }
+        if playing {
+            title.push_str("\nPlaying");
+        }
+        if slot.choke_group != 0 {
+            title.push_str(&format!("\nChoke group {}", slot.choke_group));
+        }
+
+        title
     }
 
     fn assign_selected_to_pad(&mut self, index: usize) {
@@ -317,19 +371,7 @@ impl ConstellationState {
 
     pub(super) fn render_selected_pad(&mut self, ui: &mut egui::Ui) {
         let index = self.selected_slot;
-        ui.horizontal_wrapped(|ui| {
-            ui.strong(format!("Pad {}", index + 1));
-            let group = &mut self.pack_bank.slots[index].choke_group;
-            egui::ComboBox::from_id_source(("pad_choke", index)).width(100.0).selected_text(if *group == 0 { "Choke: Off".to_string() } else { format!("Choke: {group}") }).show_ui(ui, |ui| {
-                ui.selectable_value(group, 0, "Off");
-                for value in 1..=8 { ui.selectable_value(group, value, format!("Group {value}")); }
-            }).response.on_hover_text("Pads in the same group cut each other off; useful for open and closed hi-hats.");
-            if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add selected")).clicked() { self.assign_selected_to_pad(index); }
-            if ui.small_button("Clear").clicked() { self.clear_slot(index); }
-            if self.pack_bank.slots[index].samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path)) && ui.small_button("Retry audio").clicked() {
-                for sample in &self.pack_bank.slots[index].samples { self.failed_audio.remove(&sample.file_path); }
-            }
-        });
+        self.render_selected_pad_header(ui, index);
         let slot = &mut self.pack_bank.slots[index];
         if slot.samples.is_empty() {
             ui.weak("Select a sample on the map, then Add selected or Shift+click a pad.");
@@ -343,7 +385,6 @@ impl ConstellationState {
                     ui.label(RichText::new(super::ui::short_label(&sample.filename, 28)).strong())
                         .on_hover_text(&sample.filename);
                 });
-                Self::render_layer_waveform(ui, sample);
                 ui.horizontal_wrapped(|ui| {
                     if ui.small_button("Play").clicked() {
                         audition = Some(sample.clone());
@@ -361,6 +402,58 @@ impl ConstellationState {
                             .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
                     );
                 });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Start");
+                    ui.add(
+                        egui::DragValue::new(&mut sample.start_sec)
+                            .speed(0.001)
+                            .clamp_range(0.0..=(sample.end_sec - 0.0001).max(0.0))
+                            .max_decimals(4)
+                            .suffix(" s"),
+                    );
+                    ui.label("End");
+                    ui.add(
+                        egui::DragValue::new(&mut sample.end_sec)
+                            .speed(0.001)
+                            .clamp_range(
+                                (sample.start_sec + 0.0001).min(sample.duration)..=sample.duration,
+                            )
+                            .max_decimals(4)
+                            .suffix(" s"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut sample.pan, -1.0..=1.0)
+                            .text("Pan")
+                            .custom_formatter(|value, _| {
+                                if value.abs() < 0.01 {
+                                    "C".into()
+                                } else {
+                                    format!(
+                                        "{} {:.0}",
+                                        if value < 0.0 { "L" } else { "R" },
+                                        value.abs() * 100.0
+                                    )
+                                }
+                            }),
+                    );
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Attack");
+                    ui.add(
+                        egui::DragValue::new(&mut sample.attack_ms)
+                            .speed(0.1)
+                            .clamp_range(0.0..=500.0)
+                            .suffix(" ms"),
+                    );
+                    ui.label("Release");
+                    ui.add(
+                        egui::DragValue::new(&mut sample.release_ms)
+                            .speed(0.1)
+                            .clamp_range(0.0..=500.0)
+                            .suffix(" ms"),
+                    );
+                });
+                Self::render_layer_waveform(ui, sample);
                 ui.separator();
             });
         }
@@ -370,6 +463,24 @@ impl ConstellationState {
         if let Some(sample) = audition {
             self.audition_layers(&[sample]);
         }
+    }
+
+    fn render_selected_pad_header(&mut self, ui: &mut egui::Ui, index: usize) {
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(format!("Pad {}", index + 1));
+            ui.toggle_value(&mut self.pack_bank.slots[index].mute, "Mute");
+            ui.toggle_value(&mut self.pack_bank.slots[index].solo, "Solo");
+            let group = &mut self.pack_bank.slots[index].choke_group;
+            egui::ComboBox::from_id_source(("pad_choke", index)).width(100.0).selected_text(if *group == 0 { "Choke: Off".to_string() } else { format!("Choke: {group}") }).show_ui(ui, |ui| {
+                ui.selectable_value(group, 0, "Off");
+                for value in 1..=8 { ui.selectable_value(group, value, format!("Group {value}")); }
+            }).response.on_hover_text("Pads in the same group cut each other off; useful for open and closed hi-hats.");
+            if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add selected")).clicked() { self.assign_selected_to_pad(index); }
+            if ui.small_button("Clear").clicked() { self.clear_slot(index); }
+            if self.pack_bank.slots[index].samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path)) && ui.small_button("Retry audio").clicked() {
+                for sample in &self.pack_bank.slots[index].samples { self.failed_audio.remove(&sample.file_path); }
+            }
+        });
     }
 
     fn render_layer_waveform(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {

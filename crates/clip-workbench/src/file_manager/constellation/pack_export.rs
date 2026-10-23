@@ -53,6 +53,9 @@ fn stage(staged: &Path, bank: &SamplePackBank, originals: bool) -> Result<Vec<Fi
             sample.end_sec = duration;
             sample.duration = duration;
             sample.volume = 1.0;
+            sample.pan = 0.0;
+            sample.attack_ms = 0.0;
+            sample.release_ms = 0.0;
             sample.cached_audio = None;
         }
     }
@@ -96,11 +99,11 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
     if channels > super::MAX_SAMPLE_CHANNELS || rate > super::MAX_SAMPLE_RATE {
         return Err("Unsupported audio header".into());
     }
-    let start = (sample.start_sec as f64 * rate as f64).floor() as u64;
-    let end = (sample.end_sec as f64 * rate as f64).floor() as u64;
+    let start = (sample.start_sec as f64 * rate as f64).round() as u64;
+    let end = (sample.end_sec as f64 * rate as f64).round() as u64;
     let frames = end.saturating_sub(start);
     let bytes = frames
-        .checked_mul(channels as u64 * 4)
+        .checked_mul(2 * 4)
         .filter(|bytes| *bytes <= u32::MAX as u64 - 36)
         .ok_or("WAV layer exceeds RIFF size limit")? as u32;
     if frames == 0 {
@@ -109,11 +112,12 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
     decoder
         .try_seek(Duration::from_secs_f64(start as f64 / rate as f64))
         .map_err(|e| e.to_string())?;
+    let mut decoder = super::layer_source::LayerSource::new(decoder, sample, frames as usize);
     let file = File::create(target).map_err(|e| e.to_string())?;
     let mut writer = hound::WavWriter::new(
         BufWriter::new(&file),
         hound::WavSpec {
-            channels,
+            channels: 2,
             sample_rate: rate,
             bits_per_sample: 32,
             sample_format: hound::SampleFormat::Float,
@@ -127,9 +131,7 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
         if !value.is_finite() {
             return Err("Non-finite source sample".into());
         }
-        writer
-            .write_sample(value * sample.volume)
-            .map_err(|e| e.to_string())?;
+        writer.write_sample(value).map_err(|e| e.to_string())?;
     }
     writer.finalize().map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;
@@ -160,7 +162,18 @@ mod tests {
             std::fs::read(path.join("originals/pad01_layer1.wav")).unwrap(),
             original
         );
+        bank.slots[0].samples[0].pan = 1.0;
+        bank.slots[0].samples[0].attack_ms = 2.0;
+        bank.slots[0].samples[0].release_ms = 2.0;
         let second = export(root.path(), &bank, false).unwrap();
+        let effects =
+            rodio::Decoder::try_from(File::open(second.join("pad01_layer1.wav")).unwrap())
+                .unwrap()
+                .collect::<Vec<_>>();
+        assert_eq!(&effects[..2], &[0.0, 0.0]);
+        assert_eq!(&effects[effects.len() - 2..], &[0.0, 0.0]);
+        assert_eq!(effects[10000], 0.0);
+        assert!((effects[10001] - 0.125).abs() < 0.0001);
         assert_ne!(path, second);
         std::fs::remove_file(source).unwrap();
         let relocated = root.path().join("relocated");
@@ -171,7 +184,7 @@ mod tests {
         assert_eq!(layer.start_sec, 0.0);
         let decoder = rodio::Decoder::try_from(File::open(&layer.file_path).unwrap()).unwrap();
         let values: Vec<_> = decoder.collect();
-        assert_eq!(values.len(), 24000);
+        assert_eq!(values.len(), 48000);
         assert!(values.iter().all(|value| (*value - 0.125).abs() < 0.0001));
         assert!(export(root.path(), &bank, false).is_err());
         let entries = std::fs::read_dir(super::super::sample_pack::get_sample_packs_root(

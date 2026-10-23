@@ -76,12 +76,10 @@ impl PadOutput {
             return None;
         }
         let source = SharedPcm::trimmed(sample)?;
+        let frames = source.size_hint().0 / source.channels().get() as usize;
+        let source = super::layer_source::LayerSource::new(source, sample, frames);
         let player = Player::connect_new(&self.mixer);
-        player.append(
-            source.amplify(
-                sample.volume.clamp(0.0, 2.0) * velocity.min(127) as f32 / 127.0 * HEADROOM,
-            ),
-        );
+        player.append(source.amplify(velocity.min(127) as f32 / 127.0 * HEADROOM));
         Some(player)
     }
 }
@@ -299,6 +297,15 @@ impl Rack {
         if self.bank != *bank || cache_changed {
             self.bank = bank.clone();
         }
+        let solo = bank.slots.iter().any(|slot| slot.solo);
+        for (slot, voices) in bank.slots.iter().zip(&self.voices) {
+            let gain = if slot.mute || (solo && !slot.solo) {
+                0.0
+            } else {
+                1.0
+            };
+            voices.iter().for_each(|voice| voice.set_volume(gain));
+        }
         if let Some(output) = &self.output {
             output.set_bypass(bank.compressor_bypass);
         }
@@ -334,7 +341,11 @@ impl Rack {
         if slot_idx >= self.bank.slots.len() || velocity == 0 {
             return true;
         }
-        let group = self.bank.slots[slot_idx].choke_group;
+        let slot = &self.bank.slots[slot_idx];
+        if slot.mute || (self.bank.slots.iter().any(|slot| slot.solo) && !slot.solo) {
+            return true;
+        }
+        let group = slot.choke_group;
         for (index, voices) in self.voices.iter_mut().enumerate() {
             if index == slot_idx || (group != 0 && self.bank.slots[index].choke_group == group) {
                 for player in voices.drain(..) {

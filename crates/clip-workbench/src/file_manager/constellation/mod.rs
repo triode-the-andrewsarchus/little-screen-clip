@@ -23,6 +23,7 @@ pub mod db;
 pub mod generated_model;
 mod history;
 pub mod indexer;
+mod layer_source;
 mod midi;
 mod output;
 mod pack_export;
@@ -744,6 +745,24 @@ mod tests {
             }
             assert!((output.next().unwrap() - expected).abs() < 0.00001);
         }
+    }
+
+    #[test]
+    fn mute_and_solo_change_active_voice_gates_without_retriggering() {
+        let (mixer, _audio) = rodio::mixer::mixer(2.try_into().unwrap(), 48000.try_into().unwrap());
+        let mut state = ConstellationState::default();
+        state.playback.lock().unwrap().voices[0].push(rodio::Player::connect_new(&mixer));
+        state.pack_bank.slots[0].mute = true;
+        state.playback.lock().unwrap().sync(&state.pack_bank);
+        assert_eq!(state.playback.lock().unwrap().voices[0][0].volume(), 0.0);
+        state.pack_bank.slots[0].mute = false;
+        state.pack_bank.slots[1].solo = true;
+        state.playback.lock().unwrap().sync(&state.pack_bank);
+        assert_eq!(state.playback.lock().unwrap().voices[0][0].volume(), 0.0);
+        state.pack_bank.slots[0].solo = true;
+        state.playback.lock().unwrap().sync(&state.pack_bank);
+        assert_eq!(state.playback.lock().unwrap().voices[0][0].volume(), 1.0);
+        assert_eq!(state.playback.lock().unwrap().voices[0].len(), 1);
     }
 
     #[test]
