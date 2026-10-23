@@ -101,8 +101,8 @@ impl ConstellationState {
                 {
                     egui::TopBottomPanel::bottom("constellation_selected_pad")
                         .resizable(true)
-                        .default_height(220.0)
-                        .height_range(160.0..=320.0)
+                        .default_height(260.0)
+                        .height_range(220.0..=420.0)
                         .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 6.0)))
                         .show_inside(ui, |ui| {
                             ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
@@ -110,7 +110,10 @@ impl ConstellationState {
                             egui::ScrollArea::vertical()
                                 .id_source("constellation_layer_editor")
                                 .min_scrolled_height(0.0)
-                                .show(ui, |ui| self.render_selected_pad(ui));
+                                .scroll_bar_visibility(
+                                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                )
+                                .show(ui, |ui| self.render_selected_pad(ui, palette));
                         });
                 }
                 self.render_starfield(ui, current_folder, on_play_sample, on_select_sample);

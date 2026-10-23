@@ -191,6 +191,7 @@ mod tests {
                 samples: pcm.clone(),
                 mono_samples: pcm,
                 waveform_peaks: vec![],
+                waveform_colors: vec![],
             }));
             let voice = if streaming {
                 bus.play_source(Box::new(rodio::buffer::SamplesBuffer::new(
@@ -218,6 +219,7 @@ mod tests {
             samples: pcm.clone(),
             mono_samples: pcm.clone(),
             waveform_peaks: vec![],
+            waveform_colors: vec![],
         }));
         for velocity in [1, 64, 127] {
             let (player, mut samples) = Player::new();

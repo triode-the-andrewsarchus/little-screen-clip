@@ -761,6 +761,7 @@ mod tests {
             samples: pcm.clone(),
             mono_samples: pcm,
             waveform_peaks: vec![],
+            waveform_colors: vec![],
         }));
         state.pack_bank.slots[0].samples.push(sample);
         let full = 0.5 * 10.0_f32.powf(-2.0 / 20.0);

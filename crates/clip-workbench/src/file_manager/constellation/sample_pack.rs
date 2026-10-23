@@ -18,7 +18,7 @@ pub const SLOT_KEY_CHARS: [char; NUM_SLOTS] = [
     '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ' ', ' ', ' ', ' ', ' ', ' ',
 ];
 
-/// Prepared interleaved PCM, mono snapping data, and 100 min/max waveform buckets.
+/// Prepared interleaved PCM, mono snapping data, and frequency-colored min/max waveform buckets.
 ///
 /// Slot layers share this allocation through [`Arc<T>`]. Playback owns a frame-aligned
 /// view of its PCM and never copies the trimmed payload on the UI thread.
@@ -29,6 +29,7 @@ pub struct CachedAudio {
     pub samples: Arc<Vec<f32>>,
     pub mono_samples: Arc<Vec<f32>>,
     pub waveform_peaks: Vec<(f32, f32)>,
+    pub waveform_colors: Vec<[u8; 3]>,
 }
 
 impl std::fmt::Debug for CachedAudio {
@@ -70,12 +71,17 @@ impl CachedAudio {
             .chunks_exact(width)
             .map(|frame| frame.iter().sum::<f32>() / width as f32)
             .collect();
-        let waveform_peaks = (0..100)
+        let buckets = mono.len().min(512);
+        let mut color = little_clip_core::audio::WaveformColor::new(sample_rate as f32);
+        let mut waveform_colors = Vec::with_capacity(buckets);
+        let waveform_peaks = (0..buckets)
             .map(|bucket| {
-                let start = bucket * mono.len() / 100;
-                let end = ((bucket + 1) * mono.len() / 100)
+                let start = bucket * mono.len() / buckets;
+                let end = ((bucket + 1) * mono.len() / buckets)
                     .max(start + 1)
                     .min(mono.len());
+                color.push_samples(&mono[start..end]);
+                waveform_colors.push(color.take_color());
                 mono[start..end]
                     .iter()
                     .fold((0.0_f32, 0.0_f32), |(low, high), &value| {
@@ -90,6 +96,7 @@ impl CachedAudio {
             samples: Arc::new(samples),
             mono_samples: Arc::new(mono),
             waveform_peaks,
+            waveform_colors,
         })
     }
 }
@@ -617,6 +624,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prepared_waveform_colors_cover_every_bucket_including_tiny_hits() {
+        let root = tempfile::tempdir().unwrap();
+        for frames in [16, 2048] {
+            let path = root.path().join(format!("{frames}.wav"));
+            let mut writer = hound::WavWriter::create(
+                &path,
+                hound::WavSpec {
+                    channels: 1,
+                    sample_rate: 48000,
+                    bits_per_sample: 16,
+                    sample_format: hound::SampleFormat::Int,
+                },
+            )
+            .unwrap();
+            for frame in 0..frames {
+                writer
+                    .write_sample(((frame as f32 * 0.13).sin() * 16000.0) as i16)
+                    .unwrap();
+            }
+            writer.finalize().unwrap();
+            let audio = CachedAudio::load(&path).unwrap();
+            assert_eq!(audio.waveform_peaks.len(), frames.min(512));
+            assert_eq!(audio.waveform_colors.len(), audio.waveform_peaks.len());
+            assert_eq!(audio.samples.len(), frames);
+        }
+    }
+
+    #[test]
     fn legacy_layers_default_to_neutral_effects_and_invalid_controls_are_rejected() {
         let layer = SlotSample::new("hit.wav".into(), "hit.wav".into(), None, 1.0);
         let mut value = serde_json::to_value(&layer).unwrap();
@@ -698,6 +733,7 @@ mod tests {
             samples: Arc::new(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]),
             mono_samples: Arc::new(vec![0.5, 2.5, 4.5, 6.5]),
             waveform_peaks: vec![],
+            waveform_colors: vec![],
         });
         sample.cached_audio = Some(audio.clone());
         sample.start_sec = 0.25;

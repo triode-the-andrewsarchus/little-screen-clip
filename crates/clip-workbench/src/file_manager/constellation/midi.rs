@@ -252,6 +252,7 @@ mod tests {
             samples: pcm.clone(),
             mono_samples: pcm,
             waveform_peaks: vec![],
+            waveform_colors: vec![],
         }));
         bank.slots[0].samples.push(sample);
         rack.sync(&bank);

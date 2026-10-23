@@ -1,7 +1,7 @@
 //! Compact drum rack, selected-pad editor, and reference-pack browser.
 
 use super::ConstellationState;
-use egui::{Pos2, Rect, RichText, Stroke, Vec2};
+use egui::{Color32, Pos2, Rect, RichText, Stroke, Vec2};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -370,9 +370,13 @@ impl ConstellationState {
         });
     }
 
-    pub(super) fn render_selected_pad(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn render_selected_pad(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
         // Parameter rows use compact chrome so the essential controls and fades
-        // fit above the waveform at ordinary file-manager window sizes.
+        // remain accessible below the waveform at ordinary file-manager window sizes.
         ui.spacing_mut().interact_size.y = 22.0;
         ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
         ui.spacing_mut().item_spacing.y = 4.0;
@@ -384,7 +388,33 @@ impl ConstellationState {
         }
         let mut remove = None;
         let mut audition = None;
-        for (layer, sample) in slot.samples.iter_mut().enumerate() {
+        // One layer at a time keeps the waveform and controls at a predictable height.
+        let layer_id = ui.id().with(("edited_layer", index));
+        let mut selected_layer = ui
+            .data(|data| data.get_temp::<usize>(layer_id))
+            .unwrap_or(0)
+            .min(slot.samples.len().saturating_sub(1));
+        if slot.samples.len() > 1 {
+            use crate::ui_tabs::{Tab, TabBar};
+            let labels: Vec<_> = (0..slot.samples.len())
+                .map(|layer| format!("Layer {}", layer + 1))
+                .collect();
+            let tabs: Vec<_> = labels
+                .iter()
+                .enumerate()
+                .map(|(layer, label)| Tab::new(layer, label))
+                .collect();
+            if let Some(layer) = TabBar::new(layer_id, selected_layer, &tabs, palette).show(ui) {
+                selected_layer = layer;
+            }
+            ui.data_mut(|data| data.insert_temp(layer_id, selected_layer));
+        }
+        for (layer, sample) in slot
+            .samples
+            .iter_mut()
+            .enumerate()
+            .filter(|(layer, _)| *layer == selected_layer)
+        {
             let frame_duration = sample
                 .cached_audio
                 .as_ref()
@@ -395,6 +425,7 @@ impl ConstellationState {
                     ui.label(RichText::new(super::ui::short_label(&sample.filename, 28)).strong())
                         .on_hover_text(&sample.filename);
                 });
+                Self::render_layer_waveform(ui, sample);
                 ui.horizontal_wrapped(|ui| {
                     if ui.small_button("Play").clicked() {
                         audition = Some(sample.clone());
@@ -464,7 +495,6 @@ impl ConstellationState {
                             .suffix(" ms"),
                     );
                 });
-                Self::render_layer_waveform(ui, sample);
                 ui.separator();
             });
         }
@@ -496,11 +526,13 @@ impl ConstellationState {
 
     fn render_layer_waveform(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
         let (rect, response) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width(), 48.0),
+            Vec2::new(ui.available_width(), 88.0),
             egui::Sense::click_and_drag(),
         );
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
+        painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+        // Keep both handle centers inside the canvas, clear of panel edges.
+        let rect = rect.shrink2(Vec2::new(12.0, 10.0));
         let duration = sample.duration.max(f32::EPSILON);
         let frame_duration = sample
             .cached_audio
@@ -509,23 +541,31 @@ impl ConstellationState {
         let start = rect.left() + sample.start_sec / duration * rect.width();
         let end = rect.left() + sample.end_sec / duration * rect.width();
         if let Some(audio) = &sample.cached_audio {
-            let color = sample
-                .category
-                .map_or(ui.visuals().text_color(), |category| category.color());
             for (index, &(low, high)) in audio.waveform_peaks.iter().enumerate() {
                 let x = rect.left()
                     + index as f32 / audio.waveform_peaks.len().max(1) as f32 * rect.width();
+                let rgb = audio
+                    .waveform_colors
+                    .get(index)
+                    .copied()
+                    .unwrap_or([160; 3]);
                 let color = if x >= start && x <= end {
-                    color
+                    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
                 } else {
                     ui.visuals().weak_text_color()
                 };
-                painter.line_segment(
-                    [
-                        Pos2::new(x, rect.center().y - high.abs() * 20.0),
-                        Pos2::new(x, rect.center().y + low.abs() * 20.0),
-                    ],
-                    Stroke::new(1.0_f32, color),
+                let width = rect.width() / audio.waveform_peaks.len().max(1) as f32;
+                let amplitude = rect.height() * 0.48;
+                painter.rect_filled(
+                    Rect::from_min_max(
+                        Pos2::new(x, rect.center().y - high.abs().min(1.0) * amplitude),
+                        Pos2::new(
+                            x + width.max(1.0),
+                            rect.center().y + (low.abs().min(1.0) * amplitude).max(0.5),
+                        ),
+                    ),
+                    0.0,
+                    color,
                 );
             }
         } else {
@@ -538,16 +578,30 @@ impl ConstellationState {
             );
         }
         let marker = ui.visuals().text_color();
-        for x in [start, end] {
+        for (x, label) in [(start, "IN"), (end, "OUT")] {
             painter.line_segment(
                 [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
                 Stroke::new(1.5_f32, marker),
             );
             painter.rect_filled(
-                Rect::from_center_size(Pos2::new(x, rect.top() + 4.0), Vec2::new(6.0, 8.0)),
+                Rect::from_center_size(Pos2::new(x, rect.center().y), Vec2::new(8.0, 22.0)),
                 1.0,
                 marker,
             );
+            painter.text(
+                Pos2::new(x, rect.top() - 1.0),
+                egui::Align2::CENTER_BOTTOM,
+                label,
+                egui::FontId::proportional(9.0),
+                marker,
+            );
+        }
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if response.double_clicked() {
+            sample.start_sec = 0.0;
+            sample.end_sec = duration;
         }
         if response.drag_started()
             && let Some(pointer) = response.interact_pointer_pos()
@@ -575,8 +629,8 @@ impl ConstellationState {
             }
         }
         ui.weak(format!(
-            "{:.3}s – {:.3}s · drag edges to trim",
-            sample.start_sec, sample.end_sec
+            "{:.3} s selected · drag IN / OUT to trim · double-click to reset",
+            sample.end_sec - sample.start_sec
         ));
     }
 
