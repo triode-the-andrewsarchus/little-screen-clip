@@ -17,6 +17,7 @@ impl ConstellationState {
         &mut self,
         ui: &mut egui::Ui,
         current_folder: &std::path::Path,
+        palette: &little_clip_core::palette::AppPalette,
         on_play_sample: &mut dyn FnMut(&std::path::Path),
         on_select_sample: &mut dyn FnMut(&std::path::Path),
     ) {
@@ -25,57 +26,127 @@ impl ConstellationState {
         {
             self.close_pack_browser();
         }
-        // Handle keyboard shortcuts (keys 1-0 for slot trigger, Shift+1-0 for assigning)
         self.handle_shelf_keyboard_shortcuts(ui.ctx());
-
-        // Top Toolbar
-        self.render_toolbar(ui, current_folder, on_play_sample);
-
-        // Render Sample Pack Browser modal if open
-        self.render_pack_browser(ui.ctx(), current_folder);
-
-        // If indexing is currently active, show progress overlay
-        if let Some(progress) = self.indexing_status.clone() {
-            let mut cancel = false;
-            ui.horizontal(|ui| {
-                ui.spinner();
-                if let Some(folder) = self.indexing_folder() {
-                    let folder_name = folder
-                        .file_name()
-                        .map(|n| n.to_string_lossy())
-                        .unwrap_or_default();
-                    ui.label(format!("[{}] {}", folder_name, progress));
-                } else {
-                    ui.label(progress);
-                }
-                if ui.button("Cancel").clicked() {
-                    cancel = true;
-                }
-            });
-            if cancel {
-                self.cancel_indexing();
-            }
-            ui.separator();
+        let notes = self
+            .midi
+            .as_ref()
+            .map(|controller| controller.poll(!self.browser_open))
+            .unwrap_or_default();
+        for (pad, velocity) in notes {
+            self.trigger_slot_velocity(pad, velocity);
         }
+        self.render_toolbar(ui, current_folder, on_play_sample);
+        self.render_indexing_progress(ui);
 
-        // Layout: Central starfield canvas + Right creation shelf
+        egui::TopBottomPanel::bottom("constellation_output")
+            .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 4.0)))
+            .show_inside(ui, |ui| {
+                self.render_rack_output(ui);
+            });
         if self.pack_shelf_open {
             egui::SidePanel::right("constellation_pack_shelf_panel")
                 .resizable(true)
-                .default_width(320.0)
-                .width_range(280.0..=480.0)
+                .default_width(360.0)
+                .width_range(280.0..=420.0)
+                .frame(egui::Frame::none().inner_margin(8.0))
                 .show_inside(ui, |ui| {
-                    self.render_pack_shelf(ui, current_folder);
+                    ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                    use crate::ui_tabs::{Tab, TabBar};
+                    if let Some(packs) = TabBar::new(
+                        "constellation_rack_tabs",
+                        self.browser_open,
+                        &[Tab::new(false, "Rack"), Tab::new(true, "Packs")],
+                        palette,
+                    )
+                    .equal_widths()
+                    .show(ui)
+                    {
+                        self.stop_playback();
+                        if packs {
+                            self.browser_open = true;
+                            self.refresh_browser_packs(current_folder);
+                        } else {
+                            self.close_pack_browser();
+                        }
+                    }
+                    ui.add_space(8.0);
+                    if self.browser_open {
+                        self.render_pack_browser(ui, current_folder);
+                    } else {
+                        self.render_pack_shelf(ui, current_folder);
+                    }
                 });
         }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().inner_margin(8.0))
+            .show_inside(ui, |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                if self.samples.is_empty() && self.active_job.is_none() {
+                    self.render_empty_state(ui, current_folder);
+                    return;
+                }
+                if !self.browser_open
+                    && self.pad_editor_open
+                    && !self.pack_bank.slots[self.selected_slot].is_empty()
+                {
+                    egui::TopBottomPanel::bottom("constellation_selected_pad")
+                        .resizable(true)
+                        .default_height(168.0)
+                        .height_range(110.0..=240.0)
+                        .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 6.0)))
+                        .show_inside(ui, |ui| {
+                            ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                            ui.separator();
+                            egui::ScrollArea::vertical()
+                                .id_source("constellation_layer_editor")
+                                .min_scrolled_height(0.0)
+                                .show(ui, |ui| self.render_selected_pad(ui));
+                        });
+                }
+                self.render_starfield(ui, current_folder, on_play_sample, on_select_sample);
+            });
+    }
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            if self.samples.is_empty() && self.active_job.is_none() {
-                self.render_empty_state(ui, current_folder);
-                return;
-            }
-            self.render_starfield(ui, current_folder, on_play_sample, on_select_sample);
-        });
+    fn render_indexing_progress(&mut self, ui: &mut egui::Ui) {
+        let Some(status) = self.indexing_status.clone() else {
+            return;
+        };
+        if self.active_job.is_some() {
+            let elapsed = self
+                .indexing_started
+                .map_or(0.0, |started| started.elapsed().as_secs_f32());
+            let text = self.indexing_progress.map_or_else(
+                || format!("Discovering samples · {elapsed:.1}s"),
+                |progress| format!("{:.0}% · {elapsed:.1}s", progress * 100.0),
+            );
+            ui.horizontal(|ui| {
+                let width = (ui.available_width() - 85.0).max(20.0);
+                ui.add(
+                    egui::ProgressBar::new(self.indexing_progress.unwrap_or(0.0))
+                        .fill(ui.visuals().widgets.active.fg_stroke.color)
+                        .animate(true)
+                        .desired_width(width)
+                        .text(text),
+                );
+                if ui.button("Cancel").clicked() {
+                    self.cancel_indexing();
+                }
+            });
+            ui.label(
+                egui::RichText::new(status)
+                    .small()
+                    .monospace()
+                    .color(ui.visuals().weak_text_color()),
+            );
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(status);
+                if ui.small_button("Dismiss").clicked() {
+                    self.indexing_status = None;
+                }
+            });
+        }
+        ui.separator();
     }
 
     fn render_toolbar(
@@ -85,169 +156,120 @@ impl ConstellationState {
         on_play_sample: &mut dyn FnMut(&std::path::Path),
     ) {
         ui.horizontal_wrapped(|ui| {
-            // Category filter pills
-            let all_selected = self.category_filter.is_none();
-            if ui
-                .selectable_label(all_selected, format!("All ({})", self.samples.len()))
-                .clicked()
-            {
-                self.category_filter = None;
-            }
-
-            // Count per category
-            let mut counts = [0usize; 12];
-            for s in &self.samples {
-                counts[s.category as usize] += 1;
-            }
-
-            for cat in SampleCategory::ALL {
-                let cnt = counts[cat as usize];
-                if cnt == 0 && self.category_filter != Some(cat) {
-                    continue;
-                }
-                let is_active = self.category_filter == Some(cat);
-                let label = format!("{} ({})", cat.display_name(), cnt);
-                let btn = egui::Button::new(egui::RichText::new(label).color(if is_active {
-                    Color32::WHITE
-                } else {
-                    cat.color()
-                }))
-                .fill(if is_active {
-                    cat.color()
-                } else {
-                    Color32::from_black_alpha(80)
-                });
-
-                if ui.add(btn).clicked() {
-                    if self.category_filter == Some(cat) {
-                        self.category_filter = None;
-                    } else {
-                        self.category_filter = Some(cat);
-                    }
-                }
-            }
-
-            ui.separator();
-
-            let search_id = ui.make_persistent_id("constellation-search");
-            let search_response = ui.add(
+            let response = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
-                    .id(search_id)
-                    .hint_text("Filter by name (Ctrl+F)...")
-                    .desired_width(130.0),
+                    .id_source("constellation-search")
+                    .hint_text("Filter samples · Ctrl+F")
+                    .desired_width(170.0),
             );
             if self.focus_search {
-                search_response.request_focus();
+                response.request_focus();
                 self.focus_search = false;
             }
-            // egui clears keyboard focus at frame start for Escape, so include
-            // the response's previous focus when handling search dismissal.
-            if (search_response.has_focus() || search_response.lost_focus())
+            if (response.has_focus() || response.lost_focus())
                 && ui.input(|input| input.key_pressed(egui::Key::Escape))
             {
                 self.search_query.clear();
-                search_response.surrender_focus();
-                ui.ctx().request_repaint();
+                response.surrender_focus();
             }
-
-            // Hover to play toggle
             ui.checkbox(&mut self.hover_to_play, "Hover to audition");
-
-            // Creative features
-            if !self.samples.is_empty() {
-                if ui
-                    .button("Random")
-                    .on_hover_text("Play random sample")
-                    .clicked()
+            if ui
+                .add_enabled(!self.samples.is_empty(), egui::Button::new("Random"))
+                .clicked()
+            {
+                let query = self.search_query.to_lowercase();
+                let eligible: Vec<_> = self
+                    .samples
+                    .iter()
+                    .filter(|sample| self.matches_filters(sample, &query))
+                    .collect();
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as usize;
+                if let Some(sample) = eligible
+                    .get(nanos % eligible.len().max(1))
+                    .map(|sample| (*sample).clone())
                 {
-                    let nanos = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.subsec_nanos() as usize)
-                        .unwrap_or(0);
-                    let query = self.search_query.to_lowercase();
-                    let eligible: Vec<_> = self
-                        .samples
-                        .iter()
-                        .filter(|sample| self.matches_filters(sample, &query))
-                        .collect();
-                    let Some(s) = eligible
-                        .get(nanos % eligible.len().max(1))
-                        .map(|sample| (*sample).clone())
-                    else {
-                        return;
-                    };
-                    self.selected_path = Some(s.file_path.clone());
-                    self.record_played_sample(&s);
-                    on_play_sample(&s.file_path);
-                }
-
-                if ui
-                    .button("Nearest Neighbor")
-                    .on_hover_text("Find acoustically closest sample")
-                    .clicked()
-                {
-                    self.play_nearest_neighbor(on_play_sample);
+                    self.selected_path = Some(sample.file_path.clone());
+                    self.record_played_sample(&sample);
+                    on_play_sample(&sample.file_path);
                 }
             }
-
-            ui.separator();
-
-            // Sample Pack Creation Shelf Toggle & Browser
-            let shelf_active = self.pack_shelf_open;
-            let shelf_label = if shelf_active {
-                "Creation Shelf (On)"
-            } else {
-                "Creation Shelf"
-            };
-            let shelf_btn =
-                egui::Button::new(egui::RichText::new(shelf_label).color(if shelf_active {
-                    Color32::from_rgb(120, 220, 255)
-                } else {
-                    Color32::WHITE
-                }))
-                .fill(if shelf_active {
-                    Color32::from_rgba_premultiplied(35, 65, 110, 220)
-                } else {
-                    Color32::from_black_alpha(80)
-                });
-
             if ui
-                .add(shelf_btn)
-                .on_hover_text("Toggle sample pack creation shelf (10 slots for keys 1-0)")
+                .add_enabled(self.selected_path.is_some(), egui::Button::new("Neighbor"))
+                .on_hover_text("Audition the acoustically nearest sample")
+                .clicked()
+            {
+                self.play_nearest_neighbor(on_play_sample);
+            }
+            if ui
+                .button(if self.pack_shelf_open {
+                    "Hide rack"
+                } else {
+                    "Show rack"
+                })
                 .clicked()
             {
                 self.pack_shelf_open = !self.pack_shelf_open;
             }
-
+            ui.menu_button("Map", |ui| {
+                if ui
+                    .add_enabled(
+                        self.active_job.is_none(),
+                        egui::Button::new("Index folder again"),
+                    )
+                    .clicked()
+                {
+                    self.start_indexing(current_folder);
+                    ui.close_menu();
+                }
+                if ui.button("Reset pan and zoom").clicked() {
+                    self.pan = Vec2::ZERO;
+                    self.zoom = 1.0;
+                    ui.close_menu();
+                }
+                if ui.button("Clear rack").clicked() {
+                    self.clear_bank();
+                    ui.close_menu();
+                }
+                if ui.button("Saved packs").clicked() {
+                    self.pack_shelf_open = true;
+                    self.browser_open = true;
+                    self.refresh_browser_packs(current_folder);
+                    ui.close_menu();
+                }
+            });
+        });
+        ui.horizontal_wrapped(|ui| {
             if ui
-                .button("Browse Packs")
-                .on_hover_text("Open Sample Pack Browser")
+                .selectable_label(
+                    self.category_filter.is_none(),
+                    format!("All ({})", self.samples.len()),
+                )
                 .clicked()
             {
-                self.refresh_browser_packs(current_folder);
-                self.browser_open = true;
+                self.category_filter = None;
             }
-
-            // Quick Assign to Slot if a sample is selected on map
-            if let Some(ref path) = self.selected_path.clone() {
-                if let Some(sample) = self.samples.iter().find(|s| &s.file_path == path).cloned() {
-                    ui.separator();
-                    ui.menu_button("Assign Selected to Slot ▾", |ui| {
-                        ui.label(
-                            egui::RichText::new(format!("Sample: {}", sample.filename)).strong(),
-                        );
-                        ui.separator();
-                        for slot_idx in 0..super::sample_pack::NUM_SLOTS {
-                            let key_char = super::sample_pack::SLOT_KEY_CHARS[slot_idx];
-                            let slot_title = self.pack_bank.slots[slot_idx].display_title();
-                            let text = format!("[{key_char}] {slot_title}");
-                            if ui.button(text).clicked() {
-                                self.add_sample_to_slot(slot_idx, &sample);
-                                self.slot_flash[slot_idx] = Some(std::time::Instant::now());
-                                ui.close_menu();
-                            }
-                        }
-                    });
+            let mut counts = [0usize; 12];
+            for sample in &self.samples {
+                counts[sample.category as usize] += 1;
+            }
+            for category in SampleCategory::ALL {
+                let count = counts[category as usize];
+                if count == 0 && self.category_filter != Some(category) {
+                    continue;
+                }
+                let active = self.category_filter == Some(category);
+                if ui
+                    .selectable_label(
+                        active,
+                        egui::RichText::new(format!("{} ({count})", category.display_name()))
+                            .color(category.color()),
+                    )
+                    .clicked()
+                {
+                    self.category_filter = if active { None } else { Some(category) };
                 }
             }
         });
@@ -256,36 +278,19 @@ impl ConstellationState {
 
     fn render_empty_state(&mut self, ui: &mut egui::Ui, current_folder: &std::path::Path) {
         ui.vertical_centered(|ui| {
-            ui.add_space(60.0);
-            ui.heading(
-                egui::RichText::new("Sample Constellation Map")
-                    .size(24.0)
-                    .color(Color32::from_rgb(100, 200, 255)),
-            );
-            ui.add_space(10.0);
-            ui.label(
-                egui::RichText::new(
-                    "Transform your audio folder into an interactive, color-coded 2D galaxy of sounds.\n\
-                     Kicks, snares, hats, melodic synths, and basses are grouped by their physical timbral characteristics.",
-                )
-                .size(13.0)
-                .color(Color32::from_gray(180)),
-            );
-            ui.add_space(20.0);
-
-            let btn = egui::Button::new(
-                egui::RichText::new("Index folder into sample constellation (recursive)")
-                    .size(15.0)
-                    .color(Color32::WHITE),
-            )
-            .fill(Color32::from_rgb(60, 100, 200))
-            .min_size(Vec2::new(320.0, 42.0));
-
-            if ui.add(btn).clicked() {
+            ui.add_space((ui.available_height() * 0.28).max(10.0));
+            ui.heading("Sample constellation");
+            ui.add_space(8.0);
+            ui.label("Explore samples by sound. Similar timbres sit together.");
+            ui.label("Choose a sample, then assign it to a drum pad.");
+            ui.add_space(16.0);
+            if ui
+                .button("Index folder")
+                .on_hover_text("Analyze audio in this folder and its subfolders")
+                .clicked()
+            {
                 self.start_indexing(current_folder);
             }
-
-            ui.add_space(40.0);
         });
     }
 
@@ -317,12 +322,16 @@ impl ConstellationState {
             self.pan -= mouse_rel * (self.zoom / old_zoom - 1.0);
         }
 
-        // 1. Sleek Matte Slate Cosmic Void
-        painter.rect_filled(rect, 0.0, Color32::from_rgb(26, 29, 34));
+        // The map inherits the file browser canvas; only samples carry category color.
         let center = rect.center() + self.pan;
 
         // 2. High-Performance GPU Batched Star Rendering
-        let view_scale = (rect.width().min(rect.height()) * 0.50).max(10.0) * self.zoom;
+        // Organic category coordinates can extend beyond ±1. Fit their actual
+        // extent, leaving a margin, while preserving every relative position.
+        let extent = self.samples.iter().fold(1.0_f32, |extent, sample| {
+            extent.max(sample.x.abs()).max(sample.y.abs())
+        });
+        let view_scale = (rect.width().min(rect.height()) * 0.45).max(1.0) / extent * self.zoom;
         let query_lower = self.search_query.to_lowercase();
         let has_query = !query_lower.is_empty();
 
@@ -755,19 +764,15 @@ impl ConstellationState {
                     hud_rect.center().y,
                 ),
             ],
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(100, 150, 255, 80)),
+            Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
         );
 
         // Glass card background
-        painter.rect_filled(
-            hud_rect,
-            6.0,
-            Color32::from_rgba_premultiplied(16, 20, 34, 242),
-        );
+        painter.rect_filled(hud_rect, 6.0, ui.visuals().window_fill());
         painter.rect_stroke(
             hud_rect,
             6.0,
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(70, 100, 180, 140)),
+            Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
         );
 
         // 1. Top Row: Filename (left) + Category Pill (right)
@@ -781,7 +786,7 @@ impl ConstellationState {
             egui::Align2::LEFT_TOP,
             short_name,
             egui::FontId::proportional(12.5),
-            Color32::WHITE,
+            ui.visuals().text_color(),
         );
 
         // Category Tag Pill
@@ -845,7 +850,7 @@ impl ConstellationState {
             egui::Align2::LEFT_TOP,
             short_rel,
             egui::FontId::proportional(10.0),
-            Color32::from_rgb(145, 185, 235),
+            ui.visuals().weak_text_color(),
         );
 
         // 3. Colored Waveform Strip
@@ -856,15 +861,11 @@ impl ConstellationState {
             Vec2::new(wave_w, wave_h),
         );
 
-        painter.rect_filled(
-            wave_rect,
-            3.0,
-            Color32::from_rgba_premultiplied(10, 14, 24, 230),
-        );
+        painter.rect_filled(wave_rect, 3.0, ui.visuals().extreme_bg_color);
         painter.rect_stroke(
             wave_rect,
             3.0,
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(60, 80, 130, 80)),
+            Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
         );
 
         painter.line_segment(
@@ -872,7 +873,7 @@ impl ConstellationState {
                 Pos2::new(wave_rect.left() + 2.0, wave_rect.center().y),
                 Pos2::new(wave_rect.right() - 2.0, wave_rect.center().y),
             ],
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(70, 90, 140, 60)),
+            Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
         );
 
         if let Some(ref prev) = cached_preview {
@@ -902,7 +903,7 @@ impl ConstellationState {
                     egui::Align2::CENTER_CENTER,
                     "No audio waveform",
                     egui::FontId::proportional(10.0),
-                    Color32::from_gray(120),
+                    ui.visuals().weak_text_color(),
                 );
             }
         } else {
@@ -911,7 +912,7 @@ impl ConstellationState {
                 egui::Align2::CENTER_CENTER,
                 "Loading waveform...",
                 egui::FontId::proportional(10.0),
-                Color32::from_gray(140),
+                ui.visuals().weak_text_color(),
             );
         }
 
@@ -937,7 +938,7 @@ impl ConstellationState {
             egui::Align2::LEFT_TOP,
             format_text,
             egui::FontId::proportional(10.5),
-            Color32::from_rgb(140, 215, 255),
+            ui.visuals().text_color(),
         );
 
         // 5. Acoustic Stats: Duration, Frequency, Note
@@ -960,7 +961,7 @@ impl ConstellationState {
             egui::Align2::LEFT_TOP,
             stats_text,
             egui::FontId::proportional(10.5),
-            Color32::from_gray(175),
+            ui.visuals().weak_text_color(),
         );
     }
 
@@ -1241,10 +1242,89 @@ mod tests {
                 .iter()
                 .any(|vertex| vertex.color == SampleCategory::Snare.color())
         );
+        state.samples.truncate(1);
+        state.samples[0].x = -2.3;
+        state.samples[0].y = 1.5;
+        state.search_query.clear();
+        let fitted = coarse_mesh(&mut state);
+        assert_eq!(
+            fitted.len(),
+            4,
+            "a sample beyond the unit square stays visible"
+        );
+        assert!(
+            fitted
+                .iter()
+                .all(|vertex| (8.0..792.0).contains(&vertex.pos.x)
+                    && (8.0..592.0).contains(&vertex.pos.y))
+        );
     }
 
     #[test]
-    fn pad_assignment_uses_physical_digits_and_only_text_focus_blocks_it() {
+    fn rack_layout_does_not_grow_across_frames_or_open_a_pack_window() {
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette = little_clip_core::palette::AppPalette::for_appearance(appearance);
+            crate::ui_appearance::apply_visuals(&ctx, &palette);
+            let mut state = ConstellationState::new();
+            for frame in 0..12 {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(840.0, 550.0),
+                    )),
+                    ..Default::default()
+                };
+                let _ = ctx.run(input, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(
+                            ui,
+                            std::path::Path::new("/samples"),
+                            &palette,
+                            &mut |_| {},
+                            &mut |_| {},
+                        )
+                    });
+                });
+                let panel = egui::containers::panel::PanelState::load(
+                    &ctx,
+                    egui::Id::new("constellation_pack_shelf_panel"),
+                )
+                .unwrap();
+                assert!(
+                    panel.rect.width() <= 361.0,
+                    "rack expanded on frame {frame}: {:?}",
+                    panel.rect
+                );
+            }
+            state.browser_open = true;
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(
+                        ui,
+                        std::path::Path::new("/samples"),
+                        &palette,
+                        &mut |_| {},
+                        &mut |_| {},
+                    )
+                });
+            });
+            assert!(!ctx.memory(|memory| {
+                memory
+                    .areas()
+                    .visible_layer_ids()
+                    .iter()
+                    .any(|layer| layer.order == egui::Order::Middle)
+            }));
+        }
+    }
+
+    #[test]
+    fn pad_assignment_uses_configured_keys_and_only_text_focus_blocks_it() {
         let ctx = egui::Context::default();
         let mut state = ConstellationState::new();
         let sample = ConstellationSample {
@@ -1298,8 +1378,8 @@ mod tests {
             state.handle_shelf_keyboard_shortcuts(ctx);
             assert!(ctx.input(|input| input.events.is_empty()));
         });
-        assert_eq!(state.pack_bank.slots[0].samples.len(), 1);
-        assert_eq!(state.pack_bank.slots[1].samples.len(), 1);
+        assert_eq!(state.pack_bank.slots[12].samples.len(), 1);
+        assert_eq!(state.pack_bank.slots[13].samples.len(), 1);
         let mut text = String::new();
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -1310,7 +1390,7 @@ mod tests {
             state.handle_shelf_keyboard_shortcuts(ctx);
             assert!(!ctx.input(|input| input.events.is_empty()));
         });
-        assert_eq!(state.pack_bank.slots[0].samples.len(), 1);
+        assert_eq!(state.pack_bank.slots[12].samples.len(), 1);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! finish after navigation and still update its own database without changing the
 //! visible map. Dropping the state cancels its read-only index/hover work.
 //!
-//! [`sample_pack`] owns ten layered slots. PCM is prepared off the UI thread, shared
+//! [`sample_pack`] owns sixteen layered pads. PCM is prepared off the UI thread, shared
 //! by playback sources, and limited to the first 15 seconds/two million values per
 //! layer. Bank metadata and symlinks preserve source references and trim settings;
 //! saving a pack does not render or export trimmed audio. Accepted save/delete jobs
@@ -21,6 +21,8 @@ pub mod classifier;
 pub mod db;
 pub mod generated_model;
 pub mod indexer;
+mod midi;
+mod output;
 pub mod pack_shelf_ui;
 pub mod sample_pack;
 pub mod ui;
@@ -94,6 +96,8 @@ pub struct ConstellationState {
     pub zoom: f32,
     pub active_job: Option<IndexingJob>,
     pub indexing_status: Option<String>,
+    indexing_progress: Option<f32>,
+    indexing_started: Option<Instant>,
     pub hover_previews: HashMap<PathBuf, Arc<ConstellationHoverPreview>>,
     pub hover_req_tx: Option<mpsc::SyncSender<HoverPreviewRequest>>,
     pub hover_res_rx: Option<mpsc::Receiver<ConstellationHoverPreview>>,
@@ -101,7 +105,12 @@ pub struct ConstellationState {
     hover_cancelled: Arc<AtomicBool>,
     pub pack_bank: SamplePackBank,
     pub pack_shelf_open: bool,
-    pub slot_flash: [Option<Instant>; 10],
+    pub slot_flash: [Option<Instant>; sample_pack::NUM_SLOTS],
+    selected_slot: usize,
+    pad_editor_open: bool,
+    pad_keys: [char; sample_pack::NUM_SLOTS],
+    midi: Option<midi::Controller>,
+    output: Option<output::PadOutput>,
     /// Independent auditions outside the numbered pads.
     pub active_players: Vec<rodio::Player>,
     /// One voice group per pad; retriggering replaces every layer in that pad only.
@@ -134,6 +143,8 @@ impl Default for ConstellationState {
             zoom: 1.0,
             active_job: None,
             indexing_status: None,
+            indexing_progress: None,
+            indexing_started: None,
             hover_previews: HashMap::new(),
             hover_req_tx: None,
             hover_res_rx: None,
@@ -141,7 +152,14 @@ impl Default for ConstellationState {
             hover_cancelled: Arc::new(AtomicBool::new(false)),
             pack_bank: SamplePackBank::default(),
             pack_shelf_open: true,
-            slot_flash: [None; 10],
+            slot_flash: [None; sample_pack::NUM_SLOTS],
+            selected_slot: 0,
+            pad_editor_open: true,
+            pad_keys: [
+                'z', 'x', 'c', 'v', 'a', 's', 'd', 'f', 'q', 'w', 'e', 'r', '1', '2', '3', '4',
+            ],
+            midi: None,
+            output: None,
             active_players: Vec::new(),
             slot_players: std::array::from_fn(|_| Vec::new()),
             background: Vec::new(),
@@ -270,6 +288,23 @@ impl ConstellationState {
         );
     }
 
+    /// Installs validated logical character rows, ordered from the bottom of the rack.
+    pub fn configure_pad_keys(&mut self, rows: &[String; 4]) {
+        if let Ok(keys) = rows
+            .iter()
+            .flat_map(|row| row.chars().map(|key| key.to_ascii_lowercase()))
+            .collect::<Vec<_>>()
+            .try_into()
+        {
+            self.pad_keys = keys;
+        }
+    }
+
+    /// Reports whether a printable character is reserved by the configured rack.
+    pub fn uses_pad_key(&self, key: char) -> bool {
+        self.pad_keys.contains(&key.to_ascii_lowercase())
+    }
+
     /// Starts recursive indexing of the target folder in a background worker thread.
     pub fn start_indexing(&mut self, folder: &Path) {
         self.cancel_indexing();
@@ -297,6 +332,8 @@ impl ConstellationState {
             receiver,
         });
 
+        self.indexing_started = Some(Instant::now());
+        self.indexing_progress = None;
         self.indexing_status = Some("Scanning directory tree for audio samples...".to_string());
     }
 
@@ -306,6 +343,8 @@ impl ConstellationState {
             job.cancelled.store(true, Ordering::Relaxed);
         }
         self.indexing_status = None;
+        self.indexing_progress = None;
+        self.indexing_started = None;
     }
 
     /// Starts a single hover worker with one queued request and one queued result.
@@ -406,6 +445,10 @@ impl ConstellationState {
     /// Map auditions use the browser's `Music` player, stopped by its owner alongside
     /// this method. Retains the hovered path so Escape cannot immediately retrigger it.
     pub fn stop_playback(&mut self) {
+        self.output = None;
+        if let Some(midi) = &self.midi {
+            midi.suspend();
+        }
         for player in self.active_players.drain(..).chain(
             self.slot_players
                 .iter_mut()
@@ -421,18 +464,51 @@ impl ConstellationState {
     ///
     /// Stops the previous voices even if a replacement layer is still loading.
     pub fn trigger_slot(&mut self, slot_idx: usize) {
-        if slot_idx >= self.pack_bank.slots.len() {
+        self.trigger_slot_velocity(slot_idx, 127);
+    }
+
+    /// Plays a one-shot pad at MIDI velocity, applying the bank's velocity override.
+    ///
+    /// Retriggers replace that pad's voices; nonzero choke groups also retire peers.
+    /// Velocity zero is a note-off and never chokes or restarts a pad.
+    fn trigger_slot_velocity(&mut self, slot_idx: usize, velocity: u8) {
+        if slot_idx >= self.pack_bank.slots.len() || velocity == 0 {
             return;
         }
         self.slot_flash[slot_idx] = Some(Instant::now());
-        let voices = &mut self.slot_players[slot_idx];
-        for player in voices.drain(..) {
-            player.stop();
+        let group = self.pack_bank.slots[slot_idx].choke_group;
+        for (index, voices) in self.slot_players.iter_mut().enumerate() {
+            if index == slot_idx || (group != 0 && self.pack_bank.slots[index].choke_group == group)
+            {
+                for player in voices.drain(..) {
+                    player.stop();
+                }
+            }
         }
         let slot = &self.pack_bank.slots[slot_idx];
-        for s in &slot.samples {
-            if let Some(player) = sample_pack::play_slot_sample(s) {
-                voices.push(player);
+        if !slot
+            .samples
+            .iter()
+            .any(|sample| sample.cached_audio.is_some())
+        {
+            return;
+        }
+        if self.output.is_none() {
+            self.output = output::PadOutput::new(self.pack_bank.compressor_bypass);
+        }
+        let Some(output) = &self.output else {
+            self.browser_status = Some(("Audio output is unavailable".into(), Instant::now()));
+            return;
+        };
+        output.set_bypass(self.pack_bank.compressor_bypass);
+        let velocity = if self.pack_bank.override_velocity {
+            127
+        } else {
+            velocity.min(127)
+        };
+        for sample in &slot.samples {
+            if let Some(player) = output.play(sample, velocity) {
+                self.slot_players[slot_idx].push(player);
             }
         }
     }
@@ -442,6 +518,7 @@ impl ConstellationState {
         if slot_idx >= self.pack_bank.slots.len() {
             return;
         }
+        self.selected_slot = slot_idx;
         let slot_sample = sample_pack::SlotSample::new(
             sample.file_path.clone(),
             sample.filename.clone(),
@@ -463,6 +540,9 @@ impl ConstellationState {
     pub fn clear_slot(&mut self, slot_idx: usize) {
         if slot_idx < self.pack_bank.slots.len() {
             self.pack_bank.slots[slot_idx].samples.clear();
+            for player in self.slot_players[slot_idx].drain(..) {
+                player.stop();
+            }
         }
     }
 
@@ -496,6 +576,12 @@ impl ConstellationState {
         for voices in &mut self.slot_players {
             voices.retain(|player| !player.empty());
         }
+        if let Some(output) = &self.output {
+            output.set_bypass(self.pack_bank.compressor_bypass);
+        }
+        if self.slot_players.iter().all(Vec::is_empty) {
+            self.output = None;
+        }
         self.active_players.retain(|p| !p.empty());
         let excess = self.active_players.len().saturating_sub(64);
         for player in self.active_players.drain(..excess) {
@@ -524,6 +610,7 @@ impl ConstellationState {
                         total,
                         current_file,
                     } => {
+                        self.indexing_progress = Some(processed as f32 / total.max(1) as f32);
                         let pct = (processed as f32 / total.max(1) as f32 * 100.0) as u32;
                         self.indexing_status = Some(format!(
                             "Indexing [{}/{} - {}%]: {}",
@@ -611,6 +698,60 @@ mod tests {
             output.next();
         }
         assert!(output.next().is_none());
+    }
+
+    #[test]
+    fn velocity_override_and_retriggers_use_one_voice_per_pad() {
+        let (player, mut output) = rodio::Player::new();
+        let mut state = ConstellationState::new();
+        state.output = Some(output::PadOutput::with_player(player, true));
+        let mut sample =
+            sample_pack::SlotSample::new("kick.wav".into(), "kick.wav".into(), None, 1.0);
+        let pcm = Arc::new(vec![0.5; 48000]);
+        sample.cached_audio = Some(Arc::new(sample_pack::CachedAudio {
+            channels: 1,
+            sample_rate: 48000,
+            samples: pcm.clone(),
+            mono_samples: pcm,
+            waveform_peaks: vec![],
+        }));
+        state.pack_bank.slots[0].samples.push(sample);
+        let full = 0.5 * 10.0_f32.powf(-2.0 / 20.0);
+        for (velocity, override_velocity, expected) in [
+            (64, false, full * 64.0 / 127.0),
+            (127, false, full),
+            (1, true, full),
+        ] {
+            state.pack_bank.override_velocity = override_velocity;
+            state.trigger_slot_velocity(0, velocity);
+            assert_eq!(state.slot_players[0].len(), 1);
+            for _ in 0..4000 {
+                output.next();
+            }
+            assert!((output.next().unwrap() - expected).abs() < 0.00001);
+        }
+    }
+
+    #[test]
+    fn choke_groups_retire_peers_but_not_other_groups_and_ignore_note_off() {
+        let (mixer, _output) =
+            rodio::mixer::mixer(1.try_into().unwrap(), 44100.try_into().unwrap());
+        let mut state = ConstellationState::new();
+        for index in 0..4 {
+            state.pack_bank.slots[index].choke_group = if index < 3 { 1 } else { 2 };
+            state.slot_players[index].push(rodio::Player::connect_new(&mixer));
+        }
+        state.trigger_slot_velocity(0, 0);
+        assert!(
+            state.slot_players[..4]
+                .iter()
+                .all(|voices| voices.len() == 1)
+        );
+        state.trigger_slot_velocity(0, 64);
+        assert!(state.slot_players[..3].iter().all(Vec::is_empty));
+        assert_eq!(state.slot_players[3].len(), 1);
+        state.trigger_slot_velocity(15, 127);
+        assert_eq!(state.slot_players[3].len(), 1);
     }
 
     #[test]

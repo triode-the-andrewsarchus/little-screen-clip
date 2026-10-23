@@ -12,13 +12,11 @@ from file_manager_acceptance import (
 )
 
 
-def exercise(session, root):
+def exercise(session, root, hardware_keys=False):
     session.observe("folder", ["Constellation", "File"])
     session.click(*session.word("folder", "Constellation"))
-    session.observe("empty-map", ["Sample Constellation Map", "Pack Shelf"])
-    # The blue empty-state action is visibly centered here in the runner's
-    # fixed 1280x800 viewport; Tesseract misses its reversed-color label.
-    session.click(600, 480)
+    session.observe("empty-map", ["Sample constellation", "Rack", "Override velocity"])
+    session.click(580, 535)
     database = session.output / "data/little-screen-clip/constellation.sqlite"
     def indexed():
         if not database.exists():
@@ -26,7 +24,7 @@ def exercise(session, root):
         with sqlite3.connect(database) as db:
             return db.execute("SELECT count(*) FROM samples").fetchone()[0] == 1
     wait_for(indexed, "owned sample indexing")
-    session.observe("indexed-map", ["Pack Shelf", "Hover to audition"])
+    session.observe("indexed-map", ["Rack", "Hover to audition"])
     session.key("f", "ctrl")
     from file_manager_acceptance import private
     private.run_checked(["wtype", "kick"], env=session.env)
@@ -41,32 +39,40 @@ def exercise(session, root):
              if (lambda c: c[0] > 140 and c[0] > c[1] * 1.5 and c[0] > c[2] * 1.5)(image.getpixel((x, y)))]
     assert stars, "owned kick star must be visible in the map"
     session.click(sum(x for x, _ in stars) // len(stars), sum(y for _, y in stars) // len(stars))
-    session.key("1", "shift")
+    session.key("semicolon" if hardware_keys else "z", "shift")
     session.observe("assigned-slot", ["kick.wav"])
-    session.key("2", "shift")
-    for key in ["1", "1", "2", "1"]:
+    session.key("q" if hardware_keys else "x", "shift")
+    if hardware_keys:
+        session.key("apostrophe", "shift")
+    for key in (["semicolon", "semicolon", "q", "apostrophe"] if hardware_keys else ["z", "z", "x", "z"]):
         session.key(key)
     session.observe("retriggered-slots", ["kick.wav"])
-    session.click(885, 412)
+    session.click(500, 708)  # Override velocity, in the shared footer.
+    session.click(690, 708)  # Compressor bypass.
+    session.observe("performance-controls", ["kick.wav"])
+    session.click(1110, 376)
     packs = root / "little-screen-clip-sample-packs"
     wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 1, "first atomic pack save")
     first = next(packs.glob("*/bank.json"))
     bank = json.loads(first.read_text())
-    assert len(bank["slots"]) == 10
+    assert len(bank["slots"]) == 16
     assert len(bank["slots"][0]["samples"]) == 1
     assert len(bank["slots"][1]["samples"]) == 1
     assert bank["slots"][0]["samples"][0]["end_sec"] > 0
+    assert bank["override_velocity"] and bank["compressor_bypass"]
+    if hardware_keys:
+        assert len(bank["slots"][8]["samples"]) == 1
     marker = first.parent / "owned-preservation-marker.txt"
     marker.write_text("preserve this owned fixture")
     before = first.read_bytes()
-    session.observe("first-save", ["Pack Shelf"])
-    session.click(885, 412)
+    session.observe("first-save", ["kick.wav"])
+    session.click(1110, 376)
     wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 2, "versioned second pack save")
     assert first.read_bytes() == before
     assert marker.read_text() == "preserve this owned fixture"
-    session.observe("second-save", ["Pack Shelf"])
-    session.click(565, 264)
-    session.observe("pack-browser", ["Sample Pack Browser", "Saved Packs", "Untitled"])
+    session.observe("second-save", ["kick.wav"])
+    session.click(1080, 326)
+    session.observe("pack-browser", ["Saved packs", "Untitled", "Hover to audition"])
     session.key("Escape")
     session.address(root.parent)
     session.observe("navigated-away", ["fixture"])
@@ -74,7 +80,8 @@ def exercise(session, root):
 
 
 def main():
-    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/debug/clip-file-manager")
+    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/debug/clip-file-manager",
+                                 lambda parser: parser.add_argument("--hardware-keys", action="store_true"))
     output, root = media_fixture_directory(args)
     with wave.open(str(root / "kick.wav"), "wb") as wav:
         wav.setnchannels(1)
@@ -87,8 +94,12 @@ def main():
         config = output / "alsa-null.conf"
         config.write_text("pcm.!default { type null }\n")
         env["ALSA_CONFIG_PATH"] = str(config)
+        if args.hardware_keys:
+            config = output / "scratch/config.toml"
+            with config.open("a") as file:
+                file.write('\n[file_manager]\nconstellation_pad_keys = [";qjk", "aoeu", "\',.p", "1234"]\n')
 
-    return run_application_acceptance(args, output, root, exercise,
+    return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.hardware_keys),
                                       "constellation indexing, slots, search, and non-destructive pack saves",
                                       prepare_environment)
 

@@ -57,6 +57,7 @@ ndarray = "0.17.2"
 fuse-binwalk = { git = "https://github.com/triode-the-andrewsarchus/fuse-binwalk" }
 rusqlite = { version = "0.35", features = ["bundled", "backup", "limits", "hooks", "functions"] }
 realfft = "3.5.0"
+midir = "0.11"
 
 [dev-dependencies]
 rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }

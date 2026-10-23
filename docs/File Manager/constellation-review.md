@@ -52,9 +52,9 @@ I/O failure and liveness checks. The review keeps those checks rather than hidin
 them behind generic wrappers to change a metric. The index coordinator itself fell
 from CCN 29 to 4; new migration code has named, version-specific responsibilities.
 
-## Pad assignment and retrigger follow-up
+## Pad assignment and retrigger follow-up (`2eb9a41`)
 
-Clicking a map sample followed by Shift+number now assigns that selection even
+This follow-up made clicking a map sample followed by Shift+number assign it even
 when a canvas control has keyboard focus. Text editors still keep their keys.
 The vendored input adapter preserves physical keys for shifted characters such
 as `!`, which egui cannot represent as logical keys. Pad handling prefers physical
@@ -78,6 +78,46 @@ a different ordering and is private. Other touched-file clone findings include
 existing worker code and egui test setup. No new audio backend, decoding pipeline,
 or generic voice abstraction was introduced.
 
+## Integrated rack and UI review
+
+The map now shares the file manager canvas, with category colors confined to
+sample identity. Default fitting includes organic coordinates beyond the unit
+square, fixing a sample clipped out of the narrower map. Indexing reuses the depth
+view's themed progress-bar treatment. Rack and Packs use the shared tab bar in
+one side panel; the floating pack browser is gone. The selected pad's resizable
+layer editor sits below the map, and MIDI/velocity/output controls share a footer.
+
+The rack has sixteen pads. Default rows are ZXCV / ASDF / QWER / 1234, bottom to
+top. Validated `file_manager.constellation_pad_keys` rows override them directly;
+logical, unshifted input also preserves hardware-remapped punctuation absent from
+egui's fixed key enum. Pad labels follow this local configuration independently of
+saved packs. Older ten-slot banks keep their samples and gain six empty pads.
+
+An opt-in midir worker owns controller connections, with bounded event delivery
+and stale-epoch rejection across preview stops. Notes 36–51 retain velocity unless
+overridden to 127. Pads can share choke groups. A linked stereo pad bus adds 2 dB
+headroom, gentle dynamics, a peak ceiling, reduction metering, and bypass without
+changing device buffer policy. Configuration and playback contracts are detailed
+in [constellation-drum-rack.md](constellation-drum-rack.md).
+
+Against `constellation-pad-ui-start`, the necessary MIDI/input/dynamics mechanisms
+and regression coverage add 674 measured lines and 119 total CCN. Average CCN drops
+from 4.06 to 4.05, duplication drops from 5.81% to 5.79%, maximum CCN stays 196,
+clone count stays 1,394, and cycle count stays six. Shelf rendering drops from CCN
+50 to 7; the inline browser is CCN 16 versus the old 25. The tool still labels the
+comparison REGRESSION, including clone findings in existing egui test scaffolding;
+this is not being presented as a clean architecture acceptance. The new two modules
+have separate responsibilities: controller lifecycle and a shared stereo output bus.
+
+The workspace suite passes 2,516 tests with 23 existing ignores. All 47 focused
+constellation tests pass; a separate adapter test verifies punctuation retention
+and expiry, and core configuration tests cover exact hardware-remap rows plus
+invalid/duplicate bindings. Private dark/default and light/hardware runs pass actual
+star selection, repeated pad hits, saved output settings, version preservation,
+inline Packs navigation, and exit through an ALSA null sink. Physical controllers
+and perceptual audio quality remain outside that automated evidence. Clippy runs
+successfully with existing repository warnings; it is not warning-clean.
+
 ## Architecture comparison against current main
 
 The baseline was measured from a clean detached worktree at `999cd24`, not from
@@ -85,11 +125,11 @@ the feature branch. The same fast profile was used for every measurement.
 
 | Metric | Main | Original feature branch (`82e72a0`) | Reviewed branch |
 | --- | ---: | ---: | ---: |
-| Total cyclomatic complexity | 27,909 | 30,006 | 28,769 |
-| Average cyclomatic complexity | 4.02 | 4.26 | 4.06 |
+| Total cyclomatic complexity | 27,909 | 30,006 | 28,888 |
+| Average cyclomatic complexity | 4.02 | 4.26 | 4.05 |
 | Maximum cyclomatic complexity | 196 | 196 | 196 |
-| Lines of code | 227,320 | 238,554 | 235,868 |
-| Duplication | 5.98% | 5.76% | 5.81% |
+| Lines of code | 227,320 | 238,554 | 236,542 |
+| Duplication | 5.98% | 5.76% | 5.79% |
 | Clone groups | 1,382 | 1,390 | 1,394 |
 | Reported cycles | 5 | 5 | 6 |
 | Valknut health | 73.88 | 62.65 | 62.71 |
@@ -121,9 +161,9 @@ static model data and existing clones in touched files, as well as test fixtures
 
 ## Validation and evidence
 
-- `cargo test --workspace -- --test-threads=2`: 2,507 passed, zero failed,
+- `cargo test --workspace -- --test-threads=2`: 2,516 passed, zero failed,
   23 ignored, including workspace doctests.
-- All 39 focused constellation regression tests pass and cover database boundaries, stale results,
+- All 47 focused constellation regression tests pass and cover database boundaries, stale results,
   protected inputs, malformed audio/banks, save preservation, shared trim storage,
   Unicode labels, Escape handling, model equivalence, and mutation completion.
 - `cargo build -p clip-workbench --bin clip-file-manager` passes.
@@ -137,8 +177,9 @@ static model data and existing clones in touched files, as well as test fixtures
   and an ALSA null device; it never injects input into the user's compositor.
 
 Private-run screenshots and its machine-readable report are retained at
-`/tmp/constellation-pad-acceptance-final/`. The full test log is
-`/tmp/constellation-pad-workspace.log`. Run the UI scenario with an installed
+`/tmp/constellation-rack-dark-final-pass/` and
+`/tmp/constellation-rack-verified-light/`. The full test log is
+`/tmp/constellation-rack-workspace-final.log`. Run the UI scenario with an installed
 Tesseract English model, or point `TESSDATA_PREFIX` at one:
 
 ```bash

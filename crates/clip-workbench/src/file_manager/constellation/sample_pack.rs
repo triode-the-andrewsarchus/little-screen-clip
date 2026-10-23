@@ -1,6 +1,6 @@
 //! Layered sample references, bounded PCM preparation, and atomic pack persistence.
 //!
-//! Banks contain ten slots with up to eight layers each. Saved packs retain original
+//! Banks contain sixteen pads with up to eight layers each. Saved packs retain original
 //! source paths through symlinks and `bank.json`; trim/volume edits are metadata, not
 //! rendered audio. Existing packs remain intact: repeated saves create numbered
 //! versions, and the new directory appears only after staging succeeds.
@@ -13,8 +13,10 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const PACKS_DIR_NAME: &str = "little-screen-clip-sample-packs";
-pub const NUM_SLOTS: usize = 10;
-pub const SLOT_KEY_CHARS: [char; NUM_SLOTS] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+pub const NUM_SLOTS: usize = 16;
+pub const SLOT_KEY_CHARS: [char; NUM_SLOTS] = [
+    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ' ', ' ', ' ', ' ', ' ', ' ',
+];
 
 /// Prepared interleaved PCM, mono snapping data, and 100 min/max waveform buckets.
 ///
@@ -189,12 +191,16 @@ impl SlotSample {
     }
 }
 
-/// One of the 10 slots (Keys 1..9, 0) in the sample pack bank.
+/// One of sixteen pads, ordered left to right from the bottom row in the sample pack bank.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PackSlot {
+    /// Legacy bank metadata; active keyboard bindings come from local configuration.
     pub key_char: char,
     pub name: String,
     pub samples: Vec<SlotSample>,
+    /// Zero disables choking; pads in the same group (1–8) cut each other off.
+    #[serde(default)]
+    pub choke_group: u8,
 }
 
 impl PackSlot {
@@ -203,6 +209,7 @@ impl PackSlot {
             key_char,
             name: format!("Slot {}", key_char),
             samples: Vec::new(),
+            choke_group: 0,
         }
     }
 
@@ -212,7 +219,7 @@ impl PackSlot {
 
     pub fn display_title(&self) -> String {
         if self.samples.is_empty() {
-            format!("Slot {} (Empty)", self.key_char)
+            "Empty pad".into()
         } else if self.samples.len() == 1 {
             self.samples[0].filename.clone()
         } else {
@@ -225,12 +232,18 @@ impl PackSlot {
     }
 }
 
-/// An entire 10-slot sample pack bank.
+/// A sixteen-pad bank. Legacy ten-slot banks keep their original shortcut positions.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SamplePackBank {
     pub name: String,
     pub created_at: u64,
     pub slots: Vec<PackSlot>,
+    /// Forces MIDI hits to full velocity; keyboard and mouse hits are always full.
+    #[serde(default)]
+    pub override_velocity: bool,
+    /// Bypasses dynamics processing on the pad output bus.
+    #[serde(default)]
+    pub compressor_bypass: bool,
 }
 
 impl Default for SamplePackBank {
@@ -250,12 +263,14 @@ impl SamplePackBank {
             name: name.to_string(),
             created_at: now,
             slots,
+            override_velocity: false,
+            compressor_bypass: false,
         }
     }
 
     fn validate(&mut self, pack_dir: &Path) -> Result<(), String> {
         if self.slots.len() > NUM_SLOTS {
-            return Err("Pack has more than ten slots".into());
+            return Err("Pack has more than sixteen pads".into());
         }
         while self.slots.len() < NUM_SLOTS {
             self.slots
@@ -263,6 +278,9 @@ impl SamplePackBank {
         }
         for (idx, slot) in self.slots.iter_mut().enumerate() {
             slot.key_char = SLOT_KEY_CHARS[idx];
+            if slot.choke_group > 8 {
+                return Err("Choke groups must be between zero and eight".into());
+            }
             if slot.samples.len() > 8 {
                 return Err("A slot supports at most eight layers".into());
             }
@@ -479,14 +497,14 @@ pub fn delete_sample_pack(pack_dir: &Path) -> Result<(), String> {
 }
 
 /// A frame-aligned view over shared PCM. Triggering a slot never copies the audio buffer.
-struct SharedPcm {
+pub(super) struct SharedPcm {
     audio: Arc<CachedAudio>,
     position: usize,
     end: usize,
     length: usize,
 }
 impl SharedPcm {
-    fn trimmed(sample: &SlotSample) -> Option<Self> {
+    pub(super) fn trimmed(sample: &SlotSample) -> Option<Self> {
         let audio = sample.cached_audio.as_ref()?.clone();
         if audio.channels == 0
             || audio.sample_rate == 0
@@ -643,10 +661,48 @@ mod tests {
     }
 
     #[test]
+    fn legacy_banks_extend_without_moving_layers_and_new_settings_round_trip() {
+        let mut bank = SamplePackBank::new("Legacy");
+        bank.slots.truncate(10);
+        bank.slots[9].samples.push(SlotSample::new(
+            "tail.wav".into(),
+            "tail.wav".into(),
+            None,
+            1.0,
+        ));
+        let mut json = serde_json::to_value(&bank).unwrap();
+        json.as_object_mut().unwrap().remove("override_velocity");
+        json.as_object_mut().unwrap().remove("compressor_bypass");
+        for slot in json["slots"].as_array_mut().unwrap() {
+            slot.as_object_mut().unwrap().remove("choke_group");
+        }
+        let mut loaded: SamplePackBank = serde_json::from_value(json).unwrap();
+        loaded.validate(Path::new("/samples")).unwrap();
+        assert_eq!(loaded.slots.len(), 16);
+        assert_eq!(
+            loaded.slots[9].samples[0].file_path,
+            Path::new("/samples/tail.wav")
+        );
+        assert_eq!(loaded.slots[9].key_char, '0');
+        assert!(loaded.slots[10..].iter().all(PackSlot::is_empty));
+        assert!(!loaded.override_velocity && !loaded.compressor_bypass);
+        loaded.override_velocity = true;
+        loaded.compressor_bypass = true;
+        loaded.slots[15].choke_group = 8;
+        let mut copy: SamplePackBank =
+            serde_json::from_str(&serde_json::to_string(&loaded).unwrap()).unwrap();
+        copy.validate(Path::new("/samples")).unwrap();
+        assert!(copy.override_velocity && copy.compressor_bypass);
+        assert_eq!(copy.slots[15].choke_group, 8);
+        copy.slots[15].choke_group = 9;
+        assert!(copy.validate(Path::new("/samples")).is_err());
+    }
+
+    #[test]
     fn test_sample_pack_bank_initialization() {
         let bank = SamplePackBank::new("Test Kit");
         assert_eq!(bank.name, "Test Kit");
-        assert_eq!(bank.slots.len(), 10);
+        assert_eq!(bank.slots.len(), NUM_SLOTS);
         assert_eq!(bank.slots[0].key_char, '1');
         assert_eq!(bank.slots[8].key_char, '9');
         assert_eq!(bank.slots[9].key_char, '0');

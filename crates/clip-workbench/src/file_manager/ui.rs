@@ -203,7 +203,7 @@ impl FileManager {
         &mut self,
         ui: &mut Ui,
         _colors: WorkbenchColors,
-        _palette: &AppPalette,
+        palette: &AppPalette,
     ) {
         let current_path = self.path().to_path_buf();
         self.constellation.check_and_load_folder(&current_path);
@@ -214,6 +214,7 @@ impl FileManager {
         self.constellation.render_ui(
             ui,
             &current_path,
+            palette,
             &mut |path| {
                 sample_to_play = Some(path.to_path_buf());
             },
@@ -297,7 +298,9 @@ impl FileManager {
     fn constellation_shortcuts(&mut self, ctx: &egui::Context) {
         self.type_navigation.clear();
         if key(ctx, Modifiers::CTRL, Key::F)
-            || (!ctx.wants_keyboard_input() && key(ctx, Modifiers::NONE, Key::Slash))
+            || (!ctx.wants_keyboard_input()
+                && !self.constellation.uses_pad_key('/')
+                && key(ctx, Modifiers::NONE, Key::Slash))
         {
             self.constellation.focus_search = true;
         }

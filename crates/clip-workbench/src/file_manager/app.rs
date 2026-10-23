@@ -45,6 +45,9 @@ impl FileManagerApp {
         ui_appearance::apply_visuals(ctx, &palette);
         egui_extras::install_image_loaders(ctx);
         let mut browser = FileManager::default();
+        browser
+            .constellation
+            .configure_pad_keys(&config.file_manager.constellation_pad_keys);
         browser.bookmarks = super::bookmarks::Bookmarks::for_user(&browser.home);
         browser.music_threshold = config.file_manager.music_threshold_percent.clamp(1, 100);
         browser

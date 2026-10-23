@@ -1,67 +1,88 @@
-//! UI implementation for the sample pack creation shelf and the sample pack browser.
-//! Includes inline waveform rendering per sample layer with draggable zero-crossing start/end flags
-//! and compact volume sliders directly inside each slot card.
+//! Compact drum rack, selected-pad editor, and reference-pack browser.
 
 use super::ConstellationState;
-use super::sample_pack::{SamplePackBank, get_sample_packs_root, play_slot_sample};
-use egui::{Color32, Pos2, Rect, RichText, Stroke, Vec2};
+use super::sample_pack::play_slot_sample;
+use egui::{Pos2, Rect, RichText, Stroke, Vec2};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 impl ConstellationState {
-    /// Triggers numbered pads or assigns the selected sample with Shift+number.
+    /// Triggers configured pads or assigns the selected sample with Shift+key.
     ///
-    /// Uses physical digit positions and each event's modifiers. Text editors retain
+    /// Uses unshifted logical characters and each event's modifiers. Text editors retain
     /// their keys; other focused controls do not block the pads. Consumes handled
     /// presses before other file manager navigation handlers receive them.
     pub fn handle_shelf_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
+        let native = egui_winit::take_logical_key_presses(ctx);
         let editing_text = ctx
             .memory(|memory| memory.focused())
             .is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
-        if editing_text || self.browser_open {
+        if editing_text || self.browser_open || self.focus_search {
             return;
         }
-
-        let keys = [
-            egui::Key::Num1,
-            egui::Key::Num2,
-            egui::Key::Num3,
-            egui::Key::Num4,
-            egui::Key::Num5,
-            egui::Key::Num6,
-            egui::Key::Num7,
-            egui::Key::Num8,
-            egui::Key::Num9,
-            egui::Key::Num0,
-        ];
-        let mut actions = Vec::new();
-        ctx.input_mut(|input| {
-            input.events.retain(|event| {
-                let egui::Event::Key {
-                    key,
-                    physical_key,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } = event
-                else {
-                    return true;
-                };
-                if modifiers.ctrl || modifiers.alt || modifiers.command || modifiers.mac_cmd {
-                    return true;
-                }
-                // Pad positions remain stable when Shift changes the logical character.
-                let Some(slot_idx) = keys
+        let presses: Vec<_> = if native.is_empty() {
+            // Also support synthetic egui input. Native input above retains full
+            // logical punctuation, including apostrophes absent from egui::Key.
+            ctx.input(|input| {
+                input
+                    .events
                     .iter()
-                    .position(|keycode| Some(*keycode) == *physical_key)
-                    .or_else(|| keys.iter().position(|keycode| keycode == key))
-                else {
-                    return true;
-                };
-                actions.push((slot_idx, modifiers.shift));
-                false
+                    .filter_map(|event| {
+                        let egui::Event::Key {
+                            key,
+                            physical_key,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } = event
+                        else {
+                            return None;
+                        };
+                        let index = self
+                            .pad_keys
+                            .iter()
+                            .position(|character| {
+                                egui::Key::from_name(&character.to_string()) == Some(*key)
+                            })
+                            .or_else(|| {
+                                modifiers
+                                    .shift
+                                    .then(|| {
+                                        self.pad_keys.iter().position(|character| {
+                                            physical_key.is_some()
+                                                && egui::Key::from_name(&character.to_string())
+                                                    == *physical_key
+                                        })
+                                    })
+                                    .flatten()
+                            });
+                        index.map(|index| (index, *modifiers, Some(*key)))
+                    })
+                    .collect()
             })
-        });
+        } else {
+            native
+                .iter()
+                .filter_map(|press| {
+                    self.pad_keys
+                        .iter()
+                        .position(|key| *key == press.character.to_ascii_lowercase())
+                        .map(|index| (index, press.modifiers, press.egui_key))
+                })
+                .collect()
+        };
+        let presses: Vec<_> = presses
+            .into_iter()
+            .filter(|(_, modifiers, _)| {
+                !(modifiers.ctrl || modifiers.alt || modifiers.command || modifiers.mac_cmd)
+            })
+            .collect();
+        ctx.input_mut(|input| input.events.retain(|event| {
+            !matches!(event, egui::Event::Key { key, modifiers, pressed: true, .. } if presses.iter().any(|(_, handled_modifiers, handled_key)| *handled_key == Some(*key) && handled_modifiers == modifiers))
+        }));
+        let actions = presses
+            .into_iter()
+            .map(|(index, modifiers, _)| (index, modifiers.shift));
         for (slot_idx, assign) in actions {
             if assign {
                 if let Some(sample) = self
@@ -79,747 +100,422 @@ impl ConstellationState {
         }
     }
 
-    /// Renders the sample pack creation shelf on the right side of the constellation view.
+    /// Renders the sixteen-pad rack and only the selected pad's layer controls.
     pub fn render_pack_shelf(&mut self, ui: &mut egui::Ui, current_folder: &Path) {
-        ui.vertical(|ui| {
-            // Header: Bank Title & Persistence Toolbar
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Pack Shelf").strong().size(14.0));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Close").on_hover_text("Collapse shelf").clicked() {
-                        self.pack_shelf_open = false;
-                    }
-                });
-            });
-
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("Name:")
-                        .size(11.5)
-                        .color(Color32::from_gray(180)),
-                );
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.pack_bank.name)
-                        .hint_text("Pack name...")
-                        .desired_width(140.0),
-                );
-            });
-
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(!self.writing_pack(), egui::Button::new("Save"))
-                    .on_hover_text(
-                        "Save sample pack to little-screen-clip-sample-packs (symlinks + JSON)",
-                    )
-                    .clicked()
-                {
-                    let root = self
-                        .current_indexed_folder
-                        .as_deref()
-                        .unwrap_or(current_folder);
-                    self.save_bank(root.to_path_buf(), self.pack_bank.clone());
-                }
-
-                if ui
-                    .button("Browse")
-                    .on_hover_text("Open Sample Pack Browser")
-                    .clicked()
-                {
-                    self.refresh_browser_packs(current_folder);
-                    self.browser_open = true;
-                }
-
-                if ui
-                    .button("Clear")
-                    .on_hover_text("Clear all 10 slots to start a fresh bank")
-                    .clicked()
-                {
-                    self.clear_bank();
-                    self.browser_status = Some(("Cleared all slots".to_string(), Instant::now()));
-                }
-            });
-
-            if let Some((ref msg, time)) = self.browser_status {
-                if time.elapsed() < Duration::from_secs(4) {
-                    ui.add_space(2.0);
-                    ui.label(
-                        RichText::new(msg)
-                            .size(10.5)
-                            .color(if msg.starts_with("Error") {
-                                Color32::from_rgb(255, 100, 100)
-                            } else {
-                                Color32::from_rgb(100, 230, 160)
-                            }),
-                    );
-                }
-            }
-
-            ui.separator();
-
-            // Quick instruction badge
-            ui.label(
-                RichText::new("Keys 1-0 trigger · Shift+1-0 assign selected")
-                    .size(10.0)
-                    .color(Color32::from_gray(140)),
+        ui.horizontal(|ui| {
+            let width = (ui.available_width() - 110.0).max(40.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.pack_bank.name)
+                    .desired_width(width)
+                    .hint_text("Pack name"),
             );
-            ui.add_space(4.0);
-
-            // 10 Slots (Keys 1..9, 0)
-            let mut trigger_slot_idx: Option<usize> = None;
-            let mut add_selected_to_idx: Option<usize> = None;
-            let mut clear_slot_idx: Option<usize> = None;
-            let mut remove_layer: Option<(usize, usize)> = None;
-            let mut audition_sample: Option<super::sample_pack::SlotSample> = None;
-
-            egui::ScrollArea::vertical()
-                .auto_shrink([false; 2])
-                .show(ui, |ui| {
-                    for (slot_idx, slot) in self.pack_bank.slots.iter_mut().enumerate() {
-                        let is_flashing = self.slot_flash[slot_idx]
-                            .map_or(false, |t| t.elapsed() < Duration::from_millis(220));
-
-                        if is_flashing {
-                            ui.ctx().request_repaint_after(Duration::from_millis(16));
-                        }
-
-                        let key_char = slot.key_char;
-                        let sample_count = slot.samples.len();
-
-                        // Slot card frame
-                        let card_fill = if is_flashing {
-                            Color32::from_rgba_premultiplied(40, 80, 140, 240)
-                        } else if sample_count > 0 {
-                            Color32::from_rgba_premultiplied(22, 28, 42, 220)
-                        } else {
-                            Color32::from_rgba_premultiplied(16, 20, 30, 180)
-                        };
-
-                        let card_stroke = if is_flashing {
-                            Stroke::new(1.5_f32, Color32::from_rgb(120, 200, 255))
-                        } else if sample_count > 0 {
-                            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(70, 95, 145, 120))
-                        } else {
-                            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(45, 55, 75, 80))
-                        };
-
-                        egui::Frame::none()
-                            .fill(card_fill)
-                            .stroke(card_stroke)
-                            .rounding(6.0)
-                            .inner_margin(6.0)
-                            .show(ui, |ui| {
-                                // Slot Header Row
-                                ui.horizontal(|ui| {
-                                    // Key badge button (clicking triggers slot)
-                                    let badge_color = match slot_idx {
-                                        0 | 1 => Color32::from_rgb(255, 150, 80),  // Kicks/Basses
-                                        2 | 3 => Color32::from_rgb(255, 210, 80),  // Snares/Claps
-                                        4 | 5 => Color32::from_rgb(100, 220, 255), // Hats/Cymbals
-                                        6 | 7 => Color32::from_rgb(180, 140, 255), // Melodic/Keys
-                                        _ => Color32::from_rgb(120, 240, 180),     // Perc/FX
-                                    };
-
-                                    let badge_btn = egui::Button::new(
-                                        RichText::new(format!("[{key_char}]"))
-                                            .strong()
-                                            .size(12.0)
-                                            .color(badge_color),
-                                    )
-                                    .fill(Color32::from_black_alpha(100));
-
-                                    if ui
-                                        .add(badge_btn)
-                                        .on_hover_text(format!("Trigger slot (Key {key_char})"))
-                                        .clicked()
-                                    {
-                                        trigger_slot_idx = Some(slot_idx);
-                                    }
-
-                                    let title = slot.display_title();
-                                    // Right action buttons
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if sample_count > 0 {
-                                                if ui
-                                                    .small_button("Clear")
-                                                    .on_hover_text("Clear slot")
-                                                    .clicked()
-                                                {
-                                                    clear_slot_idx = Some(slot_idx);
-                                                }
-                                            }
-
-                                            if ui
-                                                .small_button("Add")
-                                                .on_hover_text(
-                                                    "Add currently selected sample to this slot",
-                                                )
-                                                .clicked()
-                                            {
-                                                add_selected_to_idx = Some(slot_idx);
-                                            }
-                                            ui.add(
-                                                egui::Label::new(
-                                                    RichText::new(&title).size(11.0).color(
-                                                        if sample_count > 0 {
-                                                            Color32::WHITE
-                                                        } else {
-                                                            Color32::from_gray(130)
-                                                        },
-                                                    ),
-                                                )
-                                                .truncate(true),
-                                            )
-                                            .on_hover_text(&title);
-                                        },
-                                    );
-                                });
-
-                                // Empty slot state or Sample Layers with Waveforms
-                                if sample_count == 0 {
-                                    ui.add_space(2.0);
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            RichText::new("Empty slot · Press Shift+")
-                                                .size(9.5)
-                                                .color(Color32::from_gray(120)),
-                                        );
-                                        ui.label(
-                                            RichText::new(format!("{key_char}"))
-                                                .size(9.5)
-                                                .strong()
-                                                .color(Color32::from_gray(170)),
-                                        );
-                                        ui.label(
-                                            RichText::new("to assign selected")
-                                                .size(9.5)
-                                                .color(Color32::from_gray(120)),
-                                        );
-                                    });
-                                } else {
-                                    ui.add_space(4.0);
-
-                                    // Render each sample layer with inline waveform & draggable trim flags
-                                    for (layer_idx, sample) in slot.samples.iter_mut().enumerate() {
-                                        // Layer sub-header
-                                        ui.horizontal(|ui| {
-                                            let cat_col = sample
-                                                .category
-                                                .map(|c| c.color())
-                                                .unwrap_or(Color32::from_rgb(100, 200, 255));
-
-                                            let short_name =
-                                                super::ui::short_label(&sample.filename, 22);
-
-                                            ui.label(
-                                                RichText::new(format!(
-                                                    "{}: {}",
-                                                    layer_idx + 1,
-                                                    short_name
-                                                ))
-                                                .size(10.5)
-                                                .strong()
-                                                .color(cat_col),
-                                            );
-
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| {
-                                                    if sample_count > 1 {
-                                                        if ui
-                                                            .small_button("Remove")
-                                                            .on_hover_text("Remove this layer")
-                                                            .clicked()
-                                                        {
-                                                            remove_layer =
-                                                                Some((slot_idx, layer_idx));
-                                                        }
-                                                    }
-                                                    if ui
-                                                        .small_button("Reset")
-                                                        .on_hover_text("Reset start/end trim")
-                                                        .clicked()
-                                                    {
-                                                        sample.start_sec = 0.0;
-                                                        sample.end_sec = sample.duration;
-                                                    }
-                                                    if ui
-                                                        .small_button("Play")
-                                                        .on_hover_text(
-                                                            "Audition this trimmed layer",
-                                                        )
-                                                        .clicked()
-                                                    {
-                                                        audition_sample = Some(sample.clone());
-                                                    }
-                                                },
-                                            );
-                                        });
-
-                                        // Waveform display with draggable start/end flags
-                                        let wave_height = 32.0;
-                                        let wave_w = ui.available_width().max(160.0);
-                                        let (rect, wave_resp) = ui.allocate_exact_size(
-                                            Vec2::new(wave_w, wave_height),
-                                            egui::Sense::click_and_drag(),
-                                        );
-                                        let painter = ui.painter_at(rect);
-
-                                        // Waveform background box
-                                        painter.rect_filled(
-                                            rect,
-                                            4.0,
-                                            Color32::from_rgb(14, 18, 26),
-                                        );
-                                        painter.rect_stroke(
-                                            rect,
-                                            4.0,
-                                            Stroke::new(
-                                                1.0_f32,
-                                                Color32::from_rgba_premultiplied(45, 55, 75, 120),
-                                            ),
-                                        );
-
-                                        let total_dur = sample.duration.max(0.01);
-                                        let start_ratio =
-                                            (sample.start_sec / total_dur).clamp(0.0, 1.0);
-                                        let end_ratio =
-                                            (sample.end_sec / total_dur).clamp(0.0, 1.0);
-
-                                        let start_x = rect.left() + start_ratio * rect.width();
-                                        let end_x = rect.left() + end_ratio * rect.width();
-
-                                        // Draw waveform peaks
-                                        if let Some(ref cached) = sample.cached_audio {
-                                            let peaks = &cached.waveform_peaks;
-                                            let num_peaks = peaks.len();
-                                            if num_peaks > 0 {
-                                                let mid_y = rect.center().y;
-                                                let h_half = rect.height() * 0.40;
-                                                let cat_color = sample
-                                                    .category
-                                                    .map(|c| c.color())
-                                                    .unwrap_or(Color32::from_rgb(90, 210, 255));
-                                                let dim_color = Color32::from_rgb(50, 56, 68);
-
-                                                for (i, &(min_val, max_val)) in
-                                                    peaks.iter().enumerate()
-                                                {
-                                                    let px = rect.left()
-                                                        + (i as f32 / num_peaks as f32)
-                                                            * rect.width();
-                                                    let is_active = px >= start_x && px <= end_x;
-                                                    let col = if is_active {
-                                                        cat_color
-                                                    } else {
-                                                        dim_color
-                                                    };
-                                                    let top_y =
-                                                        mid_y - (max_val.abs() * h_half).max(1.0);
-                                                    let btm_y =
-                                                        mid_y + (min_val.abs() * h_half).max(1.0);
-                                                    painter.line_segment(
-                                                        [
-                                                            Pos2::new(px, top_y),
-                                                            Pos2::new(px, btm_y),
-                                                        ],
-                                                        Stroke::new(1.2_f32, col),
-                                                    );
-                                                }
-                                            }
-                                        }
-
-                                        // Dim inactive regions
-                                        if start_x > rect.left() {
-                                            let inactive_left = Rect::from_min_max(
-                                                rect.min,
-                                                Pos2::new(start_x, rect.bottom()),
-                                            );
-                                            painter.rect_filled(
-                                                inactive_left,
-                                                4.0,
-                                                Color32::from_black_alpha(110),
-                                            );
-                                        }
-                                        if end_x < rect.right() {
-                                            let inactive_right = Rect::from_min_max(
-                                                Pos2::new(end_x, rect.top()),
-                                                rect.max,
-                                            );
-                                            painter.rect_filled(
-                                                inactive_right,
-                                                4.0,
-                                                Color32::from_black_alpha(110),
-                                            );
-                                        }
-
-                                        // Midline
-                                        painter.line_segment(
-                                            [
-                                                Pos2::new(rect.left(), rect.center().y),
-                                                Pos2::new(rect.right(), rect.center().y),
-                                            ],
-                                            Stroke::new(
-                                                0.5_f32,
-                                                Color32::from_rgba_premultiplied(255, 255, 255, 25),
-                                            ),
-                                        );
-
-                                        // Start flag [S] (emerald green)
-                                        let start_col = Color32::from_rgb(50, 230, 150);
-                                        painter.line_segment(
-                                            [
-                                                Pos2::new(start_x, rect.top()),
-                                                Pos2::new(start_x, rect.bottom()),
-                                            ],
-                                            Stroke::new(2.0_f32, start_col),
-                                        );
-                                        let flag_s_rect = Rect::from_min_size(
-                                            Pos2::new(start_x - 4.0, rect.top() - 1.0),
-                                            Vec2::new(9.0, 9.0),
-                                        );
-                                        painter.rect_filled(flag_s_rect, 2.0, start_col);
-                                        painter.text(
-                                            flag_s_rect.center(),
-                                            egui::Align2::CENTER_CENTER,
-                                            "S",
-                                            egui::FontId::monospace(7.5),
-                                            Color32::BLACK,
-                                        );
-
-                                        // End flag [E] (coral red)
-                                        let end_col = Color32::from_rgb(255, 90, 90);
-                                        painter.line_segment(
-                                            [
-                                                Pos2::new(end_x, rect.top()),
-                                                Pos2::new(end_x, rect.bottom()),
-                                            ],
-                                            Stroke::new(2.0_f32, end_col),
-                                        );
-                                        let flag_e_rect = Rect::from_min_size(
-                                            Pos2::new(end_x - 5.0, rect.top() - 1.0),
-                                            Vec2::new(9.0, 9.0),
-                                        );
-                                        painter.rect_filled(flag_e_rect, 2.0, end_col);
-                                        painter.text(
-                                            flag_e_rect.center(),
-                                            egui::Align2::CENTER_CENTER,
-                                            "E",
-                                            egui::FontId::monospace(7.5),
-                                            Color32::BLACK,
-                                        );
-
-                                        // Interactive dragging of flags
-                                        let drag_id =
-                                            ui.id().with(("flag_drag", slot_idx, layer_idx));
-                                        if wave_resp.drag_started() {
-                                            if let Some(pos) = wave_resp.interact_pointer_pos() {
-                                                let dist_s = (pos.x - start_x).abs();
-                                                let dist_e = (pos.x - end_x).abs();
-                                                let chosen_flag: u8 =
-                                                    if dist_s <= dist_e { 0 } else { 1 };
-                                                ui.memory_mut(|m| {
-                                                    m.data.insert_persisted(drag_id, chosen_flag)
-                                                });
-                                            }
-                                        }
-
-                                        if wave_resp.dragged() {
-                                            let chosen_flag: u8 = ui
-                                                .memory_mut(|m| m.data.get_persisted(drag_id))
-                                                .unwrap_or(0);
-                                            if let Some(pos) = wave_resp.interact_pointer_pos() {
-                                                let ratio = ((pos.x - rect.left()) / rect.width())
-                                                    .clamp(0.0, 1.0);
-                                                let raw_t = ratio * total_dur;
-                                                if chosen_flag == 0 {
-                                                    let snapped = sample.snap_time(raw_t);
-                                                    sample.start_sec = snapped.clamp(
-                                                        0.0,
-                                                        (sample.end_sec - 0.005).max(0.0),
-                                                    );
-                                                } else {
-                                                    let snapped = sample.snap_time(raw_t);
-                                                    sample.end_sec = snapped.clamp(
-                                                        (sample.start_sec + 0.005).min(total_dur),
-                                                        total_dur,
-                                                    );
-                                                }
-                                            }
-                                        }
-
-                                        if wave_resp.drag_stopped() {
-                                            audition_sample = Some(sample.clone());
-                                        }
-
-                                        // Compact controls strip below waveform
-                                        ui.horizontal(|ui| {
-                                            let start_ms = (sample.start_sec * 1000.0) as u32;
-                                            let end_ms = (sample.end_sec * 1000.0) as u32;
-                                            ui.label(
-                                                RichText::new(format!("{start_ms}ms → {end_ms}ms"))
-                                                    .size(9.5)
-                                                    .color(Color32::from_gray(160)),
-                                            );
-
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| {
-                                                    let vol_slider = egui::Slider::new(
-                                                        &mut sample.volume,
-                                                        0.0..=2.0,
-                                                    )
-                                                    .show_value(true)
-                                                    .custom_formatter(|v, _| {
-                                                        format!("{:.0}%", v * 100.0)
-                                                    });
-                                                    ui.add_sized(Vec2::new(55.0, 16.0), vol_slider);
-                                                    ui.label(
-                                                        RichText::new("Vol:")
-                                                            .size(9.5)
-                                                            .color(Color32::from_gray(160)),
-                                                    );
-                                                },
-                                            );
-                                        });
-
-                                        ui.add_space(2.0);
-                                    }
-                                }
-                            });
-
-                        ui.add_space(3.0);
-                    }
-                });
-
-            // Handle actions deferred to avoid borrow checker conflicts
-            if let Some(idx) = trigger_slot_idx {
-                self.trigger_slot(idx);
-            }
-            if let Some(idx) = add_selected_to_idx {
-                if let Some(ref path) = self.selected_path.clone() {
-                    if let Some(sample) =
-                        self.samples.iter().find(|s| &s.file_path == path).cloned()
-                    {
-                        self.add_sample_to_slot(idx, &sample);
-                    }
-                }
-            }
-            if let Some(idx) = clear_slot_idx {
-                self.clear_slot(idx);
-            }
-            if let Some((s_idx, l_idx)) = remove_layer {
-                if s_idx < self.pack_bank.slots.len()
-                    && l_idx < self.pack_bank.slots[s_idx].samples.len()
-                {
-                    self.pack_bank.slots[s_idx].samples.remove(l_idx);
-                }
-            }
-            if let Some(sample) = audition_sample {
-                if let Some(player) = play_slot_sample(&sample) {
-                    self.active_players.push(player);
-                }
-            }
-        });
-    }
-
-    /// Renders the Sample Pack Browser window for loading and managing banks.
-    pub fn render_pack_browser(&mut self, ctx: &egui::Context, current_folder: &Path) {
-        if !self.browser_open {
-            return;
-        }
-
-        let mut load_bank_path: Option<std::path::PathBuf> = None;
-        let mut preview_bank_path: Option<std::path::PathBuf> = None;
-        let mut delete_bank_path: Option<std::path::PathBuf> = None;
-        let mut overwrite_bank: Option<SamplePackBank> = None;
-        let mut refresh_packs = false;
-        let mut new_empty_pack = false;
-        let mut is_open = self.browser_open;
-
-        egui::Window::new("Sample Pack Browser")
-            .id(egui::Id::new("constellation_pack_browser_window"))
-            .open(&mut is_open)
-            .default_size(Vec2::new(740.0, 520.0))
-            .min_size(Vec2::new(620.0, 420.0))
-            .resizable(true)
-            .show(ctx, |ui| {
+            if ui
+                .add_enabled(!self.writing_pack(), egui::Button::new("Save pack"))
+                .clicked()
+            {
                 let root = self
                     .current_indexed_folder
                     .as_deref()
                     .unwrap_or(current_folder);
-                let packs_dir = get_sample_packs_root(root);
-
-                // Top banner
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Packs directory:")
-                            .size(11.5)
-                            .color(Color32::from_gray(180)),
-                    );
-                    ui.label(
-                        RichText::new(packs_dir.display().to_string())
-                            .size(11.0)
-                            .color(Color32::from_rgb(140, 200, 255)),
-                    );
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Refresh").clicked() {
-                            refresh_packs = true;
-                        }
-                        if ui.button("New Empty Pack").clicked() {
-                            new_empty_pack = true;
-                        }
-                    });
-                });
-
-                ui.separator();
-
-                // Split layout: Packs list on left, Bank preview on right
-                ui.columns(2, |columns| {
-                    // Left Column: Saved Packs List
-                    columns[0].vertical(|ui| {
-                        ui.heading(RichText::new("Saved Packs").size(14.0));
-                        ui.add_space(4.0);
-
-                        if self.browser_packs.is_empty() {
-                            ui.label("No saved packs found yet.\nUse 'Save' on the creation shelf to save a pack.");
-                        } else {
-                            egui::ScrollArea::vertical()
-                                .max_height(400.0)
-                                .show(ui, |ui| {
-                                    for (idx, summary) in self.browser_packs.iter().enumerate() {
-                                        let is_selected = self.browser_selected_idx == Some(idx);
-                                        let text = format!(
-                                            "{} ({} slots · {} samples)",
-                                            summary.folder_path.file_name().unwrap_or_default().to_string_lossy(),
-                                            summary.slot_count, summary.sample_count
-                                        );
-
-                                        let label = egui::SelectableLabel::new(is_selected, text);
-                                        if ui.add(label).clicked() {
-                                            self.browser_selected_idx = Some(idx);
-                                            self.browser_preview = None;
-                                            preview_bank_path = Some(summary.folder_path.clone());
-                                        }
-                                    }
-                                });
-                        }
-                    });
-
-                    // Right Column: Selected Pack Preview & Actions
-                    columns[1].vertical(|ui| {
-                        if let Some(idx) = self.browser_selected_idx {
-                            if idx < self.browser_packs.len() {
-                                let summary = &self.browser_packs[idx];
-                                ui.heading(RichText::new(&summary.name).size(15.0).color(Color32::WHITE));
-                                ui.label(
-                                    RichText::new(format!(
-                                        "{} slots with {} total samples",
-                                        summary.slot_count, summary.sample_count
-                                    ))
-                                    .size(11.0)
-                                    .color(Color32::from_gray(170)),
-                                );
-
-                                ui.add_space(6.0);
-                                ui.horizontal(|ui| {
-                                    if ui
-                                        .button(RichText::new("Load into Creation Shelf").strong())
-                                        .clicked()
-                                    {
-                                        load_bank_path = Some(summary.folder_path.clone());
-                                    }
-
-                                    if ui
-                                        .add_enabled(!self.writing_pack(), egui::Button::new("Save Copy"))
-                                        .on_hover_text("Save current shelf slots as a new version of this pack")
-                                        .clicked()
-                                    {
-                                        let mut updated = self.pack_bank.clone();
-                                        updated.name = summary.name.clone();
-                                        overwrite_bank = Some(updated);
-                                    }
-
-                                    if ui
-                                        .add_enabled(!self.writing_pack(), egui::Button::new(RichText::new("Delete").color(Color32::from_rgb(255, 120, 120))))
-                                        .clicked()
-                                    {
-                                        delete_bank_path = Some(summary.folder_path.clone());
-                                    }
-                                });
-
-                                ui.separator();
-
-                                // Preview 10 slots of this pack
-                                if let Some((_, bank)) = self.browser_preview.as_ref().filter(|(path, _)| path == &summary.folder_path) {
-                                    ui.label(RichText::new("Slot Preview (Click Play to audition):").size(11.0).strong());
-                                    ui.add_space(4.0);
-
-                                    egui::ScrollArea::vertical()
-                                        .max_height(280.0)
-                                        .show(ui, |ui| {
-                                            for slot in &bank.slots {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(RichText::new(format!("[{}]", slot.key_char)).strong().size(11.0));
-                                                    if !slot.samples.is_empty() {
-                                                        if ui.small_button("Play").clicked() {
-                                                            for s in &slot.samples {
-                                                                if let Some(p) = play_slot_sample(s) {
-                                                                    self.active_players.push(p);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    ui.label(RichText::new(slot.display_title()).size(10.5));
-                                                });
-                                            }
-                                        });
-                                }
-                            }
-                        } else {
-                            ui.vertical_centered(|ui| {
-                                ui.add_space(40.0);
-                                ui.label(RichText::new("Select a sample pack on the left to preview or load.").color(Color32::from_gray(150)));
-                            });
-                        }
-                    });
-                });
+                self.save_bank(root.to_path_buf(), self.pack_bank.clone());
+            }
+        });
+        ui.add_space(4.0);
+        self.render_pad_grid(ui);
+        ui.add_space(4.0);
+        if !self.pack_bank.slots[self.selected_slot].is_empty() {
+            let label = if self.pad_editor_open {
+                "Hide pad editor".to_string()
+            } else {
+                format!("Edit pad {}", self.selected_slot + 1)
+            };
+            if ui.button(label).clicked() {
+                self.pad_editor_open = !self.pad_editor_open;
+            }
+        }
+        // Errors and persistence completions remain visible below the rack.
+        egui::ScrollArea::vertical()
+            .id_source("selected_pad_editor")
+            .min_scrolled_height(0.0)
+            .show(ui, |ui| {
+                if let Some((message, time)) = &self.browser_status
+                    && time.elapsed() < Duration::from_secs(5)
+                {
+                    ui.separator();
+                    ui.label(message);
+                }
             });
+    }
 
-        if !is_open {
-            self.close_pack_browser();
+    fn render_pad_grid(&mut self, ui: &mut egui::Ui) {
+        let gap = 5.0;
+        let width = ((ui.available_width() - gap * 3.0) / 4.0).max(24.0);
+        for row in (0..4).rev() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for col in 0..4 {
+                    let index = row * 4 + col;
+                    let slot = &self.pack_bank.slots[index];
+                    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 44.0), egui::Sense::click());
+                    let flashing = self.slot_flash[index].is_some_and(|time| time.elapsed() < Duration::from_millis(150));
+                    if flashing { ui.ctx().request_repaint_after(Duration::from_millis(16)); }
+                    let painter = ui.painter_at(rect);
+                    let visuals = ui.visuals();
+                    let fill = if flashing || response.hovered() { visuals.widgets.hovered.bg_fill } else { visuals.widgets.inactive.weak_bg_fill };
+                    let stroke = if self.selected_slot == index { Stroke::new(1.5_f32, visuals.text_color()) } else { visuals.widgets.noninteractive.bg_stroke };
+                    painter.rect(rect, 4.0, fill, stroke);
+                    let key = self.pad_keys[index].to_ascii_uppercase().to_string();
+                    painter.text(rect.min + Vec2::new(7.0, 5.0), egui::Align2::LEFT_TOP, key, egui::FontId::monospace(11.0), visuals.text_color());
+                    painter.text(rect.right_top() + Vec2::new(-6.0, 6.0), egui::Align2::RIGHT_TOP, format!("{}", 36 + index), egui::FontId::monospace(9.0), visuals.weak_text_color());
+                    let title = slot.samples.first().map_or("—", |sample| sample.filename.as_str());
+                    let label = super::ui::short_label(title, ((width - 12.0) / 5.5).max(3.0) as usize);
+                    painter.text(rect.left_bottom() + Vec2::new(7.0, -9.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(10.0), visuals.text_color());
+                    if let Some(category) = slot.samples.first().and_then(|sample| sample.category) {
+                        painter.line_segment([rect.left_bottom() + Vec2::new(5.0, -3.0), rect.right_bottom() + Vec2::new(-5.0, -3.0)], Stroke::new(2.0_f32, category.color()));
+                    }
+                    let response = response.on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick to select and play. Shift+click to assign the map selection.", index + 1, 36 + index, slot.display_title()));
+                    if response.clicked() {
+                        self.selected_slot = index;
+                        if ui.input(|input| input.modifiers.shift) { self.assign_selected_to_pad(index); }
+                        else { self.trigger_slot(index); }
+                    }
+                }
+            });
+            if row != 0 {
+                ui.add_space(gap - ui.spacing().item_spacing.y.min(gap));
+            }
         }
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new(format!(
+                "{} · Shift = assign",
+                self.pad_keys
+                    .chunks(4)
+                    .map(|row| row
+                        .iter()
+                        .map(|key| key.to_ascii_uppercase())
+                        .collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            ))
+            .size(10.0)
+            .color(ui.visuals().weak_text_color()),
+        );
+    }
 
-        if refresh_packs {
-            self.refresh_browser_packs(current_folder);
+    fn assign_selected_to_pad(&mut self, index: usize) {
+        if let Some(sample) = self
+            .samples
+            .iter()
+            .find(|sample| Some(&sample.file_path) == self.selected_path.as_ref())
+            .cloned()
+        {
+            self.add_sample_to_slot(index, &sample);
         }
+    }
 
-        if new_empty_pack {
-            self.clear_bank();
-            self.browser_status = Some(("Started new empty pack".into(), Instant::now()));
+    pub(super) fn render_rack_output(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.menu_button("MIDI input", |ui| {
+                if self.midi.is_none() {
+                    match super::midi::Controller::new(ui.ctx().clone()) {
+                        Ok(controller) => self.midi = Some(controller),
+                        Err(error) => {
+                            ui.label(error);
+                        }
+                    }
+                }
+                if let Some(controller) = &self.midi {
+                    let status = controller.status();
+                    if ui.button("Refresh inputs").clicked() {
+                        controller.refresh();
+                    }
+                    if ui
+                        .selectable_label(status.connected.is_none(), "Off")
+                        .clicked()
+                    {
+                        controller.disconnect();
+                    }
+                    for (index, name) in status.ports.iter().enumerate() {
+                        if ui
+                            .selectable_label(status.connected == Some(index), name)
+                            .clicked()
+                        {
+                            controller.connect(index, name.clone());
+                            ui.close_menu();
+                        }
+                    }
+                    if status.ports.is_empty() {
+                        ui.weak("No MIDI inputs found");
+                    }
+                    if let Some(error) = status.error {
+                        ui.label(error);
+                    }
+                    ui.separator();
+                    ui.weak("Notes 36–51 · all channels · one-shot pads");
+                }
+            });
+            ui.toggle_value(&mut self.pack_bank.override_velocity, "Override velocity")
+                .on_hover_text(
+                    "Force all hits to MIDI velocity 127. Keyboard and mouse hits already use 127.",
+                );
+            ui.separator();
+            ui.label("Glue");
+            ui.toggle_value(&mut self.pack_bank.compressor_bypass, "Bypass").on_hover_text("Bypass the stereo pad compressor and peak ceiling. Pad input headroom stays unchanged.");
+            let reduction = self.output.as_ref().map_or(0.0, |output| output.reduction_db());
+            ui.weak(format!("{reduction:.1} dB reduction"));
+        });
+    }
+
+    pub(super) fn render_selected_pad(&mut self, ui: &mut egui::Ui) {
+        let index = self.selected_slot;
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(format!("Pad {}", index + 1));
+            let group = &mut self.pack_bank.slots[index].choke_group;
+            egui::ComboBox::from_id_source(("pad_choke", index)).width(100.0).selected_text(if *group == 0 { "Choke: Off".to_string() } else { format!("Choke: {group}") }).show_ui(ui, |ui| {
+                ui.selectable_value(group, 0, "Off");
+                for value in 1..=8 { ui.selectable_value(group, value, format!("Group {value}")); }
+            }).response.on_hover_text("Pads in the same group cut each other off; useful for open and closed hi-hats.");
+            if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add selected")).clicked() { self.assign_selected_to_pad(index); }
+            if ui.small_button("Clear").clicked() { self.clear_slot(index); }
+        });
+        let slot = &mut self.pack_bank.slots[index];
+        if slot.samples.is_empty() {
+            ui.weak("Select a sample on the map, then Add selected or Shift+click a pad.");
         }
+        let mut remove = None;
+        let mut audition = None;
+        for (layer, sample) in slot.samples.iter_mut().enumerate() {
+            ui.push_id((index, layer), |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(super::ui::short_label(&sample.filename, 28)).strong())
+                        .on_hover_text(&sample.filename);
+                });
+                Self::render_layer_waveform(ui, sample);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.small_button("Play").clicked() {
+                        audition = Some(sample.clone());
+                    }
+                    if ui.small_button("Reset trim").clicked() {
+                        sample.start_sec = 0.0;
+                        sample.end_sec = sample.duration;
+                    }
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(layer);
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut sample.volume, 0.0..=2.0)
+                            .text("Gain")
+                            .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
+                    );
+                });
+                ui.separator();
+            });
+        }
+        if let Some(layer) = remove {
+            slot.samples.remove(layer);
+        }
+        if let Some(sample) = audition
+            && let Some(player) = play_slot_sample(&sample)
+        {
+            self.active_players.push(player);
+        }
+    }
 
-        // Apply deferred actions
-        if let Some(path) = preview_bank_path {
+    fn render_layer_waveform(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), 48.0),
+            egui::Sense::click_and_drag(),
+        );
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
+        let duration = sample.duration.max(0.01);
+        let start = rect.left() + sample.start_sec / duration * rect.width();
+        let end = rect.left() + sample.end_sec / duration * rect.width();
+        if let Some(audio) = &sample.cached_audio {
+            let color = sample
+                .category
+                .map_or(ui.visuals().text_color(), |category| category.color());
+            for (index, &(low, high)) in audio.waveform_peaks.iter().enumerate() {
+                let x = rect.left()
+                    + index as f32 / audio.waveform_peaks.len().max(1) as f32 * rect.width();
+                let color = if x >= start && x <= end {
+                    color
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                painter.line_segment(
+                    [
+                        Pos2::new(x, rect.center().y - high.abs() * 20.0),
+                        Pos2::new(x, rect.center().y + low.abs() * 20.0),
+                    ],
+                    Stroke::new(1.0_f32, color),
+                );
+            }
+        } else {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Preparing audio…",
+                egui::FontId::proportional(11.0),
+                ui.visuals().weak_text_color(),
+            );
+        }
+        let marker = ui.visuals().text_color();
+        for x in [start, end] {
+            painter.line_segment(
+                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                Stroke::new(1.5_f32, marker),
+            );
+            painter.rect_filled(
+                Rect::from_center_size(Pos2::new(x, rect.top() + 4.0), Vec2::new(6.0, 8.0)),
+                1.0,
+                marker,
+            );
+        }
+        if response.drag_started()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            ui.data_mut(|data| {
+                data.insert_temp(
+                    response.id.with("trim_start"),
+                    (pointer.x - start).abs() <= (pointer.x - end).abs(),
+                )
+            });
+        }
+        if response.dragged()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let time = ((pointer.x - rect.left()) / rect.width() * duration).clamp(0.0, duration);
+            let time = sample.snap_time(time);
+            if ui
+                .data(|data| data.get_temp::<bool>(response.id.with("trim_start")))
+                .unwrap_or(true)
+            {
+                sample.start_sec = time.clamp(0.0, (sample.end_sec - 0.005).max(0.0));
+            } else {
+                sample.end_sec = time.clamp((sample.start_sec + 0.005).min(duration), duration);
+            }
+        }
+        ui.weak(format!(
+            "{:.3}s – {:.3}s · drag edges to trim",
+            sample.start_sec, sample.end_sec
+        ));
+    }
+
+    /// Browses saved reference packs in the rack's side panel, keeping the map visible.
+    pub fn render_pack_browser(&mut self, ui: &mut egui::Ui, current_folder: &Path) {
+        ui.horizontal(|ui| {
+            ui.strong("Saved packs");
+            if ui.small_button("Refresh").clicked() {
+                self.refresh_browser_packs(current_folder);
+            }
+        });
+        if self.browser_packs.is_empty() {
+            ui.weak("No saved packs here yet. Save a pack from the Rack tab.");
+        }
+        let mut preview = None;
+        egui::ScrollArea::vertical()
+            .id_source("saved_pack_list")
+            .max_height(150.0)
+            .min_scrolled_height(0.0)
+            .show(ui, |ui| {
+                for (index, summary) in self.browser_packs.iter().enumerate() {
+                    let folder = summary
+                        .folder_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    if ui
+                        .selectable_label(self.browser_selected_idx == Some(index), folder.as_ref())
+                        .clicked()
+                    {
+                        self.browser_selected_idx = Some(index);
+                        preview = Some(summary.folder_path.clone());
+                    }
+                }
+            });
+        if let Some(path) = preview {
+            self.stop_playback();
+            self.browser_preview = None;
             self.load_browser_bank(path, false);
         }
-        if let Some(path) = load_bank_path {
-            self.load_browser_bank(path, true);
-        }
-        if let Some(bank) = overwrite_bank {
-            let root = self
-                .current_indexed_folder
-                .as_deref()
-                .unwrap_or(current_folder)
-                .to_path_buf();
-            self.save_bank(root, bank);
-        }
-        if let Some(path) = delete_bank_path {
-            self.delete_bank(path);
+        ui.separator();
+        let Some(summary) = self
+            .browser_selected_idx
+            .and_then(|index| self.browser_packs.get(index))
+            .cloned()
+        else {
+            ui.weak("Select a pack to inspect its pads or load it into the rack.");
+            return;
+        };
+        ui.strong(&summary.name);
+        ui.weak(format!(
+            "{} pads · {} samples",
+            summary.slot_count, summary.sample_count
+        ));
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Load pack").clicked() {
+                self.load_browser_bank(summary.folder_path.clone(), true);
+            }
+            if ui
+                .add_enabled(!self.writing_pack(), egui::Button::new("Save new version"))
+                .on_hover_text("Save the current rack as a new version of this pack")
+                .clicked()
+            {
+                let mut bank = self.pack_bank.clone();
+                bank.name = summary.name.clone();
+                let root = self
+                    .current_indexed_folder
+                    .as_deref()
+                    .unwrap_or(current_folder);
+                self.save_bank(root.to_path_buf(), bank);
+            }
+            if ui
+                .add_enabled(!self.writing_pack(), egui::Button::new("Delete"))
+                .clicked()
+            {
+                self.delete_bank(summary.folder_path.clone());
+            }
+        });
+        let mut audition = None;
+        egui::ScrollArea::vertical()
+            .id_source("saved_pack_preview")
+            .min_scrolled_height(0.0)
+            .show(ui, |ui| {
+                if let Some((_, bank)) = self
+                    .browser_preview
+                    .as_ref()
+                    .filter(|(path, _)| path == &summary.folder_path)
+                {
+                    for (index, slot) in bank
+                        .slots
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, slot)| !slot.is_empty())
+                    {
+                        ui.horizontal(|ui| {
+                            if ui.small_button(format!("Play {}", index + 1)).clicked() {
+                                audition = Some(slot.samples.clone());
+                            }
+                            ui.label(slot.display_title());
+                        });
+                    }
+                } else {
+                    ui.spinner();
+                }
+                if let Some((message, _)) = &self.browser_status {
+                    ui.label(message);
+                }
+            });
+        if let Some(samples) = audition {
+            self.stop_playback();
+            for sample in samples {
+                if let Some(player) = play_slot_sample(&sample) {
+                    self.active_players.push(player);
+                }
+            }
         }
     }
 }
