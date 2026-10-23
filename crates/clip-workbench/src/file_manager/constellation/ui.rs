@@ -47,6 +47,7 @@ impl ConstellationState {
         self.render_toolbar(ui, current_folder, on_play_sample);
         self.render_indexing_progress(ui);
 
+        self.map_viewport = Some(ui.available_rect_before_wrap().shrink(8.0));
         egui::TopBottomPanel::bottom("constellation_output")
             .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 4.0)))
             .show_inside(ui, |ui| {
@@ -410,6 +411,7 @@ impl ConstellationState {
     ) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
+        let viewport = self.map_viewport.unwrap_or(rect);
 
         // Zoom handling
         let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
@@ -420,12 +422,12 @@ impl ConstellationState {
             self.zoom = (self.zoom * factor).clamp(0.2, 50.0);
 
             // Zoom toward pointer
-            let mouse_rel = pointer_pos - rect.center() - self.pan;
+            let mouse_rel = pointer_pos - viewport.center() - self.pan;
             self.pan -= mouse_rel * (self.zoom / old_zoom - 1.0);
         }
 
         // The map inherits the file browser canvas; only samples carry category color.
-        let center = rect.center() + self.pan;
+        let center = viewport.center() + self.pan;
 
         // 2. High-Performance GPU Batched Star Rendering
         // Organic category coordinates can extend beyond ±1. Fit their actual
@@ -433,7 +435,8 @@ impl ConstellationState {
         let extent = self.samples.iter().fold(1.0_f32, |extent, sample| {
             extent.max(sample.x.abs()).max(sample.y.abs())
         });
-        let view_scale = (rect.width().min(rect.height()) * 0.45).max(1.0) / extent * self.zoom;
+        let view_scale =
+            (viewport.width().min(viewport.height()) * 0.45).max(1.0) / extent * self.zoom;
         let query_lower = self.search_query.to_lowercase();
 
         let mut hovered_sample: Option<ConstellationSample> = None;
@@ -464,10 +467,10 @@ impl ConstellationState {
         if push_factor > 0.0 {
             // Zoomed-in path: collect visible candidates and apply spatial repulsion
             let margin = 50.0_f32;
-            let cull_min_x = rect.left() - margin;
-            let cull_max_x = rect.right() + margin;
-            let cull_min_y = rect.top() - margin;
-            let cull_max_y = rect.bottom() + margin;
+            let cull_min_x = viewport.left() - margin;
+            let cull_max_x = viewport.right() + margin;
+            let cull_min_y = viewport.top() - margin;
+            let cull_max_y = viewport.bottom() + margin;
 
             struct VisStar<'a> {
                 sample: &'a ConstellationSample,
@@ -1390,6 +1393,44 @@ mod tests {
                 .all(|vertex| (8.0..792.0).contains(&vertex.pos.x)
                     && (8.0..592.0).contains(&vertex.pos.y))
         );
+    }
+
+    #[test]
+    fn dock_visibility_keeps_the_same_projection_viewport() {
+        let ctx = egui::Context::default();
+        let palette = little_clip_core::palette::AppPalette::default();
+        let mut state = ConstellationState::new();
+        let mut viewport = None;
+        for rack in [true, false, true] {
+            state.pack_shelf_open = rack;
+            for editor in [false, true, false] {
+                state.pad_editor_open = editor;
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1000.0, 800.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            state.render_ui(
+                                ui,
+                                std::path::Path::new("/samples"),
+                                &palette,
+                                &mut |_| {},
+                                &mut |_| {},
+                            );
+                        });
+                    },
+                );
+                if let Some(expected) = viewport {
+                    assert_eq!(state.map_viewport, Some(expected));
+                }
+                viewport = state.map_viewport;
+            }
+        }
     }
 
     #[test]

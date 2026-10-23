@@ -100,6 +100,8 @@ pub struct ConstellationState {
     pub selected_path: Option<PathBuf>,
     pub last_hovered_path: Option<PathBuf>,
     pub history_trail: std::collections::VecDeque<HistoryTrailPoint>,
+    /// Full canvas before docks obscure it; projection must not depend on dock visibility.
+    map_viewport: Option<egui::Rect>,
     pub pan: egui::Vec2,
     pub zoom: f32,
     pub active_job: Option<IndexingJob>,
@@ -161,6 +163,7 @@ impl Default for ConstellationState {
             selected_path: None,
             last_hovered_path: None,
             history_trail: std::collections::VecDeque::new(),
+            map_viewport: None,
             pan: egui::Vec2::ZERO,
             zoom: 1.0,
             active_job: None,
