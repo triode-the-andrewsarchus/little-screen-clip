@@ -1,5 +1,6 @@
 //! Dedicated SQLite database storage for sample constellation indexing.
-//! Independent from other database caches. Schema version six stores Unix paths as
+//! Independent from other database caches. Schema version seven adds pinned-source
+//! revision keys; legacy observations are analyzed once before reuse. Unix paths use
 //! BLOB keys so invalid UTF-8 bytes cannot alias a different display-equivalent
 //! filename. Names remain display text. Older TEXT keys migrate transactionally;
 //! paths already lost by older versions require re-indexing their source folders.
@@ -33,6 +34,8 @@ pub struct ConstellationSample {
     pub sample_rate: u32,
     pub channels: u16,
     pub bit_depth: u16,
+    /// Pinned identity and precise timestamps; absent legacy keys never authorize reuse.
+    pub source_revision: Option<Vec<u8>>,
 }
 
 /// Opens short-lived SQLite connections for transactional index snapshots.
@@ -143,6 +146,12 @@ impl ConstellationDb {
             conn.execute_batch("UPDATE samples SET file_path = CAST(file_path AS BLOB), folder_path = CAST(folder_path AS BLOB);
                 UPDATE indexed_folders SET folder_path = CAST(folder_path AS BLOB);
                 PRAGMA user_version = 6;").map_err(|error| format!("Cannot migrate sample index paths: {error}"))?;
+        }
+        if version < 7 {
+            conn.execute_batch(
+                "ALTER TABLE samples ADD COLUMN source_revision BLOB; PRAGMA user_version = 7;",
+            )
+            .map_err(|error| format!("Cannot migrate sample revisions: {error}"))?;
         }
         conn.commit().map_err(|error| error.to_string())
     }
@@ -257,7 +266,7 @@ impl ConstellationDb {
             .prepare(
                 "SELECT file_path, folder_path, filename, category, confidence,
                         duration_seconds, pitch_hz, pitch_clarity, brightness, x, y, file_size, mtime,
-                        COALESCE(sample_rate, 0), COALESCE(channels, 0), COALESCE(bit_depth, 0)
+                        COALESCE(sample_rate, 0), COALESCE(channels, 0), COALESCE(bit_depth, 0), source_revision
                  FROM samples
                  WHERE folder_path = ?1 OR substr(folder_path, 1, length(?2)) = ?2 ORDER BY file_path",
             )
@@ -291,6 +300,7 @@ impl ConstellationDb {
                         sample_rate: row.get(13)?,
                         channels: row.get(14)?,
                         bit_depth: row.get(15)?,
+                        source_revision: row.get(16)?,
                     })
                 },
             )
@@ -338,8 +348,8 @@ impl ConstellationDb {
                     "INSERT INTO samples (
                         file_path, folder_path, filename, category, confidence,
                         duration_seconds, pitch_hz, pitch_clarity, brightness, x, y, file_size, mtime,
-                        sample_rate, channels, bit_depth
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                        sample_rate, channels, bit_depth, source_revision
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                 )
                 .map_err(|e| e.to_string())?;
 
@@ -361,6 +371,7 @@ impl ConstellationDb {
                     s.sample_rate as i64,
                     s.channels as i64,
                     s.bit_depth as i64,
+                    s.source_revision,
                 ])
                 .map_err(|e| e.to_string())?;
             }
@@ -417,6 +428,7 @@ mod tests {
                 sample_rate: 44100,
                 channels: 2,
                 bit_depth: 24,
+                source_revision: Some(vec![7; 56]),
             },
             ConstellationSample {
                 file_path: test_folder.join("crisp_snare.wav"),
@@ -435,6 +447,7 @@ mod tests {
                 sample_rate: 48000,
                 channels: 1,
                 bit_depth: 16,
+                source_revision: None,
             },
         ];
 
@@ -454,6 +467,7 @@ mod tests {
         assert_eq!(loaded[0].sample_rate, 44100);
         assert_eq!(loaded[0].channels, 2);
         assert_eq!(loaded[0].bit_depth, 24);
+        assert_eq!(loaded[0].source_revision, Some(vec![7; 56]));
         assert_eq!(loaded[1].filename, "crisp_snare.wav");
         assert_eq!(loaded[1].category, SampleCategory::Snare);
         assert_eq!(loaded[1].sample_rate, 48000);
@@ -493,6 +507,7 @@ mod tests {
         let legacy = db.open().unwrap();
         legacy.execute_batch("UPDATE samples SET file_path = CAST(file_path AS TEXT), folder_path = CAST(folder_path AS TEXT);
             UPDATE indexed_folders SET folder_path = CAST(folder_path AS TEXT);
+            ALTER TABLE samples DROP COLUMN source_revision;
             PRAGMA user_version = 3;
             CREATE TRIGGER fail_coordinate_migration BEFORE UPDATE ON samples BEGIN SELECT RAISE(ABORT, 'owned migration failure'); END;").unwrap();
         assert!(ConstellationDb::open_path(db_path.clone()).is_err());
@@ -528,6 +543,7 @@ mod tests {
         let legacy = db.open().unwrap();
         legacy.execute_batch("UPDATE samples SET file_path = CAST(file_path AS TEXT), folder_path = CAST(folder_path AS TEXT);
             UPDATE indexed_folders SET folder_path = CAST(folder_path AS TEXT);
+            ALTER TABLE samples DROP COLUMN source_revision;
             PRAGMA user_version = 5;").unwrap();
         drop(legacy);
         let migrated = ConstellationDb::open_path(db_path.clone()).unwrap();

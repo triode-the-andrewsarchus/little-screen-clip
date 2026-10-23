@@ -23,7 +23,7 @@ impl FileSource {
             little_clip_core::kernel_interface::pin(path, true).map_err(|e| e.to_string())?;
         Self::capture_file(&source)
     }
-    fn capture_file(source: &File) -> Result<Self, String> {
+    pub(crate) fn capture_file(source: &File) -> Result<Self, String> {
         if little_clip_core::kernel_interface::classify_handle(source)
             .map_err(|e| e.to_string())?
             .protected()
@@ -49,6 +49,14 @@ impl FileSource {
             ],
             mode: metadata.permissions().mode(),
         })
+    }
+    /// Returns a stable, byte-exact cache revision from the pinned file metadata.
+    /// Includes device/inode, size, and mtime/ctime with nanosecond precision.
+    pub(crate) fn revision_key(&self) -> Vec<u8> {
+        self.version
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
     }
     /// Rejects a source whose identity or timestamps changed since capture.
     pub fn check(&self) -> Result<(), String> {

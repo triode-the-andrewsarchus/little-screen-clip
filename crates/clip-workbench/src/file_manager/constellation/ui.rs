@@ -11,6 +11,14 @@ impl ConstellationState {
         self.category_filter
             .is_none_or(|category| sample.category == category)
             && sample.filename.to_lowercase().contains(lowercase_query)
+            && sample.duration_seconds >= self.min_duration
+            && (self.max_duration == 0.0 || sample.duration_seconds <= self.max_duration)
+            && match self.channel_filter {
+                1 => sample.channels == 1,
+                2 => sample.channels == 2,
+                3 => sample.channels > 2,
+                _ => true,
+            }
     }
 
     pub fn render_ui(
@@ -248,6 +256,7 @@ impl ConstellationState {
                 }
             });
         });
+        self.render_audio_filters(ui);
         ui.horizontal_wrapped(|ui| {
             if ui
                 .selectable_label(
@@ -281,6 +290,60 @@ impl ConstellationState {
             }
         });
         ui.separator();
+    }
+
+    fn render_audio_filters(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Duration");
+            ui.add(
+                egui::DragValue::new(&mut self.min_duration)
+                    .speed(0.01)
+                    .clamp_range(0.0..=3600.0)
+                    .prefix("Min ")
+                    .suffix(" s"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut self.max_duration)
+                    .speed(0.01)
+                    .clamp_range(0.0..=3600.0)
+                    .prefix("Max ")
+                    .suffix(" s"),
+            )
+            .on_hover_text("Zero means no upper duration limit.");
+            egui::ComboBox::from_id_source("constellation_channel_filter")
+                .selected_text(match self.channel_filter {
+                    1 => "Mono",
+                    2 => "Stereo",
+                    3 => "Multichannel",
+                    _ => "All channels",
+                })
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        (0, "All channels"),
+                        (1, "Mono"),
+                        (2, "Stereo"),
+                        (3, "Multichannel"),
+                    ] {
+                        ui.selectable_value(&mut self.channel_filter, value, label);
+                    }
+                });
+            if ui.small_button("Reset filters").clicked() {
+                self.min_duration = 0.0;
+                self.max_duration = 0.0;
+                self.channel_filter = 0;
+                self.category_filter = None;
+                self.search_query.clear();
+            }
+            let query = self.search_query.to_lowercase();
+            ui.weak(format!(
+                "{} / {}",
+                self.samples
+                    .iter()
+                    .filter(|sample| self.matches_filters(sample, &query))
+                    .count(),
+                self.samples.len()
+            ));
+        });
     }
 
     fn render_empty_state(&mut self, ui: &mut egui::Ui, current_folder: &std::path::Path) {
@@ -321,7 +384,7 @@ impl ConstellationState {
                         let pos = relaxed_map
                             .and_then(|map| map.get(sample.file_path.as_path()))
                             .copied()
-                            .unwrap_or(center + Vec2::new(sample.x, sample.y) * view_scale);
+                            .unwrap_or(center + Vec2::new(sample.x, -sample.y) * view_scale);
                         let distance = pos.distance_sq(origin);
                         (distance <= 144.0).then_some((sample, distance))
                     })
@@ -372,7 +435,6 @@ impl ConstellationState {
         });
         let view_scale = (rect.width().min(rect.height()) * 0.45).max(1.0) / extent * self.zoom;
         let query_lower = self.search_query.to_lowercase();
-        let has_query = !query_lower.is_empty();
 
         let mut hovered_sample: Option<ConstellationSample> = None;
         let mut hovered_pos = Pos2::ZERO;
@@ -549,8 +611,7 @@ impl ConstellationState {
                         continue;
                     }
 
-                    let is_query_dimmed =
-                        has_query && !star.sample.filename.to_lowercase().contains(&query_lower);
+                    let is_filter_dimmed = !self.matches_filters(star.sample, &query_lower);
 
                     let color = if star.is_dimmed {
                         Color32::from_rgba_unmultiplied(
@@ -559,7 +620,7 @@ impl ConstellationState {
                             base_color.b(),
                             28,
                         )
-                    } else if is_query_dimmed {
+                    } else if is_filter_dimmed {
                         Color32::from_rgba_unmultiplied(
                             base_color.r(),
                             base_color.g(),
@@ -628,8 +689,7 @@ impl ConstellationState {
                     continue;
                 }
 
-                let is_query_dimmed =
-                    has_query && !sample.filename.to_lowercase().contains(&query_lower);
+                let is_filter_dimmed = !self.matches_filters(sample, &query_lower);
                 // Cap foreground and background independently: all-sample views
                 // remain bounded, while a dimmed star cannot hide a filter match.
                 // Hit testing above still considers every sample, including stars
@@ -637,7 +697,7 @@ impl ConstellationState {
                 let col = ((sx - rect.left()) / cell_size) as usize;
                 let row = ((sy - rect.top()) / cell_size) as usize;
                 if col < grid_cols && row < grid_rows {
-                    let layer = usize::from(is_category_dimmed || is_query_dimmed);
+                    let layer = usize::from(is_category_dimmed || is_filter_dimmed);
                     let count = &mut occupancy[row * grid_cols + col][layer];
                     if *count >= 2 {
                         continue;
@@ -652,7 +712,7 @@ impl ConstellationState {
                         base_color.b(),
                         28,
                     )
-                } else if is_query_dimmed {
+                } else if is_filter_dimmed {
                     Color32::from_rgba_unmultiplied(
                         base_color.r(),
                         base_color.g(),
@@ -1278,6 +1338,7 @@ mod tests {
                 sample_rate: 44100,
                 channels: 1,
                 bit_depth: 16,
+                source_revision: None,
             })
             .collect();
         assert_eq!(
@@ -1301,6 +1362,18 @@ mod tests {
                 .iter()
                 .any(|vertex| vertex.color == SampleCategory::Snare.color())
         );
+        let sample = state.samples[999].clone();
+        state.min_duration = 0.6;
+        assert!(!state.matches_filters(&sample, "target"));
+        state.min_duration = 0.0;
+        state.max_duration = 0.25;
+        assert!(!state.matches_filters(&sample, "target"));
+        state.max_duration = 0.0;
+        state.channel_filter = 2;
+        assert!(!state.matches_filters(&sample, "target"));
+        state.channel_filter = 1;
+        assert!(state.matches_filters(&sample, "target"));
+        state.channel_filter = 0;
         state.samples.truncate(1);
         state.samples[0].x = -2.3;
         state.samples[0].y = 1.5;
@@ -1403,6 +1476,7 @@ mod tests {
             sample_rate: 44100,
             channels: 1,
             bit_depth: 16,
+            source_revision: None,
         };
         state.selected_path = Some(sample.file_path.clone());
         state.samples.push(sample);

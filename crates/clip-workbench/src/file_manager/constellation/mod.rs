@@ -92,6 +92,9 @@ pub struct ConstellationState {
     pub samples: Vec<ConstellationSample>,
     pub current_indexed_folder: Option<PathBuf>,
     pub category_filter: Option<SampleCategory>,
+    min_duration: f32,
+    max_duration: f32,
+    channel_filter: u16,
     pub search_query: String,
     pub hover_to_play: bool,
     pub selected_path: Option<PathBuf>,
@@ -148,6 +151,9 @@ impl Default for ConstellationState {
             samples: Vec::new(),
             current_indexed_folder: None,
             category_filter: None,
+            min_duration: 0.0,
+            max_duration: 0.0,
+            channel_filter: 0,
             search_query: String::new(),
             hover_to_play: true,
             selected_path: None,
@@ -616,15 +622,25 @@ impl ConstellationState {
                         processed,
                         total,
                         current_file,
+                        reused,
                     } => {
                         self.indexing_progress = Some(processed as f32 / total.max(1) as f32);
                         let pct = (processed as f32 / total.max(1) as f32 * 100.0) as u32;
                         self.indexing_status = Some(format!(
-                            "Indexing [{}/{} - {}%]: {}",
-                            processed, total, pct, current_file
+                            "Indexing [{}/{} - {}%] · {} reused · {} new: {}",
+                            processed,
+                            total,
+                            pct,
+                            reused,
+                            processed.saturating_sub(reused),
+                            current_file
                         ));
                     }
-                    IndexProgress::Complete { samples, .. } => {
+                    IndexProgress::Complete {
+                        samples,
+                        reused,
+                        analyzed,
+                    } => {
                         if self.current_indexed_folder.as_ref() == Some(&job.folder) {
                             self.folder_generation = self.folder_generation.wrapping_add(1);
                             self.samples = samples;
@@ -634,7 +650,9 @@ impl ConstellationState {
                             self.hover_previews.clear();
                             self.pending_hover_path = None;
                         }
-                        self.indexing_status = None;
+                        self.indexing_status = Some(format!(
+                            "Index complete · {reused} reused · {analyzed} analyzed"
+                        ));
                         job_done = true;
                         break;
                     }
@@ -803,7 +821,11 @@ mod tests {
             receiver,
         });
         sender
-            .send(IndexProgress::Complete { samples: vec![] })
+            .send(IndexProgress::Complete {
+                samples: vec![],
+                reused: 0,
+                analyzed: 0,
+            })
             .unwrap();
         state.tick();
         assert_eq!(
@@ -849,6 +871,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
             bit_depth: 16,
+            source_revision: None,
         };
 
         let s2 = ConstellationSample {
@@ -868,6 +891,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
             bit_depth: 16,
+            source_revision: None,
         };
 
         // Record first sample
@@ -911,6 +935,7 @@ mod tests {
                 sample_rate: 44100,
                 channels: 2,
                 bit_depth: 16,
+                source_revision: None,
             };
             state.record_played_sample(&sample);
         }
@@ -945,6 +970,7 @@ mod tests {
                 sample_rate: 44100,
                 channels: 2,
                 bit_depth: 16,
+                source_revision: None,
             };
             state.record_played_sample(&sample);
         }

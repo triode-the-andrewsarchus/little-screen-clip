@@ -6,6 +6,10 @@
 //! of publishing an incomplete replacement. Unsupported/silent audio is omitted by
 //! the classifier; this differs from an incomplete directory inventory.
 //!
+//! Unchanged classified observations reuse pinned FileSource revisions (device,
+//! inode, size, nanosecond mtime/ctime). Legacy and unclassified files are analyzed
+//! again. Changes to the classifier require invalidating persisted revision keys.
+//!
 //! The analysis pool uses at most eight workers and reserves one reported CPU
 //! when possible. Progress counts completed analyses, including unclassified files.
 //! Each analysis decodes at most three seconds while preserving full decoder
@@ -15,7 +19,7 @@
 use super::classifier::classify_sample;
 use super::db::{ConstellationDb, ConstellationSample};
 use rodio::{Decoder, Source};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,9 +35,12 @@ pub enum IndexProgress {
         processed: usize,
         total: usize,
         current_file: String,
+        reused: usize,
     },
     Complete {
         samples: Vec<ConstellationSample>,
+        reused: usize,
+        analyzed: usize,
     },
     Error(String),
 }
@@ -65,25 +72,42 @@ pub fn run_indexing(
     cancelled: Arc<AtomicBool>,
     sender: mpsc::Sender<IndexProgress>,
 ) {
-    let result = discover_audio_paths(&folder, &cancelled, &sender)
-        .and_then(|paths| analyze_audio_paths(&paths, &folder, &cancelled, &sender));
+    let result =
+        ConstellationDb::new().and_then(|db| index_snapshot(&db, &folder, &cancelled, &sender));
     if cancelled.load(Ordering::Relaxed) {
         return;
     }
-    let samples = match result {
-        Ok(samples) => samples,
-        Err(error) => {
-            let _ = sender.send(IndexProgress::Error(error));
-            return;
-        }
+    let event = match result {
+        Ok((samples, reused, analyzed)) => IndexProgress::Complete {
+            samples,
+            reused,
+            analyzed,
+        },
+        Err(error) => IndexProgress::Error(error),
     };
-    if let Err(error) = ConstellationDb::new().and_then(|db| db.save_samples(&folder, &samples)) {
-        let _ = sender.send(IndexProgress::Error(format!(
-            "Cannot save sample index: {error}"
-        )));
-        return;
+    let _ = sender.send(event);
+}
+
+/// Commits only complete discovery/analysis snapshots. Legacy rows lack revision
+/// keys and are analyzed once; unclassified files remain eligible on later scans.
+fn index_snapshot(
+    db: &ConstellationDb,
+    folder: &Path,
+    cancelled: &AtomicBool,
+    sender: &mpsc::Sender<IndexProgress>,
+) -> Result<(Vec<ConstellationSample>, usize, usize), String> {
+    let paths = discover_audio_paths(folder, cancelled, sender)?;
+    let cached: HashMap<_, _> = db
+        .load_samples(folder)?
+        .into_iter()
+        .map(|sample| (sample.file_path.clone(), sample))
+        .collect();
+    let (samples, reused) = analyze_audio_paths(&paths, folder, cancelled, sender, &cached)?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Indexing cancelled".into());
     }
-    let _ = sender.send(IndexProgress::Complete { samples });
+    db.save_samples(folder, &samples)?;
+    Ok((samples, reused, paths.len() - reused))
 }
 
 /// Inventories ordinary directories once per filesystem identity, excluding hidden/pack trees.
@@ -149,7 +173,8 @@ fn analyze_audio_paths(
     folder: &Path,
     cancelled: &AtomicBool,
     sender: &mpsc::Sender<IndexProgress>,
-) -> Result<Vec<ConstellationSample>, String> {
+    cached: &HashMap<PathBuf, ConstellationSample>,
+) -> Result<(Vec<ConstellationSample>, usize), String> {
     let workers = std::thread::available_parallelism()
         .map(|count| count.get().saturating_sub(1))
         .unwrap_or(2)
@@ -157,6 +182,7 @@ fn analyze_audio_paths(
         .min(paths.len());
     let next = AtomicUsize::new(0);
     let completed = AtomicUsize::new(0);
+    let reused = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..workers)
@@ -174,11 +200,10 @@ fn analyze_audio_paths(
                             .to_string_lossy()
                             .into_owned();
                         if let Some(sample) =
-                            process_single_audio_file(path, filename.clone(), folder).inspect_err(
-                                |_| {
+                            analyze_or_reuse(path, filename.clone(), folder, cached, &reused)
+                                .inspect_err(|_| {
                                     failed.store(true, Ordering::Relaxed);
-                                },
-                            )?
+                                })?
                         {
                             samples.push(sample);
                         }
@@ -188,6 +213,7 @@ fn analyze_audio_paths(
                                 processed: count,
                                 total: paths.len(),
                                 current_file: filename,
+                                reused: reused.load(Ordering::Relaxed),
                             });
                         }
                     }
@@ -208,8 +234,30 @@ fn analyze_audio_paths(
                     .and_then(|result| result)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(results.into_iter().flatten().collect())
+        Ok((
+            results.into_iter().flatten().collect(),
+            reused.load(Ordering::Relaxed),
+        ))
     })
+}
+
+fn analyze_or_reuse(
+    path: &Path,
+    filename: String,
+    folder: &Path,
+    cached: &HashMap<PathBuf, ConstellationSample>,
+    reused: &AtomicUsize,
+) -> Result<Option<ConstellationSample>, String> {
+    let source = crate::file_source::FileSource::capture(path)?;
+    if let Some(sample) = cached
+        .get(path)
+        .filter(|sample| sample.source_revision.as_ref() == Some(&source.revision_key()))
+    {
+        source.check()?;
+        reused.fetch_add(1, Ordering::Relaxed);
+        return Ok(Some(sample.clone()));
+    }
+    process_single_audio_file(path, filename, folder)
 }
 
 fn process_single_audio_file(
@@ -219,92 +267,156 @@ fn process_single_audio_file(
 ) -> Result<Option<ConstellationSample>, String> {
     let file = little_clip_core::kernel_interface::open_content(path, true)
         .map_err(|error| format!("Cannot open {}: {error}", path.display()))?;
-    let meta = file
-        .metadata()
-        .map_err(|error| format!("Cannot inspect {}: {error}", path.display()))?;
-    let file_size = meta.len();
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let source = crate::file_source::FileSource::capture_file(&file)?;
+    let observed = (|| {
+        let meta = file
+            .metadata()
+            .map_err(|error| format!("Cannot inspect {}: {error}", path.display()))?;
+        let file_size = meta.len();
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
 
-    let Ok(mut decoder) = Decoder::try_from(BufReader::new(file)) else {
-        return Ok(None);
-    };
-    let sample_rate = decoder.sample_rate().get() as f32;
-    let channels = decoder.channels().get() as usize;
-    if sample_rate > super::MAX_SAMPLE_RATE as f32 || channels > super::MAX_SAMPLE_CHANNELS as usize
-    {
-        return Ok(None);
-    }
-
-    let duration = decoder
-        .total_duration()
-        .map(|duration| duration.as_secs_f32());
-
-    // Bound acoustic analysis while retaining the full source duration.
-    let max_samples_per_ch = (sample_rate * 3.0) as usize;
-    let max_total_samples = max_samples_per_ch * channels;
-
-    let mut mono_samples = Vec::with_capacity(max_samples_per_ch);
-    let mut ch_idx = 0;
-    let mut current_frame_sum = 0.0f32;
-
-    for s in decoder.by_ref().take(max_total_samples) {
-        current_frame_sum += s;
-        ch_idx += 1;
-        if ch_idx >= channels {
-            mono_samples.push(current_frame_sum / channels as f32);
-            current_frame_sum = 0.0;
-            ch_idx = 0;
+        let Ok(mut decoder) = Decoder::try_from(BufReader::new(file)) else {
+            return Ok(None);
+        };
+        let sample_rate = decoder.sample_rate().get() as f32;
+        let channels = decoder.channels().get() as usize;
+        if sample_rate > super::MAX_SAMPLE_RATE as f32
+            || channels > super::MAX_SAMPLE_CHANNELS as usize
+        {
+            return Ok(None);
         }
+
+        let duration = decoder
+            .total_duration()
+            .map(|duration| duration.as_secs_f32());
+
+        // Bound acoustic analysis while retaining the full source duration.
+        let max_samples_per_ch = (sample_rate * 3.0) as usize;
+        let max_total_samples = max_samples_per_ch * channels;
+
+        let mut mono_samples = Vec::with_capacity(max_samples_per_ch);
+        let mut ch_idx = 0;
+        let mut current_frame_sum = 0.0f32;
+
+        for s in decoder.by_ref().take(max_total_samples) {
+            current_frame_sum += s;
+            ch_idx += 1;
+            if ch_idx >= channels {
+                mono_samples.push(current_frame_sum / channels as f32);
+                current_frame_sum = 0.0;
+                ch_idx = 0;
+            }
+        }
+
+        if mono_samples.is_empty() {
+            return Ok(None);
+        }
+
+        let Some(classification) = classify_sample(path, &mono_samples, sample_rate) else {
+            return Ok(None);
+        };
+        let parent_folder = path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| root_folder.to_path_buf());
+
+        let format_info = super::audio_probe::read_audio_format_info(path);
+        let sample_rate_u32 = format_info
+            .sample_rate
+            .unwrap_or(decoder.sample_rate().get());
+        let channels_u16 = format_info.channels.unwrap_or(channels as u16);
+        let bit_depth_u16 = format_info.bit_depth.unwrap_or(0);
+
+        Ok(Some(ConstellationSample {
+            file_path: path.to_path_buf(),
+            folder_path: parent_folder,
+            filename,
+            category: classification.category,
+            confidence: classification.confidence,
+            duration_seconds: duration.unwrap_or(classification.duration),
+            pitch_hz: classification.pitch_hz,
+            pitch_clarity: classification.pitch_clarity,
+            brightness: classification.brightness,
+            x: classification.x,
+            y: classification.y,
+            file_size,
+            mtime,
+            sample_rate: sample_rate_u32,
+            channels: channels_u16,
+            bit_depth: bit_depth_u16,
+            source_revision: Some(source.revision_key()),
+        }))
+    })();
+    source.check()?;
+    if crate::file_source::FileSource::capture(path)? != source {
+        return Err("Audio path changed during analysis".into());
     }
-
-    if mono_samples.is_empty() {
-        return Ok(None);
-    }
-
-    let Some(classification) = classify_sample(path, &mono_samples, sample_rate) else {
-        return Ok(None);
-    };
-    let parent_folder = path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| root_folder.to_path_buf());
-
-    let format_info = super::audio_probe::read_audio_format_info(path);
-    let sample_rate_u32 = format_info
-        .sample_rate
-        .unwrap_or(decoder.sample_rate().get());
-    let channels_u16 = format_info.channels.unwrap_or(channels as u16);
-    let bit_depth_u16 = format_info.bit_depth.unwrap_or(0);
-
-    Ok(Some(ConstellationSample {
-        file_path: path.to_path_buf(),
-        folder_path: parent_folder,
-        filename,
-        category: classification.category,
-        confidence: classification.confidence,
-        duration_seconds: duration.unwrap_or(classification.duration),
-        pitch_hz: classification.pitch_hz,
-        pitch_clarity: classification.pitch_clarity,
-        brightness: classification.brightness,
-        x: classification.x,
-        y: classification.y,
-        file_size,
-        mtime,
-        sample_rate: sample_rate_u32,
-        channels: channels_u16,
-        bit_depth: bit_depth_u16,
-    }))
+    observed
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn incremental_index_reuses_only_matching_identity_and_precise_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        std::fs::create_dir(&library).unwrap();
+        let path = library.join("kick.wav");
+        let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(1, 16000, 1);
+        buffer.push_samples(
+            &(0..16000)
+                .map(|frame| {
+                    let time = frame as f32 / 16000.0;
+                    ((time * 220.0 * std::f32::consts::TAU).sin() * (-time * 8.0).exp() * 20000.0)
+                        as i16
+                })
+                .collect::<Vec<_>>(),
+        );
+        buffer.write_wav(&path).unwrap();
+        let db = ConstellationDb::open_path(root.path().join("index.sqlite")).unwrap();
+        let (sender, _events) = mpsc::channel();
+        let cancelled = AtomicBool::new(false);
+        let (first, reused, analyzed) = index_snapshot(&db, &library, &cancelled, &sender).unwrap();
+        assert_eq!((first.len(), reused, analyzed), (1, 0, 1));
+        let (second, reused, analyzed) =
+            index_snapshot(&db, &library, &cancelled, &sender).unwrap();
+        assert_eq!((reused, analyzed), (1, 0));
+        assert_eq!(first[0].source_revision, second[0].source_revision);
+        // A same-size replacement with the original mtime must still invalidate.
+        let original = std::fs::metadata(&path).unwrap();
+        let replacement = library.join("replacement.tmp");
+        std::fs::copy(&path, &replacement).unwrap();
+        std::fs::File::open(&replacement)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(original.modified().unwrap()))
+            .unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let (third, reused, analyzed) = index_snapshot(&db, &library, &cancelled, &sender).unwrap();
+        assert_eq!((reused, analyzed), (0, 1));
+        assert_ne!(second[0].source_revision, third[0].source_revision);
+        // An in-place rewrite restoring mtime is caught by nanosecond ctime.
+        let metadata = std::fs::metadata(&path).unwrap();
+        std::fs::write(&path, vec![0; metadata.len() as usize]).unwrap();
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
+            .unwrap();
+        let (samples, reused, analyzed) =
+            index_snapshot(&db, &library, &cancelled, &sender).unwrap();
+        assert_eq!((samples.len(), reused, analyzed), (0, 0, 1));
+        assert!(db.load_samples(&library).unwrap().is_empty());
+        // Cancellation never publishes a partial replacement.
+        db.save_samples(&library, &first).unwrap();
+        assert!(index_snapshot(&db, &library, &AtomicBool::new(true), &sender).is_err());
+        assert_eq!(db.load_samples(&library).unwrap().len(), 1);
+    }
     #[test]
     fn discovery_excludes_hidden_pack_and_symlink_trees() {
         let root = tempfile::tempdir().unwrap();
@@ -343,7 +455,8 @@ mod tests {
                 &[root.path().join("missing.wav")],
                 root.path(),
                 &AtomicBool::new(false),
-                &sender
+                &sender,
+                &HashMap::new()
             )
             .is_err()
         );
@@ -357,10 +470,11 @@ mod tests {
             root.path(),
             &AtomicBool::new(false),
             &sender,
+            &HashMap::new(),
         )
         .unwrap();
         assert!(
-            samples.is_empty(),
+            samples.0.is_empty(),
             "unsupported content is a classification omission, not an inaccessible source"
         );
     }

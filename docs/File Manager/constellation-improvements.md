@@ -34,6 +34,13 @@ architecture, and private compositor validation.
   Legacy serde defaults preserve sound. DSP, export, validation and live-gate
   regressions pass (58 focused tests). Pad painting/header responsibilities were
   separated after measurement flagged growth in the interaction handlers.
-- [ ] Incremental indexing and duration/channel filters, with indexed/new status.
+- [x] Incremental indexing and duration/channel filters, with indexed/new status.
+  Schema 7 persists FileSource identity/size/nanosecond timestamps. Complete scans
+  reuse matching classified observations, analyze new/changed files, and atomically
+  remove disappeared rows. Legacy/unclassified files are analyzed on the next scan.
+  Progress/completion report reused vs newly analyzed counts. Duration and channel
+  filters share the map, hit-test, random and neighbor predicate. Same-size/inode
+  replacement, restored-mtime rewrite, migration and cancellation tests pass
+  (59 focused tests).
 
 Baseline: `constellation-eight-improvements` at `c5524ae`.
