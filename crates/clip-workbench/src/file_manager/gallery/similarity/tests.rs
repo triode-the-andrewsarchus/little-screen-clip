@@ -1107,4 +1107,39 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
         (canvas.grids[1].allowance - 0.50).abs() < 1e-4,
         "Grid 1 allowance must NOT change when pointer is not over Grid 1"
     );
+
+    // 4. Test that even when a text input is focused, pressing '+' over Grid 1 overrides and adjusts allowance
+    canvas.zoom = 1.0;
+    canvas.pan = egui::Vec2::ZERO;
+    let g1_screen = canvas.tile_screen_rect(
+        canvas_rect.min,
+        canvas.grids[1].col_offset,
+        canvas.grids[1].row_offset,
+    );
+    let g1_hover_pos = g1_screen.center();
+
+    let mut raw_focus_plus = egui::RawInput::default();
+    raw_focus_plus
+        .events
+        .push(egui::Event::PointerMoved(g1_hover_pos));
+    raw_focus_plus.events.push(egui::Event::Key {
+        key: egui::Key::Plus,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx.run(raw_focus_plus, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let id = ui.make_persistent_id("fake_text_box");
+            ui.memory_mut(|m| m.request_focus(id));
+            let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
+            canvas.handle_input(ui, canvas_rect, &resp);
+        });
+    });
+
+    assert!(
+        (canvas.grids[1].allowance - 0.55).abs() < 1e-4,
+        "Pressing '+' over Grid 1 must override focused text inputs and adjust allowance"
+    );
 }

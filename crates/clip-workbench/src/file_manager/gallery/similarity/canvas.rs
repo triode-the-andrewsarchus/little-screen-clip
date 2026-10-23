@@ -1068,51 +1068,70 @@ impl SimilarityCanvas {
         let pointer_pos_raw = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
         let pointer_in_canvas = pointer_pos_raw.map_or(false, |p| canvas_rect.contains(p));
 
-        let text_focused = ui.memory(|m| m.focused().is_some());
+        let (plus_pressed, minus_pressed, fit, escape) = ui.input(|i| {
+            let plus = i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals);
+            let minus = i.key_pressed(egui::Key::Minus);
+            let fit =
+                i.key_pressed(egui::Key::F) || (i.modifiers.ctrl && i.key_pressed(egui::Key::Num0));
+            let escape = i.key_pressed(egui::Key::Escape);
+            (plus, minus, fit, escape)
+        });
+
+        let focused_id = ui.memory(|m| m.focused());
+        let text_focused =
+            focused_id.is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
+
+        let hovered_result_grid = pointer_pos_raw
+            .filter(|&p| canvas_rect.contains(p))
+            .and_then(|p| self.result_grid_at_pos(canvas_rect.min, p));
+
+        // When '+' or '-' is pressed, in similarity view override find/text bars:
+        // 1. If hovering over a result grid, always adjust that result grid's allowance.
+        // 2. Otherwise (if not over a result grid), zoom the canvas unless actively typing in a non-empty text input.
+        if plus_pressed {
+            if let Some(grid_id) = hovered_result_grid {
+                if self.adjust_grid_allowance(grid_id, 0.05) {
+                    self.recompute_layout();
+                    ui.ctx().request_repaint();
+                }
+            } else if !text_focused
+                || self.search_query.trim().is_empty()
+                || self.search_query == "+"
+                || self.search_query == "="
+            {
+                let center = canvas_rect.center();
+                let new_zoom = (self.zoom * 1.25).clamp(0.05, 8.0);
+                let origin_offset = center - canvas_rect.min - self.pan;
+                self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
+                self.zoom = new_zoom;
+            }
+        }
+        if minus_pressed {
+            if let Some(grid_id) = hovered_result_grid {
+                if self.adjust_grid_allowance(grid_id, -0.05) {
+                    self.recompute_layout();
+                    ui.ctx().request_repaint();
+                }
+            } else if !text_focused
+                || self.search_query.trim().is_empty()
+                || self.search_query == "-"
+            {
+                let center = canvas_rect.center();
+                let new_zoom = (self.zoom / 1.25).clamp(0.05, 8.0);
+                let origin_offset = center - canvas_rect.min - self.pan;
+                self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
+                self.zoom = new_zoom;
+            }
+        }
+
+        // Clean up accidental single +/-/= character in search query from overriding
+        if self.search_query == "+" || self.search_query == "=" || self.search_query == "-" {
+            self.search_query.clear();
+        }
+
         if !text_focused {
-            let hovered_result_grid = pointer_pos_raw
-                .filter(|&p| canvas_rect.contains(p))
-                .and_then(|p| self.result_grid_at_pos(canvas_rect.min, p));
-
-            let (plus_pressed, minus_pressed, fit, escape) = ui.input(|i| {
-                let plus = i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals);
-                let minus = i.key_pressed(egui::Key::Minus);
-                let fit = i.key_pressed(egui::Key::F)
-                    || (i.modifiers.ctrl && i.key_pressed(egui::Key::Num0));
-                let escape = i.key_pressed(egui::Key::Escape);
-                (plus, minus, fit, escape)
-            });
-
             if fit {
                 self.fit_to_view(canvas_rect);
-            }
-            if plus_pressed {
-                if let Some(grid_id) = hovered_result_grid {
-                    if self.adjust_grid_allowance(grid_id, 0.05) {
-                        self.recompute_layout();
-                        ui.ctx().request_repaint();
-                    }
-                } else {
-                    let center = canvas_rect.center();
-                    let new_zoom = (self.zoom * 1.25).clamp(0.05, 8.0);
-                    let origin_offset = center - canvas_rect.min - self.pan;
-                    self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
-                    self.zoom = new_zoom;
-                }
-            }
-            if minus_pressed {
-                if let Some(grid_id) = hovered_result_grid {
-                    if self.adjust_grid_allowance(grid_id, -0.05) {
-                        self.recompute_layout();
-                        ui.ctx().request_repaint();
-                    }
-                } else {
-                    let center = canvas_rect.center();
-                    let new_zoom = (self.zoom / 1.25).clamp(0.05, 8.0);
-                    let origin_offset = center - canvas_rect.min - self.pan;
-                    self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
-                    self.zoom = new_zoom;
-                }
             }
             if escape {
                 if !self.search_query.is_empty() {
