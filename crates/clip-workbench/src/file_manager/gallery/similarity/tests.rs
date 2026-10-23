@@ -1249,3 +1249,54 @@ fn test_pca_handles_ragged_feature_dimensions_safely() {
         assert!(y >= -1.0 && y <= 1.0);
     }
 }
+
+#[test]
+fn test_photo_mode_display_and_parsing() {
+    assert_eq!(PhotoMode::Similarity.to_string(), "similarity");
+    assert_eq!(PhotoMode::Masonry.to_string(), "masonry");
+
+    assert_eq!("similarity".parse::<PhotoMode>(), Ok(PhotoMode::Similarity));
+    assert_eq!("masonry".parse::<PhotoMode>(), Ok(PhotoMode::Masonry));
+    assert_eq!("other".parse::<PhotoMode>(), Ok(PhotoMode::Masonry));
+
+    assert_eq!(PhotoMode::from_str("similarity"), PhotoMode::Similarity);
+    assert_eq!(PhotoMode::from_str("anything"), PhotoMode::Masonry);
+}
+
+#[test]
+fn test_canvas_grid_allowance_conversion_and_monotonicity() {
+    use super::canvas::CanvasGrid;
+
+    // Normal query (standard)
+    for a in [0.05f32, 0.25, 0.5, 0.75, 0.95] {
+        let thresh = CanvasGrid::allowance_to_threshold(a, false);
+        let back = CanvasGrid::threshold_to_allowance(thresh, false);
+        assert!(
+            (a - back).abs() < 1e-4,
+            "Roundtrip failed for {a}: got {back}"
+        );
+    }
+    // As allowance increases, threshold decreases (allowing more photos)
+    let t1 = CanvasGrid::allowance_to_threshold(0.2, false);
+    let t2 = CanvasGrid::allowance_to_threshold(0.5, false);
+    assert!(
+        t1 > t2,
+        "Standard threshold should decrease as allowance increases"
+    );
+
+    // Inverted query (negative concept)
+    for a in [0.05f32, 0.25, 0.5, 0.75, 0.95] {
+        let thresh = CanvasGrid::allowance_to_threshold(a, true);
+        let back = CanvasGrid::threshold_to_allowance(thresh, true);
+        assert!(
+            (a - back).abs() < 1e-4,
+            "Inverted roundtrip failed for {a}: got {back}"
+        );
+    }
+    let it1 = CanvasGrid::allowance_to_threshold(0.2, true);
+    let it2 = CanvasGrid::allowance_to_threshold(0.5, true);
+    assert!(
+        it1 < it2,
+        "Inverted threshold should increase (closer to 0) as allowance increases"
+    );
+}
