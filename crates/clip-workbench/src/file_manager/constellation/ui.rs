@@ -33,8 +33,8 @@ impl ConstellationState {
             .as_ref()
             .map(|controller| controller.poll(!self.browser_open))
             .unwrap_or_default();
-        for (pad, velocity) in notes {
-            self.trigger_slot_velocity(pad, velocity);
+        for (pad, _) in notes {
+            self.slot_flash[pad] = Some(std::time::Instant::now());
         }
         self.render_toolbar(ui, current_folder, on_play_sample);
         self.render_indexing_progress(ui);
@@ -111,6 +111,7 @@ impl ConstellationState {
             .memory(|memory| memory.focused())
             .is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
         self.checkpoint_bank(ui.input(|input| input.pointer.any_down()) || text_focused);
+        self.playback.lock().unwrap().sync(&self.pack_bank);
     }
 
     fn render_indexing_progress(&mut self, ui: &mut egui::Ui) {

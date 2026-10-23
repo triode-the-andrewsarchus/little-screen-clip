@@ -32,7 +32,10 @@ pub(super) struct Controller {
 }
 
 impl Controller {
-    pub fn new(ctx: egui::Context) -> Result<Self, String> {
+    pub fn new(
+        ctx: egui::Context,
+        playback: Arc<Mutex<super::output::Rack>>,
+    ) -> Result<Self, String> {
         let (commands, requests) = mpsc::sync_channel(8);
         let (events, notes) = mpsc::sync_channel(128);
         let status = Arc::new(Mutex::new(Status::default()));
@@ -55,6 +58,7 @@ impl Controller {
                         &gate,
                         &generation,
                         &ctx,
+                        &playback,
                     );
                     if let Ok(mut status) = state.lock() {
                         status.error = result.err();
@@ -140,6 +144,7 @@ fn execute(
     active: &Arc<AtomicBool>,
     epoch: &Arc<AtomicU64>,
     ctx: &egui::Context,
+    playback: &Arc<Mutex<super::output::Rack>>,
 ) -> Result<(), String> {
     if matches!(command, Command::Disconnect) {
         *connection = None;
@@ -169,17 +174,15 @@ fn execute(
         let active = active.clone();
         let epoch = epoch.clone();
         let ctx = ctx.clone();
+        let playback = playback.clone();
         *connection = Some(
             input
                 .connect(
                     &ports[index],
                     "Little Clip drum rack",
                     move |_, message, _| {
-                        let generation = epoch.load(Ordering::SeqCst);
-                        if active.load(Ordering::SeqCst)
-                            && let Some((pad, velocity)) = note_hit(message)
-                            && events.try_send((generation, pad, velocity)).is_ok()
-                        {
+                        if let Some(event) = dispatch_hit(message, &active, &epoch, &playback) {
+                            let _ = events.try_send(event);
                             ctx.request_repaint();
                         }
                     },
@@ -197,6 +200,27 @@ fn execute(
     Ok(())
 }
 
+/// Audio is dispatched before best-effort UI telemetry. The gate is checked
+/// again under the Stop lock so retired callbacks cannot start new voices.
+fn dispatch_hit(
+    message: &[u8],
+    active: &AtomicBool,
+    epoch: &AtomicU64,
+    playback: &Mutex<super::output::Rack>,
+) -> Option<(u64, usize, u8)> {
+    let generation = epoch.load(Ordering::SeqCst);
+    if !active.load(Ordering::SeqCst) {
+        return None;
+    }
+    let (pad, velocity) = note_hit(message)?;
+    let mut rack = playback.lock().unwrap_or_else(|error| error.into_inner());
+    if !active.load(Ordering::SeqCst) || epoch.load(Ordering::SeqCst) != generation {
+        return None;
+    }
+    rack.trigger(pad, velocity)
+        .then_some((generation, pad, velocity))
+}
+
 fn note_hit(message: &[u8]) -> Option<(usize, u8)> {
     let &[status, note, velocity] = message else {
         return None;
@@ -209,6 +233,58 @@ fn note_hit(message: &[u8]) -> Option<(usize, u8)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn callback_plays_without_ui_poll_and_suspended_callbacks_stay_silent() {
+        use super::super::{
+            output::{PadOutput, Rack},
+            sample_pack::{CachedAudio, SamplePackBank, SlotSample},
+        };
+        let (player, mut audio) = rodio::Player::new();
+        let mut rack = Rack::default();
+        let mut bank = SamplePackBank::default();
+        let mut sample = SlotSample::new("kick.wav".into(), "kick.wav".into(), None, 1.0);
+        let pcm = Arc::new(vec![0.5; 48000]);
+        sample.cached_audio = Some(Arc::new(CachedAudio {
+            channels: 1,
+            sample_rate: 48000,
+            samples: pcm.clone(),
+            mono_samples: pcm,
+            waveform_peaks: vec![],
+        }));
+        bank.slots[0].samples.push(sample);
+        rack.sync(&bank);
+        rack.output = Some(PadOutput::with_player(player, true));
+        let playback = Arc::new(Mutex::new(rack));
+        let callback_rack = playback.clone();
+        std::thread::spawn(move || {
+            assert_eq!(
+                dispatch_hit(
+                    &[0x90, 36, 127],
+                    &AtomicBool::new(true),
+                    &AtomicU64::new(0),
+                    &callback_rack
+                ),
+                Some((0, 0, 127))
+            );
+        })
+        .join()
+        .unwrap();
+        for _ in 0..4000 {
+            audio.next();
+        }
+        assert!(audio.next().unwrap() > 0.39);
+        playback.lock().unwrap().stop();
+        assert_eq!(
+            dispatch_hit(
+                &[0x90, 36, 127],
+                &AtomicBool::new(false),
+                &AtomicU64::new(1),
+                &playback
+            ),
+            None
+        );
+        assert!(playback.lock().unwrap().voices.iter().all(Vec::is_empty));
+    }
     #[test]
     fn drum_notes_cover_all_pads_and_preserve_velocity_on_every_channel() {
         for channel in 0..16 {

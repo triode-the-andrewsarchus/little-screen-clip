@@ -12,7 +12,10 @@ architecture, and private compositor validation.
   rejection, eight-layer/PCM limits, and undo support. Focused suite: 52 passed.
   Architecture review found necessary reference-drop routing growth; map drag and
   target resolution now have cohesive handlers instead of growing event loops.
-- [ ] MIDI playback independent of UI painting and navigation load.
+- [x] MIDI playback independent of UI painting and navigation load.
+  Shared prepared rack dispatches directly from the input callback; UI telemetry
+  is best effort. Stop and callback epoch checks share the playback lock. No PCM
+  decoding occurs in callbacks. Device-free callback/audio regression: 53 tests pass.
 - [ ] Shared output for map, layer, library, and pad auditions with consistent loudness/protection.
 - [ ] Portable trimmed-WAV kit export, with optional collected original files.
 - [ ] Pad loading/missing/playing/choke indicators without permanent visual clutter.

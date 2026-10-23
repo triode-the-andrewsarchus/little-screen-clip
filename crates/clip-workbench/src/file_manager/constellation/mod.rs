@@ -123,11 +123,9 @@ pub struct ConstellationState {
     pad_editor_open: bool,
     pad_keys: [char; sample_pack::NUM_SLOTS],
     midi: Option<midi::Controller>,
-    output: Option<output::PadOutput>,
+    playback: Arc<std::sync::Mutex<output::Rack>>,
     /// Independent auditions outside the numbered pads.
     pub active_players: Vec<rodio::Player>,
-    /// One voice group per pad; retriggering replaces every layer in that pad only.
-    slot_players: [Vec<rodio::Player>; sample_pack::NUM_SLOTS],
     background: Vec<background::Pending>,
     folder_generation: u64,
     bank_generation: u64,
@@ -185,9 +183,8 @@ impl Default for ConstellationState {
                 'z', 'x', 'c', 'v', 'a', 's', 'd', 'f', 'q', 'w', 'e', 'r', '1', '2', '3', '4',
             ],
             midi: None,
-            output: None,
+            playback: Default::default(),
             active_players: Vec::new(),
-            slot_players: std::array::from_fn(|_| Vec::new()),
             background: Vec::new(),
             folder_generation: 0,
             bank_generation: 0,
@@ -471,15 +468,14 @@ impl ConstellationState {
     /// Map auditions use the browser's `Music` player, stopped by its owner alongside
     /// this method. Retains the hovered path so Escape cannot immediately retrigger it.
     pub fn stop_playback(&mut self) {
-        self.output = None;
         if let Some(midi) = &self.midi {
             midi.suspend();
         }
-        for player in self.active_players.drain(..).chain(
-            self.slot_players
-                .iter_mut()
-                .flat_map(|voices| voices.drain(..)),
-        ) {
+        self.playback
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .stop();
+        for player in self.active_players.drain(..) {
             player.stop();
         }
         self.hover_cancelled.store(true, Ordering::Relaxed);
@@ -498,44 +494,13 @@ impl ConstellationState {
     /// Retriggers replace that pad's voices; nonzero choke groups also retire peers.
     /// Velocity zero is a note-off and never chokes or restarts a pad.
     fn trigger_slot_velocity(&mut self, slot_idx: usize, velocity: u8) {
-        if slot_idx >= self.pack_bank.slots.len() || velocity == 0 {
-            return;
-        }
-        self.slot_flash[slot_idx] = Some(Instant::now());
-        let group = self.pack_bank.slots[slot_idx].choke_group;
-        for (index, voices) in self.slot_players.iter_mut().enumerate() {
-            if index == slot_idx || (group != 0 && self.pack_bank.slots[index].choke_group == group)
-            {
-                for player in voices.drain(..) {
-                    player.stop();
-                }
-            }
-        }
-        let slot = &self.pack_bank.slots[slot_idx];
-        if !slot
-            .samples
-            .iter()
-            .any(|sample| sample.cached_audio.is_some())
-        {
-            return;
-        }
-        if self.output.is_none() {
-            self.output = output::PadOutput::new(self.pack_bank.compressor_bypass);
-        }
-        let Some(output) = &self.output else {
-            self.browser_status = Some(("Audio output is unavailable".into(), Instant::now()));
-            return;
-        };
-        output.set_bypass(self.pack_bank.compressor_bypass);
-        let velocity = if self.pack_bank.override_velocity {
-            127
-        } else {
-            velocity.min(127)
-        };
-        for sample in &slot.samples {
-            if let Some(player) = output.play(sample, velocity) {
-                self.slot_players[slot_idx].push(player);
-            }
+        let mut playback = self
+            .playback
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        playback.sync(&self.pack_bank);
+        if playback.trigger(slot_idx, velocity) && velocity != 0 {
+            self.slot_flash[slot_idx] = Some(Instant::now());
         }
     }
 
@@ -568,7 +533,7 @@ impl ConstellationState {
         self.checkpoint_bank(false);
         if slot_idx < self.pack_bank.slots.len() {
             self.pack_bank.slots[slot_idx].samples.clear();
-            for player in self.slot_players[slot_idx].drain(..) {
+            for player in self.playback.lock().unwrap().voices[slot_idx].drain(..) {
                 player.stop();
             }
         }
@@ -601,14 +566,13 @@ impl ConstellationState {
         self.poll_background(little_clip_core::jobs::BackgroundJobs::global());
         self.queue_audio_loads();
         self.poll_hover_previews();
-        for voices in &mut self.slot_players {
-            voices.retain(|player| !player.empty());
-        }
-        if let Some(output) = &self.output {
-            output.set_bypass(self.pack_bank.compressor_bypass);
-        }
-        if self.slot_players.iter().all(Vec::is_empty) {
-            self.output = None;
+        {
+            let mut playback = self
+                .playback
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            playback.sync(&self.pack_bank);
+            playback.retire();
         }
         self.active_players.retain(|p| !p.empty());
         let excess = self.active_players.len().saturating_sub(64);
@@ -700,7 +664,7 @@ mod tests {
                 44100.try_into().unwrap(),
                 vec![amplitude; 44100],
             ));
-            state.slot_players[slot].push(player);
+            state.playback.lock().unwrap().voices[slot].push(player);
         }
         // Player queues start with a short silent span before their first source.
         for _ in 0..1000 {
@@ -709,8 +673,8 @@ mod tests {
         assert!((output.next().unwrap() - 0.5).abs() < 0.0001);
         // An empty/cold slot must retire all its old layers as well.
         state.trigger_slot(0);
-        assert!(state.slot_players[0].is_empty());
-        assert_eq!(state.slot_players[1].len(), 1);
+        assert!(state.playback.lock().unwrap().voices[0].is_empty());
+        assert_eq!(state.playback.lock().unwrap().voices[1].len(), 1);
         assert!(state.busy());
         // Rodio applies stop controls at bounded periodic source checkpoints.
         for _ in 0..1000 {
@@ -718,9 +682,17 @@ mod tests {
         }
         assert!((output.next().unwrap() - 0.25).abs() < 0.0001);
         state.trigger_slot(0);
-        assert_eq!(state.slot_players[1].len(), 1);
+        assert_eq!(state.playback.lock().unwrap().voices[1].len(), 1);
         state.stop_playback();
-        assert!(state.slot_players.iter().all(Vec::is_empty));
+        assert!(
+            state
+                .playback
+                .lock()
+                .unwrap()
+                .voices
+                .iter()
+                .all(Vec::is_empty)
+        );
         assert!(!state.busy());
         for _ in 0..1000 {
             output.next();
@@ -732,7 +704,7 @@ mod tests {
     fn velocity_override_and_retriggers_use_one_voice_per_pad() {
         let (player, mut output) = rodio::Player::new();
         let mut state = ConstellationState::new();
-        state.output = Some(output::PadOutput::with_player(player, true));
+        state.playback.lock().unwrap().output = Some(output::PadOutput::with_player(player, true));
         let mut sample =
             sample_pack::SlotSample::new("kick.wav".into(), "kick.wav".into(), None, 1.0);
         let pcm = Arc::new(vec![0.5; 48000]);
@@ -752,7 +724,7 @@ mod tests {
         ] {
             state.pack_bank.override_velocity = override_velocity;
             state.trigger_slot_velocity(0, velocity);
-            assert_eq!(state.slot_players[0].len(), 1);
+            assert_eq!(state.playback.lock().unwrap().voices[0].len(), 1);
             for _ in 0..4000 {
                 output.next();
             }
@@ -767,19 +739,23 @@ mod tests {
         let mut state = ConstellationState::new();
         for index in 0..4 {
             state.pack_bank.slots[index].choke_group = if index < 3 { 1 } else { 2 };
-            state.slot_players[index].push(rodio::Player::connect_new(&mixer));
+            state.playback.lock().unwrap().voices[index].push(rodio::Player::connect_new(&mixer));
         }
         state.trigger_slot_velocity(0, 0);
         assert!(
-            state.slot_players[..4]
+            state.playback.lock().unwrap().voices[..4]
                 .iter()
                 .all(|voices| voices.len() == 1)
         );
         state.trigger_slot_velocity(0, 64);
-        assert!(state.slot_players[..3].iter().all(Vec::is_empty));
-        assert_eq!(state.slot_players[3].len(), 1);
+        assert!(
+            state.playback.lock().unwrap().voices[..3]
+                .iter()
+                .all(Vec::is_empty)
+        );
+        assert_eq!(state.playback.lock().unwrap().voices[3].len(), 1);
         state.trigger_slot_velocity(15, 127);
-        assert_eq!(state.slot_players[3].len(), 1);
+        assert_eq!(state.playback.lock().unwrap().voices[3].len(), 1);
     }
 
     #[test]

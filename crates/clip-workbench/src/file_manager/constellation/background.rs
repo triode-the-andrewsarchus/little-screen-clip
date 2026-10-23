@@ -102,7 +102,13 @@ impl ConstellationState {
             || self.active_job.is_some()
             || self.pending_hover_path.is_some()
             || !self.active_players.is_empty()
-            || self.slot_players.iter().any(|voices| !voices.is_empty())
+            || self
+                .playback
+                .lock()
+                .unwrap()
+                .voices
+                .iter()
+                .any(|voices| !voices.is_empty())
     }
 
     /// Reports accepted mutations whose completions must be observed before close.

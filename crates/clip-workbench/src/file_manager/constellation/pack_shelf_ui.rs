@@ -240,7 +240,7 @@ impl ConstellationState {
         ui.horizontal_wrapped(|ui| {
             ui.menu_button("MIDI input", |ui| {
                 if self.midi.is_none() {
-                    match super::midi::Controller::new(ui.ctx().clone()) {
+                    match super::midi::Controller::new(ui.ctx().clone(), self.playback.clone()) {
                         Ok(controller) => self.midi = Some(controller),
                         Err(error) => {
                             ui.label(error);
@@ -284,7 +284,7 @@ impl ConstellationState {
             ui.separator();
             ui.label("Glue");
             ui.toggle_value(&mut self.pack_bank.compressor_bypass, "Bypass").on_hover_text("Bypass the stereo pad compressor and peak ceiling. Pad input headroom stays unchanged.");
-            let reduction = self.output.as_ref().map_or(0.0, |output| output.reduction_db());
+            let reduction = self.playback.lock().unwrap().output.as_ref().map_or(0.0, |output| output.reduction_db());
             ui.weak(format!("{reduction:.1} dB reduction"));
         });
     }

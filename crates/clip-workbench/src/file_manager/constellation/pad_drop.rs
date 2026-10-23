@@ -102,7 +102,7 @@ impl ConstellationState {
             return false;
         }
         self.checkpoint_bank(false);
-        self.slot_players[drop.index]
+        self.playback.lock().unwrap().voices[drop.index]
             .drain(..)
             .for_each(|player| player.stop());
         let slot = &mut self.pack_bank.slots[drop.index];
