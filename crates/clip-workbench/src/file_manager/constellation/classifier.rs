@@ -29,7 +29,11 @@ pub struct SampleFeatures {
 
 /// Extracts the 32 physical acoustic DSP features from mono PCM samples.
 pub fn extract_features(samples: &[f32], sample_rate: f32) -> Option<SampleFeatures> {
-    if samples.is_empty() || sample_rate <= 0.0 {
+    if samples.is_empty()
+        || !sample_rate.is_finite()
+        || sample_rate <= 0.0
+        || samples.iter().any(|sample| !sample.is_finite())
+    {
         return None;
     }
 
@@ -241,43 +245,7 @@ pub fn extract_features(samples: &[f32], sample_rate: f32) -> Option<SampleFeatu
     };
 
     // 4. Pitch & Pitch Clarity via Autocorrelation
-    let first_100ms = (0.10 * sample_rate) as usize;
-    let ac_slice = &norm[..norm.len().min(first_100ms)];
-    let mut pitch_hz = 0.0f32;
-    let mut pitch_clarity = 0.0f32;
-
-    if ac_slice.len() > 128 {
-        let min_lag = (sample_rate / 1000.0) as usize;
-        let max_lag = (sample_rate / 40.0) as usize;
-        let end_lag = max_lag.min(ac_slice.len() / 2);
-
-        let mut r0 = 0.0f32;
-        for &s in ac_slice {
-            r0 += s * s;
-        }
-
-        if r0 > 1e-6 && min_lag < end_lag {
-            let mut best_lag = min_lag;
-            let mut best_r = 0.0f32;
-
-            for lag in min_lag..end_lag {
-                let mut sum = 0.0f32;
-                let lim = ac_slice.len() - lag;
-                for i in 0..lim {
-                    sum += ac_slice[i] * ac_slice[i + lag];
-                }
-                if sum > best_r {
-                    best_r = sum;
-                    best_lag = lag;
-                }
-            }
-
-            pitch_clarity = (best_r / r0).clamp(0.0, 1.0);
-            if pitch_clarity > 0.25 {
-                pitch_hz = sample_rate / best_lag as f32;
-            }
-        }
-    }
+    let (pitch_hz, pitch_clarity) = estimate_pitch(&norm, sample_rate);
 
     // 5. Transient Count
     let hop_size = 256;
@@ -405,136 +373,146 @@ pub fn extract_features(samples: &[f32], sample_rate: f32) -> Option<SampleFeatu
     })
 }
 
-/// Token prior matcher from path and filename.
+/// Estimates fundamental frequency and normalized autocorrelation over the first 100 ms.
+fn estimate_pitch(samples: &[f32], sample_rate: f32) -> (f32, f32) {
+    let first_100ms = (0.10 * sample_rate) as usize;
+    let ac_slice = &samples[..samples.len().min(first_100ms)];
+    let mut pitch_hz = 0.0f32;
+    let mut pitch_clarity = 0.0f32;
+
+    if ac_slice.len() > 128 {
+        let min_lag = ((sample_rate / 1000.0) as usize).max(1);
+        let max_lag = (sample_rate / 40.0) as usize;
+        let end_lag = max_lag.min(ac_slice.len() / 2);
+
+        let mut r0 = 0.0f32;
+        for &s in ac_slice {
+            r0 += s * s;
+        }
+
+        if r0 > 1e-6 && min_lag < end_lag {
+            let mut best_lag = min_lag;
+            let mut best_r = 0.0f32;
+
+            for lag in min_lag..end_lag {
+                let mut sum = 0.0f32;
+                let lim = ac_slice.len() - lag;
+                for i in 0..lim {
+                    sum += ac_slice[i] * ac_slice[i + lag];
+                }
+                if sum > best_r {
+                    best_r = sum;
+                    best_lag = lag;
+                }
+            }
+
+            pitch_clarity = (best_r / r0).clamp(0.0, 1.0);
+            if pitch_clarity > 0.25 {
+                pitch_hz = sample_rate / best_lag as f32;
+            }
+        }
+    }
+
+    (pitch_hz, pitch_clarity)
+}
+
+/// Returns an ordered filename or directory prior for a sample.
+///
+/// Filename hints take precedence over ancestry. These are weak naming heuristics;
+/// [`classify_sample`] checks physical plausibility before combining them with the
+/// acoustic model. Short `bd`/`hat` abbreviations require word boundaries to avoid
+/// treating names such as `subdivision` and `what` as drum labels.
 pub fn match_path_token(path: &Path) -> Option<(SampleCategory, f32)> {
-    let lower_path = path.to_string_lossy().to_lowercase();
+    use SampleCategory::*;
+    const FILENAMES: &[(SampleCategory, f32, &[&str])] = &[
+        (Kick, 1.0, &["kick", "bassdrum"]),
+        (Snare, 1.0, &["snare", "snr"]),
+        (Clap, 1.0, &["clap", "clp", "handclap"]),
+        (
+            HihatOpen,
+            1.0,
+            &["open_hat", "openhat", "open_hh", "open-hh", "oh_", "oh "],
+        ),
+        (
+            HihatClosed,
+            0.9,
+            &[
+                "closed_hat",
+                "closedhat",
+                "closed_hh",
+                "closed-hh",
+                "ch_",
+                "ch ",
+                "hihat",
+                "hi-hat",
+                "hh",
+            ],
+        ),
+        (Cymbal, 1.0, &["crash", "ride", "cymbal", "splash", "china"]),
+        (Tom, 1.0, &["tom", "rototom", "floortom"]),
+        (
+            Percussion,
+            1.0,
+            &[
+                "shaker",
+                "tambourine",
+                "conga",
+                "bongo",
+                "cowbell",
+                "perc",
+                "rim",
+            ],
+        ),
+        (Bass, 0.95, &["808", "sub", "bass", "reese"]),
+        (Loop, 0.95, &["loop", "bpm"]),
+        (Vocal, 0.95, &["vocal", "vox", "acapella", "chant"]),
+        (
+            Melodic,
+            0.95,
+            &["synth", "lead", "pad", "chord", "stab", "pluck"],
+        ),
+    ];
+    const FOLDERS: &[(SampleCategory, f32, &[&str])] = &[
+        (Kick, 0.85, &["bd - bass drum", "/bd/", "/kick"]),
+        (Snare, 0.85, &["sn - snare drum", "/sn/", "/snare"]),
+        (Clap, 0.85, &["hc - hand clap", "/clap"]),
+        (HihatClosed, 0.80, &["ch - closed hat", "/hats"]),
+        (HihatOpen, 0.85, &["oh - open hat"]),
+        (
+            Cymbal,
+            0.85,
+            &["cc - crash cymbal", "rc - ride cymbal", "/ride_cymbal"],
+        ),
+        (
+            Tom,
+            0.85,
+            &["ht - hi tom", "lt - low tom", "mt - mid tom", "/toms"],
+        ),
+        (Percussion, 0.80, &["/percussion", "shaker"]),
+    ];
     let filename = path.file_name()?.to_string_lossy().to_lowercase();
-
-    // Check specific filename patterns first
-    if filename.contains("bd") || filename.contains("kick") || filename.contains("bassdrum") {
-        return Some((SampleCategory::Kick, 1.0));
+    let words: Vec<_> = filename.split(|c: char| !c.is_ascii_alphabetic()).collect();
+    if words.contains(&"bd") {
+        return Some((Kick, 1.0));
     }
-    if filename.contains("snare")
-        || filename.contains("snr")
-        || filename.starts_with("sd_")
-        || filename.starts_with("sd ")
-    {
-        return Some((SampleCategory::Snare, 1.0));
+    let special = |category| match category {
+        Snare => filename.starts_with("sd_") || filename.starts_with("sd "),
+        HihatOpen => {
+            filename.contains("open") && (words.contains(&"hat") || filename.contains("hh"))
+        }
+        HihatClosed => words.contains(&"hat"),
+        _ => false,
+    };
+    if let Some((category, weight, _)) = FILENAMES.iter().find(|(category, _, patterns)| {
+        patterns.iter().any(|pattern| filename.contains(pattern)) || special(*category)
+    }) {
+        return Some((*category, *weight));
     }
-    if filename.contains("clap") || filename.contains("clp") || filename.contains("handclap") {
-        return Some((SampleCategory::Clap, 1.0));
-    }
-    if filename.contains("open_hat")
-        || filename.contains("openhat")
-        || filename.contains("open_hh")
-        || filename.contains("open-hh")
-        || filename.contains("oh_")
-        || filename.contains("oh ")
-        || (filename.contains("open") && (filename.contains("hat") || filename.contains("hh")))
-    {
-        return Some((SampleCategory::HihatOpen, 1.0));
-    }
-    if filename.contains("closed_hat")
-        || filename.contains("closedhat")
-        || filename.contains("closed_hh")
-        || filename.contains("closed-hh")
-        || filename.contains("ch_")
-        || filename.contains("ch ")
-        || filename.contains("hihat")
-        || filename.contains("hi-hat")
-        || filename.contains("hat")
-        || filename.contains("hh")
-    {
-        return Some((SampleCategory::HihatClosed, 0.9));
-    }
-    if filename.contains("crash")
-        || filename.contains("ride")
-        || filename.contains("cymbal")
-        || filename.contains("splash")
-        || filename.contains("china")
-    {
-        return Some((SampleCategory::Cymbal, 1.0));
-    }
-    if filename.contains("tom") || filename.contains("rototom") || filename.contains("floortom") {
-        return Some((SampleCategory::Tom, 1.0));
-    }
-    if filename.contains("shaker")
-        || filename.contains("tambourine")
-        || filename.contains("conga")
-        || filename.contains("bongo")
-        || filename.contains("cowbell")
-        || filename.contains("perc")
-        || filename.contains("rim")
-    {
-        return Some((SampleCategory::Percussion, 1.0));
-    }
-    if filename.contains("808")
-        || filename.contains("sub")
-        || filename.contains("bass")
-        || filename.contains("reese")
-    {
-        return Some((SampleCategory::Bass, 0.95));
-    }
-    if filename.contains("loop") || filename.contains("bpm") {
-        return Some((SampleCategory::Loop, 0.95));
-    }
-    if filename.contains("vocal")
-        || filename.contains("vox")
-        || filename.contains("acapella")
-        || filename.contains("chant")
-    {
-        return Some((SampleCategory::Vocal, 0.95));
-    }
-    if filename.contains("synth")
-        || filename.contains("lead")
-        || filename.contains("pad")
-        || filename.contains("chord")
-        || filename.contains("stab")
-        || filename.contains("pluck")
-    {
-        return Some((SampleCategory::Melodic, 0.95));
-    }
-
-    // Check directory path
-    if lower_path.contains("bd - bass drum")
-        || lower_path.contains("/bd/")
-        || lower_path.contains("/kick")
-    {
-        return Some((SampleCategory::Kick, 0.85));
-    }
-    if lower_path.contains("sn - snare drum")
-        || lower_path.contains("/sn/")
-        || lower_path.contains("/snare")
-    {
-        return Some((SampleCategory::Snare, 0.85));
-    }
-    if lower_path.contains("hc - hand clap") || lower_path.contains("/clap") {
-        return Some((SampleCategory::Clap, 0.85));
-    }
-    if lower_path.contains("ch - closed hat") || lower_path.contains("/hats") {
-        return Some((SampleCategory::HihatClosed, 0.80));
-    }
-    if lower_path.contains("oh - open hat") {
-        return Some((SampleCategory::HihatOpen, 0.85));
-    }
-    if lower_path.contains("cc - crash cymbal")
-        || lower_path.contains("rc - ride cymbal")
-        || lower_path.contains("/ride_cymbal")
-    {
-        return Some((SampleCategory::Cymbal, 0.85));
-    }
-    if lower_path.contains("ht - hi tom")
-        || lower_path.contains("lt - low tom")
-        || lower_path.contains("mt - mid tom")
-        || lower_path.contains("/toms")
-    {
-        return Some((SampleCategory::Tom, 0.85));
-    }
-    if lower_path.contains("/percussion") || lower_path.contains("shaker") {
-        return Some((SampleCategory::Percussion, 0.80));
-    }
-
-    None
+    let lower = path.to_string_lossy().to_lowercase();
+    FOLDERS
+        .iter()
+        .find(|(_, _, patterns)| patterns.iter().any(|pattern| lower.contains(pattern)))
+        .map(|(category, weight, _)| (*category, *weight))
 }
 
 /// Classifies a sample using our full hybrid ensemble.
@@ -690,6 +668,32 @@ pub fn calculate_organic_coordinates(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_finite_audio_is_not_classified() {
+        assert!(extract_features(&[f32::NAN; 256], 44100.0).is_none());
+        assert!(extract_features(&[f32::INFINITY; 256], 44100.0).is_none());
+        assert!(extract_features(&[0.5; 256], f32::NAN).is_none());
+        let features = extract_features(&[0.5; 256], 500.0).unwrap();
+        assert!(features.values.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn short_drum_abbreviations_do_not_match_unrelated_words() {
+        assert_eq!(match_path_token(Path::new("what.wav")), None);
+        assert_eq!(
+            match_path_token(Path::new("subdivision.wav")).unwrap().0,
+            SampleCategory::Bass
+        );
+        assert_eq!(
+            match_path_token(Path::new("BD_909.wav")).unwrap().0,
+            SampleCategory::Kick
+        );
+        assert_eq!(
+            match_path_token(Path::new("hat02.wav")).unwrap().0,
+            SampleCategory::HihatClosed
+        );
+    }
 
     #[test]
     fn test_token_hints() {
