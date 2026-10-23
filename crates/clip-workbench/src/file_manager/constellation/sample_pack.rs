@@ -72,7 +72,9 @@ impl CachedAudio {
             .map(|frame| frame.iter().sum::<f32>() / width as f32)
             .collect();
         let buckets = mono.len().min(512);
-        let mut color = little_clip_core::audio::WaveformColor::new(sample_rate as f32);
+        let mut filters: Vec<_> = (0..width)
+            .map(|_| little_clip_core::audio::WaveformColor::new(sample_rate as f32))
+            .collect();
         let mut waveform_colors = Vec::with_capacity(buckets);
         let waveform_peaks = (0..buckets)
             .map(|bucket| {
@@ -80,13 +82,23 @@ impl CachedAudio {
                 let end = ((bucket + 1) * mono.len() / buckets)
                     .max(start + 1)
                     .min(mono.len());
-                color.push_samples(&mono[start..end]);
-                waveform_colors.push(color.take_color());
-                mono[start..end]
-                    .iter()
-                    .fold((0.0_f32, 0.0_f32), |(low, high), &value| {
-                        (low.min(value), high.max(value))
-                    })
+                let mut peaks = (0.0_f32, 0.0_f32);
+                let mut sum = [0_u32; 3];
+                // Preserve per-channel filter history, like the shared Music preview.
+                // Mixing first would erase opposing-phase stereo transients.
+                for (channel, filter) in filters.iter_mut().enumerate() {
+                    for frame in samples[start * width..end * width].chunks_exact(width) {
+                        let value = frame[channel];
+                        peaks.0 = peaks.0.min(value);
+                        peaks.1 = peaks.1.max(value);
+                        filter.push(value);
+                    }
+                    for (total, component) in sum.iter_mut().zip(filter.take_color()) {
+                        *total += component as u32;
+                    }
+                }
+                waveform_colors.push(sum.map(|value| (value / width as u32) as u8));
+                peaks
             })
             .collect();
         source.check().ok()?;
@@ -278,7 +290,10 @@ impl PackSlot {
     }
 }
 
-/// A sixteen-pad bank. Legacy ten-slot banks keep their original shortcut positions.
+/// Sixteen pads with serializable layers and output controls.
+///
+/// Legacy ten-pad banks retain their layer positions. Keyboard bindings remain
+/// local configuration rather than inheriting a saved bank's shortcut metadata.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SamplePackBank {
     pub name: String,
@@ -644,30 +659,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prepared_waveform_colors_cover_every_bucket_including_tiny_hits() {
+    fn prepared_waveforms_keep_stereo_transients_and_cover_tiny_hits() {
         let root = tempfile::tempdir().unwrap();
         for frames in [16, 2048] {
-            let path = root.path().join(format!("{frames}.wav"));
-            let mut writer = hound::WavWriter::create(
-                &path,
-                hound::WavSpec {
-                    channels: 1,
-                    sample_rate: 48000,
-                    bits_per_sample: 16,
-                    sample_format: hound::SampleFormat::Int,
-                },
-            )
-            .unwrap();
-            for frame in 0..frames {
-                writer
-                    .write_sample(((frame as f32 * 0.13).sin() * 16000.0) as i16)
-                    .unwrap();
+            for channels in [1, 2] {
+                let path = root.path().join(format!("{frames}-{channels}.wav"));
+                let mut writer = hound::WavWriter::create(
+                    &path,
+                    hound::WavSpec {
+                        channels,
+                        sample_rate: 48000,
+                        bits_per_sample: 16,
+                        sample_format: hound::SampleFormat::Int,
+                    },
+                )
+                .unwrap();
+                for frame in 0..frames {
+                    let value = ((frame as f32 * 0.13).sin() * 16000.0) as i16;
+                    writer.write_sample(value).unwrap();
+                    if channels == 2 {
+                        writer.write_sample(-value).unwrap();
+                    }
+                }
+                writer.finalize().unwrap();
+                let audio = CachedAudio::load(&path).unwrap();
+                assert_eq!(audio.waveform_peaks.len(), frames.min(512));
+                assert_eq!(audio.waveform_colors.len(), audio.waveform_peaks.len());
+                assert_eq!(audio.samples.len(), frames * channels as usize);
+                assert!(audio.waveform_peaks.iter().any(|&(_, high)| high > 0.4));
+                if channels == 2 {
+                    assert!(audio.mono_samples.iter().all(|&value| value == 0.0));
+                }
             }
-            writer.finalize().unwrap();
-            let audio = CachedAudio::load(&path).unwrap();
-            assert_eq!(audio.waveform_peaks.len(), frames.min(512));
-            assert_eq!(audio.waveform_colors.len(), audio.waveform_peaks.len());
-            assert_eq!(audio.samples.len(), frames);
         }
     }
 
