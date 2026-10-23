@@ -894,3 +894,217 @@ fn test_per_grid_match_allowance_adjustment() {
     // At 10% allowance, threshold is ~0.011, so only P4 (0.00) matches!
     assert_eq!(canvas.grids[2].indices, vec![3]);
 }
+
+#[test]
+fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
+    let mut canvas = SimilarityCanvas::default();
+    canvas.allowance = 0.50;
+    canvas.initial_fit_done = true;
+    canvas.zoom = 1.0;
+    canvas.pan = egui::Vec2::ZERO;
+
+    let p1 = PathBuf::from("/test/photo1.jpg");
+    let p2 = PathBuf::from("/test/photo2.jpg");
+    let p3 = PathBuf::from("/test/photo3.jpg");
+
+    let make_test_entry = |p: &PathBuf, name: &str| Entry {
+        path: p.clone(),
+        name: name.to_string(),
+        directory: false,
+        regular_file: true,
+        system: None,
+        typescript: false,
+        symlink: false,
+        hidden: false,
+        size: "1 KB".to_string(),
+        size_bytes: 1024,
+        modified: "today".to_string(),
+        modified_time: None,
+        warning: None,
+        revision: 1,
+        identity: None,
+    };
+
+    let entries = vec![
+        make_test_entry(&p1, "photo1.jpg"),
+        make_test_entry(&p2, "photo2.jpg"),
+        make_test_entry(&p3, "photo3.jpg"),
+    ];
+    canvas.set_entries(entries);
+
+    // Concept vector = [1.0, 0.0]
+    // v1 dot = 0.20
+    // v2 dot = 0.06
+    // v3 dot = -0.50 (negative, will never match normal search)
+    let concept = vec![1.0, 0.0];
+    let v1 = vec![0.20, (1.0f32 - 0.20 * 0.20).sqrt()];
+    let v2 = vec![0.06, (1.0f32 - 0.06 * 0.06).sqrt()];
+    let v3 = vec![-0.50, (1.0f32 - 0.50 * 0.50).sqrt()];
+
+    canvas
+        .hashes
+        .insert(p1.clone(), (FeatureVector::Dense(v1), 1));
+    canvas
+        .hashes
+        .insert(p2.clone(), (FeatureVector::Dense(v2), 1));
+    canvas
+        .hashes
+        .insert(p3.clone(), (FeatureVector::Dense(v3), 1));
+
+    // Search grid with candidate indices [0, 1, 2]
+    let grid_id = canvas.add_search_grid("concept", false, vec![0, 1, 2], concept);
+    assert_eq!(grid_id, 1);
+    canvas.recompute_layout();
+
+    // At default 50% allowance (threshold ~0.08), only P1 (0.20) matches -> 1 photo
+    assert_eq!(canvas.grids[1].indices.len(), 1);
+
+    // Decreasing allowance to 45% (threshold ~0.10) keeps P1 (0.20) -> 1 photo
+    assert!(canvas.can_decrease_grid_allowance(1));
+    assert!(canvas.adjust_grid_allowance(1, -0.05));
+    canvas.recompute_layout();
+    assert_eq!(canvas.grids[1].indices.len(), 1);
+
+    // At 25% allowance (threshold ~0.19), P1 (0.20) still matches (1 photo)
+    canvas.grids[1].set_allowance(0.25);
+    canvas.recompute_layout();
+    assert_eq!(canvas.grids[1].indices.len(), 1);
+
+    // If we step down to 20% (threshold ~0.23), P1 (0.20) will no longer match (0 photos)!
+    // Therefore, right now before pressing (-), can_decrease_grid_allowance MUST be false!
+    assert!(
+        !canvas.can_decrease_grid_allowance(1),
+        "(-) button must be grayed out/prevented right before pressing it yields 0 results"
+    );
+    assert!(
+        !canvas.adjust_grid_allowance(1, -0.05),
+        "adjust_grid_allowance must refuse to decrease when it would yield 0 results"
+    );
+
+    // Now test (+) upper bound:
+    // Broaden search to 70% allowance: P1 (0.20) and P2 (0.06) match -> 2 photos
+    canvas.grids[1].set_allowance(0.70);
+    canvas.recompute_layout();
+    assert_eq!(canvas.grids[1].indices.len(), 2);
+
+    // Candidate 3 has score -0.50, so even at 100% allowance (threshold 0.01), it can never match.
+    // The maximum possible photos that could ever match is 2.
+    // Since current count is 2 (equals maximum possible matches):
+    assert!(
+        !canvas.can_increase_grid_allowance(1),
+        "(+) button must be grayed out/prevented when no matter how high value goes it wouldn't include more photos"
+    );
+    assert!(
+        !canvas.adjust_grid_allowance(1, 0.05),
+        "adjust_grid_allowance must refuse to increase when no higher value could include more photos"
+    );
+
+    // Test condition: "when it's now so broad that it includes all of the original search"
+    // Create grid with candidates [0] only
+    let small_grid_id = canvas.add_search_grid("p1_only", false, vec![0], vec![1.0, 0.0]);
+    canvas.recompute_layout();
+    assert_eq!(canvas.grids[small_grid_id].indices.len(), 1);
+    assert_eq!(canvas.grids[small_grid_id].candidate_indices.len(), 1);
+    assert!(
+        !canvas.can_increase_grid_allowance(small_grid_id),
+        "(+) must be grayed out when it includes all photos from the original search"
+    );
+
+    // Test +/- keyboard shortcuts acting on whichever grid the mouse is currently over
+    let canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1600.0, 1000.0));
+    canvas.pending_pan_to_grid = None;
+    canvas.pan = egui::Vec2::ZERO;
+    canvas.zoom = 1.0;
+    canvas.grids[1].set_allowance(0.50);
+    canvas.recompute_layout();
+    assert!((canvas.grids[1].allowance - 0.50).abs() < 1e-4);
+
+    // Locate grid 1 on screen
+    let g1_screen = canvas.tile_screen_rect(
+        canvas_rect.min,
+        canvas.grids[1].col_offset,
+        canvas.grids[1].row_offset,
+    );
+    let g1_hover_pos = g1_screen.center();
+
+    let ctx = egui::Context::default();
+
+    // 1. Hover over Grid 1 and press '+' key: should increase Grid 1 allowance from 50% to 55%
+    let mut raw_plus = egui::RawInput::default();
+    raw_plus
+        .events
+        .push(egui::Event::PointerMoved(g1_hover_pos));
+    raw_plus.events.push(egui::Event::Key {
+        key: egui::Key::Plus,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx.run(raw_plus, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
+            canvas.handle_input(ui, canvas_rect, &resp);
+        });
+    });
+
+    assert!(
+        (canvas.grids[1].allowance - 0.55).abs() < 1e-4,
+        "Pressing '+' over Grid 1 must increase its allowance to 0.55, got {}",
+        canvas.grids[1].allowance
+    );
+
+    // 2. Hover over Grid 1 and press '-' key: should decrease Grid 1 allowance from 55% back to 50%
+    let mut raw_minus = egui::RawInput::default();
+    raw_minus
+        .events
+        .push(egui::Event::PointerMoved(g1_hover_pos));
+    raw_minus.events.push(egui::Event::Key {
+        key: egui::Key::Minus,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx.run(raw_minus, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
+            canvas.handle_input(ui, canvas_rect, &resp);
+        });
+    });
+
+    assert!(
+        (canvas.grids[1].allowance - 0.50).abs() < 1e-4,
+        "Pressing '-' over Grid 1 must decrease its allowance back to 0.50, got {}",
+        canvas.grids[1].allowance
+    );
+
+    // 3. Move pointer away from Grid 1 (to empty canvas at 10.0, 10.0) and press '+'
+    let initial_zoom = canvas.zoom;
+    let mut raw_zoom = egui::RawInput::default();
+    raw_zoom
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(10.0, 10.0)));
+    raw_zoom.events.push(egui::Event::Key {
+        key: egui::Key::Plus,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = ctx.run(raw_zoom, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let resp = ui.allocate_response(canvas_rect.size(), egui::Sense::click_and_drag());
+            canvas.handle_input(ui, canvas_rect, &resp);
+        });
+    });
+
+    assert!(
+        canvas.zoom > initial_zoom,
+        "Pressing '+' over empty canvas must zoom canvas in"
+    );
+    assert!(
+        (canvas.grids[1].allowance - 0.50).abs() < 1e-4,
+        "Grid 1 allowance must NOT change when pointer is not over Grid 1"
+    );
+}
