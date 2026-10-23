@@ -24,6 +24,26 @@ use crate::file_manager::filesystem::{Directory, Entry};
 
 pub const DEFAULT_TILE_SIZE: f32 = 128.0;
 pub const TILE_SPACING: f32 = 4.0;
+pub const MIN_ALLOWANCE: f32 = 0.05;
+pub const MAX_ALLOWANCE: f32 = 0.95;
+pub const MIN_ZOOM: f32 = 0.05;
+pub const MAX_ZOOM: f32 = 8.0;
+pub const KEYBOARD_ZOOM_STEP: f32 = 1.25;
+const MIN_FIT_ZOOM: f32 = 0.05;
+const MAX_FIT_ZOOM: f32 = 2.5;
+const SCROLL_ZOOM_SENSITIVITY: f32 = 0.002;
+const MIN_SCROLL_ZOOM_FACTOR: f32 = 0.75;
+const MAX_SCROLL_ZOOM_FACTOR: f32 = 1.35;
+
+// Grid layout spacing
+const GRID_COL_GAP: usize = 2;
+const GRID_ROW_GAP: usize = 1;
+
+// Pan-to-grid margins
+const GRID_PAN_TOP_MARGIN: f32 = 76.0;
+const GRID_PAN_HEADER_SPACING: f32 = 46.0;
+const GRID_PAN_SIDE_PADDING: f32 = 80.0;
+const GRID_PAN_LEFT_MARGIN: f32 = 40.0;
 
 #[derive(Clone, Debug)]
 pub struct CanvasGrid {
@@ -70,13 +90,13 @@ impl CanvasGrid {
 
     pub fn adjust_allowance(&mut self, delta: f32) {
         let new_val = ((self.allowance + delta) * 100.0).round() / 100.0;
-        self.allowance = new_val.clamp(0.05, 0.95);
+        self.allowance = new_val.clamp(MIN_ALLOWANCE, MAX_ALLOWANCE);
         self.threshold = Self::allowance_to_threshold(self.allowance, self.is_inverted);
     }
 
     pub fn set_allowance(&mut self, allowance: f32) {
         let new_val = (allowance * 100.0).round() / 100.0;
-        self.allowance = new_val.clamp(0.05, 0.95);
+        self.allowance = new_val.clamp(MIN_ALLOWANCE, MAX_ALLOWANCE);
         self.threshold = Self::allowance_to_threshold(self.allowance, self.is_inverted);
     }
 
@@ -175,10 +195,10 @@ impl CanvasGrid {
         if self.concept_embedding.is_none() || self.indices.is_empty() {
             return false;
         }
-        if self.allowance <= 0.05 + 1e-4 {
+        if self.allowance <= MIN_ALLOWANCE + 1e-4 {
             return false;
         }
-        let next_allowance = (self.allowance - Self::ALLOWANCE_STEP).max(0.05);
+        let next_allowance = (self.allowance - Self::ALLOWANCE_STEP).max(MIN_ALLOWANCE);
         let next_count = self.count_matches_at_allowance(hashes, entries, next_allowance);
         // Gray out and prevent pressing (-) right before pressing it would mean 0 results
         next_count > 0
@@ -197,7 +217,7 @@ impl CanvasGrid {
         {
             return false;
         }
-        if self.allowance >= 0.95 - 1e-4 {
+        if self.allowance >= MAX_ALLOWANCE - 1e-4 {
             return false;
         }
         // 2. Or if no matter how high the value goes it wouldn't include more photos
@@ -927,9 +947,6 @@ impl SimilarityCanvas {
             self.base_placements = snap_to_grid(&coords_2d);
         }
 
-        const COL_GAP: usize = 2;
-        const ROW_GAP: usize = 1;
-
         let max_column_height = self.grids.first().map_or(10, |base| base.grid_rows.max(8));
 
         let mut max_overall_cols = 0;
@@ -957,7 +974,7 @@ impl SimilarityCanvas {
                         row: p.row,
                     });
                 }
-                col_start_x = c + COL_GAP;
+                col_start_x = c + GRID_COL_GAP;
                 col_used_height = 0;
                 col_width = 0;
             } else {
@@ -970,20 +987,20 @@ impl SimilarityCanvas {
 
                 // Check if this grid fits vertically in the current column
                 let needed_height = if col_used_height > 0 {
-                    col_used_height + ROW_GAP + eff_r
+                    col_used_height + GRID_ROW_GAP + eff_r
                 } else {
                     eff_r
                 };
 
                 if col_used_height > 0 && needed_height > max_column_height {
                     // Start a new column to the right
-                    col_start_x += col_width + COL_GAP;
+                    col_start_x += col_width + GRID_COL_GAP;
                     col_used_height = 0;
                     col_width = 0;
                 }
 
                 let row_offset = if col_used_height > 0 {
-                    col_used_height + ROW_GAP
+                    col_used_height + GRID_ROW_GAP
                 } else {
                     0
                 };
@@ -1022,7 +1039,7 @@ impl SimilarityCanvas {
         let pad = 32.0;
         let scale_x = (viewport.width() - pad) / total_w.max(1.0);
         let scale_y = (viewport.height() - pad) / total_h.max(1.0);
-        let fit_zoom = scale_x.min(scale_y).clamp(0.05, 2.5);
+        let fit_zoom = scale_x.min(scale_y).clamp(MIN_FIT_ZOOM, MAX_FIT_ZOOM);
         self.zoom = fit_zoom;
         let scaled_w = total_w * self.zoom;
         let scaled_h = total_h * self.zoom;
@@ -1040,16 +1057,15 @@ impl SimilarityCanvas {
         let step = (self.tile_size + self.spacing) * self.zoom;
         let grid_w = (grid.grid_cols as f32) * step;
 
-        let target_x = if grid_w < viewport.width() - 80.0 {
+        let target_x = if grid_w < viewport.width() - GRID_PAN_SIDE_PADDING {
             ((viewport.width() - grid_w) * 0.5) - (grid.col_offset as f32) * step
         } else {
-            40.0 - (grid.col_offset as f32) * step
+            GRID_PAN_LEFT_MARGIN - (grid.col_offset as f32) * step
         };
 
-        // Position the header bar cleanly below the top HUD (at ~76px from canvas top)
-        let top_offset = 76.0;
-        let header_spacing = 46.0;
-        let target_y = top_offset + header_spacing - (grid.row_offset as f32) * step;
+        // Position the header bar cleanly below the top HUD
+        let target_y =
+            GRID_PAN_TOP_MARGIN + GRID_PAN_HEADER_SPACING - (grid.row_offset as f32) * step;
 
         self.pan = egui::vec2(target_x, target_y);
     }
@@ -1090,7 +1106,7 @@ impl SimilarityCanvas {
         // 2. Otherwise (if not over a result grid), zoom the canvas unless actively typing in a non-empty text input.
         if plus_pressed {
             if let Some(grid_id) = hovered_result_grid {
-                if self.adjust_grid_allowance(grid_id, 0.05) {
+                if self.adjust_grid_allowance(grid_id, CanvasGrid::ALLOWANCE_STEP) {
                     self.recompute_layout();
                     ui.ctx().request_repaint();
                 }
@@ -1100,7 +1116,7 @@ impl SimilarityCanvas {
                 || self.search_query == "="
             {
                 let center = canvas_rect.center();
-                let new_zoom = (self.zoom * 1.25).clamp(0.05, 8.0);
+                let new_zoom = (self.zoom * KEYBOARD_ZOOM_STEP).clamp(MIN_ZOOM, MAX_ZOOM);
                 let origin_offset = center - canvas_rect.min - self.pan;
                 self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
                 self.zoom = new_zoom;
@@ -1108,7 +1124,7 @@ impl SimilarityCanvas {
         }
         if minus_pressed {
             if let Some(grid_id) = hovered_result_grid {
-                if self.adjust_grid_allowance(grid_id, -0.05) {
+                if self.adjust_grid_allowance(grid_id, -CanvasGrid::ALLOWANCE_STEP) {
                     self.recompute_layout();
                     ui.ctx().request_repaint();
                 }
@@ -1117,7 +1133,7 @@ impl SimilarityCanvas {
                 || self.search_query == "-"
             {
                 let center = canvas_rect.center();
-                let new_zoom = (self.zoom / 1.25).clamp(0.05, 8.0);
+                let new_zoom = (self.zoom / KEYBOARD_ZOOM_STEP).clamp(MIN_ZOOM, MAX_ZOOM);
                 let origin_offset = center - canvas_rect.min - self.pan;
                 self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
                 self.zoom = new_zoom;
@@ -1164,8 +1180,9 @@ impl SimilarityCanvas {
         if canvas_rect.contains(pointer_pos) {
             let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
             if scroll_delta.abs() > 0.01 {
-                let zoom_factor = (1.0 + scroll_delta * 0.002).clamp(0.75, 1.35);
-                let new_zoom = (self.zoom * zoom_factor).clamp(0.05, 8.0);
+                let zoom_factor = (1.0 + scroll_delta * SCROLL_ZOOM_SENSITIVITY)
+                    .clamp(MIN_SCROLL_ZOOM_FACTOR, MAX_SCROLL_ZOOM_FACTOR);
+                let new_zoom = (self.zoom * zoom_factor).clamp(MIN_ZOOM, MAX_ZOOM);
                 let origin_offset = pointer_pos - canvas_rect.min - self.pan;
                 self.pan = pointer_pos - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
                 self.zoom = new_zoom;

@@ -23,10 +23,7 @@ pub enum PhotoMode {
 
 impl PhotoMode {
     pub fn from_str(s: &str) -> Self {
-        match s {
-            "similarity" => Self::Similarity,
-            _ => Self::Masonry,
-        }
+        s.parse().unwrap_or(Self::Masonry)
     }
 
     pub fn as_str(self) -> &'static str {
@@ -34,5 +31,22 @@ impl PhotoMode {
             Self::Masonry => "masonry",
             Self::Similarity => "similarity",
         }
+    }
+}
+
+impl std::fmt::Display for PhotoMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for PhotoMode {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "similarity" => Self::Similarity,
+            _ => Self::Masonry,
+        })
     }
 }
