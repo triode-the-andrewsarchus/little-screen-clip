@@ -20,6 +20,38 @@ The private acceptance run uses an ALSA null device and cannot establish that a
 particular physical audio backend no longer produces the error. Restart Files to
 replace an already-open stream with the restored backend configuration.
 
+## Follow-up audit
+
+`881895d` retains job inputs through rejected executor admission and retries only
+`QueueFull`, which proves the operation has not run. Completed or disconnected
+mutations are never retried. Superseded reads are canceled and removed before new
+admission, stale errors use the same validity rules as successful results, and a
+memory-budget refusal no longer permanently marks a source as undecodable. Browser
+close releases its PCM and invalidates preview requests. Pending work uses the
+existing repaint scheduler so progress and admission retries do not wait for input.
+A saturated one-worker executor test verifies that a pending save eventually runs
+exactly once. The slot header keeps its clickable numbered pad, fits the title to
+available width, and shows distinct saved-version directory names in the browser.
+Coarse rendering now caps foreground and background stars independently; a dense
+1,000-sample test checks bounded mesh size and preserved category/search matches.
+
+`d04798f` separates directory discovery, parallel analysis, and cache publication.
+Entry/open failures and joined worker panics cannot commit a partial replacement;
+unsupported/silent content remains a deliberate classification omission. Directory
+identity tracking stops bind-alias cycles, the pool reserves one reported CPU when
+possible and uses at most eight workers, and progress counts completed analyses.
+Indexing and PCM preparation share rate/channel limits before allocation sizes are
+derived from headers. SQLite schema version six preserves Unix path bytes, and all
+legacy migrations commit their data changes and version markers together. Tests
+cover invalid UTF-8 paths distinct from their display-equivalent names, legacy TEXT
+migration, forced migration rollback, excluded discovery trees, inaccessible audio,
+and a decoder-accepted over-budget sample-rate header.
+
+The small remaining increases in discovery/repaint complexity implement explicit
+I/O failure and liveness checks. The review keeps those checks rather than hiding
+them behind generic wrappers to change a metric. The index coordinator itself fell
+from CCN 29 to 4; new migration code has named, version-specific responsibilities.
+
 ## Architecture comparison against current main
 
 The baseline was measured from a clean detached worktree at `999cd24`, not from
@@ -27,12 +59,12 @@ the feature branch. The same fast profile was used for every measurement.
 
 | Metric | Main | Original feature branch (`82e72a0`) | Reviewed branch |
 | --- | ---: | ---: | ---: |
-| Total cyclomatic complexity | 27,909 | 30,006 | 28,700 |
-| Average cyclomatic complexity | 4.02 | 4.26 | 4.06 |
+| Total cyclomatic complexity | 27,909 | 30,006 | 28,750 |
+| Average cyclomatic complexity | 4.02 | 4.26 | 4.05 |
 | Maximum cyclomatic complexity | 196 | 196 | 196 |
-| Lines of code | 227,320 | 238,554 | 235,263 |
-| Duplication | 5.98% | 5.76% | 5.82% |
-| Clone groups | 1,382 | 1,390 | 1,391 |
+| Lines of code | 227,320 | 238,554 | 235,716 |
+| Duplication | 5.98% | 5.76% | 5.81% |
+| Clone groups | 1,382 | 1,390 | 1,393 |
 | Reported cycles | 5 | 5 | 6 |
 | Valknut health | 73.88 | 62.65 | 62.72 |
 
@@ -51,7 +83,7 @@ fixtures). Its CCN fell from 82 to 9. PCM loading fell from 17 to 3; shared chun
 parsing removes duplicated container traversal.
 
 Remaining hotspots include feature extraction (CCN 56), map rendering (62), shelf
-rendering (50), pack browser rendering (24), and SQL record decoding (20). The
+rendering (50), pack browser rendering (25), and SQL record decoding (20). The
 record decoder now reports invalid rows rather than silently discarding them.
 These are disclosed maintenance costs; this review does not claim they disappeared.
 
@@ -63,9 +95,9 @@ static model data and existing clones in touched files, as well as test fixtures
 
 ## Validation and evidence
 
-- `cargo test --workspace -- --test-threads=2`: 2,498 passed, zero failed, 23 ignored,
-  including workspace doctests.
-- All 30 focused constellation regression tests pass and cover database boundaries, stale results,
+- `cargo test --workspace -- --test-threads=2`: 2,505 passed, zero failed,
+  23 ignored, including workspace doctests.
+- All 37 focused constellation regression tests pass and cover database boundaries, stale results,
   protected inputs, malformed audio/banks, save preservation, shared trim storage,
   Unicode labels, Escape handling, model equivalence, and mutation completion.
 - `cargo build -p clip-workbench --bin clip-file-manager` passes.
@@ -79,8 +111,8 @@ static model data and existing clones in touched files, as well as test fixtures
   and an ALSA null device; it never injects input into the user's compositor.
 
 Private-run screenshots and its machine-readable report are retained at
-`/tmp/constellation-acceptance-review-final/`. The full test log is
-`/tmp/constellation-workspace-final.log`. Run the UI scenario with an installed
+`/tmp/constellation-followup-acceptance-final/`. The full test log is
+`/tmp/constellation-followup-workspace-final.log`. Run the UI scenario with an installed
 Tesseract English model, or point `TESSDATA_PREFIX` at one:
 
 ```bash
