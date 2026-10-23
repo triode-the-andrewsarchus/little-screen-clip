@@ -318,6 +318,8 @@ impl ConstellationState {
     }
 
     pub(super) fn render_rack_output(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().interact_size.y = 24.0;
+        ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
         ui.horizontal_wrapped(|ui| {
             ui.menu_button("MIDI input", |ui| {
                 if self.midi.is_none() {
@@ -362,18 +364,15 @@ impl ConstellationState {
                 .on_hover_text(
                     "Force all hits to MIDI velocity 127. Keyboard and mouse hits already use 127.",
                 );
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Compressor");
+            ui.separator();
+            ui.label("Glue");
             ui.toggle_value(&mut self.pack_bank.compressor_bypass, "Bypass").on_hover_text("Bypass the stereo pad compressor and peak ceiling. Pad input headroom stays unchanged.");
             let reduction = self.playback.lock().unwrap().output.as_ref().map_or(0.0, |output| output.reduction_db());
             ui.add_enabled_ui(!self.pack_bank.compressor_bypass, |ui| {
-                ui.label("Threshold");
-                ui.add(egui::DragValue::new(&mut self.pack_bank.compressor_threshold_db).speed(0.2).clamp_range(-48.0..=0.0).fixed_decimals(1).suffix(" dB"));
-                ui.label("Ratio");
-                ui.add(egui::DragValue::new(&mut self.pack_bank.compressor_ratio).speed(0.1).clamp_range(1.0..=12.0).fixed_decimals(1).suffix(":1"));
+                ui.add(egui::DragValue::new(&mut self.pack_bank.compressor_threshold_db).speed(0.2).clamp_range(-48.0..=0.0).fixed_decimals(1).prefix("Threshold ").suffix(" dB"));
+                ui.add(egui::DragValue::new(&mut self.pack_bank.compressor_ratio).speed(0.1).clamp_range(1.0..=12.0).fixed_decimals(1).prefix("Ratio ").suffix(":1"));
             });
-            ui.add(egui::ProgressBar::new((reduction / 18.0).clamp(0.0, 1.0)).desired_width(120.0).text(format!("{reduction:.1} dB reduction")));
+            ui.add(egui::ProgressBar::new((reduction / 18.0).clamp(0.0, 1.0)).desired_width(96.0).fill(ui.visuals().widgets.hovered.bg_fill).text(RichText::new(format!("GR {reduction:.1} dB")).color(ui.visuals().text_color())));
 
         });
     }
@@ -429,12 +428,9 @@ impl ConstellationState {
                 .map_or(0.000_001, |audio| 1.0 / audio.sample_rate as f32);
             ui.push_id((index, layer), |ui| {
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(super::ui::short_label(&sample.filename, 28)).strong())
-                        .on_hover_text(&sample.filename);
-                });
-                Self::render_layer_waveform(ui, sample);
                 ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(super::ui::short_label(&sample.filename, 22)).strong())
+                        .on_hover_text(&sample.filename);
                     if ui.small_button("Play").clicked() {
                         audition = Some(sample.clone());
                     }
@@ -445,12 +441,8 @@ impl ConstellationState {
                     if ui.small_button("Remove").clicked() {
                         remove = Some(layer);
                     }
-                    ui.add(
-                        egui::Slider::new(&mut sample.volume, 0.0..=2.0)
-                            .text("Gain")
-                            .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
-                    );
                 });
+                Self::render_layer_waveform(ui, sample);
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Start");
                     ui.add(
@@ -471,23 +463,23 @@ impl ConstellationState {
                             .max_decimals(6)
                             .suffix(" s"),
                     );
-                    ui.add(
-                        egui::Slider::new(&mut sample.pan, -1.0..=1.0)
-                            .text("Pan")
-                            .custom_formatter(|value, _| {
-                                if value.abs() < 0.01 {
-                                    "C".into()
-                                } else {
-                                    format!(
-                                        "{} {:.0}",
-                                        if value < 0.0 { "L" } else { "R" },
-                                        value.abs() * 100.0
-                                    )
-                                }
-                            }),
-                    );
                 });
                 ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut sample.volume)
+                            .speed(0.01)
+                            .clamp_range(0.0..=2.0)
+                            .fixed_decimals(2)
+                            .prefix("Gain ")
+                            .suffix("×"),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut sample.pan)
+                            .speed(0.01)
+                            .clamp_range(-1.0..=1.0)
+                            .fixed_decimals(2)
+                            .prefix("Pan "),
+                    );
                     ui.label("Attack");
                     ui.add(
                         egui::DragValue::new(&mut sample.attack_ms)
@@ -534,7 +526,7 @@ impl ConstellationState {
 
     fn render_layer_waveform(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
         let (rect, response) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width(), 88.0),
+            Vec2::new(ui.available_width(), 80.0),
             egui::Sense::click_and_drag(),
         );
         let painter = ui.painter_at(rect);
@@ -637,7 +629,7 @@ impl ConstellationState {
             }
         }
         ui.weak(format!(
-            "{:.3} s selected · drag IN / OUT to trim · double-click to reset",
+            "{:.3} s selected · drag IN / OUT · double-click to reset",
             sample.end_sec - sample.start_sec
         ));
     }

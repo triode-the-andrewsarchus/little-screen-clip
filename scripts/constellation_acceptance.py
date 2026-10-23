@@ -42,19 +42,22 @@ def exercise(session, root, hardware_keys=False):
     assert stars, "owned kick star must be visible in the map"
     session.click(sum(x for x, _ in stars) // len(stars), sum(y for _, y in stars) // len(stars))
     session.key("semicolon" if hardware_keys else "z", "shift")
-    session.observe("assigned-slot", ["kick.wav", "Mute", "Solo", "Attack", "Release"])
+    session.observe("assigned-slot", ["Mute", "Solo", "Gain", "Pan", "Attack", "Release"])
     session.key("q" if hardware_keys else "x", "shift")
     if hardware_keys:
         session.key("apostrophe", "shift")
     for key in (["semicolon", "semicolon", "q", "apostrophe"] if hardware_keys else ["z", "z", "x", "z"]):
         session.key(key)
-    session.observe("retriggered-slots", ["kick.wav"])
+    session.observe("retriggered-slots", ["Untitled Pack"])
+    # Docks obscure the anchored map. Hide the editor to expose the drag source.
+    session.click(*(session.word("retriggered-slots", "Editor", required=False) or (1115, 472)))
+    session.observe("map-for-drag", ["Untitled Pack"])
     # Exercise real Copy-only Wayland map drags, including Shift layering.
-    image = Image.open(session.output / "retriggered-slots.png").convert("RGB")
-    editor_y = (session.word("assigned-slot", "Mute", required=False) or (420, 486))[1]
+    image = Image.open(session.output / "map-for-drag.png").convert("RGB")
+    editor_y = 680
     red = lambda c: c[0] > 140 and c[0] > c[1] * 1.5 and c[0] > c[2] * 1.5
     star = [(x, y) for y in range(400, editor_y - 20) for x in range(355, 805) if red(image.getpixel((x, y)))]
-    pad_line = [(x, y) for y in range(550, 680) for x in range(822, 904) if red(image.getpixel((x, y)))]
+    pad_line = [(x, y) for y in range(550, 695) for x in range(822, 904) if red(image.getpixel((x, y)))]
     assert star and pad_line, "owned map star and first-pad category line must be visible"
     source = tuple(sum(point[axis] for point in star) // len(star) for axis in (0, 1))
     bottom = max(y for _, y in pad_line)
@@ -64,18 +67,19 @@ def exercise(session, root, hardware_keys=False):
         private.run_checked([str(session.pointer), "drag", "1280", "800", *map(str, (*source, *destination))], env=session.env)
         time.sleep(0.4)
     drag()
-    session.observe("replace-drop", ["kick.wav"])
+    session.observe("replace-drop", ["Untitled Pack"])
     modifier = subprocess.Popen(["wtype", "-M", "shift", "-s", "2500", "-m", "shift"], env=session.env)
     try:
         time.sleep(0.15)
         drag()
     finally:
         modifier.wait(timeout=4)
-    session.observe("layer-drop", ["kick.wav"])
+    session.observe("layer-drop", ["Untitled Pack"])
     assert (root / "kick.wav").is_file(), "pad assignment must preserve its source"
-    session.click(500, 708)  # Override velocity, in the shared footer.
-    session.click(690, 708)  # Compressor bypass.
-    session.observe("performance-controls", ["kick.wav"])
+    session.click(*(session.word("layer-drop", "Override", required=False) or (500, 708)))
+    session.observe("velocity-override", ["Untitled Pack"])
+    session.click(*(session.word("velocity-override", "Bypass", required=False) or (660, 708)))
+    session.observe("performance-controls", ["Untitled Pack"])
     session.click(*(session.word("performance-controls", "Save", required=False) or (1038, 514)))
     packs = root / "little-screen-clip-sample-packs"
     wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 1, "first atomic pack save")
@@ -92,12 +96,12 @@ def exercise(session, root, hardware_keys=False):
     marker = first.parent / "owned-preservation-marker.txt"
     marker.write_text("preserve this owned fixture")
     before = first.read_bytes()
-    session.observe("first-save", ["kick.wav"])
+    session.observe("first-save", ["Untitled Pack"])
     session.click(*(session.word("first-save", "Save", required=False) or (1038, 514)))
     wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 2, "versioned second pack save")
     assert first.read_bytes() == before
     assert marker.read_text() == "preserve this owned fixture"
-    session.observe("second-save", ["kick.wav"])
+    session.observe("second-save", ["Untitled Pack"])
     session.click(*(session.word("second-save", "Map", required=False) or (987, 222)))
     session.observe("index-menu", ["Index folder again"])
     session.click(*session.word("index-menu", "Index"))
@@ -117,7 +121,7 @@ def exercise(session, root, hardware_keys=False):
     assert not Path(portable["slots"][0]["samples"][0]["file_path"]).is_absolute()
     assert not (exported.parent / "pad01_layer1.wav").is_symlink()
     assert (exported.parent / "pad01_layer1.wav").read_bytes()[:4] == b"RIFF"
-    session.observe("portable-export", ["kick.wav"])
+    session.observe("portable-export", ["Untitled Pack"])
     session.key("z", "ctrl")
     session.observe("undo-edit", ["Unsaved changes"])
     private.run_checked([str(session.niri), "msg", "action", "close-window"], env=session.env)

@@ -107,12 +107,11 @@ impl ConstellationState {
                         .show_inside(ui, |ui| {
                             ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                             ui.separator();
+                            // Overflow gets a reserved gutter, never an overlay on trim handles.
+                            ui.style_mut().spacing.scroll.floating = false;
                             egui::ScrollArea::vertical()
                                 .id_source("constellation_layer_editor")
                                 .min_scrolled_height(0.0)
-                                .scroll_bar_visibility(
-                                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
-                                )
                                 .show(ui, |ui| self.render_selected_pad(ui, palette));
                         });
                 }
@@ -1460,40 +1459,78 @@ mod tests {
         );
     }
 
+    fn render_frame(
+        ctx: &egui::Context,
+        state: &mut ConstellationState,
+        palette: &little_clip_core::palette::AppPalette,
+        size: Vec2,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(
+                        ui,
+                        std::path::Path::new("/samples"),
+                        palette,
+                        &mut |_| {},
+                        &mut |_| {},
+                    );
+                });
+            },
+        )
+    }
+
     #[test]
-    fn dock_visibility_keeps_the_same_projection_viewport() {
-        let ctx = egui::Context::default();
-        let palette = little_clip_core::palette::AppPalette::default();
-        let mut state = ConstellationState::new();
-        let mut viewport = None;
-        for rack in [true, false, true] {
-            state.pack_shelf_open = rack;
-            for editor in [false, true, false] {
-                state.pad_editor_open = editor;
-                let _ = ctx.run(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(
-                            Pos2::ZERO,
-                            Vec2::new(1000.0, 800.0),
-                        )),
-                        ..Default::default()
-                    },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            state.render_ui(
-                                ui,
-                                std::path::Path::new("/samples"),
-                                &palette,
-                                &mut |_| {},
-                                &mut |_| {},
-                            );
-                        });
-                    },
-                );
-                if let Some(expected) = viewport {
-                    assert_eq!(state.map_viewport, Some(expected));
+    fn docks_do_not_move_visible_stars_at_coarse_or_relaxed_zoom() {
+        for zoom in [1.0, 2.5] {
+            let ctx = egui::Context::default();
+            let palette = little_clip_core::palette::AppPalette::default();
+            let mut state = ConstellationState::new();
+            state.zoom = zoom;
+            let mut sample = sample_fixture(0);
+            // Stay in the top-left exposed portion even when both docks are open.
+            sample.x = -0.4 / zoom;
+            sample.y = 0.4 / zoom;
+            state.samples.push(sample);
+            state.pack_bank.slots[0]
+                .samples
+                .push(super::super::sample_pack::SlotSample::new(
+                    "/samples/0.wav".into(),
+                    "0.wav".into(),
+                    None,
+                    0.5,
+                ));
+            let mut expected = None;
+            for rack in [true, false, true] {
+                state.pack_shelf_open = rack;
+                for editor in [false, true, false] {
+                    state.pad_editor_open = editor;
+                    let output = render_frame(&ctx, &mut state, &palette, Vec2::new(1000.0, 800.0));
+                    let points: Vec<_> = output
+                        .shapes
+                        .into_iter()
+                        .filter_map(|shape| match shape.shape {
+                            egui::Shape::Mesh(mesh) => Some(
+                                mesh.vertices
+                                    .iter()
+                                    .filter(|vertex| vertex.color == SampleCategory::Kick.color())
+                                    .map(|vertex| vertex.pos)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            _ => None,
+                        })
+                        .flatten()
+                        .collect();
+                    assert_eq!(points.len(), 4, "fixture star must remain visible");
+                    if let Some(ref expected) = expected {
+                        assert_eq!(&points, expected);
+                    }
+                    expected = Some(points);
                 }
-                viewport = state.map_viewport;
             }
         }
     }
@@ -1510,24 +1547,7 @@ mod tests {
             crate::ui_appearance::apply_visuals(&ctx, &palette);
             let mut state = ConstellationState::new();
             for frame in 0..12 {
-                let input = egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(840.0, 550.0),
-                    )),
-                    ..Default::default()
-                };
-                let _ = ctx.run(input, |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_ui(
-                            ui,
-                            std::path::Path::new("/samples"),
-                            &palette,
-                            &mut |_| {},
-                            &mut |_| {},
-                        )
-                    });
-                });
+                render_frame(&ctx, &mut state, &palette, Vec2::new(840.0, 550.0));
                 assert_eq!(state.pad_drop_targets.len(), 16);
                 assert!(
                     state
@@ -1548,17 +1568,7 @@ mod tests {
                 );
             }
             state.browser_open = true;
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(
-                        ui,
-                        std::path::Path::new("/samples"),
-                        &palette,
-                        &mut |_| {},
-                        &mut |_| {},
-                    )
-                });
-            });
+            render_frame(&ctx, &mut state, &palette, Vec2::new(840.0, 550.0));
             assert!(!ctx.memory(|memory| {
                 memory
                     .areas()
