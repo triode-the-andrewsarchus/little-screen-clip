@@ -1143,3 +1143,94 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
         "Pressing '+' over Grid 1 must override focused text inputs and adjust allowance"
     );
 }
+
+#[test]
+fn test_paint_canvas_edge_fade_mesh_structure_and_alpha() {
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput::default();
+    let rect = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(800.0, 600.0));
+    let canvas_color = egui::Color32::from_rgb(28, 28, 30);
+    let fade_size = 28.0;
+
+    let output = ctx.run(raw, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            crate::file_manager::ui::gallery::paint_canvas_edge_fade(
+                ui.painter(),
+                rect,
+                canvas_color,
+                fade_size,
+            );
+        });
+    });
+
+    let mut found_mesh = false;
+    for clipped in output.shapes {
+        if let egui::epaint::Shape::Mesh(mesh) = clipped.shape {
+            found_mesh = true;
+            // 8 quads * 4 vertices = 32 vertices
+            assert_eq!(mesh.vertices.len(), 32);
+            // 8 quads * 2 triangles * 3 indices = 48 indices
+            assert_eq!(mesh.indices.len(), 48);
+
+            // Verify that outer boundary vertices have full alpha
+            // and inner boundary vertices have zero alpha
+            for v in &mesh.vertices {
+                let is_outer_x =
+                    (v.pos.x - rect.left()).abs() < 1e-4 || (v.pos.x - rect.right()).abs() < 1e-4;
+                let is_outer_y =
+                    (v.pos.y - rect.top()).abs() < 1e-4 || (v.pos.y - rect.bottom()).abs() < 1e-4;
+                let is_inner_x = (v.pos.x - (rect.left() + fade_size)).abs() < 1e-4
+                    || (v.pos.x - (rect.right() - fade_size)).abs() < 1e-4;
+                let is_inner_y = (v.pos.y - (rect.top() + fade_size)).abs() < 1e-4
+                    || (v.pos.y - (rect.bottom() - fade_size)).abs() < 1e-4;
+
+                if is_inner_x && is_inner_y {
+                    assert_eq!(
+                        v.color.a(),
+                        0,
+                        "Inner boundary vertices must be transparent"
+                    );
+                }
+                if (is_outer_x && !is_inner_y) || (is_outer_y && !is_inner_x) {
+                    assert_eq!(
+                        v.color, canvas_color,
+                        "Outer boundary vertices must be opaque canvas color"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        found_mesh,
+        "Edge fade mesh must be generated and added to painter"
+    );
+}
+
+#[test]
+fn test_paint_canvas_edge_fade_handles_zero_and_negative_size() {
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput::default();
+    let empty_rect = egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(0.0, 0.0));
+    let canvas_color = egui::Color32::from_rgb(20, 20, 20);
+
+    let output = ctx.run(raw, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            crate::file_manager::ui::gallery::paint_canvas_edge_fade(
+                ui.painter(),
+                empty_rect,
+                canvas_color,
+                28.0,
+            );
+        });
+    });
+
+    let mesh_count = output
+        .shapes
+        .iter()
+        .filter(|c| matches!(c.shape, egui::epaint::Shape::Mesh(_)))
+        .count();
+    assert_eq!(
+        mesh_count, 0,
+        "No mesh should be generated for empty canvas"
+    );
+}

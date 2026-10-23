@@ -9,7 +9,7 @@ use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext;
 
 mod bookmarks;
-mod gallery;
+pub(crate) mod gallery;
 mod list;
 mod mounts;
 pub(super) mod music;
