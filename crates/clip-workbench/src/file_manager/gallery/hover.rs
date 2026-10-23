@@ -4,8 +4,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const UNHOVER_GRACE_PERIOD: Duration = Duration::from_millis(250);
+/// Minimum target edge length in pixels for hover previews.
 pub const MIN_HOVER_EDGE: u32 = 128;
+/// Maximum target edge length in pixels for hover previews.
 pub const MAX_HOVER_EDGE: u32 = 4096;
+/// Resolution step increment for hover preview caching.
 pub const HOVER_EDGE_STEP: u32 = 128;
 
 #[derive(Default)]
@@ -16,16 +19,19 @@ pub(in crate::file_manager) struct GalleryHover {
 }
 
 impl GalleryHover {
+    /// Polls in-flight hover preview loads and uploads completed textures.
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
     }
 
+    /// Clears all cached textures and active requests.
     pub fn clear(&mut self) {
         self.cache.clear();
         self.key = None;
         self.unhover_time = None;
     }
 
+    /// Retains the cached preview if `hovered_path` matches the active key, otherwise schedules eviction.
     pub fn retain(&mut self, hovered_path: Option<&Path>) {
         if let Some(path) = hovered_path {
             self.unhover_time = None;
@@ -44,6 +50,7 @@ impl GalleryHover {
         }
     }
 
+    /// Returns a cached texture handle for the given image path at or above `edge` resolution.
     pub fn texture_for(
         &mut self,
         path: &Path,

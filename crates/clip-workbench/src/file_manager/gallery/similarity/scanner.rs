@@ -11,9 +11,10 @@ use super::super::super::filesystem::{Entry, read_entry};
 const MAX_RECURSIVE_ITEMS: usize = 10_000;
 const MAX_DIRECTORY_DEPTH: usize = 16;
 
-/// Recursively scans `root` for image files (`entry.is_photo()`).
+/// Recursively scans a directory for image files.
 ///
-/// Avoids symlink cycles, bind mount recursion, and kernel filesystems.
+/// Avoids symlink cycles, bind mount recursion, and kernel filesystems. Returns early
+/// with collected entries if `cancelled` is set or if the recursive item budget is reached.
 pub fn scan_recursive_photos(root: &Path, show_hidden: bool, cancelled: &AtomicBool) -> Vec<Entry> {
     let mut results = Vec::new();
     let mut visited_dirs = HashSet::new();

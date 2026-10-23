@@ -1,6 +1,6 @@
 //! Hilbert color strip and spatial color source-mapping ported from PaletteAtlas.
 //!
-//! Based on PaletteAtlas (https://github.com/itzik123/PaletteAtlas) and Jakub Červený's
+//! Based on PaletteAtlas (<https://github.com/itzik123/PaletteAtlas>) and Jakub Červený's
 //! generalized 2D Hilbert curve ("gilbert", 2018).
 
 use std::sync::atomic::{AtomicBool, Ordering};

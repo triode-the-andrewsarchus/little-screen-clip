@@ -7,8 +7,11 @@ const COST_IMPROVEMENT_EPSILON: f32 = 1e-4;
 /// A placed tile in the discrete 2D grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GridPlacement {
+    /// Zero-based index of the item in the source collection.
     pub index: usize,
+    /// Zero-based column offset in the grid.
     pub col: usize,
+    /// Zero-based row offset in the grid.
     pub row: usize,
 }
 
@@ -22,9 +25,9 @@ pub fn grid_dimensions(n: usize) -> (usize, usize) {
     (cols.max(1), rows.max(1))
 }
 
-/// Assigns `n` 2D points to discrete `(col, row)` grid cells with no overlaps and no holes.
+/// Assigns 2D points to discrete `(col, row)` grid cells with no overlaps and no holes.
 ///
-/// Returns a vector of `GridPlacement` corresponding to each input point index.
+/// Returns a vector of [`GridPlacement`] corresponding to each input point index.
 pub fn snap_to_grid(points: &[(f32, f32)]) -> Vec<GridPlacement> {
     let n = points.len();
     if n == 0 {

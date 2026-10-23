@@ -22,10 +22,14 @@ pub enum PhotoMode {
 }
 
 impl PhotoMode {
+    /// Parses a photo layout mode from a string identifier.
+    ///
+    /// Falls back to [`PhotoMode::Masonry`] if unrecognized.
     pub fn from_str(s: &str) -> Self {
         s.parse().unwrap_or(Self::Masonry)
     }
 
+    /// Returns the static string representation of the photo layout mode.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Masonry => "masonry",

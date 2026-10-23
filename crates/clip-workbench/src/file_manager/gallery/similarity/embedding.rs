@@ -3,6 +3,7 @@
 //! Supports arbitrary feature dimensions (e.g. 64-bit d-hash bit-vectors, or 728-dimensional
 //! neural embeddings like EmbeddingGemma2) without materializing large covariance matrices.
 
+/// Dimension of a difference hash expanded into floating-point coordinates.
 pub const DHASH_DIMENSION: usize = 64;
 const POWER_ITERATION_MAX_STEPS: usize = 40;
 const MIN_NORM_EPSILON: f32 = 1e-7;
@@ -22,6 +23,7 @@ pub enum FeatureVector {
 }
 
 impl FeatureVector {
+    /// Converts the feature into a continuous floating-point vector.
     pub fn to_vec(&self) -> Vec<f32> {
         match self {
             Self::DHash(hash) => {
@@ -35,6 +37,7 @@ impl FeatureVector {
         }
     }
 
+    /// Returns the dimensionality of this feature representation.
     #[allow(dead_code)]
     pub fn dimension(&self) -> usize {
         match self {
@@ -44,7 +47,7 @@ impl FeatureVector {
     }
 }
 
-/// Projects arbitrary $D$-dimensional feature vectors into continuous 2D coordinates `(x, y)`.
+/// Projects arbitrary feature vectors into continuous 2D coordinates `(x, y)`.
 ///
 /// Computes the principal components via matrix-free power iteration:
 /// $C v = \frac{1}{N} X^T (X v)$
@@ -146,7 +149,7 @@ pub fn project_features_to_2d(features: &[Vec<f32>]) -> Vec<(f32, f32)> {
     coords
 }
 
-/// Convenience wrapper for 64-bit d-hashes.
+/// Projects 64-bit difference hashes into continuous 2D coordinates.
 #[allow(dead_code)]
 pub fn project_hashes_to_2d(hashes: &[u64]) -> Vec<(f32, f32)> {
     let features: Vec<Vec<f32>> = hashes
