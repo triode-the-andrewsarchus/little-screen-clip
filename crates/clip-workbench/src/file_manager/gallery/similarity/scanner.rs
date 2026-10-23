@@ -33,7 +33,10 @@ pub fn scan_recursive_photos(root: &Path, show_hidden: bool, cancelled: &AtomicB
         if cancelled.load(Ordering::Relaxed) {
             break;
         }
-        if depth > MAX_DIRECTORY_DEPTH || results.len() >= MAX_RECURSIVE_ITEMS {
+        if depth > MAX_DIRECTORY_DEPTH {
+            continue;
+        }
+        if results.len() >= MAX_RECURSIVE_ITEMS {
             break;
         }
 
@@ -73,4 +76,58 @@ pub fn scan_recursive_photos(root: &Path, show_hidden: bool, cancelled: &AtomicB
     }
 
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recursive_scanner_skips_over_depth_branches_without_abandoning_siblings() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        // Branch A: shallow sibling with an image
+        let branch_a = root.join("branch_a");
+        std::fs::create_dir_all(&branch_a).unwrap();
+        std::fs::write(branch_a.join("photo_a.jpg"), b"fake_jpeg").unwrap();
+
+        // Branch B: deep branch exceeding MAX_DIRECTORY_DEPTH
+        let mut deep = root.join("branch_b");
+        for i in 0..=MAX_DIRECTORY_DEPTH + 2 {
+            deep = deep.join(format!("depth_{i}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("deep_photo.jpg"), b"fake_jpeg").unwrap();
+
+        // Branch C: another shallow sibling with an image
+        let branch_c = root.join("branch_c");
+        std::fs::create_dir_all(&branch_c).unwrap();
+        std::fs::write(branch_c.join("photo_c.png"), b"fake_png").unwrap();
+
+        let cancelled = AtomicBool::new(false);
+        let photos = scan_recursive_photos(root, false, &cancelled);
+
+        let names: Vec<String> = photos.into_iter().map(|e| e.name).collect();
+        assert!(names.contains(&"photo_a.jpg".to_string()));
+        assert!(names.contains(&"photo_c.png".to_string()));
+        assert!(!names.contains(&"deep_photo.jpg".to_string()));
+    }
+
+    #[test]
+    fn recursive_scanner_respects_hidden_toggle() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+
+        std::fs::write(root.join("visible.jpg"), b"fake_jpeg").unwrap();
+        std::fs::write(root.join(".hidden.jpg"), b"fake_jpeg").unwrap();
+
+        let cancelled = AtomicBool::new(false);
+        let without_hidden = scan_recursive_photos(root, false, &cancelled);
+        assert_eq!(without_hidden.len(), 1);
+        assert_eq!(without_hidden[0].name, "visible.jpg");
+
+        let with_hidden = scan_recursive_photos(root, true, &cancelled);
+        assert_eq!(with_hidden.len(), 2);
+    }
 }
