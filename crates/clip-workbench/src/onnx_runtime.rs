@@ -97,14 +97,24 @@ pub fn expected_model_size(model_name: &str) -> Option<u64> {
     }
 }
 
+/// Minimum file size (1 MB) to consider a cached model file valid rather than a truncated or stub download.
+pub const MIN_VALID_MODEL_BYTES: u64 = 1_000_000;
+
+/// Returns the local cache directory for downloaded neural models, honoring `XDG_CACHE_HOME`.
+pub fn models_cache_dir() -> PathBuf {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("little-screen-clip/models")
+}
+
 /// Checks whether a named ONNX model is already cached locally.
+#[allow(dead_code)]
 pub fn is_model_cached(model_name: &str) -> bool {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let model_path = PathBuf::from(home)
-        .join(".cache/little-screen-clip/models")
-        .join(model_name);
+    let model_path = models_cache_dir().join(model_name);
     if let Ok(meta) = std::fs::metadata(&model_path) {
-        meta.len() > 1_000_000
+        meta.len() > MIN_VALID_MODEL_BYTES
     } else {
         false
     }
@@ -143,13 +153,12 @@ pub fn ensure_model_with_url_progress<F>(
 where
     F: Fn(f32, &str),
 {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let models_dir = PathBuf::from(home).join(".cache/little-screen-clip/models");
+    let models_dir = models_cache_dir();
     let model_path = models_dir.join(model_name);
     if model_path.exists() {
         if let Ok(meta) = std::fs::metadata(&model_path) {
             // Verify file has non-trivial size (> 1MB) so corrupted/stub downloads are discarded
-            if meta.len() > 1_000_000 {
+            if meta.len() > MIN_VALID_MODEL_BYTES {
                 return Ok(model_path);
             }
         }
@@ -280,15 +289,21 @@ mod tests {
         );
         assert_eq!(
             resolve_model_url(SIGLIP2_GIANT_MODEL_NAME, None),
-            DEFAULT_SIGLIP2_GIANT_MODEL_URL
+            SIGLIP2_GIANT_MODEL_URL
         );
         assert_eq!(
             resolve_model_url(SIGLIP2_GIANT_TEXT_MODEL_NAME, None),
-            DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL
+            SIGLIP2_GIANT_TEXT_MODEL_URL
         );
         assert_eq!(
             resolve_model_url(SIGLIP2_GIANT_TOKENIZER_NAME, None),
-            DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL
+            SIGLIP2_GIANT_TOKENIZER_URL
         );
+    }
+
+    #[test]
+    fn test_models_cache_dir_path_structure() {
+        let dir = models_cache_dir();
+        assert!(dir.ends_with("little-screen-clip/models"));
     }
 }
