@@ -109,6 +109,7 @@ impl FileManager {
         });
         if self.pending.is_some()
             || self.bookmarks.busy()
+            || self.constellation.busy()
             || self.mounts.busy()
             || self.edit_busy()
             || self.fuse_mounts.busy()

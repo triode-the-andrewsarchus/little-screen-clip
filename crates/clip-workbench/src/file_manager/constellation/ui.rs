@@ -23,7 +23,7 @@ impl ConstellationState {
         if self.browser_open
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
-            self.browser_open = false;
+            self.close_pack_browser();
         }
         // Handle keyboard shortcuts (keys 1-0 for slot trigger, Shift+1-0 for assigning)
         self.handle_shelf_keyboard_shortcuts(ui.ctx());
@@ -505,17 +505,17 @@ impl ConstellationState {
                         has_query && !star.sample.filename.to_lowercase().contains(&query_lower);
 
                     let color = if star.is_dimmed {
-                        Color32::from_rgba_premultiplied(
-                            base_color.r() / 7,
-                            base_color.g() / 7,
-                            base_color.b() / 7,
+                        Color32::from_rgba_unmultiplied(
+                            base_color.r(),
+                            base_color.g(),
+                            base_color.b(),
                             28,
                         )
                     } else if is_query_dimmed {
-                        Color32::from_rgba_premultiplied(
-                            base_color.r() / 5,
-                            base_color.g() / 5,
-                            base_color.b() / 5,
+                        Color32::from_rgba_unmultiplied(
+                            base_color.r(),
+                            base_color.g(),
+                            base_color.b(),
                             25,
                         )
                     } else {
@@ -533,7 +533,7 @@ impl ConstellationState {
             let grid_cols = ((rect.width() / cell_size).ceil() as usize).max(1);
             let grid_rows = ((rect.height() / cell_size).ceil() as usize).max(1);
             let total_cells = grid_cols * grid_rows;
-            let mut occupancy = vec![0u8; total_cells];
+            let mut occupancy = vec![[0_u8; 2]; total_cells];
 
             let rect_min_x = rect.left() - base_star_radius;
             let rect_max_x = rect.right() + base_star_radius;
@@ -580,33 +580,35 @@ impl ConstellationState {
                     continue;
                 }
 
-                // Sub-pixel density capping: if cell already has 2 stars, skip redundant rendering.
-                // Soloed stars are never dropped by dimmed background stars.
+                let is_query_dimmed =
+                    has_query && !sample.filename.to_lowercase().contains(&query_lower);
+                // Cap foreground and background independently: all-sample views
+                // remain bounded, while a dimmed star cannot hide a filter match.
+                // Hit testing above still considers every sample, including stars
+                // omitted from this coarse rendering mesh.
                 let col = ((sx - rect.left()) / cell_size) as usize;
                 let row = ((sy - rect.top()) / cell_size) as usize;
                 if col < grid_cols && row < grid_rows {
-                    let cell_idx = row * grid_cols + col;
-                    if is_category_dimmed && occupancy[cell_idx] >= 2 {
+                    let layer = usize::from(is_category_dimmed || is_query_dimmed);
+                    let count = &mut occupancy[row * grid_cols + col][layer];
+                    if *count >= 2 {
                         continue;
                     }
-                    occupancy[cell_idx] = occupancy[cell_idx].saturating_add(1);
+                    *count += 1;
                 }
 
-                let is_query_dimmed =
-                    has_query && !sample.filename.to_lowercase().contains(&query_lower);
-
                 let color = if is_category_dimmed {
-                    Color32::from_rgba_premultiplied(
-                        base_color.r() / 7,
-                        base_color.g() / 7,
-                        base_color.b() / 7,
+                    Color32::from_rgba_unmultiplied(
+                        base_color.r(),
+                        base_color.g(),
+                        base_color.b(),
                         28,
                     )
                 } else if is_query_dimmed {
-                    Color32::from_rgba_premultiplied(
-                        base_color.r() / 5,
-                        base_color.g() / 5,
-                        base_color.b() / 5,
+                    Color32::from_rgba_unmultiplied(
+                        base_color.r(),
+                        base_color.g(),
+                        base_color.b(),
                         25,
                     )
                 } else {
@@ -1157,6 +1159,89 @@ fn add_star_diamond(mesh: &mut egui::Mesh, pos: Pos2, r: f32, color: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn coarse_mesh(state: &mut ConstellationState) -> Vec<egui::epaint::Vertex> {
+        let context = egui::Context::default();
+        let output = context.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    state.render_starfield(
+                        ui,
+                        std::path::Path::new("/samples"),
+                        &mut |_| {},
+                        &mut |_| {},
+                    );
+                });
+            },
+        );
+        output
+            .shapes
+            .into_iter()
+            .filter_map(|shape| match shape.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.vertices.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    #[test]
+    fn dense_coarse_mesh_is_bounded_without_hiding_category_or_search_matches() {
+        let mut state = ConstellationState::new();
+        state.samples = (0..1000)
+            .map(|index| ConstellationSample {
+                file_path: std::path::PathBuf::from(format!("/samples/{index}.wav")),
+                folder_path: "/samples".into(),
+                filename: if index == 999 {
+                    "target.wav".into()
+                } else {
+                    "background.wav".into()
+                },
+                category: if index == 999 {
+                    SampleCategory::Snare
+                } else {
+                    SampleCategory::Kick
+                },
+                confidence: 1.0,
+                duration_seconds: 0.5,
+                pitch_hz: 0.0,
+                pitch_clarity: 0.0,
+                brightness: 0.0,
+                x: 0.0,
+                y: 0.0,
+                file_size: 100,
+                mtime: 0,
+                sample_rate: 44100,
+                channels: 1,
+                bit_depth: 16,
+            })
+            .collect();
+        assert_eq!(
+            coarse_mesh(&mut state).len(),
+            8,
+            "All view paints at most two stars in a cell"
+        );
+        state.category_filter = Some(SampleCategory::Snare);
+        let solo = coarse_mesh(&mut state);
+        assert_eq!(solo.len(), 12, "two background stars and one matching star");
+        assert!(
+            solo.iter()
+                .any(|vertex| vertex.color == SampleCategory::Snare.color())
+        );
+        state.category_filter = None;
+        state.search_query = "target".into();
+        let search = coarse_mesh(&mut state);
+        assert_eq!(search.len(), 12);
+        assert!(
+            search
+                .iter()
+                .any(|vertex| vertex.color == SampleCategory::Snare.color())
+        );
+    }
 
     #[test]
     fn escape_clears_search_before_the_text_edit_surrenders_focus() {

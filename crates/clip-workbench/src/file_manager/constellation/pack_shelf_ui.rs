@@ -153,6 +153,10 @@ impl ConstellationState {
                         let is_flashing = self.slot_flash[slot_idx]
                             .map_or(false, |t| t.elapsed() < Duration::from_millis(220));
 
+                        if is_flashing {
+                            ui.ctx().request_repaint_after(Duration::from_millis(16));
+                        }
+
                         let key_char = slot.key_char;
                         let sample_count = slot.samples.len();
 
@@ -206,23 +210,7 @@ impl ConstellationState {
                                         trigger_slot_idx = Some(slot_idx);
                                     }
 
-                                    // Play icon button
-                                    if ui.button("Play").on_hover_text("Play slot").clicked() {
-                                        trigger_slot_idx = Some(slot_idx);
-                                    }
-
-                                    // Slot title / layers summary
                                     let title = slot.display_title();
-                                    let short_title = super::ui::short_label(&title, 18);
-
-                                    ui.label(RichText::new(short_title).size(11.0).color(
-                                        if sample_count > 0 {
-                                            Color32::WHITE
-                                        } else {
-                                            Color32::from_gray(130)
-                                        },
-                                    ));
-
                                     // Right action buttons
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
@@ -246,6 +234,19 @@ impl ConstellationState {
                                             {
                                                 add_selected_to_idx = Some(slot_idx);
                                             }
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(&title).size(11.0).color(
+                                                        if sample_count > 0 {
+                                                            Color32::WHITE
+                                                        } else {
+                                                            Color32::from_gray(130)
+                                                        },
+                                                    ),
+                                                )
+                                                .truncate(true),
+                                            )
+                                            .on_hover_text(&title);
                                         },
                                     );
                                 });
@@ -667,7 +668,8 @@ impl ConstellationState {
                                         let is_selected = self.browser_selected_idx == Some(idx);
                                         let text = format!(
                                             "{} ({} slots · {} samples)",
-                                            summary.name, summary.slot_count, summary.sample_count
+                                            summary.folder_path.file_name().unwrap_or_default().to_string_lossy(),
+                                            summary.slot_count, summary.sample_count
                                         );
 
                                         let label = egui::SelectableLabel::new(is_selected, text);
@@ -716,7 +718,7 @@ impl ConstellationState {
                                     }
 
                                     if ui
-                                        .button(RichText::new("Delete").color(Color32::from_rgb(255, 120, 120)))
+                                        .add_enabled(!self.writing_pack(), egui::Button::new(RichText::new("Delete").color(Color32::from_rgb(255, 120, 120))))
                                         .clicked()
                                     {
                                         delete_bank_path = Some(summary.folder_path.clone());
@@ -761,7 +763,9 @@ impl ConstellationState {
                 });
             });
 
-        self.browser_open = is_open;
+        if !is_open {
+            self.close_pack_browser();
+        }
 
         if refresh_packs {
             self.refresh_browser_packs(current_folder);

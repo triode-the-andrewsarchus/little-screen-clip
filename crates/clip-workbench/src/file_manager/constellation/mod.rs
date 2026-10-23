@@ -37,6 +37,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
 
+// Shared decoder limits must be checked before sizes are derived from audio headers.
+pub(super) const MAX_SAMPLE_RATE: u32 = 384_000;
+pub(super) const MAX_SAMPLE_CHANNELS: u16 = 8;
+
 pub struct IndexingJob {
     pub folder: PathBuf,
     pub cancelled: Arc<AtomicBool>,
@@ -472,7 +476,7 @@ impl ConstellationState {
     ///
     /// Must run while the view is hidden to preserve accepted mutation completions.
     pub fn tick(&mut self) {
-        self.poll_background();
+        self.poll_background(little_clip_core::jobs::BackgroundJobs::global());
         self.queue_audio_loads();
         self.poll_hover_previews();
         self.active_players.retain(|p| !p.empty());
@@ -542,6 +546,9 @@ impl Drop for ConstellationState {
     fn drop(&mut self) {
         self.cancel_indexing();
         self.stop_playback();
+        for job in &self.background {
+            job.cancel_read();
+        }
     }
 }
 
