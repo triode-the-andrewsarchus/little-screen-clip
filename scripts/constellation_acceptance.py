@@ -33,9 +33,20 @@ def exercise(session, root):
     session.observe("search", ["Hover to audition"])
     session.key("Escape")
     session.observe("search-cleared", ["Hover to audition"])
-    session.click(845, 222)
+    # Select the actual kick star, rather than the Random toolbar action. This
+    # exercises the map's focus behavior before Shift+1 on a real Wayland keyboard.
+    from PIL import Image
+    image = Image.open(session.output / "search-cleared.png").convert("RGB")
+    stars = [(x, y) for y in range(310, 715) for x in range(355, 840)
+             if (lambda c: c[0] > 140 and c[0] > c[1] * 1.5 and c[0] > c[2] * 1.5)(image.getpixel((x, y)))]
+    assert stars, "owned kick star must be visible in the map"
+    session.click(sum(x for x, _ in stars) // len(stars), sum(y for _, y in stars) // len(stars))
     session.key("1", "shift")
     session.observe("assigned-slot", ["kick.wav"])
+    session.key("2", "shift")
+    for key in ["1", "1", "2", "1"]:
+        session.key(key)
+    session.observe("retriggered-slots", ["kick.wav"])
     session.click(885, 412)
     packs = root / "little-screen-clip-sample-packs"
     wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 1, "first atomic pack save")
@@ -43,6 +54,7 @@ def exercise(session, root):
     bank = json.loads(first.read_text())
     assert len(bank["slots"]) == 10
     assert len(bank["slots"][0]["samples"]) == 1
+    assert len(bank["slots"][1]["samples"]) == 1
     assert bank["slots"][0]["samples"][0]["end_sec"] > 0
     marker = first.parent / "owned-preservation-marker.txt"
     marker.write_text("preserve this owned fixture")
@@ -68,7 +80,7 @@ def main():
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(44100)
-        wav.writeframes(b"".join(struct.pack("<h", int(20000 * math.sin(2 * math.pi * 60 * i / 44100) * math.exp(-8 * i / 44100))) for i in range(17640)))
+        wav.writeframes(b"".join(struct.pack("<h", int(20000 * math.sin(2 * math.pi * 60 * i / 44100) * math.exp(-i / 44100))) for i in range(88200)))
 
     def prepare_environment(env, _children):
         # Keep acceptance playback away from the user's audio device/server.

@@ -1244,6 +1244,76 @@ mod tests {
     }
 
     #[test]
+    fn pad_assignment_uses_physical_digits_and_only_text_focus_blocks_it() {
+        let ctx = egui::Context::default();
+        let mut state = ConstellationState::new();
+        let sample = ConstellationSample {
+            file_path: "/samples/kick.wav".into(),
+            folder_path: "/samples".into(),
+            filename: "kick.wav".into(),
+            category: SampleCategory::Kick,
+            confidence: 1.0,
+            duration_seconds: 0.5,
+            pitch_hz: 60.0,
+            pitch_clarity: 0.0,
+            brightness: 0.0,
+            x: 0.0,
+            y: 0.0,
+            file_size: 100,
+            mtime: 0,
+            sample_rate: 44100,
+            channels: 1,
+            bit_depth: 16,
+        };
+        state.selected_path = Some(sample.file_path.clone());
+        state.samples.push(sample);
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.button("Canvas control").request_focus();
+            });
+        });
+        assert!(ctx.wants_keyboard_input());
+        let input = || egui::RawInput {
+            events: vec![
+                egui::Event::Key {
+                    // Some layouts map Shift+digit to a different supported logical key.
+                    key: egui::Key::Plus,
+                    physical_key: Some(egui::Key::Num1),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::SHIFT,
+                },
+                egui::Event::Key {
+                    // Virtual keyboards can assign digits to arbitrary physical codes.
+                    key: egui::Key::Num2,
+                    physical_key: Some(egui::Key::A),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::SHIFT,
+                },
+            ],
+            ..Default::default()
+        };
+        let _ = ctx.run(input(), |ctx| {
+            state.handle_shelf_keyboard_shortcuts(ctx);
+            assert!(ctx.input(|input| input.events.is_empty()));
+        });
+        assert_eq!(state.pack_bank.slots[0].samples.len(), 1);
+        assert_eq!(state.pack_bank.slots[1].samples.len(), 1);
+        let mut text = String::new();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.text_edit_singleline(&mut text).request_focus();
+            });
+        });
+        let _ = ctx.run(input(), |ctx| {
+            state.handle_shelf_keyboard_shortcuts(ctx);
+            assert!(!ctx.input(|input| input.events.is_empty()));
+        });
+        assert_eq!(state.pack_bank.slots[0].samples.len(), 1);
+    }
+
+    #[test]
     fn escape_clears_search_before_the_text_edit_surrenders_focus() {
         let ctx = egui::Context::default();
         let mut state = ConstellationState::new();

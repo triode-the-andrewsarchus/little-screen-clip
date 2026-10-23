@@ -52,6 +52,32 @@ I/O failure and liveness checks. The review keeps those checks rather than hidin
 them behind generic wrappers to change a metric. The index coordinator itself fell
 from CCN 29 to 4; new migration code has named, version-specific responsibilities.
 
+## Pad assignment and retrigger follow-up
+
+Clicking a map sample followed by Shift+number now assigns that selection even
+when a canvas control has keyboard focus. Text editors still keep their keys.
+The vendored input adapter preserves physical keys for shifted characters such
+as `!`, which egui cannot represent as logical keys. Pad handling prefers physical
+digit positions and falls back to logical digits for virtual keyboards; it uses
+each event's modifiers rather than the frame's final modifier state.
+
+Each pad now owns its own layered voice group. Retriggering stops that pad's
+previous voices before starting ready layers; other pads can keep ringing.
+Navigation and Escape retire all groups, and the repaint scheduler keeps polling
+until their voices finish. A device-free rodio mixer test verifies that both layers
+of one pad stop while another pad remains audible, then verifies global stopping.
+The private UI scenario clicks the actual star, assigns two pads, repeats triggers
+with a two-second fixture, and verifies both assignments in saved metadata. The
+null device cannot establish perceptual audio quality or physical ALSA behavior.
+
+Against `constellation-pad-fixes-start`, this follow-up adds 152 measured lines,
+two regression tests, and 19 total CCN; duplication remains 5.81%, maximum CCN
+remains 196, and cycle count remains six. The extra clone group is the literal
+number-key enumeration also present in Audio Studio; the existing list there has
+a different ordering and is private. Other touched-file clone findings include
+existing worker code and egui test setup. No new audio backend, decoding pipeline,
+or generic voice abstraction was introduced.
+
 ## Architecture comparison against current main
 
 The baseline was measured from a clean detached worktree at `999cd24`, not from
@@ -59,14 +85,14 @@ the feature branch. The same fast profile was used for every measurement.
 
 | Metric | Main | Original feature branch (`82e72a0`) | Reviewed branch |
 | --- | ---: | ---: | ---: |
-| Total cyclomatic complexity | 27,909 | 30,006 | 28,750 |
-| Average cyclomatic complexity | 4.02 | 4.26 | 4.05 |
+| Total cyclomatic complexity | 27,909 | 30,006 | 28,769 |
+| Average cyclomatic complexity | 4.02 | 4.26 | 4.06 |
 | Maximum cyclomatic complexity | 196 | 196 | 196 |
-| Lines of code | 227,320 | 238,554 | 235,716 |
+| Lines of code | 227,320 | 238,554 | 235,868 |
 | Duplication | 5.98% | 5.76% | 5.81% |
-| Clone groups | 1,382 | 1,390 | 1,393 |
+| Clone groups | 1,382 | 1,390 | 1,394 |
 | Reported cycles | 5 | 5 | 6 |
-| Valknut health | 73.88 | 62.65 | 62.72 |
+| Valknut health | 73.88 | 62.65 | 62.71 |
 
 The architecture tool still classifies the whole feature branch as **REGRESSION**
 against main. This is not a clean architecture acceptance result.
@@ -95,9 +121,9 @@ static model data and existing clones in touched files, as well as test fixtures
 
 ## Validation and evidence
 
-- `cargo test --workspace -- --test-threads=2`: 2,505 passed, zero failed,
+- `cargo test --workspace -- --test-threads=2`: 2,507 passed, zero failed,
   23 ignored, including workspace doctests.
-- All 37 focused constellation regression tests pass and cover database boundaries, stale results,
+- All 39 focused constellation regression tests pass and cover database boundaries, stale results,
   protected inputs, malformed audio/banks, save preservation, shared trim storage,
   Unicode labels, Escape handling, model equivalence, and mutation completion.
 - `cargo build -p clip-workbench --bin clip-file-manager` passes.
@@ -111,8 +137,8 @@ static model data and existing clones in touched files, as well as test fixtures
   and an ALSA null device; it never injects input into the user's compositor.
 
 Private-run screenshots and its machine-readable report are retained at
-`/tmp/constellation-followup-acceptance-final/`. The full test log is
-`/tmp/constellation-followup-workspace-final.log`. Run the UI scenario with an installed
+`/tmp/constellation-pad-acceptance-final/`. The full test log is
+`/tmp/constellation-pad-workspace.log`. Run the UI scenario with an installed
 Tesseract English model, or point `TESSDATA_PREFIX` at one:
 
 ```bash

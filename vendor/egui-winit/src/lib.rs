@@ -748,7 +748,9 @@ impl State {
             None
         };
 
-        let logical_key = key_from_winit_key(logical_key);
+        // Shifted characters such as `!` have no egui logical key. Preserve
+        // their physical key so shortcuts such as Shift+1 still reach the app.
+        let logical_key = key_from_winit_key(logical_key).or(physical_key);
 
         // Helpful logging to enable when adding new key support
         log::trace!(

@@ -102,7 +102,10 @@ pub struct ConstellationState {
     pub pack_bank: SamplePackBank,
     pub pack_shelf_open: bool,
     pub slot_flash: [Option<Instant>; 10],
+    /// Independent auditions outside the numbered pads.
     pub active_players: Vec<rodio::Player>,
+    /// One voice group per pad; retriggering replaces every layer in that pad only.
+    slot_players: [Vec<rodio::Player>; sample_pack::NUM_SLOTS],
     background: Vec<background::Pending>,
     folder_generation: u64,
     bank_generation: u64,
@@ -140,6 +143,7 @@ impl Default for ConstellationState {
             pack_shelf_open: true,
             slot_flash: [None; 10],
             active_players: Vec::new(),
+            slot_players: std::array::from_fn(|_| Vec::new()),
             background: Vec::new(),
             folder_generation: 0,
             bank_generation: 0,
@@ -402,23 +406,33 @@ impl ConstellationState {
     /// Map auditions use the browser's `Music` player, stopped by its owner alongside
     /// this method. Retains the hovered path so Escape cannot immediately retrigger it.
     pub fn stop_playback(&mut self) {
-        for player in self.active_players.drain(..) {
+        for player in self.active_players.drain(..).chain(
+            self.slot_players
+                .iter_mut()
+                .flat_map(|voices| voices.drain(..)),
+        ) {
             player.stop();
         }
         self.hover_cancelled.store(true, Ordering::Relaxed);
         self.pending_hover_path = None;
     }
 
-    /// Triggers audio playback for a sample slot (all layered samples play simultaneously).
+    /// Restarts all ready layers in one slot without interrupting other slots.
+    ///
+    /// Stops the previous voices even if a replacement layer is still loading.
     pub fn trigger_slot(&mut self, slot_idx: usize) {
         if slot_idx >= self.pack_bank.slots.len() {
             return;
         }
         self.slot_flash[slot_idx] = Some(Instant::now());
+        let voices = &mut self.slot_players[slot_idx];
+        for player in voices.drain(..) {
+            player.stop();
+        }
         let slot = &self.pack_bank.slots[slot_idx];
         for s in &slot.samples {
             if let Some(player) = sample_pack::play_slot_sample(s) {
-                self.active_players.push(player);
+                voices.push(player);
             }
         }
     }
@@ -479,6 +493,9 @@ impl ConstellationState {
         self.poll_background(little_clip_core::jobs::BackgroundJobs::global());
         self.queue_audio_loads();
         self.poll_hover_previews();
+        for voices in &mut self.slot_players {
+            voices.retain(|player| !player.empty());
+        }
         self.active_players.retain(|p| !p.empty());
         let excess = self.active_players.len().saturating_sub(64);
         for player in self.active_players.drain(..excess) {
@@ -555,6 +572,46 @@ impl Drop for ConstellationState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retrigger_stops_only_its_slot_and_navigation_stops_every_voice() {
+        let (mixer, mut output) =
+            rodio::mixer::mixer(1.try_into().unwrap(), 44100.try_into().unwrap());
+        let mut state = ConstellationState::new();
+        for (slot, amplitude) in [(0, 0.1), (0, 0.15), (1, 0.25)] {
+            let player = rodio::Player::connect_new(&mixer);
+            player.append(rodio::buffer::SamplesBuffer::new(
+                1.try_into().unwrap(),
+                44100.try_into().unwrap(),
+                vec![amplitude; 44100],
+            ));
+            state.slot_players[slot].push(player);
+        }
+        // Player queues start with a short silent span before their first source.
+        for _ in 0..1000 {
+            output.next();
+        }
+        assert!((output.next().unwrap() - 0.5).abs() < 0.0001);
+        // An empty/cold slot must retire all its old layers as well.
+        state.trigger_slot(0);
+        assert!(state.slot_players[0].is_empty());
+        assert_eq!(state.slot_players[1].len(), 1);
+        assert!(state.busy());
+        // Rodio applies stop controls at bounded periodic source checkpoints.
+        for _ in 0..1000 {
+            output.next();
+        }
+        assert!((output.next().unwrap() - 0.25).abs() < 0.0001);
+        state.trigger_slot(0);
+        assert_eq!(state.slot_players[1].len(), 1);
+        state.stop_playback();
+        assert!(state.slot_players.iter().all(Vec::is_empty));
+        assert!(!state.busy());
+        for _ in 0..1000 {
+            output.next();
+        }
+        assert!(output.next().is_none());
+    }
 
     #[test]
     fn indexing_completion_does_not_replace_another_folder() {

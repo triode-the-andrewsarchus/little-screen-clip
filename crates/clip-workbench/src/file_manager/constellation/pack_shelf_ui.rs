@@ -9,44 +9,71 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 impl ConstellationState {
-    /// Handles keyboard shortcuts for triggering (keys 1-0) and assigning (Shift+1-0) sample slots.
-    /// Consumes the keypress events so they do not leak to other file manager navigation handlers.
+    /// Triggers numbered pads or assigns the selected sample with Shift+number.
+    ///
+    /// Uses physical digit positions and each event's modifiers. Text editors retain
+    /// their keys; other focused controls do not block the pads. Consumes handled
+    /// presses before other file manager navigation handlers receive them.
     pub fn handle_shelf_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.wants_keyboard_input() || self.browser_open {
+        let editing_text = ctx
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
+        if editing_text || self.browser_open {
             return;
         }
 
         let keys = [
-            (egui::Key::Num1, 0),
-            (egui::Key::Num2, 1),
-            (egui::Key::Num3, 2),
-            (egui::Key::Num4, 3),
-            (egui::Key::Num5, 4),
-            (egui::Key::Num6, 5),
-            (egui::Key::Num7, 6),
-            (egui::Key::Num8, 7),
-            (egui::Key::Num9, 8),
-            (egui::Key::Num0, 9),
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+            egui::Key::Num7,
+            egui::Key::Num8,
+            egui::Key::Num9,
+            egui::Key::Num0,
         ];
-
-        let shift_held = ctx.input(|i| i.modifiers.shift);
-
-        for (key, slot_idx) in keys {
-            if shift_held {
-                if ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, key)) {
-                    if let Some(ref selected_path) = self.selected_path.clone() {
-                        if let Some(sample) = self
-                            .samples
-                            .iter()
-                            .find(|s| &s.file_path == selected_path)
-                            .cloned()
-                        {
-                            self.add_sample_to_slot(slot_idx, &sample);
-                            self.slot_flash[slot_idx] = Some(Instant::now());
-                        }
-                    }
+        let mut actions = Vec::new();
+        ctx.input_mut(|input| {
+            input.events.retain(|event| {
+                let egui::Event::Key {
+                    key,
+                    physical_key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                else {
+                    return true;
+                };
+                if modifiers.ctrl || modifiers.alt || modifiers.command || modifiers.mac_cmd {
+                    return true;
                 }
-            } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
+                // Pad positions remain stable when Shift changes the logical character.
+                let Some(slot_idx) = keys
+                    .iter()
+                    .position(|keycode| Some(*keycode) == *physical_key)
+                    .or_else(|| keys.iter().position(|keycode| keycode == key))
+                else {
+                    return true;
+                };
+                actions.push((slot_idx, modifiers.shift));
+                false
+            })
+        });
+        for (slot_idx, assign) in actions {
+            if assign {
+                if let Some(sample) = self
+                    .samples
+                    .iter()
+                    .find(|sample| Some(&sample.file_path) == self.selected_path.as_ref())
+                    .cloned()
+                {
+                    self.add_sample_to_slot(slot_idx, &sample);
+                    self.slot_flash[slot_idx] = Some(Instant::now());
+                }
+            } else {
                 self.trigger_slot(slot_idx);
             }
         }
