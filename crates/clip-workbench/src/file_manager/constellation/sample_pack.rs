@@ -54,7 +54,7 @@ impl CachedAudio {
         let decoder = rodio::Decoder::try_from(BufReader::new(file)).ok()?;
         let sample_rate = decoder.sample_rate().get();
         let channels = decoder.channels().get();
-        if sample_rate > 384_000 || channels > 8 {
+        if sample_rate > super::MAX_SAMPLE_RATE || channels > super::MAX_SAMPLE_CHANNELS {
             return None;
         }
         let width = channels as usize;
