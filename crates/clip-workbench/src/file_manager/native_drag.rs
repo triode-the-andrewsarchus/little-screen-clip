@@ -71,7 +71,7 @@ struct State {
     uri_offers: Vec<ObjectId>,
     copy_offers: Vec<ObjectId>,
     incoming: Option<Incoming>,
-    reference_target: Option<egui::Rect>,
+    reference_targets: Vec<egui::Rect>,
     reading: BTreeMap<u64, Reading>,
     awaiting: BTreeMap<u64, wl_data_offer::WlDataOffer>,
     source: Option<Source>,
@@ -121,7 +121,7 @@ impl NativeDrag {
             uri_offers: Vec::new(),
             copy_offers: Vec::new(),
             incoming: None,
-            reference_target: None,
+            reference_targets: Vec::new(),
             reading: BTreeMap::new(),
             awaiting: BTreeMap::new(),
             source: None,
@@ -138,8 +138,8 @@ impl NativeDrag {
         })
     }
 
-    pub(super) fn set_reference_target(&mut self, rect: Option<egui::Rect>) {
-        self.state.reference_target = rect;
+    pub(super) fn set_reference_targets(&mut self, rects: Vec<egui::Rect>) {
+        self.state.reference_targets = rects;
     }
     pub(super) fn drag_position(&self) -> Option<egui::Pos2> {
         self.state

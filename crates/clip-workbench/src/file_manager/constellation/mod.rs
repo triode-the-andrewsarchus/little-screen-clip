@@ -25,6 +25,7 @@ pub mod indexer;
 mod midi;
 mod output;
 pub mod pack_shelf_ui;
+mod pad_drop;
 pub mod sample_pack;
 pub mod ui;
 
@@ -112,6 +113,10 @@ pub struct ConstellationState {
     guard_saving: bool,
     load_approved: bool,
     pub(crate) close_approved: bool,
+    pub(crate) pad_drop_hover: Option<egui::Pos2>,
+    pub(crate) pad_drop_targets: Vec<(egui::Rect, usize)>,
+    pub(crate) native_drop_results: Vec<(u64, bool)>,
+    drop_sequence: u64,
     pub pack_shelf_open: bool,
     pub slot_flash: [Option<Instant>; sample_pack::NUM_SLOTS],
     selected_slot: usize,
@@ -168,6 +173,10 @@ impl Default for ConstellationState {
             guard_saving: false,
             load_approved: false,
             close_approved: false,
+            pad_drop_hover: None,
+            pad_drop_targets: Vec::new(),
+            native_drop_results: Vec::new(),
+            drop_sequence: 0,
             pack_shelf_open: true,
             slot_flash: [None; sample_pack::NUM_SLOTS],
             selected_slot: 0,

@@ -139,8 +139,9 @@ impl State {
     fn update_drop_action(&self) {
         if let Some(incoming) = &self.incoming {
             if self
-                .reference_target
-                .is_some_and(|rect| rect.contains(incoming.point))
+                .reference_targets
+                .iter()
+                .any(|rect| rect.contains(incoming.point))
             {
                 incoming.offer.set_actions(Action::Copy, Action::Copy);
             } else {
@@ -158,8 +159,9 @@ impl State {
             return;
         }
         let reference = self
-            .reference_target
-            .is_some_and(|rect| rect.contains(incoming.point));
+            .reference_targets
+            .iter()
+            .any(|rect| rect.contains(incoming.point));
         if !self.uri_offers.contains(&incoming.offer.id())
             || (reference && !self.copy_offers.contains(&incoming.offer.id()))
             || (!reference && !matches!(incoming.action, Action::Copy | Action::Move))

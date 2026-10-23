@@ -160,6 +160,7 @@ impl ConstellationState {
     }
 
     fn render_pad_grid(&mut self, ui: &mut egui::Ui) {
+        self.pad_drop_targets.clear();
         let gap = 5.0;
         let width = ((ui.available_width() - gap * 3.0) / 4.0).max(24.0);
         for row in (0..4).rev() {
@@ -185,7 +186,16 @@ impl ConstellationState {
                     if let Some(category) = slot.samples.first().and_then(|sample| sample.category) {
                         painter.line_segment([rect.left_bottom() + Vec2::new(5.0, -3.0), rect.right_bottom() + Vec2::new(-5.0, -3.0)], Stroke::new(2.0_f32, category.color()));
                     }
-                    let response = response.on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick to select and play. Shift+click to assign the map selection.", index + 1, 36 + index, slot.display_title()));
+                    let title = slot.display_title();
+                    self.pad_drop_targets.push((rect.intersect(ui.clip_rect()), index));
+                    let native_hover = self.pad_drop_hover.is_some_and(|pos| rect.contains(pos));
+                    if response.dnd_hover_payload::<crate::file_manager::transfers::FileDrag>().is_some() || native_hover {
+                        painter.rect_stroke(rect.shrink(1.0), 4.0, Stroke::new(2.0_f32, visuals.selection.stroke.color));
+                    }
+                    if let Some(payload) = response.dnd_release_payload::<crate::file_manager::transfers::FileDrag>() {
+                        self.drop_on_pad(index, payload.paths.clone(), ui.input(|input| input.modifiers.shift), None);
+                    }
+                    let response = response.on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick to select and play. Shift+click to assign the map selection.", index + 1, 36 + index, title));
                     if response.clicked() {
                         self.selected_slot = index;
                         if ui.input(|input| input.modifiers.shift) { self.assign_selected_to_pad(index); }

@@ -9,6 +9,7 @@ pub(super) enum Task {
     List(PathBuf, u64),
     Bank(PathBuf, bool, u64),
     Audio(PathBuf, u64),
+    Drop(u64, u64, Option<u64>),
     Save,
     Delete,
 }
@@ -17,6 +18,7 @@ pub(super) enum Output {
     Packs(Vec<sample_pack::SamplePackSummary>),
     Bank(SamplePackBank),
     Audio(sample_pack::SlotSample),
+    Dropped(super::pad_drop::PreparedDrop),
     Saved(PathBuf),
     Deleted,
 }
@@ -53,6 +55,7 @@ impl Task {
             Self::Bank(_, true, generation) | Self::Audio(_, generation) => {
                 *generation == state.bank_generation
             }
+            Self::Drop(_, generation, _) => *generation == state.bank_generation,
             Self::Save | Self::Delete => true,
         }
     }
@@ -122,6 +125,9 @@ impl ConstellationState {
                     true
                 } else {
                     job.cancel_read();
+                    if let Task::Drop(_, _, Some(token)) = job.task {
+                        self.native_drop_results.push((token, false));
+                    }
                     false
                 }
             })
@@ -213,6 +219,9 @@ impl ConstellationState {
         for mut job in std::mem::take(&mut self.background) {
             if !job.task.current(self) {
                 job.cancel_read();
+                if let Task::Drop(_, _, Some(token)) = job.task {
+                    self.native_drop_results.push((token, false));
+                }
                 continue;
             }
             let Some(result) = job.poll(jobs) else {
@@ -225,6 +234,9 @@ impl ConstellationState {
             {
                 Ok(output) => self.accept_background(job.task, output),
                 Err(error) => {
+                    if let Task::Drop(_, _, Some(token)) = job.task {
+                        self.native_drop_results.push((token, false));
+                    }
                     if job.task == Task::Save {
                         self.pending_saved_bank = None;
                         self.guard_saving = false;
@@ -245,6 +257,12 @@ impl ConstellationState {
             return;
         }
         match (task, output) {
+            (Task::Drop(_, _, token), Output::Dropped(drop)) => {
+                let success = self.apply_pad_drop(drop);
+                if let Some(token) = token {
+                    self.native_drop_results.push((token, success));
+                }
+            }
             (Task::Folder(..), Output::Samples(samples)) => {
                 self.samples = samples;
             }

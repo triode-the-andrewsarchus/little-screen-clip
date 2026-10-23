@@ -26,6 +26,32 @@ pub(super) fn central_panel<R>(
 enum DropDestination {
     Directory(PathBuf),
     Bookmark,
+    Pad(usize, bool),
+}
+
+impl DropDestination {
+    fn at(
+        browser: &FileManager,
+        pads: &[(egui::Rect, usize)],
+        point: egui::Pos2,
+        append: bool,
+    ) -> Option<Self> {
+        if let Some((_, index)) = pads.iter().find(|(rect, _)| rect.contains(point)) {
+            return Some(Self::Pad(*index, append));
+        }
+        if browser
+            .bookmark_drop_rect
+            .is_some_and(|rect| rect.contains(point))
+        {
+            return Some(Self::Bookmark);
+        }
+        browser
+            .drop_targets
+            .iter()
+            .rev()
+            .find(|(rect, _)| rect.contains(point))
+            .map(|(_, path)| Self::Directory(path.clone()))
+    }
 }
 
 struct FileManagerApp {
@@ -96,34 +122,47 @@ impl FileManagerApp {
         let Some(native) = &mut self.native else {
             return;
         };
-        native.set_reference_target(self.browser.bookmark_drop_rect.map(|rect| {
-            egui::Rect::from_min_max(rect.min * ctx.zoom_factor(), rect.max * ctx.zoom_factor())
-        }));
+        let pads_visible =
+            !self.viewers.active() && self.browser.view == super::BrowserView::Constellation;
+        let pad_targets = if pads_visible {
+            self.browser.constellation.pad_drop_targets.clone()
+        } else {
+            Vec::new()
+        };
+        let references = self
+            .browser
+            .bookmark_drop_rect
+            .into_iter()
+            .chain(pad_targets.iter().map(|(rect, _)| *rect))
+            .map(|rect| {
+                egui::Rect::from_min_max(rect.min * ctx.zoom_factor(), rect.max * ctx.zoom_factor())
+            })
+            .collect();
+        native.set_reference_targets(references);
         for event in native.tick() {
             use super::native_drag::Event;
             match event {
                 Event::Drop(token, point) => {
                     let point = point / ctx.zoom_factor();
-                    if self
-                        .browser
-                        .bookmark_drop_rect
-                        .is_some_and(|rect| rect.contains(point))
-                    {
-                        self.drop_destinations
-                            .insert(token, DropDestination::Bookmark);
-                    } else if let Some((_, path)) = self
-                        .browser
-                        .drop_targets
-                        .iter()
-                        .rev()
-                        .find(|(rect, _)| rect.contains(point))
-                    {
-                        self.drop_destinations
-                            .insert(token, DropDestination::Directory(path.clone()));
+                    if let Some(destination) = DropDestination::at(
+                        &self.browser,
+                        &pad_targets,
+                        point,
+                        ctx.input(|input| input.modifiers.shift),
+                    ) {
+                        self.drop_destinations.insert(token, destination);
                     }
                 }
                 Event::Files(token, paths, moving) => {
                     let accepted = match self.drop_destinations.remove(&token) {
+                        Some(DropDestination::Pad(index, append)) if !moving && pads_visible => {
+                            self.browser.constellation.drop_on_pad(
+                                index,
+                                paths,
+                                append,
+                                Some(token),
+                            )
+                        }
                         Some(DropDestination::Bookmark) if !moving => {
                             self.browser.bookmarks.add(paths, Some(token))
                         }
@@ -154,6 +193,14 @@ impl FileManagerApp {
         self.browser.native_drag_point = native
             .drag_position()
             .map(|point| point / ctx.zoom_factor());
+        self.browser.constellation.pad_drop_hover = if pads_visible {
+            self.browser.native_drag_point
+        } else {
+            None
+        };
+        for (token, success) in self.browser.constellation.native_drop_results.drain(..) {
+            native.finish(token, success);
+        }
         for (token, success) in self.browser.bookmarks.native_results.drain(..) {
             native.finish(token, success);
         }

@@ -179,7 +179,7 @@ impl FileManager {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().inner_margin(8.0))
             .show_inside(ui, |ui| {
-                if ui.is_enabled() {
+                if ui.is_enabled() && self.view != super::BrowserView::Constellation {
                     self.drop_targets.push((
                         ui.available_rect_before_wrap().intersect(ui.clip_rect()),
                         self.path().to_path_buf(),

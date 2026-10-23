@@ -21,6 +21,7 @@ impl ConstellationState {
         on_play_sample: &mut dyn FnMut(&std::path::Path),
         on_select_sample: &mut dyn FnMut(&std::path::Path),
     ) {
+        self.pad_drop_targets.clear();
         if self.browser_open
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
@@ -299,6 +300,43 @@ impl ConstellationState {
         });
     }
 
+    /// Distinguishes a sample-reference drag from empty-canvas panning.
+    fn handle_map_drag(
+        &self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        center: Pos2,
+        view_scale: f32,
+        relaxed_map: Option<&std::collections::HashMap<&std::path::Path, Pos2>>,
+        query_lower: &str,
+    ) -> Option<std::path::PathBuf> {
+        if response.drag_started() {
+            if let Some(origin) = ui.input(|input| input.pointer.press_origin()) {
+                let nearest = self
+                    .samples
+                    .iter()
+                    .filter(|sample| self.matches_filters(sample, query_lower))
+                    .filter_map(|sample| {
+                        let pos = relaxed_map
+                            .and_then(|map| map.get(sample.file_path.as_path()))
+                            .copied()
+                            .unwrap_or(center + Vec2::new(sample.x, sample.y) * view_scale);
+                        let distance = pos.distance_sq(origin);
+                        (distance <= 144.0).then_some((sample, distance))
+                    })
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                if let Some((sample, _)) = nearest {
+                    response.dnd_set_drag_payload(crate::file_manager::transfers::FileDrag {
+                        paths: vec![sample.file_path.clone()],
+                        copy_only: true,
+                    });
+                    return Some(sample.file_path.clone());
+                }
+            }
+        }
+        None
+    }
+
     fn render_starfield(
         &mut self,
         ui: &mut egui::Ui,
@@ -308,11 +346,6 @@ impl ConstellationState {
     ) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-
-        // Pan handling
-        if response.dragged() {
-            self.pan += response.drag_delta();
-        }
 
         // Zoom handling
         let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
@@ -631,6 +664,26 @@ impl ConstellationState {
 
                 add_star_diamond(&mut star_mesh, Pos2::new(sx, sy), base_star_radius, color);
             }
+        }
+
+        let dragged_path = self.handle_map_drag(
+            ui,
+            &response,
+            center,
+            view_scale,
+            relaxed_map.as_ref(),
+            &query_lower,
+        );
+
+        if let Some(path) = dragged_path {
+            self.selected_path = Some(path);
+        }
+        if response.dragged()
+            && !egui::DragAndDrop::has_payload_of_type::<crate::file_manager::transfers::FileDrag>(
+                ui.ctx(),
+            )
+        {
+            self.pan += response.drag_delta();
         }
 
         // Render playback history trail (fades over steps and distance)
