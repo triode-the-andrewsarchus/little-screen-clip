@@ -2,6 +2,18 @@
 use little_clip_core::ImageThumbnail;
 use std::{path::Path, sync::atomic::AtomicBool};
 
+pub const HASH_WIDTH: usize = 8;
+pub const HASH_HEIGHT: usize = 8;
+pub const GRID_COLS: usize = HASH_WIDTH + 1; // 9 columns to yield 8 horizontal differences
+pub const GRID_ROWS: usize = HASH_HEIGHT; // 8 rows
+pub const DHASH_THUMBNAIL_EDGE: u32 = 64;
+
+// ITU-R BT.601 luma coefficients: Y = 0.299 R + 0.587 G + 0.114 B
+const LUMA_RED_WEIGHT: u32 = 299;
+const LUMA_GREEN_WEIGHT: u32 = 587;
+const LUMA_BLUE_WEIGHT: u32 = 114;
+const LUMA_DENOMINATOR: u32 = 1000;
+
 /// Computes a 64-bit difference hash from a thumbnail buffer.
 ///
 /// Samples a 9-wide by 8-high grid of grayscale luminance values and compares
@@ -13,12 +25,12 @@ pub fn compute_dhash(thumbnail: &ImageThumbnail) -> u64 {
         return 0;
     }
 
-    let mut gray = [[0u16; 9]; 8];
-    for y in 0..8 {
-        let src_y = (y * height) / 8;
+    let mut gray = [[0u16; GRID_COLS]; GRID_ROWS];
+    for y in 0..GRID_ROWS {
+        let src_y = (y * height) / GRID_ROWS;
         let row_offset = src_y * width * 4;
-        for x in 0..9 {
-            let src_x = (x * width) / 9;
+        for x in 0..GRID_COLS {
+            let src_x = (x * width) / GRID_COLS;
             let idx = row_offset + src_x * 4;
             if idx + 3 < thumbnail.premultiplied_rgba.len() {
                 let a = thumbnail.premultiplied_rgba[idx + 3] as u32;
@@ -31,17 +43,17 @@ pub fn compute_dhash(thumbnail: &ImageThumbnail) -> u64 {
                 } else {
                     (0, 0, 0)
                 };
-                // ITU-R BT.601 luma formula
-                gray[y][x] = ((r * 299 + g * 587 + b * 114) / 1000) as u16;
+                gray[y][x] = ((r * LUMA_RED_WEIGHT + g * LUMA_GREEN_WEIGHT + b * LUMA_BLUE_WEIGHT)
+                    / LUMA_DENOMINATOR) as u16;
             }
         }
     }
 
     let mut hash = 0u64;
-    for y in 0..8 {
-        for x in 0..8 {
+    for y in 0..HASH_HEIGHT {
+        for x in 0..HASH_WIDTH {
             if gray[y][x] < gray[y][x + 1] {
-                hash |= 1u64 << (y * 8 + x);
+                hash |= 1u64 << (y * HASH_WIDTH + x);
             }
         }
     }
@@ -51,7 +63,7 @@ pub fn compute_dhash(thumbnail: &ImageThumbnail) -> u64 {
 /// Computes the d-hash directly from a regular image file using thumbnail loading.
 pub fn compute_dhash_from_path(path: &Path, cancelled: &AtomicBool) -> Option<u64> {
     // 64px is sufficient resolution for a 9x8 gradient hash and is extremely fast.
-    let thumb = super::super::thumbnail::load(path, 64, 1, cancelled)?;
+    let thumb = super::super::thumbnail::load(path, DHASH_THUMBNAIL_EDGE, 1, cancelled)?;
     Some(compute_dhash(&thumb))
 }
 

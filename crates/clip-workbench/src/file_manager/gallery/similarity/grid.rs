@@ -1,5 +1,9 @@
 //! Discrete 2D grid snapping via recursive median bipartition and local relaxation.
 
+const REFINE_PASSES: usize = 2;
+const SCALE_EPSILON: f32 = 1e-5;
+const COST_IMPROVEMENT_EPSILON: f32 = 1e-4;
+
 /// A placed tile in the discrete 2D grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GridPlacement {
@@ -179,12 +183,12 @@ fn refine_grid(
         min_y = min_y.min(y);
         max_y = max_y.max(y);
     }
-    let scale_x = if (max_x - min_x).abs() > 1e-5 {
+    let scale_x = if (max_x - min_x).abs() > SCALE_EPSILON {
         (cols.saturating_sub(1) as f32) / (max_x - min_x)
     } else {
         1.0
     };
-    let scale_y = if (max_y - min_y).abs() > 1e-5 {
+    let scale_y = if (max_y - min_y).abs() > SCALE_EPSILON {
         (rows.saturating_sub(1) as f32) / (max_y - min_y)
     } else {
         1.0
@@ -201,8 +205,8 @@ fn refine_grid(
         grid_to_item.insert(slot, item);
     }
 
-    // 2 passes of adjacent swap optimization
-    for _ in 0..2 {
+    // Adjacent swap optimization passes
+    for _ in 0..REFINE_PASSES {
         let mut improved = false;
         for item_a in 0..points.len() {
             let (ca, ra) = assignments[item_a];
@@ -234,7 +238,7 @@ fn refine_grid(
                     let d_swap_b = (tb_x - ca as f32).powi(2) + (tb_y - ra as f32).powi(2);
                     let cost_swap = d_swap_a + d_swap_b;
 
-                    if cost_swap + 1e-4 < cost_curr {
+                    if cost_swap + COST_IMPROVEMENT_EPSILON < cost_curr {
                         assignments[item_a] = (cb, rb);
                         assignments[item_b] = (ca, ra);
                         grid_to_item.insert((cb, rb), item_a);
