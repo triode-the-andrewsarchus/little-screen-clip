@@ -18,6 +18,72 @@ pub(crate) struct StudioRequest {
 }
 
 impl ConstellationState {
+    pub(super) fn handle_pad_response(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        response: &egui::Response,
+        title: String,
+    ) {
+        let rect = response.rect;
+        let painter = ui.painter();
+        let visuals = ui.visuals().clone();
+        if let Some(payload) =
+            response.dnd_release_payload::<crate::file_manager::transfers::FileDrag>()
+        {
+            self.drop_on_pad(
+                index,
+                payload.paths.clone(),
+                ui.input(|input| input.modifiers.shift),
+                None,
+            );
+        }
+        if response.drag_started() {
+            egui::DragAndDrop::set_payload(
+                ui.ctx(),
+                PadDrag {
+                    index,
+                    generation: self.bank_generation,
+                    before: self.pack_bank.slots[index].clone(),
+                },
+            );
+        }
+        if response.dnd_hover_payload::<PadDrag>().is_some() {
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                4.0,
+                egui::Stroke::new(2.0_f32, visuals.selection.bg_fill),
+            );
+        }
+        if let Some(drag) = response.dnd_release_payload::<PadDrag>() {
+            self.swap_pads(&drag, index);
+        }
+
+        let response = response.clone().on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick: play · Double-click: Audio Studio · Shift+click: add map sample\nHold Shift and right-click consecutive pads to join a mute group. Right-click for pad actions.", index + 1, 36 + index, title));
+        if response.secondary_clicked() && ui.input(|input| input.modifiers.shift) {
+            self.join_mute_group(index);
+        }
+        if !ui.input(|input| input.modifiers.shift) {
+            response.context_menu(|ui| {
+                if ui.button("Leave mute group").clicked() {
+                    self.pack_bank.slots[index].choke_group = 0;
+                    ui.close_menu();
+                }
+            });
+        }
+        if response.double_clicked() {
+            self.selected_slot = index;
+            self.request_pad_studio(index, 0);
+        } else if response.clicked() {
+            self.selected_slot = index;
+            if ui.input(|input| input.modifiers.shift) {
+                self.assign_selected_to_pad(index);
+            } else {
+                self.trigger_slot(index);
+            }
+        }
+    }
+
     pub(super) fn request_pad_studio(&mut self, pad: usize, layer: usize) {
         if let Some(before) = self.pack_bank.slots[pad].samples.get(layer).cloned() {
             self.studio_request = Some(StudioRequest {

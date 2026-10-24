@@ -500,6 +500,7 @@ impl ConstellationState {
     /// The browser consumes that request before accepting loader results and after
     /// rack UI actions. Retains the hovered path so Escape cannot retrigger it.
     pub fn stop_playback(&mut self) {
+        self.choke_anchor = None;
         self.stop_map_audition = true;
         if let Some(midi) = &self.midi {
             midi.suspend();

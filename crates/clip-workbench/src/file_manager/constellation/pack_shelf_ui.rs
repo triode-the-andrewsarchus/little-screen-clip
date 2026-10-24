@@ -1,7 +1,7 @@
 //! Compact drum rack, selected-pad editor, and reference-pack browser.
 
 use super::ConstellationState;
-use egui::{Pos2, Rect, RichText, Stroke, Vec2};
+use egui::{Rect, RichText, Stroke, Vec2};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -177,7 +177,7 @@ impl ConstellationState {
 
     fn render_pad_grid(&mut self, ui: &mut egui::Ui) {
         self.pad_drop_targets.clear();
-        if !ui.input(|input| input.modifiers.shift) {
+        if ui.input(|input| !input.modifiers.shift || input.key_pressed(egui::Key::Escape)) {
             self.choke_anchor = None;
         }
         let mut hovered = None;
@@ -201,74 +201,112 @@ impl ConstellationState {
         ui.scope(|ui| {
             ui.spacing_mut().interact_size.y = pad_height;
             ui.spacing_mut().item_spacing = Vec2::new(gap, gap);
-        for row in (0..4).rev() {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                for col in 0..4 {
-                    let index = row * 4 + col;
-                    let slot = &self.pack_bank.slots[index];
-                    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, pad_height), egui::Sense::click_and_drag());
-                    let unavailable = slot.samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path));
-                    let loading = slot.samples.iter().any(|sample| sample.cached_audio.is_none() && !self.failed_audio.contains(&sample.file_path));
-                    let flashing = self.slot_flash[index].is_some_and(|time| time.elapsed() < Duration::from_millis(150));
-                    if flashing { ui.ctx().request_repaint_after(Duration::from_millis(16)); }
-                    let painter = ui.painter_at(rect);
-                    let visuals = ui.visuals().clone();
-                    let fill = if flashing || response.hovered() { visuals.widgets.hovered.bg_fill } else { visuals.widgets.inactive.weak_bg_fill };
-                    let stroke = if self.selected_slot == index { Stroke::new(1.5_f32, visuals.text_color()) } else { visuals.widgets.noninteractive.bg_stroke };
-                    painter.rect(rect, 4.0, fill, stroke);
-                    let key = self.pad_keys[index].to_ascii_uppercase().to_string();
-                    painter.text(rect.min + Vec2::new(7.0, 4.0), egui::Align2::LEFT_TOP, key, egui::FontId::monospace(if pad_height < 36.0 { 10.0 } else { 14.0 }), visuals.text_color());
-                    Self::paint_pad_status(ui, rect, slot, unavailable, loading, playing[index]);
-                    let title = slot.samples.first().map_or("—", |sample| sample.filename.as_str());
-                    let label = super::ui::short_label(title, ((width - 12.0) / 5.5).max(3.0) as usize);
-                    painter.text(rect.left_bottom() + Vec2::new(7.0, -4.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(if pad_height >= 56.0 { 12.0 } else { 10.0 }), visuals.text_color());
-                    if let Some(category) = slot.samples.first().and_then(|sample| sample.category) {
-                        painter.line_segment([rect.left_bottom() + Vec2::new(5.0, -2.0), rect.right_bottom() + Vec2::new(-5.0, -2.0)], Stroke::new(2.0_f32, category.color()));
-                    }
-                    let title = Self::pad_tooltip(slot, unavailable, loading, playing[index]);
-                    self.pad_drop_targets.push((rect.intersect(ui.clip_rect()), index));
-                    let native_hover = self.pad_drop_hover.is_some_and(|pos| rect.contains(pos));
-                    if response.dnd_hover_payload::<crate::file_manager::transfers::FileDrag>().is_some() || native_hover {
-                        painter.rect_stroke(rect.shrink(1.0), 4.0, Stroke::new(2.0_f32, visuals.selection.stroke.color));
-                    }
-                    if let Some(payload) = response.dnd_release_payload::<crate::file_manager::transfers::FileDrag>() {
-                        self.drop_on_pad(index, payload.paths.clone(), ui.input(|input| input.modifiers.shift), None);
-                    }
-                    if response.drag_started() {
-                        egui::DragAndDrop::set_payload(ui.ctx(), super::pad_interaction::PadDrag {
-                            index, generation: self.bank_generation, before: self.pack_bank.slots[index].clone(),
+            for row in (0..4).rev() {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for col in 0..4 {
+                        let index = row * 4 + col;
+                        let slot = &self.pack_bank.slots[index];
+                        let (rect, response) = ui.allocate_exact_size(
+                            Vec2::new(width, pad_height),
+                            egui::Sense::click_and_drag(),
+                        );
+                        let unavailable = slot
+                            .samples
+                            .iter()
+                            .any(|sample| self.failed_audio.contains(&sample.file_path));
+                        let loading = slot.samples.iter().any(|sample| {
+                            sample.cached_audio.is_none()
+                                && !self.failed_audio.contains(&sample.file_path)
                         });
-                    }
-                    if response.dnd_hover_payload::<super::pad_interaction::PadDrag>().is_some() {
-                        painter.rect_stroke(rect.shrink(1.0), 4.0, Stroke::new(2.0_f32, visuals.selection.bg_fill));
-                    }
-                    if let Some(drag) = response.dnd_release_payload::<super::pad_interaction::PadDrag>() {
-                        self.swap_pads(&drag, index);
-                    }
-                    if response.hovered() { hovered = Some(index); }
-                    let response = response.on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick: play · Double-click: Audio Studio · Shift+click: add map sample\nHold Shift and right-click consecutive pads to join a mute group. Right-click for pad actions.", index + 1, 36 + index, title));
-                    if response.secondary_clicked() && ui.input(|input| input.modifiers.shift) { self.join_mute_group(index); }
-                    if !ui.input(|input| input.modifiers.shift) { response.context_menu(|ui| {
-                        if ui.button("Leave mute group").clicked() {
-                            self.pack_bank.slots[index].choke_group = 0;
-                            ui.close_menu();
+                        let flashing = self.slot_flash[index]
+                            .is_some_and(|time| time.elapsed() < Duration::from_millis(150));
+                        if flashing {
+                            ui.ctx().request_repaint_after(Duration::from_millis(16));
                         }
-                    }); }
-                    if response.double_clicked() {
-                        self.selected_slot = index;
-                        self.request_pad_studio(index, 0);
-                    } else if response.clicked() {
-                        self.selected_slot = index;
-                        if ui.input(|input| input.modifiers.shift) { self.assign_selected_to_pad(index); }
-                        else { self.trigger_slot(index); }
+                        let painter = ui.painter_at(rect);
+                        let visuals = ui.visuals().clone();
+                        let fill = if flashing || response.hovered() {
+                            visuals.widgets.hovered.bg_fill
+                        } else {
+                            visuals.widgets.inactive.weak_bg_fill
+                        };
+                        let stroke = if self.selected_slot == index {
+                            Stroke::new(1.5_f32, visuals.text_color())
+                        } else {
+                            visuals.widgets.noninteractive.bg_stroke
+                        };
+                        painter.rect(rect, 4.0, fill, stroke);
+                        let key = self.pad_keys[index].to_ascii_uppercase().to_string();
+                        painter.text(
+                            rect.min + Vec2::new(7.0, 4.0),
+                            egui::Align2::LEFT_TOP,
+                            key,
+                            egui::FontId::monospace(if pad_height < 36.0 { 10.0 } else { 14.0 }),
+                            visuals.text_color(),
+                        );
+                        Self::paint_pad_status(
+                            ui,
+                            rect,
+                            slot,
+                            unavailable,
+                            loading,
+                            playing[index],
+                        );
+                        let title = slot
+                            .samples
+                            .first()
+                            .map_or("—", |sample| sample.filename.as_str());
+                        let label =
+                            super::ui::short_label(title, ((width - 12.0) / 5.5).max(3.0) as usize);
+                        painter.text(
+                            rect.left_bottom() + Vec2::new(7.0, -4.0),
+                            egui::Align2::LEFT_BOTTOM,
+                            label,
+                            egui::FontId::proportional(if pad_height >= 56.0 {
+                                12.0
+                            } else {
+                                10.0
+                            }),
+                            visuals.text_color(),
+                        );
+                        if let Some(category) =
+                            slot.samples.first().and_then(|sample| sample.category)
+                        {
+                            painter.line_segment(
+                                [
+                                    rect.left_bottom() + Vec2::new(5.0, -2.0),
+                                    rect.right_bottom() + Vec2::new(-5.0, -2.0),
+                                ],
+                                Stroke::new(2.0_f32, category.color()),
+                            );
+                        }
+                        self.pad_drop_targets
+                            .push((rect.intersect(ui.clip_rect()), index));
+                        let native_hover =
+                            self.pad_drop_hover.is_some_and(|pos| rect.contains(pos));
+                        if response
+                            .dnd_hover_payload::<crate::file_manager::transfers::FileDrag>()
+                            .is_some()
+                            || native_hover
+                        {
+                            painter.rect_stroke(
+                                rect.shrink(1.0),
+                                4.0,
+                                Stroke::new(2.0_f32, visuals.selection.stroke.color),
+                            );
+                        }
+                        if response.hovered() {
+                            hovered = Some(index);
+                        }
+                        let title = Self::pad_tooltip(slot, unavailable, loading, playing[index]);
+                        self.handle_pad_response(ui, index, &response, title);
                     }
+                });
+                if row != 0 {
+                    ui.add_space(gap - ui.spacing().item_spacing.y.min(gap));
                 }
-            });
-            if row != 0 {
-                ui.add_space(gap - ui.spacing().item_spacing.y.min(gap));
             }
-        }
         });
         self.paint_mute_links(ui, hovered);
         ui.weak(if self.choke_anchor.is_some() {
@@ -293,7 +331,7 @@ impl ConstellationState {
             painter.text(
                 rect.right_top() + Vec2::new(-6.0, 6.0),
                 egui::Align2::RIGHT_TOP,
-                format!("C{}", slot.choke_group),
+                format!("G{}", slot.choke_group),
                 egui::FontId::monospace(9.0),
                 visuals.weak_text_color(),
             );
@@ -343,7 +381,7 @@ impl ConstellationState {
         title
     }
 
-    fn assign_selected_to_pad(&mut self, index: usize) {
+    pub(super) fn assign_selected_to_pad(&mut self, index: usize) {
         if let Some(sample) = self
             .samples
             .iter()
@@ -503,12 +541,12 @@ impl ConstellationState {
                         });
                         ui.allocate_ui(Vec2::new(240.0, 200.0), |ui| {
                             ui.strong("Sound");
-                            Self::render_layer_parameters(ui, sample, palette);
+                            Self::render_layer_parameters(ui, sample);
                         });
                     });
                 } else {
                     Self::render_layer_trim(ui, sample);
-                    Self::render_layer_parameters(ui, sample, palette);
+                    Self::render_layer_parameters(ui, sample);
                 }
                 ui.separator();
             });
@@ -552,24 +590,23 @@ impl ConstellationState {
         });
     }
 
-    fn render_layer_parameters(
-        ui: &mut egui::Ui,
-        sample: &mut super::sample_pack::SlotSample,
-        _palette: &little_clip_core::palette::AppPalette,
-    ) {
+    fn render_layer_parameters(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
         let mut gain = if sample.volume <= 0.0 {
             -60.0
         } else {
             20.0 * sample.volume.log10()
         };
         let mut gain_changed = false;
-        ui.spacing_mut().slider_width = (ui.available_width() - 105.0).clamp(80.0, 180.0);
-        for (label, value, range, timed) in [
+        let columns = if ui.available_width() >= 380.0 { 2 } else { 1 };
+        ui.spacing_mut().slider_width =
+            (ui.available_width() / columns as f32 - 145.0).clamp(50.0, 160.0);
+        egui::Grid::new("pad_sound_controls").num_columns(columns).spacing(Vec2::new(12.0, 4.0)).show(ui, |ui| {
+        for (index, (label, value, range, timed)) in [
             ("Gain", &mut gain, -60.0..=6.0206, false),
             ("Pan", &mut sample.pan, -1.0..=1.0, false),
             ("Attack", &mut sample.attack_ms, 0.0..=500.0, true),
             ("Release", &mut sample.release_ms, 0.0..=500.0, true),
-        ] {
+        ].into_iter().enumerate() {
             let response = ui.add(
                 egui::Slider::new(value, range)
                     .text(label)
@@ -603,12 +640,14 @@ impl ConstellationState {
                 gain_changed = response.changed() || reset;
             }
             response.on_hover_text("Drag to adjust · click the value to type · double-click to reset. Pan: -1 left, 0 center, +1 right.");
+            if (index + 1) % columns == 0 { ui.end_row(); }
         }
+        });
         if gain_changed {
             sample.volume = if gain <= -60.0 {
                 0.0
             } else {
-                10.0_f32.powf(gain / 20.0)
+                10.0_f32.powf(gain / 20.0).min(2.0)
             };
         }
     }
@@ -620,9 +659,12 @@ impl ConstellationState {
             ui.toggle_value(&mut self.pack_bank.slots[index].solo, "Solo");
             let group = self.pack_bank.slots[index].choke_group;
             ui.label(if group == 0 { "Mute group: none".into() } else { format!("Mute group {group}") })
-                .on_hover_text("Hold Shift and right-click pads to link them. Hover a grouped pad to see its partners.");
-            if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add selected")).clicked() { self.assign_selected_to_pad(index); }
-            if ui.small_button("Clear").clicked() { self.clear_slot(index); }
+                .on_hover_text("Pads in the same mute group cut each other off. Hold Shift and right-click pads to link them; hover to see partners.");
+            ui.menu_button("Pad actions", |ui| {
+                if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add map sample")).clicked() { self.assign_selected_to_pad(index); ui.close_menu(); }
+                if ui.button("Leave mute group").clicked() { self.pack_bank.slots[index].choke_group = 0; ui.close_menu(); }
+                if ui.button("Clear pad").clicked() { self.clear_slot(index); ui.close_menu(); }
+            });
             if self.pack_bank.slots[index].samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path)) && ui.small_button("Retry audio").clicked() {
                 for sample in &self.pack_bank.slots[index].samples { self.failed_audio.remove(&sample.file_path); }
             }
@@ -744,6 +786,7 @@ impl ConstellationState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::Pos2;
 
     #[test]
     fn inset_end_handle_trims_without_moving_the_start() {

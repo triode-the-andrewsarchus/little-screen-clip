@@ -163,6 +163,19 @@ impl AudioViewport {
         }
     }
 
+    /// Projects a time onto a track's horizontal pixel interval without changing the view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use clip_workbench::audio_preview::AudioViewport;
+    /// let view = AudioViewport::new(2.0);
+    /// assert_eq!(view.time_to_x(1.0, 10.0, 200.0), 110.0);
+    /// ```
+    pub fn time_to_x(self, time: f32, left: f32, width: f32) -> f32 {
+        left + (time - self.start_sec) / self.duration_sec.max(f32::EPSILON) * width
+    }
+
     /// Applies a zoom factor centered around an anchor time point, clamped within bounds.
     pub fn zoom(&mut self, factor: f32, anchor_time: f32, total_duration: f32, sample_rate: f32) {
         let dur = total_duration.max(0.01);

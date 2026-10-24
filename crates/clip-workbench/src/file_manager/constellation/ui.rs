@@ -10,7 +10,8 @@ impl ConstellationState {
     fn matches_filters(&self, sample: &ConstellationSample, lowercase_query: &str) -> bool {
         self.category_filter
             .is_none_or(|category| sample.category == category)
-            && sample.filename.to_lowercase().contains(lowercase_query)
+            && (lowercase_query.is_empty()
+                || sample.filename.to_lowercase().contains(lowercase_query))
             && sample.duration_seconds >= self.min_duration
             && (self.max_duration == 0.0 || sample.duration_seconds <= self.max_duration)
             && match self.channel_filter {
@@ -119,8 +120,8 @@ impl ConstellationState {
                 {
                     egui::TopBottomPanel::bottom("constellation_selected_pad")
                         .resizable(true)
-                        .default_height(260.0)
-                        .height_range(220.0..=420.0)
+                        .default_height(300.0)
+                        .height_range(240.0..=420.0)
                         .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 6.0)))
                         .show_inside(ui, |ui| {
                             ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
@@ -269,10 +270,20 @@ impl ConstellationState {
                 if ui.button("Saved packs").clicked() {
                     self.pack_shelf_open = true;
                     self.browser_open = true;
+                    self.output_editor_open = false;
                     self.refresh_browser_packs(current_folder);
                     ui.close_menu();
                 }
             });
+            let query = self.search_query.to_lowercase();
+            ui.weak(format!(
+                "{} / {}",
+                self.samples
+                    .iter()
+                    .filter(|sample| self.matches_filters(sample, &query))
+                    .count(),
+                self.samples.len()
+            ));
         });
         if self.filters_open {
             self.render_audio_filters(ui);
@@ -315,12 +326,26 @@ impl ConstellationState {
     }
 
     fn render_filter_chips(&mut self, ui: &mut egui::Ui) {
+        if self.min_duration == 0.0 && self.max_duration == 0.0 && self.channel_filter == 0 {
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             for (label, value) in [
                 ("Min", &mut self.min_duration),
                 ("Max", &mut self.max_duration),
             ] {
-                if *value > 0.0 && ui.small_button(format!("{label} {value:.3} s ×")).clicked() {
+                if *value > 0.0
+                    && ui
+                        .add(
+                            egui::Button::image_and_text(
+                                crate::icons::Icon::Close
+                                    .image_tinted(12.0, ui.visuals().text_color()),
+                                format!("{label} {value:.3} s"),
+                            )
+                            .small(),
+                        )
+                        .clicked()
+                {
                     *value = 0.0;
                 }
             }
@@ -330,19 +355,19 @@ impl ConstellationState {
                     2 => "Stereo",
                     _ => "Multichannel",
                 };
-                if ui.small_button(format!("{label} ×")).clicked() {
+                if ui
+                    .add(
+                        egui::Button::image_and_text(
+                            crate::icons::Icon::Close.image_tinted(12.0, ui.visuals().text_color()),
+                            label,
+                        )
+                        .small(),
+                    )
+                    .clicked()
+                {
                     self.channel_filter = 0;
                 }
             }
-            let query = self.search_query.to_lowercase();
-            ui.weak(format!(
-                "{} / {} samples",
-                self.samples
-                    .iter()
-                    .filter(|sample| self.matches_filters(sample, &query))
-                    .count(),
-                self.samples.len()
-            ));
         });
     }
 
@@ -507,12 +532,17 @@ impl ConstellationState {
         let base_star_radius = (4.0_f32 * self.zoom.clamp(0.6, 2.0)).clamp(2.0, 8.0);
         // Count projected neighbors without suppressing any point. The full viewport
         // keeps radii stable when docks obscure part of the map.
-        let density = PointDensity::new(self.samples.iter().map(|sample| {
-            Pos2::new(
-                center.x + sample.x * view_scale,
-                center.y - sample.y * view_scale,
-            )
-        }));
+        let density = PointDensity::new(
+            self.samples
+                .iter()
+                .map(|sample| {
+                    Pos2::new(
+                        center.x + sample.x * view_scale,
+                        center.y - sample.y * view_scale,
+                    )
+                })
+                .filter(|pos| viewport.expand(32.0).contains(*pos)),
+        );
 
         let mut selected_sample_overlay: Option<(Pos2, Color32)> = None;
 
@@ -683,23 +713,19 @@ impl ConstellationState {
 
                     let is_filter_dimmed = !self.matches_filters(star.sample, &query_lower);
 
-                    let color = if star.is_dimmed {
-                        Color32::from_rgba_unmultiplied(
-                            base_color.r(),
-                            base_color.g(),
-                            base_color.b(),
-                            28,
-                        )
+                    let alpha = if star.is_dimmed {
+                        28
                     } else if is_filter_dimmed {
-                        Color32::from_rgba_unmultiplied(
-                            base_color.r(),
-                            base_color.g(),
-                            base_color.b(),
-                            25,
-                        )
+                        25
                     } else {
-                        base_color
+                        255
                     };
+                    let color = Color32::from_rgba_unmultiplied(
+                        base_color.r(),
+                        base_color.g(),
+                        base_color.b(),
+                        alpha,
+                    );
 
                     add_star_diamond(
                         &mut star_mesh,
@@ -759,23 +785,19 @@ impl ConstellationState {
                 }
 
                 let is_filter_dimmed = !self.matches_filters(sample, &query_lower);
-                let color = if is_category_dimmed {
-                    Color32::from_rgba_unmultiplied(
-                        base_color.r(),
-                        base_color.g(),
-                        base_color.b(),
-                        28,
-                    )
+                let alpha = if is_category_dimmed {
+                    28
                 } else if is_filter_dimmed {
-                    Color32::from_rgba_unmultiplied(
-                        base_color.r(),
-                        base_color.g(),
-                        base_color.b(),
-                        25,
-                    )
+                    25
                 } else {
-                    base_color
+                    255
                 };
+                let color = Color32::from_rgba_unmultiplied(
+                    base_color.r(),
+                    base_color.g(),
+                    base_color.b(),
+                    alpha,
+                );
 
                 add_star_diamond(
                     &mut star_mesh,
@@ -1625,25 +1647,6 @@ mod tests {
     }
 
     #[test]
-    fn tall_rack_uses_square_pads_without_widening_the_sidebar() {
-        let ctx = egui::Context::default();
-        let palette = little_clip_core::palette::AppPalette::default();
-        let mut state = ConstellationState::default();
-        render_frame(&ctx, &mut state, &palette, Vec2::new(1200.0, 1000.0));
-        assert_eq!(state.pad_drop_targets.len(), 16);
-        for (rect, _) in &state.pad_drop_targets {
-            assert!((rect.width() - rect.height()).abs() < 1.0);
-            assert!(rect.height() > 44.0);
-        }
-        let panel = egui::containers::panel::PanelState::load(
-            &ctx,
-            egui::Id::new("constellation_pack_shelf_panel"),
-        )
-        .unwrap();
-        assert!(panel.rect.width() <= 361.0);
-    }
-
-    #[test]
     fn rack_layout_does_not_grow_across_frames_or_open_a_pack_window() {
         for appearance in [
             little_clip_core::config::WorkbenchAppearance::Dark,
@@ -1654,29 +1657,47 @@ mod tests {
             let palette = little_clip_core::palette::AppPalette::for_appearance(appearance);
             crate::ui_appearance::apply_visuals(&ctx, &palette);
             let mut state = ConstellationState::new();
-            for frame in 0..12 {
-                render_frame(&ctx, &mut state, &palette, Vec2::new(840.0, 550.0));
-                assert_eq!(state.pad_drop_targets.len(), 16);
-                assert!(
-                    state
-                        .pad_drop_targets
-                        .iter()
-                        .all(|(rect, _)| rect.height() >= 27.9),
-                    "every pad must remain visible at the compact window size"
-                );
-                let panel = egui::containers::panel::PanelState::load(
-                    &ctx,
-                    egui::Id::new("constellation_pack_shelf_panel"),
-                )
-                .unwrap();
-                assert!(
-                    panel.rect.width() <= 361.0,
-                    "rack expanded on frame {frame}: {:?}",
-                    panel.rect
-                );
+            for size in [Vec2::new(840.0, 550.0), Vec2::new(1200.0, 1000.0)] {
+                for frame in 0..12 {
+                    render_frame(&ctx, &mut state, &palette, size);
+                    assert_eq!(state.pad_drop_targets.len(), 16);
+                    assert!(
+                        state
+                            .pad_drop_targets
+                            .iter()
+                            .all(|(rect, _)| rect.height() >= 27.9),
+                        "every pad must remain visible at the compact window size"
+                    );
+                    if size.y >= 1000.0 {
+                        for (rect, _) in &state.pad_drop_targets {
+                            assert!(
+                                (rect.width() - rect.height()).abs() < 1.0 && rect.height() > 44.0
+                            );
+                        }
+                    }
+                    let panel = egui::containers::panel::PanelState::load(
+                        &ctx,
+                        egui::Id::new("constellation_pack_shelf_panel"),
+                    )
+                    .unwrap();
+                    assert!(
+                        panel.rect.width() <= 361.0,
+                        "rack expanded on frame {frame}: {:?}",
+                        panel.rect
+                    );
+                }
             }
             state.browser_open = true;
             render_frame(&ctx, &mut state, &palette, Vec2::new(840.0, 550.0));
+            state.browser_open = false;
+            state.output_editor_open = true;
+            render_frame(&ctx, &mut state, &palette, Vec2::new(840.0, 550.0));
+            let panel = egui::containers::panel::PanelState::load(
+                &ctx,
+                egui::Id::new("constellation_pack_shelf_panel"),
+            )
+            .unwrap();
+            assert!(panel.rect.width() <= 361.0 && panel.rect.bottom() <= 550.0);
             assert!(!ctx.memory(|memory| {
                 memory
                     .areas()
