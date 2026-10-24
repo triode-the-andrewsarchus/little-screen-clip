@@ -316,15 +316,6 @@ impl ConstellationState {
             {
                 self.play_nearest_neighbor(on_play_sample);
             }
-            let query = self.search_query.to_lowercase();
-            ui.add(egui::Label::new(egui::RichText::new(format!(
-                "{} / {}",
-                self.samples
-                    .iter()
-                    .filter(|sample| self.matches_filters(sample, &query))
-                    .count(),
-                self.samples.len()
-            )).weak()).wrap(false));
         });
         if self.filters_open {
             self.render_audio_filters(ui);
@@ -414,6 +405,16 @@ impl ConstellationState {
         });
     }
 
+    pub(crate) fn sample_count_label(&self) -> String {
+        let query = self.search_query.to_lowercase();
+        let active = self
+            .samples
+            .iter()
+            .filter(|sample| self.matches_filters(sample, &query))
+            .count();
+        format!("{active} / {} samples", self.samples.len())
+    }
+
     fn render_audio_filters(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.label("Duration");
@@ -461,15 +462,6 @@ impl ConstellationState {
                 self.category_filter = None;
                 self.search_query.clear();
             }
-            let query = self.search_query.to_lowercase();
-            ui.weak(format!(
-                "{} / {}",
-                self.samples
-                    .iter()
-                    .filter(|sample| self.matches_filters(sample, &query))
-                    .count(),
-                self.samples.len()
-            ));
         });
     }
 

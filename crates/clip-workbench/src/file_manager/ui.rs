@@ -451,6 +451,9 @@ impl FileManager {
     }
 
     pub(super) fn selection_summary(&self) -> String {
+        if self.view == super::BrowserView::Constellation {
+            return self.constellation.sample_count_label();
+        }
         let selection = self.location().map(|location| &location.selection);
         let selected = selection.is_some_and(|paths| !paths.is_empty());
         let entries = self
