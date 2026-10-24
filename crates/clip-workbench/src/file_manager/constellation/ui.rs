@@ -93,6 +93,24 @@ impl ConstellationState {
                     let ui = &mut content;
 
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                    ui.horizontal(|ui| {
+                        ui.strong("Drum rack");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::image(
+                                        crate::icons::Icon::Close
+                                            .image_tinted(12.0, ui.visuals().text_color()),
+                                    )
+                                    .small(),
+                                )
+                                .on_hover_text("Collapse rack and editor")
+                                .clicked()
+                            {
+                                self.pack_shelf_open = false;
+                            }
+                        });
+                    });
                     use crate::ui_tabs::{Tab, TabBar};
                     if let Some(tab) = TabBar::new(
                         "constellation_rack_tabs",
@@ -133,6 +151,29 @@ impl ConstellationState {
                         self.render_pack_browser(ui, current_folder);
                     } else {
                         self.render_pack_shelf(ui, current_folder);
+                    }
+                });
+        }
+        if !self.pack_shelf_open {
+            egui::SidePanel::right("constellation_rack_reopen")
+                .resizable(false)
+                .exact_width(20.0)
+                .frame(egui::Frame::none())
+                .show_inside(ui, |ui| {
+                    let rect = ui.available_rect_before_wrap();
+                    let response = ui.allocate_rect(rect, Sense::click());
+                    if response.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            0.0,
+                            ui.visuals().widgets.hovered.weak_bg_fill,
+                        );
+                    }
+                    let icon =
+                        crate::icons::Icon::Plus.image_tinted(12.0, ui.visuals().text_color());
+                    icon.paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(12.0)));
+                    if response.on_hover_text("Show rack and editor").clicked() {
+                        self.pack_shelf_open = true;
                     }
                 });
         }
@@ -274,16 +315,6 @@ impl ConstellationState {
                 .clicked()
             {
                 self.play_nearest_neighbor(on_play_sample);
-            }
-            if ui
-                .button(if self.pack_shelf_open {
-                    "Hide rack"
-                } else {
-                    "Show rack"
-                })
-                .clicked()
-            {
-                self.pack_shelf_open = !self.pack_shelf_open;
             }
             ui.menu_button("Map", |ui| {
                 if ui
