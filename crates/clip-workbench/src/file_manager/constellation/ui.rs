@@ -486,7 +486,16 @@ impl ConstellationState {
 
         // Allocate a single batched GPU mesh
         let mut star_mesh = egui::Mesh::default();
-        let base_star_radius = (2.0_f32 * self.zoom.clamp(0.6, 3.5)).clamp(1.4, 6.0);
+        let base_star_radius = (4.0_f32 * self.zoom.clamp(0.6, 2.0)).clamp(2.0, 8.0);
+        // Count projected neighbors without suppressing any point. The full viewport
+        // keeps radii stable when docks obscure part of the map.
+        let density = PointDensity::new(self.samples.iter().map(|sample| {
+            Pos2::new(
+                center.x + sample.x * view_scale,
+                center.y - sample.y * view_scale,
+            )
+        }));
+
         let mut selected_sample_overlay: Option<(Pos2, Color32)> = None;
 
         // When hover-to-play is OFF: the highlighted sample is ALWAYS the closest one on canvas,
@@ -674,19 +683,18 @@ impl ConstellationState {
                         base_color
                     };
 
-                    add_star_diamond(&mut star_mesh, star.pos, base_star_radius, color);
+                    add_star_diamond(
+                        &mut star_mesh,
+                        star.pos,
+                        density.radius(star.pos, base_star_radius),
+                        color,
+                    );
                 }
 
                 relaxed_map = Some(map);
             }
         } else {
             // High-level zoom path: direct projection with sub-pixel density capping for maximum FPS
-            let cell_size = 3.0_f32;
-            let grid_cols = ((rect.width() / cell_size).ceil() as usize).max(1);
-            let grid_rows = ((rect.height() / cell_size).ceil() as usize).max(1);
-            let total_cells = grid_cols * grid_rows;
-            let mut occupancy = vec![[0_u8; 2]; total_cells];
-
             let rect_min_x = rect.left() - base_star_radius;
             let rect_max_x = rect.right() + base_star_radius;
             let rect_min_y = rect.top() - base_star_radius;
@@ -733,21 +741,6 @@ impl ConstellationState {
                 }
 
                 let is_filter_dimmed = !self.matches_filters(sample, &query_lower);
-                // Cap foreground and background independently: all-sample views
-                // remain bounded, while a dimmed star cannot hide a filter match.
-                // Hit testing above still considers every sample, including stars
-                // omitted from this coarse rendering mesh.
-                let col = ((sx - rect.left()) / cell_size) as usize;
-                let row = ((sy - rect.top()) / cell_size) as usize;
-                if col < grid_cols && row < grid_rows {
-                    let layer = usize::from(is_category_dimmed || is_filter_dimmed);
-                    let count = &mut occupancy[row * grid_cols + col][layer];
-                    if *count >= 2 {
-                        continue;
-                    }
-                    *count += 1;
-                }
-
                 let color = if is_category_dimmed {
                     Color32::from_rgba_unmultiplied(
                         base_color.r(),
@@ -766,7 +759,12 @@ impl ConstellationState {
                     base_color
                 };
 
-                add_star_diamond(&mut star_mesh, Pos2::new(sx, sy), base_star_radius, color);
+                add_star_diamond(
+                    &mut star_mesh,
+                    Pos2::new(sx, sy),
+                    density.radius(Pos2::new(sx, sy), base_star_radius),
+                    color,
+                );
             }
         }
 
@@ -1312,6 +1310,27 @@ fn freq_to_note_str(freq: f32) -> String {
     format!("{}{}", note_names[note_idx], octave)
 }
 
+/// Local screen density controls size, never whether a sample is drawn.
+struct PointDensity(std::collections::HashMap<(i32, i32), usize>);
+impl PointDensity {
+    fn cell(pos: Pos2) -> (i32, i32) {
+        ((pos.x / 32.0).floor() as i32, (pos.y / 32.0).floor() as i32)
+    }
+    fn new(points: impl Iterator<Item = Pos2>) -> Self {
+        let mut cells = std::collections::HashMap::new();
+        for point in points {
+            *cells.entry(Self::cell(point)).or_insert(0) += 1;
+        }
+        Self(cells)
+    }
+    fn radius(&self, point: Pos2, maximum: f32) -> f32 {
+        let count = self.0.get(&Self::cell(point)).copied().unwrap_or(1) as f32;
+        (32.0 * 32.0 * 0.12 / (2.0 * count))
+            .sqrt()
+            .clamp(0.35, maximum)
+    }
+}
+
 #[inline]
 fn add_star_diamond(mesh: &mut egui::Mesh, pos: Pos2, r: f32, color: Color32) {
     let v_start = mesh.vertices.len() as u32;
@@ -1444,17 +1463,30 @@ mod tests {
     }
 
     #[test]
-    fn dense_coarse_mesh_is_bounded_without_hiding_category_or_search_matches() {
+    fn density_preserves_sparse_targets_and_reduces_dense_marker_size() {
+        let point = Pos2::new(100.0, 100.0);
+        let sparse = PointDensity::new(std::iter::once(point));
+        let dense = PointDensity::new(std::iter::repeat_n(point, 1000));
+        assert_eq!(sparse.radius(point, 4.0), 4.0);
+        assert!(dense.radius(point, 4.0) < 0.5);
+    }
+
+    #[test]
+    fn dense_coarse_mesh_keeps_every_point_and_all_filter_matches() {
         let mut state = ConstellationState::new();
         state.samples = (0..1000).map(sample_fixture).collect();
         assert_eq!(
             coarse_mesh(&mut state).len(),
-            8,
-            "All view paints at most two stars in a cell"
+            4000,
+            "Every point is rendered, including coincident samples"
         );
         state.category_filter = Some(SampleCategory::Snare);
         let solo = coarse_mesh(&mut state);
-        assert_eq!(solo.len(), 12, "two background stars and one matching star");
+        assert_eq!(
+            solo.len(),
+            4000,
+            "filtering dims points without omitting them"
+        );
         assert!(
             solo.iter()
                 .any(|vertex| vertex.color == SampleCategory::Snare.color())
@@ -1462,7 +1494,7 @@ mod tests {
         state.category_filter = None;
         state.search_query = "target".into();
         let search = coarse_mesh(&mut state);
-        assert_eq!(search.len(), 12);
+        assert_eq!(search.len(), 4000);
         assert!(
             search
                 .iter()

@@ -1,7 +1,7 @@
 //! Compact drum rack, selected-pad editor, and reference-pack browser.
 
 use super::ConstellationState;
-use egui::{Color32, Pos2, Rect, RichText, Stroke, Vec2};
+use egui::{Pos2, Rect, RichText, Stroke, Vec2};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
