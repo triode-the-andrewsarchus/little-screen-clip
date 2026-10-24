@@ -563,8 +563,9 @@ impl ConstellationState {
                         });
                     });
                 } else {
-                    Self::render_layer_trim(ui, sample);
+                    ui.strong("Sound");
                     Self::render_layer_parameters(ui, sample);
+                    Self::render_layer_trim(ui, sample);
                 }
                 ui.separator();
             });
@@ -582,8 +583,8 @@ impl ConstellationState {
             .cached_audio
             .as_ref()
             .map_or(0.000_001, |audio| 1.0 / audio.sample_rate as f32);
-        Self::render_layer_waveform(ui, sample);
         ui.horizontal_wrapped(|ui| {
+            ui.strong("Trim");
             ui.label("Start");
             ui.add(
                 egui::DragValue::new(&mut sample.start_sec)
@@ -603,6 +604,7 @@ impl ConstellationState {
                     .suffix(" s"),
             );
         });
+        Self::render_layer_waveform(ui, sample);
     }
 
     fn render_layer_parameters(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {

@@ -139,7 +139,7 @@ impl ConstellationState {
                 {
                     egui::TopBottomPanel::bottom("constellation_selected_pad")
                         .resizable(true)
-                        .default_height(300.0)
+                        .default_height(340.0)
                         .height_range(240.0..=420.0)
                         .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 6.0)))
                         .show_inside(ui, |ui| {
