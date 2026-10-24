@@ -131,7 +131,7 @@ impl ConstellationState {
                 self.save_bank(root.to_path_buf(), self.pack_bank.clone());
             }
             ui.add_enabled_ui(!self.writing_pack(), |ui| {
-                ui.menu_button("Export", |ui| {
+                ui.menu_button("Actions", |ui| {
                     if ui
                         .button("WAV kit")
                         .on_hover_text(
@@ -148,6 +148,11 @@ impl ConstellationState {
                         .clicked()
                     {
                         self.export_bank(current_folder.to_path_buf(), true);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Clear rack").clicked() {
+                        self.clear_bank();
                         ui.close_menu();
                     }
                 });

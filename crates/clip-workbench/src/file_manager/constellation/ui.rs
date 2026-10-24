@@ -190,7 +190,8 @@ impl ConstellationState {
                 self.search_query.clear();
                 response.surrender_focus();
             }
-            ui.checkbox(&mut self.hover_to_play, "Hover to audition");
+            ui.toggle_value(&mut self.hover_to_play, "Hover audition").on_hover_text("Play samples as the pointer passes over them");
+            ui.toggle_value(&mut self.filters_open, "Filters");
             if ui
                 .add_enabled(!self.samples.is_empty(), egui::Button::new("Random"))
                 .clicked()
@@ -215,7 +216,7 @@ impl ConstellationState {
                 }
             }
             if ui
-                .add_enabled(self.selected_path.is_some(), egui::Button::new("Neighbor"))
+                .add_enabled(self.selected_path.is_some(), egui::Button::new("Next unplayed"))
                 .on_hover_text("Audition the nearest unplayed sample (Shift+Space); click a sample to start a new exploration")
                 .clicked()
             {
@@ -247,10 +248,6 @@ impl ConstellationState {
                     self.zoom = 1.0;
                     ui.close_menu();
                 }
-                if ui.button("Clear rack").clicked() {
-                    self.clear_bank();
-                    ui.close_menu();
-                }
                 if ui.button("Saved packs").clicked() {
                     self.pack_shelf_open = true;
                     self.browser_open = true;
@@ -259,7 +256,11 @@ impl ConstellationState {
                 }
             });
         });
-        self.render_audio_filters(ui);
+        if self.filters_open {
+            self.render_audio_filters(ui);
+        } else {
+            self.render_filter_chips(ui);
+        }
         ui.horizontal_wrapped(|ui| {
             if ui
                 .selectable_label(
@@ -295,6 +296,38 @@ impl ConstellationState {
         ui.separator();
     }
 
+    fn render_filter_chips(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            for (label, value) in [
+                ("Min", &mut self.min_duration),
+                ("Max", &mut self.max_duration),
+            ] {
+                if *value > 0.0 && ui.small_button(format!("{label} {value:.3} s ×")).clicked() {
+                    *value = 0.0;
+                }
+            }
+            if self.channel_filter != 0 {
+                let label = match self.channel_filter {
+                    1 => "Mono",
+                    2 => "Stereo",
+                    _ => "Multichannel",
+                };
+                if ui.small_button(format!("{label} ×")).clicked() {
+                    self.channel_filter = 0;
+                }
+            }
+            let query = self.search_query.to_lowercase();
+            ui.weak(format!(
+                "{} / {} samples",
+                self.samples
+                    .iter()
+                    .filter(|sample| self.matches_filters(sample, &query))
+                    .count(),
+                self.samples.len()
+            ));
+        });
+    }
+
     fn render_audio_filters(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.label("Duration");
@@ -309,8 +342,13 @@ impl ConstellationState {
                 egui::DragValue::new(&mut self.max_duration)
                     .speed(0.01)
                     .clamp_range(0.0..=3600.0)
-                    .prefix("Max ")
-                    .suffix(" s"),
+                    .custom_formatter(|value, _| {
+                        if value == 0.0 {
+                            "Any duration".into()
+                        } else {
+                            format!("Max {value:.3} s")
+                        }
+                    }),
             )
             .on_hover_text("Zero means no upper duration limit.");
             egui::ComboBox::from_id_source("constellation_channel_filter")
