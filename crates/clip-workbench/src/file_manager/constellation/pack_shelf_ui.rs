@@ -487,12 +487,12 @@ impl ConstellationState {
                         });
                         ui.allocate_ui(Vec2::new(240.0, 150.0), |ui| {
                             ui.strong("Sound");
-                            Self::render_layer_parameters(ui, sample);
+                            Self::render_layer_parameters(ui, sample, palette);
                         });
                     });
                 } else {
                     Self::render_layer_trim(ui, sample);
-                    Self::render_layer_parameters(ui, sample);
+                    Self::render_layer_parameters(ui, sample, palette);
                 }
                 ui.separator();
             });
@@ -520,7 +520,7 @@ impl ConstellationState {
                 egui::DragValue::new(&mut sample.start_sec)
                     .speed(0.001)
                     .clamp_range(0.0..=(sample.end_sec - frame_duration).max(0.0))
-                    .max_decimals(6)
+                    .max_decimals(3)
                     .suffix(" s"),
             );
             ui.label("End");
@@ -530,44 +530,71 @@ impl ConstellationState {
                     .clamp_range(
                         (sample.start_sec + frame_duration).min(sample.duration)..=sample.duration,
                     )
-                    .max_decimals(6)
+                    .max_decimals(3)
                     .suffix(" s"),
             );
         });
     }
 
-    fn render_layer_parameters(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
-        ui.horizontal_wrapped(|ui| {
-            ui.add(
-                egui::DragValue::new(&mut sample.volume)
-                    .speed(0.01)
-                    .clamp_range(0.0..=2.0)
-                    .fixed_decimals(2)
-                    .prefix("Gain ")
-                    .suffix("×"),
+    fn render_layer_parameters(
+        ui: &mut egui::Ui,
+        sample: &mut super::sample_pack::SlotSample,
+        _palette: &little_clip_core::palette::AppPalette,
+    ) {
+        let mut gain = if sample.volume <= 0.0 {
+            -60.0
+        } else {
+            20.0 * sample.volume.log10()
+        };
+        let mut gain_changed = false;
+        ui.spacing_mut().slider_width = (ui.available_width() - 105.0).clamp(80.0, 180.0);
+        for (label, value, range, timed) in [
+            ("Gain", &mut gain, -60.0..=6.0206, false),
+            ("Pan", &mut sample.pan, -1.0..=1.0, false),
+            ("Attack", &mut sample.attack_ms, 0.0..=500.0, true),
+            ("Release", &mut sample.release_ms, 0.0..=500.0, true),
+        ] {
+            let response = ui.add(
+                egui::Slider::new(value, range)
+                    .text(label)
+                    .logarithmic(timed)
+                    .smallest_positive(0.1)
+                    .custom_formatter(move |number, _| {
+                        if timed {
+                            format!("{number:.1} ms")
+                        } else if label == "Gain" {
+                            if number <= -60.0 {
+                                "−∞ dB".into()
+                            } else {
+                                format!("{number:.1} dB")
+                            }
+                        } else if number.abs() < 0.005 {
+                            "Center".into()
+                        } else {
+                            format!(
+                                "{} {:.0}%",
+                                if number < 0.0 { "L" } else { "R" },
+                                number.abs() * 100.0
+                            )
+                        }
+                    }),
             );
-            ui.add(
-                egui::DragValue::new(&mut sample.pan)
-                    .speed(0.01)
-                    .clamp_range(-1.0..=1.0)
-                    .fixed_decimals(2)
-                    .prefix("Pan "),
-            );
-            ui.label("Attack");
-            ui.add(
-                egui::DragValue::new(&mut sample.attack_ms)
-                    .speed(0.1)
-                    .clamp_range(0.0..=500.0)
-                    .suffix(" ms"),
-            );
-            ui.label("Release");
-            ui.add(
-                egui::DragValue::new(&mut sample.release_ms)
-                    .speed(0.1)
-                    .clamp_range(0.0..=500.0)
-                    .suffix(" ms"),
-            );
-        });
+            let reset = crate::shell::studio_controls::slider_double_clicked(ui, &response);
+            if reset {
+                *value = 0.0;
+            }
+            if label == "Gain" {
+                gain_changed = response.changed() || reset;
+            }
+            response.on_hover_text("Drag to adjust · click the value to type · double-click to reset. Pan: -1 left, 0 center, +1 right.");
+        }
+        if gain_changed {
+            sample.volume = if gain <= -60.0 {
+                0.0
+            } else {
+                10.0_f32.powf(gain / 20.0)
+            };
+        }
     }
 
     fn render_selected_pad_header(&mut self, ui: &mut egui::Ui, index: usize) {
