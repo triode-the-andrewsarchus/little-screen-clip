@@ -98,7 +98,7 @@ impl ConstellationState {
 
     /// Defers close while unsaved edits need a decision. Accepted saves remain owned.
     pub fn allow_close(&mut self) -> bool {
-        if std::mem::take(&mut self.close_approved) {
+        if self.close_approved {
             return true;
         }
         if !self.bank_dirty() {
@@ -257,6 +257,7 @@ mod tests {
         assert!(!state.allow_close());
         state.continue_bank_action(); // Explicit discard approval.
         assert!(state.allow_close());
-        assert!(!state.allow_close());
+        // Eframe may deliver another close event after the Close command.
+        assert!(state.allow_close());
     }
 }

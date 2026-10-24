@@ -382,7 +382,7 @@ impl SamplePackBank {
         Ok(())
     }
 
-    /// Stages metadata and links while retaining every validated source handle.
+    /// Stages metadata and ordinary copies while retaining validated source handles.
     fn stage_references(&self, staged: &Path) -> Result<Vec<File>, String> {
         use std::io::Write;
         use std::os::fd::AsRawFd;
@@ -391,7 +391,7 @@ impl SamplePackBank {
         let mut sources = Vec::new();
         for (slot_idx, slot) in saved.slots.iter_mut().enumerate() {
             for (layer_idx, sample) in slot.samples.iter_mut().enumerate() {
-                let source =
+                let mut source =
                     little_clip_core::kernel_interface::open_content(&sample.file_path, true)
                         .map_err(|e| format!("Cannot save {}: {e}", sample.filename))?;
                 sample.file_path =
@@ -403,8 +403,10 @@ impl SamplePackBank {
                     .ok_or("Missing sample filename")?
                     .to_string_lossy();
                 let name = format!("{:02}_layer{}_{}", slot_idx + 1, layer_idx + 1, filename);
-                std::os::unix::fs::symlink(&sample.file_path, staged.join(name))
-                    .map_err(|e| e.to_string())?;
+                let mut copy = File::create_new(staged.join(&name)).map_err(|e| e.to_string())?;
+                std::io::copy(&mut source, &mut copy).map_err(|e| e.to_string())?;
+                copy.sync_all().map_err(|e| e.to_string())?;
+                sample.file_path = name.into();
                 sources.push(source);
             }
         }
@@ -897,6 +899,13 @@ mod tests {
         assert_eq!(loaded.name, "Boom Bap Pack");
         assert_eq!(loaded.slots[0].samples.len(), 1);
         assert_eq!(loaded.slots[0].samples[0].filename, "test_kick.wav");
+        let copied = &loaded.slots[0].samples[0].file_path;
+        assert_ne!(copied, &sample_file);
+        assert!(!copied.is_symlink());
+        assert_eq!(
+            std::fs::read(copied).unwrap(),
+            std::fs::read(&sample_file).unwrap()
+        );
         assert!((loaded.slots[0].samples[0].start_sec - 0.05).abs() < 1e-4);
         assert!((loaded.slots[0].samples[0].end_sec - 0.45).abs() < 1e-4);
         assert!((loaded.slots[0].samples[0].volume - 1.2).abs() < 1e-4);
