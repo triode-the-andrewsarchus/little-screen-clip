@@ -138,13 +138,19 @@ impl ConstellationState {
                 });
             });
         if let Some(approved) = decision {
-            let pending = self.duplicate_layers.take().unwrap();
-            let success = approved
-                && pending.generation == self.bank_generation
-                && self.apply_pad_drop(pending.drop);
-            if let Some(token) = pending.token {
-                self.native_drop_results.push((token, success));
-            }
+            self.resolve_duplicate_layers(approved);
+        }
+    }
+
+    fn resolve_duplicate_layers(&mut self, approved: bool) {
+        let Some(pending) = self.duplicate_layers.take() else {
+            return;
+        };
+        let success = approved
+            && pending.generation == self.bank_generation
+            && self.apply_pad_drop(pending.drop);
+        if let Some(token) = pending.token {
+            self.native_drop_results.push((token, success));
         }
     }
 
@@ -197,6 +203,48 @@ impl ConstellationState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_confirmation_retains_native_completion_and_checks_the_target() {
+        let mut state = ConstellationState::default();
+        let sample = SlotSample::new("same.wav".into(), "same.wav".into(), None, 1.0);
+        state.pack_bank.slots[0].samples.push(sample.clone());
+        for (token, approve) in [(1, false), (2, true)] {
+            state.accept_pad_layers(
+                PreparedDrop {
+                    index: 0,
+                    before: state.pack_bank.slots[0].clone(),
+                    append: true,
+                    samples: vec![sample.clone()],
+                },
+                Some(token),
+            );
+            assert!(state.duplicate_layers.is_some());
+            assert!(
+                state
+                    .native_drop_results
+                    .iter()
+                    .all(|(completed, _)| *completed != token)
+            );
+            assert_eq!(state.pack_bank.slots[0].samples.len(), 1);
+            state.resolve_duplicate_layers(approve);
+            assert_eq!(state.native_drop_results.last(), Some(&(token, approve)));
+        }
+        assert_eq!(state.pack_bank.slots[0].samples.len(), 2);
+        state.accept_pad_layers(
+            PreparedDrop {
+                index: 0,
+                before: state.pack_bank.slots[0].clone(),
+                append: true,
+                samples: vec![sample],
+            },
+            Some(3),
+        );
+        state.pack_bank.slots[0].mute = true;
+        state.resolve_duplicate_layers(true);
+        assert_eq!(state.pack_bank.slots[0].samples.len(), 2);
+        assert_eq!(state.native_drop_results.last(), Some(&(3, false)));
+    }
 
     #[test]
     fn replacement_layering_stale_drop_and_undo() {

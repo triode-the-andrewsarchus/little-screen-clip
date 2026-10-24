@@ -163,6 +163,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn automatic_pack_save_copies_unedited_layers_once_and_keeps_edited_originals() {
+        let root = if let Some(path) = std::env::var_os("LITTLE_CLIP_PACK_TEST_ROOT") {
+            tempfile::Builder::new()
+                .prefix(".little-clip-pack-test-")
+                .tempdir_in(path)
+                .unwrap()
+        } else {
+            tempfile::tempdir().unwrap()
+        };
+        let path = root.path().join("source.wav");
+        let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(1, 48000, 1);
+        buffer.push_samples(&vec![8192; 4800]);
+        buffer.write_wav(&path).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let mut bank = SamplePackBank::new("Automatic");
+        bank.slots[0].samples.push(SlotSample::new(
+            path.clone(),
+            "source.wav".into(),
+            None,
+            0.1,
+        ));
+        let first = export(root.path(), &bank, true).unwrap();
+        assert_eq!(
+            std::fs::read(first.join("pad01_layer1.wav")).unwrap(),
+            original
+        );
+        assert_eq!(
+            std::fs::read_dir(first.join("originals")).unwrap().count(),
+            0
+        );
+        bank.slots[0].samples[0].volume = 0.5;
+        let edited = export(root.path(), &bank, true).unwrap();
+        assert_ne!(first, edited);
+        assert_eq!(
+            std::fs::read(edited.join("originals/pad01_layer1.wav")).unwrap(),
+            original
+        );
+        let loaded = super::super::sample_pack::load_sample_pack(&edited).unwrap();
+        assert_eq!(loaded.slots[0].samples[0].filename, "source.wav");
+        let values: Vec<_> =
+            rodio::Decoder::try_from(File::open(&loaded.slots[0].samples[0].file_path).unwrap())
+                .unwrap()
+                .collect();
+        assert!(values.iter().all(|value| (*value - 0.125).abs() < 0.0001));
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+
+    #[test]
     fn sub_millisecond_hits_keep_their_actual_duration_through_cache_and_export() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("click.wav");

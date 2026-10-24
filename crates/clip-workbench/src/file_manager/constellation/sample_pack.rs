@@ -1,8 +1,8 @@
 //! Layered sample references, bounded PCM preparation, and atomic pack persistence.
 //!
 //! Banks contain sixteen pads with up to eight layers each. Saved packs retain original
-//! source paths through symlinks and `bank.json`; trim/volume edits are metadata, not
-//! rendered audio. Existing packs remain intact: repeated saves create numbered
+//! samples as ordinary files and `bank.json`; edited layers include rendered audio
+//! and their unmodified originals. Existing packs remain intact: repeated saves create numbered
 //! versions, and the new directory appears only after staging succeeds.
 
 use super::generated_model::SampleCategory;
@@ -392,45 +392,6 @@ impl SamplePackBank {
         Ok(())
     }
 
-    /// Stages metadata and ordinary copies while retaining validated source handles.
-    fn stage_references(&self, staged: &Path) -> Result<Vec<File>, String> {
-        use std::io::Write;
-        use std::os::fd::AsRawFd;
-        let mut saved = self.clone();
-        saved.validate(staged)?;
-        let mut sources = Vec::new();
-        for (slot_idx, slot) in saved.slots.iter_mut().enumerate() {
-            for (layer_idx, sample) in slot.samples.iter_mut().enumerate() {
-                let mut source =
-                    little_clip_core::kernel_interface::open_content(&sample.file_path, true)
-                        .map_err(|e| format!("Cannot save {}: {e}", sample.filename))?;
-                sample.file_path =
-                    std::fs::read_link(format!("/proc/self/fd/{}", source.as_raw_fd()))
-                        .map_err(|e| e.to_string())?;
-                let filename = sample
-                    .file_path
-                    .file_name()
-                    .ok_or("Missing sample filename")?
-                    .to_string_lossy();
-                let name = format!("{:02}_layer{}_{}", slot_idx + 1, layer_idx + 1, filename);
-                let mut copy = File::create_new(staged.join(&name)).map_err(|e| e.to_string())?;
-                std::io::copy(&mut source, &mut copy).map_err(|e| e.to_string())?;
-                copy.sync_all().map_err(|e| e.to_string())?;
-                sample.file_path = name.into();
-                sources.push(source);
-            }
-        }
-        let mut json = File::create(staged.join("bank.json")).map_err(|e| e.to_string())?;
-        json.write_all(
-            serde_json::to_string_pretty(&saved)
-                .map_err(|e| e.to_string())?
-                .as_bytes(),
-        )
-        .map_err(|e| e.to_string())?;
-        json.sync_all().map_err(|e| e.to_string())?;
-        Ok(sources)
-    }
-
     pub fn total_samples(&self) -> usize {
         self.slots.iter().map(|s| s.samples.len()).sum()
     }
@@ -469,9 +430,7 @@ pub fn save_sample_pack(
     constellation_root: &Path,
     bank: &SamplePackBank,
 ) -> Result<PathBuf, String> {
-    install_pack(constellation_root, bank, |staged| {
-        bank.stage_references(staged)
-    })
+    super::pack_export::export(constellation_root, bank, true)
 }
 
 /// Shares pinned-directory staging and no-overwrite publication across pack formats.
@@ -884,7 +843,9 @@ mod tests {
 
         // Create dummy sample audio file
         let sample_file = temp_dir.join("test_kick.wav");
-        std::fs::write(&sample_file, b"RIFF....WAVEfmt ....data....").unwrap();
+        let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(1, 48000, 1);
+        buffer.push_samples(&vec![8192; 24000]);
+        buffer.write_wav(&sample_file).unwrap();
 
         let mut bank = SamplePackBank::new("Boom Bap Pack");
         bank.slots[0].samples.push(SlotSample {
@@ -913,12 +874,12 @@ mod tests {
         assert_ne!(copied, &sample_file);
         assert!(!copied.is_symlink());
         assert_eq!(
-            std::fs::read(copied).unwrap(),
+            std::fs::read(pack_path.join("originals/pad01_layer1.wav")).unwrap(),
             std::fs::read(&sample_file).unwrap()
         );
-        assert!((loaded.slots[0].samples[0].start_sec - 0.05).abs() < 1e-4);
-        assert!((loaded.slots[0].samples[0].end_sec - 0.45).abs() < 1e-4);
-        assert!((loaded.slots[0].samples[0].volume - 1.2).abs() < 1e-4);
+        assert!(loaded.slots[0].samples[0].start_sec.abs() < 1e-4);
+        assert!((loaded.slots[0].samples[0].end_sec - 0.4).abs() < 1e-4);
+        assert!((loaded.slots[0].samples[0].volume - 1.0).abs() < 1e-4);
 
         let list = list_saved_packs(&temp_dir);
         assert_eq!(list.len(), 1);

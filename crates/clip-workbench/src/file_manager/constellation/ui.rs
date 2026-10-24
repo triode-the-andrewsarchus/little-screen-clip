@@ -1115,7 +1115,7 @@ impl ConstellationState {
                 .get(self.selected_layers[self.selected_slot].min(layers.len().saturating_sub(1)))
                 .cloned()
             {
-                self.stop_playback();
+                self.stop_map_audition = true;
                 self.audition_layers(&[sample]);
                 return None;
             }
@@ -1477,6 +1477,61 @@ mod tests {
     }
 
     #[test]
+    fn space_plays_only_the_active_editor_layer_through_the_bus() {
+        use super::super::sample_pack::{CachedAudio, SlotSample};
+        use std::sync::Arc;
+        let mut state = ConstellationState::new();
+        let map = sample_fixture(0);
+        state.selected_path = Some(map.file_path.clone());
+        state.samples.push(map);
+        state.pack_bank.compressor_bypass = true;
+        for value in [0.2, 0.6] {
+            let mut layer = SlotSample::new("layer.wav".into(), "layer.wav".into(), None, 1.0);
+            let pcm = Arc::new(vec![value; 48000]);
+            layer.cached_audio = Some(Arc::new(CachedAudio {
+                channels: 1,
+                sample_rate: 48000,
+                samples: pcm.clone(),
+                mono_samples: pcm,
+                waveform_peaks: vec![],
+                waveform_colors: vec![],
+            }));
+            state.pack_bank.slots[0].samples.push(layer);
+        }
+        state.selected_layers[0] = 1;
+        let (player, mut rendered) = rodio::Player::new();
+        state.playback.lock().unwrap().output =
+            Some(super::super::output::PadOutput::with_player(player, true));
+        assert_eq!(state.space_audition(false), None);
+        for _ in 0..4000 {
+            rendered.next();
+        }
+        assert!((rendered.next().unwrap() - 0.6 * 0.7943282).abs() < 0.00001);
+        assert!(state.stop_map_audition);
+        state.pack_shelf_open = false;
+        assert_eq!(
+            state.space_audition(false),
+            Some(state.samples[0].file_path.clone())
+        );
+    }
+
+    #[test]
+    fn status_count_includes_search_category_duration_and_channel_filters() {
+        let mut state = ConstellationState::new();
+        state.samples = (0..4).map(sample_fixture).collect();
+        state.samples[1].duration_seconds = 2.0;
+        state.samples[2].channels = 2;
+        state.samples[3].category = SampleCategory::Snare;
+        assert_eq!(state.sample_count_label(), "4 / 4 samples");
+        state.channel_filter = 1;
+        state.max_duration = 1.0;
+        state.category_filter = Some(SampleCategory::Kick);
+        assert_eq!(state.sample_count_label(), "1 / 4 samples");
+        state.search_query = "absent".into();
+        assert_eq!(state.sample_count_label(), "0 / 4 samples");
+    }
+
+    #[test]
     fn final_zoom_steps_use_equal_radii_and_separate_coincident_points() {
         let point = Pos2::new(100.0, 100.0);
         let density = PointDensity::new(std::iter::repeat_n(point, 1000));
@@ -1689,7 +1744,7 @@ mod tests {
             crate::ui_appearance::apply_visuals(&ctx, &palette);
             let mut state = ConstellationState::new();
             for size in [Vec2::new(840.0, 550.0), Vec2::new(1200.0, 1000.0)] {
-                for frame in 0..12 {
+                for frame in 0..120 {
                     render_frame(&ctx, &mut state, &palette, size);
                     assert_eq!(state.pad_drop_targets.len(), 16);
                     assert!(

@@ -115,7 +115,7 @@ impl ConstellationState {
     pub fn render_pack_shelf(&mut self, ui: &mut egui::Ui, current_folder: &Path) {
         self.render_history_controls(ui);
         ui.horizontal(|ui| {
-            let width = (ui.available_width() - 100.0).max(40.0);
+            let width = (ui.available_width() - 120.0).max(40.0);
             ui.add(
                 egui::TextEdit::singleline(&mut self.pack_bank.name)
                     .desired_width(width)
@@ -183,7 +183,8 @@ impl ConstellationState {
         } else {
             0.0
         };
-        let width = ((ui.available_width() - gap * 3.0) / 4.0).max(28.0);
+        let width =
+            ((ui.available_width().min(ui.clip_rect().width()) - gap * 3.0) / 4.0).max(28.0);
         let pad_height =
             ((ui.available_height() - status_height - gap * 3.0 - 32.0) / 4.0).clamp(28.0, width);
         ui.scope(|ui| {

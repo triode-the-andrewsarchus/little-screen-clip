@@ -164,8 +164,9 @@ impl ConstellationState {
         self.browser_generation = self.browser_generation.wrapping_add(1);
     }
 
-    /// Replaces the editable bank and invalidates older asynchronous loads.
-    pub fn clear_bank(&mut self) {
+    /// Simulates a document replacement for stale-worker acceptance tests.
+    #[cfg(test)]
+    fn clear_bank(&mut self) {
         self.checkpoint_bank(false);
         self.bank_generation = self.bank_generation.wrapping_add(1);
         self.stop_playback();
@@ -206,7 +207,7 @@ impl ConstellationState {
         }
         let snapshot = history::metadata(&bank);
         self.submit_background(Task::Save, move || {
-            super::pack_export::export(&root, &bank, true).map(Output::Saved)
+            sample_pack::save_sample_pack(&root, &bank).map(Output::Saved)
         });
         if self.writing_pack() {
             self.pending_saved_bank = Some(snapshot);

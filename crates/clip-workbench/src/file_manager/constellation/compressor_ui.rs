@@ -215,7 +215,7 @@ impl ConstellationState {
                 ui.visuals().text_color(),
             );
         }
-        ui.spacing_mut().slider_width = (ui.available_width() - 130.0).clamp(60.0, 160.0);
+        ui.spacing_mut().slider_width = (ui.available_width() - 180.0).clamp(50.0, 130.0);
         ui.add_enabled_ui(!self.pack_bank.compressor_bypass, |ui| {
             let defaults = super::sample_pack::SamplePackBank::default();
             for (label, value, range, default, suffix) in [
