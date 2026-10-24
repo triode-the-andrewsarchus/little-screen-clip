@@ -73,6 +73,13 @@ impl ConstellationState {
                 .width_range(280.0..=420.0)
                 .frame(egui::Frame::none().inner_margin(8.0))
                 .show_inside(ui, |ui| {
+                    // Keep content requests from changing the user's divider width.
+                    // egui 0.27 otherwise stores overflowing child bounds as panel size.
+                    let bounds = ui.available_rect_before_wrap();
+                    ui.allocate_rect(bounds, Sense::hover());
+                    let mut content = ui.child_ui(bounds, egui::Layout::top_down(egui::Align::Min));
+                    let ui = &mut content;
+
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                     use crate::ui_tabs::{Tab, TabBar};
                     if let Some(tab) = TabBar::new(
