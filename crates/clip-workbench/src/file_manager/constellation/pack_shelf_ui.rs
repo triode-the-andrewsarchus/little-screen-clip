@@ -115,7 +115,7 @@ impl ConstellationState {
     pub fn render_pack_shelf(&mut self, ui: &mut egui::Ui, current_folder: &Path) {
         self.render_history_controls(ui);
         ui.horizontal(|ui| {
-            let width = (ui.available_width() - 190.0).max(40.0);
+            let width = (ui.available_width() - 100.0).max(40.0);
             ui.add(
                 egui::TextEdit::singleline(&mut self.pack_bank.name)
                     .desired_width(width)
@@ -131,33 +131,6 @@ impl ConstellationState {
                     .unwrap_or(current_folder);
                 self.save_bank(root.to_path_buf(), self.pack_bank.clone());
             }
-            ui.add_enabled_ui(!self.writing_pack(), |ui| {
-                ui.menu_button("Actions", |ui| {
-                    if ui
-                        .button("WAV kit")
-                        .on_hover_text(
-                            "Render trim, gain, pan and fades into portable float WAV layers.",
-                        )
-                        .clicked()
-                    {
-                        self.export_bank(current_folder.to_path_buf(), false);
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("WAV kit + originals")
-                        .on_hover_text("Also collect the unmodified source files.")
-                        .clicked()
-                    {
-                        self.export_bank(current_folder.to_path_buf(), true);
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button("Clear rack").clicked() {
-                        self.clear_bank();
-                        ui.close_menu();
-                    }
-                });
-            });
         });
         ui.add_space(4.0);
         self.render_pad_grid(ui);

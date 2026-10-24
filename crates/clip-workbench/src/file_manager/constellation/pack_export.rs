@@ -39,20 +39,32 @@ fn stage(staged: &Path, bank: &SamplePackBank, originals: bool) -> Result<Vec<Fi
                 .map_err(|e| e.to_string())?;
             let view = PathBuf::from(format!("/proc/self/fd/{}", source.as_raw_fd()));
             let identity = crate::file_source::FileSource::capture(&view)?;
-            let name = format!("pad{:02}_layer{}.wav", index + 1, layer + 1);
-            let duration = render(&source, sample, &staged.join(&name))?;
-            if originals {
-                collect_original(staged, index, layer, sample, &source)?;
-            }
+            let unmodified = sample.start_sec == 0.0
+                && sample.end_sec == sample.duration
+                && sample.volume == 1.0
+                && sample.pan == 0.0
+                && sample.attack_ms == 0.0
+                && sample.release_ms == 0.0;
+            let (name, duration) = if originals && unmodified {
+                let extension = sample
+                    .file_path
+                    .extension()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let name = format!("pad{:02}_layer{}.{}", index + 1, layer + 1, extension);
+                copy_source(&source, &staged.join(&name))?;
+                (name, sample.duration)
+            } else {
+                let name = format!("pad{:02}_layer{}.wav", index + 1, layer + 1);
+                let duration = render(&source, sample, &staged.join(&name))?;
+                if originals {
+                    collect_original(staged, index, layer, sample, &source)?;
+                }
+                (name, duration)
+            };
             identity.check()?;
             sources.push(source);
             sample.file_path = name.into();
-            sample.filename = sample
-                .file_path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
             sample.start_sec = 0.0;
             sample.end_sec = duration;
             sample.duration = duration;
@@ -83,15 +95,19 @@ fn collect_original(
         .unwrap_or_default()
         .to_string_lossy();
     let name = format!("pad{:02}_layer{}.{}", index + 1, layer + 1, extension);
-    let mut original =
-        File::create(staged.join("originals").join(name)).map_err(|e| e.to_string())?;
-    // try_clone shares the cursor with the decoder; rewind explicitly.
+    copy_source(source, &staged.join("originals").join(name))
+}
+
+/// Copies a pinned input independently of the decoder's shared cursor.
+fn copy_source(source: &File, target: &Path) -> Result<(), String> {
     use std::io::{Seek, SeekFrom};
-    let mut input = source.try_clone().map_err(|e| e.to_string())?;
-    input.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    std::io::copy(&mut input, &mut original).map_err(|e| e.to_string())?;
-    original.sync_all().map_err(|e| e.to_string())?;
-    Ok(())
+    let mut original = File::create_new(target).map_err(|error| error.to_string())?;
+    let mut input = source.try_clone().map_err(|error| error.to_string())?;
+    input
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| error.to_string())?;
+    std::io::copy(&mut input, &mut original).map_err(|error| error.to_string())?;
+    original.sync_all().map_err(|error| error.to_string())
 }
 
 /// Streams frame-aligned IEEE float WAV data without allocating the full result.
