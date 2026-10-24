@@ -1908,6 +1908,27 @@ mod tests {
                         "{wanted} is clipped at {size:?} in {appearance:?}"
                     );
                 }
+                let center = |label: &str| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => {
+                                Some(text.pos + text.galley.size() * 0.5)
+                            }
+                            _ => None,
+                        })
+                        .unwrap()
+                };
+                assert!(
+                    center("Pan").x > center("Gain").x + 40.0,
+                    "Pan belongs beside the fader"
+                );
+                assert!((center("Pan").x - center("Pitch").x).abs() < 2.0);
+                assert!(
+                    center("P").y > center("Pan").y && center("P").y < center("Pitch").y,
+                    "pitch mode belongs with its knob below Pan"
+                );
                 assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
                     egui::Shape::Text(text) if text.galley.text().contains("drag IN / OUT")
                         || text.galley.text() == "Start" || text.galley.text() == "End")));

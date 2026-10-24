@@ -67,49 +67,64 @@ pub(super) fn knob(ui: &mut egui::Ui, label: &str, value: &mut f32, limit: f32) 
 }
 
 pub(super) fn mixer(ui: &mut egui::Ui, sample: &mut SlotSample, retrigger: &mut bool) {
-    ui.horizontal(|ui| {
-        ui.small("Gain");
-        let color = if *retrigger {
-            ui.visuals().hyperlink_color
-        } else {
-            ui.visuals().widgets.noninteractive.bg_stroke.color
-        };
-        if ui
-            .add(
-                egui::Button::new("R")
-                    .min_size(Vec2::splat(22.0))
-                    .rounding(2.0)
-                    .stroke(Stroke::new(1.5_f32, color)),
-            )
-            .on_hover_text("Retrigger: stop the previous hit. Off allows overlapping hits.")
-            .clicked()
-        {
-            *retrigger = !*retrigger;
-        }
-        let pitch = sample.pitch_mode == super::sample_pack::PitchMode::Pitch;
-        if ui
-            .add(
-                egui::Button::new(if pitch { "P" } else { "T" })
-                    .min_size(Vec2::splat(22.0))
-                    .rounding(2.0),
-            )
-            .on_hover_text("P: change pitch, preserve time. T: change playback speed and pitch.")
-            .clicked()
-        {
-            sample.pitch_mode = if pitch {
-                super::sample_pack::PitchMode::Time
-            } else {
-                super::sample_pack::PitchMode::Pitch
-            };
-        }
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.small("Gain");
+                if super::ui::outlined_toggle(ui, "R", *retrigger, ui.visuals().hyperlink_color)
+                    .on_hover_text("Retrigger: stop the previous hit. Off allows overlapping hits.")
+                    .clicked()
+                {
+                    *retrigger = !*retrigger;
+                }
+            });
+            gain_fader(ui, &mut sample.volume);
+        });
+        ui.allocate_ui_with_layout(
+            Vec2::new(44.0, 184.0),
+            egui::Layout::top_down(egui::Align::Center),
+            |ui| {
+                ui.add_space(4.0);
+                knob(ui, "Pan", &mut sample.pan, 1.0);
+                ui.add_space(6.0);
+                let pitch = sample.pitch_mode == super::sample_pack::PitchMode::Pitch;
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(if pitch { "P" } else { "T" })
+                                .min_size(Vec2::splat(22.0))
+                                .rounding(2.0),
+                        )
+                        .on_hover_text(
+                            "P: change pitch, preserve time. T: change playback speed and pitch.",
+                        )
+                        .clicked()
+                    {
+                        sample.pitch_mode = if pitch {
+                            super::sample_pack::PitchMode::Time
+                        } else {
+                            super::sample_pack::PitchMode::Pitch
+                        };
+                    }
+                    if sample.pitch_pending() {
+                        ui.spinner().on_hover_text("Preparing pitch…");
+                    }
+                });
+                knob(ui, "Pitch", &mut sample.pitch_semitones, 24.0);
+            },
+        );
     });
-    let mut db = if sample.volume > 0.0 {
-        20.0 * sample.volume.log10()
+}
+
+/// A tall, marked dB fader; its silent lower stop does not require a numeric field.
+fn gain_fader(ui: &mut egui::Ui, volume: &mut f32) {
+    let mut db = if *volume > 0.0 {
+        20.0 * volume.log10()
     } else {
         -60.0
     };
     ui.horizontal(|ui| {
-        ui.spacing_mut().slider_width = 84.0;
+        ui.spacing_mut().slider_width = 150.0;
         let response = ui.add(
             egui::Slider::new(&mut db, -60.0..=6.0206)
                 .vertical()
@@ -121,7 +136,7 @@ pub(super) fn mixer(ui: &mut egui::Ui, sample: &mut SlotSample, retrigger: &mut 
             db = 0.0;
         }
         if response.changed() || response.double_clicked() {
-            sample.volume = if db <= -60.0 {
+            *volume = if db <= -60.0 {
                 0.0
             } else {
                 10.0_f32.powf(db / 20.0)
@@ -146,13 +161,6 @@ pub(super) fn mixer(ui: &mut egui::Ui, sample: &mut SlotSample, retrigger: &mut 
                 ui.visuals().weak_text_color(),
             );
         }
-        ui.allocate_space(Vec2::new(30.0, 84.0));
+        ui.allocate_space(Vec2::new(30.0, 150.0));
     });
-    ui.horizontal(|ui| {
-        knob(ui, "Pan", &mut sample.pan, 1.0);
-        knob(ui, "Pitch", &mut sample.pitch_semitones, 24.0);
-    });
-    if sample.pitch_pending() {
-        ui.small("Preparing pitch…");
-    }
 }
