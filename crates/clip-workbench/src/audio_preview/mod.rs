@@ -709,6 +709,7 @@ pub struct AudioPreviewState {
     pub open_folder_after_save: bool,
     browse_rx: Option<Receiver<Option<String>>>,
     save_job: Option<AudioSaveJob>,
+    completed_saves: Vec<PathBuf>,
     file_source: Option<crate::file_source::FileSource>,
     slice_copy_job: Option<AudioSliceCopyJob>,
 
@@ -743,6 +744,7 @@ struct AudioSaveRegion {
 }
 
 struct AudioSavePlan {
+    versioned: bool,
     file_source: Option<crate::file_source::FileSource>,
     destination: PathBuf,
     source: PathBuf,
@@ -753,6 +755,7 @@ struct AudioSavePlan {
 #[derive(Debug)]
 struct AudioSaveOutcome {
     saved_count: usize,
+    saved_paths: Vec<PathBuf>,
     failures: Vec<String>,
 }
 
@@ -996,6 +999,7 @@ impl AudioPreviewState {
             open_folder_after_save: true,
             browse_rx: None,
             save_job: None,
+            completed_saves: Vec::new(),
             file_source: None,
             slice_copy_job: None,
             preview_stop_time: None,
@@ -1013,6 +1017,11 @@ impl AudioPreviewState {
         self.file_source = Some(source);
         self
     }
+    /// Takes paths published by completed exports, never speculative output names.
+    pub(crate) fn take_saved_files(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.completed_saves)
+    }
+
     /// Reports an accepted export that must finish before the studio closes.
     pub fn file_write_pending(&self) -> bool {
         self.save_job.is_some()

@@ -68,6 +68,10 @@ pub(super) struct Viewers {
     path: Option<PathBuf>,
     error: Option<String>,
     confirm_close: bool,
+    pad_audio: bool,
+    pad_trim: Option<(f32, f32)>,
+    audio_return_saving: bool,
+    audio_result: Option<PathBuf>,
     config: AppConfig,
     gallery: Option<gallery::Collection>,
     video_start_seconds: f64,
@@ -97,6 +101,15 @@ impl Viewers {
     pub fn open_system(&mut self, path: PathBuf) {
         self.open_on(path, true);
     }
+    pub(crate) fn open_pad_audio(&mut self, path: PathBuf, trim: (f32, f32)) {
+        self.open(path);
+        self.pad_audio = true;
+        self.pad_trim = Some(trim);
+    }
+    pub(crate) fn take_audio_result(&mut self) -> Option<PathBuf> {
+        self.audio_result.take()
+    }
+
     pub fn open(&mut self, path: PathBuf) {
         self.open_on(path, false);
     }
@@ -184,6 +197,11 @@ impl Viewers {
             }
             Err(error) => self.error = Some(error),
         }
+        if let Some(ViewerSession::Audio(state)) = &mut self.session
+            && let Some((start, end)) = self.pad_trim.take()
+        {
+            state.selection = Some((start.min(state.duration_sec), end.min(state.duration_sec)));
+        }
         if let Some(ViewerSession::Pdf(state)) = &mut self.session
             && let Some(page) = self.pdf_start_page.take()
         {
@@ -199,7 +217,7 @@ impl Viewers {
     pub fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) -> bool {
         self.poll(ui.ctx());
         self.gallery_controls(ui);
-        ui.set_enabled(!self.confirm_close);
+        ui.set_enabled(!self.confirm_close && !self.audio_return_saving);
         let mut close = false;
         ui.horizontal(|ui| {
             close = ui.button("Back to folder").clicked();
@@ -224,6 +242,17 @@ impl Viewers {
             ui.label(error);
         }
         self.render_session(ui, palette, &mut close);
+        if self.audio_return_saving
+            && let Some(ViewerSession::Audio(state)) = &mut self.session
+        {
+            if let Some(path) = state.take_saved_files().into_iter().next() {
+                self.audio_result = Some(path);
+                self.clear();
+            } else if !state.file_write_pending() {
+                self.audio_return_saving = false;
+                self.confirm_close = true;
+            }
+        }
         if self.session.is_none() {
             close |=
                 ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
@@ -237,12 +266,37 @@ impl Viewers {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
-                    ui.label("Save your changes before returning to the folder.");
+                    ui.label(if self.pad_audio {
+                        "Save an edited copy beside the original and replace this drum pad layer?"
+                    } else {
+                        "Save your changes before returning to the folder."
+                    });
+                    if self.pad_audio
+                        && ui.button("Save copy and replace pad").clicked()
+                        && let Some(ViewerSession::Audio(state)) = &mut self.session
+                    {
+                        match state.save_edited_sibling(ui.input(|input| input.time)) {
+                            Ok(()) => {
+                                self.audio_return_saving = true;
+                                self.confirm_close = false;
+                            }
+                            Err(error) => {
+                                self.error = Some(error);
+                            }
+                        }
+                    }
                     ui.horizontal(|ui| {
                         if ui.button("Keep editing").clicked() {
                             self.confirm_close = false;
                         }
-                        if ui.button("Discard edits").clicked() {
+                        if ui
+                            .button(if self.pad_audio {
+                                "Return without replacing"
+                            } else {
+                                "Discard edits"
+                            })
+                            .clicked()
+                        {
                             self.clear();
                             self.gallery = None;
                         }
@@ -285,7 +339,7 @@ impl Viewers {
                 self.error = Some("Wait for audio export to finish.".into());
                 return false;
             }
-            if state.has_session_edits() {
+            if self.pad_audio || state.has_session_edits() {
                 self.confirm_close = true;
                 return false;
             }
@@ -326,6 +380,9 @@ impl Viewers {
         self.path = None;
         self.error = None;
         self.confirm_close = false;
+        self.pad_audio = false;
+        self.pad_trim = None;
+        self.audio_return_saving = false;
         self.video_start_seconds = 0.0;
     }
     fn open_external(&mut self) {

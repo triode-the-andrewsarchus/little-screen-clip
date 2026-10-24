@@ -424,6 +424,7 @@ fn audio_save_reports_destination_directory_creation_failure() {
         std::env::temp_dir().join(format!("little_clip_save_blocker_{}", uuid::Uuid::new_v4()));
     std::fs::write(&blocker, b"file blocks directory creation").unwrap();
     let plan = AudioSavePlan {
+        versioned: false,
         file_source: None,
         destination: blocker.join("child"),
         source,
@@ -448,6 +449,7 @@ fn file_backed_audio_export_preserves_collisions_and_reports_partial_success() {
     std::fs::write(&existing, b"preserved").unwrap();
     let source_bytes = std::fs::read(&source).unwrap();
     let outcome = run_audio_save(AudioSavePlan {
+        versioned: false,
         file_source: Some(crate::file_source::FileSource::capture(&source).unwrap()),
         source: source.clone(),
         destination: destination.path().to_owned(),
@@ -484,6 +486,7 @@ fn file_backed_audio_export_rejects_a_changed_source_before_creating_outputs() {
     std::fs::write(&source, b"externally changed").unwrap();
     let destination = tempfile::tempdir().unwrap();
     let error = run_audio_save(AudioSavePlan {
+        versioned: false,
         file_source: Some(file_source),
         source,
         destination: destination.path().to_owned(),
@@ -507,6 +510,7 @@ fn audio_exports_use_seekable_staging_in_the_held_directory() {
     std::fs::remove_file(&original).unwrap();
     std::os::unix::fs::symlink("/proc", &original).unwrap();
     let plan = AudioSavePlan {
+        versioned: false,
         file_source: Some(crate::file_source::FileSource::capture(&source).unwrap()),
         source,
         destination: original.clone(),
@@ -551,6 +555,7 @@ fn audio_exports_use_seekable_staging_in_the_held_directory() {
     let alias = root.path().join("kernel");
     std::os::unix::fs::symlink("/proc", &alias).unwrap();
     let error = run_audio_save(AudioSavePlan {
+        versioned: false,
         file_source: plan.file_source,
         source: plan.source,
         destination: alias,
@@ -565,6 +570,7 @@ fn audio_exports_use_seekable_staging_in_the_held_directory() {
 fn audio_save_reports_ffmpeg_process_failure_with_filename() {
     let destination = tempfile::tempdir().unwrap();
     let result = run_audio_save(AudioSavePlan {
+        versioned: false,
         file_source: None,
         destination: destination.path().to_owned(),
         source: destination.path().join("missing-source.wav"),
@@ -755,4 +761,25 @@ fn test_right_click_hold_state_and_timeout() {
     assert_eq!(hold.target_range, (1.0, 3.0));
     assert_eq!(hold.slice_index, Some(2));
     assert!(!hold.started_looping);
+}
+
+#[test]
+fn pad_studio_export_publishes_a_trimmed_sibling_without_overwriting_sources() {
+    let (_root, source) = generate_fixture_wav("pad", 0.5);
+    let original = std::fs::read(&source).unwrap();
+    let existing = source.with_file_name("pad.edited.wav");
+    std::fs::write(&existing, b"keep existing sibling").unwrap();
+    let pin = crate::file_source::FileSource::capture(&source).unwrap();
+    let mut state = AudioPreviewState::new(source.clone(), "pad.wav".into()).with_file_source(pin);
+    state.selection = Some((0.1, 0.3));
+    state.save_edited_sibling(1.0).unwrap();
+    wait_for_audio_save(&mut state);
+    let files = state.take_saved_files();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].parent(), source.parent());
+    assert_ne!(files[0], existing);
+    assert_eq!(std::fs::read(source).unwrap(), original);
+    assert_eq!(std::fs::read(existing).unwrap(), b"keep existing sibling");
+    let analysis = compute_full_audio_analysis(&files[0], 100).unwrap();
+    assert!(analysis.duration_ms.abs_diff(200) < 20);
 }

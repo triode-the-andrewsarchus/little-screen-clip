@@ -60,6 +60,7 @@ struct FileManagerApp {
     palette: AppPalette,
     native: Option<super::native_drag::NativeDrag>,
     drop_destinations: std::collections::BTreeMap<u64, DropDestination>,
+    pad_studio: Option<super::constellation::pad_interaction::StudioRequest>,
 }
 
 impl FileManagerApp {
@@ -89,6 +90,7 @@ impl FileManagerApp {
         Self {
             browser,
             viewers: super::viewers::Viewers::new(config),
+            pad_studio: None,
             palette,
             native: super::native_drag::NativeDrag::new(cc),
             drop_destinations: Default::default(),
@@ -256,6 +258,11 @@ impl FileManagerApp {
                 self.browser.previews.retire();
                 self.browser.music_previews.retire();
                 if self.viewers.ui(ui, &self.palette) {
+                    if let Some(request) = self.pad_studio.take()
+                        && let Some(path) = self.viewers.take_audio_result()
+                    {
+                        self.browser.constellation.accept_studio_edit(request, path);
+                    }
                     if let Some(target) = self.viewers.take_system_navigation() {
                         self.browser.browse_system_target(target);
                     } else {
@@ -265,6 +272,12 @@ impl FileManagerApp {
                 }
             } else {
                 self.browser.ui(ui, &self.palette);
+                if let Some(request) = self.browser.constellation.studio_request.take() {
+                    self.browser.stop_previews();
+                    self.viewers
+                        .open_pad_audio(request.path.clone(), request.trim);
+                    self.pad_studio = Some(request);
+                }
                 if let Some(path) = self.browser.open_file.take() {
                     let pdf_start = self
                         .browser

@@ -242,7 +242,7 @@ impl ConstellationState {
                         self.swap_pads(&drag, index);
                     }
                     if response.hovered() { hovered = Some(index); }
-                    let response = response.on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick: play · Shift+click: add map sample\nHold Shift and right-click consecutive pads to join a mute group. Right-click for pad actions.", index + 1, 36 + index, title));
+                    let response = response.on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick: play · Double-click: Audio Studio · Shift+click: add map sample\nHold Shift and right-click consecutive pads to join a mute group. Right-click for pad actions.", index + 1, 36 + index, title));
                     if response.secondary_clicked() && ui.input(|input| input.modifiers.shift) { self.join_mute_group(index); }
                     if !ui.input(|input| input.modifiers.shift) { response.context_menu(|ui| {
                         if ui.button("Leave mute group").clicked() {
@@ -250,7 +250,10 @@ impl ConstellationState {
                             ui.close_menu();
                         }
                     }); }
-                    if response.clicked() {
+                    if response.double_clicked() {
+                        self.selected_slot = index;
+                        self.request_pad_studio(index, 0);
+                    } else if response.clicked() {
                         self.selected_slot = index;
                         if ui.input(|input| input.modifiers.shift) { self.assign_selected_to_pad(index); }
                         else { self.trigger_slot(index); }
@@ -424,6 +427,7 @@ impl ConstellationState {
         }
         let mut remove = None;
         let mut audition = None;
+        let mut studio_layer = None;
         // One layer at a time keeps the waveform and controls at a predictable height.
         let layer_id = ui.id().with(("edited_layer", index));
         let mut selected_layer = ui
@@ -459,13 +463,21 @@ impl ConstellationState {
                     if ui.small_button("Play").clicked() {
                         audition = Some(sample.clone());
                     }
-                    if ui.small_button("Reset trim").clicked() {
-                        sample.start_sec = 0.0;
-                        sample.end_sec = sample.duration;
-                    }
-                    if ui.small_button("Remove").clicked() {
-                        remove = Some(layer);
-                    }
+                    ui.menu_button("Layer actions", |ui| {
+                        if ui.button("Edit in Audio Studio").clicked() {
+                            studio_layer = Some(layer);
+                            ui.close_menu();
+                        }
+                        if ui.button("Reset trim").clicked() {
+                            sample.start_sec = 0.0;
+                            sample.end_sec = sample.duration;
+                            ui.close_menu();
+                        }
+                        if ui.button("Remove layer").clicked() {
+                            remove = Some(layer);
+                            ui.close_menu();
+                        }
+                    });
                 });
                 if ui.available_width() >= 700.0 {
                     let wave_width = ui.available_width() - 260.0;
@@ -490,6 +502,9 @@ impl ConstellationState {
         }
         if let Some(sample) = audition {
             self.audition_layers(&[sample]);
+        }
+        if let Some(layer) = studio_layer {
+            self.request_pad_studio(index, layer);
         }
     }
 

@@ -8,7 +8,58 @@ pub(super) struct PadDrag {
     pub before: super::sample_pack::PackSlot,
 }
 
+pub(crate) struct StudioRequest {
+    pub path: std::path::PathBuf,
+    pub trim: (f32, f32),
+    generation: u64,
+    pad: usize,
+    layer: usize,
+    before: super::sample_pack::SlotSample,
+}
+
 impl ConstellationState {
+    pub(super) fn request_pad_studio(&mut self, pad: usize, layer: usize) {
+        if let Some(before) = self.pack_bank.slots[pad].samples.get(layer).cloned() {
+            self.studio_request = Some(StudioRequest {
+                path: before.file_path.clone(),
+                trim: (before.start_sec, before.end_sec),
+                generation: self.bank_generation,
+                pad,
+                layer,
+                before,
+            });
+            self.stop_playback();
+        }
+    }
+
+    /// Replaces only the originating layer after a successful non-overwriting export.
+    pub(crate) fn accept_studio_edit(&mut self, request: StudioRequest, path: std::path::PathBuf) {
+        if request.generation != self.bank_generation
+            || self.pack_bank.slots[request.pad].samples.get(request.layer) != Some(&request.before)
+        {
+            self.browser_status = Some((
+                format!("Pad changed; edited file retained at {}", path.display()),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        self.checkpoint_bank(false);
+        let mut layer = request.before;
+        layer.file_path = path.clone();
+        layer.filename = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        layer.start_sec = 0.0;
+        layer.duration = 15.0; // Cache warming replaces this bound with actual decoded duration.
+        layer.end_sec = 15.0;
+        layer.cached_audio = None;
+        self.failed_audio.remove(&path);
+        self.pack_bank.slots[request.pad].samples[request.layer] = layer;
+        self.checkpoint_bank(false);
+    }
+
     /// Moves complete pad instruments while leaving configured key positions fixed.
     pub(super) fn swap_pads(&mut self, drag: &PadDrag, target: usize) {
         if drag.index == target
@@ -94,13 +145,13 @@ impl ConstellationState {
         let painter = ui.painter();
         for (rect, pad) in &self.pad_drop_targets {
             if *pad == index || (group != 0 && self.pack_bank.slots[*pad].choke_group == group) {
-                painter.rect_stroke(rect.shrink(2.0), 4.0, egui::Stroke::new(2.0, color));
+                painter.rect_stroke(rect.shrink(2.0), 4.0, egui::Stroke::new(2.0_f32, color));
                 if *pad != index {
                     let direction = (rect.center() - origin.center()).normalized();
                     let start =
                         origin.center() + direction * (origin.width().min(origin.height()) * 0.5);
                     let end = rect.center() - direction * (rect.width().min(rect.height()) * 0.5);
-                    painter.line_segment([start, end], egui::Stroke::new(2.0, color));
+                    painter.line_segment([start, end], egui::Stroke::new(2.0_f32, color));
                 }
             }
         }
@@ -110,6 +161,31 @@ impl ConstellationState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn studio_return_replaces_one_layer_and_rejects_changed_targets() {
+        let mut state = ConstellationState::default();
+        let layer = super::super::sample_pack::SlotSample::new(
+            "old.wav".into(),
+            "old.wav".into(),
+            None,
+            1.0,
+        );
+        state.pack_bank.slots[0].samples = vec![layer.clone(), layer];
+        state.request_pad_studio(0, 1);
+        let request = state.studio_request.take().unwrap();
+        state.accept_studio_edit(request, "old.edited.wav".into());
+        assert_eq!(state.pack_bank.slots[0].samples[0].filename, "old.wav");
+        assert_eq!(
+            state.pack_bank.slots[0].samples[1].filename,
+            "old.edited.wav"
+        );
+        state.request_pad_studio(0, 0);
+        let request = state.studio_request.take().unwrap();
+        state.pack_bank.slots[0].samples[0].volume = 0.5;
+        state.accept_studio_edit(request, "stale.wav".into());
+        assert_eq!(state.pack_bank.slots[0].samples[0].filename, "old.wav");
+    }
+
     #[test]
     fn pad_swap_preserves_instruments_keys_selection_and_rejects_stale_drags() {
         let mut state = ConstellationState::default();

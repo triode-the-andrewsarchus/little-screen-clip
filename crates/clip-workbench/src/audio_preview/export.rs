@@ -611,11 +611,36 @@ impl AudioPreviewState {
         });
     }
 
+    /// Exports a single edited sample to a non-overwriting sibling of its source.
+    pub(crate) fn save_edited_sibling(&mut self, now: f64) -> Result<(), String> {
+        if self.selection_mode == SelectionMode::Multi && self.multi_selections.len() > 1 {
+            return Err("Choose a single region to return to the drum pad.".into());
+        }
+        let destination = self
+            .path
+            .parent()
+            .ok_or("Sample has no parent directory")?
+            .to_path_buf();
+        let stem = self.path.file_stem().unwrap_or_default().to_string_lossy();
+        self.save_filenames = vec![format!("{stem}.edited.wav")];
+        self.open_folder_after_save = false;
+        self.completed_saves.clear();
+        self.execute_save_to(now, destination, true)
+    }
+
     pub fn execute_save(&mut self, now: f64) -> Result<(), String> {
+        self.execute_save_to(now, PathBuf::from(self.save_destination_dir.trim()), false)
+    }
+
+    fn execute_save_to(
+        &mut self,
+        now: f64,
+        dest_dir: PathBuf,
+        versioned: bool,
+    ) -> Result<(), String> {
         if self.save_job.is_some() {
             return Err("An audio save is already in progress".to_owned());
         }
-        let dest_dir = PathBuf::from(self.save_destination_dir.trim());
         let slices: Vec<(f32, f32)> = match self.selection_mode {
             SelectionMode::Single => {
                 if let Some((s, e)) = self.selection {
@@ -686,6 +711,7 @@ impl AudioPreviewState {
             });
         }
         let plan = AudioSavePlan {
+            versioned,
             file_source: self.file_source.clone(),
             destination: dest_dir,
             source: self.path.clone(),
@@ -724,6 +750,7 @@ impl AudioPreviewState {
         self.save_job = None;
         let message = match result {
             Ok(Ok(outcome)) => {
+                self.completed_saves = outcome.saved_paths;
                 self.save_dialog_open = false;
                 if outcome.failures.is_empty() {
                     crate::ui_ext::StatusMessage::new(
@@ -1230,6 +1257,7 @@ pub(super) fn run_audio_save(plan: AudioSavePlan) -> Result<AudioSaveOutcome, St
     }
     Ok(AudioSaveOutcome {
         saved_count: saved_paths.len(),
+        saved_paths,
         failures,
     })
 }
@@ -1245,7 +1273,7 @@ pub(super) fn save_audio_region(
     }
     let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
     let parent = std::fs::read_link(&anchor).map_err(|error| error.to_string())?;
-    let out_path = anchor.join(&region.filename);
+    let mut out_path = anchor.join(&region.filename);
     let staging = tempfile::NamedTempFile::new_in(&anchor).map_err(|error| error.to_string())?;
     let status = audio_export_command(
         &plan.source,
@@ -1266,9 +1294,32 @@ pub(super) fn save_audio_region(
         .map_err(|error| error.to_string())?;
     if let Some(source) = &plan.file_source {
         source.check()?;
-        staging
-            .persist_noclobber(&out_path)
-            .map_err(|error| error.to_string())?;
+        let mut staged = staging;
+        let mut installed = false;
+        for version in 0..10_000 {
+            if version > 0 {
+                let name = Path::new(&region.filename);
+                let stem = name.file_stem().unwrap_or_default().to_string_lossy();
+                let extension = name.extension().unwrap_or_default().to_string_lossy();
+                out_path = anchor.join(format!("{stem}-{version}.{extension}"));
+            }
+            match staged.persist_noclobber(&out_path) {
+                Ok(_) => {
+                    installed = true;
+                    break;
+                }
+                Err(error)
+                    if plan.versioned
+                        && error.error.kind() == std::io::ErrorKind::AlreadyExists =>
+                {
+                    staged = error.file;
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        if !installed {
+            return Err("No unused edited sample name is available".into());
+        }
     } else {
         match little_clip_core::kernel_interface::require_content(&out_path) {
             Ok(()) => {}
@@ -1281,7 +1332,7 @@ pub(super) fn save_audio_region(
     }
     Ok(std::fs::read_link(&anchor)
         .unwrap_or(parent)
-        .join(&region.filename))
+        .join(out_path.file_name().ok_or("Missing output name")?))
 }
 
 fn audio_export_command(
