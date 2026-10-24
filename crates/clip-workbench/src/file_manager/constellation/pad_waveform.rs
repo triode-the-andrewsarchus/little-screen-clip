@@ -90,7 +90,6 @@ impl ConstellationState {
         }
         edit_trim(ui, &response, rect, sample, view, frame);
         ui.data_mut(|data| data.insert_temp(id, view));
-
     }
 }
 

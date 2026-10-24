@@ -9,13 +9,14 @@ Rack, Packs, and Output are tabs in the existing-width right panel. Packs stays 
 Selecting a pad exposes its layer editor below the map; resize or hide that editor
 to reveal more of the map. Docks obscure the full map canvas without moving or
 rescaling its points, including at zoom levels with point relaxation. The editor
-shows one layer at a time. Its layer tabs have a close button for removing the
-selected layer. The Editor toggle sits beside Undo/Redo; Override MIDI velocity
+shows one layer at a time. Its layer tabs show truncated sample filenames, each
+with its own close button. Closing an inactive layer keeps the current layer
+selected. The Editor toggle sits beside Undo/Redo; Override MIDI velocity
 lives in Rack, and all dynamics controls live in Output. There is no output footer.
 Pads become square when height permits and compact vertically in small windows.
 The sidebar retains its existing default and width limits, and only the user's
-divider drag changes its width. The X beside its tabs collapses both rack and
-editor to a thin rail. Click anywhere on that rail to reopen them; editor visibility
+divider drag changes its width. The full-height minus rail on the right collapses
+both rack and editor to a thin rail. Click anywhere on that rail to reopen them; editor visibility
 and rack width survive collapse.
 
 ## Keyboard configuration
@@ -151,12 +152,13 @@ actual displayed columns. Wheel zooms around the pointer; Shift+wheel pans. The
 canvas shares Audio Studio's viewport model and time ruler. Tick spacing
 also accounts for available width; envelope guides use the playback fade model.
 
-Wide editors put waveform/trim and Sound in separate columns. Narrow editors use
-a compact two-column Sound grid followed by numeric Trim controls before the
-waveform, keeping gain, pan, Start, and End visible. Gain is a dB fader with a silent lower stop;
+Sound controls sit above the waveform at every editor width; a compact grid keeps
+gain, pan, attack and release visible in both small and large windows. Trim uses
+the waveform's IN/OUT markers, without duplicate numeric endpoints or hint text.
+Gain is a dB fader with a silent lower stop;
 pan shows Center/L/R. Attack/release sliders have finer logarithmic control near
 zero; values remain editable, and double-click resets controls to neutral.
-The selected pad exposes numeric trim, gain, stereo balance, and linear attack and
+The selected pad exposes marker-based trim, gain, stereo balance, and linear attack and
 release fades (0–500 ms). Mute and Solo gate active pad voices without restarting
 them. Layer changes affect subsequent hits. Fades follow the trimmed boundaries;
 overlapping fades use the lower envelope. Center balance preserves existing stereo
@@ -175,7 +177,9 @@ full-range trim. Failed or stale handoffs retain the saved file and prior pad.
 The top toolbar always shows a two-ended duration slider, bounded by the shortest
 and longest indexed samples, and an outlined Mono samples only toggle. Double-click
 the duration track to reset its range. Category buttons retain subtle outlines and
-use the short labels CH, OH, and Bass. The bottom status bar reports active / total
+use the short labels CH, OH, and Bass. Active categories keep their normal fill
+and text, with their category color on the border. Hover audition, All and Mono
+also use rounded outlines rather than bright selected fills. The bottom status bar reports active / total
 samples. Re-indexing remains in File; there is no Map menu.
 
 Every visible sample gets a mesh marker of the same size at any given zoom.

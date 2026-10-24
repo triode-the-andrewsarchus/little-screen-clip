@@ -158,29 +158,31 @@ impl<'a, T> Tab<'a, T> {
         if focused && selected {
             painter.rect_stroke(rect.shrink(2.0), rounding, Stroke::new(1.0_f32, foreground));
         }
-        let close_clicked = if closable {
-            let close_rect =
-                Rect::from_min_max(egui::pos2(rect.right() - close_width, rect.top()), rect.max);
-            let close = ui.interact(close_rect, response.id.with("close"), Sense::click());
-            if close.hovered() {
-                painter.rect_filled(
-                    close_rect.shrink(3.0),
-                    3.0,
-                    ui.visuals().widgets.hovered.weak_bg_fill,
-                );
-            }
-            Icon::Close.image_tinted(12.0, foreground).paint_at(
-                ui,
-                Rect::from_center_size(close_rect.center(), Vec2::splat(12.0)),
-            );
-            close
-                .on_hover_text(format!("Remove {}", self.label))
-                .clicked()
-        } else {
-            false
-        };
+        let close_clicked =
+            closable && tab_close_button(ui, rect, response.id, self.label, foreground);
         (response.on_hover_text(self.label), close_clicked)
     }
+}
+
+/// A tab's independent close target, with its own focus, tooltip and accessible name.
+fn tab_close_button(ui: &mut Ui, tab: Rect, id: Id, label: &str, foreground: Color32) -> bool {
+    let rect = Rect::from_min_max(egui::pos2(tab.right() - 24.0, tab.top()), tab.max);
+    let response = ui.interact(rect, id.with("close"), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, format!("Remove {label}"))
+    });
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    if response.hovered() || response.has_focus() {
+        painter.rect_filled(
+            rect.shrink(3.0),
+            3.0,
+            ui.visuals().widgets.hovered.weak_bg_fill,
+        );
+    }
+    Icon::Close
+        .image_tinted(12.0, foreground)
+        .paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(12.0)));
+    response.on_hover_text(format!("Remove {label}")).clicked()
 }
 
 /// A wrapping tab strip, or a vertical tool rail. Returns only actual selection changes.
@@ -398,6 +400,48 @@ mod tests {
             pressed: true,
             repeat: false,
             modifiers: Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn closing_an_inactive_tab_does_not_select_it() {
+        let ctx = egui::Context::default();
+        let palette = crate::ui_appearance::palette(WorkbenchAppearance::Dark);
+        let tabs = [Tab::new(0, "First.wav"), Tab::new(1, "Second.wav")];
+        let frame = |events| {
+            let mut actions = (None, None);
+            let output = ctx.run(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 240.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        actions = TabBar::new("closable", 0, &tabs, &palette).show_closable(ui);
+                    });
+                },
+            );
+            (output, actions)
+        };
+        let (output, _) = frame(vec![]);
+        let rect = tab_rects(&output)[1];
+        let pos = egui::pos2(rect.right() - 12.0, rect.center().y);
+        for pressed in [true, false] {
+            let (_, actions) = frame(vec![
+                Event::PointerMoved(pos),
+                Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ]);
+            assert_eq!(
+                actions.0, None,
+                "closing an inactive layer must not select it"
+            );
+            assert_eq!(actions.1, (!pressed).then_some(1));
         }
     }
 

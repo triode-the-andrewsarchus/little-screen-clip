@@ -130,3 +130,51 @@ and stable state assertions; no product behavior was weakened to make the runner
 pass. The dense-map regression tests cover 68,055 rendered points at six zooms,
 including coincident inputs. They establish equal marker radii and bounded work;
 they are not a GPU frame-rate benchmark on the user's full library.
+
+## Follow-up: six UI corrections
+
+The next review identified six concrete issues. Each has a separate implementation
+commit, followed by shared-widget accessibility, regression coverage and documentation.
+
+| Request | Resolution | Commit |
+|---|---|---|
+| Per-layer close controls and useful tab names | Filename prefixes replace numbered labels; every tab has its own X. Closing an inactive tab preserves the active sample. | `401fba5` |
+| Missing sound controls in large windows | Remove the separate wide-editor layout. Sound stays above the waveform at every width. | `a7b7181` |
+| Symmetric collapse/expand controls | Use full-height minus/plus rails at the same right edge; the expanded rail fits inside the existing sidebar width. | `a1ff9b1` |
+| Redundant trim controls and text | Remove numeric start/end controls, selected-duration text and the marker hint; keep the waveform's draggable IN/OUT markers. | `0083c4f` |
+| Filtered points too bright | Reduce excluded marker alpha from 25/28 to 12 while retaining all markers. | `e4a352f` |
+| Square, low-contrast active filters | Keep neutral fills and rounded corners. Active category borders use the category color; All, Hover audition and Mono use the theme accent. | `1c4eafd` |
+
+The new layout test checks that filename tabs and Gain, Pan, Attack and Release
+text are fully inside the clipping rectangle at widths 840, 1400 and 2200, in
+both appearances. A pointer test closes an inactive shared tab and verifies a
+close action without a selection change. Existing manual rack-width and camera
+invariance tests still pass. The workbench library suite passes 1,300 tests with
+9 ignored; all five shared-tab tests pass after isolating the close widget.
+
+The rebuilt binary passes both private compositor scenarios, each with 36
+observations: `/tmp/constellation-six-dark-accepted` and
+`/tmp/constellation-six-light-final` (hardware-Dvorak keys). The runner now uses
+filename tabs and the new rails. Grid gesture spacing follows the rendered pad
+stripe instead of assuming the old pad width. Geometry assertions cover sound
+control visibility independently of OCR, which can miss the Pan label in dark
+screenshots even when it is visibly present.
+
+Architecture measurements were repeated against `constellation-followup-six`
+(starting at `59156da`) and refreshed main, still `999cd24`. The follow-up adds
+99 NLOC and six functions, including two regression tests; duplication remains
+5.71%, average CCN 4.05, maximum CCN 196, and reported cycles six. Two additional
+clone groups are test-harness matches. The tool still reports **REGRESSION**.
+Shared tab painting rises from CCN 12 to 18 because of optional per-tab close
+geometry and action handling; the close target itself has a separate painter,
+accessible label, tooltip and focus feedback. Extending the shared tab bar avoids
+a constellation-only navigation fork. The acceptance scenario grows from CCN 33
+to 36 for its new targeting checks.
+
+For the entire branch against current main: NLOC 227,320 → 240,457, functions
+6,934 → 7,268, sum CCN 27,909 → 29,426, duplication 5.98% → 5.71%, clone groups
+1,382 → 1,403, reported cycles five → six, and health 73.88 → 62.73. This preserves
+the earlier branch-wide regression finding; the six UI fixes do not erase the
+indexing and feature-extraction hotspots documented above.
+
+Final follow-up validation: `cargo test --workspace -- --test-threads=1` passes 2555 tests with 23 ignored across 26 targets. The file-manager binary builds, and formatting, diff whitespace and acceptance-script compilation checks pass.

@@ -14,12 +14,12 @@ from file_manager_acceptance import (
 )
 
 
-def pad_gestures(session, root, destination, red):
+def pad_gestures(session, root, destination, red, stride):
     """Check actual grid swaps, mute-link gestures and the studio round trip."""
     from file_manager_acceptance import private
     from PIL import Image
-    # The rack width is unchanged: adjacent pad centers remain 87 logical pixels apart.
-    empty = (destination[0] + 174, destination[1])
+    # Derive the grid stride from the visible category stripe.
+    empty = (destination[0] + stride * 2, destination[1])
     def swap(source, target):
         private.run_checked([str(session.pointer), "drag", "1280", "800", *map(str, (*source, *target))], env=session.env)
     swap(destination, empty)
@@ -33,7 +33,7 @@ def pad_gestures(session, root, destination, red):
     modifier = subprocess.Popen(["wtype", "-M", "shift", "-s", "1800", "-m", "shift"], env=session.env)
     try:
         time.sleep(0.15)
-        for x, y in [destination, (destination[0] + 87, destination[1])]:
+        for x, y in [destination, (destination[0] + stride, destination[1])]:
             private.run_checked([str(session.pointer), "right-click", "1280", "800", str(x), str(y)], env=session.env)
             time.sleep(0.15)
     finally:
@@ -84,8 +84,8 @@ def exercise(session, root, hardware_keys=False):
     session.click(*(sum(point[axis] for point in stars) // len(stars) for axis in (0, 1)))
     first_key = "semicolon" if hardware_keys else "z"
     session.key(first_key, "shift")
-    text = session.observe("assigned-slot", ["Sound", "Trim", "Start", "End", "Gain", "Pan"])
-    assert "Layer actions" not in text and "Fit selection" not in text
+    text = session.observe("assigned-slot", ["Sound", "Gain"])
+    assert "Layer actions" not in text and "Fit selection" not in text and "drag IN / OUT" not in text
     session.key("Space")
     session.key("Space")
     # Duplicate keyboard assignments must be confirmable and cancellable.
@@ -95,7 +95,7 @@ def exercise(session, root, hardware_keys=False):
     session.key(first_key, "shift")
     session.observe("duplicate-add", ["Duplicate sample layers", "Add anyway"])
     session.click(*(session.word("duplicate-add", "anyway", required=False) or (535, 488)))
-    session.observe("two-layers", ["Layer 1", "Layer 2", "Sound"])
+    session.observe("two-layers", ["kick.wav", "Sound"])
     session.key("q" if hardware_keys else "x", "shift")
     for key in [first_key, first_key, "q" if hardware_keys else "x"]:
         session.key(key)
@@ -108,24 +108,23 @@ def exercise(session, root, hardware_keys=False):
     bottom = max(y for _, y in pad_line)
     edge = [(x, y) for x, y in pad_line if y >= bottom - 2]
     destination = (sum(x for x, _ in edge) // len(edge), bottom - 12)
-    pad_gestures(session, root, destination, red)
+    stride = max(x for x, _ in edge) - min(x for x, _ in edge) + 15
+    pad_gestures(session, root, destination, red, stride)
     # Collapse and reopen the sidebar; editor visibility must survive both actions.
     session.observe("before-collapse", ["Packs"])
-    header = session.word("before-collapse", "Packs", minimum_y=300)
-    session.click(1150, header[1])
+    session.click(1164, 550)
     text = session.observe("collapsed-rack", ["Mono samples only"])
     assert "Packs" not in text
     session.click(1164, 550)
     text = session.observe("reopened-rack", ["Packs"])
     assert "Sound" not in text, "a previously closed editor stays closed"
     session.click(*(session.word("reopened-rack", "Editor", required=False) or (1094, 470)))
-    session.observe("editor-open-before-collapse", ["Sound", "Trim"])
-    header = session.word("editor-open-before-collapse", "Packs", minimum_y=300)
-    session.click(1150, header[1])
+    session.observe("editor-open-before-collapse", ["Sound", "Gain"])
+    session.click(1164, 550)
     text = session.observe("editor-collapsed", ["Mono samples only"])
     assert "Sound" not in text
     session.click(1164, 550)
-    session.observe("editor-reopened", ["Sound", "Gain", "Pan"])
+    session.observe("editor-reopened", ["Sound", "Gain"])
     session.click(*session.word("editor-reopened", "Output"))
     session.observe("visual-compressor", ["Compressor", "Threshold", "Ratio", "Knee", "Makeup"])
     session.click(*session.word("visual-compressor", "Rack", minimum_y=300))
@@ -155,12 +154,13 @@ def exercise(session, root, hardware_keys=False):
     wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 2, "second atomic version")
     assert first.read_bytes() == before and marker.read_text() == "owned marker"
     session.observe("second-save", ["Saved"])
-    session.click(466, 533)  # Select Layer 2, then its adjacent remove control.
-    session.click(519, 533)
-    text = session.observe("layer-removed", ["Layer 1", "Sound", "Unsaved changes"])
-    assert "Layer 2" not in text
+    # Close the inactive kick.wav tab while kick.edited.wav remains selected.
+    tab = session.word("second-save", "kick.wav", minimum_y=400)
+    assert tab[1] < 550, "target must be the layer tab, not a pad label"
+    session.click(tab[0] + 80, tab[1])
+    session.observe("layer-removed", ["kick.edited.wav", "Sound", "Unsaved changes"])
     session.click(978, 470)  # Button center; OCR can include its left border.
-    session.observe("layer-restored", ["Layer 1", "Layer 2"])
+    session.observe("layer-restored", ["kick.edited.wav", "kick.wav"])
     session.click(110, 70)
     session.observe("file-menu", ["constellation", "recursive"])
     session.click(*(session.word("file-menu", "Re-index", tree=True, required=False) or (155, 130)))

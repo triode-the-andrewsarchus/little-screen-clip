@@ -8,9 +8,7 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 /// Keeps filtered samples as faint spatial context without competing with matches.
 fn filtered_star_color(base: Color32, category_dimmed: bool, filter_dimmed: bool) -> Color32 {
-    let alpha = if category_dimmed {
-        12
-    } else if filter_dimmed {
+    let alpha = if category_dimmed || filter_dimmed {
         12
     } else {
         255
@@ -1752,6 +1750,53 @@ mod tests {
                 });
             },
         )
+    }
+
+    #[test]
+    fn sound_controls_and_filename_tabs_remain_visible_at_every_editor_width() {
+        use super::super::sample_pack::SlotSample;
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette = little_clip_core::palette::AppPalette::for_appearance(appearance);
+            crate::ui_appearance::apply_visuals(&ctx, &palette);
+            let mut state = ConstellationState::new();
+            state.samples.push(sample_fixture(0));
+            state.pad_editor_open = true;
+            state.pack_bank.slots[0].samples.push(SlotSample::new(
+                "/samples/kick.wav".into(),
+                "kick.wav".into(),
+                None,
+                1.0,
+            ));
+            for size in [
+                Vec2::new(840.0, 650.0),
+                Vec2::new(1400.0, 1000.0),
+                Vec2::new(2200.0, 1300.0),
+            ] {
+                render_frame(&ctx, &mut state, &palette, size);
+                let output = render_frame(&ctx, &mut state, &palette, size);
+                for wanted in ["kick.wav", "Sound", "Gain", "Pan", "Attack", "Release"] {
+                    assert!(
+                        output.shapes.iter().any(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == wanted => {
+                                shape.clip_rect.contains_rect(
+                                    Rect::from_min_size(text.pos, text.galley.size()).shrink(0.5),
+                                )
+                            }
+                            _ => false,
+                        }),
+                        "{wanted} is clipped at {size:?} in {appearance:?}"
+                    );
+                }
+                assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text().contains("drag IN / OUT")
+                        || text.galley.text() == "Start" || text.galley.text() == "End")));
+            }
+        }
     }
 
     #[test]
