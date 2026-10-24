@@ -1,4 +1,4 @@
-//! Maps recursively indexed audio samples and assembles reference-based sample packs.
+//! Maps recursively indexed audio samples and assembles portable layered sample packs.
 //!
 //! [`indexer`] performs bounded acoustic analysis and persists snapshots in [`db`].
 //! Folder loads and pack operations use core's bounded background executor; the UI
@@ -8,8 +8,9 @@
 //!
 //! [`sample_pack`] owns sixteen layered pads. PCM is prepared off the UI thread, shared
 //! by playback sources, and limited to the first 15 seconds/two million values per
-//! layer. Bank metadata and symlinks preserve source references and trim settings;
-//! reference saves retain edits as metadata; portable exports render WAV layers.
+//! layer. Pitch preparation shares that bounded worker/cache path. Portable saves
+//! copy ordinary source files and render edited WAV layers, retaining their complete
+//! original inputs alongside the relative-path bank manifest.
 //! Accepted save/export/delete jobs
 //! have no timeout and keep application close deferred until their results arrive.
 //!
@@ -34,7 +35,7 @@ pub mod pack_shelf_ui;
 mod pad_drop;
 pub(crate) mod pad_interaction;
 mod pad_waveform;
-pub mod pitch;
+mod pitch;
 pub mod sample_pack;
 pub mod ui;
 

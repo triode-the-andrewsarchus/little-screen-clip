@@ -84,7 +84,7 @@ def exercise(session, root, hardware_keys=False):
     session.click(*(sum(point[axis] for point in stars) // len(stars) for axis in (0, 1)))
     first_key = "semicolon" if hardware_keys else "z"
     session.key(first_key, "shift")
-    text = session.observe("assigned-slot", ["Sound", "Gain"])
+    text = session.observe("assigned-slot", ["Edit in Audio Studio"])
     assert "Layer actions" not in text and "Fit selection" not in text and "drag IN / OUT" not in text
     session.key("Space")
     session.key("Space")
@@ -95,7 +95,7 @@ def exercise(session, root, hardware_keys=False):
     session.key(first_key, "shift")
     session.observe("duplicate-add", ["Duplicate sample layers", "Add anyway"])
     session.click(*(session.word("duplicate-add", "anyway", required=False) or (535, 488)))
-    session.observe("two-layers", ["kick.wav", "Sound"])
+    session.observe("two-layers", ["kick.wav", "Edit in Audio Studio"])
     session.key("q" if hardware_keys else "x", "shift")
     for key in [first_key, first_key, "q" if hardware_keys else "x"]:
         session.key(key)
@@ -117,14 +117,14 @@ def exercise(session, root, hardware_keys=False):
     assert "Packs" not in text
     session.click(1164, 550)
     text = session.observe("reopened-rack", ["Packs"])
-    assert "Sound" not in text, "a previously closed editor stays closed"
+    assert "EditinAudioStudio" not in "".join(text.split()), "a previously closed editor stays closed"
     session.click(*(session.word("reopened-rack", "Editor", required=False) or (1094, 470)))
-    session.observe("editor-open-before-collapse", ["Sound", "Gain"])
+    session.observe("editor-open-before-collapse", ["Edit in Audio Studio"])
     session.click(1164, 550)
     text = session.observe("editor-collapsed", ["Mono samples only"])
-    assert "Sound" not in text
+    assert "EditinAudioStudio" not in "".join(text.split())
     session.click(1164, 550)
-    session.observe("editor-reopened", ["Sound", "Gain"])
+    session.observe("editor-reopened", ["Edit in Audio Studio"])
     session.click(*session.word("editor-reopened", "Output"))
     session.observe("visual-compressor", ["Compressor", "Threshold", "Ratio", "Knee", "Makeup"])
     session.click(*session.word("visual-compressor", "Rack", minimum_y=300))
@@ -156,9 +156,9 @@ def exercise(session, root, hardware_keys=False):
     session.observe("second-save", ["Saved"])
     # Close the inactive kick.wav tab while kick.edited.wav remains selected.
     tab = session.word("second-save", "kick.wav", minimum_y=400)
-    assert tab[1] < 550, "target must be the layer tab, not a pad label"
+    assert tab[0] < 800, "target must be the layer tab, not a pad label"
     session.click(tab[0] + 80, tab[1])
-    session.observe("layer-removed", ["kick.edited.wav", "Sound", "Unsaved changes"])
+    session.observe("layer-removed", ["kick.edited.wav", "Edit in Audio Studio", "Unsaved changes"])
     session.click(978, 470)  # Button center; OCR can include its left border.
     session.observe("layer-restored", ["kick.edited.wav", "kick.wav"])
     session.click(110, 70)

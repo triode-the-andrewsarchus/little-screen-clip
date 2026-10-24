@@ -297,16 +297,25 @@ fn edit_fades(
     view: AudioViewport,
 ) -> bool {
     let mut editing = false;
-    for attack in [true, false] {
-        let seconds = if attack {
-            sample.start_sec + sample.attack_ms / 1000.0
+    let span = (sample.end_sec - sample.start_sec).max(0.0);
+    let [attack_x, release_x] = [
+        sample.start_sec + (sample.attack_ms / 1000.0).min(span),
+        sample.end_sec - (sample.release_ms / 1000.0).min(span),
+    ]
+    .map(|time| view.time_to_x(time, rect.left(), rect.width()));
+    let crowded = (attack_x - release_x).abs() < 20.0;
+    for (attack, x) in [(true, attack_x), (false, release_x)] {
+        if x < rect.left() || x > rect.right() {
+            continue;
+        }
+        // Keep both targets accessible when fades meet or the trim is very short.
+        let offset = if crowded {
+            if attack { 21.0 } else { 8.0 }
         } else {
-            sample.end_sec - sample.release_ms / 1000.0
+            12.0
         };
-        let x = view
-            .time_to_x(seconds, rect.left(), rect.width())
-            .clamp(rect.left(), rect.right());
-        let handle = Rect::from_center_size(Pos2::new(x, rect.top() - 12.0), Vec2::new(18.0, 16.0));
+        let handle =
+            Rect::from_center_size(Pos2::new(x, rect.top() - offset), Vec2::new(18.0, 12.0));
         let response = ui.interact(
             handle,
             ui.id().with(("fade", attack)),
@@ -354,4 +363,88 @@ fn edit_fades(
         });
     }
     editing
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn fade_flags_edit_the_envelope_without_moving_trim() {
+        let ctx = egui::Context::default();
+        let mut sample = SlotSample::new("hit.wav".into(), "hit.wav".into(), None, 1.0);
+        let mut frame = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 240.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ConstellationState::render_layer_waveform(ui, &mut sample)
+                    });
+                },
+            )
+        };
+        let output = frame(vec![]);
+        let start = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "A" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let end = start + Vec2::new(90.0, 0.0);
+        frame(vec![
+            egui::Event::PointerMoved(start),
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        frame(vec![egui::Event::PointerMoved(end)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert!(sample.attack_ms > 100.0);
+        assert_eq!((sample.start_sec, sample.end_sec), (0.0, 1.0));
+        assert_eq!(sample.release_ms, 0.0);
+        sample.attack_ms = 500.0;
+        sample.release_ms = 500.0;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 240.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ConstellationState::render_layer_waveform(ui, &mut sample)
+                });
+            },
+        );
+        let label_pos = |label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert!(
+            (label_pos("A").y - label_pos("R").y).abs() >= 12.0,
+            "coincident fades need independent drag targets"
+        );
+    }
 }

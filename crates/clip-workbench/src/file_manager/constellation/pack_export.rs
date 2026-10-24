@@ -59,7 +59,6 @@ fn stage(staged: &Path, bank: &SamplePackBank) -> Result<Vec<File>, String> {
             sample.attack_ms = 0.0;
             sample.release_ms = 0.0;
             sample.pitch_semitones = 0.0;
-            sample.pitch_mode = Default::default();
             sample.prepared_pitch = None;
             sample.cached_audio = None;
         }
@@ -206,8 +205,8 @@ mod tests {
         }
         wav.finalize().unwrap();
         for mode in [
-            super::super::pitch::PitchMode::Pitch,
-            super::super::pitch::PitchMode::Time,
+            super::super::sample_pack::PitchMode::Pitch,
+            super::super::sample_pack::PitchMode::Time,
         ] {
             let mut bank = SamplePackBank::default();
             let mut sample = SlotSample::new(path.clone(), "tone.wav".into(), None, 0.5);
@@ -229,7 +228,7 @@ mod tests {
             let manifest = super::super::sample_pack::load_sample_pack(&saved).unwrap();
             let rendered = &manifest.slots[0].samples[0];
             assert_eq!(rendered.pitch_semitones, 0.0);
-            assert_eq!(rendered.pitch_mode, super::super::pitch::PitchMode::Pitch);
+            assert_eq!(rendered.pitch_mode, mode);
             let samples: Vec<_> = hound::WavReader::open(&rendered.file_path)
                 .unwrap()
                 .samples::<f32>()
@@ -242,7 +241,7 @@ mod tests {
                     .zip(expected)
                     .all(|(a, b)| (*a - b).abs() < 0.0001)
             );
-            let duration = if mode == super::super::pitch::PitchMode::Pitch {
+            let duration = if mode == super::super::sample_pack::PitchMode::Pitch {
                 0.5
             } else {
                 0.25

@@ -120,6 +120,16 @@ impl CachedAudio {
     }
 }
 
+/// Selects duration-preserving transposition or coupled playback-rate adjustment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PitchMode {
+    /// Changes pitch using prepared phase-vocoder PCM, retaining duration.
+    #[default]
+    Pitch,
+    /// Changes both pitch and duration through playback speed.
+    Time,
+}
+
 /// A single sample layer assigned to a pack slot.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SlotSample {
@@ -143,7 +153,7 @@ pub struct SlotSample {
     #[serde(default)]
     pub pitch_semitones: f32,
     #[serde(default)]
-    pub pitch_mode: super::pitch::PitchMode,
+    pub pitch_mode: PitchMode,
     #[serde(skip)]
     pub(super) prepared_pitch: Option<(u32, Arc<CachedAudio>)>,
     #[serde(skip)]
@@ -170,7 +180,23 @@ impl PartialEq for SlotSample {
 }
 
 impl SlotSample {
-    /// Reports whether rendering changes the source's trim, level, balance or fades.
+    pub(super) fn speed(&self) -> f32 {
+        if self.pitch_mode == PitchMode::Time {
+            2.0_f32.powf(self.pitch_semitones / 12.0)
+        } else {
+            1.0
+        }
+    }
+    pub(super) fn pitch_pending(&self) -> bool {
+        self.pitch_mode == PitchMode::Pitch
+            && self.pitch_semitones != 0.0
+            && self.pitch_semitones.is_finite()
+            && self
+                .prepared_pitch
+                .as_ref()
+                .is_none_or(|(key, _)| *key != self.pitch_semitones.to_bits())
+    }
+    /// Reports whether rendering changes trim, level, balance, fades or pitch.
     pub(super) fn has_edits(&self) -> bool {
         self.start_sec != 0.0
             || self.end_sec != self.duration
@@ -612,9 +638,7 @@ impl SharedPcm {
         if sample.pitch_pending() {
             return None;
         }
-        let audio = if sample.pitch_mode == super::pitch::PitchMode::Pitch
-            && sample.pitch_semitones != 0.0
-        {
+        let audio = if sample.pitch_mode == PitchMode::Pitch && sample.pitch_semitones != 0.0 {
             sample.prepared_pitch.as_ref()?.1.clone()
         } else {
             sample.cached_audio.as_ref()?.clone()
@@ -901,7 +925,7 @@ mod tests {
         assert_eq!(restored.slots[0].samples[0].pitch_semitones, 0.0);
         assert_eq!(
             restored.slots[0].samples[0].pitch_mode,
-            super::super::pitch::PitchMode::Pitch
+            super::PitchMode::Pitch
         );
     }
 

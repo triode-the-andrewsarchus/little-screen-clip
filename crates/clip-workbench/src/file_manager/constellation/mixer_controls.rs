@@ -86,7 +86,7 @@ pub(super) fn mixer(ui: &mut egui::Ui, sample: &mut SlotSample, retrigger: &mut 
         {
             *retrigger = !*retrigger;
         }
-        let pitch = sample.pitch_mode == super::pitch::PitchMode::Pitch;
+        let pitch = sample.pitch_mode == super::sample_pack::PitchMode::Pitch;
         if ui
             .add(
                 egui::Button::new(if pitch { "P" } else { "T" })
@@ -97,9 +97,9 @@ pub(super) fn mixer(ui: &mut egui::Ui, sample: &mut SlotSample, retrigger: &mut 
             .clicked()
         {
             sample.pitch_mode = if pitch {
-                super::pitch::PitchMode::Time
+                super::sample_pack::PitchMode::Time
             } else {
-                super::pitch::PitchMode::Pitch
+                super::sample_pack::PitchMode::Pitch
             };
         }
     });
@@ -113,6 +113,8 @@ pub(super) fn mixer(ui: &mut egui::Ui, sample: &mut SlotSample, retrigger: &mut 
         let response = ui.add(
             egui::Slider::new(&mut db, -60.0..=6.0206)
                 .vertical()
+                .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 0.5 })
+                .suffix(" dB")
                 .show_value(false),
         );
         if response.double_clicked() {
@@ -125,9 +127,10 @@ pub(super) fn mixer(ui: &mut egui::Ui, sample: &mut SlotSample, retrigger: &mut 
                 10.0_f32.powf(db / 20.0)
             };
         }
+        let inset = response.rect.width() / 2.5 * 0.5;
         let scale = Rect::from_min_size(
-            Pos2::new(response.rect.right() + 3.0, response.rect.top()),
-            Vec2::new(30.0, response.rect.height()),
+            Pos2::new(response.rect.right() + 3.0, response.rect.top() + inset),
+            Vec2::new(30.0, response.rect.height() - inset * 2.0),
         );
         for tick in [6.0, 0.0, -6.0, -12.0, -24.0, -48.0, -60.0] {
             let y = scale.bottom() - (tick + 60.0) / 66.0206 * scale.height();

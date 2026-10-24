@@ -1,32 +1,11 @@
 //! Worker-side phase-vocoder transposition. Playback only borrows prepared PCM.
+#[cfg(test)]
+use super::sample_pack::PitchMode;
 use super::sample_pack::SlotSample;
 use realfft::{RealFftPlanner, num_complex::Complex32};
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PitchMode {
-    #[default]
-    Pitch,
-    Time,
-}
-
 impl SlotSample {
-    pub(super) fn speed(&self) -> f32 {
-        if self.pitch_mode == PitchMode::Time {
-            2.0_f32.powf(self.pitch_semitones / 12.0)
-        } else {
-            1.0
-        }
-    }
-    pub(super) fn pitch_pending(&self) -> bool {
-        self.pitch_mode == PitchMode::Pitch
-            && self.pitch_semitones != 0.0
-            && self.pitch_semitones.is_finite()
-            && self
-                .prepared_pitch
-                .as_ref()
-                .is_none_or(|(key, _)| *key != self.pitch_semitones.to_bits())
-    }
     /// Runs only on a bounded preparation/export worker, never on the UI or mixer thread.
     pub(super) fn prepare_pitch(&mut self) -> Result<(), String> {
         if !self.pitch_pending() {

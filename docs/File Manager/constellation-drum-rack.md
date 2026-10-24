@@ -84,16 +84,22 @@ note 36 and the upper-right pad is note 51. All MIDI channels are accepted.
 
 Pads are one-shots. Note-off and note-on with velocity zero do not start or choke
 anything. Positive velocities scale layer gain; Override MIDI velocity forces 127.
-Mouse and keyboard hits already use 127. Repeated hits replace that pad's previous
-voices; different pads can ring together.
+Mouse and keyboard hits already use 127. The selected pad's square R button is on
+by default: repeated hits stop its previous voices and restart its layers. Turn R
+off to let successive hits overlap. Other pads can ring independently in either
+mode. Overlap is bounded to 128 layer voices per pad; the oldest voices retire
+when that limit is reached. R is saved per pad, including in Undo snapshots;
+older packs default to retriggering.
 
 Hold Shift and right-click a pad to start a mute-group chain. Right-click further
 pads while keeping Shift held to join them. The chain adopts the first existing
 group it encounters or chooses an unused group (up to eight). Release Shift or
 press Escape to finish. Hover a grouped pad to see red links to its partners;
+Links are drawn behind every pad face, so they never cross pad labels or contents.
 G1–G8 mark membership. The hint names the linked keys; hold Alt for detailed pad
 information without covering those links during ordinary hover. Right-click → Leave mute group removes one member.
-Triggering a grouped pad stops its own old voices and the other pads in that group.
+Triggering a grouped pad always stops the other pads in that group; R determines
+whether its own previous voices stop too.
 Ungrouped pads overlap independently. Navigation, Escape, studio entry, and
 application close stop previews; queued MIDI hits from earlier view epochs cannot
 restart them. MIDI connections stay open while their note delivery is gated.
@@ -116,9 +122,12 @@ ceiling at 0.98 catches transient overloads. A normal full-scale single layer at
 default gain stays below the compressor threshold. Layered or boosted samples can
 engage it. Output provides a
 transfer curve with draggable threshold and ratio handles, editable sliders, input
-and output peak meters, and gain reduction. The live dot includes attack/release
-and the safety ceiling; the static line includes the knee and makeup gain before
-the ceiling. Double-click any parameter slider to restore its default.
+and output peak meters, and gain reduction. The curve overlays three seconds of
+single-band level and gain-reduction history: dim input bars, accent output bars,
+and an amber reduction trace. The audio mixer captures peaks every 256 frames,
+so short hits remain visible between repaints. The static transfer line includes
+the knee and makeup gain before the safety ceiling. Double-click any parameter
+slider to restore its default.
 
 Bypass disables compression, makeup gain, and the ceiling while keeping input
 headroom unchanged. A 1:1 ratio retains makeup gain and the peak ceiling. Threshold,
@@ -152,17 +161,35 @@ actual displayed columns. Wheel zooms around the pointer; Shift+wheel pans. The
 canvas shares Audio Studio's viewport model and time ruler. Tick spacing
 also accounts for available width; envelope guides use the playback fade model.
 
-Sound controls sit above the waveform at every editor width; a compact grid keeps
-gain, pan, attack and release visible in both small and large windows. Trim uses
-the waveform's IN/OUT markers, without duplicate numeric endpoints or hint text.
-Gain is a dB fader with a silent lower stop;
-pan shows Center/L/R. Attack/release sliders have finer logarithmic control near
-zero; values remain editable, and double-click resets controls to neutral.
-The selected pad exposes marker-based trim, gain, stereo balance, and linear attack and
-release fades (0–500 ms). Mute and Solo gate active pad voices without restarting
-them. Layer changes affect subsequent hits. Fades follow the trimmed boundaries;
-overlapping fades use the lower envelope. Center balance preserves existing stereo
-level; mono is duplicated before balance. These settings also apply to exports.
+A compact mixer strip sits to the left of the waveform at every window size. Its
+vertical Gain fader has dB ticks and a silent lower stop; double-click resets it
+to 0 dB. Pan and Pitch are knobs beneath it. Both have a center detent and reset
+on double-click; hover shows their values. The editor defaults to 290 pixels high
+and remains resizable. The waveform and direct Studio button use the remaining
+width without displacing the mixer.
+
+Trim uses only the waveform's IN/OUT markers. Smaller A and R flags above those
+rails set attack and release (0–500 ms); drag A right or R left to lengthen a fade,
+or double-click the flag to reset it. Crowded flags use separate lanes so both
+remain reachable. The envelope guides show the resulting fades, including after
+trimming; overlapping fades use the lower envelope. No duplicate numeric trim
+fields or selected-duration text occupy the editor.
+
+The square R button controls retriggering for the entire selected pad. The square
+P/T button and Pitch knob apply to the selected layer. Pitch spans -24 to +24
+semitones. P is the default: a phase vocoder changes pitch while preserving frame
+count and duration. T changes playback speed, so +12 semitones plays twice as fast
+and halves the duration. Changes affect subsequent hits. A pending P adjustment
+shows Preparing pitch until a bounded worker has prepared its PCM; that layer does
+not play using stale pitch data while preparation is pending. Large shifts can
+color transients; this is a preview pitch shifter without formant controls.
+
+Prepared pitch PCM shares the existing bounded audio cache and is invalidated by
+source or pitch changes. Preparation uses the existing FFT dependency and runs off
+the UI and audio callback threads. Gain, balance and fades apply after source
+preparation. Mute and Solo gate active pad voices without restarting them. Center
+balance preserves existing stereo level; mono is duplicated before balance. These
+settings also apply to exports.
 
 Double-click a populated pad to open its first layer in Audio Studio with the pad's
 trim selected. The direct Edit in Audio Studio button opens the selected layer.
@@ -191,6 +218,8 @@ each colliding point checks at most 48 nearby cells and moves at most 64 logical
 pixels. Saturated neighborhoods retain overlaps instead of pushing clusters into
 holes. Saved acoustic coordinates remain unchanged; no samples are dropped.
 Empty searches avoid per-sample lowercase allocation on the render path.
+Middle-drag pans even when it starts over a sample. It never begins a file drag,
+and hover audition stays suppressed after panning until the next pointer movement.
 
 Undo/Redo keep 32 metadata snapshots and coalesce pointer gestures/text editing.
 Ctrl+Z undoes, Ctrl+Y or Ctrl+Shift+Z redoes; text editors retain their own undo.
@@ -199,10 +228,13 @@ with unsaved edits opens an inline Save and continue/Discard/Keep editing bar.
 Saving records the submitted snapshot; edits made during a save stay unsaved.
 
 Save pack writes a portable, versioned folder automatically. Edited layers render
-their trim, gain, balance, and fades into stereo 32-bit float WAVs; their complete
+their pitch or playback-speed adjustment, trim, gain, balance, and fades into
+stereo 32-bit float WAVs; their complete
 unmodified inputs are copied into originals/. Unedited layers retain one
 byte-identical source copy. The relative-path bank manifest makes the kit movable
-without source paths or symlink support. Bus compression is not baked into layers.
+without source paths or symlink support. Rendered layer parameters reset to neutral to avoid applying edits twice; the
+P/T mode choice remains selected with its pitch amount reset to zero. Legacy
+layers default to zero semitones in P mode. Bus compression is not baked into layers.
 Saving records the submitted rack snapshot as Saved; later edits remain unsaved.
 Staging retains pinned inputs and output directories and installs atomically
 without overwriting existing versions. Accepted writes survive navigation and

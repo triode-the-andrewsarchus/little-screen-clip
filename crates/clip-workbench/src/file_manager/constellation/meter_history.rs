@@ -56,15 +56,11 @@ impl MeterHistory {
     }
 }
 
-pub(super) fn show(ui: &mut egui::Ui, history: &MeterHistory) {
-    use egui::{Pos2, Stroke, Vec2};
+pub(super) fn paint(ui: &mut egui::Ui, plot: egui::Rect, history: &MeterHistory) {
+    use egui::{Pos2, Stroke};
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(33));
-    let (rect, _) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), 64.0), egui::Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
-    let plot = rect.shrink2(Vec2::new(4.0, 16.0));
+    let painter = ui.painter_at(plot);
     let now = history.now();
     let points: Vec<_> = history
         .snapshot()
@@ -98,11 +94,21 @@ pub(super) fn show(ui: &mut egui::Ui, history: &MeterHistory) {
         reduction,
         Stroke::new(1.5_f32, egui::Color32::from_rgb(235, 175, 70)),
     ));
-    painter.text(
-        rect.left_top() + Vec2::new(5.0, 2.0),
-        egui::Align2::LEFT_TOP,
-        "Level / gain reduction · 3 s",
-        egui::FontId::proportional(10.0),
-        ui.visuals().text_color(),
-    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn audio_history_retains_transients_and_wraps_without_growing() {
+        let meter = MeterHistory::default();
+        for index in 0..1000 {
+            meter.push([index as f32, -6.0, if index == 990 { 8.0 } else { 0.0 }]);
+        }
+        let snapshot = meter.snapshot();
+        assert_eq!(snapshot.len(), CAPACITY);
+        assert_eq!(snapshot.first().unwrap().1[0], (1000 - CAPACITY) as f32);
+        assert_eq!(snapshot.last().unwrap().1[0], 999.0);
+        assert!(snapshot.iter().any(|(_, values)| values[2] == 8.0));
+    }
 }

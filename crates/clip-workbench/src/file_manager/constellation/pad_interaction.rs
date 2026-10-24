@@ -151,6 +151,7 @@ impl ConstellationState {
         layer.duration = 15.0; // Cache warming replaces this bound with actual decoded duration.
         layer.end_sec = 15.0;
         layer.cached_audio = None;
+        layer.prepared_pitch = None;
         self.failed_audio.remove(&path);
         self.pack_bank.slots[request.pad].samples[request.layer] = layer;
         self.checkpoint_bank(false);
@@ -280,6 +281,44 @@ mod tests {
             ));
         state
     }
+    #[test]
+    fn mute_links_are_below_every_pad_face() {
+        let ctx = egui::Context::default();
+        let mut state = ConstellationState::default();
+        state.pack_bank.slots[0].choke_group = 1;
+        state.pack_bank.slots[2].choke_group = 1;
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let background = ui.painter().add(egui::Shape::Noop);
+                state.pad_drop_targets = (0..3)
+                    .map(|index| {
+                        (
+                            egui::Rect::from_min_size(
+                                egui::pos2(20.0 + index as f32 * 70.0, 20.0),
+                                egui::vec2(60.0, 60.0),
+                            ),
+                            index,
+                        )
+                    })
+                    .collect();
+                for (rect, _) in &state.pad_drop_targets {
+                    ui.painter().rect_filled(*rect, 4.0, egui::Color32::GRAY);
+                }
+                state.paint_mute_links(ui, Some(0), background);
+            });
+        });
+        let links = output
+            .shapes
+            .iter()
+            .position(|shape| matches!(&shape.shape,egui::Shape::Vec(shapes) if !shapes.is_empty()))
+            .unwrap();
+        let first_face=output.shapes.iter().position(|shape| matches!(&shape.shape,egui::Shape::Rect(rect) if rect.fill==egui::Color32::GRAY)).unwrap();
+        assert!(
+            links < first_face,
+            "even a link crossing a third pad must stay behind its face"
+        );
+    }
+
     #[test]
     fn pad_release_is_not_consumed_by_the_file_drop_handler() {
         let ctx = egui::Context::default();

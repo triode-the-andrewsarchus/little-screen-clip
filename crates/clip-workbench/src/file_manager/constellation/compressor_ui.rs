@@ -46,12 +46,11 @@ impl ConstellationState {
                 .request_repaint_after(std::time::Duration::from_millis(33));
         }
         let history = self.playback.lock().unwrap().history.clone();
-        super::meter_history::show(ui, &history);
         let (outer, response) = ui.allocate_exact_size(
             Vec2::new(
                 ui.available_width(),
-                (ui.clip_rect().height() - 330.0)
-                    .clamp(90.0, 220.0)
+                (ui.clip_rect().height() - 250.0)
+                    .clamp(110.0, 260.0)
                     .min(ui.available_width()),
             ),
             egui::Sense::hover(),
@@ -90,6 +89,14 @@ impl ConstellationState {
                 ui.visuals().weak_text_color(),
             );
         }
+        super::meter_history::paint(ui, plot, &history);
+        painter.text(
+            egui::pos2(plot.right(), outer.top() + 4.0),
+            egui::Align2::RIGHT_TOP,
+            "3 s · level / GR",
+            egui::FontId::proportional(9.0),
+            ui.visuals().weak_text_color(),
+        );
         painter.line_segment(
             [point(-48.0, -48.0), point(6.0, 6.0)],
             Stroke::new(1.0_f32, ui.visuals().weak_text_color()),

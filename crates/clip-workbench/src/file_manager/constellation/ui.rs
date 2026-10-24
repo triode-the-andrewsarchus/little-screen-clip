@@ -225,7 +225,7 @@ impl ConstellationState {
                 {
                     egui::TopBottomPanel::bottom("constellation_selected_pad")
                         .resizable(true)
-                        .default_height(270.0)
+                        .default_height(290.0)
                         .height_range(220.0..=420.0)
                         .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 6.0)))
                         .show_inside(ui, |ui| {
@@ -592,10 +592,28 @@ impl ConstellationState {
         let mut hovered_sample: Option<ConstellationSample> = None;
         let mut hovered_pos = Pos2::ZERO;
 
-        let mouse_pos = response.hover_pos().filter(|_| {
-            !response.dragged()
-                && !ui.input(|input| input.pointer.button_down(egui::PointerButton::Middle))
+        // Panning never auditions a point on press/release. Resume hover only
+        // after a fresh pointer movement, not because the map moved underneath it.
+        let pan_id = response.id.with("suppress_hover_after_pan");
+        let mut suppress_hover = ui
+            .data(|data| data.get_temp::<bool>(pan_id))
+            .unwrap_or(false);
+        let (middle_down, middle_released, moved) = ui.input(|input| {
+            (
+                input.pointer.button_down(egui::PointerButton::Middle),
+                input.pointer.button_released(egui::PointerButton::Middle),
+                input.pointer.delta() != Vec2::ZERO,
+            )
         });
+        if middle_down {
+            suppress_hover = true;
+        } else if moved && !middle_released {
+            suppress_hover = false;
+        }
+        ui.data_mut(|data| data.insert_temp(pan_id, suppress_hover));
+        let mouse_pos = response
+            .hover_pos()
+            .filter(|_| !response.dragged() && !suppress_hover);
 
         // Allocate a single batched GPU mesh
         let mut star_mesh = egui::Mesh::default();
@@ -1412,6 +1430,57 @@ mod tests {
     }
 
     #[test]
+    fn middle_drag_on_a_sample_pans_without_creating_a_file_drag_or_audition() {
+        let ctx = egui::Context::default();
+        let mut state = ConstellationState::new();
+        state.samples.push(sample_fixture(0));
+        let mut auditions = 0;
+        let mut frame = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_starfield(
+                            ui,
+                            std::path::Path::new("/samples"),
+                            &mut |_| auditions += 1,
+                            &mut |_| {},
+                        )
+                    });
+                },
+            )
+        };
+        frame(vec![]);
+        let start = Pos2::new(400.0, 300.0);
+        let end = start + Vec2::new(50.0, 40.0);
+        frame(vec![
+            egui::Event::PointerMoved(start),
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Middle,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        frame(vec![egui::Event::PointerMoved(end)]);
+        frame(vec![egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Middle,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(state.pan, Vec2::new(50.0, 40.0));
+        assert_eq!(auditions, 0);
+        assert!(!egui::DragAndDrop::has_payload_of_type::<
+            crate::file_manager::transfers::FileDrag,
+        >(&ctx));
+    }
+
+    #[test]
     fn duration_handles_keep_the_grabbed_endpoint_and_reset_on_double_click() {
         let ctx = egui::Context::default();
         let mut state = ConstellationState::new();
@@ -1783,7 +1852,15 @@ mod tests {
             ] {
                 render_frame(&ctx, &mut state, &palette, size);
                 let output = render_frame(&ctx, &mut state, &palette, size);
-                for wanted in ["kick.wav", "Gain", "Pan", "Pitch", "A", "R"] {
+                for wanted in [
+                    "kick.wav",
+                    "Gain",
+                    "Pan",
+                    "Pitch",
+                    "A",
+                    "R",
+                    "Edit in Audio Studio",
+                ] {
                     assert!(
                         output.shapes.iter().any(|shape| match &shape.shape {
                             egui::Shape::Text(text) if text.galley.text() == wanted => {

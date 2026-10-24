@@ -178,3 +178,86 @@ the earlier branch-wide regression finding; the six UI fixes do not erase the
 indexing and feature-extraction hotspots documented above.
 
 Final follow-up validation: `cargo test --workspace -- --test-threads=1` passes 2555 tests with 23 ignored across 26 targets. The file-manager binary builds, and formatting, diff whitespace and acceptance-script compilation checks pass.
+
+## Follow-up: compact mixer, output history and pitch
+
+Each requested behavior has its own implementation commit. The final integration
+commit adds gesture regressions, keeps the Studio button visible, separates
+coincident fade flags, and updates these notes.
+
+| Request | Resolution | Commit |
+|---|---|---|
+| Compact editor | Left-side vertical dB fader, detented Pan knob, and draggable A/R flags above the waveform; keep fade guides. | `d75a413` |
+| Compressor history | Audio-clock level peaks and gain-reduction trace replace the moving level dot. History overlays the transfer graph, keeping all four parameter controls visible. | `8c15a16` |
+| Middle-drag over samples | Reserve file drags for primary-button gestures and suppress hover audition through pan release until fresh pointer movement. | `048680a` |
+| Per-pad retrigger | Square R toggle defaults on; off permits overlapping hits with a bounded oldest-voice limit. Choke groups still stop other members. | `73bd14f` |
+| Mute-link painter order | Reserve a background shape before drawing any pad faces; place every connecting segment there. | `58a2b24` |
+| Per-layer repitch | Detented ±24-semitone knob, P/T mode, duration-preserving worker-side phase vocoder, and matching baked exports. | `53ebf27` |
+
+The mixer stays inside a 96-pixel strip at every editor size. The right sidebar
+keeps its existing default width and limits. Gain has marked dB positions; Pan
+and Pitch reset on double-click. The knobs retain raw drag accumulation through
+the center detent, so slow motion can leave the detent. Fade handles clamp to the
+trimmed span and use separate lanes when they meet. A pointer regression verifies
+that dragging attack changes the envelope without changing trim.
+
+P is the default for new and legacy layers. Prepared PCM belongs to the existing
+bounded cache and background queue. Stale pitch/source results are rejected;
+Studio replacement invalidates both source and pitch caches. No new executor,
+audio-device stream, or package dependency was introduced. The existing realfft
+dependency supplies the STFT. The audio callback only borrows prepared PCM. Export
+uses pinned inputs and the same pitch/trim/gain/fade pipeline; rendered parameters
+reset to neutral while P/T mode is retained. The basic phase vocoder can color
+transients at large shifts; listening quality is not established by frequency
+and duration assertions alone.
+
+### Validation
+
+- Focused constellation tests: 89 passed. They include pitch peaks at ±12/24 semitones, exact frame counts, stereo alignment, short hits, stale preparations, P/T export-to-preview PCM equality, retrigger/overlap, bounded meter history, middle-drag over a sample, background link ordering, fade gestures, and editor geometry in both themes at 840, 1400 and 2200 pixel widths.
+- Full workspace: 2,563 passed, 23 ignored across 26 targets (`/tmp/constellation-mixer-workspace.log`). This run preceded the final localized fade-lane refinement; all 89 focused tests passed again afterward (`/tmp/constellation-mixer-final-focused.log`).
+- Final file-manager binary build passed (`/tmp/constellation-mixer-build-final.log`); the two pre-existing float-inference warnings remain outside the constellation code.
+- Private Weston/Niri scenarios passed in dark/default keys and light/hardware-Dvorak keys, 36 observations each (`/tmp/constellation-mixer-dark`, `/tmp/constellation-mixer-light`). Screenshots were inspected for mixer, waveform and Output placement. These runs preceded only the coincident-fade lane refinement, which is covered by the focused geometry test.
+- Formatting, diff whitespace and acceptance-script Python compilation passed.
+- Rustdoc generation (including private modules) and the workbench doctest passed; generated module and PitchMode documentation were checked. The existing unrelated bare-URL warning remains in image_strip/hilbert.rs.
+
+The private runner uses ALSA null, isolated sockets and fixture directories. It
+does not establish physical ALSA/MIDI behavior or perceptual compressor/pitch
+quality on the user's equipment.
+
+### Architecture review
+
+Refreshed `origin/main` remains `999cd24c9f28814cf06441a1a7be780ac9e5c20c`.
+The architecture tool reports **REGRESSION**, both against this pass's baseline
+`constellation-mixer-pitch` and against current main:
+
+| Metric | Before this pass | Current | Current main |
+|---|---:|---:|---:|
+| NLOC | 240,457 | 241,457 | 227,320 |
+| Functions | 7,268 | 7,290 | 6,934 |
+| Sum CCN | 29,426 | 29,549 | 27,909 |
+| Average CCN | 4.05 | 4.05 | 4.02 |
+| Maximum CCN | 196 | 196 | 196 |
+| Duplication | 5.71% | 5.70% | 5.98% |
+| Clone groups | 1,403 | 1,408 | 1,382 |
+| Reported cycles | 6 | 6 | 5 |
+| Health | 62.73 | 62.71 | 73.88 |
+
+New or enlarged hotspots in this pass are `ui::render_starfield` (27 → 32),
+`background::accept_background` (14 → 18), `output::trigger` (16 → 19),
+`pack_export::render` (16 → 21), and the new phase-vocoder `pitch::shift` (24).
+These implement pan/hover gesture arbitration, stale-result validation,
+retrigger/choke/voice bounds, export duration safety, and the STFT respectively.
+The clone report includes repeated headless egui setup in UI regression tests;
+repeated test setup is retained rather than adding a production abstraction.
+There is no new reported cycle count in this pass. The tool reports the unchanged
+Python video benchmark cycle as both added and resolved because its member order
+changed; that is not a cycle fix. PitchMode lives with pack metadata, avoiding a
+model-to-DSP dependency solely to represent a persisted enum.
+
+Reuse searches and source inspection led to the existing audio bus, cache budget,
+background queue, waveform viewport, fade envelope, FFT dependency, shared tabs,
+and guarded export installer. Custom work is confined to the requested mixer
+widgets, single-band history ring and pitch transform. The +1,000 NLOC includes
+regression tests and DSP, rather than a second playback or file-save framework.
+The branch-wide regression remains, including the earlier indexing/extraction
+hotspots. This pass does not claim to eliminate that broader debt.
