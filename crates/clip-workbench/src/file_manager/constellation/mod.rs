@@ -30,6 +30,7 @@ mod pack_export;
 pub mod pack_shelf_ui;
 mod pad_drop;
 pub(crate) mod pad_interaction;
+mod pad_waveform;
 pub mod sample_pack;
 pub mod ui;
 

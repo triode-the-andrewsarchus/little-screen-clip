@@ -383,9 +383,7 @@ impl ConstellationState {
                 .flat_map(|slot| &slot.samples)
                 .filter_map(|sample| sample.cached_audio.as_ref())
                 .filter(|audio| seen.insert(Arc::as_ptr(audio)))
-                .map(|audio| {
-                    (audio.samples.len() + audio.mono_samples.len()) * std::mem::size_of::<f32>()
-                })
+                .map(|audio| audio.byte_len())
                 .sum();
             if used > 112 * 1024 * 1024 {
                 self.browser_status = Some((

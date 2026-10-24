@@ -482,10 +482,10 @@ impl ConstellationState {
                 if ui.available_width() >= 700.0 {
                     let wave_width = ui.available_width() - 260.0;
                     ui.horizontal_top(|ui| {
-                        ui.allocate_ui(Vec2::new(wave_width, 150.0), |ui| {
+                        ui.allocate_ui(Vec2::new(wave_width, 200.0), |ui| {
                             Self::render_layer_trim(ui, sample)
                         });
-                        ui.allocate_ui(Vec2::new(240.0, 150.0), |ui| {
+                        ui.allocate_ui(Vec2::new(240.0, 200.0), |ui| {
                             ui.strong("Sound");
                             Self::render_layer_parameters(ui, sample, palette);
                         });
@@ -611,116 +611,6 @@ impl ConstellationState {
                 for sample in &self.pack_bank.slots[index].samples { self.failed_audio.remove(&sample.file_path); }
             }
         });
-    }
-
-    fn render_layer_waveform(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
-        let (rect, response) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width(), 80.0),
-            egui::Sense::click_and_drag(),
-        );
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
-        // Keep both handle centers inside the canvas, clear of panel edges.
-        let rect = rect.shrink2(Vec2::new(12.0, 10.0));
-        let duration = sample.duration.max(f32::EPSILON);
-        let frame_duration = sample
-            .cached_audio
-            .as_ref()
-            .map_or(0.000_001, |audio| 1.0 / audio.sample_rate as f32);
-        let start = rect.left() + sample.start_sec / duration * rect.width();
-        let end = rect.left() + sample.end_sec / duration * rect.width();
-        if let Some(audio) = &sample.cached_audio {
-            for (index, &(low, high)) in audio.waveform_peaks.iter().enumerate() {
-                let x = rect.left()
-                    + index as f32 / audio.waveform_peaks.len().max(1) as f32 * rect.width();
-                let rgb = audio
-                    .waveform_colors
-                    .get(index)
-                    .copied()
-                    .unwrap_or([160; 3]);
-                let color = if x >= start && x <= end {
-                    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-                } else {
-                    ui.visuals().weak_text_color()
-                };
-                let width = rect.width() / audio.waveform_peaks.len().max(1) as f32;
-                let amplitude = rect.height() * 0.48;
-                painter.rect_filled(
-                    Rect::from_min_max(
-                        Pos2::new(x, rect.center().y - high.abs().min(1.0) * amplitude),
-                        Pos2::new(
-                            x + width.max(1.0),
-                            rect.center().y + (low.abs().min(1.0) * amplitude).max(0.5),
-                        ),
-                    ),
-                    0.0,
-                    color,
-                );
-            }
-        } else {
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Preparing audio…",
-                egui::FontId::proportional(11.0),
-                ui.visuals().weak_text_color(),
-            );
-        }
-        let marker = ui.visuals().text_color();
-        for (x, label) in [(start, "IN"), (end, "OUT")] {
-            painter.line_segment(
-                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                Stroke::new(1.5_f32, marker),
-            );
-            painter.rect_filled(
-                Rect::from_center_size(Pos2::new(x, rect.center().y), Vec2::new(8.0, 22.0)),
-                1.0,
-                marker,
-            );
-            painter.text(
-                Pos2::new(x, rect.top() - 1.0),
-                egui::Align2::CENTER_BOTTOM,
-                label,
-                egui::FontId::proportional(9.0),
-                marker,
-            );
-        }
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-        }
-        if response.double_clicked() {
-            sample.start_sec = 0.0;
-            sample.end_sec = duration;
-        }
-        if response.drag_started()
-            && let Some(pointer) = response.interact_pointer_pos()
-        {
-            ui.data_mut(|data| {
-                data.insert_temp(
-                    response.id.with("trim_start"),
-                    (pointer.x - start).abs() <= (pointer.x - end).abs(),
-                )
-            });
-        }
-        if response.dragged()
-            && let Some(pointer) = response.interact_pointer_pos()
-        {
-            let time = ((pointer.x - rect.left()) / rect.width() * duration).clamp(0.0, duration);
-            let time = sample.snap_time(time);
-            if ui
-                .data(|data| data.get_temp::<bool>(response.id.with("trim_start")))
-                .unwrap_or(true)
-            {
-                sample.start_sec = time.clamp(0.0, (sample.end_sec - frame_duration).max(0.0));
-            } else {
-                sample.end_sec =
-                    time.clamp((sample.start_sec + frame_duration).min(duration), duration);
-            }
-        }
-        ui.weak(format!(
-            "{:.3} s selected · drag IN / OUT · double-click to reset",
-            sample.end_sec - sample.start_sec
-        ));
     }
 
     /// Browses saved reference packs in the rack's side panel, keeping the map visible.

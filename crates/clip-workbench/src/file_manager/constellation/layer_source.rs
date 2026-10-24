@@ -40,17 +40,13 @@ impl<S: Source> Iterator for LayerSource<S> {
         if frame >= self.frames {
             return None;
         }
-        let attack = if self.attack > 0.0 {
-            (frame as f32 / self.attack).min(1.0)
-        } else {
-            1.0
-        };
-        let release = if self.release > 0.0 {
-            ((self.frames - 1 - frame) as f32 / self.release).min(1.0)
-        } else {
-            1.0
-        };
-        let value = self.source.next()? * self.gains[self.position % 2] * attack.min(release);
+        let envelope = fade_gain(
+            frame as f32,
+            (self.frames - 1 - frame) as f32,
+            self.attack,
+            self.release,
+        );
+        let value = self.source.next()? * self.gains[self.position % 2] * envelope;
         self.position += 1;
         Some(value)
     }
@@ -70,6 +66,21 @@ impl<S: Source> Source for LayerSource<S> {
             self.frames as f64 / self.rate.get() as f64,
         ))
     }
+}
+
+/// Linear attack/release envelope in any consistent time unit.
+pub(super) fn fade_gain(position: f32, remaining: f32, attack: f32, release: f32) -> f32 {
+    let attack = if attack > 0.0 {
+        (position / attack).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let release = if release > 0.0 {
+        (remaining / release).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    attack.min(release)
 }
 
 #[cfg(test)]

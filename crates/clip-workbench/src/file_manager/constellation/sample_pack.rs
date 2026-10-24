@@ -44,6 +44,13 @@ impl std::fmt::Debug for CachedAudio {
 }
 
 impl CachedAudio {
+    /// Includes prepared waveform storage in the rack's bounded cache budget.
+    pub(super) fn byte_len(&self) -> usize {
+        (self.samples.len() + self.mono_samples.len()) * std::mem::size_of::<f32>()
+            + self.waveform_peaks.len() * std::mem::size_of::<(f32, f32)>()
+            + self.waveform_colors.len() * 3
+    }
+
     /// Decodes one ordinary source, rejecting a source replaced during the read.
     fn load(path: &Path) -> Option<Self> {
         use rodio::Source;
@@ -71,7 +78,7 @@ impl CachedAudio {
             .chunks_exact(width)
             .map(|frame| frame.iter().sum::<f32>() / width as f32)
             .collect();
-        let buckets = mono.len().min(512);
+        let buckets = mono.len().min(16_384);
         let mut filters: Vec<_> = (0..width)
             .map(|_| little_clip_core::audio::WaveformColor::new(sample_rate as f32))
             .collect();
@@ -683,7 +690,7 @@ mod tests {
                 }
                 writer.finalize().unwrap();
                 let audio = CachedAudio::load(&path).unwrap();
-                assert_eq!(audio.waveform_peaks.len(), frames.min(512));
+                assert_eq!(audio.waveform_peaks.len(), frames.min(16_384));
                 assert_eq!(audio.waveform_colors.len(), audio.waveform_peaks.len());
                 assert_eq!(audio.samples.len(), frames * channels as usize);
                 assert!(audio.waveform_peaks.iter().any(|&(_, high)| high > 0.4));

@@ -92,7 +92,7 @@ impl ConstellationState {
             .flat_map(|(_, slot)| &slot.samples)
             .chain(drop.samples.iter())
             .filter_map(|sample| sample.cached_audio.as_ref())
-            .map(|audio| (audio.samples.len() + audio.mono_samples.len()) * 4)
+            .map(|audio| audio.byte_len())
             .sum();
         if bytes > 128 * 1024 * 1024 {
             self.browser_status = Some((

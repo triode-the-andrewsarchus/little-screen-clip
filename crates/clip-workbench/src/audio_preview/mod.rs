@@ -78,6 +78,7 @@ mod selection;
 mod studio;
 
 pub use export::{copy_file_audio_segment, run_audio_command_cancellable};
+pub(crate) use tools::spectrogram_view::{format_time_label, time_ruler_interval};
 
 mod layout;
 mod tools;
