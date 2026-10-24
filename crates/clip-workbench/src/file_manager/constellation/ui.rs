@@ -6,6 +6,18 @@ use super::db::ConstellationSample;
 use super::generated_model::SampleCategory;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
+/// Keeps category and search dimming consistent across both map projection paths.
+fn filtered_star_color(base: Color32, category_dimmed: bool, filter_dimmed: bool) -> Color32 {
+    let alpha = if category_dimmed {
+        28
+    } else if filter_dimmed {
+        25
+    } else {
+        255
+    };
+    Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
+}
+
 impl ConstellationState {
     fn matches_filters(&self, sample: &ConstellationSample, lowercase_query: &str) -> bool {
         self.category_filter
@@ -276,14 +288,14 @@ impl ConstellationState {
                 }
             });
             let query = self.search_query.to_lowercase();
-            ui.weak(format!(
+            ui.add(egui::Label::new(egui::RichText::new(format!(
                 "{} / {}",
                 self.samples
                     .iter()
                     .filter(|sample| self.matches_filters(sample, &query))
                     .count(),
                 self.samples.len()
-            ));
+            )).weak()).wrap(false));
         });
         if self.filters_open {
             self.render_audio_filters(ui);
@@ -713,19 +725,7 @@ impl ConstellationState {
 
                     let is_filter_dimmed = !self.matches_filters(star.sample, &query_lower);
 
-                    let alpha = if star.is_dimmed {
-                        28
-                    } else if is_filter_dimmed {
-                        25
-                    } else {
-                        255
-                    };
-                    let color = Color32::from_rgba_unmultiplied(
-                        base_color.r(),
-                        base_color.g(),
-                        base_color.b(),
-                        alpha,
-                    );
+                    let color = filtered_star_color(base_color, star.is_dimmed, is_filter_dimmed);
 
                     add_star_diamond(
                         &mut star_mesh,
@@ -785,19 +785,7 @@ impl ConstellationState {
                 }
 
                 let is_filter_dimmed = !self.matches_filters(sample, &query_lower);
-                let alpha = if is_category_dimmed {
-                    28
-                } else if is_filter_dimmed {
-                    25
-                } else {
-                    255
-                };
-                let color = Color32::from_rgba_unmultiplied(
-                    base_color.r(),
-                    base_color.g(),
-                    base_color.b(),
-                    alpha,
-                );
+                let color = filtered_star_color(base_color, is_category_dimmed, is_filter_dimmed);
 
                 add_star_diamond(
                     &mut star_mesh,
@@ -1513,18 +1501,19 @@ mod tests {
 
     #[test]
     fn dense_coarse_mesh_keeps_every_point_and_all_filter_matches() {
+        let count = 68_055;
         let mut state = ConstellationState::new();
-        state.samples = (0..1000).map(sample_fixture).collect();
+        state.samples = (0..count).map(sample_fixture).collect();
         assert_eq!(
             coarse_mesh(&mut state).len(),
-            4000,
+            count * 4,
             "Every point is rendered, including coincident samples"
         );
         state.category_filter = Some(SampleCategory::Snare);
         let solo = coarse_mesh(&mut state);
         assert_eq!(
             solo.len(),
-            4000,
+            count * 4,
             "filtering dims points without omitting them"
         );
         assert!(
@@ -1534,7 +1523,7 @@ mod tests {
         state.category_filter = None;
         state.search_query = "target".into();
         let search = coarse_mesh(&mut state);
-        assert_eq!(search.len(), 4000);
+        assert_eq!(search.len(), count * 4);
         assert!(
             search
                 .iter()

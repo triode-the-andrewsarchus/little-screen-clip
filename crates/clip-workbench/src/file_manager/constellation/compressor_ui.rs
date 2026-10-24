@@ -31,7 +31,12 @@ impl ConstellationState {
                 .request_repaint_after(std::time::Duration::from_millis(33));
         }
         let (outer, _) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width(), ui.available_width().min(260.0)),
+            Vec2::new(
+                ui.available_width(),
+                (ui.clip_rect().height() - 190.0)
+                    .clamp(130.0, 260.0)
+                    .min(ui.available_width()),
+            ),
             egui::Sense::hover(),
         );
         let plot = Rect::from_min_max(

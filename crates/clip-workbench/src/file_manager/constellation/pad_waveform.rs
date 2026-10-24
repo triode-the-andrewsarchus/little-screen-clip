@@ -20,6 +20,7 @@ impl ConstellationState {
         let mut view = ui
             .data(|data| data.get_temp::<AudioViewport>(id))
             .unwrap_or(full);
+        let show_help = ui.available_width() >= 700.0;
         ui.horizontal_wrapped(|ui| {
             ui.strong("Waveform");
             if ui.small_button("Fit").clicked() {
@@ -31,7 +32,7 @@ impl ConstellationState {
                     duration_sec: (sample.end_sec - sample.start_sec).max(frame),
                 };
             }
-            if ui.available_width() >= 250.0 {
+            if show_help {
                 ui.weak("Wheel: zoom · Shift+wheel: pan");
             }
         });
@@ -195,7 +196,7 @@ fn paint_peaks(
                     Pos2::new(x, rect.center().y - high.min(1.0) * amplitude),
                     Pos2::new(
                         x + rect.width() / columns as f32,
-                        rect.center().y + (-low).min(1.0).max(0.005) * amplitude,
+                        rect.center().y + (-low).clamp(0.005, 1.0) * amplitude,
                     ),
                 ),
                 0.0,
