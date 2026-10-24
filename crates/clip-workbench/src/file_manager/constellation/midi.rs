@@ -30,6 +30,7 @@ pub(super) struct Controller {
 }
 
 impl Controller {
+    #[cfg(not(test))]
     pub fn new(
         ctx: egui::Context,
         playback: Arc<Mutex<super::output::Rack>>,
@@ -103,6 +104,7 @@ impl Drop for Controller {
 }
 
 /// Reconciles hotplugged inputs while retaining connections to unchanged port IDs.
+#[cfg(not(test))]
 fn refresh_inputs(
     connections: &mut std::collections::HashMap<String, midir::MidiInputConnection<()>>,
     events: &mpsc::SyncSender<(u64, usize, u8)>,
@@ -227,6 +229,7 @@ mod tests {
             audio.next();
         }
         assert!(audio.next().unwrap() > 0.39);
+        assert!(playback.lock().unwrap().show_midi_notes);
         playback.lock().unwrap().stop();
         assert_eq!(
             dispatch_hit(

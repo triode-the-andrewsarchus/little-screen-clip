@@ -113,6 +113,8 @@ impl ConstellationState {
 
     /// Renders the sixteen-pad rack and only the selected pad's layer controls.
     pub fn render_pack_shelf(&mut self, ui: &mut egui::Ui, current_folder: &Path) {
+        ui.spacing_mut().interact_size.y = 24.0;
+        ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
         self.render_history_controls(ui);
         ui.horizontal(|ui| {
             let width = (ui.available_width() - 120.0).max(40.0);
@@ -133,7 +135,6 @@ impl ConstellationState {
             }
         });
         ui.add_space(4.0);
-        self.render_pad_grid(ui);
         if ui
             .add(
                 egui::Button::new("Override MIDI velocity")
@@ -143,6 +144,8 @@ impl ConstellationState {
         {
             self.pack_bank.override_velocity = !self.pack_bank.override_velocity;
         }
+        ui.add_space(4.0);
+        self.render_pad_grid(ui);
         ui.add_space(4.0);
         // Errors and persistence completions remain visible below the rack.
         egui::ScrollArea::vertical()
@@ -237,7 +240,7 @@ impl ConstellationState {
                             rect.min + Vec2::new(7.0, 4.0),
                             egui::Align2::LEFT_TOP,
                             key,
-                            egui::FontId::monospace(if pad_height < 36.0 { 10.0 } else { 14.0 }),
+                            egui::FontId::monospace(if pad_height < 44.0 { 10.0 } else { 14.0 }),
                             visuals.text_color(),
                         );
                         Self::paint_pad_status(
@@ -248,31 +251,39 @@ impl ConstellationState {
                             loading,
                             playing[index],
                         );
-                        let font_size = if pad_height >= 56.0 { 12.0 } else { 10.0 };
-                        let line_height = font_size + 2.0;
-                        let capacity =
-                            ((pad_height - 22.0) / line_height).floor().max(1.0) as usize;
+                        let font_size = if pad_height >= 56.0 { 12.0 } else { 9.0 };
+                        let line_height = font_size + 1.0;
+                        let text_top = if pad_height < 44.0 { 15.0 } else { 22.0 };
+                        let capacity = ((pad_height - text_top - 3.0) / line_height)
+                            .floor()
+                            .max(1.0) as usize;
                         let overflow = slot.samples.len() > capacity;
-                        let visible = if overflow {
-                            capacity.saturating_sub(1)
+                        let visible = if overflow && capacity > 1 {
+                            capacity - 1
                         } else {
                             capacity
                         };
-                        for (line, title) in slot
+                        let titles = slot
                             .samples
                             .iter()
                             .take(visible)
                             .map(|sample| sample.filename.as_str())
-                            .chain(overflow.then_some("..."))
-                            .enumerate()
-                        {
+                            .chain((overflow && capacity > 1).then_some("..."));
+                        for (line, title) in titles.enumerate() {
+                            let limit = ((width - 12.0) / 5.0).max(3.0) as usize;
+                            let label = if overflow && capacity == 1 {
+                                format!(
+                                    "{}...",
+                                    super::ui::short_label(title, limit.saturating_sub(3))
+                                )
+                            } else {
+                                super::ui::short_label(title, limit)
+                            };
                             painter.text(
-                                rect.left_top() + Vec2::new(7.0, 20.0 + line as f32 * line_height),
+                                rect.left_top()
+                                    + Vec2::new(7.0, text_top + line as f32 * line_height),
                                 egui::Align2::LEFT_TOP,
-                                super::ui::short_label(
-                                    title,
-                                    ((width - 12.0) / 5.5).max(3.0) as usize,
-                                ),
+                                label,
                                 egui::FontId::proportional(font_size),
                                 visuals.text_color(),
                             );

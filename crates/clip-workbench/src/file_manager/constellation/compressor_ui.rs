@@ -10,17 +10,26 @@ fn output_db(input: f32, threshold: f32, ratio: f32) -> f32 {
 
 impl ConstellationState {
     pub(super) fn render_compressor(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Preview compressor");
-        if let Some(error) = self
-            .midi
-            .as_ref()
-            .and_then(|controller| controller.status().error)
-        {
-            ui.weak(format!("MIDI input: {error}"));
-        }
+        ui.spacing_mut().interact_size.y = 24.0;
+        ui.spacing_mut().item_spacing.y = 4.0;
+        ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
+        ui.horizontal(|ui| {
+            ui.heading("Preview compressor");
+            if let Some(error) = self
+                .midi
+                .as_ref()
+                .and_then(|controller| controller.status().error)
+            {
+                ui.weak("MIDI offline").on_hover_text(error);
+            }
+        });
         ui.horizontal(|ui| {
             if ui
-                .add(egui::Button::new("Bypass").selected(self.pack_bank.compressor_bypass))
+                .add(
+                    egui::Button::new("Bypass")
+                        .selected(self.pack_bank.compressor_bypass)
+                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke),
+                )
                 .clicked()
             {
                 self.pack_bank.compressor_bypass = !self.pack_bank.compressor_bypass;
@@ -39,7 +48,7 @@ impl ConstellationState {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(33));
         }
-        let (outer, _) = ui.allocate_exact_size(
+        let (outer, response) = ui.allocate_exact_size(
             Vec2::new(
                 ui.available_width(),
                 (ui.clip_rect().height() - 250.0)
@@ -48,6 +57,7 @@ impl ConstellationState {
             ),
             egui::Sense::hover(),
         );
+        response.on_hover_text("Drag the threshold or ratio handle. The curve shows steady compression; the live dot includes attack/release, makeup gain and the safety ceiling. Fixed 5 ms attack, 120 ms release.");
         let plot = Rect::from_min_max(
             outer.min + Vec2::new(36.0, 24.0),
             outer.max - Vec2::new(24.0, 28.0),
@@ -267,13 +277,83 @@ impl ConstellationState {
                 )
                 .fill(ui.visuals().widgets.hovered.bg_fill),
         );
-        ui.weak("5 ms attack · 120 ms release · safety ceiling −0.18 dBFS\nDrag the knee for threshold, or the right handle for ratio.\nThe curve shows steady compression; the live dot includes attack/release and the safety ceiling.");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn double_click_resets_every_compressor_slider_to_its_saved_default() {
+        let ctx = egui::Context::default();
+        let mut state = ConstellationState::new();
+        state.pack_bank.compressor_threshold_db = -20.0;
+        state.pack_bank.compressor_ratio = 8.0;
+        state.pack_bank.compressor_knee_db = 12.0;
+        state.pack_bank.compressor_makeup_db = 9.0;
+        let render = |state: &mut ConstellationState, events, time| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 800.0))),
+                    events,
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| state.render_compressor(ui));
+                },
+            )
+        };
+        let output = render(&mut state, vec![], 0.0);
+        let labels: std::collections::HashMap<_, _> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape {
+                    Some((text.galley.text().to_owned(), text.pos))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (index, label) in ["Threshold", "Ratio", "Knee", "Makeup"]
+            .into_iter()
+            .enumerate()
+        {
+            let y = labels.get(label).expect("slider label rendered").y + 8.0;
+            let pos = Pos2::new(70.0, y);
+            for (step, pressed) in [true, false, true, false].into_iter().enumerate() {
+                render(
+                    &mut state,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    1.0 + index as f64 + step as f64 * 0.05,
+                );
+            }
+        }
+        let defaults = super::super::sample_pack::SamplePackBank::default();
+        assert_eq!(
+            state.pack_bank.compressor_threshold_db,
+            defaults.compressor_threshold_db
+        );
+        assert_eq!(state.pack_bank.compressor_ratio, defaults.compressor_ratio);
+        assert_eq!(
+            state.pack_bank.compressor_knee_db,
+            defaults.compressor_knee_db
+        );
+        assert_eq!(
+            state.pack_bank.compressor_makeup_db,
+            defaults.compressor_makeup_db
+        );
+    }
+
     #[test]
     fn transfer_curve_matches_the_output_bus_ratio() {
         assert_eq!(output_db(-30.0, -20.0, 4.0), -30.0);

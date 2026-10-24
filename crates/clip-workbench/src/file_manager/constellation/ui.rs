@@ -59,8 +59,10 @@ impl ConstellationState {
             && !self.pad_keys.contains(&'n')
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::N))
         {
+            self.playback.lock().unwrap().show_midi_notes = false;
             self.play_nearest_neighbor(on_play_sample);
         }
+        #[cfg(not(test))]
         if self.midi.is_none() {
             match super::midi::Controller::new(ui.ctx().clone(), self.playback.clone()) {
                 Ok(controller) => self.midi = Some(controller),
@@ -94,9 +96,32 @@ impl ConstellationState {
                     let ui = &mut content;
 
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
-                    ui.horizontal(|ui| {
-                        ui.strong("Drum rack");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    use crate::ui_tabs::{Tab, TabBar};
+                    let selected_tab = ui
+                        .horizontal(|ui| {
+                            let tabs_width = (ui.available_width() - 32.0).max(1.0);
+                            let selected = ui
+                                .allocate_ui(Vec2::new(tabs_width, 28.0), |ui| {
+                                    TabBar::new(
+                                        "constellation_rack_tabs",
+                                        if self.browser_open {
+                                            1
+                                        } else if self.output_editor_open {
+                                            2
+                                        } else {
+                                            0
+                                        },
+                                        &[
+                                            Tab::new(0, "Rack"),
+                                            Tab::new(1, "Packs"),
+                                            Tab::new(2, "Output"),
+                                        ],
+                                        palette,
+                                    )
+                                    .equal_widths()
+                                    .show(ui)
+                                })
+                                .inner;
                             if ui
                                 .add(
                                     egui::Button::image(
@@ -110,28 +135,10 @@ impl ConstellationState {
                             {
                                 self.pack_shelf_open = false;
                             }
-                        });
-                    });
-                    use crate::ui_tabs::{Tab, TabBar};
-                    if let Some(tab) = TabBar::new(
-                        "constellation_rack_tabs",
-                        if self.browser_open {
-                            1
-                        } else if self.output_editor_open {
-                            2
-                        } else {
-                            0
-                        },
-                        &[
-                            Tab::new(0, "Rack"),
-                            Tab::new(1, "Packs"),
-                            Tab::new(2, "Output"),
-                        ],
-                        palette,
-                    )
-                    .equal_widths()
-                    .show(ui)
-                    {
+                            selected
+                        })
+                        .inner;
+                    if let Some(tab) = selected_tab {
                         if self.browser_open || tab == 1 {
                             self.stop_playback();
                         }
@@ -283,7 +290,7 @@ impl ConstellationState {
                 self.search_query.clear();
                 response.surrender_focus();
             }
-            if ui.add(egui::Button::new("Hover audition").selected(self.hover_to_play)).on_hover_text("Play samples as the pointer passes over them").clicked() {
+            if ui.add(egui::Button::new("Hover audition").selected(self.hover_to_play).stroke(ui.visuals().widgets.noninteractive.bg_stroke)).on_hover_text("Play samples as the pointer passes over them").clicked() {
                 self.hover_to_play = !self.hover_to_play;
             }
             self.render_audio_filters(ui);
@@ -322,7 +329,8 @@ impl ConstellationState {
             if ui
                 .add(
                     egui::Button::new(format!("All ({})", self.samples.len()))
-                        .selected(self.category_filter.is_none()),
+                        .selected(self.category_filter.is_none())
+                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke),
                 )
                 .clicked()
             {
@@ -344,7 +352,8 @@ impl ConstellationState {
                             egui::RichText::new(format!("{} ({count})", category.display_name()))
                                 .color(category.color()),
                         )
-                        .selected(active),
+                        .selected(active)
+                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke),
                     )
                     .clicked()
                 {
@@ -397,7 +406,10 @@ impl ConstellationState {
         let high_x = x_at(high);
         let handle_id = response.id.with("duration_endpoint");
         if response.drag_started() || response.clicked() {
-            let x = response.interact_pointer_pos().map_or(low_x, |pos| pos.x);
+            let x = ui
+                .input(|input| input.pointer.press_origin())
+                .or_else(|| response.interact_pointer_pos())
+                .map_or(low_x, |pos| pos.x);
             ui.data_mut(|data| {
                 data.insert_temp(handle_id, (x - low_x).abs() <= (x - high_x).abs())
             });
@@ -1109,6 +1121,7 @@ impl ConstellationState {
         if self.browser_open {
             return None;
         }
+        self.playback.lock().unwrap().show_midi_notes = false;
         if !advance && self.pack_shelf_open && self.pad_editor_open && !self.output_editor_open {
             let layers = &self.pack_bank.slots[self.selected_slot].samples;
             if let Some(sample) = layers
@@ -1477,6 +1490,128 @@ mod tests {
     }
 
     #[test]
+    fn duration_handles_keep_the_grabbed_endpoint_and_reset_on_double_click() {
+        let ctx = egui::Context::default();
+        let mut state = ConstellationState::new();
+        state.samples = (0..2).map(sample_fixture).collect();
+        state.samples[1].duration_seconds = 2.0;
+        let render = |state: &mut ConstellationState, events, time| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 300.0))),
+                    events,
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| state.render_duration_range(ui));
+                },
+            )
+        };
+        let output = render(&mut state, vec![], 0.0);
+        let handles: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) if circle.radius == 6.0 => Some(circle.center),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(handles.len(), 2);
+        for (round, (start, fraction, expected_low, expected_high)) in [
+            (handles[0], 0.75, 1.625, 0.0),
+            (handles[1], 0.9, 1.625, 1.85),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let target = handles[0].lerp(handles[1], fraction);
+            for phase in 0..3 {
+                let pos = if phase == 0 { start } else { target };
+                let mut events = vec![egui::Event::PointerMoved(pos)];
+                if phase != 1 {
+                    events.push(egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: phase == 0,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                render(&mut state, events, 0.1 + round as f64 + phase as f64 * 0.1);
+            }
+            assert!((state.min_duration - expected_low).abs() < 0.001);
+            assert!((state.max_duration - expected_high).abs() < 0.001);
+        }
+        let pos = handles[0].lerp(handles[1], 0.5);
+        for (index, pressed) in [true, false, true, false].into_iter().enumerate() {
+            render(
+                &mut state,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                3.0 + index as f64 * 0.05,
+            );
+        }
+        assert_eq!((state.min_duration, state.max_duration), (0.0, 0.0));
+    }
+
+    #[test]
+    fn n_advances_only_when_unbound_and_outside_text_entry() {
+        for (assigned, editing) in [(false, false), (true, false), (false, true)] {
+            let ctx = egui::Context::default();
+            let mut state = ConstellationState::new();
+            state.samples = (0..2).map(sample_fixture).collect();
+            state.samples[1].x = 0.1;
+            state.selected_path = Some(state.samples[0].file_path.clone());
+            if assigned {
+                state.pad_keys[0] = 'n';
+            }
+            state.focus_search = editing;
+            state.playback.lock().unwrap().show_midi_notes = true;
+            let mut auditions = Vec::new();
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::N,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(
+                            ui,
+                            std::path::Path::new("/samples"),
+                            &Default::default(),
+                            &mut |path| auditions.push(path.to_owned()),
+                            &mut |_| {},
+                        )
+                    });
+                },
+            );
+            assert_eq!(auditions.len(), usize::from(!assigned && !editing));
+            assert_eq!(state.playback.lock().unwrap().show_midi_notes, editing);
+        }
+        assert_eq!(
+            freq_to_note_str(440.0 * 2.0_f32.powf((36.0 - 69.0) / 12.0)),
+            "C2"
+        );
+        assert_eq!(
+            freq_to_note_str(440.0 * 2.0_f32.powf((51.0 - 69.0) / 12.0)),
+            "D#3"
+        );
+    }
+
+    #[test]
     fn space_plays_only_the_active_editor_layer_through_the_bus() {
         use super::super::sample_pack::{CachedAudio, SlotSample};
         use std::sync::Arc;
@@ -1774,6 +1909,35 @@ mod tests {
                     );
                 }
             }
+            let id = egui::Id::new("constellation_pack_shelf_panel");
+            let mut user_panel = egui::containers::panel::PanelState::load(&ctx, id).unwrap();
+            user_panel.rect.min.x = user_panel.rect.max.x - 312.0;
+            ctx.data_mut(|data| data.insert_persisted(id, user_panel));
+            for _ in 0..30 {
+                render_frame(&ctx, &mut state, &palette, Vec2::new(1200.0, 1000.0));
+                assert!(
+                    (egui::containers::panel::PanelState::load(&ctx, id)
+                        .unwrap()
+                        .rect
+                        .width()
+                        - 312.0)
+                        .abs()
+                        < 1.0
+                );
+            }
+            state.pack_shelf_open = false;
+            render_frame(&ctx, &mut state, &palette, Vec2::new(1200.0, 1000.0));
+            state.pack_shelf_open = true;
+            render_frame(&ctx, &mut state, &palette, Vec2::new(1200.0, 1000.0));
+            assert!(
+                (egui::containers::panel::PanelState::load(&ctx, id)
+                    .unwrap()
+                    .rect
+                    .width()
+                    - 312.0)
+                    .abs()
+                    < 1.0
+            );
             state.browser_open = true;
             render_frame(&ctx, &mut state, &palette, Vec2::new(840.0, 550.0));
             state.browser_open = false;
