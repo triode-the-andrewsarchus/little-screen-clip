@@ -18,6 +18,29 @@ fn filtered_star_color(base: Color32, category_dimmed: bool, filter_dimmed: bool
     Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
 }
 
+/// The same edge target collapses and expands the rack without changing its width.
+fn render_rack_rail(ui: &mut egui::Ui, rect: Rect, expanded: bool) -> bool {
+    let response = ui.allocate_rect(rect, Sense::click());
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 0.0, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    let icon = if expanded {
+        crate::icons::Icon::Minus
+    } else {
+        crate::icons::Icon::Plus
+    };
+    icon.image_tinted(12.0, ui.visuals().text_color())
+        .paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(12.0)));
+    response
+        .on_hover_text(if expanded {
+            "Collapse rack and editor"
+        } else {
+            "Show rack and editor"
+        })
+        .clicked()
+}
+
 impl ConstellationState {
     fn matches_filters(&self, sample: &ConstellationSample, lowercase_query: &str) -> bool {
         self.category_filter
@@ -86,58 +109,52 @@ impl ConstellationState {
                 .resizable(true)
                 .default_width(360.0)
                 .width_range(280.0..=420.0)
-                .frame(egui::Frame::none().inner_margin(8.0))
+                .frame(egui::Frame::none().inner_margin(egui::Margin {
+                    left: 8.0,
+                    right: 0.0,
+                    top: 0.0,
+                    bottom: 0.0,
+                }))
                 .show_inside(ui, |ui| {
                     // Keep content requests from changing the user's divider width.
                     // egui 0.27 otherwise stores overflowing child bounds as panel size.
                     let bounds = ui.available_rect_before_wrap();
                     ui.allocate_rect(bounds, Sense::hover());
-                    let mut content = ui.child_ui(bounds, egui::Layout::top_down(egui::Align::Min));
+                    let rail = Rect::from_min_max(
+                        Pos2::new(bounds.right() - 20.0, bounds.top()),
+                        bounds.max,
+                    );
+                    if render_rack_rail(ui, rail, true) {
+                        self.pack_shelf_open = false;
+                    }
+                    let content_bounds = Rect::from_min_max(
+                        bounds.min + Vec2::new(0.0, 8.0),
+                        bounds.max - Vec2::new(28.0, 8.0),
+                    );
+                    let mut content =
+                        ui.child_ui(content_bounds, egui::Layout::top_down(egui::Align::Min));
                     let ui = &mut content;
 
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                     use crate::ui_tabs::{Tab, TabBar};
-                    let selected_tab = ui
-                        .horizontal(|ui| {
-                            let tabs_width = (ui.available_width() - 32.0).max(1.0);
-                            let selected = ui
-                                .allocate_ui(Vec2::new(tabs_width, 28.0), |ui| {
-                                    TabBar::new(
-                                        "constellation_rack_tabs",
-                                        if self.browser_open {
-                                            1
-                                        } else if self.output_editor_open {
-                                            2
-                                        } else {
-                                            0
-                                        },
-                                        &[
-                                            Tab::new(0, "Rack"),
-                                            Tab::new(1, "Packs"),
-                                            Tab::new(2, "Output"),
-                                        ],
-                                        palette,
-                                    )
-                                    .equal_widths()
-                                    .show(ui)
-                                })
-                                .inner;
-                            if ui
-                                .add(
-                                    egui::Button::image(
-                                        crate::icons::Icon::Close
-                                            .image_tinted(12.0, ui.visuals().text_color()),
-                                    )
-                                    .small(),
-                                )
-                                .on_hover_text("Collapse rack and editor")
-                                .clicked()
-                            {
-                                self.pack_shelf_open = false;
-                            }
-                            selected
-                        })
-                        .inner;
+                    let selected_tab = TabBar::new(
+                        "constellation_rack_tabs",
+                        if self.browser_open {
+                            1
+                        } else if self.output_editor_open {
+                            2
+                        } else {
+                            0
+                        },
+                        &[
+                            Tab::new(0, "Rack"),
+                            Tab::new(1, "Packs"),
+                            Tab::new(2, "Output"),
+                        ],
+                        palette,
+                    )
+                    .equal_widths()
+                    .show(ui);
                     if let Some(tab) = selected_tab {
                         if self.browser_open || tab == 1 {
                             self.stop_playback();
@@ -169,18 +186,7 @@ impl ConstellationState {
                 .frame(egui::Frame::none())
                 .show_inside(ui, |ui| {
                     let rect = ui.available_rect_before_wrap();
-                    let response = ui.allocate_rect(rect, Sense::click());
-                    if response.hovered() {
-                        ui.painter().rect_filled(
-                            rect,
-                            0.0,
-                            ui.visuals().widgets.hovered.weak_bg_fill,
-                        );
-                    }
-                    let icon =
-                        crate::icons::Icon::Plus.image_tinted(12.0, ui.visuals().text_color());
-                    icon.paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(12.0)));
-                    if response.on_hover_text("Show rack and editor").clicked() {
+                    if render_rack_rail(ui, rect, false) {
                         self.pack_shelf_open = true;
                     }
                 });
