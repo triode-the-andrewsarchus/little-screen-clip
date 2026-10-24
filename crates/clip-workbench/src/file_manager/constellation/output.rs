@@ -109,7 +109,7 @@ impl PadOutput {
 
     /// Updates live controls without restarting any voices or touching the device.
     ///
-    /// Non-finite numeric edits retain the last valid threshold and ratio.
+    /// Non-finite numeric edits retain the last valid setting for each control.
     pub fn set_dynamics(&self, bank: &super::sample_pack::SamplePackBank) {
         self.bypass.store(bank.compressor_bypass, Ordering::Relaxed);
         // Numeric text edits can temporarily contain NaN/Inf. Retain the last

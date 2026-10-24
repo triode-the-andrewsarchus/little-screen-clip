@@ -125,6 +125,7 @@ class Session:
             ("toolbar-ocr.png", (90, 90, 1180, 280)),
             ("player-ocr.png", (90, 610, 1180, 775)),
             ("dialog-ocr.png", (320, 330, 960, 540)),
+            ("pad-menu-ocr.png", (526, 511, 615, 623)),
         ]:
             region = self.output / filename
             with Image.open(path) as screen:

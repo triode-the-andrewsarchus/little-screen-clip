@@ -354,3 +354,81 @@ visible controls; click targets now use the verified menu-title offset and butto
 center. An actual grouped-header overflow was fixed by the compact group menu,
 and the geometry test was extended. Product behavior was not weakened to make the
 scenario pass.
+
+## Follow-up: compressor timing, mixer layout and shared vignette
+
+| Request | Resolution | Commit |
+|---|---|---|
+| Remove input/output history bars | Keep the orange gain-reduction trace, steady transfer curve, handles and edge peak meters. | `a64becd` |
+| Compressor Attack/Release | Add saved logarithmic timing controls, preserving 5 ms / 120 ms legacy defaults and updating live coefficients without restarting voices. | `85f071c` |
+| Discoverable choke priority | Right-click and the editor group button call the same High/Medium/Low menu, including Leave mute group. | `70d9550` |
+| Taller gain and grouped tuning | Increase fader height from 84 to 150 pixels; place Pan alongside it, with pitch mode and Pitch knob together below Pan. | `3794135` |
+| Velocity override location | Move the outlined toggle under the grid and reserve its space when sizing pads. | `3a37568` |
+| Canvas vignette | Add a shared painter with the original photo-canvas helper's name and signature; use it after map content and before hover cards. | `2bc54f3` |
+
+The shared `ui_ext::paint_canvas_edge_fade` retains the eight-quad, 28-pixel
+edge treatment from `8826c084a6e1e6d5892da2f9e036223a3b234b30`. Adjacent quads
+share 16 vertices instead of the photo helper's 32. The center stays transparent;
+invalid bounds draw nothing, and tiny canvases cap the fade to one quarter of each
+dimension. Paint clipping does not change projection or picking. The rack guide
+includes the exact call/import change for the photo branch; that branch was not
+modified here.
+
+The mixer occupies a 116-pixel strip, leaving the existing right sidebar width
+unchanged. Actual Pan/Pitch knob centers are checked for vertical alignment;
+text-label centers vary with their different glyph widths. The short-window Output
+panel reserves a visible scrollbar gutter so Release, Makeup and the meter footer
+remain discoverable through ordinary scrolling. The acceptance scenario checks
+the top controls and then scrolls to the timing controls.
+
+Timing is stored in the bank, included in history/saves, and validated within
+0.1–200 ms Attack and 10–2000 ms Release. A single-pole coefficient is computed
+on control updates; the stereo audio loop only loads atomic coefficients.
+Non-finite live edits retain prior valid values. Tests check the measured envelope
+after one time constant, changes to fast attack/recovery, legacy defaults,
+round-trip persistence and slider double-click resets. The context-menu pointer
+test changes the right-clicked pad rather than the currently selected pad.
+
+### Validation and architecture
+
+`cargo test --workspace -- --test-threads=1` passes 2,572 tests with 23 ignored
+across 26 targets (`/tmp/constellation-timing-workspace.log`). The final scrollbar
+affordance is a localized UI follow-up after that run; all 96 constellation tests
+pass again afterward (`/tmp/constellation-timing-final-focused.log`). The final
+file-manager build passes; its two pre-existing float-inference warnings remain.
+Rustdoc generation succeeds with the existing unrelated bare-URL warning in
+image_strip/hilbert.rs.
+
+Against this pass's `constellation-timing-vignette` baseline (`cd9f400`), the
+architecture tool reports **REGRESSION**: NLOC 241,867 → 242,253, functions
+7,301 → 7,310, sum CCN 29,608 → 29,655, average CCN unchanged at 4.06, maximum
+unchanged at 196, duplication unchanged at 5.69%, clone groups 1,409 → 1,412,
+and cycles unchanged at six. Validation rises from CCN 14 to 16 for the two new
+finite timing ranges. The clone report includes repeated pointer-test setup and
+short mesh-building fragments; sharing the complete menu/painter avoids a second
+implementation of their behavior. No executor, device stream, dependency or
+source module was added.
+
+Refreshed main remains `999cd24`. Entire-branch values against main are NLOC
+227,320 → 242,253, functions 6,934 → 7,310, sum CCN 27,909 → 29,655, average
+CCN 4.02 → 4.06, maximum 196, duplication 5.98% → 5.69%, clones 1,382 → 1,412,
+cycles five → six, and health 73.88 → 62.70. The branch-wide regression remains;
+these UI changes do not erase earlier indexing/extraction complexity.
+
+The final private dark and light/hardware-Dvorak scenarios each pass all 47
+observations: `/tmp/constellation-timing-dark-completed` and
+`/tmp/constellation-timing-light-checked`. They verify the pad context-menu choices,
+manual priority changes, Studio handoff and unchanged originals, portable versions,
+saved compressor defaults, the scrolled timing controls, velocity override below
+the grid, folder continuity and guarded application close. Mixer and Output
+screenshots were visually inspected. The runner uses ALSA null; hardware listening
+and physical MIDI behavior are not established by these checks.
+
+The shared vignette's generated rustdoc was checked, and formatting, diff
+whitespace and both acceptance scripts' Python compilation pass. Intermediate
+UI runs exposed the Output overflow affordance and stale automation targets after
+moving velocity override. Bordered light-theme menu labels needed a dedicated
+text-column OCR crop and verified row-center click targets. The scenario now
+explicitly dismisses the context menu before selecting Pad 1, and checks the
+selected pad before editing; manifest assertions continue to verify both pads'
+priorities. No product behavior was weakened for OCR.

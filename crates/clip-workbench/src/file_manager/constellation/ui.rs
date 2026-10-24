@@ -187,7 +187,12 @@ impl ConstellationState {
                     }
                     ui.add_space(8.0);
                     if self.output_editor_open {
+                        ui.style_mut().spacing.scroll.floating = false;
                         egui::ScrollArea::vertical()
+                            .scroll_bar_visibility(
+                                egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+                            )
+                            .max_height(ui.available_height())
                             .min_scrolled_height(0.0)
                             .show(ui, |ui| self.render_compressor(ui));
                     } else if self.browser_open {

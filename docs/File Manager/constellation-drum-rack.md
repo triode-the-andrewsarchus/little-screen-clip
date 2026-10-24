@@ -12,7 +12,8 @@ rescaling its points, including at zoom levels with point relaxation. The editor
 shows one layer at a time. Its layer tabs show truncated sample filenames, each
 with its own close button. Closing an inactive layer keeps the current layer
 selected. The Editor toggle sits beside Undo/Redo; Override MIDI velocity
-lives in Rack, and all dynamics controls live in Output. Velocity override, Mute, Solo, Editor,
+lives in Rack, and all dynamics controls live in Output. Velocity override sits below the pad grid.
+Velocity override, Mute, Solo, Editor,
 Bypass and saved-pack selection share the neutral fill and rounded active-outline
 treatment used by the map filters. There is no output footer.
 Pads become square when height permits and compact vertically in small windows.
@@ -112,7 +113,8 @@ or clearing a pad; Undo restores the partners together.
 New groups assign priority by click order: the first pad is High, the second
 Medium, and later pads Low. Newcomers to an existing group start Low; existing
 priorities stay as edited. The selected-pad header shows its group and priority in one compact menu, with
-High, Medium and Low choices, and pad badges and group hints show the current level. A ringing
+High, Medium and Low choices; right-clicking a pad exposes the same priority menu.
+Pad badges and group hints show the current level. A ringing
 higher-priority pad blocks lower-priority hits. Equal priorities use the latest
 hit, which cuts off other ringing members. Muted, solo-gated and completed voices
 do not block hits. R determines whether the pad's own previous voices stop too.
@@ -134,7 +136,11 @@ Every audition and pad layer has 2 dB of input headroom. Glue uses linked stereo
 compression with an adjustable threshold (-48 to 0 dBFS) and ratio (1:1 to 12:1).
 Defaults preserve the previous subtle behavior: about -1.4 dBFS (0.85 linear),
 2:1 ratio, hard knee, 5 ms attack, 120 ms release, and 0 dB makeup gain.
-Knee adjusts the transition width from 0 to 24 dB; Makeup provides -12 to +24 dB
+Attack adjusts the response from 0.1 to 200 ms; Release adjusts recovery from 10
+to 2000 ms. These use logarithmic sliders and update active playback without
+restarting voices. Older packs retain the 5 ms / 120 ms defaults. Non-finite live
+edits retain the last valid timing. Knee adjusts the transition width from 0 to
+24 dB; Makeup provides -12 to +24 dB
 before the peak ceiling. Lower the threshold
 and raise the ratio for more audible compression. A linked peak
 ceiling at 0.98 catches transient overloads. A normal full-scale single layer at
@@ -142,15 +148,14 @@ default gain stays below the compressor threshold. Layered or boosted samples ca
 engage it. Output provides a
 transfer curve with draggable threshold and ratio handles, editable sliders, input
 and output peak meters, and gain reduction. The curve overlays three seconds of
-single-band level and gain-reduction history: dim input bars, accent output bars,
-and an amber reduction trace. The audio mixer captures peaks every 256 frames,
+single-band gain-reduction history as an amber trace, without input/output bars. The audio mixer captures peaks every 256 frames,
 so short hits remain visible between repaints. The static transfer line includes
 the knee and makeup gain before the safety ceiling. Double-click any parameter
 slider to restore its default.
 
 Bypass disables compression, makeup gain, and the ceiling while keeping input
 headroom unchanged. A 1:1 ratio retains makeup gain and the peak ceiling. Threshold,
-ratio, knee, makeup gain, choke groups, velocity
+ratio, knee, makeup gain, attack, release, choke groups, velocity
 override, and bypass are saved with the pack; older packs inherit the defaults. The bus also
 protects map, individual-layer, and saved-pack auditions. Map auditions retain the
 guarded streaming loader, so long samples are not truncated to pad-cache length.
@@ -181,8 +186,9 @@ canvas shares Audio Studio's viewport model and time ruler. Tick spacing
 also accounts for available width; envelope guides use the playback fade model.
 
 A compact mixer strip sits to the left of the waveform at every window size. Its
-vertical Gain fader has dB ticks and a silent lower stop; double-click resets it
-to 0 dB. Pan and Pitch are knobs beneath it. Both have a center detent and reset
+150-pixel vertical Gain fader has dB ticks and a silent lower stop; double-click
+resets it to 0 dB. Pan is to its right, with the Pitch mode button and knob grouped
+vertically below Pan. Both have a center detent and reset
 on double-click; hover shows their values. The editor defaults to 290 pixels high
 and remains resizable. The waveform and direct Studio button use the remaining
 width without displacing the mixer.
@@ -239,6 +245,10 @@ each colliding point checks at most 48 nearby cells and moves at most 64 logical
 pixels. Saturated neighborhoods retain overlaps instead of pushing clusters into
 holes. Saved acoustic coordinates remain unchanged; no samples are dropped.
 Empty searches avoid per-sample lowercase allocation on the render path.
+A 28-pixel edge vignette fades map content into the themed canvas. It is painted
+after map points/trails and before hover cards, within the visible map boundaries.
+It neither moves points nor changes picking or panning. The center remains clear;
+tiny viewports cap the fade to a quarter of their width/height.
 Middle-drag pans even when it starts over a sample. It never begins a file drag,
 and hover audition stays suppressed after panning until the next pointer movement.
 
@@ -299,3 +309,25 @@ inline browsing, and quitting after discard in both appearances. `--hardware-key
 fixture and verifies remapped logical punctuation during pad assignment. Its audio sink is ALSA
 null. Physical MIDI-controller interoperability, physical ALSA behavior, and
 perceptual compressor quality still require listening with the user's equipment.
+
+## Shared canvas vignette
+
+`ui_ext::paint_canvas_edge_fade` is the shared desktop painter. It keeps the
+28-pixel edge treatment from photo-similarity commit
+`8826c084a6e1e6d5892da2f9e036223a3b234b30`, with eight gradient quads sharing 16
+vertices. It clips to the painter and visible canvas; the clear center has no
+triangles. It adds no widget or input target.
+
+When updating the photo-similarity branch, remove its local
+`file_manager::ui::gallery::paint_canvas_edge_fade` implementation and replace its
+call with:
+
+```rust
+crate::ui_ext::paint_canvas_edge_fade(ui.painter(), clip_rect, colors.canvas, 28.0);
+```
+
+Keep that call after tiles/dividers/headers and before the search HUD. Keep the
+photo canvas's own clipping tests; use the shared painter's geometry/bounds test
+rather than retaining a second helper implementation or its old 32-vertex
+assertion. The shared helper has the same arguments as the original, so no photo
+layout or camera change is needed.

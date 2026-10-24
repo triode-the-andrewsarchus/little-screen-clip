@@ -44,16 +44,20 @@ def pad_gestures(session, root, destination, red, stride):
     finally:
         hover.terminate()
         hover.wait(timeout=3)
+    private.run_checked([str(session.pointer), "right-click", "1280", "800", *map(str, destination)], env=session.env)
+    session.observe("pad-context-priority", ["Choke priority", "High", "Medium", "Low", "Leave mute group"])
+    session.click(780, 400)  # Dismiss into empty canvas before clicking a pad.
     original = (root / "kick.wav").read_bytes()
     session.click(*destination, delay=0.05)
     session.click(*destination, delay=0.1)
     text = session.observe("pad-click-reveal", ["Packs"])
     assert "AUDIO STUDIO" not in text, "double-click must stay in the constellation"
     session.click(*session.word("pad-click-reveal", "Editor"))
-    session.observe("pad-editor-for-studio", ["Edit in Audio Studio", "High"])
+    session.observe("pad-editor-for-studio", ["Edit in Audio Studio", "Pad 1"])
     session.click(*session.word("pad-editor-for-studio", "Group"))
     session.observe("pad-priority-choices", ["High", "Medium", "Low"])
-    session.click(*session.word("pad-priority-choices", "Medium"))
+    priority_title = session.word("pad-priority-choices", "Choke")
+    session.click(priority_title[0] + 60, priority_title[1] + 77)  # Medium row center.
     session.observe("pad-priority-medium", ["Medium", "Edit in Audio Studio"])
     session.click(*session.word("pad-priority-medium", "Group"))
     session.observe("pad-priority-reopen", ["High", "Medium", "Low"])
@@ -141,8 +145,9 @@ def exercise(session, root, hardware_keys=False):
     session.click(1164, 550)
     session.observe("editor-reopened", ["Edit in Audio Studio"])
     session.click(*session.word("editor-reopened", "Output"))
-    session.observe("visual-compressor", ["Compressor", "Threshold", "Ratio", "Knee", "Makeup"])
-    session.click(*session.word("visual-compressor", "Rack", minimum_y=300))
+    session.observe("visual-compressor", ["Compressor", "Threshold", "Ratio", "Knee", "Attack"])
+    session.scroll_to_visible("compressor-timing-controls", ["Attack", "Release", "Makeup"], position=(1060, 650), step=100)
+    session.click(*session.word("compressor-timing-controls", "Rack", minimum_y=300))
     session.observe("rack-return", ["Override MIDI velocity"])
     session.click(*session.word("rack-return", "Override"))
     session.observe("before-save", ["Packs"])
@@ -158,6 +163,8 @@ def exercise(session, root, hardware_keys=False):
     assert bank["slots"][0]["choke_priority"] == 2, "first linked pad defaults to High"
     assert bank["slots"][1]["choke_priority"] == 1, "second linked pad defaults to Medium"
     assert bank["override_velocity"]
+    assert bank["compressor_attack_ms"] == 5.0
+    assert bank["compressor_release_ms"] == 120.0
     for slot in bank["slots"]:
         for layer in slot["samples"]:
             assert not Path(layer["file_path"]).is_absolute()
@@ -188,7 +195,7 @@ def exercise(session, root, hardware_keys=False):
     session.observe("pack-browser", ["Saved packs", "Untitled"])
     session.key("Escape")
     session.observe("rack-before-close", ["Packs"])
-    session.click(*(session.word("rack-before-close", "Override", required=False) or (944, 534)))
+    session.click(*(session.word("rack-before-close", "Override", required=False) or (905, 710)))
     nested_root = root / "recursive-audio"
     nested = nested_root / "nested"
     nested.mkdir(parents=True)
