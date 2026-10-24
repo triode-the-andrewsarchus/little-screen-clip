@@ -228,7 +228,9 @@ impl ConstellationState {
                 self.search_query.clear();
                 response.surrender_focus();
             }
-            ui.toggle_value(&mut self.hover_to_play, "Hover audition").on_hover_text("Play samples as the pointer passes over them");
+            if ui.add(egui::Button::new("Hover audition").selected(self.hover_to_play)).on_hover_text("Play samples as the pointer passes over them").clicked() {
+                self.hover_to_play = !self.hover_to_play;
+            }
             ui.toggle_value(&mut self.filters_open, "Filters");
             if ui
                 .add_enabled(!self.samples.is_empty(), egui::Button::new("Random"))

@@ -15,7 +15,12 @@ impl ConstellationState {
     pub(super) fn render_compressor(&mut self, ui: &mut egui::Ui) {
         ui.heading("Preview compressor");
         ui.horizontal(|ui| {
-            ui.toggle_value(&mut self.pack_bank.compressor_bypass, "Bypass");
+            if ui
+                .add(egui::Button::new("Bypass").selected(self.pack_bank.compressor_bypass))
+                .clicked()
+            {
+                self.pack_bank.compressor_bypass = !self.pack_bank.compressor_bypass;
+            }
             ui.weak("Stereo linked · no makeup gain");
         });
         let (levels, reduction, running) = {
