@@ -160,6 +160,15 @@ impl ConstellationState {
         });
         ui.add_space(4.0);
         self.render_pad_grid(ui);
+        if ui
+            .add(
+                egui::Button::new("Override MIDI velocity")
+                    .selected(self.pack_bank.override_velocity),
+            )
+            .clicked()
+        {
+            self.pack_bank.override_velocity = !self.pack_bank.override_velocity;
+        }
         ui.add_space(4.0);
         // Errors and persistence completions remain visible below the rack.
         egui::ScrollArea::vertical()
@@ -419,77 +428,6 @@ impl ConstellationState {
         {
             self.add_sample_to_slot(index, &sample);
         }
-    }
-
-    pub(super) fn render_rack_output(&mut self, ui: &mut egui::Ui) {
-        ui.spacing_mut().interact_size.y = 24.0;
-        ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.menu_button("MIDI input", |ui| {
-                if self.midi.is_none() {
-                    match super::midi::Controller::new(ui.ctx().clone(), self.playback.clone()) {
-                        Ok(controller) => self.midi = Some(controller),
-                        Err(error) => {
-                            ui.label(error);
-                        }
-                    }
-                }
-                if let Some(controller) = &self.midi {
-                    let status = controller.status();
-                    if ui.button("Refresh inputs").clicked() {
-                        controller.refresh();
-                    }
-                    if ui
-                        .selectable_label(status.connected.is_none(), "Off")
-                        .clicked()
-                    {
-                        controller.disconnect();
-                    }
-                    for (index, name) in status.ports.iter().enumerate() {
-                        if ui
-                            .selectable_label(status.connected == Some(index), name)
-                            .clicked()
-                        {
-                            controller.connect(index, name.clone());
-                            ui.close_menu();
-                        }
-                    }
-                    if status.ports.is_empty() {
-                        ui.weak("No MIDI inputs found");
-                    }
-                    if let Some(error) = status.error {
-                        ui.label(error);
-                    }
-                    ui.separator();
-                    ui.weak("Notes 36–51 · all channels · one-shot pads");
-                }
-            });
-            ui.toggle_value(&mut self.pack_bank.override_velocity, "Override velocity")
-                .on_hover_text(
-                    "Force all hits to MIDI velocity 127. Keyboard and mouse hits already use 127.",
-                );
-            ui.separator();
-            if ui
-                .selectable_label(self.output_editor_open, "Compression")
-                .clicked()
-            {
-                self.pack_shelf_open = true;
-                if self.browser_open {
-                    self.stop_playback();
-                    self.close_pack_browser();
-                }
-                self.output_editor_open = !self.output_editor_open;
-            }
-            ui.toggle_value(&mut self.pack_bank.compressor_bypass, "Bypass");
-            let reduction = self
-                .playback
-                .lock()
-                .unwrap()
-                .output
-                .as_ref()
-                .map_or(0.0, |output| output.reduction_db());
-            ui.weak(format!("GR {reduction:.1} dB"));
-        });
     }
 
     pub(super) fn render_selected_pad(
@@ -775,6 +713,7 @@ impl ConstellationState {
                 self.delete_bank(summary.folder_path.clone());
             }
         });
+        let mut audition = None;
         egui::ScrollArea::vertical()
             .id_source("saved_pack_preview")
             .min_scrolled_height(0.0)

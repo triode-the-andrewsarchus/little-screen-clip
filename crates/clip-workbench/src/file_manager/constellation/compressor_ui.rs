@@ -14,6 +14,13 @@ fn output_db(input: f32, threshold: f32, ratio: f32) -> f32 {
 impl ConstellationState {
     pub(super) fn render_compressor(&mut self, ui: &mut egui::Ui) {
         ui.heading("Preview compressor");
+        if let Some(error) = self
+            .midi
+            .as_ref()
+            .and_then(|controller| controller.status().error)
+        {
+            ui.weak(format!("MIDI input: {error}"));
+        }
         ui.horizontal(|ui| {
             if ui
                 .add(egui::Button::new("Bypass").selected(self.pack_bank.compressor_bypass))

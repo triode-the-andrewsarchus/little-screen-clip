@@ -61,6 +61,12 @@ impl ConstellationState {
         {
             self.play_nearest_neighbor(on_play_sample);
         }
+        if self.midi.is_none() {
+            match super::midi::Controller::new(ui.ctx().clone(), self.playback.clone()) {
+                Ok(controller) => self.midi = Some(controller),
+                Err(error) => self.browser_status = Some((error, std::time::Instant::now())),
+            }
+        }
         let notes = self
             .midi
             .as_ref()
@@ -73,11 +79,6 @@ impl ConstellationState {
         self.render_indexing_progress(ui);
 
         self.map_viewport = Some(ui.available_rect_before_wrap().shrink(8.0));
-        egui::TopBottomPanel::bottom("constellation_output")
-            .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 4.0)))
-            .show_inside(ui, |ui| {
-                self.render_rack_output(ui);
-            });
         if self.pack_shelf_open {
             egui::SidePanel::right("constellation_pack_shelf_panel")
                 .resizable(true)
@@ -425,11 +426,11 @@ impl ConstellationState {
         let painter = ui.painter_at(rect);
         painter.line_segment(
             [egui::pos2(track.left(), y), egui::pos2(track.right(), y)],
-            Stroke::new(3.0, ui.visuals().widgets.inactive.bg_fill),
+            Stroke::new(3.0_f32, ui.visuals().widgets.inactive.bg_fill),
         );
         painter.line_segment(
             [egui::pos2(x_at(low), y), egui::pos2(x_at(high), y)],
-            Stroke::new(3.0, ui.visuals().selection.bg_fill),
+            Stroke::new(3.0_f32, ui.visuals().selection.bg_fill),
         );
         for time in [low, high] {
             painter.circle(

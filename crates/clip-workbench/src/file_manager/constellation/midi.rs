@@ -1,4 +1,4 @@
-//! Opt-in controller input. Enumeration and connection lifetimes stay off the UI thread.
+//! Automatic, non-exclusive controller input. Enumeration and connection lifetimes stay off the UI thread.
 //!
 //! MIDI notes 36–51 map left to right, bottom to top. Note-off and velocity-zero
 //! messages do not retrigger these one-shot pads. Input is gated by view visibility;
@@ -12,15 +12,7 @@ use std::sync::{
 
 #[derive(Clone, Default)]
 pub(super) struct Status {
-    pub ports: Vec<String>,
-    pub connected: Option<usize>,
     pub error: Option<String>,
-}
-
-enum Command {
-    Refresh,
-    Connect(usize, String),
-    Disconnect,
 }
 
 /// Visibility and its retirement epoch travel together to every callback.
@@ -31,7 +23,7 @@ struct Gate {
 }
 
 pub(super) struct Controller {
-    commands: mpsc::SyncSender<Command>,
+    _lifetime: mpsc::SyncSender<()>,
     notes: mpsc::Receiver<(u64, usize, u8)>,
     status: Arc<Mutex<Status>>,
     gate: Gate,
@@ -51,33 +43,24 @@ impl Controller {
         std::thread::Builder::new()
             .name("constellation-midi".into())
             .spawn(move || {
-                let mut connection = None;
-                let mut command = Command::Refresh;
+                let mut connections = std::collections::HashMap::new();
                 loop {
-                    let result = execute(
-                        command,
-                        &mut connection,
-                        &state,
-                        &events,
-                        &worker_gate,
-                        &ctx,
-                        &playback,
-                    );
+                    let result =
+                        refresh_inputs(&mut connections, &events, &worker_gate, &ctx, &playback);
                     if let Ok(mut status) = state.lock() {
                         status.error = result.err();
                     }
-                    ctx.request_repaint();
-                    let Ok(next) = requests.recv() else {
-                        break;
-                    };
-                    command = next;
+                    match requests.recv_timeout(std::time::Duration::from_secs(2)) {
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        _ => break,
+                    }
                 }
                 // Closing midir may join its callback thread; keep that off the UI.
-                drop(connection);
+                drop(connections);
             })
             .map_err(|error| format!("Cannot start MIDI input: {error}"))?;
         Ok(Self {
-            commands,
+            _lifetime: commands,
             notes,
             status,
             gate,
@@ -89,25 +72,6 @@ impl Controller {
             .try_lock()
             .map(|status| status.clone())
             .unwrap_or_default()
-    }
-
-    pub fn refresh(&self) {
-        self.send(Command::Refresh);
-    }
-    pub fn connect(&self, index: usize, name: String) {
-        self.send(Command::Connect(index, name));
-    }
-    pub fn disconnect(&self) {
-        self.suspend();
-        self.send(Command::Disconnect);
-    }
-
-    fn send(&self, command: Command) {
-        if self.commands.try_send(command).is_err()
-            && let Ok(mut status) = self.status.try_lock()
-        {
-            status.error = Some("MIDI input is busy; try again".into());
-        }
     }
 
     pub fn suspend(&self) {
@@ -138,68 +102,54 @@ impl Drop for Controller {
     }
 }
 
-fn execute(
-    command: Command,
-    connection: &mut Option<midir::MidiInputConnection<()>>,
-    state: &Mutex<Status>,
+/// Reconciles hotplugged inputs while retaining connections to unchanged port IDs.
+fn refresh_inputs(
+    connections: &mut std::collections::HashMap<String, midir::MidiInputConnection<()>>,
     events: &mpsc::SyncSender<(u64, usize, u8)>,
     gate: &Gate,
     ctx: &egui::Context,
     playback: &Arc<Mutex<super::output::Rack>>,
 ) -> Result<(), String> {
-    if matches!(command, Command::Disconnect) {
-        *connection = None;
-        state.lock().map_err(|e| e.to_string())?.connected = None;
-        return Ok(());
-    }
-    let mut input = midir::MidiInput::new("Little Clip sample pads").map_err(|e| e.to_string())?;
-    input.ignore(midir::Ignore::All);
-    let ports = input.ports();
-    let names: Vec<_> = ports
-        .iter()
-        .take(64)
-        .map(|port| {
-            input
-                .port_name(port)
-                .unwrap_or_else(|_| "Unavailable input".into())
-        })
-        .collect();
-    if let Command::Connect(index, expected) = command {
-        // A refresh or device removal may have changed port ordering.
-        if names.get(index) != Some(&expected) {
-            return Err("MIDI inputs changed; refresh and select again".into());
+    let inventory =
+        midir::MidiInput::new("Little Clip sample pads").map_err(|error| error.to_string())?;
+    let ports = inventory.ports();
+    let ids: std::collections::HashSet<_> = ports.iter().map(|port| port.id()).collect();
+    connections.retain(|id, _| ids.contains(id));
+    let mut errors = Vec::new();
+    for port in ports {
+        let id = port.id();
+        if connections.contains_key(&id) {
+            continue;
         }
-        *connection = None;
-        state.lock().map_err(|e| e.to_string())?.connected = None;
+        let mut input =
+            midir::MidiInput::new("Little Clip sample pads").map_err(|error| error.to_string())?;
+        input.ignore(midir::Ignore::All);
         let events = events.clone();
         let gate = gate.clone();
         let ctx = ctx.clone();
         let playback = playback.clone();
-        *connection = Some(
-            input
-                .connect(
-                    &ports[index],
-                    "Little Clip drum rack",
-                    move |_, message, _| {
-                        if let Some(event) =
-                            dispatch_hit(message, &gate.active, &gate.epoch, &playback)
-                        {
-                            let _ = events.try_send(event);
-                            ctx.request_repaint();
-                        }
-                    },
-                    (),
-                )
-                .map_err(|e| e.to_string())?,
-        );
-        state.lock().map_err(|e| e.to_string())?.connected = Some(index);
-    } else {
-        // Port indices only describe this inventory, so close the old connection.
-        *connection = None;
-        state.lock().map_err(|e| e.to_string())?.connected = None;
+        match input.connect(
+            &port,
+            "Little Clip drum rack",
+            move |_, message, _| {
+                if let Some(event) = dispatch_hit(message, &gate.active, &gate.epoch, &playback) {
+                    let _ = events.try_send(event);
+                    ctx.request_repaint();
+                }
+            },
+            (),
+        ) {
+            Ok(connection) => {
+                connections.insert(id, connection);
+            }
+            Err(error) => errors.push(error.to_string()),
+        }
     }
-    state.lock().map_err(|e| e.to_string())?.ports = names;
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 /// Audio is dispatched before best-effort UI telemetry. The gate is checked
@@ -315,7 +265,7 @@ mod tests {
         let (commands, _requests) = mpsc::sync_channel(8);
         let (events, notes) = mpsc::sync_channel(128);
         let controller = Controller {
-            commands,
+            _lifetime: commands,
             notes,
             status: Default::default(),
             gate: Gate {
