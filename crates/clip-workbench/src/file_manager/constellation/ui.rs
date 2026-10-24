@@ -18,6 +18,26 @@ fn filtered_star_color(base: Color32, category_dimmed: bool, filter_dimmed: bool
     Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
 }
 
+/// Marks active filters with an outline while retaining normal text contrast and corners.
+fn outlined_toggle(
+    ui: &mut egui::Ui,
+    label: impl Into<egui::WidgetText>,
+    active: bool,
+    accent: Color32,
+) -> egui::Response {
+    let border = if active {
+        Stroke::new(1.5_f32, accent)
+    } else {
+        ui.visuals().widgets.noninteractive.bg_stroke
+    };
+    ui.add(
+        egui::Button::new(label)
+            .fill(ui.visuals().widgets.inactive.weak_bg_fill)
+            .rounding(crate::ui_ext::CONTROL_CORNER_RADIUS)
+            .stroke(border),
+    )
+}
+
 /// The same edge target collapses and expands the rack without changing its width.
 fn render_rack_rail(ui: &mut egui::Ui, rect: Rect, expanded: bool) -> bool {
     let response = ui.allocate_rect(rect, Sense::click());
@@ -296,7 +316,7 @@ impl ConstellationState {
                 self.search_query.clear();
                 response.surrender_focus();
             }
-            if ui.add(egui::Button::new("Hover audition").selected(self.hover_to_play).stroke(ui.visuals().widgets.noninteractive.bg_stroke)).on_hover_text("Play samples as the pointer passes over them").clicked() {
+            if outlined_toggle(ui, "Hover audition", self.hover_to_play, ui.visuals().hyperlink_color).on_hover_text("Play samples as the pointer passes over them").clicked() {
                 self.hover_to_play = !self.hover_to_play;
             }
             self.render_audio_filters(ui);
@@ -332,13 +352,13 @@ impl ConstellationState {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .add(
-                    egui::Button::new(format!("All ({})", self.samples.len()))
-                        .selected(self.category_filter.is_none())
-                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke),
-                )
-                .clicked()
+            if outlined_toggle(
+                ui,
+                format!("All ({})", self.samples.len()),
+                self.category_filter.is_none(),
+                ui.visuals().hyperlink_color,
+            )
+            .clicked()
             {
                 self.category_filter = None;
             }
@@ -352,16 +372,14 @@ impl ConstellationState {
                     continue;
                 }
                 let active = self.category_filter == Some(category);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(format!("{} ({count})", category.display_name()))
-                                .color(category.color()),
-                        )
-                        .selected(active)
-                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke),
-                    )
-                    .clicked()
+                if outlined_toggle(
+                    ui,
+                    egui::RichText::new(format!("{} ({count})", category.display_name()))
+                        .color(category.color()),
+                    active,
+                    category.color(),
+                )
+                .clicked()
                 {
                     self.category_filter = if active { None } else { Some(category) };
                 }
@@ -469,9 +487,13 @@ impl ConstellationState {
 
     fn render_audio_filters(&mut self, ui: &mut egui::Ui) {
         self.render_duration_range(ui);
-        if ui
-            .add(egui::Button::new("Mono samples only").selected(self.channel_filter == 1))
-            .clicked()
+        if outlined_toggle(
+            ui,
+            "Mono samples only",
+            self.channel_filter == 1,
+            ui.visuals().hyperlink_color,
+        )
+        .clicked()
         {
             self.channel_filter = if self.channel_filter == 1 { 0 } else { 1 };
         }
