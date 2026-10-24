@@ -34,7 +34,7 @@ impl ConstellationState {
             Vec2::new(
                 ui.available_width(),
                 (ui.clip_rect().height() - 190.0)
-                    .clamp(130.0, 260.0)
+                    .clamp(110.0, 260.0)
                     .min(ui.available_width()),
             ),
             egui::Sense::hover(),
