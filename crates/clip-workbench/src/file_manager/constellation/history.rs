@@ -174,7 +174,16 @@ impl ConstellationState {
                 self.undo_bank(true);
             }
             ui.add_enabled_ui(!self.pack_bank.slots[self.selected_slot].is_empty(), |ui| {
-                ui.toggle_value(&mut self.pad_editor_open, "Editor");
+                if super::ui::outlined_toggle(
+                    ui,
+                    "Editor",
+                    self.pad_editor_open,
+                    ui.visuals().hyperlink_color,
+                )
+                .clicked()
+                {
+                    self.pad_editor_open = !self.pad_editor_open;
+                }
             });
         });
     }

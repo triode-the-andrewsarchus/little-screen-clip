@@ -135,12 +135,14 @@ impl ConstellationState {
             }
         });
         ui.add_space(4.0);
-        if ui
-            .add(
-                egui::Button::new("Override MIDI velocity")
-                    .selected(self.pack_bank.override_velocity),
-            )
-            .clicked()
+        if super::ui::outlined_toggle(
+            ui,
+            "Override MIDI velocity",
+            self.pack_bank.override_velocity,
+            ui.visuals().hyperlink_color,
+        )
+        .on_hover_text("Force every MIDI hit to maximum velocity (127)")
+        .clicked()
         {
             self.pack_bank.override_velocity = !self.pack_bank.override_velocity;
         }
@@ -522,8 +524,12 @@ impl ConstellationState {
     fn render_selected_pad_header(&mut self, ui: &mut egui::Ui, index: usize) {
         ui.horizontal_wrapped(|ui| {
             ui.strong(format!("{} · Pad {}", self.pad_keys[index].to_ascii_uppercase(), index + 1));
-            ui.toggle_value(&mut self.pack_bank.slots[index].mute, "Mute");
-            ui.toggle_value(&mut self.pack_bank.slots[index].solo, "Solo");
+            if super::ui::outlined_toggle(ui, "Mute", self.pack_bank.slots[index].mute, ui.visuals().hyperlink_color).clicked() {
+                self.pack_bank.slots[index].mute = !self.pack_bank.slots[index].mute;
+            }
+            if super::ui::outlined_toggle(ui, "Solo", self.pack_bank.slots[index].solo, ui.visuals().hyperlink_color).clicked() {
+                self.pack_bank.slots[index].solo = !self.pack_bank.slots[index].solo;
+            }
             let group = self.pack_bank.slots[index].choke_group;
             ui.label(if group == 0 { "Mute group: none".into() } else { format!("Mute group {group}") })
                 .on_hover_text("Pads in the same mute group cut each other off. Hold Shift and right-click pads to link them; hover to see partners.");
@@ -561,9 +567,13 @@ impl ConstellationState {
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy();
-                    if ui
-                        .selectable_label(self.browser_selected_idx == Some(index), folder.as_ref())
-                        .clicked()
+                    if super::ui::outlined_toggle(
+                        ui,
+                        folder.as_ref(),
+                        self.browser_selected_idx == Some(index),
+                        ui.visuals().hyperlink_color,
+                    )
+                    .clicked()
                     {
                         self.browser_selected_idx = Some(index);
                         preview = Some(summary.folder_path.clone());

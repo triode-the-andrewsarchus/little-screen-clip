@@ -17,7 +17,7 @@ fn filtered_star_color(base: Color32, category_dimmed: bool, filter_dimmed: bool
 }
 
 /// Marks active filters with an outline while retaining normal text contrast and corners.
-fn outlined_toggle(
+pub(super) fn outlined_toggle(
     ui: &mut egui::Ui,
     label: impl Into<egui::WidgetText>,
     active: bool,

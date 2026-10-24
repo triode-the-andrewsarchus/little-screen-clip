@@ -15,13 +15,13 @@ impl ConstellationState {
         ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
         ui.horizontal(|ui| {
             ui.strong("Compressor");
-            if ui
-                .add(
-                    egui::Button::new("Bypass")
-                        .selected(self.pack_bank.compressor_bypass)
-                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke),
-                )
-                .clicked()
+            if super::ui::outlined_toggle(
+                ui,
+                "Bypass",
+                self.pack_bank.compressor_bypass,
+                ui.visuals().hyperlink_color,
+            )
+            .clicked()
             {
                 self.pack_bank.compressor_bypass = !self.pack_bank.compressor_bypass;
             }
