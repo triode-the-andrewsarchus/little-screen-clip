@@ -69,8 +69,9 @@ class Session:
         pointer.terminate()
         pointer.wait(timeout=3)
 
-    def observe(self, name, expected, expected_any=()):
-        self.move_pointer_to_title()
+    def observe(self, name, expected, expected_any=(), preserve_pointer=False):
+        if not preserve_pointer:
+            self.move_pointer_to_title()
         # Poll rendered output, not a guessed fixed delay, until the requested
         # visible evidence appears. Keep the PNG and extracted text for review.
         path = self.output / f"{name}.png"
