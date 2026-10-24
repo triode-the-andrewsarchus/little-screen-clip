@@ -49,13 +49,13 @@ impl ConstellationState {
         let (outer, response) = ui.allocate_exact_size(
             Vec2::new(
                 ui.available_width(),
-                (ui.clip_rect().height() - 250.0)
+                (ui.clip_rect().height() - 305.0)
                     .clamp(110.0, 260.0)
                     .min(ui.available_width()),
             ),
             egui::Sense::hover(),
         );
-        response.on_hover_text("Stereo linked. Drag the threshold or ratio handle. The curve shows steady compression; the orange history shows actual gain reduction over time. Fixed 5 ms attack, 120 ms release.");
+        response.on_hover_text("Stereo linked. Drag the threshold or ratio handle. The curve shows steady compression; the orange history shows actual gain reduction over time. Attack and release control how quickly reduction engages and recovers.");
         let plot = Rect::from_min_max(
             outer.min + Vec2::new(36.0, 24.0),
             outer.max - Vec2::new(24.0, 28.0),
@@ -250,6 +250,20 @@ impl ConstellationState {
                     " dB",
                 ),
                 (
+                    "Attack",
+                    &mut self.pack_bank.compressor_attack_ms,
+                    0.1..=200.0,
+                    defaults.compressor_attack_ms,
+                    " ms",
+                ),
+                (
+                    "Release",
+                    &mut self.pack_bank.compressor_release_ms,
+                    10.0..=2000.0,
+                    defaults.compressor_release_ms,
+                    " ms",
+                ),
+                (
                     "Makeup",
                     &mut self.pack_bank.compressor_makeup_db,
                     -12.0..=24.0,
@@ -257,7 +271,12 @@ impl ConstellationState {
                     " dB",
                 ),
             ] {
-                let response = ui.add(egui::Slider::new(value, range).text(label).suffix(suffix));
+                let response = ui.add(
+                    egui::Slider::new(value, range)
+                        .text(label)
+                        .suffix(suffix)
+                        .logarithmic(matches!(label, "Attack" | "Release")),
+                );
                 if crate::shell::studio_controls::slider_double_clicked(ui, &response) {
                     *value = default;
                 }
@@ -290,6 +309,8 @@ mod tests {
         state.pack_bank.compressor_ratio = 8.0;
         state.pack_bank.compressor_knee_db = 12.0;
         state.pack_bank.compressor_makeup_db = 9.0;
+        state.pack_bank.compressor_attack_ms = 75.0;
+        state.pack_bank.compressor_release_ms = 600.0;
         let render = |state: &mut ConstellationState, events, time| {
             ctx.run(
                 egui::RawInput {
@@ -315,7 +336,7 @@ mod tests {
                 }
             })
             .collect();
-        for (index, label) in ["Threshold", "Ratio", "Knee", "Makeup"]
+        for (index, label) in ["Threshold", "Ratio", "Knee", "Attack", "Release", "Makeup"]
             .into_iter()
             .enumerate()
         {
@@ -343,6 +364,14 @@ mod tests {
             defaults.compressor_threshold_db
         );
         assert_eq!(state.pack_bank.compressor_ratio, defaults.compressor_ratio);
+        assert_eq!(
+            state.pack_bank.compressor_attack_ms,
+            defaults.compressor_attack_ms
+        );
+        assert_eq!(
+            state.pack_bank.compressor_release_ms,
+            defaults.compressor_release_ms
+        );
         assert_eq!(
             state.pack_bank.compressor_knee_db,
             defaults.compressor_knee_db

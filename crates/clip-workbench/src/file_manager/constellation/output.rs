@@ -41,6 +41,8 @@ pub(super) struct PadOutput {
     exponent: Arc<AtomicU32>,
     knee: Arc<AtomicU32>,
     makeup: Arc<AtomicU32>,
+    attack: Arc<AtomicU32>,
+    release: Arc<AtomicU32>,
     levels: Arc<[AtomicU32; 2]>,
 }
 
@@ -79,6 +81,8 @@ impl PadOutput {
         let levels = glue.levels.clone();
         let knee = glue.knee.clone();
         let makeup = glue.makeup.clone();
+        let attack = glue.attack.clone();
+        let release = glue.release.clone();
         player.append(glue);
         Self {
             mixer,
@@ -89,6 +93,8 @@ impl PadOutput {
             exponent,
             knee,
             makeup,
+            attack,
+            release,
             levels,
         }
     }
@@ -127,6 +133,17 @@ impl PadOutput {
                 bank.compressor_knee_db.clamp(0.0, 24.0).to_bits(),
                 Ordering::Relaxed,
             );
+        }
+        for (value, target, min, max) in [
+            (bank.compressor_attack_ms, &self.attack, 0.1, 200.0),
+            (bank.compressor_release_ms, &self.release, 10.0, 2000.0),
+        ] {
+            if value.is_finite() {
+                target.store(
+                    time_coefficient(value.clamp(min, max)).to_bits(),
+                    Ordering::Relaxed,
+                );
+            }
         }
         if bank.compressor_makeup_db.is_finite() {
             self.makeup.store(
@@ -174,6 +191,11 @@ impl Drop for PadOutput {
     }
 }
 
+/// Computes a one-pole envelope coefficient once per control update at the fixed bus rate.
+fn time_coefficient(milliseconds: f32) -> f32 {
+    (-1000.0 / (RATE as f32 * milliseconds)).exp()
+}
+
 /// Stereo-linked dynamics; processes complete frames to preserve stereo balance.
 struct Glue<S> {
     source: S,
@@ -183,6 +205,8 @@ struct Glue<S> {
     exponent: Arc<AtomicU32>,
     knee: Arc<AtomicU32>,
     makeup: Arc<AtomicU32>,
+    attack: Arc<AtomicU32>,
+    release: Arc<AtomicU32>,
     levels: Arc<[AtomicU32; 2]>,
     gain: f32,
     right: Option<f32>,
@@ -202,6 +226,12 @@ impl<S> Glue<S> {
             exponent: Arc::new(AtomicU32::new(0.5_f32.to_bits())),
             knee: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             makeup: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
+            attack: Arc::new(AtomicU32::new(
+                time_coefficient(super::sample_pack::default_compressor_attack()).to_bits(),
+            )),
+            release: Arc::new(AtomicU32::new(
+                time_coefficient(super::sample_pack::default_compressor_release()).to_bits(),
+            )),
             levels: Arc::new([AtomicU32::new(0), AtomicU32::new(0)]),
             gain: 1.0,
             right: None,
@@ -236,12 +266,11 @@ impl<S> Glue<S> {
         } else {
             1.0
         };
-        // exp(-1 / (48000 * time)); fixed bus rate avoids per-frame exponentials.
-        let coefficient = if target < self.gain {
-            0.995_842
+        let coefficient = f32::from_bits(if target < self.gain {
+            self.attack.load(Ordering::Relaxed)
         } else {
-            0.999_826_43
-        };
+            self.release.load(Ordering::Relaxed)
+        });
         self.gain = target + coefficient * (self.gain - target);
         let bypass = self.bypass.load(Ordering::Relaxed);
         let gain = if bypass {
@@ -447,6 +476,59 @@ mod tests {
         bank.compressor_bypass = true;
         output.set_dynamics(&bank);
         assert_eq!(glue.frame(2.0, 1.0), (2.0, 1.0));
+    }
+
+    #[test]
+    fn live_timing_controls_change_attack_and_release_envelopes() {
+        let (player, _) = Player::new();
+        let output = PadOutput::with_player(player, false);
+        let mut bank = super::super::sample_pack::SamplePackBank::default();
+        bank.compressor_threshold_db = -20.0;
+        bank.compressor_ratio = 4.0;
+        bank.compressor_attack_ms = 100.0;
+        bank.compressor_release_ms = 1000.0;
+        output.set_dynamics(&bank);
+        let mut glue = Glue::new(
+            std::iter::empty::<f32>(),
+            output.bypass.clone(),
+            output.reduction.clone(),
+        );
+        glue.threshold = output.threshold.clone();
+        glue.exponent = output.exponent.clone();
+        glue.attack = output.attack.clone();
+        glue.release = output.release.clone();
+        let target = (0.1_f32 / 0.5).powf(0.75);
+        for _ in 0..4800 {
+            glue.frame(0.5, 0.25);
+        }
+        assert!((glue.gain - (target + (-1.0_f32).exp() * (1.0 - target))).abs() < 0.001);
+        let compressed = glue.gain;
+        for _ in 0..48000 {
+            glue.frame(0.0, 0.0);
+        }
+        assert!((glue.gain - (1.0 + (-1.0_f32).exp() * (compressed - 1.0))).abs() < 0.002);
+        bank.compressor_attack_ms = f32::NAN;
+        bank.compressor_release_ms = f32::INFINITY;
+        output.set_dynamics(&bank);
+        assert_eq!(
+            f32::from_bits(output.attack.load(Ordering::Relaxed)),
+            time_coefficient(100.0)
+        );
+        assert_eq!(
+            f32::from_bits(output.release.load(Ordering::Relaxed)),
+            time_coefficient(1000.0)
+        );
+        bank.compressor_attack_ms = 0.1;
+        bank.compressor_release_ms = 10.0;
+        output.set_dynamics(&bank);
+        for _ in 0..480 {
+            glue.frame(0.5, 0.25);
+        }
+        assert!((glue.gain - target).abs() < 0.001);
+        for _ in 0..4800 {
+            glue.frame(0.0, 0.0);
+        }
+        assert!(glue.gain > 0.999);
     }
 
     #[test]

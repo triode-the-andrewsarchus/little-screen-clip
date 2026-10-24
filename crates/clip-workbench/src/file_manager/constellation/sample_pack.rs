@@ -396,6 +396,12 @@ pub struct SamplePackBank {
     /// Output gain before the safety ceiling, in dB.
     #[serde(default)]
     pub compressor_makeup_db: f32,
+    /// Gain-reduction attack in milliseconds (0.1–200).
+    #[serde(default = "default_compressor_attack")]
+    pub compressor_attack_ms: f32,
+    /// Gain-reduction recovery in milliseconds (10–2000).
+    #[serde(default = "default_compressor_release")]
+    pub compressor_release_ms: f32,
 }
 
 fn default_compressor_threshold() -> f32 {
@@ -403,6 +409,12 @@ fn default_compressor_threshold() -> f32 {
 }
 fn default_compressor_ratio() -> f32 {
     2.0
+}
+pub(super) fn default_compressor_attack() -> f32 {
+    5.0
+}
+pub(super) fn default_compressor_release() -> f32 {
+    120.0
 }
 
 impl Default for SamplePackBank {
@@ -428,6 +440,8 @@ impl SamplePackBank {
             compressor_ratio: default_compressor_ratio(),
             compressor_knee_db: 0.0,
             compressor_makeup_db: 0.0,
+            compressor_attack_ms: default_compressor_attack(),
+            compressor_release_ms: default_compressor_release(),
         }
     }
 
@@ -436,8 +450,10 @@ impl SamplePackBank {
             || !(1.0..=12.0).contains(&self.compressor_ratio)
             || !(0.0..=24.0).contains(&self.compressor_knee_db)
             || !(-12.0..=24.0).contains(&self.compressor_makeup_db)
+            || !(0.1..=200.0).contains(&self.compressor_attack_ms)
+            || !(10.0..=2000.0).contains(&self.compressor_release_ms)
         {
-            return Err("Invalid compressor threshold, ratio, knee or makeup gain".into());
+            return Err("Invalid compressor threshold, ratio, knee, makeup or timing".into());
         }
         if self.slots.len() > NUM_SLOTS {
             return Err("Pack has more than sixteen pads".into());
@@ -885,6 +901,10 @@ mod tests {
             .unwrap()
             .remove("compressor_threshold_db");
         json.as_object_mut().unwrap().remove("compressor_ratio");
+        json.as_object_mut().unwrap().remove("compressor_attack_ms");
+        json.as_object_mut()
+            .unwrap()
+            .remove("compressor_release_ms");
         for slot in json["slots"].as_array_mut().unwrap() {
             slot.as_object_mut().unwrap().remove("choke_group");
             slot.as_object_mut().unwrap().remove("choke_priority");
@@ -905,6 +925,10 @@ mod tests {
             default_compressor_threshold()
         );
         assert_eq!(loaded.compressor_ratio, 2.0);
+        assert_eq!(loaded.compressor_attack_ms, 5.0);
+        assert_eq!(loaded.compressor_release_ms, 120.0);
+        loaded.compressor_attack_ms = 75.0;
+        loaded.compressor_release_ms = 600.0;
         loaded.compressor_threshold_db = -18.0;
         loaded.compressor_ratio = 6.0;
         loaded.compressor_bypass = true;
@@ -917,6 +941,8 @@ mod tests {
         assert!(copy.override_velocity && copy.compressor_bypass);
         assert_eq!(copy.compressor_threshold_db, -18.0);
         assert_eq!(copy.compressor_ratio, 6.0);
+        assert_eq!(copy.compressor_attack_ms, 75.0);
+        assert_eq!(copy.compressor_release_ms, 600.0);
         copy.compressor_ratio = f32::NAN;
         assert!(copy.validate(Path::new("/samples")).is_err());
         copy.compressor_ratio = 6.0;
