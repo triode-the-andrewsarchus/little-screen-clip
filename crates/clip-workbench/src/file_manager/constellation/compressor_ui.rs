@@ -55,7 +55,7 @@ impl ConstellationState {
             ),
             egui::Sense::hover(),
         );
-        response.on_hover_text("Stereo linked. Drag the threshold or ratio handle. The curve shows steady compression; the history shows input, output and actual gain reduction over time. Fixed 5 ms attack, 120 ms release.");
+        response.on_hover_text("Stereo linked. Drag the threshold or ratio handle. The curve shows steady compression; the orange history shows actual gain reduction over time. Fixed 5 ms attack, 120 ms release.");
         let plot = Rect::from_min_max(
             outer.min + Vec2::new(36.0, 24.0),
             outer.max - Vec2::new(24.0, 28.0),
@@ -93,7 +93,7 @@ impl ConstellationState {
         painter.text(
             egui::pos2(plot.right(), outer.top() + 4.0),
             egui::Align2::RIGHT_TOP,
-            "3 s · level / GR",
+            "3 s · gain reduction",
             egui::FontId::proportional(9.0),
             ui.visuals().weak_text_color(),
         );

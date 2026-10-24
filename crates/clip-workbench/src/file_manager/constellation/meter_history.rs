@@ -68,19 +68,6 @@ pub(super) fn paint(ui: &mut egui::Ui, plot: egui::Rect, history: &MeterHistory)
         .filter(|(time, _)| now.saturating_sub(*time) <= 3000)
         .collect();
     let x_at = |time| plot.right() - now.saturating_sub(time) as f32 / 3000.0 * plot.width();
-    for (time, [input, output, _]) in &points {
-        let x = x_at(*time);
-        let y =
-            |level: f32| plot.bottom() - ((level + 60.0) / 66.0).clamp(0.0, 1.0) * plot.height();
-        painter.line_segment(
-            [Pos2::new(x, plot.bottom()), Pos2::new(x, y(*input))],
-            Stroke::new(1.0_f32, ui.visuals().weak_text_color().gamma_multiply(0.4)),
-        );
-        painter.line_segment(
-            [Pos2::new(x, plot.bottom()), Pos2::new(x, y(*output))],
-            Stroke::new(1.0_f32, ui.visuals().hyperlink_color.gamma_multiply(0.7)),
-        );
-    }
     let reduction = points
         .iter()
         .map(|(time, values)| {
