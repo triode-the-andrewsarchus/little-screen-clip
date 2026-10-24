@@ -253,23 +253,35 @@ impl ConstellationState {
                             loading,
                             playing[index],
                         );
-                        let title = slot
+                        let font_size = if pad_height >= 56.0 { 12.0 } else { 10.0 };
+                        let line_height = font_size + 2.0;
+                        let capacity =
+                            ((pad_height - 22.0) / line_height).floor().max(1.0) as usize;
+                        let overflow = slot.samples.len() > capacity;
+                        let visible = if overflow {
+                            capacity.saturating_sub(1)
+                        } else {
+                            capacity
+                        };
+                        for (line, title) in slot
                             .samples
-                            .first()
-                            .map_or("—", |sample| sample.filename.as_str());
-                        let label =
-                            super::ui::short_label(title, ((width - 12.0) / 5.5).max(3.0) as usize);
-                        painter.text(
-                            rect.left_bottom() + Vec2::new(7.0, -4.0),
-                            egui::Align2::LEFT_BOTTOM,
-                            label,
-                            egui::FontId::proportional(if pad_height >= 56.0 {
-                                12.0
-                            } else {
-                                10.0
-                            }),
-                            visuals.text_color(),
-                        );
+                            .iter()
+                            .take(visible)
+                            .map(|sample| sample.filename.as_str())
+                            .chain(overflow.then_some("..."))
+                            .enumerate()
+                        {
+                            painter.text(
+                                rect.left_top() + Vec2::new(7.0, 20.0 + line as f32 * line_height),
+                                egui::Align2::LEFT_TOP,
+                                super::ui::short_label(
+                                    title,
+                                    ((width - 12.0) / 5.5).max(3.0) as usize,
+                                ),
+                                egui::FontId::proportional(font_size),
+                                visuals.text_color(),
+                            );
+                        }
                         if let Some(category) =
                             slot.samples.first().and_then(|sample| sample.category)
                         {
