@@ -103,12 +103,7 @@ impl ConstellationState {
             self.join_mute_group(index);
         }
         if !ui.input(|input| input.modifiers.shift) {
-            response.context_menu(|ui| {
-                if ui.button("Leave mute group").clicked() {
-                    self.leave_mute_group(index);
-                    ui.close_menu();
-                }
-            });
+            response.context_menu(|ui| self.render_mute_group_menu(ui, index));
         }
         if response.clicked() {
             self.selected_slot = index;
@@ -270,6 +265,35 @@ impl ConstellationState {
         }
     }
 
+    /// Shares priority editing between the pad context menu and editor group button.
+    pub(super) fn render_mute_group_menu(&mut self, ui: &mut egui::Ui, index: usize) {
+        if self.pack_bank.slots[index].choke_group == 0 {
+            ui.label("No mute group");
+            ui.weak("Shift+right-click pads to link: first High, second Medium, then Low.");
+            return;
+        }
+        ui.label("Choke priority");
+        for (priority, label) in [(2, "High"), (1, "Medium"), (0, "Low")] {
+            if super::ui::outlined_toggle(
+                ui,
+                label,
+                self.pack_bank.slots[index].choke_priority == priority,
+                ui.visuals().hyperlink_color,
+            )
+            .clicked()
+            {
+                self.pack_bank.slots[index].choke_priority = priority;
+                ui.close_menu();
+            }
+        }
+        ui.weak("Higher priority wins while ringing. Equal: latest hit wins.");
+        ui.separator();
+        if ui.button("Leave mute group").clicked() {
+            self.leave_mute_group(index);
+            ui.close_menu();
+        }
+    }
+
     pub(super) fn leave_mute_group(&mut self, index: usize) {
         self.checkpoint_bank(false);
         self.pack_bank.slots[index].choke_group = 0;
@@ -333,6 +357,86 @@ mod tests {
             ));
         state
     }
+    #[test]
+    fn pad_context_menu_edits_the_clicked_pads_priority() {
+        let ctx = egui::Context::default();
+        let mut state = ConstellationState::default();
+        state.pack_bank.slots[0].choke_group = 1;
+        state.pack_bank.slots[1].choke_group = 1;
+        state.pack_bank.slots[0].choke_priority = 1;
+        state.pack_bank.slots[1].choke_priority = 2;
+        let mut frame = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 500.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let (_, response) =
+                            ui.allocate_exact_size(egui::vec2(100.0, 100.0), egui::Sense::click());
+                        state.handle_pad_response(ui, 1, &response, None);
+                    });
+                },
+            )
+        };
+        frame(vec![]); // Register the pad before injecting its pointer press.
+        let origin = egui::pos2(50.0, 50.0);
+        for pressed in [true, false] {
+            frame(vec![
+                egui::Event::PointerMoved(origin),
+                egui::Event::PointerButton {
+                    pos: origin,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        let output = frame(vec![]);
+        let positions: std::collections::HashMap<_, _> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.pos + text.galley.size() * 0.5,
+                )),
+                _ => None,
+            })
+            .collect();
+        for label in [
+            "Choke priority",
+            "High",
+            "Medium",
+            "Low",
+            "Leave mute group",
+        ] {
+            assert!(
+                positions.contains_key(label),
+                "missing context control {label}"
+            );
+        }
+        let pos = positions["Low"];
+        for pressed in [true, false] {
+            frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        assert_eq!(state.pack_bank.slots[1].choke_priority, 0);
+        assert_eq!(state.pack_bank.slots[0].choke_priority, 1);
+    }
+
     #[test]
     fn mute_links_are_below_every_pad_face() {
         let ctx = egui::Context::default();

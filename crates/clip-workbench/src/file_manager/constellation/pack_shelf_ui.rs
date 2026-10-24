@@ -538,18 +538,8 @@ impl ConstellationState {
             if group == 0 {
                 ui.weak("No mute group").on_hover_text("Shift+right-click consecutive pads to link them: first High, second Medium, then Low.");
             } else {
-                ui.menu_button(format!("Group {group} · {}", self.pack_bank.slots[index].choke_priority_label()), |ui| {
-                    ui.label("Choke priority");
-                    for (priority, label) in [(2, "High"), (1, "Medium"), (0, "Low")] {
-                        if super::ui::outlined_toggle(ui, label, self.pack_bank.slots[index].choke_priority == priority, ui.visuals().hyperlink_color).clicked() {
-                            self.pack_bank.slots[index].choke_priority = priority;
-                            ui.close_menu();
-                        }
-                    }
-                    ui.weak("Higher priority wins while ringing. Equal: latest hit wins.");
-                    ui.separator();
-                    if ui.button("Leave mute group").clicked() { self.leave_mute_group(index); ui.close_menu(); }
-                }).response.on_hover_text("Change choke priority or leave the group. A ringing higher-priority pad blocks lower-priority hits; equal priority uses the latest hit.");
+                ui.menu_button(format!("Group {group} · {}", self.pack_bank.slots[index].choke_priority_label()), |ui| self.render_mute_group_menu(ui, index))
+                    .response.on_hover_text("Change choke priority or leave the group. Right-click a pad for the same controls.");
             }
             ui.menu_button("Pad actions", |ui| {
                 if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add map sample")).clicked() { self.assign_selected_to_pad(index); ui.close_menu(); }
