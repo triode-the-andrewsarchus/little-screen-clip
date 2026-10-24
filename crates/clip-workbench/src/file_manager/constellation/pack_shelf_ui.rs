@@ -433,7 +433,7 @@ impl ConstellationState {
         palette: &little_clip_core::palette::AppPalette,
     ) {
         // Parameter rows use compact chrome so the essential controls and fades
-        // remain accessible below the waveform at ordinary file-manager window sizes.
+        // remain accessible above the waveform at every file-manager window size.
         ui.spacing_mut().interact_size.y = 22.0;
         ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
         ui.spacing_mut().item_spacing.y = 4.0;
@@ -488,22 +488,11 @@ impl ConstellationState {
                         studio_layer = Some(layer);
                     }
                 });
-                if ui.available_width() >= 700.0 {
-                    let wave_width = ui.available_width() - 260.0;
-                    ui.horizontal_top(|ui| {
-                        ui.allocate_ui(Vec2::new(wave_width, 200.0), |ui| {
-                            Self::render_layer_trim(ui, sample)
-                        });
-                        ui.allocate_ui(Vec2::new(240.0, 200.0), |ui| {
-                            ui.strong("Sound");
-                            Self::render_layer_parameters(ui, sample);
-                        });
-                    });
-                } else {
-                    ui.strong("Sound");
-                    Self::render_layer_parameters(ui, sample);
-                    Self::render_layer_trim(ui, sample);
-                }
+                // Use the same bounded layout at every width. A waveform child
+                // must never push sound controls beyond the editor's right edge.
+                ui.strong("Sound");
+                Self::render_layer_parameters(ui, sample);
+                Self::render_layer_trim(ui, sample);
                 ui.separator();
             });
         }
