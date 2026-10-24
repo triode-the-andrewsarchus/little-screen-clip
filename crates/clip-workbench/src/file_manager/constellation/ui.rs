@@ -311,9 +311,9 @@ impl ConstellationState {
         }
         ui.horizontal_wrapped(|ui| {
             if ui
-                .selectable_label(
-                    self.category_filter.is_none(),
-                    format!("All ({})", self.samples.len()),
+                .add(
+                    egui::Button::new(format!("All ({})", self.samples.len()))
+                        .selected(self.category_filter.is_none()),
                 )
                 .clicked()
             {
@@ -330,10 +330,12 @@ impl ConstellationState {
                 }
                 let active = self.category_filter == Some(category);
                 if ui
-                    .selectable_label(
-                        active,
-                        egui::RichText::new(format!("{} ({count})", category.display_name()))
-                            .color(category.color()),
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(format!("{} ({count})", category.display_name()))
+                                .color(category.color()),
+                        )
+                        .selected(active),
                     )
                     .clicked()
                 {
