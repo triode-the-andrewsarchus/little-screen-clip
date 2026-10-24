@@ -135,6 +135,8 @@ impl ConstellationState {
             }
         });
         ui.add_space(4.0);
+        self.render_pad_grid(ui);
+        ui.add_space(4.0);
         if super::ui::outlined_toggle(
             ui,
             "Override MIDI velocity",
@@ -146,8 +148,6 @@ impl ConstellationState {
         {
             self.pack_bank.override_velocity = !self.pack_bank.override_velocity;
         }
-        ui.add_space(4.0);
-        self.render_pad_grid(ui);
         ui.add_space(4.0);
         // Errors and persistence completions remain visible below the rack.
         egui::ScrollArea::vertical()
@@ -191,7 +191,7 @@ impl ConstellationState {
         let width =
             ((ui.available_width().min(ui.clip_rect().width()) - gap * 3.0) / 4.0).max(28.0);
         let pad_height =
-            ((ui.available_height() - status_height - gap * 3.0 - 32.0) / 4.0).clamp(28.0, width);
+            ((ui.available_height() - status_height - gap * 3.0 - 60.0) / 4.0).clamp(28.0, width);
         let links = ui.painter().add(egui::Shape::Noop);
         ui.scope(|ui| {
             ui.spacing_mut().interact_size.y = pad_height;
