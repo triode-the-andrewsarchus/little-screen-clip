@@ -1871,6 +1871,9 @@ mod tests {
             let mut state = ConstellationState::new();
             state.samples.push(sample_fixture(0));
             state.pad_editor_open = true;
+            state.pack_bank.slots[0].choke_group = 1;
+            state.pack_bank.slots[1].choke_group = 1;
+            state.pack_bank.slots[0].choke_priority = 2;
             state.pack_bank.slots[0].samples.push(SlotSample::new(
                 "/samples/kick.wav".into(),
                 "kick.wav".into(),

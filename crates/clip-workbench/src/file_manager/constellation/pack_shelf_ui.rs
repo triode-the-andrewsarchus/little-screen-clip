@@ -535,20 +535,24 @@ impl ConstellationState {
                 self.pack_bank.slots[index].solo = !self.pack_bank.slots[index].solo;
             }
             let group = self.pack_bank.slots[index].choke_group;
-            ui.label(if group == 0 { "Mute group: none".into() } else { format!("Mute group {group}") })
-                .on_hover_text("Latest hit wins at equal priority. A ringing higher-priority pad blocks lower-priority hits. Shift+right-click pads to link; hover to see partners.");
-            if group != 0 {
-                ui.label("Priority");
-                for (priority, label) in [(2, "High"), (1, "Medium"), (0, "Low")] {
-                    if super::ui::outlined_toggle(ui, label, self.pack_bank.slots[index].choke_priority == priority, ui.visuals().hyperlink_color)
-                        .on_hover_text("A ringing higher-priority pad blocks lower-priority hits. Equal priority: latest hit wins.").clicked() {
-                        self.pack_bank.slots[index].choke_priority = priority;
+            if group == 0 {
+                ui.weak("No mute group").on_hover_text("Shift+right-click consecutive pads to link them: first High, second Medium, then Low.");
+            } else {
+                ui.menu_button(format!("Group {group} · {}", self.pack_bank.slots[index].choke_priority_label()), |ui| {
+                    ui.label("Choke priority");
+                    for (priority, label) in [(2, "High"), (1, "Medium"), (0, "Low")] {
+                        if super::ui::outlined_toggle(ui, label, self.pack_bank.slots[index].choke_priority == priority, ui.visuals().hyperlink_color).clicked() {
+                            self.pack_bank.slots[index].choke_priority = priority;
+                            ui.close_menu();
+                        }
                     }
-                }
+                    ui.weak("Higher priority wins while ringing. Equal: latest hit wins.");
+                    ui.separator();
+                    if ui.button("Leave mute group").clicked() { self.leave_mute_group(index); ui.close_menu(); }
+                }).response.on_hover_text("Change choke priority or leave the group. A ringing higher-priority pad blocks lower-priority hits; equal priority uses the latest hit.");
             }
             ui.menu_button("Pad actions", |ui| {
                 if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add map sample")).clicked() { self.assign_selected_to_pad(index); ui.close_menu(); }
-                if ui.button("Leave mute group").clicked() { self.leave_mute_group(index); ui.close_menu(); }
                 if ui.button("Clear pad").clicked() { self.clear_slot(index); ui.close_menu(); }
             });
             if self.pack_bank.slots[index].samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path)) && ui.small_button("Retry audio").clicked() {
