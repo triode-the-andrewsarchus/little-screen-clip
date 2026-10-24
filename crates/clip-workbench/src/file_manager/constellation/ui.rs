@@ -626,79 +626,13 @@ impl ConstellationState {
             let n_vis = vis_stars.len();
             if n_vis > 0 {
                 let min_dist = (base_star_radius * 2.2).max(7.5) * push_factor;
-                let min_dist_sq = min_dist * min_dist;
-                let cell_size = (min_dist * 1.5).max(12.0);
-
-                let origin_x = cull_min_x;
-                let origin_y = cull_min_y;
-                let grid_w = (((cull_max_x - origin_x) / cell_size).ceil() as usize + 2).max(1);
-                let grid_h = (((cull_max_y - origin_y) / cell_size).ceil() as usize + 2).max(1);
-                let total_cells = grid_w * grid_h;
-
-                let mut head = vec![usize::MAX; total_cells];
-                let mut next = vec![usize::MAX; n_vis];
-
-                for (idx, star) in vis_stars.iter().enumerate() {
-                    let gx = ((star.pos.x - origin_x) / cell_size) as usize;
-                    let gy = ((star.pos.y - origin_y) / cell_size) as usize;
-                    if gx < grid_w && gy < grid_h {
-                        let cell = gy * grid_w + gx;
-                        next[idx] = head[cell];
-                        head[cell] = idx;
-                    }
-                }
-
-                let mut disp = vec![Vec2::ZERO; n_vis];
-
-                for (idx, star) in vis_stars.iter().enumerate() {
-                    let gx = ((star.pos.x - origin_x) / cell_size) as usize;
-                    let gy = ((star.pos.y - origin_y) / cell_size) as usize;
-                    if gx >= grid_w || gy >= grid_h {
-                        continue;
-                    }
-
-                    let mut dx_acc = 0.0f32;
-                    let mut dy_acc = 0.0f32;
-
-                    let gx_min = gx.saturating_sub(1);
-                    let gx_max = (gx + 1).min(grid_w - 1);
-                    let gy_min = gy.saturating_sub(1);
-                    let gy_max = (gy + 1).min(grid_h - 1);
-
-                    for cy in gy_min..=gy_max {
-                        for cx in gx_min..=gx_max {
-                            let cell = cy * grid_w + cx;
-                            let mut cur = head[cell];
-                            let mut checked = 0;
-                            while cur != usize::MAX && checked < 12 {
-                                checked += 1;
-                                if cur != idx {
-                                    let other_pos = vis_stars[cur].pos;
-                                    let dx = star.pos.x - other_pos.x;
-                                    let dy = star.pos.y - other_pos.y;
-                                    let d2 = dx * dx + dy * dy;
-                                    if d2 < min_dist_sq {
-                                        let d = d2.sqrt();
-                                        if d < 0.001 {
-                                            let angle = ((idx * 37 + cur * 17) % 360) as f32
-                                                * std::f32::consts::PI
-                                                / 180.0;
-                                            dx_acc += angle.cos() * (min_dist * 0.5);
-                                            dy_acc += angle.sin() * (min_dist * 0.5);
-                                        } else {
-                                            let push = (min_dist - d) * 0.5;
-                                            let inv = push / d;
-                                            dx_acc += dx * inv;
-                                            dy_acc += dy * inv;
-                                        }
-                                    }
-                                }
-                                cur = next[cur];
-                            }
-                        }
-                    }
-                    disp[idx] = Vec2::new(dx_acc * 0.75, dy_acc * 0.75);
-                }
+                let mut positions: Vec<_> = vis_stars.iter().map(|star| star.pos).collect();
+                relax_star_positions(&mut positions, min_dist);
+                let disp: Vec<_> = positions
+                    .iter()
+                    .zip(&vis_stars)
+                    .map(|(position, star)| *position - star.pos)
+                    .collect();
 
                 let mut map = std::collections::HashMap::with_capacity(n_vis);
 
@@ -744,7 +678,7 @@ impl ConstellationState {
                     add_star_diamond(
                         &mut star_mesh,
                         star.pos,
-                        density.radius(star.pos, base_star_radius),
+                        map_point_radius(&density, star.pos, base_star_radius, self.zoom),
                         color,
                     );
                 }
@@ -804,7 +738,7 @@ impl ConstellationState {
                 add_star_diamond(
                     &mut star_mesh,
                     Pos2::new(sx, sy),
-                    density.radius(Pos2::new(sx, sy), base_star_radius),
+                    map_point_radius(&density, Pos2::new(sx, sy), base_star_radius, self.zoom),
                     color,
                 );
             }
@@ -1363,6 +1297,68 @@ pub(super) fn freq_to_note_str(freq: f32) -> String {
     format!("{}{}", note_names[note_idx], octave)
 }
 
+/// Fully uniform radii for the final four wheel steps, blended in beforehand.
+fn map_point_radius(density: &PointDensity, point: Pos2, maximum: f32, zoom: f32) -> f32 {
+    let uniform_at = 50.0 / 1.15_f32.powi(4);
+    let blend = ((zoom - uniform_at / 1.3) / (uniform_at - uniform_at / 1.3)).clamp(0.0, 1.0);
+    let compact = density.radius(point, maximum);
+    compact + (maximum - compact) * blend
+}
+
+/// Deterministic local spacing; bounded neighbor work and displacement retain the map shape.
+fn relax_star_positions(points: &mut [Pos2], spacing: f32) {
+    if spacing <= 0.0 {
+        return;
+    }
+    let original = points.to_vec();
+    let cell = |pos: Pos2| {
+        (
+            (pos.x / spacing).floor() as i32,
+            (pos.y / spacing).floor() as i32,
+        )
+    };
+    let iterations = if points.len() <= 2048 { 16 } else { 4 };
+    for _ in 0..iterations {
+        let mut grid: std::collections::HashMap<_, Vec<usize>> = std::collections::HashMap::new();
+        for (index, point) in points.iter().enumerate() {
+            grid.entry(cell(*point)).or_default().push(index);
+        }
+        let mut next = points.to_vec();
+        for (index, point) in points.iter().enumerate() {
+            let (x, y) = cell(*point);
+            let mut displacement = Vec2::ZERO;
+            for cy in y - 1..=y + 1 {
+                for cx in x - 1..=x + 1 {
+                    for other in grid.get(&(cx, cy)).into_iter().flatten().take(48).copied() {
+                        if index == other {
+                            continue;
+                        }
+                        let delta = *point - points[other];
+                        let distance = delta.length();
+                        if distance >= spacing {
+                            continue;
+                        }
+                        let direction = if distance > 0.001 {
+                            delta / distance
+                        } else {
+                            let seed = index.min(other).wrapping_mul(73856093)
+                                ^ index.max(other).wrapping_mul(19349663);
+                            let angle = (seed % 360) as f32 * std::f32::consts::PI / 180.0;
+                            Vec2::angled(angle) * if index < other { 1.0 } else { -1.0 }
+                        };
+                        displacement += direction * (spacing - distance) * 0.5;
+                    }
+                }
+            }
+            displacement *= spacing / displacement.length().max(spacing);
+            let mut offset = *point + displacement - original[index];
+            offset *= 64.0 / offset.length().max(64.0);
+            next[index] = original[index] + offset;
+        }
+        points.copy_from_slice(&next);
+    }
+}
+
 /// Local screen density controls size, never whether a sample is drawn.
 struct PointDensity(std::collections::HashMap<(i32, i32), usize>);
 impl PointDensity {
@@ -1478,6 +1474,27 @@ mod tests {
             bit_depth: 16,
             source_revision: None,
         }
+    }
+
+    #[test]
+    fn final_zoom_steps_use_equal_radii_and_separate_coincident_points() {
+        let point = Pos2::new(100.0, 100.0);
+        let density = PointDensity::new(std::iter::repeat_n(point, 1000));
+        for step in 0..=4 {
+            let zoom = 50.0 / 1.15_f32.powi(step);
+            assert!((map_point_radius(&density, point, 8.0, zoom) - 8.0).abs() < 0.00001);
+        }
+        let mut points = vec![point; 4];
+        relax_star_positions(&mut points, 18.0);
+        for (index, first) in points.iter().enumerate() {
+            assert!((*first - point).length() <= 64.001);
+            for other in points.iter().skip(index + 1) {
+                assert!((*first - *other).length() > 17.5);
+            }
+        }
+        let mut repeat = vec![point; 4];
+        relax_star_positions(&mut repeat, 18.0);
+        assert_eq!(points, repeat);
     }
 
     #[test]
@@ -1685,7 +1702,8 @@ mod tests {
                     if size.y >= 1000.0 {
                         for (rect, _) in &state.pad_drop_targets {
                             assert!(
-                                (rect.width() - rect.height()).abs() < 1.0 && rect.height() > 44.0
+                                (rect.width() - rect.height()).abs() < 1.0 && rect.height() > 44.0,
+                                "pad bounds {rect:?}, frame {frame}, size {size:?}"
                             );
                         }
                     }
