@@ -490,26 +490,24 @@ impl ConstellationState {
                         studio_layer = Some(layer);
                     }
                 });
-                // Use the same bounded layout at every width. A waveform child
-                // must never push sound controls beyond the editor's right edge.
-                ui.horizontal(|ui| {
-                    ui.strong("Sound");
-                    if ui
-                        .add(
-                            egui::Button::new("R")
-                                .selected(*retrigger)
-                                .min_size(Vec2::splat(24.0)),
-                        )
-                        .on_hover_text(
-                            "Retrigger: stop this pad's previous hit. Off allows overlapping hits.",
-                        )
-                        .clicked()
-                    {
-                        *retrigger = !*retrigger;
-                    }
+                let width = ui.available_width();
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(74.0, 164.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            super::mixer_controls::mixer(ui, sample, retrigger);
+                        },
+                    );
+                    let wave = Rect::from_min_size(
+                        ui.cursor().min,
+                        Vec2::new((width - 84.0).max(80.0), 164.0),
+                    );
+                    let mut canvas = ui.child_ui(wave, egui::Layout::top_down(egui::Align::Min));
+                    canvas.set_clip_rect(ui.clip_rect().intersect(wave));
+                    Self::render_layer_waveform(&mut canvas, sample);
+                    ui.allocate_rect(wave, egui::Sense::hover());
                 });
-                Self::render_layer_parameters(ui, sample);
-                Self::render_layer_waveform(ui, sample);
                 ui.separator();
             });
         }
@@ -522,68 +520,6 @@ impl ConstellationState {
         }
         if let Some(layer) = studio_layer {
             self.request_pad_studio(index, layer);
-        }
-    }
-
-    fn render_layer_parameters(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
-        let mut gain = if sample.volume <= 0.0 {
-            -60.0
-        } else {
-            20.0 * sample.volume.log10()
-        };
-        let mut gain_changed = false;
-        let columns = if ui.available_width() >= 380.0 { 2 } else { 1 };
-        ui.spacing_mut().slider_width =
-            (ui.available_width() / columns as f32 - 145.0).clamp(50.0, 160.0);
-        egui::Grid::new("pad_sound_controls").num_columns(columns).spacing(Vec2::new(12.0, 4.0)).show(ui, |ui| {
-        for (index, (label, value, range, timed)) in [
-            ("Gain", &mut gain, -60.0..=6.0206, false),
-            ("Pan", &mut sample.pan, -1.0..=1.0, false),
-            ("Attack", &mut sample.attack_ms, 0.0..=500.0, true),
-            ("Release", &mut sample.release_ms, 0.0..=500.0, true),
-        ].into_iter().enumerate() {
-            let response = ui.add(
-                egui::Slider::new(value, range)
-                    .text(label)
-                    .logarithmic(timed)
-                    .smallest_positive(0.1)
-                    .custom_formatter(move |number, _| {
-                        if timed {
-                            format!("{number:.1} ms")
-                        } else if label == "Gain" {
-                            if number <= -60.0 {
-                                "−∞ dB".into()
-                            } else {
-                                format!("{number:.1} dB")
-                            }
-                        } else if number.abs() < 0.005 {
-                            "Center".into()
-                        } else {
-                            format!(
-                                "{} {:.0}%",
-                                if number < 0.0 { "L" } else { "R" },
-                                number.abs() * 100.0
-                            )
-                        }
-                    }),
-            );
-            let reset = crate::shell::studio_controls::slider_double_clicked(ui, &response);
-            if reset {
-                *value = 0.0;
-            }
-            if label == "Gain" {
-                gain_changed = response.changed() || reset;
-            }
-            response.on_hover_text("Drag to adjust · click the value to type · double-click to reset. Pan: -1 left, 0 center, +1 right.");
-            if (index + 1) % columns == 0 { ui.end_row(); }
-        }
-        });
-        if gain_changed {
-            sample.volume = if gain <= -60.0 {
-                0.0
-            } else {
-                10.0_f32.powf(gain / 20.0).min(2.0)
-            };
         }
     }
 

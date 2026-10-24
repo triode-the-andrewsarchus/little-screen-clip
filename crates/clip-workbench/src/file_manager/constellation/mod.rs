@@ -26,6 +26,7 @@ mod history;
 pub mod indexer;
 mod layer_source;
 mod midi;
+mod mixer_controls;
 mod output;
 mod pack_export;
 pub mod pack_shelf_ui;

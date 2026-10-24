@@ -20,17 +20,13 @@ impl ConstellationState {
         let mut view = ui
             .data(|data| data.get_temp::<AudioViewport>(id))
             .unwrap_or(full);
-        let height = if ui.available_width() < 600.0 {
-            80.0
-        } else {
-            140.0
-        };
+        let height = 164.0;
         let (outer, response) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
             egui::Sense::click_and_drag(),
         );
         let rect = Rect::from_min_max(
-            outer.min + Vec2::new(12.0, 24.0),
+            outer.min + Vec2::new(12.0, 42.0),
             outer.max - Vec2::new(12.0, 12.0),
         );
         if response.hovered() && duration >= 0.01 {
@@ -85,10 +81,13 @@ impl ConstellationState {
             ui.visuals().weak_text_color(),
         );
         paint_markers(ui, &painter, rect, sample, view, frame);
+        let fade_drag = edit_fades(ui, &painter, rect, sample, view);
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
-        edit_trim(ui, &response, rect, sample, view, frame);
+        if !fade_drag {
+            edit_trim(ui, &response, rect, sample, view, frame);
+        }
         ui.data_mut(|data| data.insert_temp(id, view));
     }
 }
@@ -287,4 +286,72 @@ fn edit_trim(
             sample.end_sec = time.clamp((sample.start_sec + frame).min(duration), duration);
         }
     }
+}
+
+/// Small handles above the trim rails control fades; the envelope remains visible.
+fn edit_fades(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    rect: Rect,
+    sample: &mut SlotSample,
+    view: AudioViewport,
+) -> bool {
+    let mut editing = false;
+    for attack in [true, false] {
+        let seconds = if attack {
+            sample.start_sec + sample.attack_ms / 1000.0
+        } else {
+            sample.end_sec - sample.release_ms / 1000.0
+        };
+        let x = view
+            .time_to_x(seconds, rect.left(), rect.width())
+            .clamp(rect.left(), rect.right());
+        let handle = Rect::from_center_size(Pos2::new(x, rect.top() - 12.0), Vec2::new(18.0, 16.0));
+        let response = ui.interact(
+            handle,
+            ui.id().with(("fade", attack)),
+            egui::Sense::click_and_drag(),
+        );
+        let color = ui.visuals().hyperlink_color;
+        painter.rect_filled(handle, 2.0, ui.visuals().extreme_bg_color);
+        painter.rect_stroke(handle, 2.0, Stroke::new(1.0_f32, color));
+        painter.text(
+            handle.center(),
+            egui::Align2::CENTER_CENTER,
+            if attack { "A" } else { "R" },
+            egui::FontId::monospace(9.0),
+            color,
+        );
+        if response.dragged()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let time =
+                view.start_sec + (pointer.x - rect.left()) / rect.width() * view.duration_sec;
+            let ms = if attack {
+                time - sample.start_sec
+            } else {
+                sample.end_sec - time
+            } * 1000.0;
+            let limit = ((sample.end_sec - sample.start_sec) * 1000.0).min(500.0);
+            if attack {
+                sample.attack_ms = ms.clamp(0.0, limit);
+            } else {
+                sample.release_ms = ms.clamp(0.0, limit);
+            }
+        }
+        if response.double_clicked() {
+            if attack {
+                sample.attack_ms = 0.0;
+            } else {
+                sample.release_ms = 0.0;
+            }
+        }
+        editing |= response.hovered() || response.dragged();
+        response.on_hover_text(if attack {
+            "Attack · drag right"
+        } else {
+            "Release · drag left"
+        });
+    }
+    editing
 }
