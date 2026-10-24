@@ -90,10 +90,7 @@ impl ConstellationState {
         }
         edit_trim(ui, &response, rect, sample, view, frame);
         ui.data_mut(|data| data.insert_temp(id, view));
-        ui.weak(format!(
-            "{:.3} s selected · drag IN / OUT · double-click to reset",
-            sample.end_sec - sample.start_sec
-        ));
+
     }
 }
 

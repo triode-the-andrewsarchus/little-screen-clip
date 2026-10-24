@@ -492,7 +492,7 @@ impl ConstellationState {
                 // must never push sound controls beyond the editor's right edge.
                 ui.strong("Sound");
                 Self::render_layer_parameters(ui, sample);
-                Self::render_layer_trim(ui, sample);
+                Self::render_layer_waveform(ui, sample);
                 ui.separator();
             });
         }
@@ -506,35 +506,6 @@ impl ConstellationState {
         if let Some(layer) = studio_layer {
             self.request_pad_studio(index, layer);
         }
-    }
-
-    fn render_layer_trim(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
-        let frame_duration = sample
-            .cached_audio
-            .as_ref()
-            .map_or(0.000_001, |audio| 1.0 / audio.sample_rate as f32);
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("Trim");
-            ui.label("Start");
-            ui.add(
-                egui::DragValue::new(&mut sample.start_sec)
-                    .speed(0.001)
-                    .clamp_range(0.0..=(sample.end_sec - frame_duration).max(0.0))
-                    .max_decimals(3)
-                    .suffix(" s"),
-            );
-            ui.label("End");
-            ui.add(
-                egui::DragValue::new(&mut sample.end_sec)
-                    .speed(0.001)
-                    .clamp_range(
-                        (sample.start_sec + frame_duration).min(sample.duration)..=sample.duration,
-                    )
-                    .max_decimals(3)
-                    .suffix(" s"),
-            );
-        });
-        Self::render_layer_waveform(ui, sample);
     }
 
     fn render_layer_parameters(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
