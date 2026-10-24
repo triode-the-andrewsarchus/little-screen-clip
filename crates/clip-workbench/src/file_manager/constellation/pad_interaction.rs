@@ -225,7 +225,12 @@ impl ConstellationState {
         }
     }
 
-    pub(super) fn paint_mute_links(&self, ui: &egui::Ui, hovered: Option<usize>) {
+    pub(super) fn paint_mute_links(
+        &self,
+        ui: &egui::Ui,
+        hovered: Option<usize>,
+        background: egui::layers::ShapeIdx,
+    ) {
         let active = self.choke_anchor.map(|(_, index)| index).or(hovered);
         let Some(index) = active else {
             return;
@@ -239,6 +244,7 @@ impl ConstellationState {
         };
         let color = egui::Color32::from_rgb(225, 80, 85);
         let painter = ui.painter();
+        let mut lines = Vec::new();
         for (rect, pad) in &self.pad_drop_targets {
             if *pad == index || (group != 0 && self.pack_bank.slots[*pad].choke_group == group) {
                 painter.rect_stroke(rect.shrink(2.0), 4.0, egui::Stroke::new(2.0_f32, color));
@@ -247,10 +253,14 @@ impl ConstellationState {
                     let start =
                         origin.center() + direction * (origin.width().min(origin.height()) * 0.5);
                     let end = rect.center() - direction * (rect.width().min(rect.height()) * 0.5);
-                    painter.line_segment([start, end], egui::Stroke::new(2.0_f32, color));
+                    lines.push(egui::Shape::line_segment(
+                        [start, end],
+                        egui::Stroke::new(2.0_f32, color),
+                    ));
                 }
             }
         }
+        painter.set(background, egui::Shape::Vec(lines));
     }
 }
 

@@ -190,6 +190,7 @@ impl ConstellationState {
             ((ui.available_width().min(ui.clip_rect().width()) - gap * 3.0) / 4.0).max(28.0);
         let pad_height =
             ((ui.available_height() - status_height - gap * 3.0 - 32.0) / 4.0).clamp(28.0, width);
+        let links = ui.painter().add(egui::Shape::Noop);
         ui.scope(|ui| {
             ui.spacing_mut().interact_size.y = pad_height;
             ui.spacing_mut().item_spacing = Vec2::new(gap, gap);
@@ -332,7 +333,7 @@ impl ConstellationState {
                 }
             }
         });
-        self.paint_mute_links(ui, hovered);
+        self.paint_mute_links(ui, hovered, links);
         ui.weak(self.mute_group_hint(hovered));
     }
 
