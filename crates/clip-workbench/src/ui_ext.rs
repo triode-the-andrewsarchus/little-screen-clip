@@ -27,6 +27,62 @@ pub const BADGE_CORNER_RADIUS: f32 = 3.0;
 pub const PANEL_CORNER_RADIUS: f32 = 6.0;
 pub const CARD_CORNER_RADIUS: f32 = 8.0;
 
+/// Fades an infinite canvas into its background along all four visible edges.
+///
+/// Paints eight gradient quads with a transparent center, clipped to `rect` and
+/// the painter's existing bounds. Call after canvas content and before floating
+/// controls or hover cards. Painting does not affect camera coordinates or hit testing.
+/// `fade_size` is in logical pixels, capped at one quarter of each dimension;
+/// empty/non-finite bounds and non-positive/non-finite sizes draw nothing.
+pub fn paint_canvas_edge_fade(
+    painter: &egui::Painter,
+    rect: Rect,
+    canvas_color: Color32,
+    fade_size: f32,
+) {
+    if !rect.is_finite() || !rect.is_positive() || !fade_size.is_finite() || fade_size <= 0.0 {
+        return;
+    }
+    let fade_w = fade_size.min(rect.width() * 0.25);
+    let fade_h = fade_size.min(rect.height() * 0.25);
+    let xs = [
+        rect.left(),
+        rect.left() + fade_w,
+        rect.right() - fade_w,
+        rect.right(),
+    ];
+    let ys = [
+        rect.top(),
+        rect.top() + fade_h,
+        rect.bottom() - fade_h,
+        rect.bottom(),
+    ];
+    let mut mesh = egui::Mesh::default();
+    for (y, &py) in ys.iter().enumerate() {
+        for (x, &px) in xs.iter().enumerate() {
+            let color = if x == 0 || x == 3 || y == 0 || y == 3 {
+                canvas_color
+            } else {
+                Color32::TRANSPARENT
+            };
+            mesh.colored_vertex(Pos2::new(px, py), color);
+        }
+    }
+    for y in 0..3_u32 {
+        for x in 0..3_u32 {
+            if x == 1 && y == 1 {
+                continue;
+            }
+            let index = y * 4 + x;
+            mesh.add_triangle(index, index + 1, index + 5);
+            mesh.add_triangle(index, index + 5, index + 4);
+        }
+    }
+    painter
+        .with_clip_rect(rect.intersect(painter.clip_rect()))
+        .add(egui::Shape::mesh(mesh));
+}
+
 /// Keeps the regular help text available while explaining why a disabled control cannot run.
 pub fn on_hover_text_with_disabled_reason(
     response: egui::Response,
@@ -1173,6 +1229,73 @@ pub fn new_shared_audio_player() -> Option<rodio::Player> {
 mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
+
+    #[test]
+    fn canvas_edge_fade_keeps_the_center_clear_and_bounds_tiny_canvases() {
+        for size in [Vec2::new(800.0, 600.0), Vec2::new(10.0, 8.0)] {
+            let ctx = egui::Context::default();
+            let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), size);
+            let color = Color32::from_gray(28);
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 900.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        paint_canvas_edge_fade(ui.painter(), rect, color, 28.0)
+                    });
+                },
+            );
+            let shape = output
+                .shapes
+                .iter()
+                .find(|shape| matches!(shape.shape, egui::Shape::Mesh(_)))
+                .unwrap();
+            assert_eq!(shape.clip_rect, rect);
+            let egui::Shape::Mesh(mesh) = &shape.shape else {
+                unreachable!()
+            };
+            assert_eq!(mesh.vertices.len(), 16);
+            assert_eq!(mesh.indices.len(), 48);
+            for vertex in &mesh.vertices {
+                assert!(rect.contains(vertex.pos));
+                let outer = vertex.pos.x == rect.left()
+                    || vertex.pos.x == rect.right()
+                    || vertex.pos.y == rect.top()
+                    || vertex.pos.y == rect.bottom();
+                assert_eq!(
+                    vertex.color,
+                    if outer { color } else { Color32::TRANSPARENT }
+                );
+            }
+            for triangle in mesh.indices.chunks_exact(3) {
+                let points: Vec<_> = triangle
+                    .iter()
+                    .map(|index| mesh.vertices[*index as usize].pos)
+                    .collect();
+                assert!(
+                    !Rect::from_points(&points).contains(rect.center()),
+                    "vignette must leave the center clear"
+                );
+            }
+        }
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                for fade in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+                    paint_canvas_edge_fade(ui.painter(), ui.max_rect(), Color32::BLACK, fade);
+                }
+                paint_canvas_edge_fade(ui.painter(), Rect::NOTHING, Color32::BLACK, 28.0);
+            });
+        });
+        assert!(
+            !output
+                .shapes
+                .iter()
+                .any(|shape| matches!(shape.shape, egui::Shape::Mesh(_)))
+        );
+    }
 
     #[test]
     fn clipboard_unicode_renders_without_missing_glyphs_or_latin_layout_changes() {

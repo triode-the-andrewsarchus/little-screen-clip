@@ -793,6 +793,13 @@ impl ConstellationState {
             painter.circle_filled(hovered_pos, r * 0.45, Color32::WHITE);
         }
 
+        crate::ui_ext::paint_canvas_edge_fade(
+            &painter,
+            rect.intersect(ui.clip_rect()),
+            ui.visuals().panel_fill,
+            28.0,
+        );
+
         // 3. Hover and Click Interactions
         if let Some(hovered) = hovered_sample {
             // Click to select & play
@@ -1390,7 +1397,10 @@ mod tests {
             .shapes
             .into_iter()
             .filter_map(|shape| match shape.shape {
-                egui::Shape::Mesh(mesh) => Some(mesh.vertices.clone()),
+                // The shared vignette is an untextured overlay; count the dot batch only.
+                egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                    Some(mesh.vertices.clone())
+                }
                 _ => None,
             })
             .flatten()
@@ -1924,7 +1934,20 @@ mod tests {
                     center("Pan").x > center("Gain").x + 40.0,
                     "Pan belongs beside the fader"
                 );
-                assert!((center("Pan").x - center("Pitch").x).abs() < 2.0);
+                let knobs: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Circle(circle) if circle.radius == 13.0 => Some(circle.center),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(knobs.len(), 2);
+                assert!(
+                    (knobs[0].x - knobs[1].x).abs() < 0.1,
+                    "Pan/Pitch knobs must align: {knobs:?}"
+                );
+                assert!(knobs[0].y < knobs[1].y);
                 assert!(
                     center("P").y > center("Pan").y && center("P").y < center("Pitch").y,
                     "pitch mode belongs with its knob below Pan"
