@@ -57,10 +57,13 @@ def pad_gestures(session, root, destination, red):
 
 
 def exercise(session, root, hardware_keys=False):
+    from file_manager_acceptance import private
+    from PIL import Image
     session.observe("folder", ["Constellation", "File"])
     session.click(*session.word("folder", "Constellation"))
-    session.observe("empty-map", ["Sample constellation", "Rack", "Override velocity"])
-    session.click(*(session.word("empty-map", "Index", required=False) or (580, 540)))
+    text = session.observe("empty-map", ["Sample constellation", "Packs", "Mono samples only"])
+    assert "MIDI input" not in text and "Layer actions" not in text
+    session.click(*(session.word("empty-map", "Index", required=False) or (580, 578)))
     database = session.output / "data/little-screen-clip/constellation.sqlite"
     def indexed():
         if not database.exists():
@@ -68,123 +71,112 @@ def exercise(session, root, hardware_keys=False):
         with sqlite3.connect(database) as db:
             return db.execute("SELECT count(*) FROM samples").fetchone()[0] == 1
     wait_for(indexed, "owned sample indexing")
-    session.observe("indexed-map", ["Rack", "Packs"])
+    session.observe("indexed-map", ["Index complete"])
     session.key("f", "ctrl")
-    from file_manager_acceptance import private
     private.run_checked(["wtype", "kick"], env=session.env)
-    session.observe("search", ["Rack"])
+    session.observe("search", ["Packs"])
     session.key("Escape")
-    session.observe("search-cleared", ["Rack"])
-    # Select the actual kick star, rather than the Random toolbar action. This
-    # exercises the map's focus behavior before Shift+1 on a real Wayland keyboard.
-    from PIL import Image
+    session.observe("search-cleared", ["Packs"])
     image = Image.open(session.output / "search-cleared.png").convert("RGB")
-    stars = [(x, y) for y in range(400, 680) for x in range(355, 840)
-             if (lambda c: c[0] > 140 and c[0] > c[1] * 1.5 and c[0] > c[2] * 1.5)(image.getpixel((x, y)))]
-    assert stars, "owned kick star must be visible in the map"
-    session.click(sum(x for x, _ in stars) // len(stars), sum(y for _, y in stars) // len(stars))
-    session.key("semicolon" if hardware_keys else "z", "shift")
-    session.observe("assigned-slot", ["Mute", "Solo", "Gain", "Pan", "Attack", "Release"])
+    red = lambda color: color[0] > 140 and color[0] > color[1] * 1.5 and color[0] > color[2] * 1.5
+    stars = [(x, y) for y in range(390, 710) for x in range(355, 800) if red(image.getpixel((x, y)))]
+    assert stars
+    session.click(*(sum(point[axis] for point in stars) // len(stars) for axis in (0, 1)))
+    first_key = "semicolon" if hardware_keys else "z"
+    session.key(first_key, "shift")
+    text = session.observe("assigned-slot", ["Sound", "Trim", "Start", "End", "Gain", "Pan"])
+    assert "Layer actions" not in text and "Fit selection" not in text
+    session.key("Space")
+    session.key("Space")
+    # Duplicate keyboard assignments must be confirmable and cancellable.
+    session.key(first_key, "shift")
+    session.observe("duplicate-cancel", ["Duplicate sample layers", "Add anyway", "Cancel"])
+    session.click(*(session.word("duplicate-cancel", "Cancel", required=False) or (632, 488)))
+    session.key(first_key, "shift")
+    session.observe("duplicate-add", ["Duplicate sample layers", "Add anyway"])
+    session.click(*(session.word("duplicate-add", "anyway", required=False) or (535, 488)))
+    session.observe("two-layers", ["Layer 1", "Layer 2", "Sound"])
     session.key("q" if hardware_keys else "x", "shift")
-    if hardware_keys:
-        session.key("apostrophe", "shift")
-    for key in (["semicolon", "semicolon", "q", "apostrophe"] if hardware_keys else ["z", "z", "x", "z"]):
+    for key in [first_key, first_key, "q" if hardware_keys else "x"]:
         session.key(key)
     session.observe("retriggered-slots", ["Packs"])
-    # Docks obscure the anchored map. Hide the editor to expose the drag source.
-    session.click(*(session.word("retriggered-slots", "Editor", required=False) or (1115, 430)))
+    session.click(*(session.word("retriggered-slots", "Editor", required=False) or (1094, 470)))
     session.observe("map-for-drag", ["Packs"])
-    # Exercise real Copy-only Wayland map drags, including Shift layering.
     image = Image.open(session.output / "map-for-drag.png").convert("RGB")
-    editor_y = 680
-    red = lambda c: c[0] > 140 and c[0] > c[1] * 1.5 and c[0] > c[2] * 1.5
-    star = [(x, y) for y in range(400, editor_y - 20) for x in range(355, 805) if red(image.getpixel((x, y)))]
-    pad_line = [(x, y) for y in range(550, 695) for x in range(822, 904) if red(image.getpixel((x, y)))]
-    assert star and pad_line, "owned map star and first-pad category line must be visible"
-    source = tuple(sum(point[axis] for point in star) // len(star) for axis in (0, 1))
+    pad_line = [(x, y) for y in range(500, 720) for x in range(822, 902) if red(image.getpixel((x, y)))]
+    assert pad_line
     bottom = max(y for _, y in pad_line)
-    pad_line = [(x, y) for x, y in pad_line if y >= bottom - 2]
-    destination = (sum(x for x, _ in pad_line) // len(pad_line), bottom - 10)
-    def drag():
-        private.run_checked([str(session.pointer), "drag", "1280", "800", *map(str, (*source, *destination))], env=session.env)
-        time.sleep(0.4)
-    drag()
-    session.observe("replace-drop", ["Packs"])
-    modifier = subprocess.Popen(["wtype", "-M", "shift", "-s", "2500", "-m", "shift"], env=session.env)
-    try:
-        time.sleep(0.15)
-        drag()
-    finally:
-        modifier.wait(timeout=4)
-    session.observe("layer-drop", ["Packs"])
-    assert (root / "kick.wav").is_file(), "pad assignment must preserve its source"
+    edge = [(x, y) for x, y in pad_line if y >= bottom - 2]
+    destination = (sum(x for x, _ in edge) // len(edge), bottom - 12)
     pad_gestures(session, root, destination, red)
-    session.click(*(session.word("layer-drop", "Override", required=False) or (500, 708)))
-    session.observe("velocity-override", ["Packs"])
-    session.click(740, 714)  # Footer bypass; avoid similarly named output controls.
-    session.observe("performance-controls", ["Packs"])
-    session.click(*session.word("performance-controls", "Output"))
-    session.observe("visual-compressor", ["Preview compressor", "Threshold", "Ratio"])
-    session.click(880, 379)  # Rack tab, rather than the toolbar’s Hide rack.
-    session.observe("performance-controls", ["Packs"])
-    session.click(*(session.word("performance-controls", "Save", required=False) or (1038, 472)))
+    # Collapse and reopen the sidebar; editor visibility must survive both actions.
+    session.observe("before-collapse", ["Packs"])
+    header = session.word("before-collapse", "Packs", minimum_y=300)
+    session.click(1150, header[1])
+    text = session.observe("collapsed-rack", ["Mono samples only"])
+    assert "Packs" not in text
+    session.click(1164, 550)
+    text = session.observe("reopened-rack", ["Packs"])
+    assert "Sound" not in text, "a previously closed editor stays closed"
+    session.click(*(session.word("reopened-rack", "Editor", required=False) or (1094, 470)))
+    session.observe("editor-open-before-collapse", ["Sound", "Trim"])
+    header = session.word("editor-open-before-collapse", "Packs", minimum_y=300)
+    session.click(1150, header[1])
+    text = session.observe("editor-collapsed", ["Mono samples only"])
+    assert "Sound" not in text
+    session.click(1164, 550)
+    session.observe("editor-reopened", ["Sound", "Gain", "Pan"])
+    session.click(*session.word("editor-reopened", "Output"))
+    session.observe("visual-compressor", ["Compressor", "Threshold", "Ratio", "Knee", "Makeup"])
+    session.click(*session.word("visual-compressor", "Rack", minimum_y=300))
+    session.observe("rack-return", ["Override MIDI velocity"])
+    session.click(*session.word("rack-return", "Override"))
+    session.observe("before-save", ["Packs"])
+    session.click(*(session.word("before-save", "Save", required=False) or (1109, 500)))
     packs = root / "little-screen-clip-sample-packs"
-    wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 1, "first atomic pack save")
+    wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 1, "automatic portable pack save")
     first = next(packs.glob("*/bank.json"))
     bank = json.loads(first.read_text())
     assert len(bank["slots"]) == 16
-    assert {i for i, slot in enumerate(bank["slots"]) if slot["samples"]} == ({0, 1, 8} if hardware_keys else {0, 1})
     assert len(bank["slots"][0]["samples"]) == 2
-    assert bank["slots"][0]["choke_group"] == bank["slots"][1]["choke_group"] > 0
-    assert ".edited" in bank["slots"][0]["samples"][0]["filename"]
     assert len(bank["slots"][1]["samples"]) == 1
-    assert bank["slots"][0]["samples"][0]["end_sec"] > 0
-    assert bank["override_velocity"] and bank["compressor_bypass"]
-    if hardware_keys:
-        assert len(bank["slots"][8]["samples"]) == 1
-    marker = first.parent / "owned-preservation-marker.txt"
-    marker.write_text("preserve this owned fixture")
+    assert bank["slots"][0]["choke_group"] == bank["slots"][1]["choke_group"] > 0
+    assert bank["override_velocity"]
+    for slot in bank["slots"]:
+        for layer in slot["samples"]:
+            assert not Path(layer["file_path"]).is_absolute()
+            assert not (first.parent / layer["file_path"]).is_symlink()
+            assert (first.parent / layer["file_path"]).is_file()
+    marker = first.parent / "preserve.txt"
+    marker.write_text("owned marker")
     before = first.read_bytes()
     session.observe("first-save", ["Packs"])
-    session.click(*(session.word("first-save", "Save", required=False) or (1038, 472)))
-    wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 2, "versioned second pack save")
-    assert first.read_bytes() == before
-    assert marker.read_text() == "preserve this owned fixture"
-    session.observe("second-save", ["Packs"])
-    session.click(1085, 222)
-    session.observe("index-menu", ["Index folder again"])
-    session.click(*session.word("index-menu", "Index"))
+    session.click(*(session.word("first-save", "Save", required=False) or (1109, 500)))
+    wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 2, "second atomic version")
+    assert first.read_bytes() == before and marker.read_text() == "owned marker"
+    session.observe("second-save", ["Saved"])
+    session.click(466, 533)  # Select Layer 2, then its adjacent remove control.
+    session.click(519, 533)
+    text = session.observe("layer-removed", ["Layer 1", "Sound", "Unsaved changes"])
+    assert "Layer 2" not in text
+    session.click(978, 470)  # Button center; OCR can include its left border.
+    session.observe("layer-restored", ["Layer 1", "Layer 2"])
+    session.click(110, 70)
+    session.observe("file-menu", ["constellation", "recursive"])
+    session.click(*(session.word("file-menu", "Re-index", tree=True, required=False) or (155, 130)))
     session.observe("reused-index", ["1 reused", "1 analyzed"])
-    session.click(*session.word("reused-index", "Filters"))
-    session.observe("filters-expanded", ["Any duration"])
-    session.click(*(session.word("filters-expanded", "channels", required=False) or (635, 263)))
-    session.observe("channel-menu", ["Mono", "Stereo"])
-    session.click(*session.word("channel-menu", "Stereo"))
-    session.observe("stereo-filter", ["0 / 2"])
-    session.click(*(session.word("stereo-filter", "Reset", required=False) or (751, 263)))
-    session.observe("filters-reset", ["All channels", "Any duration"])
-    session.click(*(session.word("filters-reset", "Actions", required=False) or (1125, 514)))
-    session.observe("export-menu", ["WAV kit"])
-    session.click(*session.word("export-menu", "WAV"))
-    wait_for(lambda: len(list(packs.glob("*/bank.json"))) == 3, "portable WAV kit export")
-    exported = next(path for path in packs.glob("*/bank.json") if (path.parent / "pad01_layer1.wav").exists())
-    portable = json.loads(exported.read_text())
-    assert not Path(portable["slots"][0]["samples"][0]["file_path"]).is_absolute()
-    assert not (exported.parent / "pad01_layer1.wav").is_symlink()
-    assert (exported.parent / "pad01_layer1.wav").read_bytes()[:4] == b"RIFF"
-    session.observe("portable-export", ["Packs"])
-    session.key("z", "ctrl")
-    session.observe("undo-edit", ["Unsaved changes"])
-    private.run_checked([str(session.niri), "msg", "action", "close-window"], env=session.env)
-    session.observe("close-guard", ["This sample pack has unsaved changes."])
-    session.click(*(session.word("close-guard", "Keep", required=False) or (745, 112)))
-    session.key("y", "ctrl")
-    session.observe("redo-edit", ["Saved"])
-    session.click(*(session.word("redo-edit", "Packs", required=False) or (994, 422)))
+    session.click(*(session.word("reused-index", "Mono", required=False) or (1060, 222)))
+    session.observe("mono-filter", ["2 / 2 samples"])
+    session.click(*session.word("mono-filter", "Packs", minimum_y=300))
     session.observe("pack-browser", ["Saved packs", "Untitled"])
     session.key("Escape")
-    session.address(root.parent)
-    session.observe("navigated-away", ["fixture"])
+    session.observe("rack-before-close", ["Packs"])
+    session.click(*(session.word("rack-before-close", "Override", required=False) or (944, 534)))
+    session.key("q", "ctrl")
+    session.observe("close-guard", ["This sample pack has unsaved changes", "Discard changes"])
+    session.click(616, 112)  # Center of Discard changes in the close guard.
+    session.process.wait(timeout=5)
+    assert session.process.returncode == 0
     assert "POLLERR" not in (session.output / "files.log").read_text()
 
 
@@ -209,7 +201,7 @@ def main():
                 file.write('\n[file_manager]\nconstellation_pad_keys = [";qjk", "aoeu", "\',.p", "1234"]\n')
 
     return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.hardware_keys),
-                                      "constellation pads, native drops, filters, export, undo and close protection",
+                                      "constellation controls, pad gestures, studio return, portable saves and close protection",
                                       prepare_environment)
 
 

@@ -9,10 +9,14 @@ Rack, Packs, and Output are tabs in the existing-width right panel. Packs stays 
 Selecting a pad exposes its layer editor below the map; resize or hide that editor
 to reveal more of the map. Docks obscure the full map canvas without moving or
 rescaling its points, including at zoom levels with point relaxation. The editor
-shows one layer at a time, with layer tabs for layered pads. The footer holds
-MIDI input, velocity override, and shared output dynamics. The Editor toggle sits
-beside Undo/Redo. Pads become square when height permits and compact vertically in
-small windows. The sidebar retains its existing default and width limits.
+shows one layer at a time. Its layer tabs have a close button for removing the
+selected layer. The Editor toggle sits beside Undo/Redo; Override MIDI velocity
+lives in Rack, and all dynamics controls live in Output. There is no output footer.
+Pads become square when height permits and compact vertically in small windows.
+The sidebar retains its existing default and width limits, and only the user's
+divider drag changes its width. The X beside its tabs collapses both rack and
+editor to a thin rail. Click anywhere on that rail to reopen them; editor visibility
+and rack width survive collapse.
 
 ## Keyboard configuration
 
@@ -29,7 +33,9 @@ Press a key to play a pad; Shift+key adds the selected map sample as a layer.
 Click a pad to select and play it, or Shift+click to assign the map selection.
 Text fields keep their normal keys. Ctrl/Alt/Command combinations do not play pads.
 
-Space retriggers the selected map sample. Shift+Space and Neighbor select and play
+Space retriggers the active editor layer when its editor is visible, otherwise the
+selected map sample. Shift+Space, Next unplayed, and N (when N has no pad binding)
+select and play
 the nearest filtered sample not auditioned since the last map click. Hover and
 Random auditions also mark samples visited. Once all matching samples have been
 visited, advancing leaves the selection unchanged. Clicking a sample starts a new
@@ -65,14 +71,18 @@ retain their sample positions and acquire six empty pads when loaded. Their old
 
 ## MIDI and pad behavior
 
-Choose an input from MIDI input in the footer. Enumeration and connection teardown
-run on a dedicated worker. Ready pads trigger directly from MIDI callbacks using
-a shared playback state; repaint timing does not schedule their audio. Refresh inputs after plugging in or removing a device.
+All available MIDI inputs connect automatically and non-exclusively. A dedicated
+worker reconciles port IDs every two seconds, retaining unchanged connections and
+closing removed ports off the UI thread. Ready pads trigger directly from callbacks
+using shared playback state; repaint timing does not schedule audio. Output shows
+a compact MIDI-offline hint with backend details on hover when input is unavailable.
+Pad labels start as configured keyboard keys. MIDI note-on switches them to note
+names (C2 through D#3); the next keyboard audition switches back to keyboard keys.
 Notes 36–51 map consecutively left to right, bottom to top; the lower-left pad is
 note 36 and the upper-right pad is note 51. All MIDI channels are accepted.
 
 Pads are one-shots. Note-off and note-on with velocity zero do not start or choke
-anything. Positive velocities scale layer gain; Override velocity forces 127.
+anything. Positive velocities scale layer gain; Override MIDI velocity forces 127.
 Mouse and keyboard hits already use 127. Repeated hits replace that pad's previous
 voices; different pads can ring together.
 
@@ -85,7 +95,7 @@ information without covering those links during ordinary hover. Right-click → 
 Triggering a grouped pad stops its own old voices and the other pads in that group.
 Ungrouped pads overlap independently. Navigation, Escape, studio entry, and
 application close stop previews; queued MIDI hits from earlier view epochs cannot
-restart them. The MIDI connection stays selected while its note delivery is gated.
+restart them. MIDI connections stay open while their note delivery is gated.
 
 ## Pad output
 
@@ -97,17 +107,21 @@ than copying it when a pad is hit.
 Every audition and pad layer has 2 dB of input headroom. Glue uses linked stereo
 compression with an adjustable threshold (-48 to 0 dBFS) and ratio (1:1 to 12:1).
 Defaults preserve the previous subtle behavior: about -1.4 dBFS (0.85 linear),
-2:1 ratio, 5 ms attack, 120 ms release, and no makeup gain. Lower the threshold
+2:1 ratio, hard knee, 5 ms attack, 120 ms release, and 0 dB makeup gain.
+Knee adjusts the transition width from 0 to 24 dB; Makeup provides -12 to +24 dB
+before the peak ceiling. Lower the threshold
 and raise the ratio for more audible compression. A linked peak
 ceiling at 0.98 catches transient overloads. A normal full-scale single layer at
 default gain stays below the compressor threshold. Layered or boosted samples can
-engage it. The footer shows gain reduction and opens Output. That tab provides a
+engage it. Output provides a
 transfer curve with draggable threshold and ratio handles, editable sliders, input
 and output peak meters, and gain reduction. The live dot includes attack/release
-and the safety ceiling; the static line shows the compressor characteristic.
+and the safety ceiling; the static line includes the knee and makeup gain before
+the ceiling. Double-click any parameter slider to restore its default.
 
-Bypass disables compression and the ceiling while keeping input headroom unchanged.
-A 1:1 ratio retains only the peak ceiling. Threshold, ratio, choke groups, velocity
+Bypass disables compression, makeup gain, and the ceiling while keeping input
+headroom unchanged. A 1:1 ratio retains makeup gain and the peak ceiling. Threshold,
+ratio, knee, makeup gain, choke groups, velocity
 override, and bypass are saved with the pack; older packs inherit the defaults. The bus also
 protects map, individual-layer, and saved-pack auditions. Map auditions retain the
 guarded streaming loader, so long samples are not truncated to pad-cache length.
@@ -119,6 +133,10 @@ A pad holds up to eight layers. Drops collect references, never move the source.
 Worker decoding must succeed for every dropped sample before assignment, and a
 pad edited during that load rejects its stale completion. Unavailable sources show
 a compact error dot and offer Retry audio; loading and playing have transient cues.
+Adding the same file to multiple layers of a pad asks for confirmation. Add anyway
+keeps the duplication; Cancel leaves the pad untouched. Drops retain their native
+completion until that decision and reject changes to the target while waiting.
+Pads list layer-name prefixes, with an ellipsis when space cannot show all layers.
 Group labels appear only for nonzero groups. Drag a pad onto another pad to swap
 complete instruments, including layers, mute/solo and group membership. Keyboard
 and MIDI bindings stay at their grid positions. Swaps stop affected voices, reject
@@ -129,12 +147,13 @@ IN or OUT to trim, or double-click the waveform to reset its range. Handles are
 inset from the edges; any overflow scrollbar occupies a separate gutter. Audio
 preparation computes up to 16,384 waveform buckets off the UI thread, and their
 storage counts toward the existing cache budget. The canvas reduces these to the
-actual displayed columns. Wheel zooms around the pointer; Shift+wheel pans. Fit
-and Fit selection use Audio Studio's viewport model and time ruler. Tick spacing
+actual displayed columns. Wheel zooms around the pointer; Shift+wheel pans. The
+canvas shares Audio Studio's viewport model and time ruler. Tick spacing
 also accounts for available width; envelope guides use the playback fade model.
 
 Wide editors put waveform/trim and Sound in separate columns. Narrow editors use
-a compact two-column parameter grid. Gain is a dB fader with a silent lower stop;
+a compact two-column Sound grid followed by numeric Trim controls before the
+waveform, keeping gain, pan, Start, and End visible. Gain is a dB fader with a silent lower stop;
 pan shows Center/L/R. Attack/release sliders have finer logarithmic control near
 zero; values remain editable, and double-click resets controls to neutral.
 The selected pad exposes numeric trim, gain, stereo balance, and linear attack and
@@ -144,7 +163,7 @@ overlapping fades use the lower envelope. Center balance preserves existing ster
 level; mono is duplicated before balance. These settings also apply to exports.
 
 Double-click a populated pad to open its first layer in Audio Studio with the pad's
-trim selected. Layer actions → Edit in Audio Studio opens the selected layer.
+trim selected. The direct Edit in Audio Studio button opens the selected layer.
 Returning offers Save copy and replace pad, Keep editing, or Return without
 replacing. Saves use the existing guarded audio export worker and publish a new
 `name.edited.wav` beside the original; collisions become `name.edited-1.wav`, etc.
@@ -153,13 +172,21 @@ only after successful publication, and only if the originating bank/layer still
 matches. Other layers and pad gain/pan/fades remain intact; the new file starts with
 full-range trim. Failed or stale handoffs retain the saved file and prior pad.
 
-Filters expands inline; active duration/channel chips can be cleared directly.
-Zero maximum duration is displayed as Any duration. Category labels use CH, OH,
-and Bass. Pack Actions contains export options and Clear rack.
+The top toolbar always shows a two-ended duration slider, bounded by the shortest
+and longest indexed samples, and an outlined Mono samples only toggle. Double-click
+the duration track to reset its range. Category buttons retain subtle outlines and
+use the short labels CH, OH, and Bass. The bottom status bar reports active / total
+samples. Re-indexing remains in File; there is no Map menu.
 
-Every visible sample gets a mesh marker. Local screen density reduces marker size
-in crowded areas; it never caps or drops points. Sparse folders retain larger
-markers. Empty searches avoid per-sample lowercase allocation on the render path.
+Every visible sample gets a mesh marker of the same size at any given zoom.
+The radius depends on the whole library size and camera zoom, so sparse folders
+remain readable without turning large libraries into a solid wall. Neither local
+density nor opening a dock changes point size. Ordinary zoom levels preserve the
+original projection. Only the final four zoom steps allow bounded local spacing:
+each colliding point checks at most 48 nearby cells and moves at most 64 logical
+pixels. Saturated neighborhoods retain overlaps instead of pushing clusters into
+holes. Saved acoustic coordinates remain unchanged; no samples are dropped.
+Empty searches avoid per-sample lowercase allocation on the render path.
 
 Undo/Redo keep 32 metadata snapshots and coalesce pointer gestures/text editing.
 Ctrl+Z undoes, Ctrl+Y or Ctrl+Shift+Z redoes; text editors retain their own undo.
@@ -167,28 +194,29 @@ The rack indicates Saved/Unsaved changes. Loading another pack or closing Files
 with unsaved edits opens an inline Save and continue/Discard/Keep editing bar.
 Saving records the submitted snapshot; edits made during a save stay unsaved.
 
-Save pack retains source references and edit metadata in a versioned folder.
-Export → WAV kit renders each layer's trim, gain, balance, and fades into stereo
-32-bit float WAV files with a relative-path bank manifest. WAV kit + originals
-also copies the complete unmodified input files. The exported kit can be moved to
-another machine without the original paths. Glue is a live bus effect and is not
-baked into individual layers. Exports do not change the current pack's Saved state.
-Both formats stage under a pinned output directory and install atomically without
-overwriting existing names. Accepted writes survive navigation and defer close.
+Save pack writes a portable, versioned folder automatically. Edited layers render
+their trim, gain, balance, and fades into stereo 32-bit float WAVs; their complete
+unmodified inputs are copied into originals/. Unedited layers retain one
+byte-identical source copy. The relative-path bank manifest makes the kit movable
+without source paths or symlink support. Bus compression is not baked into layers.
+Saving records the submitted rack snapshot as Saved; later edits remain unsaved.
+Staging retains pinned inputs and output directories and installs atomically
+without overwriting existing versions. Accepted writes survive navigation and
+defer application close. Discard approval survives the backend's final close event.
 
 ## Indexing and filtering
 
-Index folder again inventories the complete tree and reuses classified observations
+File → Re-index folder into sample constellation inventories the complete tree and reuses classified observations
 whose device/inode, size, and nanosecond mtime/ctime still match. New or changed
 files are analyzed; disappeared files leave the next committed snapshot. Progress
 and completion show reused and newly analyzed counts. Legacy rows without precise
 revision keys, and previously unclassified files, are analyzed again. Discovery or
 analysis failures and cancellation retain the prior snapshot.
 
-Duration limits, channel count, category, and filename filtering share one predicate
-for painting, picking, Random, and Neighbor. A maximum duration of zero means no
-upper limit. Filtered stars remain dim for spatial context. Reset filters clears
-all four filter types.
+Duration range, mono-only, category, and filename filtering share one predicate
+for painting, picking, Random, Next unplayed, and the status count. A maximum
+duration of zero internally means no upper limit. Duration endpoints clamp to the
+observed library bounds when folders change. Filtered stars remain dim for context.
 
 ## Verification
 
@@ -199,8 +227,9 @@ velocity override, independent retriggering, choke groups, and linked dynamics.
 Device-free mixer tests check actual output samples without opening hardware.
 
 The private Weston/Niri acceptance scenario exercises indexing, actual star clicks,
-keyboard assignment/retriggering, footer settings, versioned saves, inline browsing,
-and navigation in both appearances. `--hardware-keys` installs the hardware-remap
-fixture and verifies the apostrophe pad's saved assignment. Its audio sink is ALSA
+keyboard assignment/retriggering, duplicate confirmation, pad swaps and mute links,
+Studio return, rack collapse/reopen, output controls, portable versioned saves,
+inline browsing, and quitting after discard in both appearances. `--hardware-keys` installs the hardware-remap
+fixture and verifies remapped logical punctuation during pad assignment. Its audio sink is ALSA
 null. Physical MIDI-controller interoperability, physical ALSA behavior, and
 perceptual compressor quality still require listening with the user's equipment.
