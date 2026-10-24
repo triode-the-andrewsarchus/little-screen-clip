@@ -262,7 +262,7 @@ impl ConstellationState {
     fn render_toolbar(
         &mut self,
         ui: &mut egui::Ui,
-        current_folder: &std::path::Path,
+        _current_folder: &std::path::Path,
         on_play_sample: &mut dyn FnMut(&std::path::Path),
     ) {
         ui.horizontal_wrapped(|ui| {
@@ -316,30 +316,6 @@ impl ConstellationState {
             {
                 self.play_nearest_neighbor(on_play_sample);
             }
-            ui.menu_button("Map", |ui| {
-                if ui
-                    .add_enabled(
-                        self.active_job.is_none(),
-                        egui::Button::new("Index folder again"),
-                    )
-                    .clicked()
-                {
-                    self.start_indexing(current_folder);
-                    ui.close_menu();
-                }
-                if ui.button("Reset pan and zoom").clicked() {
-                    self.pan = Vec2::ZERO;
-                    self.zoom = 1.0;
-                    ui.close_menu();
-                }
-                if ui.button("Saved packs").clicked() {
-                    self.pack_shelf_open = true;
-                    self.browser_open = true;
-                    self.output_editor_open = false;
-                    self.refresh_browser_packs(current_folder);
-                    ui.close_menu();
-                }
-            });
             let query = self.search_query.to_lowercase();
             ui.add(egui::Label::new(egui::RichText::new(format!(
                 "{} / {}",
