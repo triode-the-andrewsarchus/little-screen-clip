@@ -525,7 +525,7 @@ impl ConstellationState {
         relaxed_map: Option<&std::collections::HashMap<&std::path::Path, Pos2>>,
         query_lower: &str,
     ) -> Option<std::path::PathBuf> {
-        if response.drag_started() {
+        if response.drag_started_by(egui::PointerButton::Primary) {
             if let Some(origin) = ui.input(|input| input.pointer.press_origin()) {
                 let nearest = self
                     .samples
@@ -592,7 +592,10 @@ impl ConstellationState {
         let mut hovered_sample: Option<ConstellationSample> = None;
         let mut hovered_pos = Pos2::ZERO;
 
-        let mouse_pos = response.hover_pos().filter(|_| !response.dragged());
+        let mouse_pos = response.hover_pos().filter(|_| {
+            !response.dragged()
+                && !ui.input(|input| input.pointer.button_down(egui::PointerButton::Middle))
+        });
 
         // Allocate a single batched GPU mesh
         let mut star_mesh = egui::Mesh::default();
@@ -717,10 +720,11 @@ impl ConstellationState {
         if let Some(path) = dragged_path {
             self.selected_path = Some(path);
         }
-        if response.dragged()
-            && !egui::DragAndDrop::has_payload_of_type::<crate::file_manager::transfers::FileDrag>(
-                ui.ctx(),
-            )
+        if response.dragged_by(egui::PointerButton::Middle)
+            || (response.dragged_by(egui::PointerButton::Primary)
+                && !egui::DragAndDrop::has_payload_of_type::<
+                    crate::file_manager::transfers::FileDrag,
+                >(ui.ctx()))
         {
             self.pan += response.drag_delta();
         }
