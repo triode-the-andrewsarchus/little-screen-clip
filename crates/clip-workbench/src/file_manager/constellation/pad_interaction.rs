@@ -1,7 +1,45 @@
 //! Pad relationships and gestures, independent of audio decoding.
 use super::ConstellationState;
 
+#[derive(Clone)]
+pub(super) struct PadDrag {
+    pub index: usize,
+    pub generation: u64,
+    pub before: super::sample_pack::PackSlot,
+}
+
 impl ConstellationState {
+    /// Moves complete pad instruments while leaving configured key positions fixed.
+    pub(super) fn swap_pads(&mut self, drag: &PadDrag, target: usize) {
+        if drag.index == target
+            || drag.generation != self.bank_generation
+            || self.pack_bank.slots.get(drag.index) != Some(&drag.before)
+            || target >= self.pack_bank.slots.len()
+        {
+            return;
+        }
+        self.checkpoint_bank(false);
+        let mut rack = self.playback.lock().unwrap();
+        for index in [drag.index, target] {
+            rack.voices[index]
+                .drain(..)
+                .for_each(|player| player.stop());
+        }
+        drop(rack);
+        self.pack_bank.slots.swap(drag.index, target);
+        for index in [drag.index, target] {
+            self.pack_bank.slots[index].key_char = super::sample_pack::SLOT_KEY_CHARS[index];
+        }
+        if self.selected_slot == drag.index {
+            self.selected_slot = target;
+        } else if self.selected_slot == target {
+            self.selected_slot = drag.index;
+        }
+        self.choke_anchor = None;
+        self.bank_generation = self.bank_generation.wrapping_add(1);
+        self.checkpoint_bank(false);
+    }
+
     /// Joins consecutive Shift-right-clicked pads without merging unrelated groups.
     pub(super) fn join_mute_group(&mut self, index: usize) {
         let Some((generation, anchor)) = self.choke_anchor else {
@@ -72,6 +110,38 @@ impl ConstellationState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pad_swap_preserves_instruments_keys_selection_and_rejects_stale_drags() {
+        let mut state = ConstellationState::default();
+        state.pack_bank.slots[0]
+            .samples
+            .push(super::super::sample_pack::SlotSample::new(
+                "hit.wav".into(),
+                "hit.wav".into(),
+                None,
+                1.0,
+            ));
+        state.pack_bank.slots[0].choke_group = 2;
+        let drag = PadDrag {
+            index: 0,
+            generation: state.bank_generation,
+            before: state.pack_bank.slots[0].clone(),
+        };
+        state.swap_pads(&drag, 5);
+        assert_eq!(state.selected_slot, 5);
+        assert_eq!(state.pack_bank.slots[5].choke_group, 2);
+        assert_eq!(state.pack_bank.slots[5].samples.len(), 1);
+        assert_eq!(
+            state.pack_bank.slots[5].key_char,
+            super::super::sample_pack::SLOT_KEY_CHARS[5]
+        );
+        state.swap_pads(&drag, 8);
+        assert!(state.pack_bank.slots[8].samples.is_empty());
+        state.undo_bank(false);
+        assert_eq!(state.pack_bank.slots[0].samples.len(), 1);
+        assert!(state.pack_bank.slots[5].samples.is_empty());
+    }
+
     #[test]
     fn consecutive_links_adopt_existing_groups_and_undo_individually() {
         let mut state = ConstellationState::default();

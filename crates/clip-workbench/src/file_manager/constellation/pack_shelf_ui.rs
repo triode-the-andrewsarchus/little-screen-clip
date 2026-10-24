@@ -202,7 +202,7 @@ impl ConstellationState {
                 for col in 0..4 {
                     let index = row * 4 + col;
                     let slot = &self.pack_bank.slots[index];
-                    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, pad_height), egui::Sense::click());
+                    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, pad_height), egui::Sense::click_and_drag());
                     let unavailable = slot.samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path));
                     let loading = slot.samples.iter().any(|sample| sample.cached_audio.is_none() && !self.failed_audio.contains(&sample.file_path));
                     let flashing = self.slot_flash[index].is_some_and(|time| time.elapsed() < Duration::from_millis(150));
@@ -229,6 +229,17 @@ impl ConstellationState {
                     }
                     if let Some(payload) = response.dnd_release_payload::<crate::file_manager::transfers::FileDrag>() {
                         self.drop_on_pad(index, payload.paths.clone(), ui.input(|input| input.modifiers.shift), None);
+                    }
+                    if response.drag_started() {
+                        egui::DragAndDrop::set_payload(ui.ctx(), super::pad_interaction::PadDrag {
+                            index, generation: self.bank_generation, before: self.pack_bank.slots[index].clone(),
+                        });
+                    }
+                    if response.dnd_hover_payload::<super::pad_interaction::PadDrag>().is_some() {
+                        painter.rect_stroke(rect.shrink(1.0), 4.0, Stroke::new(2.0_f32, visuals.selection.bg_fill));
+                    }
+                    if let Some(drag) = response.dnd_release_payload::<super::pad_interaction::PadDrag>() {
+                        self.swap_pads(&drag, index);
                     }
                     if response.hovered() { hovered = Some(index); }
                     let response = response.on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick: play · Shift+click: add map sample\nHold Shift and right-click consecutive pads to join a mute group. Right-click for pad actions.", index + 1, 36 + index, title));
