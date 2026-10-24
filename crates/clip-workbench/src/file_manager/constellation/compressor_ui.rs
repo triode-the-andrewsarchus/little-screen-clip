@@ -137,6 +137,14 @@ impl ConstellationState {
                         ((6.0 - threshold) / (output - threshold).max(0.1)).clamp(1.0, 12.0);
                 }
             }
+            if response.double_clicked() && !self.pack_bank.compressor_bypass {
+                let defaults = super::sample_pack::SamplePackBank::default();
+                if label == "Threshold" {
+                    self.pack_bank.compressor_threshold_db = defaults.compressor_threshold_db;
+                } else {
+                    self.pack_bank.compressor_ratio = defaults.compressor_ratio;
+                }
+            }
             response.on_hover_text(format!(
                 "Drag to adjust {label}; editable values are below."
             ));
@@ -173,16 +181,28 @@ impl ConstellationState {
         }
         ui.spacing_mut().slider_width = (ui.available_width() - 130.0).clamp(60.0, 160.0);
         ui.add_enabled_ui(!self.pack_bank.compressor_bypass, |ui| {
-            ui.add(
-                egui::Slider::new(&mut self.pack_bank.compressor_threshold_db, -48.0..=0.0)
-                    .text("Threshold")
-                    .suffix(" dB"),
-            );
-            ui.add(
-                egui::Slider::new(&mut self.pack_bank.compressor_ratio, 1.0..=12.0)
-                    .text("Ratio")
-                    .suffix(":1"),
-            );
+            let defaults = super::sample_pack::SamplePackBank::default();
+            for (label, value, range, default, suffix) in [
+                (
+                    "Threshold",
+                    &mut self.pack_bank.compressor_threshold_db,
+                    -48.0..=0.0,
+                    defaults.compressor_threshold_db,
+                    " dB",
+                ),
+                (
+                    "Ratio",
+                    &mut self.pack_bank.compressor_ratio,
+                    1.0..=12.0,
+                    defaults.compressor_ratio,
+                    ":1",
+                ),
+            ] {
+                let response = ui.add(egui::Slider::new(value, range).text(label).suffix(suffix));
+                if crate::shell::studio_controls::slider_double_clicked(ui, &response) {
+                    *value = default;
+                }
+            }
         });
         ui.label(format!(
             "Input {:5.1} dBFS · Output {:5.1} dBFS",
