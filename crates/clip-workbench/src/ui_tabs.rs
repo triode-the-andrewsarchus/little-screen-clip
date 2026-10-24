@@ -35,15 +35,18 @@ impl<'a, T> Tab<'a, T> {
         vertical: bool,
         width: Option<f32>,
         focused: bool,
+        closable: bool,
         palette: &AppPalette,
-    ) -> Response {
+    ) -> (Response, bool) {
         let colors = WorkbenchColors::from_palette(palette);
         let font = TextStyle::Button.resolve(ui.style());
         let galley = ui.fonts(|fonts| {
             fonts.layout_no_wrap(self.label.to_owned(), font.clone(), Color32::WHITE)
         });
         let icon_width = self.icon.map_or(0.0, |_| CONTROL_ICON_SIZE + SPACE_SM);
-        let natural_width = galley.size().x.ceil() + icon_width + 2.0 * BUTTON_PADDING_X + 1.0;
+        let close_width = if closable { 24.0 } else { 0.0 };
+        let natural_width =
+            galley.size().x.ceil() + icon_width + close_width + 2.0 * BUTTON_PADDING_X + 1.0;
         let size = Vec2::new(
             width
                 .unwrap_or(natural_width)
@@ -77,7 +80,8 @@ impl<'a, T> Tab<'a, T> {
             }),
             palette,
         );
-        let text_width = (rect.width() - icon_width - 2.0 * BUTTON_PADDING_X).max(1.0);
+        let text_width =
+            (rect.width() - icon_width - close_width - 2.0 * BUTTON_PADDING_X).max(1.0);
         let galley = if galley.size().x > text_width + 1.0 {
             let mut text_job =
                 egui::text::LayoutJob::simple(self.label.to_owned(), font, foreground, text_width);
@@ -132,7 +136,7 @@ impl<'a, T> Tab<'a, T> {
         let content_x = if vertical {
             rect.left() + BUTTON_PADDING_X
         } else {
-            rect.center().x - (galley.size().x + icon_width) * 0.5
+            rect.center().x - (galley.size().x + icon_width + close_width) * 0.5
         };
         if let Some(icon) = self.icon {
             icon.image_tinted(CONTROL_ICON_SIZE, foreground).paint_at(
@@ -154,7 +158,28 @@ impl<'a, T> Tab<'a, T> {
         if focused && selected {
             painter.rect_stroke(rect.shrink(2.0), rounding, Stroke::new(1.0_f32, foreground));
         }
-        response.on_hover_text(self.label)
+        let close_clicked = if closable {
+            let close_rect =
+                Rect::from_min_max(egui::pos2(rect.right() - close_width, rect.top()), rect.max);
+            let close = ui.interact(close_rect, response.id.with("close"), Sense::click());
+            if close.hovered() {
+                painter.rect_filled(
+                    close_rect.shrink(3.0),
+                    3.0,
+                    ui.visuals().widgets.hovered.weak_bg_fill,
+                );
+            }
+            Icon::Close.image_tinted(12.0, foreground).paint_at(
+                ui,
+                Rect::from_center_size(close_rect.center(), Vec2::splat(12.0)),
+            );
+            close
+                .on_hover_text(format!("Remove {}", self.label))
+                .clicked()
+        } else {
+            false
+        };
+        (response.on_hover_text(self.label), close_clicked)
     }
 }
 
@@ -196,6 +221,17 @@ impl<'a, T: Copy + PartialEq> TabBar<'a, T> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Option<T> {
+        self.show_impl(ui, false).0
+    }
+
+    /// Returns selection and close actions independently, including for inactive tabs.
+    ///
+    /// Closing a tab never selects it. The caller owns removal and the resulting selection.
+    pub fn show_closable(self, ui: &mut Ui) -> (Option<T>, Option<T>) {
+        self.show_impl(ui, true)
+    }
+
+    fn show_impl(self, ui: &mut Ui, closable: bool) -> (Option<T>, Option<T>) {
         ui.push_id(self.id, |ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             let width = if self.vertical {
@@ -217,12 +253,23 @@ impl<'a, T: Copy + PartialEq> TabBar<'a, T> {
             let id = ui.make_persistent_id("tab_focus");
             let focused = ui.memory(|memory| memory.has_focus(id));
             let mut changed = None;
+            let mut closed = None;
             let mut render = |ui: &mut Ui| {
                 for tab in self.tabs {
                     let selected = tab.value == self.selected;
-                    let response =
-                        tab.show(ui, selected, self.vertical, width, focused, self.palette);
-                    if response.clicked() && !selected {
+                    let (response, close_clicked) = tab.show(
+                        ui,
+                        selected,
+                        self.vertical,
+                        width,
+                        focused,
+                        closable,
+                        self.palette,
+                    );
+                    if close_clicked {
+                        closed = Some(tab.value);
+                    }
+                    if response.clicked() && !selected && !close_clicked {
                         changed = Some(tab.value);
                     }
                 }
@@ -256,7 +303,7 @@ impl<'a, T: Copy + PartialEq> TabBar<'a, T> {
                     }
                 }
             }
-            changed
+            (changed, closed)
         })
         .inner
     }
