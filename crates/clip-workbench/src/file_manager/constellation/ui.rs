@@ -622,7 +622,8 @@ impl ConstellationState {
             .filter(|_| !response.dragged() && !suppress_hover);
 
         // Allocate a single batched GPU mesh
-        let mut star_mesh = egui::Mesh::default();
+        let dot = dot_texture(ui.ctx());
+        let mut star_mesh = egui::Mesh::with_texture(dot.id());
         let base_star_radius = map_point_radius(viewport, self.samples.len(), self.zoom);
 
         let mut selected_sample_overlay: Option<(Pos2, Color32)> = None;
@@ -729,7 +730,11 @@ impl ConstellationState {
             let is_filter_dimmed = !self.matches_filters(sample, &query_lower);
             let color = filtered_star_color(base_color, is_category_dimmed, is_filter_dimmed);
 
-            add_star_diamond(&mut star_mesh, Pos2::new(sx, sy), base_star_radius, color);
+            star_mesh.add_rect_with_uv(
+                Rect::from_center_size(Pos2::new(sx, sy), Vec2::splat(base_star_radius * 2.0)),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                color,
+            );
         }
 
         let dragged_path = self.handle_map_drag(
@@ -1288,10 +1293,11 @@ pub(super) fn freq_to_note_str(freq: f32) -> String {
 }
 
 /// One radius for the whole library, independent of local density and dock visibility.
-/// Budget diamond area at fit zoom, then grow naturally with the camera zoom.
+/// Budget disk area at fit zoom, then grow naturally with the camera zoom.
 fn map_point_radius(viewport: Rect, count: usize, zoom: f32) -> f32 {
     let fitted_side = viewport.width().min(viewport.height()) * 0.9;
-    let fit_radius = (fitted_side * fitted_side * 0.12 / (2.0 * count.max(1) as f32))
+    let fit_radius = (fitted_side * fitted_side * 0.12
+        / (std::f32::consts::PI * count.max(1) as f32))
         .sqrt()
         .min(4.0);
     (fit_radius * zoom).clamp(0.35, 8.0)
@@ -1339,37 +1345,23 @@ fn relax_star_positions(points: &mut [Pos2], spacing: f32) {
     }
 }
 
-#[inline]
-fn add_star_diamond(mesh: &mut egui::Mesh, pos: Pos2, r: f32, color: Color32) {
-    let v_start = mesh.vertices.len() as u32;
-    mesh.vertices.push(egui::epaint::Vertex {
-        pos: Pos2::new(pos.x, pos.y - r),
-        uv: egui::epaint::WHITE_UV,
-        color,
-    });
-    mesh.vertices.push(egui::epaint::Vertex {
-        pos: Pos2::new(pos.x + r, pos.y),
-        uv: egui::epaint::WHITE_UV,
-        color,
-    });
-    mesh.vertices.push(egui::epaint::Vertex {
-        pos: Pos2::new(pos.x, pos.y + r),
-        uv: egui::epaint::WHITE_UV,
-        color,
-    });
-    mesh.vertices.push(egui::epaint::Vertex {
-        pos: Pos2::new(pos.x - r, pos.y),
-        uv: egui::epaint::WHITE_UV,
-        color,
-    });
-    mesh.indices.extend_from_slice(&[
-        v_start,
-        v_start + 1,
-        v_start + 2,
-        v_start,
-        v_start + 2,
-        v_start + 3,
-    ]);
+/// Shares one antialiased disk across all points, retaining four vertices per sample.
+fn dot_texture(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::new("constellation_dot_texture");
+    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
+        return texture;
+    }
+    let mut image = egui::ColorImage::new([32, 32], Color32::TRANSPARENT);
+    for y in 0..32 {
+        for x in 0..32 {
+            let distance = Vec2::new(x as f32 - 15.5, y as f32 - 15.5).length();
+            let alpha = ((15.5 - distance).clamp(0.0, 1.0) * 255.0) as u8;
+            image[(x, y)] = Color32::from_white_alpha(alpha);
+        }
+    }
+    let texture = ctx.load_texture("constellation dot", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    texture
 }
 
 #[cfg(test)]
@@ -1768,8 +1760,9 @@ mod tests {
                 assert_eq!(mesh.len(), count * 4);
                 let radii: Vec<_> = mesh
                     .chunks_exact(4)
-                    .map(|vertices| vertices[1].pos.x - vertices[3].pos.x)
+                    .map(|vertices| vertices[1].pos.x - vertices[0].pos.x)
                     .collect();
+                assert!(radii[0] > 0.0);
                 assert!(
                     radii
                         .iter()
