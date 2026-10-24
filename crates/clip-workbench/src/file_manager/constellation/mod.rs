@@ -131,6 +131,7 @@ pub struct ConstellationState {
     pub(crate) pad_drop_targets: Vec<(egui::Rect, usize)>,
     pub(crate) native_drop_results: Vec<(u64, bool)>,
     drop_sequence: u64,
+    duplicate_layers: Option<pad_drop::DuplicateLayers>,
     pub pack_shelf_open: bool,
     pub slot_flash: [Option<Instant>; sample_pack::NUM_SLOTS],
     selected_slot: usize,
@@ -198,6 +199,7 @@ impl Default for ConstellationState {
             pad_drop_targets: Vec::new(),
             native_drop_results: Vec::new(),
             drop_sequence: 0,
+            duplicate_layers: None,
             pack_shelf_open: true,
             slot_flash: [None; sample_pack::NUM_SLOTS],
             selected_slot: 0,
@@ -575,7 +577,15 @@ impl ConstellationState {
         );
         if self.pack_bank.slots[slot_idx].samples.len() < 8 {
             self.failed_audio.remove(&sample.file_path);
-            self.pack_bank.slots[slot_idx].samples.push(slot_sample);
+            self.accept_pad_layers(
+                pad_drop::PreparedDrop {
+                    index: slot_idx,
+                    before: self.pack_bank.slots[slot_idx].clone(),
+                    append: true,
+                    samples: vec![slot_sample],
+                },
+                None,
+            );
         } else {
             self.browser_status = Some((
                 "A slot supports at most eight layers".into(),

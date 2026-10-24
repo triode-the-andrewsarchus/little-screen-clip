@@ -550,6 +550,7 @@ impl eframe::App for FileManagerApp {
         }
         let folder = self.browser.path().to_path_buf();
         self.browser.constellation.render_bank_guard(ctx, &folder);
+        self.browser.constellation.render_duplicate_warning(ctx);
         self.main_content(ctx);
         self.native_start(ctx);
         let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q))

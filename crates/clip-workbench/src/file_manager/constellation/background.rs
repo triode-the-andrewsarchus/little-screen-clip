@@ -277,10 +277,7 @@ impl ConstellationState {
         }
         match (task, output) {
             (Task::Drop(_, _, token), Output::Dropped(drop)) => {
-                let success = self.apply_pad_drop(drop);
-                if let Some(token) = token {
-                    self.native_drop_results.push((token, success));
-                }
+                self.accept_pad_layers(drop, token);
             }
             (Task::Folder(..), Output::Samples(samples)) => {
                 self.samples = samples;

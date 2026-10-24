@@ -8,10 +8,16 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 pub(super) struct PreparedDrop {
-    index: usize,
-    before: PackSlot,
-    append: bool,
-    samples: Vec<SlotSample>,
+    pub(super) index: usize,
+    pub(super) before: PackSlot,
+    pub(super) append: bool,
+    pub(super) samples: Vec<SlotSample>,
+}
+
+pub(super) struct DuplicateLayers {
+    drop: PreparedDrop,
+    token: Option<u64>,
+    generation: u64,
 }
 
 impl ConstellationState {
@@ -71,6 +77,75 @@ impl ConstellationState {
             },
         );
         true
+    }
+
+    /// Defers duplicate assignments until explicit approval, retaining native completion.
+    pub(super) fn accept_pad_layers(&mut self, drop: PreparedDrop, token: Option<u64>) {
+        let mut seen: std::collections::HashSet<_> = if drop.append {
+            drop.before
+                .samples
+                .iter()
+                .map(|sample| sample.file_path.clone())
+                .collect()
+        } else {
+            Default::default()
+        };
+        let duplicate = drop
+            .samples
+            .iter()
+            .any(|sample| !seen.insert(sample.file_path.clone()));
+        if duplicate {
+            if let Some(previous) = self.duplicate_layers.take()
+                && let Some(token) = previous.token
+            {
+                self.native_drop_results.push((token, false));
+            }
+            self.duplicate_layers = Some(DuplicateLayers {
+                drop,
+                token,
+                generation: self.bank_generation,
+            });
+        } else {
+            let success = self.apply_pad_drop(drop);
+            if let Some(token) = token {
+                self.native_drop_results.push((token, success));
+            }
+        }
+    }
+
+    pub(crate) fn render_duplicate_warning(&mut self, ctx: &egui::Context) {
+        let Some(pending) = &self.duplicate_layers else {
+            return;
+        };
+        let mut decision = None;
+        egui::Window::new("Duplicate sample layers")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "Pad {} already contains this sample, or the drop includes it more than once.",
+                    pending.drop.index + 1
+                ));
+                ui.label("Identical layers can increase loudness and reinforce the same sound.");
+                ui.horizontal(|ui| {
+                    if ui.button("Add anyway").clicked() {
+                        decision = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        decision = Some(false);
+                    }
+                });
+            });
+        if let Some(approved) = decision {
+            let pending = self.duplicate_layers.take().unwrap();
+            let success = approved
+                && pending.generation == self.bank_generation
+                && self.apply_pad_drop(pending.drop);
+            if let Some(token) = pending.token {
+                self.native_drop_results.push((token, success));
+            }
+        }
     }
 
     pub(super) fn apply_pad_drop(&mut self, drop: PreparedDrop) -> bool {
