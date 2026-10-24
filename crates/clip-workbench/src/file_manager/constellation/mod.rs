@@ -25,6 +25,7 @@ pub mod generated_model;
 mod history;
 pub mod indexer;
 mod layer_source;
+mod meter_history;
 mod midi;
 mod mixer_controls;
 mod output;
@@ -524,7 +525,8 @@ impl ConstellationState {
         let mut rack = self.playback.lock().unwrap();
         rack.sync(&self.pack_bank);
         if rack.output.is_none() {
-            rack.output = output::PadOutput::new(self.pack_bank.compressor_bypass);
+            rack.output =
+                output::PadOutput::new(self.pack_bank.compressor_bypass, rack.history.clone());
         }
         let output = rack.output.as_ref()?;
         output.set_dynamics(&self.pack_bank);

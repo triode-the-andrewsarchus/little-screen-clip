@@ -45,16 +45,18 @@ impl ConstellationState {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(33));
         }
+        let history = self.playback.lock().unwrap().history.clone();
+        super::meter_history::show(ui, &history);
         let (outer, response) = ui.allocate_exact_size(
             Vec2::new(
                 ui.available_width(),
-                (ui.clip_rect().height() - 250.0)
-                    .clamp(110.0, 260.0)
+                (ui.clip_rect().height() - 330.0)
+                    .clamp(90.0, 220.0)
                     .min(ui.available_width()),
             ),
             egui::Sense::hover(),
         );
-        response.on_hover_text("Stereo linked. Drag the threshold or ratio handle. The curve shows steady compression; the live dot includes attack/release, makeup gain and the safety ceiling. Fixed 5 ms attack, 120 ms release.");
+        response.on_hover_text("Stereo linked. Drag the threshold or ratio handle. The curve shows steady compression; the history shows input, output and actual gain reduction over time. Fixed 5 ms attack, 120 ms release.");
         let plot = Rect::from_min_max(
             outer.min + Vec2::new(36.0, 24.0),
             outer.max - Vec2::new(24.0, 28.0),
@@ -145,13 +147,6 @@ impl ConstellationState {
             egui::FontId::proportional(10.0),
             ui.visuals().text_color(),
         );
-        if levels[0] > -60.0 {
-            painter.circle_filled(
-                point(levels[0].clamp(-48.0, 6.0), levels[1].clamp(-48.0, 6.0)),
-                4.0,
-                Color32::from_rgb(110, 210, 130),
-            );
-        }
         for (handle, label) in [(threshold_point, "Threshold"), (ratio_point, "Ratio")] {
             painter.circle_filled(handle, 5.0, ui.visuals().extreme_bg_color);
             painter.circle_stroke(handle, 6.0, Stroke::new(2.0_f32, accent));

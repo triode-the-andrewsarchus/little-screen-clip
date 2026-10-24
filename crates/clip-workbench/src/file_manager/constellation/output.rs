@@ -45,15 +45,24 @@ pub(super) struct PadOutput {
 }
 
 impl PadOutput {
-    pub fn new(bypass: bool) -> Option<Self> {
-        Some(Self::with_player(
+    pub fn new(bypass: bool, history: Arc<super::meter_history::MeterHistory>) -> Option<Self> {
+        Some(Self::with_player_history(
             crate::ui_ext::new_shared_audio_player()?,
             bypass,
+            history,
         ))
     }
 
     /// Attaches the rack bus to an owned player, retaining the shared device lifetime.
+    #[cfg(test)]
     pub(super) fn with_player(player: Player, bypass: bool) -> Self {
+        Self::with_player_history(player, bypass, Arc::new(Default::default()))
+    }
+    fn with_player_history(
+        player: Player,
+        bypass: bool,
+        history: Arc<super::meter_history::MeterHistory>,
+    ) -> Self {
         let (mixer, source) = rodio::mixer::mixer(2.try_into().unwrap(), RATE.try_into().unwrap());
         // Keep the bus attached while idle between pad hits. Its owner stops and
         // drops it when all voices finish, on navigation, or on Escape.
@@ -63,7 +72,8 @@ impl PadOutput {
         ));
         let bypass = Arc::new(AtomicBool::new(bypass));
         let reduction = Arc::new(AtomicU32::new(0.0_f32.to_bits()));
-        let glue = Glue::new(source, bypass.clone(), reduction.clone());
+        let mut glue = Glue::new(source, bypass.clone(), reduction.clone());
+        glue.history = history;
         let threshold = glue.threshold.clone();
         let exponent = glue.exponent.clone();
         let levels = glue.levels.clone();
@@ -174,6 +184,8 @@ struct Glue<S> {
     right: Option<f32>,
     meter_frames: u16,
     peaks: [f32; 2],
+    history: Arc<super::meter_history::MeterHistory>,
+    meter_reduction: f32,
 }
 
 impl<S> Glue<S> {
@@ -191,6 +203,8 @@ impl<S> Glue<S> {
             right: None,
             meter_frames: 0,
             peaks: [0.0; 2],
+            history: Arc::new(Default::default()),
+            meter_reduction: 0.0,
         }
     }
 
@@ -233,7 +247,19 @@ impl<S> Glue<S> {
         };
         self.peaks[0] = self.peaks[0].max(peak);
         self.peaks[1] = self.peaks[1].max(peak * gain);
+        let reduction = if bypass {
+            0.0
+        } else {
+            (-20.0 * (gain / makeup).max(0.000001).log10()).max(0.0)
+        };
+        self.meter_reduction = self.meter_reduction.max(reduction);
         if self.meter_frames == 0 {
+            self.history.push([
+                20.0 * self.peaks[0].max(0.000001).log10(),
+                20.0 * self.peaks[1].max(0.000001).log10(),
+                self.meter_reduction,
+            ]);
+            self.meter_reduction = 0.0;
             for (level, peak) in self.levels.iter().zip(self.peaks) {
                 level.store(peak.to_bits(), Ordering::Relaxed);
             }
@@ -454,6 +480,7 @@ pub(super) struct Rack {
     pub auditions: Vec<Player>,
     pub map_playing: bool,
     pub show_midi_notes: bool,
+    pub history: Arc<super::meter_history::MeterHistory>,
 }
 impl Default for Rack {
     fn default() -> Self {
@@ -464,6 +491,7 @@ impl Default for Rack {
             auditions: Vec::new(),
             map_playing: false,
             show_midi_notes: false,
+            history: Arc::new(Default::default()),
         }
     }
 }
@@ -514,7 +542,7 @@ impl Rack {
     pub fn audition(&mut self, samples: &[SlotSample]) {
         self.auditions.drain(..).for_each(|player| player.stop());
         if self.output.is_none() {
-            self.output = PadOutput::new(self.bank.compressor_bypass);
+            self.output = PadOutput::new(self.bank.compressor_bypass, self.history.clone());
         }
         if let Some(output) = &self.output {
             output.set_dynamics(&self.bank);
@@ -554,7 +582,7 @@ impl Rack {
             return true;
         }
         if self.output.is_none() {
-            self.output = PadOutput::new(self.bank.compressor_bypass);
+            self.output = PadOutput::new(self.bank.compressor_bypass, self.history.clone());
         }
         let Some(output) = &self.output else {
             return false;
