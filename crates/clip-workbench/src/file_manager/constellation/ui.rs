@@ -285,7 +285,7 @@ impl ConstellationState {
             if ui.add(egui::Button::new("Hover audition").selected(self.hover_to_play)).on_hover_text("Play samples as the pointer passes over them").clicked() {
                 self.hover_to_play = !self.hover_to_play;
             }
-            ui.toggle_value(&mut self.filters_open, "Filters");
+            self.render_audio_filters(ui);
             if ui
                 .add_enabled(!self.samples.is_empty(), egui::Button::new("Random"))
                 .clicked()
@@ -317,11 +317,6 @@ impl ConstellationState {
                 self.play_nearest_neighbor(on_play_sample);
             }
         });
-        if self.filters_open {
-            self.render_audio_filters(ui);
-        } else {
-            self.render_filter_chips(ui);
-        }
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add(
@@ -357,52 +352,6 @@ impl ConstellationState {
             }
         });
         ui.separator();
-    }
-
-    fn render_filter_chips(&mut self, ui: &mut egui::Ui) {
-        if self.min_duration == 0.0 && self.max_duration == 0.0 && self.channel_filter == 0 {
-            return;
-        }
-        ui.horizontal_wrapped(|ui| {
-            for (label, value) in [
-                ("Min", &mut self.min_duration),
-                ("Max", &mut self.max_duration),
-            ] {
-                if *value > 0.0
-                    && ui
-                        .add(
-                            egui::Button::image_and_text(
-                                crate::icons::Icon::Close
-                                    .image_tinted(12.0, ui.visuals().text_color()),
-                                format!("{label} {value:.3} s"),
-                            )
-                            .small(),
-                        )
-                        .clicked()
-                {
-                    *value = 0.0;
-                }
-            }
-            if self.channel_filter != 0 {
-                let label = match self.channel_filter {
-                    1 => "Mono",
-                    2 => "Stereo",
-                    _ => "Multichannel",
-                };
-                if ui
-                    .add(
-                        egui::Button::image_and_text(
-                            crate::icons::Icon::Close.image_tinted(12.0, ui.visuals().text_color()),
-                            label,
-                        )
-                        .small(),
-                    )
-                    .clicked()
-                {
-                    self.channel_filter = 0;
-                }
-            }
-        });
     }
 
     pub(crate) fn sample_count_label(&self) -> String {
@@ -497,33 +446,13 @@ impl ConstellationState {
     }
 
     fn render_audio_filters(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            self.render_duration_range(ui);
-            egui::ComboBox::from_id_source("constellation_channel_filter")
-                .selected_text(match self.channel_filter {
-                    1 => "Mono",
-                    2 => "Stereo",
-                    3 => "Multichannel",
-                    _ => "All channels",
-                })
-                .show_ui(ui, |ui| {
-                    for (value, label) in [
-                        (0, "All channels"),
-                        (1, "Mono"),
-                        (2, "Stereo"),
-                        (3, "Multichannel"),
-                    ] {
-                        ui.selectable_value(&mut self.channel_filter, value, label);
-                    }
-                });
-            if ui.small_button("Reset filters").clicked() {
-                self.min_duration = 0.0;
-                self.max_duration = 0.0;
-                self.channel_filter = 0;
-                self.category_filter = None;
-                self.search_query.clear();
-            }
-        });
+        self.render_duration_range(ui);
+        if ui
+            .add(egui::Button::new("Mono samples only").selected(self.channel_filter == 1))
+            .clicked()
+        {
+            self.channel_filter = if self.channel_filter == 1 { 0 } else { 1 };
+        }
     }
 
     fn render_empty_state(&mut self, ui: &mut egui::Ui, current_folder: &std::path::Path) {
