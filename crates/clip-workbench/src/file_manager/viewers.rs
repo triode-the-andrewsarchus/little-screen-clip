@@ -242,6 +242,18 @@ impl Viewers {
             ui.label(error);
         }
         self.render_session(ui, palette, &mut close);
+        self.poll_audio_return();
+        if self.session.is_none() {
+            close |=
+                ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        }
+        if close {
+            self.request_close();
+        }
+        self.close_confirmation(ui);
+        !self.active()
+    }
+    fn poll_audio_return(&mut self) {
         if self.audio_return_saving
             && let Some(ViewerSession::Audio(state)) = &mut self.session
         {
@@ -253,13 +265,9 @@ impl Viewers {
                 self.confirm_close = true;
             }
         }
-        if self.session.is_none() {
-            close |=
-                ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-        }
-        if close {
-            self.request_close();
-        }
+    }
+
+    fn close_confirmation(&mut self, ui: &mut Ui) {
         if self.confirm_close {
             egui::Window::new("Unsaved edits")
                 .collapsible(false)
@@ -303,8 +311,8 @@ impl Viewers {
                     });
                 });
         }
-        !self.active()
     }
+
     fn render_session(&mut self, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
         if let Some(viewer) = &mut self.session {
             render(viewer, ui, palette, close);

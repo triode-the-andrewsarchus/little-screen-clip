@@ -514,26 +514,8 @@ impl AudioPreviewState {
         }
     }
 
-    pub fn reset_save_filenames(&mut self) {
-        let base_name = self
-            .path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("audio");
-
-        let ext = self
-            .path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_else(|| "wav".to_string());
-        let export_ext = if matches!(ext.as_str(), "wav" | "flac" | "mp3" | "ogg") {
-            ext.as_str()
-        } else {
-            "wav"
-        };
-
-        let slices: Vec<(f32, f32)> = match self.selection_mode {
+    fn export_ranges(&self) -> Vec<(f32, f32)> {
+        match self.selection_mode {
             SelectionMode::Single => {
                 if let Some((s, e)) = self.selection {
                     vec![if s < e { (s, e) } else { (e, s) }]
@@ -553,7 +535,29 @@ impl AudioPreviewState {
                     vec![(0.0, self.duration_sec)]
                 }
             }
+        }
+    }
+
+    pub fn reset_save_filenames(&mut self) {
+        let base_name = self
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("audio");
+
+        let ext = self
+            .path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_else(|| "wav".to_string());
+        let export_ext = if matches!(ext.as_str(), "wav" | "flac" | "mp3" | "ogg") {
+            ext.as_str()
+        } else {
+            "wav"
         };
+
+        let slices = self.export_ranges();
 
         self.save_filenames = slices
             .into_iter()
@@ -641,27 +645,7 @@ impl AudioPreviewState {
         if self.save_job.is_some() {
             return Err("An audio save is already in progress".to_owned());
         }
-        let slices: Vec<(f32, f32)> = match self.selection_mode {
-            SelectionMode::Single => {
-                if let Some((s, e)) = self.selection {
-                    vec![if s < e { (s, e) } else { (e, s) }]
-                } else {
-                    vec![(0.0, self.duration_sec)]
-                }
-            }
-            SelectionMode::Multi => {
-                if !self.multi_selections.is_empty() {
-                    self.multi_selections
-                        .iter()
-                        .map(|&(s, e)| if s < e { (s, e) } else { (e, s) })
-                        .collect()
-                } else if let Some((s, e)) = self.selection {
-                    vec![if s < e { (s, e) } else { (e, s) }]
-                } else {
-                    vec![(0.0, self.duration_sec)]
-                }
-            }
-        };
+        let slices = self.export_ranges();
 
         let mut regions = Vec::with_capacity(slices.len());
         for (i, &(start, end)) in slices.iter().enumerate() {
@@ -1294,32 +1278,7 @@ pub(super) fn save_audio_region(
         .map_err(|error| error.to_string())?;
     if let Some(source) = &plan.file_source {
         source.check()?;
-        let mut staged = staging;
-        let mut installed = false;
-        for version in 0..10_000 {
-            if version > 0 {
-                let name = Path::new(&region.filename);
-                let stem = name.file_stem().unwrap_or_default().to_string_lossy();
-                let extension = name.extension().unwrap_or_default().to_string_lossy();
-                out_path = anchor.join(format!("{stem}-{version}.{extension}"));
-            }
-            match staged.persist_noclobber(&out_path) {
-                Ok(_) => {
-                    installed = true;
-                    break;
-                }
-                Err(error)
-                    if plan.versioned
-                        && error.error.kind() == std::io::ErrorKind::AlreadyExists =>
-                {
-                    staged = error.file;
-                }
-                Err(error) => return Err(error.to_string()),
-            }
-        }
-        if !installed {
-            return Err("No unused edited sample name is available".into());
-        }
+        out_path = install_saved_audio(staging, &anchor, &region.filename, plan.versioned)?;
     } else {
         match little_clip_core::kernel_interface::require_content(&out_path) {
             Ok(()) => {}
@@ -1333,6 +1292,33 @@ pub(super) fn save_audio_region(
     Ok(std::fs::read_link(&anchor)
         .unwrap_or(parent)
         .join(out_path.file_name().ok_or("Missing output name")?))
+}
+
+/// Installs a staged file once, retrying only atomic name collisions for sibling edits.
+fn install_saved_audio(
+    mut staged: tempfile::NamedTempFile,
+    directory: &Path,
+    filename: &str,
+    versioned: bool,
+) -> Result<PathBuf, String> {
+    let name = Path::new(filename);
+    let stem = name.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = name.extension().unwrap_or_default().to_string_lossy();
+    for version in 0..10_000 {
+        let output = directory.join(if version == 0 {
+            filename.to_owned()
+        } else {
+            format!("{stem}-{version}.{extension}")
+        });
+        match staged.persist_noclobber(&output) {
+            Ok(_) => return Ok(output),
+            Err(error) if versioned && error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                staged = error.file;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("No unused edited sample name is available".into())
 }
 
 fn audio_export_command(
