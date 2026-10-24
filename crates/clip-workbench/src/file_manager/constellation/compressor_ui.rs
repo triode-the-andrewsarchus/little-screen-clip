@@ -116,8 +116,8 @@ impl ConstellationState {
             0.0
         };
         let transfer = |input| super::output::compressor_db(input, threshold, ratio, knee) + makeup;
-        let threshold_point = point(threshold, transfer(threshold));
-        let ratio_point = point(6.0, transfer(6.0));
+        let threshold_point = point(threshold, transfer(threshold).clamp(-48.0, 6.0));
+        let ratio_point = point(6.0, transfer(6.0).clamp(-48.0, 6.0));
         let curve = (0..=108)
             .map(|step| {
                 let input = -48.0 + step as f32 * 0.5;

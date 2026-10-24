@@ -396,6 +396,9 @@ impl ConstellationState {
         } else {
             self.max_duration.clamp(low, longest)
         };
+        // Keep the selection representable when a different folder changes the bounds.
+        self.min_duration = if low <= shortest { 0.0 } else { low };
+        self.max_duration = if high >= longest { 0.0 } else { high };
         ui.label("Duration");
         let (rect, response) =
             ui.allocate_exact_size(Vec2::new(160.0, 24.0), Sense::click_and_drag());

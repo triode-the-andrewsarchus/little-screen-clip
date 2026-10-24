@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-/// Renders one WAV per layer and a relative-path bank, optionally collecting originals.
+/// Saves portable layers and a relative-path bank, retaining originals for edited layers.
 ///
 /// Sources and the output directory stay pinned through staging and publication.
 /// Float PCM preserves gain above unity without integer clipping. The bus compressor
@@ -18,34 +18,22 @@ use std::{
 /// # Errors
 /// Returns an error for invalid banks, unavailable/protected or changed sources,
 /// trims beyond decoded audio, RIFF size limits, or staging/installation failures.
-pub(super) fn export(
-    root: &Path,
-    bank: &SamplePackBank,
-    originals: bool,
-) -> Result<PathBuf, String> {
-    install_pack(root, bank, |staged| stage(staged, bank, originals))
+pub(super) fn export(root: &Path, bank: &SamplePackBank) -> Result<PathBuf, String> {
+    install_pack(root, bank, |staged| stage(staged, bank))
 }
 
-fn stage(staged: &Path, bank: &SamplePackBank, originals: bool) -> Result<Vec<File>, String> {
+fn stage(staged: &Path, bank: &SamplePackBank) -> Result<Vec<File>, String> {
     let mut rendered = bank.clone();
     rendered.validate(staged)?;
     let mut sources = Vec::new();
-    if originals {
-        std::fs::create_dir(staged.join("originals")).map_err(|e| e.to_string())?;
-    }
+    std::fs::create_dir(staged.join("originals")).map_err(|e| e.to_string())?;
     for (index, slot) in rendered.slots.iter_mut().enumerate() {
         for (layer, sample) in slot.samples.iter_mut().enumerate() {
             let source = little_clip_core::kernel_interface::open_content(&sample.file_path, true)
                 .map_err(|e| e.to_string())?;
             let view = PathBuf::from(format!("/proc/self/fd/{}", source.as_raw_fd()));
             let identity = crate::file_source::FileSource::capture(&view)?;
-            let unmodified = sample.start_sec == 0.0
-                && sample.end_sec == sample.duration
-                && sample.volume == 1.0
-                && sample.pan == 0.0
-                && sample.attack_ms == 0.0
-                && sample.release_ms == 0.0;
-            let (name, duration) = if originals && unmodified {
+            let (name, duration) = if !sample.has_edits() {
                 let extension = sample
                     .file_path
                     .extension()
@@ -57,9 +45,7 @@ fn stage(staged: &Path, bank: &SamplePackBank, originals: bool) -> Result<Vec<Fi
             } else {
                 let name = format!("pad{:02}_layer{}.wav", index + 1, layer + 1);
                 let duration = render(&source, sample, &staged.join(&name))?;
-                if originals {
-                    collect_original(staged, index, layer, sample, &source)?;
-                }
+                collect_original(staged, index, layer, sample, &source)?;
                 (name, duration)
             };
             identity.check()?;
@@ -184,7 +170,7 @@ mod tests {
             None,
             0.1,
         ));
-        let first = export(root.path(), &bank, true).unwrap();
+        let first = export(root.path(), &bank).unwrap();
         assert_eq!(
             std::fs::read(first.join("pad01_layer1.wav")).unwrap(),
             original
@@ -194,7 +180,7 @@ mod tests {
             0
         );
         bank.slots[0].samples[0].volume = 0.5;
-        let edited = export(root.path(), &bank, true).unwrap();
+        let edited = export(root.path(), &bank).unwrap();
         assert_ne!(first, edited);
         assert_eq!(
             std::fs::read(edited.join("originals/pad01_layer1.wav")).unwrap(),
@@ -222,11 +208,11 @@ mod tests {
         assert!((sample.duration - 16.0 / 48000.0).abs() < 0.000001);
         let mut bank = SamplePackBank::new("Short");
         bank.slots[0].samples.push(sample);
-        let exported = export(root.path(), &bank, false).unwrap();
+        let exported = export(root.path(), &bank).unwrap();
         let decoder =
             rodio::Decoder::try_from(File::open(exported.join("pad01_layer1.wav")).unwrap())
                 .unwrap();
-        assert_eq!(decoder.count(), 32);
+        assert_eq!(decoder.count(), 16);
     }
 
     #[test]
@@ -244,7 +230,7 @@ mod tests {
         layer.end_sec = 0.75;
         layer.volume = 0.5;
         bank.slots[0].samples.push(layer);
-        let path = export(root.path(), &bank, true).unwrap();
+        let path = export(root.path(), &bank).unwrap();
         assert_eq!(
             std::fs::read(path.join("originals/pad01_layer1.wav")).unwrap(),
             original
@@ -252,7 +238,7 @@ mod tests {
         bank.slots[0].samples[0].pan = 1.0;
         bank.slots[0].samples[0].attack_ms = 2.0;
         bank.slots[0].samples[0].release_ms = 2.0;
-        let second = export(root.path(), &bank, false).unwrap();
+        let second = export(root.path(), &bank).unwrap();
         let effects =
             rodio::Decoder::try_from(File::open(second.join("pad01_layer1.wav")).unwrap())
                 .unwrap()
@@ -273,7 +259,7 @@ mod tests {
         let values: Vec<_> = decoder.collect();
         assert_eq!(values.len(), 48000);
         assert!(values.iter().all(|value| (*value - 0.125).abs() < 0.0001));
-        assert!(export(root.path(), &bank, false).is_err());
+        assert!(export(root.path(), &bank).is_err());
         let entries = std::fs::read_dir(super::super::sample_pack::get_sample_packs_root(
             root.path(),
         ))

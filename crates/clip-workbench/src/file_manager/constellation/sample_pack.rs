@@ -161,6 +161,16 @@ impl PartialEq for SlotSample {
 }
 
 impl SlotSample {
+    /// Reports whether rendering changes the source's trim, level, balance or fades.
+    pub(super) fn has_edits(&self) -> bool {
+        self.start_sec != 0.0
+            || self.end_sec != self.duration
+            || self.volume != 1.0
+            || self.pan != 0.0
+            || self.attack_ms != 0.0
+            || self.release_ms != 0.0
+    }
+
     pub fn new(
         file_path: PathBuf,
         filename: String,
@@ -416,7 +426,7 @@ pub fn get_sample_packs_root(constellation_root: &Path) -> PathBuf {
     constellation_root.join(PACKS_DIR_NAME)
 }
 
-/// Stages a complete reference pack and atomically installs it under the sample root.
+/// Stages portable layers with edited originals and installs the pack atomically.
 ///
 /// Keeps validated output-directory and source handles until installation. Existing
 /// names are never overwritten; numbered suffixes retain previous versions. This
@@ -430,7 +440,7 @@ pub fn save_sample_pack(
     constellation_root: &Path,
     bank: &SamplePackBank,
 ) -> Result<PathBuf, String> {
-    super::pack_export::export(constellation_root, bank, true)
+    super::pack_export::export(constellation_root, bank)
 }
 
 /// Shares pinned-directory staging and no-overwrite publication across pack formats.
