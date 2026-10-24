@@ -14,16 +14,7 @@ impl ConstellationState {
         ui.spacing_mut().item_spacing.y = 4.0;
         ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
         ui.horizontal(|ui| {
-            ui.heading("Preview compressor");
-            if let Some(error) = self
-                .midi
-                .as_ref()
-                .and_then(|controller| controller.status().error)
-            {
-                ui.weak("MIDI offline").on_hover_text(error);
-            }
-        });
-        ui.horizontal(|ui| {
+            ui.strong("Compressor");
             if ui
                 .add(
                     egui::Button::new("Bypass")
@@ -34,7 +25,13 @@ impl ConstellationState {
             {
                 self.pack_bank.compressor_bypass = !self.pack_bank.compressor_bypass;
             }
-            ui.weak("Stereo linked");
+            if let Some(error) = self
+                .midi
+                .as_ref()
+                .and_then(|controller| controller.status().error)
+            {
+                ui.weak("MIDI offline").on_hover_text(error);
+            }
         });
         let (levels, reduction, running) = {
             let rack = self.playback.lock().unwrap();
@@ -57,7 +54,7 @@ impl ConstellationState {
             ),
             egui::Sense::hover(),
         );
-        response.on_hover_text("Drag the threshold or ratio handle. The curve shows steady compression; the live dot includes attack/release, makeup gain and the safety ceiling. Fixed 5 ms attack, 120 ms release.");
+        response.on_hover_text("Stereo linked. Drag the threshold or ratio handle. The curve shows steady compression; the live dot includes attack/release, makeup gain and the safety ceiling. Fixed 5 ms attack, 120 ms release.");
         let plot = Rect::from_min_max(
             outer.min + Vec2::new(36.0, 24.0),
             outer.max - Vec2::new(24.0, 28.0),
