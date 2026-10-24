@@ -6,6 +6,7 @@ pub(super) fn metadata(bank: &SamplePackBank) -> SamplePackBank {
     let mut snapshot = bank.clone();
     for sample in snapshot.slots.iter_mut().flat_map(|slot| &mut slot.samples) {
         sample.cached_audio = None;
+        sample.prepared_pitch = None;
     }
     snapshot
 }

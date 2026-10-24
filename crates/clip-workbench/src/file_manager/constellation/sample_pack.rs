@@ -139,6 +139,13 @@ pub struct SlotSample {
     /// Linear fade ending at the trimmed end, in milliseconds (0–500).
     #[serde(default)]
     pub release_ms: f32,
+    /// Layer transposition in semitones, bounded to two octaves in either direction.
+    #[serde(default)]
+    pub pitch_semitones: f32,
+    #[serde(default)]
+    pub pitch_mode: super::pitch::PitchMode,
+    #[serde(skip)]
+    pub(super) prepared_pitch: Option<(u32, Arc<CachedAudio>)>,
     #[serde(skip)]
     pub cached_audio: Option<Arc<CachedAudio>>,
 }
@@ -157,6 +164,8 @@ impl PartialEq for SlotSample {
             && self.pan == other.pan
             && self.attack_ms == other.attack_ms
             && self.release_ms == other.release_ms
+            && self.pitch_semitones == other.pitch_semitones
+            && self.pitch_mode == other.pitch_mode
     }
 }
 
@@ -169,6 +178,7 @@ impl SlotSample {
             || self.pan != 0.0
             || self.attack_ms != 0.0
             || self.release_ms != 0.0
+            || self.pitch_semitones != 0.0
     }
 
     pub fn new(
@@ -189,6 +199,9 @@ impl SlotSample {
             pan: 0.0,
             attack_ms: 0.0,
             release_ms: 0.0,
+            pitch_semitones: 0.0,
+            pitch_mode: Default::default(),
+            prepared_pitch: None,
             cached_audio: None,
         }
     }
@@ -219,6 +232,7 @@ impl SlotSample {
             .start_sec
             .min((self.end_sec - 1.0 / audio.sample_rate as f32).max(0.0));
         self.cached_audio = Some(audio);
+        self.prepared_pitch = None;
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -234,6 +248,8 @@ impl SlotSample {
             || !(-1.0..=1.0).contains(&self.pan)
             || !(0.0..=500.0).contains(&self.attack_ms)
             || !(0.0..=500.0).contains(&self.release_ms)
+            || !self.pitch_semitones.is_finite()
+            || !(-24.0..=24.0).contains(&self.pitch_semitones)
         {
             return Err("Pack contains invalid trim bounds or volume".into());
         }
@@ -593,7 +609,16 @@ pub(super) struct SharedPcm {
 }
 impl SharedPcm {
     pub(super) fn trimmed(sample: &SlotSample) -> Option<Self> {
-        let audio = sample.cached_audio.as_ref()?.clone();
+        if sample.pitch_pending() {
+            return None;
+        }
+        let audio = if sample.pitch_mode == super::pitch::PitchMode::Pitch
+            && sample.pitch_semitones != 0.0
+        {
+            sample.prepared_pitch.as_ref()?.1.clone()
+        } else {
+            sample.cached_audio.as_ref()?.clone()
+        };
         if audio.channels == 0
             || audio.sample_rate == 0
             || !sample.start_sec.is_finite()
@@ -855,6 +880,32 @@ mod tests {
     }
 
     #[test]
+    fn legacy_packs_default_to_retrigger_and_time_preserving_pitch() {
+        let mut bank = SamplePackBank::default();
+        bank.slots[0]
+            .samples
+            .push(SlotSample::new("x.wav".into(), "x.wav".into(), None, 1.0));
+        let mut value = serde_json::to_value(bank).unwrap();
+        value["slots"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("retrigger");
+        for key in ["pitch_semitones", "pitch_mode"] {
+            value["slots"][0]["samples"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+        }
+        let restored: SamplePackBank = serde_json::from_value(value).unwrap();
+        assert!(restored.slots[0].retrigger);
+        assert_eq!(restored.slots[0].samples[0].pitch_semitones, 0.0);
+        assert_eq!(
+            restored.slots[0].samples[0].pitch_mode,
+            super::super::pitch::PitchMode::Pitch
+        );
+    }
+
+    #[test]
     fn test_sample_pack_save_and_load_roundtrip() {
         let temp_dir = std::env::temp_dir().join(format!("pack_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
@@ -877,6 +928,9 @@ mod tests {
             pan: 0.0,
             attack_ms: 0.0,
             release_ms: 0.0,
+            pitch_semitones: 0.0,
+            pitch_mode: Default::default(),
+            prepared_pitch: None,
             cached_audio: None,
         });
 

@@ -1,7 +1,7 @@
 //! Compact drum rack, selected-pad editor, and reference-pack browser.
 
 use super::ConstellationState;
-use egui::{Rect, RichText, Stroke, Vec2};
+use egui::{Rect, Stroke, Vec2};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -479,21 +479,10 @@ impl ConstellationState {
         {
             ui.push_id((index, layer), |ui| {
                 ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    let title_limit = ((ui.available_width() - 180.0) / 8.0).max(12.0) as usize;
-                    ui.label(
-                        RichText::new(super::ui::short_label(&sample.filename, title_limit))
-                            .strong(),
-                    )
-                    .on_hover_text(&sample.filename);
-                    if ui.small_button("Edit in Audio Studio").clicked() {
-                        studio_layer = Some(layer);
-                    }
-                });
                 let width = ui.available_width();
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
-                        Vec2::new(74.0, 164.0),
+                        Vec2::new(96.0, 192.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             super::mixer_controls::mixer(ui, sample, retrigger);
@@ -501,11 +490,18 @@ impl ConstellationState {
                     );
                     let wave = Rect::from_min_size(
                         ui.cursor().min,
-                        Vec2::new((width - 84.0).max(80.0), 164.0),
+                        Vec2::new((width - 106.0).max(80.0), 192.0),
                     );
                     let mut canvas = ui.child_ui(wave, egui::Layout::top_down(egui::Align::Min));
                     canvas.set_clip_rect(ui.clip_rect().intersect(wave));
                     Self::render_layer_waveform(&mut canvas, sample);
+                    if canvas
+                        .small_button("Edit in Audio Studio")
+                        .on_hover_text(&sample.filename)
+                        .clicked()
+                    {
+                        studio_layer = Some(layer);
+                    }
                     ui.allocate_rect(wave, egui::Sense::hover());
                 });
                 ui.separator();

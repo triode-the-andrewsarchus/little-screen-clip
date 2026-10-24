@@ -34,6 +34,7 @@ pub mod pack_shelf_ui;
 mod pad_drop;
 pub(crate) mod pad_interaction;
 mod pad_waveform;
+pub mod pitch;
 pub mod sample_pack;
 pub mod ui;
 
@@ -808,6 +809,14 @@ mod tests {
             }
             assert!((output.next().unwrap() - expected).abs() < 0.00001);
         }
+        state.pack_bank.slots[0].retrigger = false;
+        for expected in [2, 3] {
+            state.trigger_slot_velocity(0, 127);
+            assert_eq!(state.playback.lock().unwrap().voices[0].len(), expected);
+        }
+        state.pack_bank.slots[0].retrigger = true;
+        state.trigger_slot_velocity(0, 127);
+        assert_eq!(state.playback.lock().unwrap().voices[0].len(), 1);
     }
 
     #[test]

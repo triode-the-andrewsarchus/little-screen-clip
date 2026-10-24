@@ -1757,7 +1757,7 @@ mod tests {
     }
 
     #[test]
-    fn sound_controls_and_filename_tabs_remain_visible_at_every_editor_width() {
+    fn mixer_controls_and_filename_tabs_remain_visible_at_every_editor_width() {
         use super::super::sample_pack::SlotSample;
         for appearance in [
             little_clip_core::config::WorkbenchAppearance::Dark,
@@ -1783,7 +1783,7 @@ mod tests {
             ] {
                 render_frame(&ctx, &mut state, &palette, size);
                 let output = render_frame(&ctx, &mut state, &palette, size);
-                for wanted in ["kick.wav", "Sound", "Gain", "Pan", "Attack", "Release"] {
+                for wanted in ["kick.wav", "Gain", "Pan", "Pitch", "A", "R"] {
                     assert!(
                         output.shapes.iter().any(|shape| match &shape.shape {
                             egui::Shape::Text(text) if text.galley.text() == wanted => {

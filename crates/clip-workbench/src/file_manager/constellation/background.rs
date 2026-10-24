@@ -9,6 +9,7 @@ pub(super) enum Task {
     List(PathBuf, u64),
     Bank(PathBuf, bool, u64),
     Audio(PathBuf, u64),
+    Pitch(PathBuf, u64, u32),
     Drop(u64, u64, Option<u64>),
     Save,
     Delete,
@@ -51,6 +52,19 @@ impl Task {
                         .browser_selected_idx
                         .and_then(|index| state.browser_packs.get(index))
                         .is_some_and(|pack| pack.folder_path == *path)
+            }
+            Self::Pitch(path, generation, key) => {
+                *generation == state.bank_generation
+                    && state
+                        .pack_bank
+                        .slots
+                        .iter()
+                        .flat_map(|slot| &slot.samples)
+                        .any(|sample| {
+                            sample.file_path == *path
+                                && sample.pitch_pending()
+                                && sample.pitch_semitones.to_bits() == *key
+                        })
             }
             Self::Bank(_, true, generation) | Self::Audio(_, generation) => {
                 *generation == state.bank_generation
@@ -311,6 +325,25 @@ impl ConstellationState {
                 }
                 self.history.prepared(&self.pack_bank, was_clean);
             }
+            (Task::Pitch(path, _, key), Output::Audio(decoded)) => {
+                for sample in self
+                    .pack_bank
+                    .slots
+                    .iter_mut()
+                    .flat_map(|slot| &mut slot.samples)
+                {
+                    if sample.file_path == path
+                        && sample.pitch_semitones.to_bits() == key
+                        && sample
+                            .cached_audio
+                            .as_ref()
+                            .zip(decoded.cached_audio.as_ref())
+                            .is_some_and(|(a, b)| Arc::ptr_eq(a, b))
+                    {
+                        sample.prepared_pitch = decoded.prepared_pitch.clone();
+                    }
+                }
+            }
             (Task::Save, Output::Saved(path)) => {
                 if let Some(snapshot) = self.pending_saved_bank.take() {
                     self.history.saved(snapshot);
@@ -336,13 +369,66 @@ impl ConstellationState {
         }
     }
 
+    /// Uses the same PCM budget for decoding and prepared pitch copies.
+    fn admit_pcm_prepare(&mut self) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let used: usize = std::iter::once(&self.pack_bank)
+            .chain(self.browser_preview.iter().map(|(_, bank)| bank))
+            .flat_map(|bank| &bank.slots)
+            .flat_map(|slot| &slot.samples)
+            .flat_map(|sample| {
+                [
+                    sample.cached_audio.as_ref(),
+                    sample.prepared_pitch.as_ref().map(|(_, audio)| audio),
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .filter(|audio| seen.insert(Arc::as_ptr(audio)))
+            .map(|audio| audio.byte_len())
+            .sum();
+        if used > 112 * 1024 * 1024 {
+            self.browser_status = Some((
+                "PCM memory limit reached; remove layers to load more samples".into(),
+                Instant::now(),
+            ));
+            return false;
+        }
+        true
+    }
+
     pub(super) fn queue_audio_loads(&mut self) {
         // One submitted decode at a time bounds allocation and keeps mutations responsive.
         if self
             .background
             .iter()
-            .any(|job| matches!(job.task, Task::Audio(..)))
+            .any(|job| matches!(job.task, Task::Audio(..) | Task::Pitch(..)))
         {
+            return;
+        }
+        if let Some(sample) = self
+            .pack_bank
+            .slots
+            .iter()
+            .flat_map(|slot| &slot.samples)
+            .find(|sample| sample.cached_audio.is_some() && sample.pitch_pending())
+            .cloned()
+        {
+            if !self.admit_pcm_prepare() {
+                return;
+            }
+            self.submit_background(
+                Task::Pitch(
+                    sample.file_path.clone(),
+                    self.bank_generation,
+                    sample.pitch_semitones.to_bits(),
+                ),
+                move || {
+                    let mut sample = sample.clone();
+                    sample.prepare_pitch()?;
+                    Ok(Output::Audio(sample))
+                },
+            );
             return;
         }
         let next = std::iter::once(&self.pack_bank)
@@ -354,20 +440,7 @@ impl ConstellationState {
             })
             .cloned();
         if let Some(sample) = next {
-            let mut seen = std::collections::HashSet::new();
-            let used: usize = std::iter::once(&self.pack_bank)
-                .chain(self.browser_preview.iter().map(|(_, bank)| bank))
-                .flat_map(|bank| &bank.slots)
-                .flat_map(|slot| &slot.samples)
-                .filter_map(|sample| sample.cached_audio.as_ref())
-                .filter(|audio| seen.insert(Arc::as_ptr(audio)))
-                .map(|audio| audio.byte_len())
-                .sum();
-            if used > 112 * 1024 * 1024 {
-                self.browser_status = Some((
-                    "PCM memory limit reached; remove layers to load more samples".into(),
-                    Instant::now(),
-                ));
+            if !self.admit_pcm_prepare() {
                 return;
             }
             let path = sample.file_path.clone();

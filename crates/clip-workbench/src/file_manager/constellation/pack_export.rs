@@ -58,6 +58,9 @@ fn stage(staged: &Path, bank: &SamplePackBank) -> Result<Vec<File>, String> {
             sample.pan = 0.0;
             sample.attack_ms = 0.0;
             sample.release_ms = 0.0;
+            sample.pitch_semitones = 0.0;
+            sample.pitch_mode = Default::default();
+            sample.prepared_pitch = None;
             sample.cached_audio = None;
         }
     }
@@ -108,17 +111,45 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
     let start = (sample.start_sec as f64 * rate as f64).round() as u64;
     let end = (sample.end_sec as f64 * rate as f64).round() as u64;
     let frames = end.saturating_sub(start);
-    let bytes = frames
-        .checked_mul(2 * 4)
+    let expected_frames = (frames as f64 / sample.speed() as f64).ceil() as u64;
+    expected_frames
+        .checked_mul(8)
         .filter(|bytes| *bytes <= u32::MAX as u64 - 128)
-        .ok_or("WAV layer exceeds RIFF size limit")? as u32;
+        .ok_or("WAV layer exceeds RIFF size limit")?;
     if frames == 0 {
         return Err("Trim contains no complete audio frames".into());
     }
-    decoder
-        .try_seek(Duration::from_secs_f64(start as f64 / rate as f64))
-        .map_err(|e| e.to_string())?;
-    let mut decoder = super::layer_source::LayerSource::new(decoder, sample, frames as usize);
+    let input: Box<dyn Source<Item = f32> + Send> = if sample.pitch_semitones != 0.0 {
+        // Match preview's bounded preparation, using this same pinned input.
+        let limit = (rate as usize * 15 * channels as usize).min(2_000_000);
+        let values: Vec<_> = decoder.by_ref().take(limit).collect();
+        let mut prepared = sample.clone();
+        prepared.cached_audio = Some(std::sync::Arc::new(super::sample_pack::CachedAudio {
+            channels,
+            sample_rate: rate,
+            samples: std::sync::Arc::new(values),
+            mono_samples: std::sync::Arc::new(vec![]),
+            waveform_peaks: vec![],
+            waveform_colors: vec![],
+        }));
+        prepared.prepared_pitch = None;
+        prepared.prepare_pitch()?;
+        Box::new(
+            super::sample_pack::SharedPcm::trimmed(&prepared).ok_or("Pitch source is not ready")?,
+        )
+    } else {
+        decoder
+            .try_seek(Duration::from_secs_f64(start as f64 / rate as f64))
+            .map_err(|e| e.to_string())?;
+        Box::new(decoder)
+    };
+    let layer =
+        super::layer_source::LayerSource::new(input, sample, frames as usize).speed(sample.speed());
+    let mut rendered = rodio::source::UniformSourceIterator::new(
+        layer,
+        2.try_into().unwrap(),
+        rate.try_into().unwrap(),
+    );
     let file = File::create(target).map_err(|e| e.to_string())?;
     let mut writer = hound::WavWriter::new(
         BufWriter::new(&file),
@@ -130,23 +161,96 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
         },
     )
     .map_err(|e| e.to_string())?;
-    for _ in 0..bytes / 4 {
-        let value = decoder
-            .next()
-            .ok_or("Source is shorter than the saved trim")?;
+    let mut written = 0_u64;
+    for value in &mut rendered {
+        if written >= (u32::MAX as u64 - 128) / 4 {
+            return Err("WAV layer exceeds RIFF size limit".into());
+        }
         if !value.is_finite() {
             return Err("Non-finite source sample".into());
         }
         writer.write_sample(value).map_err(|e| e.to_string())?;
+        written += 1;
+    }
+    if (written / 2).abs_diff(expected_frames) > 2 || written == 0 {
+        return Err("Source is shorter than the saved trim".into());
     }
     writer.finalize().map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;
-    Ok(frames as f32 / rate as f32)
+    Ok(written as f32 / 2.0 / rate as f32)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pitch_and_speed_exports_match_preview_timing_and_reset_rendered_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("tone.wav");
+        let mut wav = hound::WavWriter::create(
+            &path,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate: 48000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            },
+        )
+        .unwrap();
+        for i in 0..24000 {
+            wav.write_sample(
+                ((std::f32::consts::TAU * 440.0 * i as f32 / 48000.0).sin() * 8000.0) as i16,
+            )
+            .unwrap();
+        }
+        wav.finalize().unwrap();
+        for mode in [
+            super::super::pitch::PitchMode::Pitch,
+            super::super::pitch::PitchMode::Time,
+        ] {
+            let mut bank = SamplePackBank::default();
+            let mut sample = SlotSample::new(path.clone(), "tone.wav".into(), None, 0.5);
+            sample.pitch_semitones = 12.0;
+            sample.pitch_mode = mode;
+            sample.ensure_audio_loaded();
+            sample.prepare_pitch().unwrap();
+            let pcm = super::super::sample_pack::SharedPcm::trimmed(&sample).unwrap();
+            let live = super::super::layer_source::LayerSource::new(pcm, &sample, 24000)
+                .speed(sample.speed());
+            let expected: Vec<_> = rodio::source::UniformSourceIterator::new(
+                live,
+                2.try_into().unwrap(),
+                48000.try_into().unwrap(),
+            )
+            .collect();
+            bank.slots[0].samples.push(sample);
+            let saved = export(root.path(), &bank).unwrap();
+            let manifest = super::super::sample_pack::load_sample_pack(&saved).unwrap();
+            let rendered = &manifest.slots[0].samples[0];
+            assert_eq!(rendered.pitch_semitones, 0.0);
+            assert_eq!(rendered.pitch_mode, super::super::pitch::PitchMode::Pitch);
+            let samples: Vec<_> = hound::WavReader::open(&rendered.file_path)
+                .unwrap()
+                .samples::<f32>()
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(samples.len(), expected.len());
+            assert!(
+                samples
+                    .iter()
+                    .zip(expected)
+                    .all(|(a, b)| (*a - b).abs() < 0.0001)
+            );
+            let duration = if mode == super::super::pitch::PitchMode::Pitch {
+                0.5
+            } else {
+                0.25
+            };
+            assert!((rendered.duration - duration).abs() < 0.0001);
+            assert!(saved.join("originals/pad01_layer1.wav").is_file());
+        }
+    }
 
     #[test]
     fn automatic_pack_save_copies_unedited_layers_once_and_keeps_edited_originals() {

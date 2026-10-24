@@ -159,7 +159,11 @@ impl PadOutput {
         let frames = source.size_hint().0 / source.channels().get() as usize;
         let source = super::layer_source::LayerSource::new(source, sample, frames);
         let player = Player::connect_new(&self.mixer);
-        player.append(source.amplify(velocity.min(127) as f32 / 127.0 * HEADROOM));
+        player.append(
+            source
+                .speed(sample.speed())
+                .amplify(velocity.min(127) as f32 / 127.0 * HEADROOM),
+        );
         Some(player)
     }
 }
@@ -505,6 +509,12 @@ impl Rack {
             .zip(bank.slots.iter().flat_map(|slot| &slot.samples))
             .any(|(a, b)| {
                 a.cached_audio.as_ref().map(Arc::as_ptr) != b.cached_audio.as_ref().map(Arc::as_ptr)
+                    || a.prepared_pitch
+                        .as_ref()
+                        .map(|(_, audio)| Arc::as_ptr(audio))
+                        != b.prepared_pitch
+                            .as_ref()
+                            .map(|(_, audio)| Arc::as_ptr(audio))
             });
         if self.bank != *bank || cache_changed {
             self.bank = bank.clone();
