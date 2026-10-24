@@ -585,155 +585,98 @@ impl ConstellationState {
             f32::MAX
         };
 
-        // Dynamic spatial anti-overlap push when zoomed in
+        // Only the last four wheel steps adjust collisions. Keep the original
+        // projection everywhere else, without building a spatial index per frame.
         let push_factor = spacing_strength(self.zoom);
-        let mut relaxed_map: Option<std::collections::HashMap<&std::path::Path, Pos2>> = None;
-
-        if push_factor > 0.0 {
-            // Zoomed-in path: collect visible candidates and apply spatial repulsion
-            let margin = 50.0_f32;
-            let cull_min_x = viewport.left() - margin;
-            let cull_max_x = viewport.right() + margin;
-            let cull_min_y = viewport.top() - margin;
-            let cull_max_y = viewport.bottom() + margin;
-
-            struct VisStar<'a> {
-                sample: &'a ConstellationSample,
-                pos: Pos2,
-                is_dimmed: bool,
-            }
-
-            let mut vis_stars: Vec<VisStar> = Vec::with_capacity(2048);
-
-            for sample in &self.samples {
-                let is_dimmed = if let Some(cat) = self.category_filter {
-                    sample.category != cat
-                } else {
-                    false
-                };
-
-                let sx = center.x + sample.x * view_scale;
-                let sy = center.y - sample.y * view_scale;
-
-                if sx >= cull_min_x && sx <= cull_max_x && sy >= cull_min_y && sy <= cull_max_y {
-                    vis_stars.push(VisStar {
-                        sample,
-                        pos: Pos2::new(sx, sy),
-                        is_dimmed,
-                    });
-                }
-            }
-
-            // Spatial relaxation on visible stars
-            let n_vis = vis_stars.len();
-            if n_vis > 0 {
-                let min_dist = (base_star_radius * 2.2).max(7.5) * push_factor;
-                let mut positions: Vec<_> = vis_stars.iter().map(|star| star.pos).collect();
-                relax_star_positions(&mut positions, min_dist);
-                let disp: Vec<_> = positions
-                    .iter()
-                    .zip(&vis_stars)
-                    .map(|(position, star)| *position - star.pos)
-                    .collect();
-
-                let mut map = std::collections::HashMap::with_capacity(n_vis);
-
-                // Apply displacements to visible stars and render
-                for (idx, star) in vis_stars.iter_mut().enumerate() {
-                    star.pos += disp[idx];
-                    map.insert(star.sample.file_path.as_path(), star.pos);
-
-                    let is_selected = self.selected_path.as_ref() == Some(&star.sample.file_path);
-                    let base_color = star.sample.category.color();
-
-                    if is_selected {
-                        selected_sample_overlay = Some((star.pos, base_color));
-                    }
-
-                    // Check hover directly against screen position (only non-dimmed samples participate in hover)
-                    if self.matches_filters(star.sample, &query_lower) {
-                        if let Some(mp) = mouse_pos {
-                            let dx = star.pos.x - mp.x;
-                            let dy = star.pos.y - mp.y;
-                            let d2 = dx * dx + dy * dy;
-                            if d2 < closest_hover_dist_sq {
-                                closest_hover_dist_sq = d2;
-                                hovered_sample = Some(star.sample.clone());
-                                hovered_pos = star.pos;
-                            }
-                        }
-                    }
-
-                    if is_selected {
-                        continue;
-                    }
-
-                    // Frustum check for actual render
-                    if !rect.contains(star.pos) {
-                        continue;
-                    }
-
-                    let is_filter_dimmed = !self.matches_filters(star.sample, &query_lower);
-
-                    let color = filtered_star_color(base_color, star.is_dimmed, is_filter_dimmed);
-
-                    add_star_diamond(&mut star_mesh, star.pos, base_star_radius, color);
-                }
-
-                relaxed_map = Some(map);
-            }
+        let relaxed_map = if push_factor > 0.0 {
+            let visible: Vec<_> = self
+                .samples
+                .iter()
+                .filter_map(|sample| {
+                    let pos = Pos2::new(
+                        center.x + sample.x * view_scale,
+                        center.y - sample.y * view_scale,
+                    );
+                    viewport
+                        .expand(64.0)
+                        .contains(pos)
+                        .then_some((sample.file_path.as_path(), pos))
+                })
+                .collect();
+            let mut positions: Vec<_> = visible.iter().map(|(_, pos)| *pos).collect();
+            relax_star_positions(
+                &mut positions,
+                (base_star_radius * 2.2).max(7.5) * push_factor,
+            );
+            Some(
+                visible
+                    .into_iter()
+                    .map(|(path, _)| path)
+                    .zip(positions)
+                    .collect::<std::collections::HashMap<_, _>>(),
+            )
         } else {
-            // High-level zoom path: direct projection with sub-pixel density capping for maximum FPS
-            let rect_min_x = rect.left() - base_star_radius;
-            let rect_max_x = rect.right() + base_star_radius;
-            let rect_min_y = rect.top() - base_star_radius;
-            let rect_max_y = rect.bottom() + base_star_radius;
+            None
+        };
 
-            for sample in &self.samples {
-                let is_category_dimmed = if let Some(cat) = self.category_filter {
-                    sample.category != cat
-                } else {
-                    false
-                };
+        // One rendering and hit-testing path at every zoom level.
+        let rect_min_x = rect.left() - base_star_radius;
+        let rect_max_x = rect.right() + base_star_radius;
+        let rect_min_y = rect.top() - base_star_radius;
+        let rect_max_y = rect.bottom() + base_star_radius;
 
-                let sx = center.x + sample.x * view_scale;
-                let sy = center.y - sample.y * view_scale;
+        for sample in &self.samples {
+            let is_category_dimmed = if let Some(cat) = self.category_filter {
+                sample.category != cat
+            } else {
+                false
+            };
 
-                // Frustum cull
-                if sx < rect_min_x || sx > rect_max_x || sy < rect_min_y || sy > rect_max_y {
-                    continue;
-                }
+            let projected = Pos2::new(
+                center.x + sample.x * view_scale,
+                center.y - sample.y * view_scale,
+            );
+            let pos = relaxed_map
+                .as_ref()
+                .and_then(|positions| positions.get(sample.file_path.as_path()))
+                .copied()
+                .unwrap_or(projected);
+            let (sx, sy) = (pos.x, pos.y);
 
-                let is_selected = self.selected_path.as_ref() == Some(&sample.file_path);
-                let base_color = sample.category.color();
+            // Frustum cull
+            if sx < rect_min_x || sx > rect_max_x || sy < rect_min_y || sy > rect_max_y {
+                continue;
+            }
 
-                if is_selected {
-                    selected_sample_overlay = Some((Pos2::new(sx, sy), base_color));
-                }
+            let is_selected = self.selected_path.as_ref() == Some(&sample.file_path);
+            let base_color = sample.category.color();
 
-                // Check hover directly against screen position (only non-dimmed samples participate in hover)
-                if self.matches_filters(sample, &query_lower) {
-                    if let Some(mp) = mouse_pos {
-                        let dx = sx - mp.x;
-                        let dy = sy - mp.y;
-                        let d2 = dx * dx + dy * dy;
-                        if d2 < closest_hover_dist_sq {
-                            closest_hover_dist_sq = d2;
-                            hovered_sample = Some(sample.clone());
-                            hovered_pos = Pos2::new(sx, sy);
-                        }
+            if is_selected {
+                selected_sample_overlay = Some((Pos2::new(sx, sy), base_color));
+            }
+
+            // Check hover directly against screen position (only non-dimmed samples participate in hover)
+            if self.matches_filters(sample, &query_lower) {
+                if let Some(mp) = mouse_pos {
+                    let dx = sx - mp.x;
+                    let dy = sy - mp.y;
+                    let d2 = dx * dx + dy * dy;
+                    if d2 < closest_hover_dist_sq {
+                        closest_hover_dist_sq = d2;
+                        hovered_sample = Some(sample.clone());
+                        hovered_pos = Pos2::new(sx, sy);
                     }
                 }
-
-                if is_selected {
-                    continue;
-                }
-
-                let is_filter_dimmed = !self.matches_filters(sample, &query_lower);
-                let color = filtered_star_color(base_color, is_category_dimmed, is_filter_dimmed);
-
-                add_star_diamond(&mut star_mesh, Pos2::new(sx, sy), base_star_radius, color);
             }
+
+            if is_selected {
+                continue;
+            }
+
+            let is_filter_dimmed = !self.matches_filters(sample, &query_lower);
+            let color = filtered_star_color(base_color, is_category_dimmed, is_filter_dimmed);
+
+            add_star_diamond(&mut star_mesh, Pos2::new(sx, sy), base_star_radius, color);
         }
 
         let dragged_path = self.handle_map_drag(
