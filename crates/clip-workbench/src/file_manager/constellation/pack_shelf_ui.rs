@@ -497,14 +497,11 @@ impl ConstellationState {
             ui.weak("Select a sample on the map, then Add selected or Shift+click a pad.");
         }
         let mut remove = None;
-        let mut audition = None;
         let mut studio_layer = None;
         // One layer at a time keeps the waveform and controls at a predictable height.
         let layer_id = ui.id().with(("edited_layer", index));
-        let mut selected_layer = ui
-            .data(|data| data.get_temp::<usize>(layer_id))
-            .unwrap_or(0)
-            .min(slot.samples.len().saturating_sub(1));
+        let mut selected_layer =
+            self.selected_layers[index].min(slot.samples.len().saturating_sub(1));
         if slot.samples.len() > 1 {
             use crate::ui_tabs::{Tab, TabBar};
             let labels: Vec<_> = (0..slot.samples.len())
@@ -518,7 +515,7 @@ impl ConstellationState {
             if let Some(layer) = TabBar::new(layer_id, selected_layer, &tabs, palette).show(ui) {
                 selected_layer = layer;
             }
-            ui.data_mut(|data| data.insert_temp(layer_id, selected_layer));
+            self.selected_layers[index] = selected_layer;
         }
         for (layer, sample) in slot
             .samples
@@ -535,9 +532,6 @@ impl ConstellationState {
                             .strong(),
                     )
                     .on_hover_text(&sample.filename);
-                    if ui.small_button("Play").clicked() {
-                        audition = Some(sample.clone());
-                    }
                     ui.menu_button("Layer actions", |ui| {
                         if ui.button("Edit in Audio Studio").clicked() {
                             studio_layer = Some(layer);
@@ -574,9 +568,6 @@ impl ConstellationState {
         }
         if let Some(layer) = remove {
             slot.samples.remove(layer);
-        }
-        if let Some(sample) = audition {
-            self.audition_layers(&[sample]);
         }
         if let Some(layer) = studio_layer {
             self.request_pad_studio(index, layer);
@@ -767,7 +758,6 @@ impl ConstellationState {
                 self.delete_bank(summary.folder_path.clone());
             }
         });
-        let mut audition = None;
         egui::ScrollArea::vertical()
             .id_source("saved_pack_preview")
             .min_scrolled_height(0.0)

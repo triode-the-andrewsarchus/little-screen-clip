@@ -1168,6 +1168,17 @@ impl ConstellationState {
         if self.browser_open {
             return None;
         }
+        if !advance && self.pack_shelf_open && self.pad_editor_open && !self.output_editor_open {
+            let layers = &self.pack_bank.slots[self.selected_slot].samples;
+            if let Some(sample) = layers
+                .get(self.selected_layers[self.selected_slot].min(layers.len().saturating_sub(1)))
+                .cloned()
+            {
+                self.stop_playback();
+                self.audition_layers(&[sample]);
+                return None;
+            }
+        }
         if advance {
             let mut next = None;
             self.play_nearest_neighbor(&mut |path| next = Some(path.to_path_buf()));
