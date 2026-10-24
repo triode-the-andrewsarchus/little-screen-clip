@@ -31,10 +31,20 @@ impl FileManager {
         } else {
             BrowserView::List
         };
-        let view = self
-            .location()
-            .and_then(|l| l.manual_view)
-            .unwrap_or(automatic);
+        if self.view == BrowserView::Constellation {
+            self.constellation
+                .check_and_load_folder(&self.path().to_path_buf());
+        }
+        let keep_constellation = self.view == BrowserView::Constellation
+            && (!self.audio_entries.is_empty()
+                || self.constellation.folder_has_audio != Some(false));
+        let view = if keep_constellation {
+            BrowserView::Constellation
+        } else {
+            self.location()
+                .and_then(|l| l.manual_view)
+                .unwrap_or(automatic)
+        };
         if self.view != view {
             if matches!(view, BrowserView::List | BrowserView::Videos) {
                 self.stop_previews();

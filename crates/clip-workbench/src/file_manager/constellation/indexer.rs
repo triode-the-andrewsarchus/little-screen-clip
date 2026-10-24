@@ -96,7 +96,7 @@ fn index_snapshot(
     cancelled: &AtomicBool,
     sender: &mpsc::Sender<IndexProgress>,
 ) -> Result<(Vec<ConstellationSample>, usize, usize), String> {
-    let paths = discover_audio_paths(folder, cancelled, sender)?;
+    let paths = discover_audio_paths(folder, cancelled, sender, false)?;
     let cached: HashMap<_, _> = db
         .load_samples(folder)?
         .into_iter()
@@ -110,11 +110,20 @@ fn index_snapshot(
     Ok((samples, reused, paths.len() - reused))
 }
 
+/// Checks recursive audio presence without decoding, stopping at the first ordinary audio file.
+///
+/// Uses the indexer's guarded traversal and cancellation; errors never prove absence.
+pub(super) fn folder_has_audio(folder: &Path, cancelled: &AtomicBool) -> Result<bool, String> {
+    let (sender, _) = mpsc::channel();
+    discover_audio_paths(folder, cancelled, &sender, true).map(|paths| !paths.is_empty())
+}
+
 /// Inventories ordinary directories once per filesystem identity, excluding hidden/pack trees.
 fn discover_audio_paths(
     folder: &Path,
     cancelled: &AtomicBool,
     sender: &mpsc::Sender<IndexProgress>,
+    stop_after_first: bool,
 ) -> Result<Vec<PathBuf>, String> {
     use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
     let mut paths = Vec::new();
@@ -155,6 +164,9 @@ fn discover_audio_paths(
                 directories.push_back(target);
             } else if kind.is_file() && is_audio_file(&target) {
                 paths.push(target);
+                if stop_after_first {
+                    return Ok(paths);
+                }
                 if paths.len() % 50 == 0 {
                     let _ = sender.send(IndexProgress::Scanning {
                         files_found: paths.len(),
@@ -430,20 +442,44 @@ mod tests {
         std::fs::write(packs.join("linked.wav"), []).unwrap();
         std::os::unix::fs::symlink(root.path(), child.join("cycle")).unwrap();
         let (sender, _) = mpsc::channel();
-        let paths = discover_audio_paths(root.path(), &AtomicBool::new(false), &sender).unwrap();
+        let paths =
+            discover_audio_paths(root.path(), &AtomicBool::new(false), &sender, false).unwrap();
         assert_eq!(
             paths,
             vec![root.path().join("kick.wav"), child.join("snare.WAV")]
         );
-        assert!(discover_audio_paths(root.path(), &AtomicBool::new(true), &sender).is_err());
+        assert!(discover_audio_paths(root.path(), &AtomicBool::new(true), &sender, false).is_err());
         assert!(
             discover_audio_paths(
                 &root.path().join("kick.wav"),
                 &AtomicBool::new(false),
-                &sender
+                &sender,
+                false,
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn recursive_audio_presence_excludes_generated_hidden_and_symlink_content() {
+        let root = tempfile::tempdir().unwrap();
+        let cancelled = AtomicBool::new(false);
+        assert!(!folder_has_audio(root.path(), &cancelled).unwrap());
+        for folder in [".hidden", super::super::sample_pack::PACKS_DIR_NAME] {
+            let path = root.path().join(folder);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("ignored.wav"), []).unwrap();
+        }
+        let external = tempfile::tempdir().unwrap();
+        std::fs::write(external.path().join("external.wav"), []).unwrap();
+        std::os::unix::fs::symlink(external.path(), root.path().join("alias")).unwrap();
+        assert!(!folder_has_audio(root.path(), &cancelled).unwrap());
+        let nested = root.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("hit.WAV"), []).unwrap();
+        assert!(folder_has_audio(root.path(), &cancelled).unwrap());
+        cancelled.store(true, Ordering::Relaxed);
+        assert!(folder_has_audio(root.path(), &cancelled).is_err());
     }
 
     #[test]

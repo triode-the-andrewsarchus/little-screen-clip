@@ -442,6 +442,12 @@ impl FileManager {
         self.shelf.tick();
         self.bookmarks.tick(jobs);
         self.constellation.tick();
+        if self.view == BrowserView::Constellation
+            && self.constellation.folder_has_audio == Some(false)
+            && self.audio_entries.is_empty()
+        {
+            self.activate_media_view();
+        }
         if let Some(text) = self.bookmarks.report.take() {
             self.set_status(Icon::Alert, text.clone(), true);
             self.edits.report = Some(edits::EditReport { text, failed: true });

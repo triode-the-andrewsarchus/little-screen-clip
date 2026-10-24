@@ -280,6 +280,62 @@ fn music_threshold_uses_visible_regular_files_and_manual_history_choices_survive
 }
 
 #[test]
+fn constellation_stays_selected_across_audio_folders_and_falls_back_after_empty_scan() {
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first");
+    let second = root.path().join("second");
+    let empty = root.path().join("empty");
+    for path in [&first, &second, &empty] {
+        std::fs::create_dir(path).unwrap();
+    }
+    std::fs::write(first.join("one.wav"), []).unwrap();
+    let nested = second.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("two.wav"), []).unwrap();
+    let (mut manager, jobs) = loaded(&first);
+    manager.set_view(BrowserView::Constellation);
+    manager.navigate(second.clone(), Navigation::New);
+    finish(&mut manager, &jobs);
+    assert_eq!(
+        manager.view,
+        BrowserView::Constellation,
+        "stay in map while recursive check is pending"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while manager.constellation.folder_has_audio.is_none() {
+        manager.tick(&jobs);
+        assert!(
+            Instant::now() < deadline,
+            "recursive audio check did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(manager.constellation.folder_has_audio, Some(true));
+    assert_eq!(manager.view, BrowserView::Constellation);
+    manager.navigate(empty, Navigation::New);
+    finish(&mut manager, &jobs);
+    while manager.view == BrowserView::Constellation {
+        manager.tick(&jobs);
+        assert!(
+            Instant::now() < deadline,
+            "empty folder did not leave automatic constellation view"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(manager.view, BrowserView::List);
+    manager.navigate(second, Navigation::New);
+    finish(&mut manager, &jobs);
+    manager.set_view(BrowserView::List);
+    manager.refresh();
+    finish(&mut manager, &jobs);
+    assert_eq!(
+        manager.view,
+        BrowserView::List,
+        "explicit mode changes still take precedence"
+    );
+}
+
+#[test]
 fn address_round_trips_unicode_control_backslash_and_invalid_bytes() {
     for bytes in [
         b"/tmp/a\\b\n\xff".to_vec(),

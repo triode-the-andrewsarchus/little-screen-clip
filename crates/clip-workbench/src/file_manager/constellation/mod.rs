@@ -98,6 +98,8 @@ pub struct HoverPreviewRequest {
 pub struct ConstellationState {
     pub samples: Vec<ConstellationSample>,
     pub current_indexed_folder: Option<PathBuf>,
+    pub(super) folder_has_audio: Option<bool>,
+    folder_scan_cancelled: Arc<AtomicBool>,
     pub category_filter: Option<SampleCategory>,
     min_duration: f32,
     max_duration: f32,
@@ -170,6 +172,8 @@ impl Default for ConstellationState {
         Self {
             samples: Vec::new(),
             current_indexed_folder: None,
+            folder_has_audio: None,
+            folder_scan_cancelled: Arc::new(AtomicBool::new(false)),
             category_filter: None,
             min_duration: 0.0,
             max_duration: 0.0,
@@ -329,6 +333,10 @@ impl ConstellationState {
         }
 
         self.current_indexed_folder = Some(folder.to_path_buf());
+        self.folder_has_audio = None;
+        self.folder_scan_cancelled.store(true, Ordering::Relaxed);
+        self.folder_scan_cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled = self.folder_scan_cancelled.clone();
         self.selected_path = None;
         self.pending_map_reveal = None;
         self.last_hovered_path = None;
@@ -346,9 +354,10 @@ impl ConstellationState {
         self.submit_background(
             background::Task::Folder(path.clone(), self.folder_generation),
             move || {
-                ConstellationDb::new()?
-                    .load_samples(&path)
-                    .map(background::Output::Samples)
+                let samples = ConstellationDb::new()?.load_samples(&path)?;
+                let has_audio =
+                    !samples.is_empty() || indexer::folder_has_audio(&path, &cancelled)?;
+                Ok(background::Output::Samples(samples, Some(has_audio)))
             },
         );
     }
@@ -729,6 +738,7 @@ impl Drop for ConstellationState {
     fn drop(&mut self) {
         self.cancel_indexing();
         self.stop_playback();
+        self.folder_scan_cancelled.store(true, Ordering::Relaxed);
         for job in &self.background {
             job.cancel_read();
         }
