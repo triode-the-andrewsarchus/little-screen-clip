@@ -18,17 +18,41 @@ pub(crate) struct StudioRequest {
 }
 
 impl ConstellationState {
+    pub(super) fn mute_group_hint(&self, hovered: Option<usize>) -> String {
+        if self.choke_anchor.is_some() {
+            "Keep Shift held · right-click pads to join · release to finish".to_owned()
+        } else if let Some(index) =
+            hovered.filter(|index| self.pack_bank.slots[*index].choke_group != 0)
+        {
+            let group = self.pack_bank.slots[index].choke_group;
+            let keys: Vec<_> = self
+                .pack_bank
+                .slots
+                .iter()
+                .enumerate()
+                .filter(|(_, slot)| slot.choke_group == group)
+                .map(|(index, _)| self.pad_keys[index].to_ascii_uppercase().to_string())
+                .collect();
+            format!("Mute group {group} · {} · Alt: details", keys.join(" "))
+        } else {
+            "Shift + right-click pads to link a mute group".to_owned()
+        }
+    }
+
     pub(super) fn handle_pad_response(
         &mut self,
         ui: &mut egui::Ui,
         index: usize,
         response: &egui::Response,
-        title: String,
+        title: Option<String>,
     ) {
         let rect = response.rect;
         let painter = ui.painter();
         let visuals = ui.visuals().clone();
-        if let Some(payload) =
+        // egui 0.27 consumes even a mismatched payload in take_payload.
+        if egui::DragAndDrop::has_payload_of_type::<crate::file_manager::transfers::FileDrag>(
+            ui.ctx(),
+        ) && let Some(payload) =
             response.dnd_release_payload::<crate::file_manager::transfers::FileDrag>()
         {
             self.drop_on_pad(
@@ -55,11 +79,17 @@ impl ConstellationState {
                 egui::Stroke::new(2.0_f32, visuals.selection.bg_fill),
             );
         }
-        if let Some(drag) = response.dnd_release_payload::<PadDrag>() {
+        if egui::DragAndDrop::has_payload_of_type::<PadDrag>(ui.ctx())
+            && let Some(drag) = response.dnd_release_payload::<PadDrag>()
+        {
             self.swap_pads(&drag, index);
         }
 
-        let response = response.clone().on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick: play · Double-click: Audio Studio · Shift+click: add map sample\nHold Shift and right-click consecutive pads to join a mute group. Right-click for pad actions.", index + 1, 36 + index, title));
+        let response = if let Some(title) = title {
+            response.clone().on_hover_text(title)
+        } else {
+            response.clone()
+        };
         if response.secondary_clicked() && ui.input(|input| input.modifiers.shift) {
             self.join_mute_group(index);
         }
@@ -196,7 +226,7 @@ impl ConstellationState {
     }
 
     pub(super) fn paint_mute_links(&self, ui: &egui::Ui, hovered: Option<usize>) {
-        let active = hovered.or(self.choke_anchor.map(|(_, index)| index));
+        let active = self.choke_anchor.map(|(_, index)| index).or(hovered);
         let Some(index) = active else {
             return;
         };
@@ -227,6 +257,63 @@ impl ConstellationState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn state_with_hit() -> ConstellationState {
+        let mut state = ConstellationState::default();
+        state.pack_bank.slots[0]
+            .samples
+            .push(super::super::sample_pack::SlotSample::new(
+                "hit.wav".into(),
+                "hit.wav".into(),
+                None,
+                1.0,
+            ));
+        state
+    }
+    #[test]
+    fn pad_release_is_not_consumed_by_the_file_drop_handler() {
+        let ctx = egui::Context::default();
+        let mut state = state_with_hit();
+        let drag = PadDrag {
+            index: 0,
+            generation: state.bank_generation,
+            before: state.pack_bank.slots[0].clone(),
+        };
+        let pos = egui::pos2(50.0, 50.0);
+        for pressed in [true, false] {
+            if !pressed {
+                egui::DragAndDrop::set_payload(&ctx, drag.clone());
+            }
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 400.0),
+                    )),
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let (_, response) =
+                            ui.allocate_exact_size(egui::vec2(100.0, 100.0), egui::Sense::hover());
+                        state.handle_pad_response(ui, 5, &response, None);
+                    });
+                },
+            );
+        }
+        assert!(state.pack_bank.slots[0].samples.is_empty());
+        assert_eq!(state.pack_bank.slots[5].samples.len(), 1);
+    }
+
     #[test]
     fn studio_return_replaces_one_layer_and_rejects_changed_targets() {
         let mut state = ConstellationState::default();
@@ -254,15 +341,7 @@ mod tests {
 
     #[test]
     fn pad_swap_preserves_instruments_keys_selection_and_rejects_stale_drags() {
-        let mut state = ConstellationState::default();
-        state.pack_bank.slots[0]
-            .samples
-            .push(super::super::sample_pack::SlotSample::new(
-                "hit.wav".into(),
-                "hit.wav".into(),
-                None,
-                1.0,
-            ));
+        let mut state = state_with_hit();
         state.pack_bank.slots[0].choke_group = 2;
         let drag = PadDrag {
             index: 0,

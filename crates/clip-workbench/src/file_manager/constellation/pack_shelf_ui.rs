@@ -299,7 +299,13 @@ impl ConstellationState {
                         if response.hovered() {
                             hovered = Some(index);
                         }
-                        let title = Self::pad_tooltip(slot, unavailable, loading, playing[index]);
+                        let title = self.pad_tooltip(
+                            index,
+                            unavailable,
+                            loading,
+                            playing[index],
+                            ui.input(|input| input.modifiers.alt),
+                        );
                         self.handle_pad_response(ui, index, &response, title);
                     }
                 });
@@ -309,11 +315,7 @@ impl ConstellationState {
             }
         });
         self.paint_mute_links(ui, hovered);
-        ui.weak(if self.choke_anchor.is_some() {
-            "Keep Shift held · right-click pads to join · release to finish"
-        } else {
-            "Shift + right-click pads to link a mute group"
-        });
+        ui.weak(self.mute_group_hint(hovered));
     }
 
     /// Keeps transient readiness and explicit pad flags out of the assignment logic.
@@ -359,11 +361,26 @@ impl ConstellationState {
     }
 
     fn pad_tooltip(
-        slot: &super::sample_pack::PackSlot,
+        &self,
+        index: usize,
         unavailable: bool,
         loading: bool,
         playing: bool,
-    ) -> String {
+        detailed: bool,
+    ) -> Option<String> {
+        let slot = &self.pack_bank.slots[index];
+        if !detailed {
+            return (slot.choke_group == 0).then(|| {
+                format!(
+                    "{} · MIDI {}\n{}\nDouble-click: edit · Shift+right-click: link · Alt: details",
+                    self.pad_keys[index].to_ascii_uppercase(),
+                    36 + index,
+                    slot.samples
+                        .first()
+                        .map_or("Empty pad", |sample| sample.filename.as_str())
+                )
+            });
+        }
         let mut title = slot.display_title();
         if unavailable {
             title.push_str("\nSome sources are unavailable or could not be decoded.");
@@ -378,7 +395,7 @@ impl ConstellationState {
             title.push_str(&format!("\nChoke group {}", slot.choke_group));
         }
 
-        title
+        Some(title)
     }
 
     pub(super) fn assign_selected_to_pad(&mut self, index: usize) {
@@ -512,8 +529,12 @@ impl ConstellationState {
             ui.push_id((index, layer), |ui| {
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(super::ui::short_label(&sample.filename, 22)).strong())
-                        .on_hover_text(&sample.filename);
+                    let title_limit = ((ui.available_width() - 180.0) / 8.0).max(12.0) as usize;
+                    ui.label(
+                        RichText::new(super::ui::short_label(&sample.filename, title_limit))
+                            .strong(),
+                    )
+                    .on_hover_text(&sample.filename);
                     if ui.small_button("Play").clicked() {
                         audition = Some(sample.clone());
                     }
