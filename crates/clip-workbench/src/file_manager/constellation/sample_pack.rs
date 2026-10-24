@@ -312,7 +312,7 @@ pub struct PackSlot {
     /// Zero disables choking; pads in the same group (1–8) cut each other off.
     #[serde(default)]
     pub choke_group: u8,
-    /// Higher values protect active hits from lower-priority peers; equal values use the latest hit.
+    /// Low (0), Medium (1), or High (2); equal priorities use the latest hit.
     #[serde(default)]
     pub choke_priority: u8,
     #[serde(default)]
@@ -339,6 +339,14 @@ impl PackSlot {
             mute: false,
             solo: false,
             retrigger: true,
+        }
+    }
+
+    pub(super) fn choke_priority_label(&self) -> &'static str {
+        match self.choke_priority {
+            0 => "Low",
+            1 => "Medium",
+            _ => "High",
         }
     }
 
@@ -443,6 +451,8 @@ impl SamplePackBank {
             if slot.choke_group > 8 || slot.choke_priority > 7 {
                 return Err("Choke groups must be 0–8 and priorities 0–7".into());
             }
+            // Migrate the short-lived numeric 0–7 priority format to three levels.
+            slot.choke_priority = slot.choke_priority.min(2);
             if slot.samples.len() > 8 {
                 return Err("A slot supports at most eight layers".into());
             }
@@ -468,6 +478,7 @@ impl SamplePackBank {
         for slot in &mut self.slots {
             if slot.choke_group != 0 && members[slot.choke_group as usize] < 2 {
                 slot.choke_group = 0;
+                slot.choke_priority = 0;
             }
         }
     }
@@ -910,7 +921,7 @@ mod tests {
         assert!(copy.validate(Path::new("/samples")).is_err());
         copy.compressor_ratio = 6.0;
         assert_eq!(copy.slots[15].choke_group, 8);
-        assert_eq!(copy.slots[15].choke_priority, 7);
+        assert_eq!(copy.slots[15].choke_priority, 2);
         copy.slots[15].choke_group = 9;
         assert!(copy.validate(Path::new("/samples")).is_err());
     }

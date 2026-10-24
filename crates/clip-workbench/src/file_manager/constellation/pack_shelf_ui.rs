@@ -354,7 +354,7 @@ impl ConstellationState {
             painter.text(
                 rect.right_top() + Vec2::new(-6.0, 6.0),
                 egui::Align2::RIGHT_TOP,
-                format!("G{}", slot.choke_group),
+                format!("G{} {}", slot.choke_group, slot.choke_priority_label()),
                 egui::FontId::monospace(9.0),
                 visuals.weak_text_color(),
             );
@@ -414,8 +414,9 @@ impl ConstellationState {
         }
         if slot.choke_group != 0 {
             title.push_str(&format!(
-                "\nChoke group {} · priority {} (higher wins; ties: latest hit)",
-                slot.choke_group, slot.choke_priority
+                "\nChoke group {} · priority {} (ties: latest hit)",
+                slot.choke_group,
+                slot.choke_priority_label()
             ));
         }
 
@@ -537,9 +538,13 @@ impl ConstellationState {
             ui.label(if group == 0 { "Mute group: none".into() } else { format!("Mute group {group}") })
                 .on_hover_text("Latest hit wins at equal priority. A ringing higher-priority pad blocks lower-priority hits. Shift+right-click pads to link; hover to see partners.");
             if group != 0 {
-                ui.add(egui::DragValue::new(&mut self.pack_bank.slots[index].choke_priority)
-                    .clamp_range(0..=7).prefix("Priority "))
-                    .on_hover_text("Higher numbers win while ringing. Equal priority: latest hit wins. Muted, solo-gated and finished hits do not block peers.");
+                ui.label("Priority");
+                for (priority, label) in [(2, "High"), (1, "Medium"), (0, "Low")] {
+                    if super::ui::outlined_toggle(ui, label, self.pack_bank.slots[index].choke_priority == priority, ui.visuals().hyperlink_color)
+                        .on_hover_text("A ringing higher-priority pad blocks lower-priority hits. Equal priority: latest hit wins.").clicked() {
+                        self.pack_bank.slots[index].choke_priority = priority;
+                    }
+                }
             }
             ui.menu_button("Pad actions", |ui| {
                 if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add map sample")).clicked() { self.assign_selected_to_pad(index); ui.close_menu(); }

@@ -610,6 +610,7 @@ impl ConstellationState {
         if slot_idx < self.pack_bank.slots.len() {
             self.pack_bank.slots[slot_idx].samples.clear();
             self.pack_bank.slots[slot_idx].choke_group = 0;
+            self.pack_bank.slots[slot_idx].choke_priority = 0;
             self.pack_bank.prune_mute_groups();
             for player in self.playback.lock().unwrap().voices[slot_idx].drain(..) {
                 player.stop();

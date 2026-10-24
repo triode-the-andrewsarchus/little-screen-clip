@@ -31,7 +31,13 @@ impl ConstellationState {
                 .iter()
                 .enumerate()
                 .filter(|(_, slot)| slot.choke_group == group)
-                .map(|(index, _)| self.pad_keys[index].to_ascii_uppercase().to_string())
+                .map(|(index, slot)| {
+                    format!(
+                        "{}: {}",
+                        self.pad_keys[index].to_ascii_uppercase(),
+                        slot.choke_priority_label()
+                    )
+                })
                 .collect();
             format!(
                 "Mute group {group} · {} · higher priority wins, ties: latest hit · Alt: details",
@@ -240,6 +246,18 @@ impl ConstellationState {
         };
         if let Some(group) = group {
             self.checkpoint_bank(false);
+            if anchor_group == 0 && target_group == 0 {
+                self.pack_bank.slots[anchor].choke_priority = 2; // First: High.
+                self.pack_bank.slots[index].choke_priority = 1; // Second: Medium.
+            } else {
+                // Joining an existing group must preserve its manually edited priorities.
+                if anchor_group != group {
+                    self.pack_bank.slots[anchor].choke_priority = 0;
+                }
+                if target_group != group {
+                    self.pack_bank.slots[index].choke_priority = 0;
+                }
+            }
             self.pack_bank.slots[anchor].choke_group = group;
             self.pack_bank.slots[index].choke_group = group;
             self.pack_bank.prune_mute_groups();
@@ -255,6 +273,7 @@ impl ConstellationState {
     pub(super) fn leave_mute_group(&mut self, index: usize) {
         self.checkpoint_bank(false);
         self.pack_bank.slots[index].choke_group = 0;
+        self.pack_bank.slots[index].choke_priority = 0;
         self.pack_bank.prune_mute_groups();
         self.checkpoint_bank(false);
     }
@@ -443,6 +462,28 @@ mod tests {
         state.undo_bank(false);
         assert_eq!(state.pack_bank.slots[0].samples.len(), 1);
         assert!(state.pack_bank.slots[5].samples.is_empty());
+    }
+
+    #[test]
+    fn group_creation_assigns_click_order_priorities_and_preserves_later_edits() {
+        let mut state = ConstellationState::default();
+        for index in [5, 2, 9, 0] {
+            state.join_mute_group(index);
+        }
+        assert_eq!(state.pack_bank.slots[5].choke_priority_label(), "High");
+        assert_eq!(state.pack_bank.slots[2].choke_priority_label(), "Medium");
+        assert_eq!(state.pack_bank.slots[9].choke_priority_label(), "Low");
+        assert_eq!(state.pack_bank.slots[0].choke_priority_label(), "Low");
+        state.pack_bank.slots[5].choke_priority = 0;
+        state.pack_bank.slots[9].choke_priority = 2;
+        state.join_mute_group(2); // Re-clicking an existing member preserves manual settings.
+        assert_eq!(state.pack_bank.slots[5].choke_priority, 0);
+        assert_eq!(state.pack_bank.slots[9].choke_priority, 2);
+        state.choke_anchor = None;
+        state.join_mute_group(7);
+        state.join_mute_group(9); // Add to an existing group in reverse click order.
+        assert_eq!(state.pack_bank.slots[7].choke_priority_label(), "Low");
+        assert_eq!(state.pack_bank.slots[9].choke_priority_label(), "High");
     }
 
     #[test]
