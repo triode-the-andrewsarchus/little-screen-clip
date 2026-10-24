@@ -49,6 +49,18 @@ impl ConstellationState {
             self.close_pack_browser();
         }
         self.handle_shelf_keyboard_shortcuts(ui.ctx());
+        let text_focused = ui
+            .ctx()
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
+        if !text_focused
+            && !self.focus_search
+            && !self.browser_open
+            && !self.pad_keys.contains(&'n')
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::N))
+        {
+            self.play_nearest_neighbor(on_play_sample);
+        }
         let notes = self
             .midi
             .as_ref()
