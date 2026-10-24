@@ -5,13 +5,14 @@ Its default scale fits the observed coordinate extent, including samples outside
 the unit square. Category colors identify samples, rather than tinting the panels.
 Indexing uses the same themed progress-bar treatment as Image Studio depth work.
 
-Rack and Packs are tabs in the right panel. Packs never opens a floating browser.
+Rack, Packs, and Output are tabs in the existing-width right panel. Packs stays inline.
 Selecting a pad exposes its layer editor below the map; resize or hide that editor
 to reveal more of the map. Docks obscure the full map canvas without moving or
 rescaling its points, including at zoom levels with point relaxation. The editor
 shows one layer at a time, with layer tabs for layered pads. The footer holds
 MIDI input, velocity override, and shared output dynamics. The Editor toggle sits
-beside Undo/Redo. Pad heights adapt to keep all sixteen visible in a compact rack.
+beside Undo/Redo. Pads become square when height permits and compact vertically in
+small windows. The sidebar retains its existing default and width limits.
 
 ## Keyboard configuration
 
@@ -75,9 +76,14 @@ anything. Positive velocities scale layer gain; Override velocity forces 127.
 Mouse and keyboard hits already use 127. Repeated hits replace that pad's previous
 voices; different pads can ring together.
 
-Choose Choke: 1–8 in the selected pad editor to put pads into a shared choke group.
+Hold Shift and right-click a pad to start a mute-group chain. Right-click further
+pads while keeping Shift held to join them. The chain adopts the first existing
+group it encounters or chooses an unused group (up to eight). Release Shift or
+press Escape to finish. Hover a grouped pad to see red links to its partners;
+G1–G8 mark membership. The hint names the linked keys; hold Alt for detailed pad
+information without covering those links during ordinary hover. Right-click → Leave mute group removes one member.
 Triggering a grouped pad stops its own old voices and the other pads in that group.
-Choke: Off allows unrelated pads to overlap. Navigation, Escape, studio entry, and
+Ungrouped pads overlap independently. Navigation, Escape, studio entry, and
 application close stop previews; queued MIDI hits from earlier view epochs cannot
 restart them. The MIDI connection stays selected while its note delivery is gated.
 
@@ -95,7 +101,10 @@ Defaults preserve the previous subtle behavior: about -1.4 dBFS (0.85 linear),
 and raise the ratio for more audible compression. A linked peak
 ceiling at 0.98 catches transient overloads. A normal full-scale single layer at
 default gain stays below the compressor threshold. Layered or boosted samples can
-engage it. The footer shows gain reduction.
+engage it. The footer shows gain reduction and opens Output. That tab provides a
+transfer curve with draggable threshold and ratio handles, editable sliders, input
+and output peak meters, and gain reduction. The live dot includes attack/release
+and the safety ceiling; the static line shows the compressor characteristic.
 
 Bypass disables compression and the ceiling while keeping input headroom unchanged.
 A 1:1 ratio retains only the peak ceiling. Threshold, ratio, choke groups, velocity
@@ -110,18 +119,47 @@ A pad holds up to eight layers. Drops collect references, never move the source.
 Worker decoding must succeed for every dropped sample before assignment, and a
 pad edited during that load rejects its stale completion. Unavailable sources show
 a compact error dot and offer Retry audio; loading and playing have transient cues.
-Choke labels appear only for nonzero groups.
+Group labels appear only for nonzero groups. Drag a pad onto another pad to swap
+complete instruments, including layers, mute/solo and group membership. Keyboard
+and MIDI bindings stay at their grid positions. Swaps stop affected voices, reject
+stale drags, and participate in Undo.
 
 The frequency-colored waveform shares the app's bass/mid/treble crossover. Drag
 IN or OUT to trim, or double-click the waveform to reset its range. Handles are
 inset from the edges; any overflow scrollbar occupies a separate gutter. Audio
-preparation computes up to 512 waveform buckets off the UI thread.
+preparation computes up to 16,384 waveform buckets off the UI thread, and their
+storage counts toward the existing cache budget. The canvas reduces these to the
+actual displayed columns. Wheel zooms around the pointer; Shift+wheel pans. Fit
+and Fit selection use Audio Studio's viewport model and time ruler. Tick spacing
+also accounts for available width; envelope guides use the playback fade model.
 
+Wide editors put waveform/trim and Sound in separate columns. Narrow editors use
+a compact two-column parameter grid. Gain is a dB fader with a silent lower stop;
+pan shows Center/L/R. Attack/release sliders have finer logarithmic control near
+zero; values remain editable, and double-click resets controls to neutral.
 The selected pad exposes numeric trim, gain, stereo balance, and linear attack and
 release fades (0–500 ms). Mute and Solo gate active pad voices without restarting
 them. Layer changes affect subsequent hits. Fades follow the trimmed boundaries;
 overlapping fades use the lower envelope. Center balance preserves existing stereo
 level; mono is duplicated before balance. These settings also apply to exports.
+
+Double-click a populated pad to open its first layer in Audio Studio with the pad's
+trim selected. Layer actions → Edit in Audio Studio opens the selected layer.
+Returning offers Save copy and replace pad, Keep editing, or Return without
+replacing. Saves use the existing guarded audio export worker and publish a new
+`name.edited.wav` beside the original; collisions become `name.edited-1.wav`, etc.
+Publication is atomic and never overwrites an existing sibling. The grid changes
+only after successful publication, and only if the originating bank/layer still
+matches. Other layers and pad gain/pan/fades remain intact; the new file starts with
+full-range trim. Failed or stale handoffs retain the saved file and prior pad.
+
+Filters expands inline; active duration/channel chips can be cleared directly.
+Zero maximum duration is displayed as Any duration. Category labels use CH, OH,
+and Bass. Pack Actions contains export options and Clear rack.
+
+Every visible sample gets a mesh marker. Local screen density reduces marker size
+in crowded areas; it never caps or drops points. Sparse folders retain larger
+markers. Empty searches avoid per-sample lowercase allocation on the render path.
 
 Undo/Redo keep 32 metadata snapshots and coalesce pointer gestures/text editing.
 Ctrl+Z undoes, Ctrl+Y or Ctrl+Shift+Z redoes; text editors retain their own undo.
