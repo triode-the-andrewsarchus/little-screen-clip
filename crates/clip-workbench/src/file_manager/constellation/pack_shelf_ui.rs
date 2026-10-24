@@ -393,7 +393,7 @@ impl ConstellationState {
         if !detailed {
             return (slot.choke_group == 0).then(|| {
                 format!(
-                    "{} · MIDI {}\n{}\nDouble-click: edit · Shift+right-click: link · Alt: details",
+                    "{} · MIDI {}\n{}\nClick: reveal next layer · Shift+right-click: link · Alt: details",
                     self.pad_keys[index].to_ascii_uppercase(),
                     36 + index,
                     slot.samples

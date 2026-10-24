@@ -140,6 +140,8 @@ pub struct ConstellationState {
     pub slot_flash: [Option<Instant>; sample_pack::NUM_SLOTS],
     selected_slot: usize,
     selected_layers: [usize; sample_pack::NUM_SLOTS],
+    pad_click_layers: [usize; sample_pack::NUM_SLOTS],
+    pending_map_reveal: Option<PathBuf>,
     choke_anchor: Option<(u64, usize)>,
     pub(crate) studio_request: Option<pad_interaction::StudioRequest>,
     pad_editor_open: bool,
@@ -208,6 +210,8 @@ impl Default for ConstellationState {
             slot_flash: [None; sample_pack::NUM_SLOTS],
             selected_slot: 0,
             selected_layers: [0; sample_pack::NUM_SLOTS],
+            pad_click_layers: [0; sample_pack::NUM_SLOTS],
+            pending_map_reveal: None,
             choke_anchor: None,
             studio_request: None,
             pad_editor_open: true,
@@ -326,6 +330,7 @@ impl ConstellationState {
 
         self.current_indexed_folder = Some(folder.to_path_buf());
         self.selected_path = None;
+        self.pending_map_reveal = None;
         self.last_hovered_path = None;
         self.history_trail.clear();
         self.visited_samples.clear();

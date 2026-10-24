@@ -101,16 +101,37 @@ impl ConstellationState {
                 }
             });
         }
-        if response.double_clicked() {
-            self.selected_slot = index;
-            self.request_pad_studio(index, 0);
-        } else if response.clicked() {
+        if response.clicked() {
             self.selected_slot = index;
             if ui.input(|input| input.modifiers.shift) {
                 self.assign_selected_to_pad(index);
             } else {
+                self.reveal_pad_layer(index);
                 self.trigger_slot(index);
             }
+        }
+    }
+
+    /// Cycles layer focus independently for each pad without altering its instrument.
+    pub(super) fn reveal_pad_layer(&mut self, index: usize) {
+        let count = self.pack_bank.slots[index].samples.len();
+        if count == 0 {
+            return;
+        }
+        let layer = self.pad_click_layers[index] % count;
+        self.pad_click_layers[index] = (layer + 1) % count;
+        self.selected_layers[index] = layer;
+        let path = self.pack_bank.slots[index].samples[layer].file_path.clone();
+        if self.samples.iter().any(|sample| sample.file_path == path) {
+            self.selected_path = Some(path.clone());
+            self.pending_map_reveal = Some(path.clone());
+            self.visited_samples.clear();
+            self.visited_samples.insert(path);
+        } else {
+            self.browser_status = Some((
+                "This layer is not in this folder's indexed map.".into(),
+                std::time::Instant::now(),
+            ));
         }
     }
 
@@ -175,6 +196,7 @@ impl ConstellationState {
         }
         drop(rack);
         self.pack_bank.slots.swap(drag.index, target);
+        self.pad_click_layers.swap(drag.index, target);
         for index in [drag.index, target] {
             self.pack_bank.slots[index].key_char = super::sample_pack::SLOT_KEY_CHARS[index];
         }

@@ -577,8 +577,6 @@ impl ConstellationState {
         }
 
         // The map inherits the file browser canvas; only samples carry category color.
-        let center = viewport.center() + self.pan;
-
         // 2. High-Performance GPU Batched Star Rendering
         // Organic category coordinates can extend beyond ±1. Fit their actual
         // extent, leaving a margin, while preserving every relative position.
@@ -587,6 +585,14 @@ impl ConstellationState {
         });
         let view_scale =
             (viewport.width().min(viewport.height()) * 0.45).max(1.0) / extent * self.zoom;
+        if let Some(path) = self.pending_map_reveal.take()
+            && let Some(sample) = self.samples.iter().find(|sample| sample.file_path == path)
+        {
+            // Center in the part left visible by the docks, keeping zoom unchanged.
+            self.pan =
+                rect.center() - viewport.center() - Vec2::new(sample.x, -sample.y) * view_scale;
+        }
+        let center = viewport.center() + self.pan;
         let query_lower = self.search_query.to_lowercase();
 
         let mut hovered_sample: Option<ConstellationSample> = None;
@@ -1427,6 +1433,39 @@ mod tests {
             bit_depth: 16,
             source_revision: None,
         }
+    }
+
+    #[test]
+    fn pad_clicks_cycle_layers_and_reveal_them_without_opening_studio() {
+        let mut state = ConstellationState::default();
+        state.samples = (0..3).map(sample_fixture).collect();
+        state.pack_bank.slots[0].samples = state.samples[..2]
+            .iter()
+            .map(|sample| {
+                super::super::sample_pack::SlotSample::new(
+                    sample.file_path.clone(),
+                    sample.filename.clone(),
+                    None,
+                    1.0,
+                )
+            })
+            .collect();
+        state.pack_bank.slots[1].samples = vec![state.pack_bank.slots[0].samples[0].clone()];
+        state.zoom = 4.0;
+        for (pad, layer) in [(0, 0), (0, 1), (1, 0), (0, 0)] {
+            state.reveal_pad_layer(pad);
+            assert_eq!(state.selected_layers[pad], layer);
+            assert_eq!(
+                state.selected_path,
+                Some(state.samples[layer].file_path.clone())
+            );
+            coarse_mesh(&mut state);
+            assert!(state.pending_map_reveal.is_none());
+            assert_eq!(state.zoom, 4.0);
+            assert!(state.studio_request.is_none());
+        }
+        state.pack_bank.slots[0].samples.clear();
+        state.reveal_pad_layer(0); // Empty pads cannot divide by zero.
     }
 
     #[test]
