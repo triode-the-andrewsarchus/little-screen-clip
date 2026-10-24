@@ -96,7 +96,7 @@ impl ConstellationState {
         if !ui.input(|input| input.modifiers.shift) {
             response.context_menu(|ui| {
                 if ui.button("Leave mute group").clicked() {
-                    self.pack_bank.slots[index].choke_group = 0;
+                    self.leave_mute_group(index);
                     ui.close_menu();
                 }
             });
@@ -217,6 +217,7 @@ impl ConstellationState {
             self.checkpoint_bank(false);
             self.pack_bank.slots[anchor].choke_group = group;
             self.pack_bank.slots[index].choke_group = group;
+            self.pack_bank.prune_mute_groups();
             self.checkpoint_bank(false);
         } else {
             self.browser_status = Some((
@@ -224,6 +225,13 @@ impl ConstellationState {
                 std::time::Instant::now(),
             ));
         }
+    }
+
+    pub(super) fn leave_mute_group(&mut self, index: usize) {
+        self.checkpoint_bank(false);
+        self.pack_bank.slots[index].choke_group = 0;
+        self.pack_bank.prune_mute_groups();
+        self.checkpoint_bank(false);
     }
 
     pub(super) fn paint_mute_links(
@@ -410,6 +418,30 @@ mod tests {
         state.undo_bank(false);
         assert_eq!(state.pack_bank.slots[0].samples.len(), 1);
         assert!(state.pack_bank.slots[5].samples.is_empty());
+    }
+
+    #[test]
+    fn leaving_or_moving_members_dissolves_singletons_and_undo_restores_partners() {
+        let mut state = ConstellationState::default();
+        state.join_mute_group(0);
+        state.join_mute_group(1);
+        state.join_mute_group(2);
+        state.leave_mute_group(1);
+        assert_eq!(state.pack_bank.slots[0].choke_group, 1);
+        state.leave_mute_group(2);
+        assert_eq!(state.pack_bank.slots[0].choke_group, 0);
+        state.undo_bank(false);
+        assert_eq!(state.pack_bank.slots[0].choke_group, 1);
+        assert_eq!(state.pack_bank.slots[2].choke_group, 1);
+        state.choke_anchor = None;
+        state.join_mute_group(3);
+        state.join_mute_group(4);
+        state.join_mute_group(0); // Move one of the two members to group 2.
+        assert_eq!(state.pack_bank.slots[0].choke_group, 2);
+        assert_eq!(state.pack_bank.slots[2].choke_group, 0);
+        state.clear_slot(3);
+        state.clear_slot(4);
+        assert_eq!(state.pack_bank.slots[0].choke_group, 0);
     }
 
     #[test]

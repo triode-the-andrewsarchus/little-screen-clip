@@ -529,7 +529,7 @@ impl ConstellationState {
                 .on_hover_text("Pads in the same mute group cut each other off. Hold Shift and right-click pads to link them; hover to see partners.");
             ui.menu_button("Pad actions", |ui| {
                 if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add map sample")).clicked() { self.assign_selected_to_pad(index); ui.close_menu(); }
-                if ui.button("Leave mute group").clicked() { self.pack_bank.slots[index].choke_group = 0; ui.close_menu(); }
+                if ui.button("Leave mute group").clicked() { self.leave_mute_group(index); ui.close_menu(); }
                 if ui.button("Clear pad").clicked() { self.clear_slot(index); ui.close_menu(); }
             });
             if self.pack_bank.slots[index].samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path)) && ui.small_button("Retry audio").clicked() {

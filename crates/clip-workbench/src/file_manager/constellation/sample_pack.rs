@@ -449,7 +449,23 @@ impl SamplePackBank {
                 }
             }
         }
+        self.prune_mute_groups();
         Ok(())
+    }
+
+    /// Removes groups without a partner after membership changes or legacy loading.
+    pub(super) fn prune_mute_groups(&mut self) {
+        let mut members = [0_u8; 9];
+        for slot in &self.slots {
+            if let Some(count) = members.get_mut(slot.choke_group as usize) {
+                *count += 1;
+            }
+        }
+        for slot in &mut self.slots {
+            if slot.choke_group != 0 && members[slot.choke_group as usize] < 2 {
+                slot.choke_group = 0;
+            }
+        }
     }
 
     pub fn total_samples(&self) -> usize {
@@ -876,6 +892,7 @@ mod tests {
         loaded.compressor_threshold_db = -18.0;
         loaded.compressor_ratio = 6.0;
         loaded.compressor_bypass = true;
+        loaded.slots[14].choke_group = 8;
         loaded.slots[15].choke_group = 8;
         let mut copy: SamplePackBank =
             serde_json::from_str(&serde_json::to_string(&loaded).unwrap()).unwrap();
