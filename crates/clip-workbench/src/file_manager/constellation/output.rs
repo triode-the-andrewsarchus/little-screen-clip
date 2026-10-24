@@ -565,10 +565,29 @@ impl Rack {
             return true;
         }
         let slot = &self.bank.slots[slot_idx];
-        if slot.mute || (self.bank.slots.iter().any(|slot| slot.solo) && !slot.solo) {
+        let solo = self.bank.slots.iter().any(|slot| slot.solo);
+        if slot.mute || (solo && !slot.solo) {
             return true;
         }
         let group = slot.choke_group;
+        // Equal priority keeps the familiar latest-hit behavior. Finished or gated
+        // voices cannot lock out the group, even before the next UI retirement tick.
+        if group != 0
+            && self
+                .bank
+                .slots
+                .iter()
+                .zip(&self.voices)
+                .any(|(peer, voices)| {
+                    peer.choke_group == group
+                        && peer.choke_priority > slot.choke_priority
+                        && !peer.mute
+                        && (!solo || peer.solo)
+                        && voices.iter().any(|voice| !voice.empty())
+                })
+        {
+            return true;
+        }
         for (index, voices) in self.voices.iter_mut().enumerate() {
             if (index == slot_idx && slot.retrigger)
                 || (index != slot_idx && group != 0 && self.bank.slots[index].choke_group == group)

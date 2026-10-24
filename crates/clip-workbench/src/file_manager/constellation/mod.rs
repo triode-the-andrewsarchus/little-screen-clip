@@ -872,6 +872,58 @@ mod tests {
     }
 
     #[test]
+    fn choke_priority_protects_ringing_peers_but_not_finished_or_muted_voices() {
+        let (mixer, mut audio) =
+            rodio::mixer::mixer(1.try_into().unwrap(), 44100.try_into().unwrap());
+        let mut rack = output::Rack::default();
+        let mut bank = SamplePackBank::default();
+        bank.slots[0].choke_group = 1;
+        bank.slots[1].choke_group = 1;
+        bank.slots[1].choke_priority = 2;
+        let high = rodio::Player::connect_new(&mixer);
+        high.append(rodio::buffer::SamplesBuffer::new(
+            1.try_into().unwrap(),
+            44100.try_into().unwrap(),
+            vec![0.2; 44100],
+        ));
+        rack.voices[1].push(high);
+        rack.sync(&bank);
+        rack.trigger(0, 127);
+        assert_eq!(
+            rack.voices[1].len(),
+            1,
+            "lower priority must not cut off the active peer"
+        );
+        bank.slots[0].choke_priority = 2;
+        rack.sync(&bank);
+        rack.trigger(0, 127);
+        assert!(rack.voices[1].is_empty(), "equal priority uses latest hit");
+        let finished = rodio::Player::connect_new(&mixer);
+        rack.voices[1].push(finished);
+        bank.slots[0].choke_priority = 0;
+        rack.sync(&bank);
+        rack.trigger(0, 127);
+        assert!(
+            rack.voices[1].is_empty(),
+            "finished peers cannot block hits"
+        );
+        let muted = rodio::Player::connect_new(&mixer);
+        muted.append(rodio::buffer::SamplesBuffer::new(
+            1.try_into().unwrap(),
+            44100.try_into().unwrap(),
+            vec![0.2; 44100],
+        ));
+        rack.voices[1].push(muted);
+        bank.slots[1].mute = true;
+        rack.sync(&bank);
+        rack.trigger(0, 127);
+        assert!(rack.voices[1].is_empty(), "muted peers cannot block hits");
+        for _ in 0..1000 {
+            audio.next();
+        }
+    }
+
+    #[test]
     fn indexing_completion_does_not_replace_another_folder() {
         let mut state = ConstellationState::default();
         state.current_indexed_folder = Some(PathBuf::from("/current"));

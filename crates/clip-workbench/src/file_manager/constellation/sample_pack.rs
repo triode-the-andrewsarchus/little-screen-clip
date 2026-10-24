@@ -312,6 +312,9 @@ pub struct PackSlot {
     /// Zero disables choking; pads in the same group (1–8) cut each other off.
     #[serde(default)]
     pub choke_group: u8,
+    /// Higher values protect active hits from lower-priority peers; equal values use the latest hit.
+    #[serde(default)]
+    pub choke_priority: u8,
     #[serde(default)]
     pub mute: bool,
     #[serde(default)]
@@ -332,6 +335,7 @@ impl PackSlot {
             name: format!("Slot {}", key_char),
             samples: Vec::new(),
             choke_group: 0,
+            choke_priority: 0,
             mute: false,
             solo: false,
             retrigger: true,
@@ -436,8 +440,8 @@ impl SamplePackBank {
         }
         for (idx, slot) in self.slots.iter_mut().enumerate() {
             slot.key_char = SLOT_KEY_CHARS[idx];
-            if slot.choke_group > 8 {
-                return Err("Choke groups must be between zero and eight".into());
+            if slot.choke_group > 8 || slot.choke_priority > 7 {
+                return Err("Choke groups must be 0–8 and priorities 0–7".into());
             }
             if slot.samples.len() > 8 {
                 return Err("A slot supports at most eight layers".into());
@@ -872,6 +876,7 @@ mod tests {
         json.as_object_mut().unwrap().remove("compressor_ratio");
         for slot in json["slots"].as_array_mut().unwrap() {
             slot.as_object_mut().unwrap().remove("choke_group");
+            slot.as_object_mut().unwrap().remove("choke_priority");
         }
         let mut loaded: SamplePackBank = serde_json::from_value(json).unwrap();
         loaded.validate(Path::new("/samples")).unwrap();
@@ -894,6 +899,7 @@ mod tests {
         loaded.compressor_bypass = true;
         loaded.slots[14].choke_group = 8;
         loaded.slots[15].choke_group = 8;
+        loaded.slots[15].choke_priority = 7;
         let mut copy: SamplePackBank =
             serde_json::from_str(&serde_json::to_string(&loaded).unwrap()).unwrap();
         copy.validate(Path::new("/samples")).unwrap();
@@ -904,6 +910,7 @@ mod tests {
         assert!(copy.validate(Path::new("/samples")).is_err());
         copy.compressor_ratio = 6.0;
         assert_eq!(copy.slots[15].choke_group, 8);
+        assert_eq!(copy.slots[15].choke_priority, 7);
         copy.slots[15].choke_group = 9;
         assert!(copy.validate(Path::new("/samples")).is_err());
     }

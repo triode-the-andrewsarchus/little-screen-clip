@@ -33,7 +33,10 @@ impl ConstellationState {
                 .filter(|(_, slot)| slot.choke_group == group)
                 .map(|(index, _)| self.pad_keys[index].to_ascii_uppercase().to_string())
                 .collect();
-            format!("Mute group {group} · {} · Alt: details", keys.join(" "))
+            format!(
+                "Mute group {group} · {} · higher priority wins, ties: latest hit · Alt: details",
+                keys.join(" ")
+            )
         } else {
             "Shift + right-click pads to link a mute group".to_owned()
         }
