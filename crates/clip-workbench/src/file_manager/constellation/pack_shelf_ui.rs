@@ -502,19 +502,34 @@ impl ConstellationState {
         let layer_id = ui.id().with(("edited_layer", index));
         let mut selected_layer =
             self.selected_layers[index].min(slot.samples.len().saturating_sub(1));
-        if slot.samples.len() > 1 {
-            use crate::ui_tabs::{Tab, TabBar};
-            let labels: Vec<_> = (0..slot.samples.len())
-                .map(|layer| format!("Layer {}", layer + 1))
-                .collect();
-            let tabs: Vec<_> = labels
-                .iter()
-                .enumerate()
-                .map(|(layer, label)| Tab::new(layer, label))
-                .collect();
-            if let Some(layer) = TabBar::new(layer_id, selected_layer, &tabs, palette).show(ui) {
-                selected_layer = layer;
-            }
+        if !slot.samples.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                use crate::ui_tabs::{Tab, TabBar};
+                let labels: Vec<_> = (0..slot.samples.len())
+                    .map(|layer| format!("Layer {}", layer + 1))
+                    .collect();
+                let tabs: Vec<_> = labels
+                    .iter()
+                    .enumerate()
+                    .map(|(layer, label)| Tab::new(layer, label))
+                    .collect();
+                if let Some(layer) = TabBar::new(layer_id, selected_layer, &tabs, palette).show(ui)
+                {
+                    selected_layer = layer;
+                }
+                if ui
+                    .add(
+                        egui::Button::image(
+                            crate::icons::Icon::Close.image_tinted(12.0, ui.visuals().text_color()),
+                        )
+                        .small(),
+                    )
+                    .on_hover_text("Remove selected layer")
+                    .clicked()
+                {
+                    remove = Some(selected_layer);
+                }
+            });
             self.selected_layers[index] = selected_layer;
         }
         for (layer, sample) in slot
