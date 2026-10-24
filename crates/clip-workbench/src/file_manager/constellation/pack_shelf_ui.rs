@@ -547,21 +547,9 @@ impl ConstellationState {
                             .strong(),
                     )
                     .on_hover_text(&sample.filename);
-                    ui.menu_button("Layer actions", |ui| {
-                        if ui.button("Edit in Audio Studio").clicked() {
-                            studio_layer = Some(layer);
-                            ui.close_menu();
-                        }
-                        if ui.button("Reset trim").clicked() {
-                            sample.start_sec = 0.0;
-                            sample.end_sec = sample.duration;
-                            ui.close_menu();
-                        }
-                        if ui.button("Remove layer").clicked() {
-                            remove = Some(layer);
-                            ui.close_menu();
-                        }
-                    });
+                    if ui.small_button("Edit in Audio Studio").clicked() {
+                        studio_layer = Some(layer);
+                    }
                 });
                 if ui.available_width() >= 700.0 {
                     let wave_width = ui.available_width() - 260.0;
