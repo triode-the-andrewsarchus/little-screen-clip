@@ -6,12 +6,12 @@ use super::db::ConstellationSample;
 use super::generated_model::SampleCategory;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
-/// Keeps category and search dimming consistent across both map projection paths.
+/// Keeps filtered samples as faint spatial context without competing with matches.
 fn filtered_star_color(base: Color32, category_dimmed: bool, filter_dimmed: bool) -> Color32 {
     let alpha = if category_dimmed {
-        28
+        12
     } else if filter_dimmed {
-        25
+        12
     } else {
         255
     };
