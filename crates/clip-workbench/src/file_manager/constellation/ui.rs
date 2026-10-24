@@ -415,29 +415,90 @@ impl ConstellationState {
         format!("{active} / {} samples", self.samples.len())
     }
 
+    /// Two duration endpoints use the observed library bounds; zero retains "all" semantics.
+    fn render_duration_range(&mut self, ui: &mut egui::Ui) {
+        let shortest = self
+            .samples
+            .iter()
+            .map(|sample| sample.duration_seconds)
+            .filter(|duration| duration.is_finite())
+            .reduce(f32::min)
+            .unwrap_or(0.0);
+        let longest = self
+            .samples
+            .iter()
+            .map(|sample| sample.duration_seconds)
+            .filter(|duration| duration.is_finite())
+            .reduce(f32::max)
+            .unwrap_or(shortest);
+        let mut low = self.min_duration.max(shortest).min(longest);
+        let mut high = if self.max_duration == 0.0 {
+            longest
+        } else {
+            self.max_duration.clamp(low, longest)
+        };
+        ui.label("Duration");
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(160.0, 24.0), Sense::click_and_drag());
+        let track = rect.shrink2(Vec2::new(8.0, 0.0));
+        let span = (longest - shortest).max(f32::EPSILON);
+        let x_at = |time: f32| track.left() + (time - shortest) / span * track.width();
+        let low_x = x_at(low);
+        let high_x = x_at(high);
+        let handle_id = response.id.with("duration_endpoint");
+        if response.drag_started() || response.clicked() {
+            let x = response.interact_pointer_pos().map_or(low_x, |pos| pos.x);
+            ui.data_mut(|data| {
+                data.insert_temp(handle_id, (x - low_x).abs() <= (x - high_x).abs())
+            });
+        }
+        if (response.dragged() || response.clicked())
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let time =
+                shortest + ((pointer.x - track.left()) / track.width()).clamp(0.0, 1.0) * span;
+            if ui
+                .data(|data| data.get_temp::<bool>(handle_id))
+                .unwrap_or(true)
+            {
+                low = time.min(high);
+            } else {
+                high = time.max(low);
+            }
+            self.min_duration = if low <= shortest { 0.0 } else { low };
+            self.max_duration = if high >= longest { 0.0 } else { high };
+        }
+        if response.double_clicked() {
+            self.min_duration = 0.0;
+            self.max_duration = 0.0;
+        }
+        let y = track.center().y;
+        let painter = ui.painter_at(rect);
+        painter.line_segment(
+            [egui::pos2(track.left(), y), egui::pos2(track.right(), y)],
+            Stroke::new(3.0, ui.visuals().widgets.inactive.bg_fill),
+        );
+        painter.line_segment(
+            [egui::pos2(x_at(low), y), egui::pos2(x_at(high), y)],
+            Stroke::new(3.0, ui.visuals().selection.bg_fill),
+        );
+        for time in [low, high] {
+            painter.circle(
+                egui::pos2(x_at(time), y),
+                6.0,
+                ui.visuals().widgets.inactive.bg_fill,
+                ui.visuals().widgets.inactive.fg_stroke,
+            );
+        }
+        response.on_hover_text(format!(
+            "{low:.3}–{high:.3} s · drag either end · double-click to reset"
+        ));
+        ui.weak(format!("{low:.2}–{high:.2} s"));
+    }
+
     fn render_audio_filters(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.label("Duration");
-            ui.add(
-                egui::DragValue::new(&mut self.min_duration)
-                    .speed(0.01)
-                    .clamp_range(0.0..=3600.0)
-                    .prefix("Min ")
-                    .suffix(" s"),
-            );
-            ui.add(
-                egui::DragValue::new(&mut self.max_duration)
-                    .speed(0.01)
-                    .clamp_range(0.0..=3600.0)
-                    .custom_formatter(|value, _| {
-                        if value == 0.0 {
-                            "Any duration".into()
-                        } else {
-                            format!("Max {value:.3} s")
-                        }
-                    }),
-            )
-            .on_hover_text("Zero means no upper duration limit.");
+            self.render_duration_range(ui);
             egui::ComboBox::from_id_source("constellation_channel_filter")
                 .selected_text(match self.channel_filter {
                     1 => "Mono",
