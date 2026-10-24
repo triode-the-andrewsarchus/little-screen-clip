@@ -20,22 +20,6 @@ impl ConstellationState {
         let mut view = ui
             .data(|data| data.get_temp::<AudioViewport>(id))
             .unwrap_or(full);
-        let show_help = ui.available_width() >= 700.0;
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("Waveform");
-            if ui.small_button("Fit").clicked() {
-                view = full;
-            }
-            if ui.small_button("Fit selection").clicked() {
-                view = AudioViewport {
-                    start_sec: sample.start_sec,
-                    duration_sec: (sample.end_sec - sample.start_sec).max(frame),
-                };
-            }
-            if show_help {
-                ui.weak("Wheel: zoom · Shift+wheel: pan");
-            }
-        });
         let height = if ui.available_width() < 600.0 {
             80.0
         } else {
@@ -101,7 +85,6 @@ impl ConstellationState {
             ui.visuals().weak_text_color(),
         );
         paint_markers(ui, &painter, rect, sample, view, frame);
-        response.clone().on_hover_text("Wheel: zoom around pointer · Shift+wheel: pan · drag IN/OUT to trim · double-click to reset trim");
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
