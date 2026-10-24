@@ -1,6 +1,6 @@
 //! One stereo bus for pads and all auditions, using the shared hardware sink.
 //!
-//! Layers have 2 dB of headroom. The linked stereo compressor has no makeup gain:
+//! Layers have 2 dB of headroom. The linked stereo compressor has adjustable makeup gain:
 //! a normal single layer stays below its threshold, while overlapping hits receive
 //! adjustable compression (default 2:1, 5 ms attack, 120 ms release). A linked peak ceiling catches
 //! fast overloads. Bypass removes both stages; it retains the same input headroom.
@@ -19,6 +19,19 @@ use std::time::Duration;
 const RATE: u32 = 48_000;
 const HEADROOM: f32 = 0.794_328_2;
 
+/// Steady-state compression in dBFS, including a continuous quadratic soft knee.
+pub(super) fn compressor_db(input: f32, threshold: f32, ratio: f32, knee: f32) -> f32 {
+    let delta = input - threshold;
+    let slope = ratio.recip() - 1.0;
+    if knee > 0.0 && delta.abs() < knee * 0.5 {
+        input + slope * (delta + knee * 0.5).powi(2) / (2.0 * knee)
+    } else if delta > 0.0 {
+        threshold + delta / ratio
+    } else {
+        input
+    }
+}
+
 pub(super) struct PadOutput {
     mixer: Mixer,
     player: Player,
@@ -26,6 +39,8 @@ pub(super) struct PadOutput {
     reduction: Arc<AtomicU32>,
     threshold: Arc<AtomicU32>,
     exponent: Arc<AtomicU32>,
+    knee: Arc<AtomicU32>,
+    makeup: Arc<AtomicU32>,
     levels: Arc<[AtomicU32; 2]>,
 }
 
@@ -52,6 +67,8 @@ impl PadOutput {
         let threshold = glue.threshold.clone();
         let exponent = glue.exponent.clone();
         let levels = glue.levels.clone();
+        let knee = glue.knee.clone();
+        let makeup = glue.makeup.clone();
         player.append(glue);
         Self {
             mixer,
@@ -60,6 +77,8 @@ impl PadOutput {
             reduction,
             threshold,
             exponent,
+            knee,
+            makeup,
             levels,
         }
     }
@@ -90,6 +109,20 @@ impl PadOutput {
         if bank.compressor_ratio.is_finite() {
             self.exponent.store(
                 (1.0 - bank.compressor_ratio.clamp(1.0, 12.0).recip()).to_bits(),
+                Ordering::Relaxed,
+            );
+        }
+        if bank.compressor_knee_db.is_finite() {
+            self.knee.store(
+                bank.compressor_knee_db.clamp(0.0, 24.0).to_bits(),
+                Ordering::Relaxed,
+            );
+        }
+        if bank.compressor_makeup_db.is_finite() {
+            self.makeup.store(
+                10.0_f32
+                    .powf(bank.compressor_makeup_db.clamp(-12.0, 24.0) / 20.0)
+                    .to_bits(),
                 Ordering::Relaxed,
             );
         }
@@ -134,6 +167,8 @@ struct Glue<S> {
     reduction: Arc<AtomicU32>,
     threshold: Arc<AtomicU32>,
     exponent: Arc<AtomicU32>,
+    knee: Arc<AtomicU32>,
+    makeup: Arc<AtomicU32>,
     levels: Arc<[AtomicU32; 2]>,
     gain: f32,
     right: Option<f32>,
@@ -149,6 +184,8 @@ impl<S> Glue<S> {
             reduction,
             threshold: Arc::new(AtomicU32::new(0.85_f32.to_bits())),
             exponent: Arc::new(AtomicU32::new(0.5_f32.to_bits())),
+            knee: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
+            makeup: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
             levels: Arc::new([AtomicU32::new(0), AtomicU32::new(0)]),
             gain: 1.0,
             right: None,
@@ -163,7 +200,20 @@ impl<S> Glue<S> {
         let peak = left.abs().max(right.abs());
         let threshold = f32::from_bits(self.threshold.load(Ordering::Relaxed));
         let exponent = f32::from_bits(self.exponent.load(Ordering::Relaxed));
-        let target = if peak > threshold {
+        let knee = f32::from_bits(self.knee.load(Ordering::Relaxed));
+        let makeup = f32::from_bits(self.makeup.load(Ordering::Relaxed));
+        let target = if knee > 0.0 {
+            let input = 20.0 * peak.max(0.000001).log10();
+            10.0_f32.powf(
+                (compressor_db(
+                    input,
+                    20.0 * threshold.log10(),
+                    (1.0 - exponent).recip(),
+                    knee,
+                ) - input)
+                    / 20.0,
+            )
+        } else if peak > threshold {
             (threshold / peak).powf(exponent)
         } else {
             1.0
@@ -179,7 +229,7 @@ impl<S> Glue<S> {
         let gain = if bypass {
             1.0
         } else {
-            self.gain.min(0.98 / peak.max(0.98))
+            (self.gain * makeup).min(0.98 / peak.max(0.000001))
         };
         self.peaks[0] = self.peaks[0].max(peak);
         self.peaks[1] = self.peaks[1].max(peak * gain);
@@ -189,7 +239,13 @@ impl<S> Glue<S> {
             }
             self.peaks = [0.0; 2];
             self.reduction.store(
-                (-20.0 * gain.max(0.000001).log10()).max(0.0).to_bits(),
+                (if bypass {
+                    0.0
+                } else {
+                    -20.0 * (gain / makeup).max(0.000001).log10()
+                })
+                .max(0.0)
+                .to_bits(),
                 Ordering::Relaxed,
             );
         }
@@ -230,6 +286,38 @@ impl Source for Glue<MixerSource> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn soft_knee_is_continuous_and_makeup_precedes_the_safety_ceiling() {
+        for threshold in [-30.0, -6.0, 0.0] {
+            let width = 12.0;
+            let lower = threshold - width * 0.5;
+            let upper = threshold + width * 0.5;
+            assert!((compressor_db(lower, threshold, 4.0, width) - lower).abs() < 0.00001);
+            assert!(
+                (compressor_db(upper, threshold, 4.0, width) - (threshold + 1.5)).abs() < 0.00001
+            );
+            assert!(compressor_db(threshold, threshold, 4.0, width) < threshold);
+            let mut previous = f32::NEG_INFINITY;
+            for step in 0..200 {
+                let value = compressor_db(lower - 1.0 + step as f32 * 0.1, threshold, 4.0, width);
+                assert!(value >= previous);
+                previous = value;
+            }
+        }
+        let mut glue = Glue::new(
+            std::iter::empty::<f32>(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicU32::new(0)),
+        );
+        glue.makeup.store(2.0_f32.to_bits(), Ordering::Relaxed);
+        assert_eq!(glue.frame(0.2, 0.1), (0.4, 0.2));
+        let frame = glue.frame(0.8, 0.4);
+        assert!(frame.0 <= 0.980001);
+        assert_eq!(frame.0, 2.0 * frame.1);
+        glue.bypass.store(true, Ordering::Relaxed);
+        assert_eq!(glue.frame(0.2, 0.1), (0.2, 0.1));
+    }
 
     #[test]
     fn streaming_and_cached_auditions_share_pad_headroom_and_protection() {

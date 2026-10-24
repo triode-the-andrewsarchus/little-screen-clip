@@ -318,6 +318,12 @@ pub struct SamplePackBank {
     /// Compression ratio; one disables compression but retains the peak ceiling.
     #[serde(default = "default_compressor_ratio")]
     pub compressor_ratio: f32,
+    /// Soft-knee width in dB; zero preserves the hard-knee characteristic.
+    #[serde(default)]
+    pub compressor_knee_db: f32,
+    /// Output gain before the safety ceiling, in dB.
+    #[serde(default)]
+    pub compressor_makeup_db: f32,
 }
 
 fn default_compressor_threshold() -> f32 {
@@ -348,14 +354,18 @@ impl SamplePackBank {
             compressor_bypass: false,
             compressor_threshold_db: default_compressor_threshold(),
             compressor_ratio: default_compressor_ratio(),
+            compressor_knee_db: 0.0,
+            compressor_makeup_db: 0.0,
         }
     }
 
     pub(super) fn validate(&mut self, pack_dir: &Path) -> Result<(), String> {
         if !(-48.0..=0.0).contains(&self.compressor_threshold_db)
             || !(1.0..=12.0).contains(&self.compressor_ratio)
+            || !(0.0..=24.0).contains(&self.compressor_knee_db)
+            || !(-12.0..=24.0).contains(&self.compressor_makeup_db)
         {
-            return Err("Compressor threshold must be -48 to 0 dBFS and ratio 1 to 12".into());
+            return Err("Invalid compressor threshold, ratio, knee or makeup gain".into());
         }
         if self.slots.len() > NUM_SLOTS {
             return Err("Pack has more than sixteen pads".into());

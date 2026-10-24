@@ -2,13 +2,10 @@
 use super::ConstellationState;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 
-/// Static hard-knee characteristic, before the separate safety peak ceiling.
+#[cfg(test)]
+/// Hard-knee reference used by the transfer test.
 fn output_db(input: f32, threshold: f32, ratio: f32) -> f32 {
-    if input <= threshold {
-        input
-    } else {
-        threshold + (input - threshold) / ratio
-    }
+    super::output::compressor_db(input, threshold, ratio, 0.0)
 }
 
 impl ConstellationState {
@@ -28,7 +25,7 @@ impl ConstellationState {
             {
                 self.pack_bank.compressor_bypass = !self.pack_bank.compressor_bypass;
             }
-            ui.weak("Stereo linked · no makeup gain");
+            ui.weak("Stereo linked");
         });
         let (levels, reduction, running) = {
             let rack = self.playback.lock().unwrap();
@@ -45,7 +42,7 @@ impl ConstellationState {
         let (outer, _) = ui.allocate_exact_size(
             Vec2::new(
                 ui.available_width(),
-                (ui.clip_rect().height() - 190.0)
+                (ui.clip_rect().height() - 250.0)
                     .clamp(110.0, 260.0)
                     .min(ui.available_width()),
             ),
@@ -98,13 +95,33 @@ impl ConstellationState {
         } else {
             2.0
         };
-        let threshold_point = point(threshold, threshold);
-        let ratio_point = point(6.0, output_db(6.0, threshold, ratio));
-        let curve = if self.pack_bank.compressor_bypass {
-            vec![point(-48.0, -48.0), point(6.0, 6.0)]
+        let knee = if self.pack_bank.compressor_knee_db.is_finite() {
+            self.pack_bank.compressor_knee_db.clamp(0.0, 24.0)
         } else {
-            vec![point(-48.0, -48.0), threshold_point, ratio_point]
+            0.0
         };
+        let makeup = if self.pack_bank.compressor_makeup_db.is_finite() {
+            self.pack_bank.compressor_makeup_db.clamp(-12.0, 24.0)
+        } else {
+            0.0
+        };
+        let transfer = |input| super::output::compressor_db(input, threshold, ratio, knee) + makeup;
+        let threshold_point = point(threshold, transfer(threshold));
+        let ratio_point = point(6.0, transfer(6.0));
+        let curve = (0..=108)
+            .map(|step| {
+                let input = -48.0 + step as f32 * 0.5;
+                point(
+                    input,
+                    if self.pack_bank.compressor_bypass {
+                        input
+                    } else {
+                        transfer(input)
+                    }
+                    .clamp(-48.0, 6.0),
+                )
+            })
+            .collect();
         let accent = ui.visuals().selection.bg_fill;
         painter.add(egui::Shape::line(curve, Stroke::new(2.5_f32, accent)));
         painter.text(
@@ -145,8 +162,15 @@ impl ConstellationState {
                         (-48.0 + (pointer.x - plot.left()) / plot.width() * 54.0).clamp(-48.0, 0.0);
                 } else {
                     let output = -48.0 + (plot.bottom() - pointer.y) / plot.height() * 54.0;
-                    self.pack_bank.compressor_ratio =
-                        ((6.0 - threshold) / (output - threshold).max(0.1)).clamp(1.0, 12.0);
+                    let delta = 6.0 - threshold;
+                    let amount = if knee > 0.0 && delta < knee * 0.5 {
+                        (delta + knee * 0.5).powi(2) / (2.0 * knee)
+                    } else {
+                        delta
+                    };
+                    self.pack_bank.compressor_ratio = (1.0 + (output - makeup - 6.0) / amount)
+                        .clamp(1.0 / 12.0, 1.0)
+                        .recip();
                 }
             }
             if response.double_clicked() && !self.pack_bank.compressor_bypass {
@@ -208,6 +232,20 @@ impl ConstellationState {
                     1.0..=12.0,
                     defaults.compressor_ratio,
                     ":1",
+                ),
+                (
+                    "Knee",
+                    &mut self.pack_bank.compressor_knee_db,
+                    0.0..=24.0,
+                    defaults.compressor_knee_db,
+                    " dB",
+                ),
+                (
+                    "Makeup",
+                    &mut self.pack_bank.compressor_makeup_db,
+                    -12.0..=24.0,
+                    defaults.compressor_makeup_db,
+                    " dB",
                 ),
             ] {
                 let response = ui.add(egui::Slider::new(value, range).text(label).suffix(suffix));
