@@ -702,7 +702,7 @@ impl AudioPreviewState {
             regions,
             open_folder: self.open_folder_after_save,
         };
-        let destination_name = plan_destination_name(&self.save_destination_dir);
+        let destination_name = plan_destination_name(&plan.destination.to_string_lossy());
         let (ticket, receiver) =
             BackgroundJobs::global().submit(Duration::MAX, move || run_audio_save(plan));
         self.save_job = Some(AudioSaveJob {
