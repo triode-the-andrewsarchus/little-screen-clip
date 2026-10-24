@@ -172,6 +172,10 @@ impl ConstellationState {
 
     fn render_pad_grid(&mut self, ui: &mut egui::Ui) {
         self.pad_drop_targets.clear();
+        if !ui.input(|input| input.modifiers.shift) {
+            self.choke_anchor = None;
+        }
+        let mut hovered = None;
         let playing: [bool; super::sample_pack::NUM_SLOTS] = {
             let rack = self.playback.lock().unwrap();
             std::array::from_fn(|index| rack.voices[index].iter().any(|player| !player.empty()))
@@ -188,7 +192,7 @@ impl ConstellationState {
         };
         let width = ((ui.available_width() - gap * 3.0) / 4.0).max(28.0);
         let pad_height =
-            ((ui.available_height() - status_height - gap * 3.0 - 8.0) / 4.0).clamp(28.0, width);
+            ((ui.available_height() - status_height - gap * 3.0 - 32.0) / 4.0).clamp(28.0, width);
         ui.scope(|ui| {
             ui.spacing_mut().interact_size.y = pad_height;
             ui.spacing_mut().item_spacing = Vec2::new(gap, gap);
@@ -226,7 +230,15 @@ impl ConstellationState {
                     if let Some(payload) = response.dnd_release_payload::<crate::file_manager::transfers::FileDrag>() {
                         self.drop_on_pad(index, payload.paths.clone(), ui.input(|input| input.modifiers.shift), None);
                     }
-                    let response = response.on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick to select and play. Shift+click to assign the map selection.", index + 1, 36 + index, title));
+                    if response.hovered() { hovered = Some(index); }
+                    let response = response.on_hover_text(format!("Pad {} · MIDI {}\n{}\nClick: play · Shift+click: add map sample\nHold Shift and right-click consecutive pads to join a mute group. Right-click for pad actions.", index + 1, 36 + index, title));
+                    if response.secondary_clicked() && ui.input(|input| input.modifiers.shift) { self.join_mute_group(index); }
+                    if !ui.input(|input| input.modifiers.shift) { response.context_menu(|ui| {
+                        if ui.button("Leave mute group").clicked() {
+                            self.pack_bank.slots[index].choke_group = 0;
+                            ui.close_menu();
+                        }
+                    }); }
                     if response.clicked() {
                         self.selected_slot = index;
                         if ui.input(|input| input.modifiers.shift) { self.assign_selected_to_pad(index); }
@@ -238,6 +250,12 @@ impl ConstellationState {
                 ui.add_space(gap - ui.spacing().item_spacing.y.min(gap));
             }
         }
+        });
+        self.paint_mute_links(ui, hovered);
+        ui.weak(if self.choke_anchor.is_some() {
+            "Keep Shift held · right-click pads to join · release to finish"
+        } else {
+            "Shift + right-click pads to link a mute group"
         });
     }
 
@@ -422,10 +440,6 @@ impl ConstellationState {
             .enumerate()
             .filter(|(layer, _)| *layer == selected_layer)
         {
-            let frame_duration = sample
-                .cached_audio
-                .as_ref()
-                .map_or(0.000_001, |audio| 1.0 / audio.sample_rate as f32);
             ui.push_id((index, layer), |ui| {
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
@@ -442,59 +456,21 @@ impl ConstellationState {
                         remove = Some(layer);
                     }
                 });
-                Self::render_layer_waveform(ui, sample);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Start");
-                    ui.add(
-                        egui::DragValue::new(&mut sample.start_sec)
-                            .speed(0.001)
-                            .clamp_range(0.0..=(sample.end_sec - frame_duration).max(0.0))
-                            .max_decimals(6)
-                            .suffix(" s"),
-                    );
-                    ui.label("End");
-                    ui.add(
-                        egui::DragValue::new(&mut sample.end_sec)
-                            .speed(0.001)
-                            .clamp_range(
-                                (sample.start_sec + frame_duration).min(sample.duration)
-                                    ..=sample.duration,
-                            )
-                            .max_decimals(6)
-                            .suffix(" s"),
-                    );
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut sample.volume)
-                            .speed(0.01)
-                            .clamp_range(0.0..=2.0)
-                            .fixed_decimals(2)
-                            .prefix("Gain ")
-                            .suffix("×"),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut sample.pan)
-                            .speed(0.01)
-                            .clamp_range(-1.0..=1.0)
-                            .fixed_decimals(2)
-                            .prefix("Pan "),
-                    );
-                    ui.label("Attack");
-                    ui.add(
-                        egui::DragValue::new(&mut sample.attack_ms)
-                            .speed(0.1)
-                            .clamp_range(0.0..=500.0)
-                            .suffix(" ms"),
-                    );
-                    ui.label("Release");
-                    ui.add(
-                        egui::DragValue::new(&mut sample.release_ms)
-                            .speed(0.1)
-                            .clamp_range(0.0..=500.0)
-                            .suffix(" ms"),
-                    );
-                });
+                if ui.available_width() >= 700.0 {
+                    let wave_width = ui.available_width() - 260.0;
+                    ui.horizontal_top(|ui| {
+                        ui.allocate_ui(Vec2::new(wave_width, 150.0), |ui| {
+                            Self::render_layer_trim(ui, sample)
+                        });
+                        ui.allocate_ui(Vec2::new(240.0, 150.0), |ui| {
+                            ui.strong("Sound");
+                            Self::render_layer_parameters(ui, sample);
+                        });
+                    });
+                } else {
+                    Self::render_layer_trim(ui, sample);
+                    Self::render_layer_parameters(ui, sample);
+                }
                 ui.separator();
             });
         }
@@ -506,16 +482,76 @@ impl ConstellationState {
         }
     }
 
+    fn render_layer_trim(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
+        let frame_duration = sample
+            .cached_audio
+            .as_ref()
+            .map_or(0.000_001, |audio| 1.0 / audio.sample_rate as f32);
+        Self::render_layer_waveform(ui, sample);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Start");
+            ui.add(
+                egui::DragValue::new(&mut sample.start_sec)
+                    .speed(0.001)
+                    .clamp_range(0.0..=(sample.end_sec - frame_duration).max(0.0))
+                    .max_decimals(6)
+                    .suffix(" s"),
+            );
+            ui.label("End");
+            ui.add(
+                egui::DragValue::new(&mut sample.end_sec)
+                    .speed(0.001)
+                    .clamp_range(
+                        (sample.start_sec + frame_duration).min(sample.duration)..=sample.duration,
+                    )
+                    .max_decimals(6)
+                    .suffix(" s"),
+            );
+        });
+    }
+
+    fn render_layer_parameters(ui: &mut egui::Ui, sample: &mut super::sample_pack::SlotSample) {
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut sample.volume)
+                    .speed(0.01)
+                    .clamp_range(0.0..=2.0)
+                    .fixed_decimals(2)
+                    .prefix("Gain ")
+                    .suffix("×"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut sample.pan)
+                    .speed(0.01)
+                    .clamp_range(-1.0..=1.0)
+                    .fixed_decimals(2)
+                    .prefix("Pan "),
+            );
+            ui.label("Attack");
+            ui.add(
+                egui::DragValue::new(&mut sample.attack_ms)
+                    .speed(0.1)
+                    .clamp_range(0.0..=500.0)
+                    .suffix(" ms"),
+            );
+            ui.label("Release");
+            ui.add(
+                egui::DragValue::new(&mut sample.release_ms)
+                    .speed(0.1)
+                    .clamp_range(0.0..=500.0)
+                    .suffix(" ms"),
+            );
+        });
+    }
+
     fn render_selected_pad_header(&mut self, ui: &mut egui::Ui, index: usize) {
         ui.horizontal_wrapped(|ui| {
             ui.strong(format!("{} · Pad {}", self.pad_keys[index].to_ascii_uppercase(), index + 1));
             ui.toggle_value(&mut self.pack_bank.slots[index].mute, "Mute");
             ui.toggle_value(&mut self.pack_bank.slots[index].solo, "Solo");
-            let group = &mut self.pack_bank.slots[index].choke_group;
-            egui::ComboBox::from_id_source(("pad_choke", index)).width(100.0).selected_text(if *group == 0 { "Choke: Off".to_string() } else { format!("Choke: {group}") }).show_ui(ui, |ui| {
-                ui.selectable_value(group, 0, "Off");
-                for value in 1..=8 { ui.selectable_value(group, value, format!("Group {value}")); }
-            }).response.on_hover_text("Pads in the same group cut each other off; useful for open and closed hi-hats.");
+            let group = self.pack_bank.slots[index].choke_group;
+            ui.label(if group == 0 { "Mute group: none".into() } else { format!("Mute group {group}") })
+                .on_hover_text("Hold Shift and right-click pads to link them. Hover a grouped pad to see its partners.");
             if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add selected")).clicked() { self.assign_selected_to_pad(index); }
             if ui.small_button("Clear").clicked() { self.clear_slot(index); }
             if self.pack_bank.slots[index].samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path)) && ui.small_button("Retry audio").clicked() {

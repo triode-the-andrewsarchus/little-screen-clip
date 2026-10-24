@@ -29,6 +29,7 @@ mod output;
 mod pack_export;
 pub mod pack_shelf_ui;
 mod pad_drop;
+mod pad_interaction;
 pub mod sample_pack;
 pub mod ui;
 
@@ -130,6 +131,7 @@ pub struct ConstellationState {
     pub pack_shelf_open: bool,
     pub slot_flash: [Option<Instant>; sample_pack::NUM_SLOTS],
     selected_slot: usize,
+    choke_anchor: Option<(u64, usize)>,
     pad_editor_open: bool,
     pad_keys: [char; sample_pack::NUM_SLOTS],
     midi: Option<midi::Controller>,
@@ -193,6 +195,7 @@ impl Default for ConstellationState {
             pack_shelf_open: true,
             slot_flash: [None; sample_pack::NUM_SLOTS],
             selected_slot: 0,
+            choke_anchor: None,
             pad_editor_open: true,
             pad_keys: [
                 'z', 'x', 'c', 'v', 'a', 's', 'd', 'f', 'q', 'w', 'e', 'r', '1', '2', '3', '4',
