@@ -470,6 +470,7 @@ impl ConstellationState {
             remove = closed;
             self.selected_layers[index] = selected_layer;
         }
+        let retrigger = &mut slot.retrigger;
         for (layer, sample) in slot
             .samples
             .iter_mut()
@@ -491,7 +492,22 @@ impl ConstellationState {
                 });
                 // Use the same bounded layout at every width. A waveform child
                 // must never push sound controls beyond the editor's right edge.
-                ui.strong("Sound");
+                ui.horizontal(|ui| {
+                    ui.strong("Sound");
+                    if ui
+                        .add(
+                            egui::Button::new("R")
+                                .selected(*retrigger)
+                                .min_size(Vec2::splat(24.0)),
+                        )
+                        .on_hover_text(
+                            "Retrigger: stop this pad's previous hit. Off allows overlapping hits.",
+                        )
+                        .clicked()
+                    {
+                        *retrigger = !*retrigger;
+                    }
+                });
                 Self::render_layer_parameters(ui, sample);
                 Self::render_layer_waveform(ui, sample);
                 ui.separator();

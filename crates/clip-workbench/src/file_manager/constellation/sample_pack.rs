@@ -274,6 +274,13 @@ pub struct PackSlot {
     pub mute: bool,
     #[serde(default)]
     pub solo: bool,
+    /// Stops this pad's previous hit before starting a new one; legacy packs default on.
+    #[serde(default = "default_retrigger")]
+    pub retrigger: bool,
+}
+
+fn default_retrigger() -> bool {
+    true
 }
 
 impl PackSlot {
@@ -285,6 +292,7 @@ impl PackSlot {
             choke_group: 0,
             mute: false,
             solo: false,
+            retrigger: true,
         }
     }
 

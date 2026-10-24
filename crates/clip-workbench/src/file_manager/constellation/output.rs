@@ -532,11 +532,18 @@ impl Rack {
         }
         let group = slot.choke_group;
         for (index, voices) in self.voices.iter_mut().enumerate() {
-            if index == slot_idx || (group != 0 && self.bank.slots[index].choke_group == group) {
+            if (index == slot_idx && slot.retrigger)
+                || (index != slot_idx && group != 0 && self.bank.slots[index].choke_group == group)
+            {
                 for player in voices.drain(..) {
                     player.stop();
                 }
             }
+        }
+        // Bound overlapping hits, retiring completed players even between UI frames.
+        self.voices[slot_idx].retain(|player| !player.empty());
+        while self.voices[slot_idx].len() + slot.samples.len() > 128 {
+            self.voices[slot_idx].remove(0).stop();
         }
         let slot = &self.bank.slots[slot_idx];
         if !slot
