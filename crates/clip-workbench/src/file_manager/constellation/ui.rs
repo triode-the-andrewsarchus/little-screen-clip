@@ -144,7 +144,8 @@ impl ConstellationState {
                     self.render_empty_state(ui, current_folder);
                     return;
                 }
-                if !self.browser_open
+                if self.pack_shelf_open
+                    && !self.browser_open
                     && !self.output_editor_open
                     && self.pad_editor_open
                     && !self.pack_bank.slots[self.selected_slot].is_empty()
