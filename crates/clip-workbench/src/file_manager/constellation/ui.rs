@@ -1537,6 +1537,25 @@ mod tests {
     }
 
     #[test]
+    fn tall_rack_uses_square_pads_without_widening_the_sidebar() {
+        let ctx = egui::Context::default();
+        let palette = little_clip_core::palette::AppPalette::default();
+        let mut state = ConstellationState::default();
+        render_frame(&ctx, &mut state, &palette, Vec2::new(1200.0, 1000.0));
+        assert_eq!(state.pad_drop_targets.len(), 16);
+        for (rect, _) in &state.pad_drop_targets {
+            assert!((rect.width() - rect.height()).abs() < 1.0);
+            assert!(rect.height() > 44.0);
+        }
+        let panel = egui::containers::panel::PanelState::load(
+            &ctx,
+            egui::Id::new("constellation_pack_shelf_panel"),
+        )
+        .unwrap();
+        assert!(panel.rect.width() <= 361.0);
+    }
+
+    #[test]
     fn rack_layout_does_not_grow_across_frames_or_open_a_pack_window() {
         for appearance in [
             little_clip_core::config::WorkbenchAppearance::Dark,

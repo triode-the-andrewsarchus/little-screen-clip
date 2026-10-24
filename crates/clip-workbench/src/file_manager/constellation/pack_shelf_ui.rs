@@ -186,9 +186,9 @@ impl ConstellationState {
         } else {
             0.0
         };
+        let width = ((ui.available_width() - gap * 3.0) / 4.0).max(28.0);
         let pad_height =
-            ((ui.available_height() - status_height - gap * 3.0 - 8.0) / 4.0).clamp(28.0, 44.0);
-        let width = ((ui.available_width() - gap * 3.0) / 4.0).max(24.0);
+            ((ui.available_height() - status_height - gap * 3.0 - 8.0) / 4.0).clamp(28.0, width);
         ui.scope(|ui| {
             ui.spacing_mut().interact_size.y = pad_height;
             ui.spacing_mut().item_spacing = Vec2::new(gap, gap);
@@ -209,11 +209,11 @@ impl ConstellationState {
                     let stroke = if self.selected_slot == index { Stroke::new(1.5_f32, visuals.text_color()) } else { visuals.widgets.noninteractive.bg_stroke };
                     painter.rect(rect, 4.0, fill, stroke);
                     let key = self.pad_keys[index].to_ascii_uppercase().to_string();
-                    painter.text(rect.min + Vec2::new(7.0, 4.0), egui::Align2::LEFT_TOP, key, egui::FontId::monospace(if pad_height < 36.0 { 9.0 } else { 11.0 }), visuals.text_color());
+                    painter.text(rect.min + Vec2::new(7.0, 4.0), egui::Align2::LEFT_TOP, key, egui::FontId::monospace(if pad_height < 36.0 { 10.0 } else { 14.0 }), visuals.text_color());
                     Self::paint_pad_status(ui, rect, slot, unavailable, loading, playing[index]);
                     let title = slot.samples.first().map_or("—", |sample| sample.filename.as_str());
                     let label = super::ui::short_label(title, ((width - 12.0) / 5.5).max(3.0) as usize);
-                    painter.text(rect.left_bottom() + Vec2::new(7.0, -4.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(10.0), visuals.text_color());
+                    painter.text(rect.left_bottom() + Vec2::new(7.0, -4.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(if pad_height >= 56.0 { 12.0 } else { 10.0 }), visuals.text_color());
                     if let Some(category) = slot.samples.first().and_then(|sample| sample.category) {
                         painter.line_segment([rect.left_bottom() + Vec2::new(5.0, -2.0), rect.right_bottom() + Vec2::new(-5.0, -2.0)], Stroke::new(2.0_f32, category.color()));
                     }
@@ -508,7 +508,7 @@ impl ConstellationState {
 
     fn render_selected_pad_header(&mut self, ui: &mut egui::Ui, index: usize) {
         ui.horizontal_wrapped(|ui| {
-            ui.strong(format!("Pad {}", index + 1));
+            ui.strong(format!("{} · Pad {}", self.pad_keys[index].to_ascii_uppercase(), index + 1));
             ui.toggle_value(&mut self.pack_bank.slots[index].mute, "Mute");
             ui.toggle_value(&mut self.pack_bank.slots[index].solo, "Solo");
             let group = &mut self.pack_bank.slots[index].choke_group;
