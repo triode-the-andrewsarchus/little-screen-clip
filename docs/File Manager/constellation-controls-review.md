@@ -261,3 +261,96 @@ widgets, single-band history ring and pitch transform. The +1,000 NLOC includes
 regression tests and DSP, rather than a second playback or file-save framework.
 The branch-wide regression remains, including the earlier indexing/extraction
 hotspots. This pass does not claim to eliminate that broader debt.
+
+## Follow-up: pad navigation, group priorities and folder continuity
+
+The six requested changes are implemented as separate commits. The priority
+follow-up supersedes the initial numeric control with the requested three levels.
+
+| Request | Resolution | Commit |
+|---|---|---|
+| Singleton mute groups | Leaving, moving or clearing a member dissolves any one-member remainder; loading normalizes legacy singletons. Undo restores partners together. | `acd8ba0` |
+| Unreadable active buttons | Reuse the map's rounded outline button for velocity override, Editor, Mute, Solo, compressor Bypass and saved-pack selection. | `8229478` |
+| Reveal clicked pads | Each pad cycles editor layers independently and centers the indexed sample without changing zoom. Double-click no longer launches Studio; the editor button remains. | `b253fbc` |
+| Choke priority | Explain and persist precedence. New groups assign High to the first pad, Medium to the second, Low to subsequent pads. All three remain editable. | `b0a2e81`, `eca94ce` |
+| Circular samples | Share one antialiased disk texture in the batched mesh, retaining four vertices/six indices per sample and equal radii at each zoom. | `d29324d` |
+| Keep Constellation across folders | Preserve the view while checking recursive audio presence on the existing worker queue. A completed empty inventory permits fallback; explicit view changes win. | `d214b9d` |
+
+Priority governs whether a hit is accepted while a partner rings: higher blocks
+lower; equal priority uses the latest hit. Finished, muted and solo-gated voices
+cannot block another pad. Existing groups keep manually edited levels when joined;
+new members of those groups start Low. Pack loading maps the brief numeric format
+onto Low/Medium/High; older packs without a priority use equal Low levels. Priority
+travels with the instrument during pad swaps and participates in history and saves.
+
+Pad navigation changes focus and camera position only on explicit ordinary clicks.
+Shift-click keeps assignment behavior. Keyboard/MIDI hits retain their existing
+performance behavior. Layer clicks wrap independently for each pad, and empty
+pads are safe. A layer absent from the current index reports that fact; it cannot
+be shown as an acoustic point until that location is indexed. Studio still uses
+the guarded copy-and-replace handoff through its editor button.
+
+The recursive presence check extends the existing guarded index inventory with
+an early exit. It does not decode files, follow symlink trees, include generated
+packs, or start indexing automatically. Folder generations reject stale results;
+a dedicated cancellation flag stops superseded inventories. Unknown/error results
+do not establish absence. Browser history and explicit mode changes retain their
+existing hooks, and navigation still stops preview audio.
+
+### Validation and architecture
+
+The file-manager suite passes 644 tests with one ignored. The full serial workspace
+run passes 2,569 tests with 23 ignored across 26 targets
+(`/tmp/constellation-navigation-workspace.log`). Coverage includes singleton cleanup
+and undo, group-join priorities, manual priority preservation, legacy metadata,
+active/finished/muted precedence, per-pad layer cycling, circular mesh density,
+recursive ordinary audio detection and inherited-view fallback. Existing camera
+and responsive-editor tests also pass.
+
+Refreshed current main remains `999cd24`. Against the start of this pass
+(`constellation-navigation-groups`, `49939a9`), the architecture tool reports
+**REGRESSION**: NLOC 241,457 → 241,867, functions 7,290 → 7,301, sum CCN
+29,549 → 29,608, average CCN 4.05 → 4.06, maximum CCN unchanged at 196,
+duplication 5.70% → 5.69%, clone groups 1,408 → 1,409, and reported cycles
+unchanged at six. The added clone is inventory-fixture setup; existing headless
+UI test clones are still reported in modified files.
+
+The changed hotspots are FileManager::tick (15 → 18), discover_audio_paths
+(17 → 18), render_starfield (32 → 34), and Rack::trigger (19 → 26). Their new
+branches perform view fallback after asynchronous presence checks, stop inventory
+at the first audio file, reveal a requested sample, and enforce audible-voice
+priority respectively. This is retained functional complexity; there is no new
+executor, device stream, dependency or source module. Circle rendering removes the
+custom diamond builder in favor of egui's existing textured-rectangle primitive.
+
+For the entire branch against current main: NLOC 227,320 → 241,867, functions
+6,934 → 7,301, sum CCN 27,909 → 29,608, average CCN 4.02 → 4.06, maximum 196,
+duplication 5.98% → 5.69%, clone groups 1,382 → 1,409, reported cycles five → six,
+and health 73.88 → 62.71. The broader branch regression remains. The unchanged
+Python video benchmark cycle again appears both added and resolved due to member
+ordering; no cycle fix is claimed.
+
+The final compact group menu (`b24d215`) replaces the wrapping priority row,
+keeping Studio visible when a grouped pad is selected. The responsive geometry
+regression now includes a grouped High-priority pad in both appearances. The full
+workspace run preceded this localized layout refinement; all 94 focused
+constellation tests passed again afterward.
+
+Final file-manager build, formatting, diff whitespace and acceptance-script Python
+compilation pass. Both private scenarios pass with 45 observations each:
+`/tmp/constellation-navigation-dark-completed` and
+`/tmp/constellation-navigation-light-completed` (hardware-Dvorak keys). They
+verify manual Medium/High changes, persisted join-order defaults, editor-button
+Studio entry, unchanged original bytes, two portable saves, recursive-only audio
+folders staying in Constellation, empty-folder fallback, and normal guarded exit.
+Screenshots of the grouped editor, priority menu and active velocity override
+were inspected. These use ALSA null; physical hardware audio/MIDI and perceptual
+pitch/compressor quality remain outside this runner.
+
+Intermediate automation attempts needed the existing English Tesseract data at
+`/tmp/constellation-tessdata` and corrections to assumptions about the removed
+pad double-click shortcut. OCR missed the High row and Editor label despite
+visible controls; click targets now use the verified menu-title offset and button
+center. An actual grouped-header overflow was fixed by the compact group menu,
+and the geometry test was extended. Product behavior was not weakened to make the
+scenario pass.

@@ -12,7 +12,9 @@ rescaling its points, including at zoom levels with point relaxation. The editor
 shows one layer at a time. Its layer tabs show truncated sample filenames, each
 with its own close button. Closing an inactive layer keeps the current layer
 selected. The Editor toggle sits beside Undo/Redo; Override MIDI velocity
-lives in Rack, and all dynamics controls live in Output. There is no output footer.
+lives in Rack, and all dynamics controls live in Output. Velocity override, Mute, Solo, Editor,
+Bypass and saved-pack selection share the neutral fill and rounded active-outline
+treatment used by the map filters. There is no output footer.
 Pads become square when height permits and compact vertically in small windows.
 The sidebar retains its existing default and width limits, and only the user's
 divider drag changes its width. The full-height minus rail on the right collapses
@@ -32,6 +34,11 @@ Z X C V
 
 Press a key to play a pad; Shift+key adds the selected map sample as a layer.
 Click a pad to select and play it, or Shift+click to assign the map selection.
+Ordinary clicks reveal its layers in round-robin order, independently for each
+pad, and select the matching editor tab. The map centers that sample in the
+visible canvas without changing zoom. A layer absent from the current folder's
+index reports that fact rather than inventing a point; index that location to map
+it. Double-clicks behave as repeated pad clicks, with no Studio handoff.
 Text fields keep their normal keys. Ctrl/Alt/Command combinations do not play pads.
 
 Space retriggers the active editor layer when its editor is visible, otherwise the
@@ -94,12 +101,24 @@ older packs default to retriggering.
 Hold Shift and right-click a pad to start a mute-group chain. Right-click further
 pads while keeping Shift held to join them. The chain adopts the first existing
 group it encounters or chooses an unused group (up to eight). Release Shift or
-press Escape to finish. Hover a grouped pad to see red links to its partners;
+press Escape to finish. Hover a grouped pad to see red links to its partners.
 Links are drawn behind every pad face, so they never cross pad labels or contents.
 G1–G8 mark membership. The hint names the linked keys; hold Alt for detailed pad
-information without covering those links during ordinary hover. Right-click → Leave mute group removes one member.
-Triggering a grouped pad always stops the other pads in that group; R determines
-whether its own previous voices stop too.
+information without covering those links during ordinary hover. Right-click →
+Leave mute group removes one member. A group with fewer than two
+members dissolves automatically, including after moving a member to another group
+or clearing a pad; Undo restores the partners together.
+
+New groups assign priority by click order: the first pad is High, the second
+Medium, and later pads Low. Newcomers to an existing group start Low; existing
+priorities stay as edited. The selected-pad header shows its group and priority in one compact menu, with
+High, Medium and Low choices, and pad badges and group hints show the current level. A ringing
+higher-priority pad blocks lower-priority hits. Equal priorities use the latest
+hit, which cuts off other ringing members. Muted, solo-gated and completed voices
+do not block hits. R determines whether the pad's own previous voices stop too.
+Priorities are independent per pad, so multiple pads may share a level. Old packs
+without priority metadata default to equal Low priorities, retaining latest-hit
+behavior; the brief numeric 0–7 format migrates to the three levels.
 Ungrouped pads overlap independently. Navigation, Escape, studio entry, and
 application close stop previews; queued MIDI hits from earlier view epochs cannot
 restart them. MIDI connections stay open while their note delivery is gated.
@@ -191,8 +210,8 @@ preparation. Mute and Solo gate active pad voices without restarting them. Cente
 balance preserves existing stereo level; mono is duplicated before balance. These
 settings also apply to exports.
 
-Double-click a populated pad to open its first layer in Audio Studio with the pad's
-trim selected. The direct Edit in Audio Studio button opens the selected layer.
+The direct Edit in Audio Studio button opens the selected layer with its trim
+selected. Pad clicks stay in the constellation.
 Returning offers Save copy and replace pad, Keep editing, or Return without
 replacing. Saves use the existing guarded audio export worker and publish a new
 `name.edited.wav` beside the original; collisions become `name.edited-1.wav`, etc.
@@ -209,7 +228,9 @@ and text, with their category color on the border. Hover audition, All and Mono
 also use rounded outlines rather than bright selected fills. The bottom status bar reports active / total
 samples. Re-indexing remains in File; there is no Map menu.
 
-Every visible sample gets a mesh marker of the same size at any given zoom.
+Every visible sample gets a circular dot of the same size at any given zoom.
+One shared antialiased disk texture keeps the batched mesh at four vertices and
+six indices per sample; circles do not add per-point CPU tessellation.
 The radius depends on the whole library size and camera zoom, so sparse folders
 remain readable without turning large libraries into a solid wall. Neither local
 density nor opening a dock changes point size. Ordinary zoom levels preserve the
@@ -241,6 +262,15 @@ without overwriting existing versions. Accepted writes survive navigation and
 defer application close. Discard approval survives the backend's final close event.
 
 ## Indexing and filtering
+
+When Constellation is active, changing folders retains it if ordinary audio exists
+in the destination or its subfolders. An existing nonempty snapshot proves cached
+audio presence; otherwise the existing guarded inventory checks recursively on a
+background worker and stops at the first audio filename. It does not decode or
+automatically index the folder. Hidden, symlink and generated-pack trees follow
+the indexer's existing exclusion rules. The view stays put while checking; a
+completed empty inventory permits normal view fallback. Errors do not prove
+absence. Explicit mode changes still win, and superseded checks are canceled.
 
 File → Re-index folder into sample constellation inventories the complete tree and reuses classified observations
 whose device/inode, size, and nanosecond mtime/ctime still match. New or changed

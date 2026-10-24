@@ -46,14 +46,28 @@ def pad_gestures(session, root, destination, red, stride):
         hover.wait(timeout=3)
     original = (root / "kick.wav").read_bytes()
     session.click(*destination, delay=0.05)
-    session.observe("pad-click-reveal", ["Edit in Audio Studio"])
-    session.click(*session.word("pad-click-reveal", "Studio"))
+    session.click(*destination, delay=0.1)
+    text = session.observe("pad-click-reveal", ["Packs"])
+    assert "AUDIO STUDIO" not in text, "double-click must stay in the constellation"
+    session.click(*session.word("pad-click-reveal", "Editor"))
+    session.observe("pad-editor-for-studio", ["Edit in Audio Studio", "High"])
+    session.click(*session.word("pad-editor-for-studio", "Group"))
+    session.observe("pad-priority-choices", ["High", "Medium", "Low"])
+    session.click(*session.word("pad-priority-choices", "Medium"))
+    session.observe("pad-priority-medium", ["Medium", "Edit in Audio Studio"])
+    session.click(*session.word("pad-priority-medium", "Group"))
+    session.observe("pad-priority-reopen", ["High", "Medium", "Low"])
+    priority_title = session.word("pad-priority-reopen", "Choke")
+    session.click(priority_title[0] + 60, priority_title[1] + 35)  # High row center below the menu title.
+    session.observe("pad-priority-restored", ["High", "Edit in Audio Studio"])
+    session.click(*session.word("pad-priority-restored", "Studio"))
     session.observe("pad-audio-studio", ["AUDIO STUDIO", "Selection info"])
     session.click(*(session.word("pad-audio-studio", "Back", tree=True, required=False) or (150, 118)))
     session.observe("pad-studio-close", ["Save an edited copy", "replace pad"])
     session.click(580, 457)  # Center of the confirmed modal save button.
     wait_for(lambda: bool(list(root.glob("kick.edited*.wav"))), "published edited sibling")
     session.observe("pad-studio-return", ["Packs"])
+    session.click(*(session.word("pad-studio-return", "Editor", required=False) or (1094, 466)))
     assert (root / "kick.wav").read_bytes() == original
 
 
@@ -141,6 +155,8 @@ def exercise(session, root, hardware_keys=False):
     assert len(bank["slots"][0]["samples"]) == 2
     assert len(bank["slots"][1]["samples"]) == 1
     assert bank["slots"][0]["choke_group"] == bank["slots"][1]["choke_group"] > 0
+    assert bank["slots"][0]["choke_priority"] == 2, "first linked pad defaults to High"
+    assert bank["slots"][1]["choke_priority"] == 1, "second linked pad defaults to Medium"
     assert bank["override_velocity"]
     for slot in bank["slots"]:
         for layer in slot["samples"]:
@@ -173,6 +189,19 @@ def exercise(session, root, hardware_keys=False):
     session.key("Escape")
     session.observe("rack-before-close", ["Packs"])
     session.click(*(session.word("rack-before-close", "Override", required=False) or (944, 534)))
+    nested_root = root / "recursive-audio"
+    nested = nested_root / "nested"
+    nested.mkdir(parents=True)
+    (nested / "hit.wav").write_bytes((root / "kick.wav").read_bytes())
+    session.address(nested_root)
+    session.observe("recursive-audio-folder", ["Sample constellation", "Packs", "Index folder"])
+    empty = root / "empty-folder"
+    empty.mkdir()
+    session.address(empty)
+    text = session.observe("empty-folder-fallback", ["Empty folder", "Constellation"])
+    assert "Packs" not in text, "an automatically inherited map must leave truly empty folders"
+    session.address(root)
+    session.observe("returned-folder", ["Music"])
     session.key("q", "ctrl")
     session.observe("close-guard", ["This sample pack has unsaved changes", "Discard changes"])
     session.click(616, 112)  # Center of Discard changes in the close guard.
