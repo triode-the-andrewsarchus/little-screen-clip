@@ -570,20 +570,7 @@ impl ConstellationState {
 
         // Allocate a single batched GPU mesh
         let mut star_mesh = egui::Mesh::default();
-        let base_star_radius = (4.0_f32 * self.zoom.clamp(0.6, 2.0)).clamp(2.0, 8.0);
-        // Count projected neighbors without suppressing any point. The full viewport
-        // keeps radii stable when docks obscure part of the map.
-        let density = PointDensity::new(
-            self.samples
-                .iter()
-                .map(|sample| {
-                    Pos2::new(
-                        center.x + sample.x * view_scale,
-                        center.y - sample.y * view_scale,
-                    )
-                })
-                .filter(|pos| viewport.expand(32.0).contains(*pos)),
-        );
+        let base_star_radius = map_point_radius(viewport, self.samples.len(), self.zoom);
 
         let mut selected_sample_overlay: Option<(Pos2, Color32)> = None;
 
@@ -599,7 +586,7 @@ impl ConstellationState {
         };
 
         // Dynamic spatial anti-overlap push when zoomed in
-        let push_factor = ((self.zoom - 1.8) / 0.8).clamp(0.0, 1.0);
+        let push_factor = spacing_strength(self.zoom);
         let mut relaxed_map: Option<std::collections::HashMap<&std::path::Path, Pos2>> = None;
 
         if push_factor > 0.0 {
@@ -690,12 +677,7 @@ impl ConstellationState {
 
                     let color = filtered_star_color(base_color, star.is_dimmed, is_filter_dimmed);
 
-                    add_star_diamond(
-                        &mut star_mesh,
-                        star.pos,
-                        map_point_radius(&density, star.pos, base_star_radius, self.zoom),
-                        color,
-                    );
+                    add_star_diamond(&mut star_mesh, star.pos, base_star_radius, color);
                 }
 
                 relaxed_map = Some(map);
@@ -750,12 +732,7 @@ impl ConstellationState {
                 let is_filter_dimmed = !self.matches_filters(sample, &query_lower);
                 let color = filtered_star_color(base_color, is_category_dimmed, is_filter_dimmed);
 
-                add_star_diamond(
-                    &mut star_mesh,
-                    Pos2::new(sx, sy),
-                    map_point_radius(&density, Pos2::new(sx, sy), base_star_radius, self.zoom),
-                    color,
-                );
+                add_star_diamond(&mut star_mesh, Pos2::new(sx, sy), base_star_radius, color);
             }
         }
 
@@ -1313,86 +1290,55 @@ pub(super) fn freq_to_note_str(freq: f32) -> String {
     format!("{}{}", note_names[note_idx], octave)
 }
 
-/// Fully uniform radii for the final four wheel steps, blended in beforehand.
-fn map_point_radius(density: &PointDensity, point: Pos2, maximum: f32, zoom: f32) -> f32 {
-    let uniform_at = 50.0 / 1.15_f32.powi(4);
-    let blend = ((zoom - uniform_at / 1.3) / (uniform_at - uniform_at / 1.3)).clamp(0.0, 1.0);
-    let compact = density.radius(point, maximum);
-    compact + (maximum - compact) * blend
+/// One radius for the whole library, independent of local density and dock visibility.
+/// Budget diamond area at fit zoom, then grow naturally with the camera zoom.
+fn map_point_radius(viewport: Rect, count: usize, zoom: f32) -> f32 {
+    let fitted_side = viewport.width().min(viewport.height()) * 0.9;
+    let fit_radius = (fitted_side * fitted_side * 0.12 / (2.0 * count.max(1) as f32))
+        .sqrt()
+        .min(4.0);
+    (fit_radius * zoom).clamp(0.35, 8.0)
 }
 
-/// Deterministic local spacing; bounded neighbor work and displacement retain the map shape.
+/// Leave the original projection untouched until the final four wheel steps.
+fn spacing_strength(zoom: f32) -> f32 {
+    let start = 50.0 / 1.15_f32.powi(4);
+    ((zoom - start) / (50.0 - start)).clamp(0.0, 1.0)
+}
+
+/// Place colliding points in nearby unoccupied cells with at most 48 probes each.
+/// Earlier points never move again: there is no iterative force propagation that
+/// can hollow out clusters or make dense/coincident inputs quadratic. Saturated
+/// neighborhoods retain overlaps rather than moving samples far from their origin.
 fn relax_star_positions(points: &mut [Pos2], spacing: f32) {
     if spacing <= 0.0 {
         return;
     }
-    let original = points.to_vec();
-    let cell = |pos: Pos2| {
-        (
-            (pos.x / spacing).floor() as i32,
-            (pos.y / spacing).floor() as i32,
-        )
-    };
-    let iterations = if points.len() <= 2048 { 16 } else { 4 };
-    for _ in 0..iterations {
-        let mut grid: std::collections::HashMap<_, Vec<usize>> = std::collections::HashMap::new();
-        for (index, point) in points.iter().enumerate() {
-            grid.entry(cell(*point)).or_default().push(index);
+    let mut occupied = std::collections::HashSet::with_capacity(points.len());
+    for point in points {
+        let cell = (
+            (point.x / spacing).floor() as i32,
+            (point.y / spacing).floor() as i32,
+        );
+        if occupied.insert(cell) {
+            continue;
         }
-        let mut next = points.to_vec();
-        for (index, point) in points.iter().enumerate() {
-            let (x, y) = cell(*point);
-            let mut displacement = Vec2::ZERO;
-            for cy in y - 1..=y + 1 {
-                for cx in x - 1..=x + 1 {
-                    for other in grid.get(&(cx, cy)).into_iter().flatten().take(48).copied() {
-                        if index == other {
-                            continue;
-                        }
-                        let delta = *point - points[other];
-                        let distance = delta.length();
-                        if distance >= spacing {
-                            continue;
-                        }
-                        let direction = if distance > 0.001 {
-                            delta / distance
-                        } else {
-                            let seed = index.min(other).wrapping_mul(73856093)
-                                ^ index.max(other).wrapping_mul(19349663);
-                            let angle = (seed % 360) as f32 * std::f32::consts::PI / 180.0;
-                            Vec2::angled(angle) * if index < other { 1.0 } else { -1.0 }
-                        };
-                        displacement += direction * (spacing - distance) * 0.5;
+        'search: for ring in 1_i32..=3 {
+            for dy in -ring..=ring {
+                for dx in -ring..=ring {
+                    if dx.abs().max(dy.abs()) != ring {
+                        continue;
+                    }
+                    let offset = Vec2::new(dx as f32, dy as f32) * spacing;
+                    if offset.length_sq() <= 64.0 * 64.0
+                        && occupied.insert((cell.0 + dx, cell.1 + dy))
+                    {
+                        *point += offset;
+                        break 'search;
                     }
                 }
             }
-            displacement *= spacing / displacement.length().max(spacing);
-            let mut offset = *point + displacement - original[index];
-            offset *= 64.0 / offset.length().max(64.0);
-            next[index] = original[index] + offset;
         }
-        points.copy_from_slice(&next);
-    }
-}
-
-/// Local screen density controls size, never whether a sample is drawn.
-struct PointDensity(std::collections::HashMap<(i32, i32), usize>);
-impl PointDensity {
-    fn cell(pos: Pos2) -> (i32, i32) {
-        ((pos.x / 32.0).floor() as i32, (pos.y / 32.0).floor() as i32)
-    }
-    fn new(points: impl Iterator<Item = Pos2>) -> Self {
-        let mut cells = std::collections::HashMap::new();
-        for point in points {
-            *cells.entry(Self::cell(point)).or_insert(0) += 1;
-        }
-        Self(cells)
-    }
-    fn radius(&self, point: Pos2, maximum: f32) -> f32 {
-        let count = self.0.get(&Self::cell(point)).copied().unwrap_or(1) as f32;
-        (32.0 * 32.0 * 0.12 / (2.0 * count))
-            .sqrt()
-            .clamp(0.35, maximum)
     }
 }
 
@@ -1670,22 +1616,22 @@ mod tests {
     }
 
     #[test]
-    fn final_zoom_steps_use_equal_radii_and_separate_coincident_points() {
+    fn spacing_only_runs_at_extreme_zoom_and_is_bounded_for_coincident_points() {
+        for zoom in [0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 28.0] {
+            assert_eq!(spacing_strength(zoom), 0.0);
+        }
+        assert_eq!(spacing_strength(50.0), 1.0);
         let point = Pos2::new(100.0, 100.0);
-        let density = PointDensity::new(std::iter::repeat_n(point, 1000));
-        for step in 0..=4 {
-            let zoom = 50.0 / 1.15_f32.powi(step);
-            assert!((map_point_radius(&density, point, 8.0, zoom) - 8.0).abs() < 0.00001);
-        }
-        let mut points = vec![point; 4];
+        let mut points = vec![point; 68_055];
         relax_star_positions(&mut points, 18.0);
-        for (index, first) in points.iter().enumerate() {
+        assert_eq!(points[0], point);
+        for first in &points {
             assert!((*first - point).length() <= 64.001);
-            for other in points.iter().skip(index + 1) {
-                assert!((*first - *other).length() > 17.5);
-            }
         }
-        let mut repeat = vec![point; 4];
+        for other in &points[1..4] {
+            assert!((*other - point).length() >= 18.0);
+        }
+        let mut repeat = vec![point; points.len()];
         relax_star_positions(&mut repeat, 18.0);
         assert_eq!(points, repeat);
     }
@@ -1726,12 +1672,30 @@ mod tests {
     }
 
     #[test]
-    fn density_preserves_sparse_targets_and_reduces_dense_marker_size() {
-        let point = Pos2::new(100.0, 100.0);
-        let sparse = PointDensity::new(std::iter::once(point));
-        let dense = PointDensity::new(std::iter::repeat_n(point, 1000));
-        assert_eq!(sparse.radius(point, 4.0), 4.0);
-        assert!(dense.radius(point, 4.0) < 0.5);
+    fn all_points_share_one_radius_at_every_zoom_in_sparse_and_dense_libraries() {
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        assert_eq!(map_point_radius(viewport, 100, 1.0), 4.0);
+        assert!(map_point_radius(viewport, 68_055, 1.0) < 1.0);
+        for count in [100, 68_055] {
+            let mut state = ConstellationState::new();
+            state.samples = (0..count).map(sample_fixture).collect();
+            // A sparse outlier must have precisely the same size as the dense cluster.
+            state.samples[0].x = 0.001;
+            for zoom in [0.5, 1.0, 2.0, 5.0, 20.0, 50.0] {
+                state.zoom = zoom;
+                let mesh = coarse_mesh(&mut state);
+                assert_eq!(mesh.len(), count * 4);
+                let radii: Vec<_> = mesh
+                    .chunks_exact(4)
+                    .map(|vertices| vertices[1].pos.x - vertices[3].pos.x)
+                    .collect();
+                assert!(
+                    radii
+                        .iter()
+                        .all(|radius| (*radius - radii[0]).abs() < 0.0001)
+                );
+            }
+        }
     }
 
     #[test]
