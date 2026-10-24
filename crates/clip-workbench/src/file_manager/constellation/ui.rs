@@ -62,17 +62,30 @@ impl ConstellationState {
                 .show_inside(ui, |ui| {
                     ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                     use crate::ui_tabs::{Tab, TabBar};
-                    if let Some(packs) = TabBar::new(
+                    if let Some(tab) = TabBar::new(
                         "constellation_rack_tabs",
-                        self.browser_open,
-                        &[Tab::new(false, "Rack"), Tab::new(true, "Packs")],
+                        if self.browser_open {
+                            1
+                        } else if self.output_editor_open {
+                            2
+                        } else {
+                            0
+                        },
+                        &[
+                            Tab::new(0, "Rack"),
+                            Tab::new(1, "Packs"),
+                            Tab::new(2, "Output"),
+                        ],
                         palette,
                     )
                     .equal_widths()
                     .show(ui)
                     {
-                        self.stop_playback();
-                        if packs {
+                        if self.browser_open || tab == 1 {
+                            self.stop_playback();
+                        }
+                        self.output_editor_open = tab == 2;
+                        if tab == 1 {
                             self.browser_open = true;
                             self.refresh_browser_packs(current_folder);
                         } else {
@@ -80,7 +93,11 @@ impl ConstellationState {
                         }
                     }
                     ui.add_space(8.0);
-                    if self.browser_open {
+                    if self.output_editor_open {
+                        egui::ScrollArea::vertical()
+                            .min_scrolled_height(0.0)
+                            .show(ui, |ui| self.render_compressor(ui));
+                    } else if self.browser_open {
                         self.render_pack_browser(ui, current_folder);
                     } else {
                         self.render_pack_shelf(ui, current_folder);
@@ -96,6 +113,7 @@ impl ConstellationState {
                     return;
                 }
                 if !self.browser_open
+                    && !self.output_editor_open
                     && self.pad_editor_open
                     && !self.pack_bank.slots[self.selected_slot].is_empty()
                 {

@@ -19,6 +19,7 @@
 pub mod audio_probe;
 mod background;
 pub mod classifier;
+mod compressor_ui;
 pub mod db;
 pub mod generated_model;
 mod history;
@@ -98,6 +99,7 @@ pub struct ConstellationState {
     max_duration: f32,
     channel_filter: u16,
     filters_open: bool,
+    output_editor_open: bool,
     pub search_query: String,
     pub hover_to_play: bool,
     pub selected_path: Option<PathBuf>,
@@ -166,6 +168,7 @@ impl Default for ConstellationState {
             max_duration: 0.0,
             channel_filter: 0,
             filters_open: false,
+            output_editor_open: false,
             search_query: String::new(),
             hover_to_play: true,
             selected_path: None,

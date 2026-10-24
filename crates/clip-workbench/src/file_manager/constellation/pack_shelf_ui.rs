@@ -402,15 +402,26 @@ impl ConstellationState {
                     "Force all hits to MIDI velocity 127. Keyboard and mouse hits already use 127.",
                 );
             ui.separator();
-            ui.label("Glue");
-            ui.toggle_value(&mut self.pack_bank.compressor_bypass, "Bypass").on_hover_text("Bypass the stereo pad compressor and peak ceiling. Pad input headroom stays unchanged.");
-            let reduction = self.playback.lock().unwrap().output.as_ref().map_or(0.0, |output| output.reduction_db());
-            ui.add_enabled_ui(!self.pack_bank.compressor_bypass, |ui| {
-                ui.add(egui::DragValue::new(&mut self.pack_bank.compressor_threshold_db).speed(0.2).clamp_range(-48.0..=0.0).fixed_decimals(1).prefix("Threshold ").suffix(" dB"));
-                ui.add(egui::DragValue::new(&mut self.pack_bank.compressor_ratio).speed(0.1).clamp_range(1.0..=12.0).fixed_decimals(1).prefix("Ratio ").suffix(":1"));
-            });
-            ui.add(egui::ProgressBar::new((reduction / 18.0).clamp(0.0, 1.0)).desired_width(96.0).fill(ui.visuals().widgets.hovered.bg_fill).text(RichText::new(format!("GR {reduction:.1} dB")).color(ui.visuals().text_color())));
-
+            if ui
+                .selectable_label(self.output_editor_open, "Compression")
+                .clicked()
+            {
+                self.pack_shelf_open = true;
+                if self.browser_open {
+                    self.stop_playback();
+                    self.close_pack_browser();
+                }
+                self.output_editor_open = !self.output_editor_open;
+            }
+            ui.toggle_value(&mut self.pack_bank.compressor_bypass, "Bypass");
+            let reduction = self
+                .playback
+                .lock()
+                .unwrap()
+                .output
+                .as_ref()
+                .map_or(0.0, |output| output.reduction_db());
+            ui.weak(format!("GR {reduction:.1} dB"));
         });
     }
 

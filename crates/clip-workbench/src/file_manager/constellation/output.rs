@@ -26,6 +26,7 @@ pub(super) struct PadOutput {
     reduction: Arc<AtomicU32>,
     threshold: Arc<AtomicU32>,
     exponent: Arc<AtomicU32>,
+    levels: Arc<[AtomicU32; 2]>,
 }
 
 impl PadOutput {
@@ -50,6 +51,7 @@ impl PadOutput {
         let glue = Glue::new(source, bypass.clone(), reduction.clone());
         let threshold = glue.threshold.clone();
         let exponent = glue.exponent.clone();
+        let levels = glue.levels.clone();
         player.append(glue);
         Self {
             mixer,
@@ -58,6 +60,7 @@ impl PadOutput {
             reduction,
             threshold,
             exponent,
+            levels,
         }
     }
 
@@ -92,6 +95,14 @@ impl PadOutput {
         }
     }
 
+    pub fn levels_db(&self) -> [f32; 2] {
+        std::array::from_fn(|index| {
+            20.0 * f32::from_bits(self.levels[index].load(Ordering::Relaxed))
+                .max(0.000001)
+                .log10()
+        })
+    }
+
     pub fn reduction_db(&self) -> f32 {
         f32::from_bits(self.reduction.load(Ordering::Relaxed))
     }
@@ -123,9 +134,11 @@ struct Glue<S> {
     reduction: Arc<AtomicU32>,
     threshold: Arc<AtomicU32>,
     exponent: Arc<AtomicU32>,
+    levels: Arc<[AtomicU32; 2]>,
     gain: f32,
     right: Option<f32>,
     meter_frames: u16,
+    peaks: [f32; 2],
 }
 
 impl<S> Glue<S> {
@@ -136,9 +149,11 @@ impl<S> Glue<S> {
             reduction,
             threshold: Arc::new(AtomicU32::new(0.85_f32.to_bits())),
             exponent: Arc::new(AtomicU32::new(0.5_f32.to_bits())),
+            levels: Arc::new([AtomicU32::new(0), AtomicU32::new(0)]),
             gain: 1.0,
             right: None,
             meter_frames: 0,
+            peaks: [0.0; 2],
         }
     }
 
@@ -166,7 +181,13 @@ impl<S> Glue<S> {
         } else {
             self.gain.min(0.98 / peak.max(0.98))
         };
+        self.peaks[0] = self.peaks[0].max(peak);
+        self.peaks[1] = self.peaks[1].max(peak * gain);
         if self.meter_frames == 0 {
+            for (level, peak) in self.levels.iter().zip(self.peaks) {
+                level.store(peak.to_bits(), Ordering::Relaxed);
+            }
+            self.peaks = [0.0; 2];
             self.reduction.store(
                 (-20.0 * gain.max(0.000001).log10()).max(0.0).to_bits(),
                 Ordering::Relaxed,
