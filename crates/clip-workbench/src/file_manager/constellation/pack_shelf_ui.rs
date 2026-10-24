@@ -105,6 +105,7 @@ impl ConstellationState {
                     self.slot_flash[slot_idx] = Some(Instant::now());
                 }
             } else {
+                self.playback.lock().unwrap().show_midi_notes = false;
                 self.trigger_slot(slot_idx);
             }
         }
@@ -190,9 +191,14 @@ impl ConstellationState {
             self.choke_anchor = None;
         }
         let mut hovered = None;
-        let playing: [bool; super::sample_pack::NUM_SLOTS] = {
+        let (playing, show_midi_notes): ([bool; super::sample_pack::NUM_SLOTS], bool) = {
             let rack = self.playback.lock().unwrap();
-            std::array::from_fn(|index| rack.voices[index].iter().any(|player| !player.empty()))
+            (
+                std::array::from_fn(|index| {
+                    rack.voices[index].iter().any(|player| !player.empty())
+                }),
+                rack.show_midi_notes,
+            )
         };
         let gap = 5.0;
         let status_height = if self
@@ -246,7 +252,13 @@ impl ConstellationState {
                             visuals.widgets.noninteractive.bg_stroke
                         };
                         painter.rect(rect, 4.0, fill, stroke);
-                        let key = self.pad_keys[index].to_ascii_uppercase().to_string();
+                        let key = if show_midi_notes {
+                            super::ui::freq_to_note_str(
+                                440.0 * 2.0_f32.powf((36.0 + index as f32 - 69.0) / 12.0),
+                            )
+                        } else {
+                            self.pad_keys[index].to_ascii_uppercase().to_string()
+                        };
                         painter.text(
                             rect.min + Vec2::new(7.0, 4.0),
                             egui::Align2::LEFT_TOP,

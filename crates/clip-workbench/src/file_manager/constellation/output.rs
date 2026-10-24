@@ -365,6 +365,7 @@ pub(super) struct Rack {
     pub voices: [Vec<Player>; super::sample_pack::NUM_SLOTS],
     pub auditions: Vec<Player>,
     pub map_playing: bool,
+    pub show_midi_notes: bool,
 }
 impl Default for Rack {
     fn default() -> Self {
@@ -374,6 +375,7 @@ impl Default for Rack {
             voices: std::array::from_fn(|_| Vec::new()),
             auditions: Vec::new(),
             map_playing: false,
+            show_midi_notes: false,
         }
     }
 }

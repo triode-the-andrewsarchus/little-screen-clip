@@ -1352,7 +1352,7 @@ pub(super) fn short_label(value: &str, limit: usize) -> String {
     }
 }
 
-fn freq_to_note_str(freq: f32) -> String {
+pub(super) fn freq_to_note_str(freq: f32) -> String {
     let note_names = [
         "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
     ];

@@ -169,8 +169,9 @@ fn dispatch_hit(
     if !active.load(Ordering::SeqCst) || epoch.load(Ordering::SeqCst) != generation {
         return None;
     }
-    rack.trigger(pad, velocity)
-        .then_some((generation, pad, velocity))
+    rack.show_midi_notes = true;
+    rack.trigger(pad, velocity);
+    Some((generation, pad, velocity))
 }
 
 fn note_hit(message: &[u8]) -> Option<(usize, u8)> {
