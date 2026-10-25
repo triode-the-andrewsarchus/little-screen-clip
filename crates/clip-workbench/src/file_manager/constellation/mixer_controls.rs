@@ -41,10 +41,12 @@ pub(super) fn layer_strip(
     }
     let mut studio = false;
     let bounds = ui.available_rect_before_wrap();
-    let row_height =
-        ui.spacing().interact_size.y.max(
-            ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().button_padding.y * 2.0,
-        );
+    let row_height = ui.spacing().interact_size.y.max(
+        ui.text_style_height(&ui.style().drag_value_text_style)
+            .max(ui.text_style_height(&egui::TextStyle::Button))
+            .max(ui.text_style_height(&egui::TextStyle::Body))
+            + ui.spacing().button_padding.y * 2.0,
+    );
     let mut cursor = bounds.min;
     for (section, width) in widths.into_iter().enumerate() {
         if cursor.x + width > bounds.right() && cursor.x > bounds.left() {
@@ -55,7 +57,9 @@ pub(super) fn layer_strip(
         }
         let rect = Rect::from_min_size(cursor, Vec2::new(width, row_height));
         let mut child = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center));
-        child.set_clip_rect(ui.clip_rect().intersect(rect));
+        // Native button outlines extend half a point beyond their layout bounds.
+        child.set_clip_rect(ui.clip_rect().intersect(rect.expand(1.0)));
+        child.spacing_mut().interact_size.y = row_height;
         let ui = &mut child;
         ui.spacing_mut().item_spacing.x = 4.0;
         if section != 0 {
@@ -111,7 +115,10 @@ pub(super) fn layer_strip(
         cursor.x = rect.right() + gap;
     }
     ui.allocate_rect(
-        Rect::from_min_max(bounds.min, Pos2::new(bounds.right(), cursor.y + row_height)),
+        Rect::from_min_max(
+            bounds.min,
+            Pos2::new(bounds.right(), cursor.y + row_height + 1.0),
+        ),
         Sense::hover(),
     );
 
@@ -190,7 +197,7 @@ fn fader(
             // Limit user edits while retaining the exact rate of old Time-mode packs (up to 4×).
             let mut edited = *value;
             let readout = ui.add_sized(
-                Vec2::new(66.0, 20.0),
+                Vec2::new(66.0, ui.spacing().interact_size.y),
                 egui::DragValue::new(&mut edited)
                     .speed(step)
                     .custom_parser(move |text| {

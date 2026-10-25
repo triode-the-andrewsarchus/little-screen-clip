@@ -107,7 +107,7 @@ def exercise(session, root, hardware_keys=False, editor_only=False):
     assert "Layer actions" not in text and "Fit selection" not in text and "drag IN / OUT" not in text
     if editor_only:
         original = (root / "kick.wav").read_bytes()
-        session.click(*session.word("assigned-slot", "Studio"))
+        session.click(*(session.word("assigned-slot", "Studio", required=False) or (729, 702)))
         session.observe("editor-studio-open", ["AUDIO STUDIO", "Selection info"])
         session.click(*(session.word("editor-studio-open", "Back", tree=True, required=False) or (150, 118)))
         session.observe("editor-studio-close", ["Return without replacing"])

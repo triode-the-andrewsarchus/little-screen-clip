@@ -1990,6 +1990,7 @@ mod tests {
         ] {
             let ctx = egui::Context::default();
             crate::ui_ext::configure_workbench_style(&ctx);
+            ctx.style_mut(|style| style.animation_time = 0.0);
             let palette = little_clip_core::palette::AppPalette::for_appearance(appearance);
             crate::ui_appearance::apply_visuals(&ctx, &palette);
             let mut state = ConstellationState::new();
@@ -2013,6 +2014,20 @@ mod tests {
                 render_frame(&ctx, &mut state, &palette, size);
                 let output = render_frame(&ctx, &mut state, &palette, size);
 
+                let editor = egui::containers::panel::PanelState::load(
+                    &ctx,
+                    egui::Id::new("constellation_selected_pad"),
+                )
+                .unwrap()
+                .rect;
+                assert!(
+                    !output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Rect(rect) if rect.rect.width() <= 12.0
+                        && rect.rect.height() > 40.0
+                        && rect.rect.right() > editor.right() - 24.0
+                        && editor.contains_rect(rect.rect))),
+                    "The default editor should not need a vertical scrollbar at {size:?}"
+                );
                 for wanted in [
                     "kick.wav",
                     "Gain",
@@ -2050,6 +2065,27 @@ mod tests {
                         })
                         .unwrap()
                 };
+                for label in ["+1.00×", "+0 oct"] {
+                    let point = center(label);
+                    let readout = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(rect)
+                                if rect.rect.contains(point) && rect.rect.width() < 100.0 =>
+                            {
+                                Some((shape.clip_rect, rect))
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert!(
+                        readout
+                            .0
+                            .contains_rect(readout.1.rect.expand(readout.1.stroke.width * 0.5)),
+                        "{label} border clipped at {size:?}: {readout:?}"
+                    );
+                }
                 let pitch_readout = center("+0 oct");
                 let studio = center("Edit in Audio Studio");
                 assert!(

@@ -20,7 +20,8 @@ impl ConstellationState {
         let mut view = ui
             .data(|data| data.get_temp::<AudioViewport>(id))
             .unwrap_or(full);
-        let height = if ui.available_width() < 350.0 {
+        // Leave room for wrapped controls in narrow docks.
+        let height = if ui.available_width() < 460.0 {
             100.0
         } else {
             140.0

@@ -574,3 +574,37 @@ allows this bounded regression check without repeating the full portable-pack
 scenario. OCR fallbacks use verified text crops and a confirmed modal button
 center. Formatting, Python compilation and `git diff --check` pass. The private
 runner uses ALSA null; these checks do not establish physical audio or MIDI quality.
+
+
+## Pad-editor overflow and readout borders
+
+The editor now reserves the waveform row's actual content height rather than a
+fixed 200 pixels in both columns, and omits its redundant trailing divider. Narrow
+waveforms use the existing compact height below 460 pixels so wrapped control rows
+fit the default dock. Waveform-row clipping follows the parent viewport instead
+of the fixed layout hint. The performance row measures the native DragValue font
+as well as button/body fonts, sizes readouts to that row, and reserves one pixel
+for their outlines. This fixes clipping that text-only visibility checks missed.
+The original layout fails the new full-border assertion; the corrected layout
+passes in both themes at all four existing window sizes. Scrollbar animations are
+disabled in this test so unexpected default overflow is visible immediately.
+
+All 103 constellation tests pass (`/tmp/constellation-editor-overflow-verified-tests.log`),
+as does the file-manager build (`/tmp/constellation-editor-overflow-build.log`).
+Private compact-editor checks pass ten observations each in dark and
+light/hardware-Dvorak modes (`/tmp/constellation-editor-fit-dark-verified` and
+`/tmp/constellation-editor-fit-light`). Screenshots confirm intact readout borders
+and no editor scrollbar. An OCR-only failure to locate the Studio label uses its
+visually verified button center; Studio opening, return and unchanged-original
+assertions still run. Formatting, Python compilation and diff checks pass.
+
+Against `constellation-editor-overflow` (`579793b`), architecture tools report
+REGRESSION from the expanded rendering assertions and the OCR fallback: summed
+CCN 29,720 → 29,729, entirely in test/acceptance code; production function
+complexities are unchanged. NLOC rises 242,737 → 242,781; functions remain 7,322,
+clones fall 1,414 → 1,413, duplication stays 5.68%, cycles stay six, average CCN
+stays 4.06 and maximum stays 196. No new mechanisms or dependencies are added.
+Against current-main baseline `999cd24`, the entire branch remains REGRESSION:
+NLOC 227,320 → 242,781, functions 6,934 → 7,322, summed CCN 27,909 → 29,729,
+duplication 5.98% → 5.68%, clones 1,382 → 1,413, cycles five → six, health
+73.8835 → 62.6876. The earlier branch-wide debt remains distinct from this fix.

@@ -439,8 +439,7 @@ impl ConstellationState {
         ui: &mut egui::Ui,
         palette: &little_clip_core::palette::AppPalette,
     ) {
-        // Parameter rows use compact chrome so the essential controls and fades
-        // remain accessible above the waveform at every file-manager window size.
+        // Compact chrome keeps the waveform and performance strip within the dock.
         ui.spacing_mut().interact_size.y = 22.0;
         ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
         ui.spacing_mut().item_spacing.y = 4.0;
@@ -488,7 +487,7 @@ impl ConstellationState {
                 let width = ui.available_width();
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
-                        Vec2::new(68.0, 200.0),
+                        Vec2::new(68.0, 0.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             super::mixer_controls::mixer(ui, sample);
@@ -499,14 +498,17 @@ impl ConstellationState {
                         Vec2::new((width - 78.0).max(80.0), 200.0),
                     );
                     let mut canvas = ui.child_ui(wave, egui::Layout::top_down(egui::Align::Min));
-                    canvas.set_clip_rect(ui.clip_rect().intersect(wave));
+                    canvas.set_clip_rect(ui.clip_rect().intersect(Rect::from_min_max(
+                        wave.min,
+                        egui::pos2(wave.right(), ui.clip_rect().bottom()),
+                    )));
                     Self::render_layer_waveform(&mut canvas, sample);
                     if super::mixer_controls::layer_strip(&mut canvas, sample, retrigger) {
                         studio_layer = Some(layer);
                     }
-                    ui.allocate_rect(wave, egui::Sense::hover());
+                    // Reserve actual contents, not the canvas's generous layout hint.
+                    ui.allocate_rect(canvas.min_rect(), egui::Sense::hover());
                 });
-                ui.separator();
             });
         }
         if let Some(layer) = remove {
