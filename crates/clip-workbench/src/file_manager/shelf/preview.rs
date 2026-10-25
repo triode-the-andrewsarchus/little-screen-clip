@@ -22,6 +22,7 @@ pub(in crate::file_manager) enum Source {
     Slot(SlotId, uuid::Uuid),
     Gallery {
         path: PathBuf,
+        revision: u64,
         edge: u32,
         orientation: u8,
     },
@@ -93,9 +94,10 @@ impl Source {
             Source::Slot(slot, expected) => slot_preview(slot, expected),
             Source::Gallery {
                 path,
+                revision,
                 edge,
                 orientation,
-            } => gallery_preview(&path, edge, orientation, token),
+            } => gallery_preview(&path, revision, edge, orientation, token),
             Source::Photo { path, revision } => {
                 super::super::image_strip::load(&path, revision, token)
             }
@@ -709,7 +711,13 @@ fn thumbnail(bytes: &[u8], mime: Option<&str>) -> Option<ImageThumbnail> {
     sized_thumbnail(bytes, mime, 128, 80)
 }
 
-fn gallery_preview(path: &Path, edge: u32, orientation: u8, cancelled: &AtomicBool) -> Data {
+fn gallery_preview(
+    path: &Path,
+    revision: u64,
+    edge: u32,
+    orientation: u8,
+    cancelled: &AtomicBool,
+) -> Data {
     let mut data = Data::new(display_path(path), "Photo".into(), Icon::Image);
     if cancelled.load(Ordering::Relaxed) {
         return data;
@@ -717,6 +725,9 @@ fn gallery_preview(path: &Path, edge: u32, orientation: u8, cancelled: &AtomicBo
     let Ok(source) = crate::file_source::FileSource::capture(path) else {
         return data;
     };
+    if super::super::filesystem::check_revision(path, revision).is_err() {
+        return data;
+    }
     data.image = super::super::gallery::thumbnail::load(path, edge, orientation, cancelled);
     if let Some(ref image) = data.image {
         let (mut w, mut h) = crate::file_source::open_regular_file(path, true)
@@ -732,6 +743,7 @@ fn gallery_preview(path: &Path, edge: u32, orientation: u8, cancelled: &AtomicBo
         data.detail = "Preview unavailable; open in Image Studio or externally".into();
     }
     if source.check().is_err()
+        || super::super::filesystem::check_revision(path, revision).is_err()
         || crate::file_source::FileSource::capture(path).ok().as_ref() != Some(&source)
     {
         data.image = None;
@@ -995,7 +1007,7 @@ mod guarded_gallery_tests {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             tx.send(
-                gallery_preview(&path, 128, 1, &AtomicBool::new(false))
+                gallery_preview(&path, 0, 128, 1, &AtomicBool::new(false))
                     .image
                     .is_none(),
             )

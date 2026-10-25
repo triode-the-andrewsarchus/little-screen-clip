@@ -79,6 +79,7 @@ impl Hover {
                 id,
                 Source::Gallery {
                     path: entry.path.clone(),
+                    revision: entry.revision,
                     edge,
                     orientation: analysis.orientation,
                 },

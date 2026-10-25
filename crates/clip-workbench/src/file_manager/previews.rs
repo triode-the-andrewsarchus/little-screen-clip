@@ -602,6 +602,7 @@ impl EntryPreviews {
                 id,
                 Source::Gallery {
                     path: entry.path.clone(),
+                    revision: entry.revision,
                     edge,
                     orientation,
                 },
@@ -614,6 +615,7 @@ impl EntryPreviews {
                 id,
                 Source::Gallery {
                     path: entry.path.clone(),
+                    revision: entry.revision,
                     edge,
                     orientation,
                 },

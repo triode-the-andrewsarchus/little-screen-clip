@@ -1229,7 +1229,7 @@ fn paint_gallery_tile(
             * crate::file_manager::gallery::hover::HOVER_EDGE_STEP;
 
         let active_texture = if let Some(ref mut hover) = hover {
-            hover.texture_for(&entry.path, needed_edge, 1, texture_info)
+            hover.texture_for(&entry.path, entry.revision, needed_edge, 1, texture_info)
         } else {
             texture_info
         };
