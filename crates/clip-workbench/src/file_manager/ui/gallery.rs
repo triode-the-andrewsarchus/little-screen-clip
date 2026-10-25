@@ -428,6 +428,9 @@ impl FileManager {
         let clip_rect = canvas_rect.intersect(prev_clip);
         ui.set_clip_rect(clip_rect);
 
+        // Tile clicks request the shared browser focus ID. Register it every
+        // frame so egui retains focus and forwards selection/clipboard shortcuts.
+        ui.interact(canvas_rect, list_id(), Sense::focusable_noninteractive());
         self.similarity_canvas
             .handle_input(ui, canvas_rect, &response);
 

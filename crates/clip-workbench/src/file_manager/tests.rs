@@ -1649,3 +1649,18 @@ fn masonry_keyboard_selection_includes_visible_folder_tiles() {
     manager.move_selection_by(1, false);
     assert_eq!(manager.selected_paths(), vec![folder]);
 }
+
+#[test]
+fn similarity_canvas_retains_browser_keyboard_focus_across_frames() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut manager, _jobs, ctx) = rendered(root.path());
+    manager.view = BrowserView::Photos;
+    manager.photo_mode = gallery::similarity::PhotoMode::Similarity;
+    frame(&mut manager, &ctx, vec![]);
+    let focus = super::ui::list_id();
+    ctx.memory_mut(|memory| memory.request_focus(focus));
+    for _ in 0..3 {
+        frame(&mut manager, &ctx, vec![]);
+    }
+    assert!(ctx.memory(|memory| memory.has_focus(focus)));
+}
