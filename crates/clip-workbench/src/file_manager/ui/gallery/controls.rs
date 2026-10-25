@@ -364,6 +364,8 @@ fn grid_header(
     ui.allocate_ui_at_rect(rect.shrink2(vec2(4.0, 2.0)), |ui| {
         ui.set_clip_rect(clip);
         ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().button_padding = vec2(3.0, 1.0);
+        ui.spacing_mut().interact_size.y = 20.0;
         ui.horizontal(|ui| {
             let mut included = grid.selected_for_search;
             if ui
