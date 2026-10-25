@@ -1610,6 +1610,7 @@ fn recursive_photo_selection_and_keyboard_use_canvas_entries() {
     manager.select(a.clone());
     manager.select_with(b.clone(), false, true);
     assert_eq!(manager.selected_paths(), vec![a.clone(), b.clone()]);
+    assert!(manager.selection_summary().contains("2 files"));
     manager.select(a.clone());
     manager.move_selection_by(1, false);
     assert_eq!(manager.selected_paths(), vec![b.clone()]);
@@ -1635,4 +1636,16 @@ fn image_viewer_collection_ignores_a_previous_similarity_folder() {
         manager.view = view;
         assert_eq!(manager.photo_collection(&target), vec![target.clone()]);
     }
+}
+
+#[test]
+fn masonry_keyboard_selection_includes_visible_folder_tiles() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    let (mut manager, _jobs) = loaded(root.path());
+    manager.view = BrowserView::Photos;
+    manager.photo_mode = gallery::similarity::PhotoMode::Masonry;
+    manager.move_selection_by(1, false);
+    assert_eq!(manager.selected_paths(), vec![folder]);
 }

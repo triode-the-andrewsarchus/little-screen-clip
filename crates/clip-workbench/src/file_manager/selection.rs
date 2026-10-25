@@ -97,7 +97,6 @@ impl FileManager {
                     .iter()
                     .filter_map(|&index| directory.entries.get(index))
             })
-            .filter(|entry| self.view != super::BrowserView::Photos || entry.is_photo())
             .collect()
     }
 

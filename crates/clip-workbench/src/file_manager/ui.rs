@@ -462,13 +462,9 @@ impl FileManager {
         }
         let selection = self.location().map(|location| &location.selection);
         let selected = selection.is_some_and(|paths| !paths.is_empty());
-        let entries = self
-            .directory
-            .iter()
-            .flat_map(|directory| self.visible.iter().map(|&index| &directory.entries[index]))
-            .filter(|entry| {
-                !selected || selection.is_some_and(|paths| paths.contains(&entry.path))
-            });
+        let entries = self.displayed_entries().into_iter().filter(|entry| {
+            !selected || selection.is_some_and(|paths| paths.contains(&entry.path))
+        });
         let mut folders = 0;
         let mut files = 0;
         let mut bytes = 0_u64;
