@@ -132,7 +132,10 @@ fn test_high_dimensional_embedding_gemma_support() {
         features.push(v);
     }
 
-    let coords = super::embedding::project_features_to_2d(&features);
+    let coords = super::embedding::project_features_to_2d(
+        &features,
+        &std::sync::atomic::AtomicBool::new(false),
+    );
     assert_eq!(coords.len(), 10);
 
     let avg1: f32 = coords[0..5].iter().map(|c| c.0).sum::<f32>() / 5.0;
@@ -222,7 +225,7 @@ fn test_siglip_giant_1536d_embedding_and_normalization() {
         for j in 0..100 {
             v[j] = 1.0 + (i as f32) * 0.02;
         }
-        let feat = FeatureVector::Dense(v);
+        let feat = FeatureVector::Dense((v).into());
         assert_eq!(feat.dimension(), D);
         features.push(feat.to_vec());
     }
@@ -233,11 +236,14 @@ fn test_siglip_giant_1536d_embedding_and_normalization() {
         for j in 200..300 {
             v[j] = 1.0 + (i as f32) * 0.02;
         }
-        let feat = FeatureVector::Dense(v);
+        let feat = FeatureVector::Dense((v).into());
         features.push(feat.to_vec());
     }
 
-    let coords = super::embedding::project_features_to_2d(&features);
+    let coords = super::embedding::project_features_to_2d(
+        &features,
+        &std::sync::atomic::AtomicBool::new(false),
+    );
     assert_eq!(coords.len(), 10);
 
     let avg1: f32 = coords[0..5].iter().map(|c| c.0).sum::<f32>() / 5.0;
@@ -259,13 +265,16 @@ fn test_heterogeneous_feature_vector_pca() {
 
     let mut dense1 = vec![0.0f32; 1536];
     dense1[0] = 1.0;
-    features.push(FeatureVector::Dense(dense1).to_vec());
+    features.push(FeatureVector::Dense((dense1).into()).to_vec());
 
     let mut dense2 = vec![0.0f32; 1536];
     dense2[1] = 1.0;
-    features.push(FeatureVector::Dense(dense2).to_vec());
+    features.push(FeatureVector::Dense((dense2).into()).to_vec());
 
-    let coords = super::embedding::project_features_to_2d(&features);
+    let coords = super::embedding::project_features_to_2d(
+        &features,
+        &std::sync::atomic::AtomicBool::new(false),
+    );
     assert_eq!(coords.len(), 4);
     for (x, y) in coords {
         assert!(x.is_finite());
@@ -320,7 +329,7 @@ fn test_multi_grid_search_retention_and_chaining() {
         if i < 2 {
             vec[2] = 1.0;
         }
-        canvas.insert_hash(path, FeatureVector::Dense(vec), 1);
+        canvas.insert_hash(path, FeatureVector::Dense((vec).into()), 1);
     }
 
     canvas.set_entries(entries);
@@ -337,6 +346,7 @@ fn test_multi_grid_search_retention_and_chaining() {
 
     let candidate_indices = canvas.grids[0].indices.clone();
     let grid1_id = canvas.add_search_grid("animal", false, candidate_indices, animal_concept);
+    canvas.settle_layout();
 
     assert_eq!(canvas.grids.len(), 2);
     // Base grid STILL retains all 12 photos!
@@ -368,6 +378,7 @@ fn test_multi_grid_search_retention_and_chaining() {
     assert_eq!(chained_candidates, vec![0, 1, 2, 3]);
 
     let grid2_id = canvas.add_search_grid("indoors", false, chained_candidates, indoors_concept);
+    canvas.settle_layout();
 
     assert_eq!(canvas.grids.len(), 3);
     // Base grid still retains all 12 photos!
@@ -385,6 +396,7 @@ fn test_multi_grid_search_retention_and_chaining() {
 
     let base_candidates = canvas.grids[0].indices.clone();
     let grid3_id = canvas.add_search_grid("!animal", true, base_candidates, inv_animal_concept);
+    canvas.settle_layout();
 
     assert_eq!(canvas.grids.len(), 4);
     // Inverted search should match items 4..12 (items without animal signal in dim 0)
@@ -460,7 +472,7 @@ fn test_search_pan_to_grid_results() {
         } else {
             vec[1] = 1.0;
         }
-        canvas.insert_hash(path, FeatureVector::Dense(vec), 1);
+        canvas.insert_hash(path, FeatureVector::Dense((vec).into()), 1);
     }
 
     canvas.set_entries(entries);
@@ -476,6 +488,7 @@ fn test_search_pan_to_grid_results() {
     concept[0] = 1.0;
     let candidate_indices = canvas.grids[0].indices.clone();
     let grid_id = canvas.add_search_grid("query", false, candidate_indices, concept);
+    canvas.settle_layout();
 
     // add_search_grid sets pending_pan_to_grid
     assert_eq!(canvas.pending_pan_to_grid, Some(grid_id));
@@ -528,7 +541,7 @@ fn test_vertical_packing_and_order_retention() {
 
         let mut vec = vec![0.0f32; 1536];
         vec[0] = 1.0;
-        canvas.insert_hash(path, FeatureVector::Dense(vec), 1);
+        canvas.insert_hash(path, FeatureVector::Dense((vec).into()), 1);
     }
 
     canvas.set_entries(entries);
@@ -541,6 +554,7 @@ fn test_vertical_packing_and_order_retention() {
     let mut concept1 = vec![0.0f32; 1536];
     concept1[0] = 1.0;
     let g1 = canvas.add_search_grid("s1", false, (0..9).collect(), concept1);
+    canvas.settle_layout();
     assert_eq!(canvas.grids[1].id, g1);
     assert_eq!(canvas.grids[1].grid_cols, 3);
     assert_eq!(canvas.grids[1].grid_rows, 3);
@@ -552,6 +566,7 @@ fn test_vertical_packing_and_order_retention() {
     let mut concept2 = vec![0.0f32; 1536];
     concept2[0] = 1.0;
     let g2 = canvas.add_search_grid("s2", false, (0..9).collect(), concept2);
+    canvas.settle_layout();
     assert_eq!(canvas.grids[2].id, g2);
     assert_eq!(canvas.grids[2].grid_cols, 3);
     assert_eq!(canvas.grids[2].grid_rows, 3);
@@ -563,6 +578,7 @@ fn test_vertical_packing_and_order_retention() {
     let mut concept3 = vec![0.0f32; 1536];
     concept3[0] = 1.0;
     let g3 = canvas.add_search_grid("s3", false, (0..81).collect(), concept3);
+    canvas.settle_layout();
     assert_eq!(canvas.grids[3].id, g3);
     assert_eq!(canvas.grids[3].grid_cols, 9);
     assert_eq!(canvas.grids[3].grid_rows, 9);
@@ -575,6 +591,7 @@ fn test_vertical_packing_and_order_retention() {
     let mut concept4 = vec![0.0f32; 1536];
     concept4[0] = 1.0;
     let g4 = canvas.add_search_grid("s4", false, (0..9).collect(), concept4);
+    canvas.settle_layout();
     assert_eq!(canvas.grids[4].id, g4);
     assert_eq!(canvas.grids[4].grid_cols, 3);
     assert_eq!(canvas.grids[4].grid_rows, 3);
@@ -663,11 +680,12 @@ fn test_search_from_photo_creates_ranked_grid() {
         identity: None,
     };
 
-    canvas.entries = vec![
+    canvas.entries = (vec![
         make_entry(&p1, "photo1.jpg"),
         make_entry(&p2, "photo2.jpg"),
         make_entry(&p3, "photo3.jpg"),
-    ];
+    ])
+    .into();
 
     // p1 and p2 are very similar; p3 is orthogonal
     let mut v1 = vec![0.0f32; 1536];
@@ -680,19 +698,21 @@ fn test_search_from_photo_creates_ranked_grid() {
 
     canvas
         .hashes
-        .insert(p1.clone(), (FeatureVector::Dense(v1.clone()), 1));
+        .insert(p1.clone(), (FeatureVector::Dense((v1.clone()).into()), 1));
     canvas
         .hashes
-        .insert(p2.clone(), (FeatureVector::Dense(v2), 1));
+        .insert(p2.clone(), (FeatureVector::Dense((v2).into()), 1));
     canvas
         .hashes
-        .insert(p3.clone(), (FeatureVector::Dense(v3), 1));
+        .insert(p3.clone(), (FeatureVector::Dense((v3).into()), 1));
 
     canvas.recompute_layout();
+    canvas.settle_layout();
     assert_eq!(canvas.grids.len(), 1);
 
     // Search visual similarity to p1
     let grid_id = canvas.search_from_photo(&p1);
+    canvas.settle_layout();
     assert_eq!(grid_id, Some(1));
     assert_eq!(canvas.grids.len(), 2);
 
@@ -706,13 +726,10 @@ fn test_search_from_photo_creates_ranked_grid() {
     assert_eq!(search_grid.indices, vec![0, 1]);
 
     // A reference upgraded after the search must remain comparable to new candidates.
-    canvas
-        .hashes
-        .insert(p1.clone(), (FeatureVector::Dense(vec![1.0, 0.0]), 1));
-    canvas
-        .hashes
-        .insert(p2.clone(), (FeatureVector::Dense(vec![1.0, 0.0]), 1));
+    canvas.insert_hash(p1.clone(), FeatureVector::Dense((vec![1.0, 0.0]).into()), 1);
+    canvas.insert_hash(p2.clone(), FeatureVector::Dense((vec![1.0, 0.0]).into()), 1);
     canvas.recompute_layout();
+    canvas.settle_layout();
     assert_eq!(canvas.grids[1].concept_embedding.as_ref().unwrap().len(), 2);
     assert_eq!(canvas.grids[1].indices, vec![0, 1]);
 }
@@ -846,21 +863,23 @@ fn test_per_grid_match_allowance_adjustment() {
 
     canvas
         .hashes
-        .insert(p1.clone(), (FeatureVector::Dense(v1.clone()), 1));
+        .insert(p1.clone(), (FeatureVector::Dense((v1.clone()).into()), 1));
     canvas
         .hashes
-        .insert(p2.clone(), (FeatureVector::Dense(v2), 1));
+        .insert(p2.clone(), (FeatureVector::Dense((v2).into()), 1));
     canvas
         .hashes
-        .insert(p3.clone(), (FeatureVector::Dense(v3), 1));
+        .insert(p3.clone(), (FeatureVector::Dense((v3).into()), 1));
     canvas
         .hashes
-        .insert(p4.clone(), (FeatureVector::Dense(v4), 1));
+        .insert(p4.clone(), (FeatureVector::Dense((v4).into()), 1));
 
     canvas.recompute_layout();
+    canvas.settle_layout();
 
     // 1. Search visual similarity to p1 with initial allowance 50% (~0.08 threshold)
     let grid_id = canvas.search_from_photo(&p1).expect("search grid created");
+    canvas.settle_layout();
     assert_eq!(grid_id, 1);
     assert_eq!(canvas.grids.len(), 2);
 
@@ -874,6 +893,7 @@ fn test_per_grid_match_allowance_adjustment() {
     assert!((canvas.grids[1].allowance - 0.65).abs() < 1e-4);
 
     canvas.recompute_layout();
+    canvas.settle_layout();
     // At 65% allowance, threshold drops to ~0.04, so P1 (1.0), P2 (0.20), and P3 (0.06) all match
     assert_eq!(canvas.grids[1].indices, vec![0, 1, 2]);
 
@@ -882,12 +902,14 @@ fn test_per_grid_match_allowance_adjustment() {
     assert!((canvas.grids[1].allowance - 0.15).abs() < 1e-4);
 
     canvas.recompute_layout();
+    canvas.settle_layout();
     // At 15% allowance, threshold is ~0.27, so only exact/high match P1 (1.0) remains
     assert_eq!(canvas.grids[1].indices, vec![0]);
 
     // 4. Test inverted search grid allowance behavior
     // Concept vector = [1.0, 0.0] (same as p1)
     let inv_id = canvas.add_search_grid("!p1", true, vec![0, 1, 2, 3], v1);
+    canvas.settle_layout();
     assert_eq!(inv_id, 2);
     // At default 50% allowance, threshold is ~0.08.
     // Inverted matches where score < 0.08: P3 (0.06) and P4 (0.00) match
@@ -896,12 +918,14 @@ fn test_per_grid_match_allowance_adjustment() {
     // Click '+' to INCREASE match allowance (include more photos): allowance up to 90%
     canvas.grids[2].adjust_allowance(0.40);
     canvas.recompute_layout();
+    canvas.settle_layout();
     // At 90% allowance, threshold is ~0.30, so P2 (0.20), P3 (0.06), and P4 (0.00) now all match!
     assert_eq!(canvas.grids[2].indices, vec![3, 2, 1]);
 
     // Click '-' to DECREASE match allowance (remove photos): allowance down to 10%
     canvas.grids[2].adjust_allowance(-0.80);
     canvas.recompute_layout();
+    canvas.settle_layout();
     // At 10% allowance, threshold is ~0.011, so only P4 (0.00) matches!
     assert_eq!(canvas.grids[2].indices, vec![3]);
 }
@@ -954,18 +978,20 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
 
     canvas
         .hashes
-        .insert(p1.clone(), (FeatureVector::Dense(v1), 1));
+        .insert(p1.clone(), (FeatureVector::Dense((v1).into()), 1));
     canvas
         .hashes
-        .insert(p2.clone(), (FeatureVector::Dense(v2), 1));
+        .insert(p2.clone(), (FeatureVector::Dense((v2).into()), 1));
     canvas
         .hashes
-        .insert(p3.clone(), (FeatureVector::Dense(v3), 1));
+        .insert(p3.clone(), (FeatureVector::Dense((v3).into()), 1));
 
     // Search grid with candidate indices [0, 1, 2]
     let grid_id = canvas.add_search_grid("concept", false, vec![0, 1, 2], concept);
+    canvas.settle_layout();
     assert_eq!(grid_id, 1);
     canvas.recompute_layout();
+    canvas.settle_layout();
 
     // At default 50% allowance (threshold ~0.08), only P1 (0.20) matches -> 1 photo
     assert_eq!(canvas.grids[1].indices.len(), 1);
@@ -974,11 +1000,13 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
     assert!(canvas.can_decrease_grid_allowance(1));
     assert!(canvas.adjust_grid_allowance(1, -0.05));
     canvas.recompute_layout();
+    canvas.settle_layout();
     assert_eq!(canvas.grids[1].indices.len(), 1);
 
     // At 25% allowance (threshold ~0.19), P1 (0.20) still matches (1 photo)
     canvas.grids[1].set_allowance(0.25);
     canvas.recompute_layout();
+    canvas.settle_layout();
     assert_eq!(canvas.grids[1].indices.len(), 1);
 
     // If we step down to 20% (threshold ~0.23), P1 (0.20) will no longer match (0 photos)!
@@ -996,6 +1024,7 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
     // Broaden search to 70% allowance: P1 (0.20) and P2 (0.06) match -> 2 photos
     canvas.grids[1].set_allowance(0.70);
     canvas.recompute_layout();
+    canvas.settle_layout();
     assert_eq!(canvas.grids[1].indices.len(), 2);
 
     // Candidate 3 has score -0.50, so even at 100% allowance (threshold 0.01), it can never match.
@@ -1013,7 +1042,9 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
     // Test condition: "when it's now so broad that it includes all of the original search"
     // Create grid with candidates [0] only
     let small_grid_id = canvas.add_search_grid("p1_only", false, vec![0], vec![1.0, 0.0]);
+    canvas.settle_layout();
     canvas.recompute_layout();
+    canvas.settle_layout();
     assert_eq!(canvas.grids[small_grid_id].indices.len(), 1);
     assert_eq!(canvas.grids[small_grid_id].candidate_indices.len(), 1);
     assert!(
@@ -1028,6 +1059,7 @@ fn test_allowance_bounds_disabling_and_hover_keyboard_controls() {
     canvas.zoom = 1.0;
     canvas.grids[1].set_allowance(0.50);
     canvas.recompute_layout();
+    canvas.settle_layout();
     assert!((canvas.grids[1].allowance - 0.50).abs() < 1e-4);
 
     // Locate grid 1 on screen
@@ -1162,7 +1194,10 @@ fn test_pca_handles_ragged_feature_dimensions_safely() {
         vec![4.0, 5.0],            // Shorter feature vector
         vec![7.0, 8.0, 9.0, 10.0], // Longer feature vector
     ];
-    let coords = super::embedding::project_features_to_2d(&features);
+    let coords = super::embedding::project_features_to_2d(
+        &features,
+        &std::sync::atomic::AtomicBool::new(false),
+    );
     assert_eq!(coords.len(), 3);
     for (x, y) in coords {
         assert!(x >= -1.0 && x <= 1.0);

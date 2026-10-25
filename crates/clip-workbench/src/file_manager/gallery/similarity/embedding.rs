@@ -1,7 +1,7 @@
 //! Dimension-agnostic 2D dimensionality reduction via Principal Component Analysis (PCA).
 //!
-//! Supports arbitrary feature dimensions (e.g. 64-bit d-hash bit-vectors, or 728-dimensional
-//! neural embeddings like EmbeddingGemma2) without materializing large covariance matrices.
+//! Supports arbitrary feature dimensions (e.g. 64-bit d-hash bit-vectors, or 1536-dimensional
+//! SigLIP image/text embeddings) without materializing large covariance matrices.
 
 /// Dimension of a difference hash expanded into floating-point coordinates.
 pub const DHASH_DIMENSION: usize = 64;
@@ -12,14 +12,16 @@ const PAIRWISE_DIFF_EPSILON: f32 = 1e-6;
 const JITTER_SCALE: f32 = 0.001;
 const JITTER_FREQUENCY: f32 = 0.0001;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 /// A generalized feature vector representation for similarity clustering.
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum FeatureVector {
     /// 64-bit difference hash expanded into 64 zero-centered float coordinates.
     DHash(u64),
-    /// Dense float embedding vector (e.g. 728-d Gemma/Gemini embedding).
-    Dense(Vec<f32>),
+    /// Dense float embedding vector (e.g. 1536-dimensional SigLIP embedding).
+    Dense(std::sync::Arc<[f32]>),
 }
 
 impl FeatureVector {
@@ -33,7 +35,7 @@ impl FeatureVector {
                 }
                 v
             }
-            Self::Dense(dense) => dense.clone(),
+            Self::Dense(dense) => dense.to_vec(),
         }
     }
 
@@ -53,7 +55,10 @@ impl FeatureVector {
 /// $C v = \frac{1}{N} X^T (X v)$
 /// which scales as $O(N \cdot D)$ rather than $O(D^2)$, gracefully handling 64-d hashes,
 /// 728-d Gemma embeddings, or 1024-d embeddings.
-pub fn project_features_to_2d(features: &[Vec<f32>]) -> Vec<(f32, f32)> {
+pub fn project_features_to_2d(features: &[Vec<f32>], cancelled: &AtomicBool) -> Vec<(f32, f32)> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
     let n = features.len();
     if n == 0 {
         return Vec::new();
@@ -81,39 +86,21 @@ pub fn project_features_to_2d(features: &[Vec<f32>]) -> Vec<(f32, f32)> {
         return vec![(-1.0, 0.0), (1.0, 0.0)];
     }
 
-    // 1. Compute per-feature mean
-    let mut means = vec![0.0f32; d];
-    for feat in features {
-        for (j, &val) in feat.iter().enumerate() {
-            means[j] += val;
-        }
-    }
-    let inv_n = 1.0 / (n as f32);
-    for m in &mut means {
-        *m *= inv_n;
-    }
-
-    // 2. Build centered data matrix X (N x D)
-    let mut x_centered = Vec::with_capacity(n);
-    for feat in features {
-        let mut row = Vec::with_capacity(d);
-        for (j, &mean) in means.iter().enumerate().take(d) {
-            let val = feat.get(j).copied().unwrap_or(0.0) - mean;
-            row.push(val);
-        }
-        x_centered.push(row);
-    }
+    let inv_n = 1.0 / n as f32;
+    let Some(x_centered) = centered_features(features, d, cancelled) else {
+        return Vec::new();
+    };
 
     // 3. Power iteration for 1st principal component e1
     // Matrix-free: C v = 1/N * X^T * (X * v)
-    let e1 = power_iteration(&x_centered, d, None, 0.0);
+    let e1 = power_iteration(&x_centered, d, None, 0.0, cancelled);
 
     // Lambda1 = 1/N * ||X * e1||^2
     let x_e1 = mat_vec_mul(&x_centered, &e1);
     let lambda1: f32 = x_e1.iter().map(|&val| val * val).sum::<f32>() * inv_n;
 
     // 4. Power iteration for 2nd principal component e2 with deflation
-    let e2 = power_iteration(&x_centered, d, Some(&e1), lambda1);
+    let e2 = power_iteration(&x_centered, d, Some(&e1), lambda1, cancelled);
 
     // 5. Project each sample onto e1 and e2
     let mut coords = Vec::with_capacity(n);
@@ -156,7 +143,43 @@ pub fn project_hashes_to_2d(hashes: &[u64]) -> Vec<(f32, f32)> {
         .iter()
         .map(|&h| FeatureVector::DHash(h).to_vec())
         .collect();
-    project_features_to_2d(&features)
+    project_features_to_2d(&features, &AtomicBool::new(false))
+}
+
+fn centered_features(
+    features: &[Vec<f32>],
+    d: usize,
+    cancelled: &AtomicBool,
+) -> Option<Vec<Vec<f32>>> {
+    let n = features.len();
+    let mut means = vec![0.0f32; d];
+    for feat in features {
+        if cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        for (j, &val) in feat.iter().enumerate() {
+            means[j] += val;
+        }
+    }
+    let inv_n = 1.0 / (n as f32);
+    for m in &mut means {
+        *m *= inv_n;
+    }
+
+    let mut x_centered = Vec::with_capacity(n);
+    for feat in features {
+        if cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        let mut row = Vec::with_capacity(d);
+        for (j, &mean) in means.iter().enumerate().take(d) {
+            let val = feat.get(j).copied().unwrap_or(0.0) - mean;
+            row.push(val);
+        }
+        x_centered.push(row);
+    }
+
+    Some(x_centered)
 }
 
 fn power_iteration(
@@ -164,6 +187,7 @@ fn power_iteration(
     d: usize,
     deflate_against: Option<&[f32]>,
     deflate_lambda: f32,
+    cancelled: &AtomicBool,
 ) -> Vec<f32> {
     let mut v = vec![0.0f32; d];
     for (i, val) in v.iter_mut().enumerate() {
@@ -178,6 +202,9 @@ fn power_iteration(
     let inv_n = 1.0 / (n as f32);
 
     for _ in 0..POWER_ITERATION_MAX_STEPS {
+        if cancelled.load(Ordering::Relaxed) {
+            break;
+        }
         // y = X * v (N x 1)
         let y = mat_vec_mul(x_centered, &v);
 

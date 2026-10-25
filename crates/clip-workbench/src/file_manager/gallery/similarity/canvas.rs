@@ -11,8 +11,9 @@ use egui::{Pos2, Rect, Ui, vec2};
 use little_clip_core::BackgroundJobs;
 
 use super::{
-    embedding::{FeatureVector, project_features_to_2d},
-    grid::{GridPlacement, grid_dimensions, snap_to_grid},
+    embedding::FeatureVector,
+    grid::{GridPlacement, grid_dimensions},
+    layout::LayoutSnapshot,
     scanner::scan_recursive_photos,
     siglip::SiglipTextEmbedder,
 };
@@ -39,8 +40,6 @@ const MIN_SCROLL_ZOOM_FACTOR: f32 = 0.75;
 const MAX_SCROLL_ZOOM_FACTOR: f32 = 1.35;
 
 // Grid layout spacing
-const GRID_COL_GAP: usize = 2;
-const GRID_ROW_GAP: usize = 1;
 
 // Pan-to-grid margins
 const GRID_PAN_TOP_MARGIN: f32 = 76.0;
@@ -59,6 +58,7 @@ pub struct CanvasGrid {
     pub is_inverted: bool,
     pub candidate_indices: Vec<usize>,
     pub concept_embedding: Option<Vec<f32>>,
+    pub(super) scores: Option<std::sync::Arc<[(usize, f32)]>>,
     pub indices: Vec<usize>,
     pub selected_for_search: bool,
     pub grid_cols: usize,
@@ -148,51 +148,65 @@ impl CanvasGrid {
         Some(scored)
     }
 
-    /// Filters candidate entries according to cosine similarity against the concept embedding.
-    pub fn refilter(
+    pub(super) fn refresh_scores(
         &mut self,
         hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
         entries: &[Entry],
+    ) {
+        if self.scores.is_some() {
+            return;
+        }
+        if let Some(mut scored) = self.compute_candidate_scores(hashes, entries) {
+            scored.sort_by(|a, b| {
+                let order = if self.is_inverted {
+                    a.1.total_cmp(&b.1)
+                } else {
+                    b.1.total_cmp(&a.1)
+                };
+                order.then_with(|| a.0.cmp(&b.0))
+            });
+            self.scores = Some(scored.into());
+        }
+    }
+
+    /// Applies a threshold to cached scores; inference and dot products run on workers.
+    pub fn refilter(
+        &mut self,
+        _hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
+        _entries: &[Entry],
         threshold: f32,
     ) {
-        let Some(scored) = self.compute_candidate_scores(hashes, entries) else {
+        let Some(scored) = &self.scores else {
+            self.indices.clear();
             return;
         };
-
-        if self.is_inverted {
-            // Inverted search includes valid negative cosines; missing features were skipped.
-            let mut matches: Vec<(usize, f32)> =
-                scored.into_iter().filter(|&(_, s)| s < threshold).collect();
-            // Sort ascending: lowest score (least similar to inverted concept) comes first
-            matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            self.indices = matches.into_iter().map(|(idx, _)| idx).collect();
-        } else {
-            // Normal search: match items where score >= threshold
-            let mut matches: Vec<(usize, f32)> = scored
-                .into_iter()
-                .filter(|&(_, s)| s >= threshold)
-                .collect();
-            // Sort descending: highest score (most similar to concept) comes first
-            matches.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            self.indices = matches.into_iter().map(|(idx, _)| idx).collect();
-        }
+        let split = scored.partition_point(|(_, score)| {
+            if self.is_inverted {
+                *score < threshold
+            } else {
+                *score >= threshold
+            }
+        });
+        self.indices = scored[..split].iter().map(|(index, _)| *index).collect();
     }
 
     pub fn count_matches_at_allowance(
         &self,
-        hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
-        entries: &[Entry],
+        _hashes: &HashMap<PathBuf, (FeatureVector, u64)>,
+        _entries: &[Entry],
         allowance: f32,
     ) -> usize {
-        let Some(scored) = self.compute_candidate_scores(hashes, entries) else {
+        let Some(scored) = &self.scores else {
             return self.indices.len();
         };
         let threshold = Self::allowance_to_threshold(allowance, self.is_inverted);
-        if self.is_inverted {
-            scored.iter().filter(|&&(_, s)| s < threshold).count()
-        } else {
-            scored.iter().filter(|&&(_, s)| s >= threshold).count()
-        }
+        scored.partition_point(|(_, score)| {
+            if self.is_inverted {
+                *score < threshold
+            } else {
+                *score >= threshold
+            }
+        })
     }
 
     /// Returns `true` if decreasing the allowance would still leave at least one matching photo.
@@ -258,7 +272,7 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     pub zoom: f32,
     pub tile_size: f32,
     pub spacing: f32,
-    pub(in crate::file_manager) entries: Vec<Entry>,
+    pub(in crate::file_manager) entries: std::sync::Arc<[Entry]>,
     pub placements: Vec<GridPlacement>,
     pub grid_cols: usize,
     pub grid_rows: usize,
@@ -280,6 +294,8 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     pub next_grid_id: usize,
     pub pending_pan_to_grid: Option<usize>,
     base_placements: Vec<GridPlacement>,
+    layout_job: Option<Task<(u64, LayoutSnapshot)>>,
+    layout_generation: u64,
 }
 
 impl Default for SimilarityCanvas {
@@ -289,7 +305,7 @@ impl Default for SimilarityCanvas {
             zoom: 1.0,
             tile_size: DEFAULT_TILE_SIZE,
             spacing: TILE_SPACING,
-            entries: Vec::new(),
+            entries: Vec::new().into(),
             placements: Vec::new(),
             grid_cols: 0,
             grid_rows: 0,
@@ -311,6 +327,8 @@ impl Default for SimilarityCanvas {
             next_grid_id: 1,
             pending_pan_to_grid: None,
             base_placements: Vec::new(),
+            layout_job: None,
+            layout_generation: 0,
         }
     }
 }
@@ -344,11 +362,12 @@ impl SimilarityCanvas {
 
     /// Retires pending background jobs.
     pub fn retire(&mut self) {
-        if self.scan_job.is_some() || self.hash_job.is_some() {
+        if self.scan_job.is_some() || self.hash_job.is_some() || self.layout_job.is_some() {
             self.current_signature = None;
         }
         self.scan_job = None;
         self.hash_job = None;
+        self.layout_job = None;
         self.clear_pending_search();
     }
 
@@ -356,6 +375,8 @@ impl SimilarityCanvas {
     #[allow(dead_code)]
     pub fn insert_hash(&mut self, path: PathBuf, feat: FeatureVector, rev: u64) {
         self.hashes.insert(path, (feat, rev));
+        self.base_placements.clear();
+        self.invalidate_scores();
     }
 
     /// Returns `true` if a background recursive photo scan is in progress.
@@ -365,7 +386,7 @@ impl SimilarityCanvas {
 
     /// Returns `true` if background feature hashing/embedding is in progress.
     pub fn is_hashing(&self) -> bool {
-        self.hash_job.is_some()
+        self.hash_job.is_some() || self.layout_job.is_some()
     }
 
     /// Returns `true` if a background text search embedding query is in flight.
@@ -576,6 +597,7 @@ impl SimilarityCanvas {
             is_inverted: false,
             candidate_indices,
             concept_embedding: Some(vec),
+            scores: None,
             indices: Vec::new(),
             selected_for_search: true,
             grid_cols: 0,
@@ -615,6 +637,7 @@ impl SimilarityCanvas {
             is_inverted,
             candidate_indices,
             concept_embedding: Some(concept_embedding),
+            scores: None,
             indices: Vec::new(),
             selected_for_search: true,
             grid_cols: 0,
@@ -685,7 +708,8 @@ impl SimilarityCanvas {
     pub fn set_entries(&mut self, entries: Vec<Entry>) {
         // Search indices belong to the exact collection that submitted the query.
         self.clear_pending_search();
-        self.entries = entries;
+        self.layout_job = None;
+        self.entries = entries.into();
         let revisions: HashMap<_, _> = self
             .entries
             .iter()
@@ -707,6 +731,7 @@ impl SimilarityCanvas {
             is_inverted: false,
             candidate_indices: (0..n).collect(),
             concept_embedding: None,
+            scores: None,
             indices: (0..n).collect(),
             selected_for_search: true,
             grid_cols: cols,
@@ -789,8 +814,13 @@ impl SimilarityCanvas {
         }
 
         self.poll_search(ctx);
+        self.poll_layout(ctx);
 
-        if self.scan_job.is_some() || self.hash_job.is_some() || self.search_job.is_some() {
+        if self.layout_job.is_some()
+            || self.scan_job.is_some()
+            || self.hash_job.is_some()
+            || self.search_job.is_some()
+        {
             ctx.request_repaint_after(Duration::from_millis(32));
         }
     }
@@ -829,6 +859,9 @@ impl SimilarityCanvas {
             let finished = completion.is_some();
             if let Some(Err(error)) = completion {
                 self.error = Some(format!("Photo indexing failed: {error:?}"));
+            }
+            if received_any {
+                self.invalidate_scores();
             }
             if finished {
                 self.hash_job = None;
@@ -872,6 +905,7 @@ impl SimilarityCanvas {
                     is_inverted: meta.is_inverted,
                     candidate_indices: meta.candidate_indices,
                     concept_embedding: Some(emb),
+                    scores: None,
                     indices: Vec::new(),
                     selected_for_search: true, // Selected for next search
                     grid_cols: 0,
@@ -893,6 +927,7 @@ impl SimilarityCanvas {
     }
 
     pub fn recompute_layout(&mut self) {
+        self.layout_generation = self.layout_generation.wrapping_add(1);
         let n = self.entries.len();
         if n == 0 {
             self.placements.clear();
@@ -911,6 +946,7 @@ impl SimilarityCanvas {
                 is_inverted: false,
                 candidate_indices: (0..n).collect(),
                 concept_embedding: None,
+                scores: None,
                 indices: (0..n).collect(),
                 selected_for_search: true,
                 grid_cols: c,
@@ -922,122 +958,74 @@ impl SimilarityCanvas {
             });
         }
 
-        // Keep base grid indices synced with all entries
-        if let Some(base) = self.grids.first_mut() {
-            base.candidate_indices = (0..n).collect();
-            base.indices = (0..n).collect();
-        }
+        self.start_layout();
+    }
 
-        // Reverse-image queries track upgrades from perceptual hashes to neural vectors.
-        for grid in self.grids.iter_mut().skip(1) {
-            if let Some(path) = &grid.reference_photo
-                && let Some((feature, _)) = self.hashes.get(path)
-            {
-                grid.concept_embedding = Some(normalized_feature(feature));
+    fn invalidate_scores(&mut self) {
+        for grid in &mut self.grids {
+            grid.scores = None;
+        }
+    }
+
+    fn start_layout(&mut self) {
+        if self.layout_job.is_some() || self.entries.is_empty() {
+            return;
+        }
+        let generation = self.layout_generation;
+        let snapshot = LayoutSnapshot {
+            entries: self.entries.clone(),
+            hashes: self.hashes.clone(),
+            grids: self.grids.clone(),
+            base_placements: self.base_placements.clone(),
+            placements: Vec::new(),
+            grid_cols: 0,
+            grid_rows: 0,
+        };
+        self.layout_job = Some(
+            Task::start(worker_pool(), Duration::from_secs(60), move |cancelled| {
+                (generation, snapshot.compute(cancelled))
+            })
+            .with_response_deadline(Duration::from_secs(60)),
+        );
+    }
+
+    fn poll_layout(&mut self, ctx: &egui::Context) {
+        let Some(result) = self.layout_job.as_ref().and_then(Task::poll) else {
+            return;
+        };
+        self.layout_job = None;
+        match result {
+            Ok((generation, mut layout)) if generation == self.layout_generation => {
+                // Search-set toggles do not affect layout; preserve changes made in flight.
+                for grid in &mut layout.grids {
+                    if let Some(current) = self.grids.iter().find(|current| current.id == grid.id) {
+                        grid.selected_for_search = current.selected_for_search;
+                    }
+                }
+                self.grids = layout.grids;
+                self.base_placements = layout.base_placements;
+                self.placements = layout.placements;
+                self.grid_cols = layout.grid_cols;
+                self.grid_rows = layout.grid_rows;
             }
-            let threshold = grid.threshold;
-            grid.refilter(&self.hashes, &self.entries, threshold);
+            Ok(_) => self.start_layout(),
+            Err(error) => self.error = Some(format!("Photo layout failed: {error:?}")),
         }
+        ctx.request_repaint();
+    }
 
-        // Compute base placements if needed
-        if self.base_placements.len() != n {
-            let features: Vec<Vec<f32>> = self
-                .entries
-                .iter()
-                .enumerate()
-                .map(|(i, e)| {
-                    self.hashes
-                        .get(&e.path)
-                        .map(|(f, _)| f.to_vec())
-                        .unwrap_or_else(|| FeatureVector::DHash(i as u64).to_vec())
-                })
-                .collect();
-
-            let coords_2d = project_features_to_2d(&features);
-            self.base_placements = snap_to_grid(&coords_2d);
+    #[cfg(test)]
+    pub fn settle_layout(&mut self) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while self.layout_job.is_some() || self.hash_job.is_some() {
+            self.poll(&egui::Context::default());
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Layout did not settle: {:?}",
+                self.error
+            );
+            std::thread::sleep(Duration::from_millis(1));
         }
-
-        let max_column_height = self.grids.first().map_or(10, |base| base.grid_rows.max(8));
-
-        let mut max_overall_cols = 0;
-        let mut max_overall_rows = 0;
-        let mut new_placements = Vec::new();
-
-        let mut col_start_x = 0;
-        let mut col_used_height = 0;
-        let mut col_width = 0;
-
-        for (grid_idx, grid) in self.grids.iter_mut().enumerate() {
-            if grid_idx == 0 {
-                let (c, r) = grid_dimensions(n);
-                grid.grid_cols = c;
-                grid.grid_rows = r;
-                grid.col_offset = 0;
-                grid.row_offset = 0;
-                max_overall_rows = max_overall_rows.max(r);
-                max_overall_cols = max_overall_cols.max(c);
-
-                for p in &self.base_placements {
-                    new_placements.push(GridPlacement {
-                        index: p.index,
-                        col: p.col,
-                        row: p.row,
-                    });
-                }
-                col_start_x = c + GRID_COL_GAP;
-                col_used_height = 0;
-                col_width = 0;
-            } else {
-                let count = grid.indices.len();
-                let (c, r) = grid_dimensions(count);
-                let eff_r = r.max(1);
-                let eff_c = c.max(1);
-                grid.grid_cols = c;
-                grid.grid_rows = r;
-
-                // Check if this grid fits vertically in the current column
-                let needed_height = if col_used_height > 0 {
-                    col_used_height + GRID_ROW_GAP + eff_r
-                } else {
-                    eff_r
-                };
-
-                if col_used_height > 0 && needed_height > max_column_height {
-                    // Start a new column to the right
-                    col_start_x += col_width + GRID_COL_GAP;
-                    col_used_height = 0;
-                    col_width = 0;
-                }
-
-                let row_offset = if col_used_height > 0 {
-                    col_used_height + GRID_ROW_GAP
-                } else {
-                    0
-                };
-
-                grid.col_offset = col_start_x;
-                grid.row_offset = row_offset;
-
-                col_used_height = row_offset + eff_r;
-                col_width = col_width.max(eff_c);
-
-                max_overall_rows = max_overall_rows.max(col_used_height);
-                max_overall_cols = max_overall_cols.max(col_start_x + col_width);
-
-                let safe_c = eff_c;
-                for (rank, &entry_idx) in grid.indices.iter().enumerate() {
-                    new_placements.push(GridPlacement {
-                        index: entry_idx,
-                        col: col_start_x + (rank % safe_c),
-                        row: row_offset + (rank / safe_c),
-                    });
-                }
-            }
-        }
-
-        self.placements = new_placements;
-        self.grid_cols = max_overall_cols;
-        self.grid_rows = max_overall_rows;
     }
 
     /// Fits the entire grid neatly inside the given viewport.
@@ -1088,7 +1076,9 @@ impl SimilarityCanvas {
             self.initial_fit_done = true;
         }
 
-        if let Some(grid_id) = self.pending_pan_to_grid.take() {
+        if self.layout_job.is_none()
+            && let Some(grid_id) = self.pending_pan_to_grid.take()
+        {
             self.pan_to_grid(grid_id, canvas_rect);
         }
 
@@ -1221,11 +1211,34 @@ mod lifecycle_tests {
     use super::*;
 
     #[test]
+    fn stale_layout_result_does_not_replace_newer_grid_state() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.png"), b"fixture").unwrap();
+        let mut canvas = SimilarityCanvas::default();
+        canvas.entries = (crate::file_manager::filesystem::read_directory(
+            root.path(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap()
+        .entries)
+            .into();
+        canvas.recompute_layout();
+        assert!(
+            canvas.layout_job.is_some(),
+            "Layout must run asynchronously"
+        );
+        canvas.grids[0].title = "newer request".into();
+        canvas.recompute_layout();
+        canvas.settle_layout();
+        assert_eq!(canvas.grids[0].title, "newer request");
+    }
+
+    #[test]
     fn replacing_collection_evicts_foreign_features_and_resets_progress() {
         let mut canvas = SimilarityCanvas::default();
         canvas.insert_hash(
             PathBuf::from("/old/photo.png"),
-            FeatureVector::Dense(vec![1.0]),
+            FeatureVector::Dense((vec![1.0]).into()),
             1,
         );
         canvas.hashing_progress = (99, 100);
@@ -1241,19 +1254,21 @@ mod lifecycle_tests {
         std::fs::write(&first, b"fixture").unwrap();
         std::fs::write(root.path().join("b.png"), b"fixture").unwrap();
         let mut canvas = SimilarityCanvas::default();
-        canvas.entries = crate::file_manager::filesystem::read_directory(
+        canvas.entries = (crate::file_manager::filesystem::read_directory(
             root.path(),
             &std::sync::atomic::AtomicBool::new(false),
         )
         .unwrap()
-        .entries;
+        .entries)
+            .into();
         canvas.insert_hash(
             first,
-            FeatureVector::Dense(vec![-1.0, 0.0]),
+            FeatureVector::Dense((vec![-1.0, 0.0]).into()),
             canvas.entries[0].revision,
         );
         canvas.recompute_layout();
         canvas.add_search_grid("opposite", true, vec![0, 1], vec![1.0, 0.0]);
+        canvas.settle_layout();
         assert_eq!(canvas.grids[1].indices, vec![0]);
         assert_eq!(
             canvas.grids[1].count_matches_at_allowance(&canvas.hashes, &canvas.entries, 0.5),
@@ -1325,7 +1340,7 @@ mod lifecycle_tests {
     }
 }
 
-fn normalized_feature(feature: &FeatureVector) -> Vec<f32> {
+pub(super) fn normalized_feature(feature: &FeatureVector) -> Vec<f32> {
     let mut vector = feature.to_vec();
     let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
     if norm > 1e-6 {

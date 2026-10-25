@@ -133,7 +133,7 @@ fn decode(bytes: &[u8], neural: bool) -> Option<FeatureVector> {
         .collect();
     let norm: f32 = values.iter().map(|v| v * v).sum();
     (values.iter().all(|v| v.is_finite()) && (norm - 1.0).abs() < 0.01)
-        .then_some(FeatureVector::Dense(values))
+        .then_some(FeatureVector::Dense((values).into()))
 }
 
 #[cfg(test)]
@@ -144,7 +144,7 @@ mod tests {
     fn vector() -> FeatureVector {
         let mut values = vec![0.0; VISION_DIMENSIONS];
         values[0] = 1.0;
-        FeatureVector::Dense(values)
+        FeatureVector::Dense((values).into())
     }
 
     #[test]

@@ -152,7 +152,10 @@ impl SiglipEmbedder {
 
         // 3. Extract and L2-normalize embeddings for each image in batch
         let embeddings = extract_normalized_embeddings(&out_tensor, b)?;
-        Ok(embeddings.into_iter().map(FeatureVector::Dense).collect())
+        Ok(embeddings
+            .into_iter()
+            .map(|embedding| FeatureVector::Dense(embedding.into()))
+            .collect())
     }
 }
 
@@ -340,7 +343,7 @@ mod tests {
             if paths.len() != 1 || paths[0] == PathBuf::from("bad") {
                 return Err("decode failure".into());
             }
-            Ok(vec![FeatureVector::Dense(vec![1.0])])
+            Ok(vec![FeatureVector::Dense((vec![1.0]).into())])
         });
         assert!(features[0].is_some());
         assert!(features[1].is_none());

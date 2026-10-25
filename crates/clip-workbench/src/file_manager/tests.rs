@@ -1630,7 +1630,7 @@ fn image_viewer_collection_ignores_a_previous_similarity_folder() {
     std::fs::write(&target, b"fixture").unwrap();
     let (mut manager, _jobs) = loaded(&current);
     manager.photo_mode = gallery::similarity::PhotoMode::Similarity;
-    manager.similarity_canvas.entries = read(&old).entries;
+    manager.similarity_canvas.entries = (read(&old).entries).into();
     for view in [BrowserView::List, BrowserView::Photos] {
         manager.view = view;
         assert_eq!(manager.photo_collection(&target), vec![target.clone()]);

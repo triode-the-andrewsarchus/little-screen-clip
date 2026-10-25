@@ -190,7 +190,7 @@ mod tests {
         let feature = if encoder.is_some() {
             let mut values = vec![0.0; 1536];
             values[0] = 1.0;
-            FeatureVector::Dense(values)
+            FeatureVector::Dense((values).into())
         } else {
             FeatureVector::DHash(123)
         };
