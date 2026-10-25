@@ -5,7 +5,7 @@ use std::{
 };
 
 use ndarray::{Array2, Array4};
-use ort::value::Tensor;
+use ort::{ep::ExecutionProvider, session::builder::SessionBuilder, value::Tensor};
 
 use super::embedding::FeatureVector;
 use crate::{
@@ -25,6 +25,19 @@ pub const SIGLIP_MAX_SEQ_LEN: usize = 64;
 const PIXEL_SCALE: f32 = 127.5;
 const MIN_NORM_EPSILON: f32 = 1e-7;
 
+/// Prefer CUDA for both encoders, retaining CPU support on machines without it.
+/// Register explicitly so missing CUDA libraries cannot silently select the CPU.
+fn session_builder() -> Result<SessionBuilder, String> {
+    let env = get_ort_environment()?;
+    let mut builder =
+        ort::session::Session::builder(&env).map_err(|e| format!("ORT builder failed: {e}"))?;
+    match ort::ep::CUDA::default().register(&mut builder) {
+        Ok(()) => tracing::info!("SigLIP: CUDA execution provider enabled (device 0)"),
+        Err(error) => tracing::warn!(%error, "SigLIP: CUDA unavailable; using CPU inference"),
+    }
+    Ok(builder)
+}
+
 /// Vision feature extractor backed by a SigLIP 2 Giant ONNX model.
 pub struct SiglipEmbedder {
     session: ort::session::Session,
@@ -41,9 +54,7 @@ impl SiglipEmbedder {
         let model_path = ensure_model(SIGLIP2_GIANT_MODEL_NAME, None)
             .map_err(|e| format!("Failed to ensure SigLIP 2 model: {e}"))?;
 
-        let env = get_ort_environment()?;
-        let session = ort::session::Session::builder(&env)
-            .map_err(|e| format!("ORT builder failed: {e}"))?
+        let session = session_builder()?
             .commit_from_file(&model_path)
             .map_err(|e| format!("ORT SigLIP 2 model load failed: {e}"))?;
 
@@ -223,9 +234,7 @@ impl SiglipTextEmbedder {
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| format!("Failed to load SigLIP 2 tokenizer: {e}"))?;
 
-        let env = get_ort_environment()?;
-        let session = ort::session::Session::builder(&env)
-            .map_err(|e| format!("ORT builder failed: {e}"))?
+        let session = session_builder()?
             .commit_from_file(&model_path)
             .map_err(|e| format!("ORT SigLIP 2 text model load failed: {e}"))?;
 
@@ -294,6 +303,42 @@ impl SiglipTextEmbedder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Requires the cached vision model and a working CUDA runtime. Unlike provider
+    /// availability checks, the ORT trace proves that model kernels execute on CUDA.
+    #[test]
+    #[ignore = "requires cached SigLIP model and CUDA GPU"]
+    fn vision_kernels_execute_on_cuda() {
+        let profile = tempfile::tempdir().unwrap();
+        let model = crate::onnx_runtime::models_cache_dir().join(SIGLIP2_GIANT_MODEL_NAME);
+        assert!(
+            model.is_file(),
+            "Cache the vision model before running this test"
+        );
+        let mut session = session_builder()
+            .unwrap()
+            .with_profiling(profile.path().join("siglip"))
+            .unwrap()
+            .commit_from_file(model)
+            .unwrap();
+        let pixels =
+            Array4::<f32>::zeros((1, 3, SIGLIP_INPUT_SIZE as usize, SIGLIP_INPUT_SIZE as usize));
+        let input = Tensor::from_array(pixels).unwrap();
+        let outputs = session.run(ort::inputs![input]).unwrap();
+        assert_eq!(outputs[0].try_extract_array::<f32>().unwrap().shape()[0], 1);
+        drop(outputs);
+        let trace = session.end_profiling().unwrap();
+        let events: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(trace).unwrap()).unwrap();
+        let cuda_nodes = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["args"]["provider"] == "CUDAExecutionProvider")
+            .count();
+        assert!(cuda_nodes > 0, "No model kernels executed on CUDA");
+        eprintln!("SigLIP vision executed {cuda_nodes} CUDA kernels");
+    }
 
     #[test]
     fn test_siglip_multimodal_alignment() {

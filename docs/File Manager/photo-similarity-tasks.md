@@ -4,7 +4,7 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 
 ## Current priorities
 
-- [ ] Verify actual SigLIP GPU execution; configure acceleration and report fallback failures clearly.
+- [x] Verify actual SigLIP GPU execution; configure acceleration and report fallback failures clearly. The opt-in vision test recorded 2,561 CUDA kernels on the RTX 3090. Both encoders now request CUDA, with explicit CPU fallback warnings.
 - [ ] Persist image embeddings in SQLite across file-manager restarts, validating source and model revisions before reuse.
 
 ## Correctness and responsiveness
