@@ -98,24 +98,22 @@ Against the pre-review baseline, clone groups fell from 1,446 to 1,442, average 
 
 ### RTX 3090 batch-size benchmark
 
-An opt-in raw inference benchmark used the cached FP16 vision model. Each run verified CUDA kernels in a separate profiled session, then measured five inferences in a normal session after two warmups, avoiding profiler overhead in the timings. Each size ran in its own process. A 100 ms `nvidia-smi` poll stopped a run below 12 GiB free. Other GPU work was active, so throughput is directional. The benchmark excludes image decode and thumbnail preprocessing.
+An opt-in raw inference benchmark compares the cached FP16 export against the cached INT8 (`vision_model_quantized.onnx`) export. Both use the same harness: a separate profiled CUDA verification session, two warmups, five timed inferences in an unprofiled session, and a fresh process per model/batch. The benchmark uses zero-filled tensors, so it excludes image decode and thumbnail preprocessing. A 100 ms `nvidia-smi` poll stopped a run below 12 GiB free. Other GPU work was active, so throughput and sampled free-memory minima are directional.
 
-| Batch | Images/sec | Minimum free VRAM sampled |
-|---:|---:|---:|
-| 1 | 66.96–70.58 | 14.5 GiB |
-| 2 | 77.58 | 14.2 GiB |
-| 4 | 77.24 | 14.3 GiB |
-| 8 | 83.10 | 14.5 GiB |
-| 12 | 86.09 | 14.5 GiB |
-| 16 | 83.35–86.64 | 14.2–14.5 GiB |
-| 20 | 88.48 | 14.3 GiB |
-| 24 | 86.39 | 14.5 GiB |
-| 32 | 89.55–90.33 | 14.2–14.5 GiB |
+| Batch | FP16 images/sec | INT8 images/sec | FP16 sampled minimum free VRAM | INT8 sampled minimum free VRAM |
+|---:|---:|---:|---:|---:|
+| 1 | 70.18 | 2.03 | 14.9 GiB | 17.8 GiB |
+| 8 | 83.70 | 2.01 | 14.9 GiB | 16.3 GiB |
+| 16 | 87.52 | 1.99 | 14.9 GiB | 15.5 GiB |
+| 32 | 90.08 | 2.47 | 14.9 GiB | 13.4 GiB |
 
-Batch 32 is the current default: it gave the best repeatable throughput among the tested sizes while leaving more than 14 GiB free for concurrent GPU applications. The 2.33 GB external FP16 weight file is stored separately from the small ONNX graph.
+The apples-to-apples run confirms FP16 is dramatically faster on this RTX 3090 (roughly 35–45× for these batches). The profiled INT8 run recorded 2,561 CUDA execution nodes and 415 CPU execution nodes, compared with 1,451 CUDA and 3 CPU nodes for FP16. This indicates substantial INT8 CPU execution/fallback and likely explains why its quantization does not translate into faster inference here. Batch 32 remains the FP16 default: it delivered the best throughput in the earlier sweep while retaining more than 14 GiB free in that run. INT8 memory use was lower for small batches, but its batch-32 run reached the 12 GiB safety boundary much more closely. Memory samples are affected by other GPU clients and should not be treated as exact per-model allocation.
+
+The 2.33 GB external FP16 weight file is stored separately from the small ONNX graph.
 
 The ignored benchmark can be repeated one size per process, up to 32:
 
 ```bash
-SIGLIP_BENCH_BATCH_SIZE=32 cargo test -p clip-workbench --lib benchmark_siglip_cuda_batch_size -- --ignored --nocapture
+SIGLIP_BENCH_MODEL=fp16 SIGLIP_BENCH_BATCH_SIZE=32 cargo test -p clip-workbench --lib benchmark_siglip_cuda_batch_size -- --ignored --nocapture
+SIGLIP_BENCH_MODEL=int8 SIGLIP_BENCH_BATCH_SIZE=32 cargo test -p clip-workbench --lib benchmark_siglip_cuda_batch_size -- --ignored --nocapture
 ```

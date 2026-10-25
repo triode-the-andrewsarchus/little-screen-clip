@@ -383,10 +383,28 @@ mod tests {
     }
 
     /// Reports repeated CUDA inference timing for one externally selected safe batch size.
-    /// Run as separate processes so each size starts from the same model allocation baseline.
+    /// Run as separate processes so each size and model starts from the same allocation baseline.
     #[test]
-    #[ignore = "opt-in RTX benchmark; run one SIGLIP_BENCH_BATCH_SIZE (1..=32) per process"]
+    #[ignore = "opt-in RTX benchmark; set SIGLIP_BENCH_MODEL=fp16|int8 and batch size 1..=32"]
     fn benchmark_siglip_cuda_batch_size() {
+        const INT8_MODEL_NAME: &str = "siglip2-giant-vision.onnx";
+        let (model_label, model_name, model_path) = match std::env::var("SIGLIP_BENCH_MODEL")
+            .as_deref()
+            .unwrap_or("fp16")
+        {
+            "fp16" => (
+                "fp16",
+                SIGLIP2_GIANT_MODEL_NAME,
+                ensure_model(SIGLIP2_GIANT_MODEL_NAME, None)
+                    .expect("ensure FP16 vision graph and weights"),
+            ),
+            "int8" => {
+                let path = crate::onnx_runtime::models_cache_dir().join(INT8_MODEL_NAME);
+                assert!(path.is_file(), "cache the INT8 model at {}", path.display());
+                ("int8", INT8_MODEL_NAME, path)
+            }
+            other => panic!("unsupported SIGLIP_BENCH_MODEL {other:?}; use fp16 or int8"),
+        };
         let batch_size = std::env::var("SIGLIP_BENCH_BATCH_SIZE")
             .expect("set SIGLIP_BENCH_BATCH_SIZE to a value from 1 through 32")
             .parse::<usize>()
@@ -395,11 +413,9 @@ mod tests {
             (1..=32).contains(&batch_size),
             "batch size exceeds benchmark ceiling"
         );
-        let model_path = ensure_model(SIGLIP2_GIANT_MODEL_NAME, None)
-            .expect("ensure FP16 vision graph and weights");
         // Verify CUDA on a profiled session, then measure a normal session so ORT
         // profiling overhead does not distort the throughput result.
-        crate::onnx_runtime::assert_cuda_execution(SIGLIP2_GIANT_MODEL_NAME, |session| {
+        crate::onnx_runtime::assert_cuda_execution(model_name, |session| {
             run_zero_batch(session, 1);
         });
         let mut session = crate::onnx_runtime::load_session(&model_path).unwrap();
@@ -417,7 +433,7 @@ mod tests {
         timings.sort_by(f64::total_cmp);
         let median = timings[timings.len() / 2];
         eprintln!(
-            "SIGLIP_BENCH batch={batch_size} median_ms={:.2} images_per_second={:.2}",
+            "SIGLIP_BENCH model={model_label} batch={batch_size} median_ms={:.2} images_per_second={:.2}",
             median * 1000.0,
             batch_size as f64 / median,
         );

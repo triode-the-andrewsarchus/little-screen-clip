@@ -365,11 +365,17 @@ pub(crate) fn assert_cuda_execution(
         .iter()
         .filter(|event| event["args"]["provider"] == "CUDAExecutionProvider")
         .count();
+    let cpu_nodes = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["args"]["provider"] == "CPUExecutionProvider")
+        .count();
     assert!(
         cuda_nodes > 0,
         "{model_name}: no model kernels executed on CUDA"
     );
-    eprintln!("{model_name}: executed {cuda_nodes} CUDA kernels");
+    eprintln!("{model_name}: executed {cuda_nodes} CUDA nodes, {cpu_nodes} CPU nodes");
 }
 
 #[cfg(test)]
