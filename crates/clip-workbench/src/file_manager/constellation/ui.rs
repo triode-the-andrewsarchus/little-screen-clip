@@ -1909,6 +1909,8 @@ mod tests {
                     "Pitch",
                     "Speed",
                     "Retrigger",
+                    "+1.00×",
+                    "+0 oct",
                     "A",
                     "R",
                     "Edit in Audio Studio",

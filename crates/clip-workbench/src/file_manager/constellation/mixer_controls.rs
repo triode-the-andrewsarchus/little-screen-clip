@@ -144,8 +144,8 @@ fn fader(
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            ui.small(label);
-            ui.spacing_mut().slider_width = (width - 106.0).max(24.0);
+            let title = ui.small(label);
+            ui.spacing_mut().slider_width = (width - title.rect.width() - 74.0).max(12.0);
             let response = ui.add(
                 egui::Slider::new(value, -limit..=limit)
                     .step_by(step)

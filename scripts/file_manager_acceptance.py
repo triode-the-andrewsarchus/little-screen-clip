@@ -120,13 +120,21 @@ class Session:
             return text
         # Sparse studios can omit the toolbar in full-window OCR. Inspect the
         # listing and toolbar regions separately while retaining the raw PNG.
-        for filename, bounds in [
+        regions = [
             ("listing-ocr.png", (340, 280, 1180, 710)),
             ("toolbar-ocr.png", (90, 90, 1180, 280)),
             ("player-ocr.png", (90, 610, 1180, 775)),
             ("dialog-ocr.png", (320, 330, 960, 540)),
-            ("pad-menu-ocr.png", (526, 511, 615, 623)),
-        ]:
+            ("pad-mixer-ocr.png", (350, 518, 464, 718)),
+            ("pad-retrigger-ocr.png", (478, 669, 549, 687)),
+            ("pad-confirm-ocr.png", (494, 478, 584, 497)),
+        ]
+        if "High" in expected:
+            title = self.word(name, "Choke", required=False)
+            if title:
+                x, y = title
+                regions.insert(0, ("pad-menu-ocr.png", (x, y + 20, x + 95, y + 140)))
+        for filename, bounds in regions:
             region = self.output / filename
             with Image.open(path) as screen:
                 crop = screen.crop(bounds)
