@@ -123,7 +123,9 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
     if frames == 0 {
         return Err("Trim contains no complete audio frames".into());
     }
-    let input: Box<dyn Source<Item = f32> + Send> = if sample.pitch_semitones != 0.0 || sample.speed() < 0.0 {
+    let input: Box<dyn Source<Item = f32> + Send> = if sample.pitch_semitones != 0.0
+        || sample.speed() < 0.0
+    {
         // Match preview's bounded preparation, using this same pinned input.
         let limit = (rate as usize * 15 * channels as usize).min(2_000_000);
         let values: Vec<_> = decoder.by_ref().take(limit).collect();
@@ -147,8 +149,8 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
             .map_err(|e| e.to_string())?;
         Box::new(decoder)
     };
-    let layer =
-        super::layer_source::LayerSource::new(input, sample, frames as usize).speed(sample.speed().abs());
+    let layer = super::layer_source::LayerSource::new(input, sample, frames as usize)
+        .speed(sample.speed().abs());
     let mut rendered = rodio::source::UniformSourceIterator::new(
         layer,
         2.try_into().unwrap(),
@@ -254,6 +256,32 @@ mod tests {
             assert!((rendered.duration - duration).abs() < 0.0001);
             assert!(saved.join("originals/pad01_layer1.wav").is_file());
         }
+    }
+
+    #[test]
+    fn stopped_layers_fail_export_without_publishing_an_incomplete_pack() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("hit.wav");
+        let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(1, 48000, 1);
+        buffer.push_samples(&[8192; 16]);
+        buffer.write_wav(&source).unwrap();
+        let mut bank = SamplePackBank::default();
+        let mut sample = SlotSample::new(source, "hit.wav".into(), None, 16.0 / 48000.0);
+        sample.playback_speed = 0.0;
+        bank.slots[0].samples.push(sample);
+        assert!(
+            export(root.path(), &bank)
+                .unwrap_err()
+                .contains("non-zero playback speed")
+        );
+        assert_eq!(
+            std::fs::read_dir(super::super::sample_pack::get_sample_packs_root(
+                root.path()
+            ))
+            .unwrap()
+            .count(),
+            0
+        );
     }
 
     #[test]

@@ -120,13 +120,13 @@ impl CachedAudio {
     }
 }
 
-/// Selects duration-preserving transposition or coupled playback-rate adjustment.
+/// Retains the transposition mode of older saved packs for migration.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PitchMode {
     /// Changes pitch using prepared phase-vocoder PCM, retaining duration.
     #[default]
     Pitch,
-    /// Changes both pitch and duration through playback speed.
+    /// Legacy coupled transposition, migrated to independent playback speed on load.
     Time,
 }
 
@@ -152,6 +152,7 @@ pub struct SlotSample {
     /// Layer transposition in semitones, bounded to two octaves in either direction.
     #[serde(default)]
     pub pitch_semitones: f32,
+    /// Legacy mode; validated banks use `Pitch` with independent playback speed.
     #[serde(default)]
     pub pitch_mode: PitchMode,
     /// Signed playback rate: negative reverses frames, zero stops the layer.
@@ -285,12 +286,11 @@ impl SlotSample {
             || !(-1.0..=1.0).contains(&self.pan)
             || !(0.0..=500.0).contains(&self.attack_ms)
             || !(0.0..=500.0).contains(&self.release_ms)
-            || !self.playback_speed.is_finite()
             || !(-4.0..=4.0).contains(&self.playback_speed)
             || !self.pitch_semitones.is_finite()
             || !(-24.0..=24.0).contains(&self.pitch_semitones)
         {
-            return Err("Pack contains invalid trim bounds or volume".into());
+            return Err("Pack contains invalid trim bounds or mixer settings".into());
         }
         Ok(())
     }
@@ -788,13 +788,18 @@ mod tests {
             channels: 2,
             sample_rate: 4,
             samples: Arc::new(vec![0.0, 10.0, 1.0, 11.0, 2.0, 12.0, 3.0, 13.0]),
-            mono_samples: Arc::new(vec![]), waveform_peaks: vec![], waveform_colors: vec![],
+            mono_samples: Arc::new(vec![]),
+            waveform_peaks: vec![],
+            waveform_colors: vec![],
         }));
         sample.start_sec = 0.25;
         sample.end_sec = 0.75;
         sample.playback_speed = -1.0;
         let mut pcm = SharedPcm::trimmed(&sample).unwrap();
-        assert!(Arc::ptr_eq(&pcm.audio, sample.cached_audio.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(
+            &pcm.audio,
+            sample.cached_audio.as_ref().unwrap()
+        ));
         assert_eq!(pcm.next(), Some(2.0));
         assert_eq!(pcm.size_hint(), (3, Some(3)));
         assert_eq!(pcm.collect::<Vec<_>>(), [12.0, 1.0, 11.0]);
@@ -819,7 +824,8 @@ mod tests {
             assert_eq!(sample.speed(), expected);
             assert_eq!(sample.pitch_semitones, 0.0);
             assert_eq!(sample.pitch_mode, PitchMode::Pitch);
-            let restored: SamplePackBank = serde_json::from_str(&serde_json::to_string(&bank).unwrap()).unwrap();
+            let restored: SamplePackBank =
+                serde_json::from_str(&serde_json::to_string(&bank).unwrap()).unwrap();
             assert_eq!(restored, bank);
         }
     }

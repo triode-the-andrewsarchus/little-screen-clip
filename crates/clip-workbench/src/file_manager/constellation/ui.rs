@@ -1907,6 +1907,8 @@ mod tests {
                     "Gain",
                     "Pan",
                     "Pitch",
+                    "Speed",
+                    "Retrigger",
                     "A",
                     "R",
                     "Edit in Audio Studio",
@@ -1947,16 +1949,13 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                assert_eq!(knobs.len(), 2);
-                assert!(
-                    (knobs[0].x - knobs[1].x).abs() < 0.1,
-                    "Pan/Pitch knobs must align: {knobs:?}"
-                );
-                assert!(knobs[0].y < knobs[1].y);
-                assert!(
-                    center("P").y > center("Pan").y && center("P").y < center("Pitch").y,
-                    "pitch mode belongs with its knob below Pan"
-                );
+                assert_eq!(knobs.len(), 1, "Only Pan belongs beside Gain");
+                assert!(center("Retrigger").x > center("Pan").x);
+                assert!(center("Retrigger").y > center("Pan").y);
+                assert!(center("Edit in Audio Studio").x > center("Retrigger").x);
+                assert!(center("Pitch").x > center("Speed").x);
+                assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text() == "P" || text.galley.text() == "T")));
                 assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
                     egui::Shape::Text(text) if text.galley.text().contains("drag IN / OUT")
                         || text.galley.text() == "Start" || text.galley.text() == "End")));

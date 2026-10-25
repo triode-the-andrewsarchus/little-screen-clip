@@ -103,7 +103,7 @@ def exercise(session, root, hardware_keys=False):
     session.click(*(sum(point[axis] for point in stars) // len(stars) for axis in (0, 1)))
     first_key = "semicolon" if hardware_keys else "z"
     session.key(first_key, "shift")
-    text = session.observe("assigned-slot", ["Edit in Audio Studio"])
+    text = session.observe("assigned-slot", ["Edit in Audio Studio", "Retrigger", "Speed", "Pitch", "Gain", "Pan"])
     assert "Layer actions" not in text and "Fit selection" not in text and "drag IN / OUT" not in text
     session.key("Space")
     session.key("Space")

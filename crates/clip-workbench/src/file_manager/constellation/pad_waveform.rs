@@ -20,7 +20,7 @@ impl ConstellationState {
         let mut view = ui
             .data(|data| data.get_temp::<AudioViewport>(id))
             .unwrap_or(full);
-        let height = 164.0;
+        let height = 140.0;
         let (outer, response) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
             egui::Sense::click_and_drag(),
@@ -80,6 +80,20 @@ impl ConstellationState {
             ui.ctx().pixels_per_point(),
             ui.visuals().weak_text_color(),
         );
+        if sample.pitch_pending() {
+            let status = Rect::from_min_size(
+                outer.center() - Vec2::new(64.0, 10.0),
+                Vec2::new(128.0, 20.0),
+            );
+            painter.rect_filled(status, 3.0, ui.visuals().extreme_bg_color);
+            painter.text(
+                status.center(),
+                egui::Align2::CENTER_CENTER,
+                "Preparing pitch…",
+                egui::FontId::proportional(12.0),
+                ui.visuals().text_color(),
+            );
+        }
         paint_markers(ui, &painter, rect, sample, view, frame);
         let fade_drag = edit_fades(ui, &painter, rect, sample, view);
         if response.hovered() {

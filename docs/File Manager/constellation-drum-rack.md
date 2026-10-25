@@ -187,9 +187,12 @@ also accounts for available width; envelope guides use the playback fade model.
 
 A compact mixer strip sits to the left of the waveform at every window size. Its
 150-pixel vertical Gain fader has dB ticks and a silent lower stop; double-click
-resets it to 0 dB. Pan is to its right, with the Pitch mode button and knob grouped
-vertically below Pan. Both have a center detent and reset
-on double-click; hover shows their values. The editor defaults to 290 pixels high
+resets it to 0 dB. Pan is the only knob beside it, with a center detent and
+reset to center on double-click. Retrigger sits below the left edge of the waveform,
+with Edit in Audio Studio at the right edge. Independent Speed and Pitch faders
+share that strip, separated into logical sections; narrow editors use a second
+compact row for the faders. Each fader has a fixed-width editable readout.
+Hover Pan to see its value. The editor defaults to 290 pixels high
 and remains resizable. The waveform and direct Studio button use the remaining
 width without displacing the mixer.
 
@@ -200,14 +203,22 @@ remain reachable. The envelope guides show the resulting fades, including after
 trimming; overlapping fades use the lower envelope. No duplicate numeric trim
 fields or selected-duration text occupy the editor.
 
-The square R button controls retriggering for the entire selected pad. The square
-P/T button and Pitch knob apply to the selected layer. Pitch spans -24 to +24
-semitones. P is the default: a phase vocoder changes pitch while preserving frame
-count and duration. T changes playback speed, so +12 semitones plays twice as fast
-and halves the duration. Changes affect subsequent hits. A pending P adjustment
-shows Preparing pitch until a bounded worker has prepared its PCM; that layer does
-not play using stale pitch data while preparation is pending. Large shifts can
-color transients; this is a preview pitch shifter without formant controls.
+Retrigger controls restarting for the entire selected pad.
+Speed and Pitch apply independently to the selected layer. Speed ranges from
+−2× to +2×: negative rates play the trimmed sample backwards, zero silences it,
+and +1× is normal playback. Its center detent is zero; double-click resets to +1×.
+Speed changes duration and pitch together. Pitch shifts the sound by up to two
+octaves in either direction while preserving the frame count. It adjusts in single
+cents (1200 per octave), with a center detent and double-click reset to zero.
+Readouts show cents between octave stops and octaves at −2, −1, 0, +1 and +2.
+Drag a readout for fine adjustment or type a value with `ct` or `oct` for pitch.
+Changing pitch shows Preparing pitch until a bounded worker has prepared its PCM;
+that layer does not play stale pitch data while preparation is pending. Large
+shifts can color transients; this preview pitch shifter has no formant controls.
+
+Old P/T packs retain their sound: Time settings migrate to playback speed with
+zero independent pitch. Previously saved rates above +2× (up to +4×) stay intact
+until edited; new speed adjustments are restricted to ±2×.
 
 Prepared pitch PCM shares the existing bounded audio cache and is invalidated by
 source or pitch changes. Preparation uses the existing FFT dependency and runs off
@@ -263,9 +274,11 @@ their pitch or playback-speed adjustment, trim, gain, balance, and fades into
 stereo 32-bit float WAVs; their complete
 unmodified inputs are copied into originals/. Unedited layers retain one
 byte-identical source copy. The relative-path bank manifest makes the kit movable
-without source paths or symlink support. Rendered layer parameters reset to neutral to avoid applying edits twice; the
-P/T mode choice remains selected with its pitch amount reset to zero. Legacy
-layers default to zero semitones in P mode. Bus compression is not baked into layers.
+without source paths or symlink support. Rendered layer parameters reset to neutral
+to avoid applying edits twice. Pitch resets to zero and playback speed resets to +1× after rendering. Zero-speed
+layers must be given a nonzero speed before export; there is no finite playback
+duration for a stopped layer. Legacy
+layers default to zero pitch and +1× speed. Bus compression is not baked into layers.
 Saving records the submitted rack snapshot as Saved; later edits remain unsaved.
 Staging retains pinned inputs and output directories and installs atomically
 without overwriting existing versions. Accepted writes survive navigation and

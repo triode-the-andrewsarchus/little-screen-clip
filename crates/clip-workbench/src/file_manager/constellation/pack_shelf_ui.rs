@@ -488,24 +488,20 @@ impl ConstellationState {
                 let width = ui.available_width();
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
-                        Vec2::new(116.0, 192.0),
+                        Vec2::new(116.0, 196.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            super::mixer_controls::mixer(ui, sample, retrigger);
+                            super::mixer_controls::mixer(ui, sample);
                         },
                     );
                     let wave = Rect::from_min_size(
                         ui.cursor().min,
-                        Vec2::new((width - 126.0).max(80.0), 192.0),
+                        Vec2::new((width - 126.0).max(80.0), 196.0),
                     );
                     let mut canvas = ui.child_ui(wave, egui::Layout::top_down(egui::Align::Min));
                     canvas.set_clip_rect(ui.clip_rect().intersect(wave));
                     Self::render_layer_waveform(&mut canvas, sample);
-                    if canvas
-                        .small_button("Edit in Audio Studio")
-                        .on_hover_text(&sample.filename)
-                        .clicked()
-                    {
+                    if super::mixer_controls::layer_strip(&mut canvas, sample, retrigger) {
                         studio_layer = Some(layer);
                     }
                     ui.allocate_rect(wave, egui::Sense::hover());
