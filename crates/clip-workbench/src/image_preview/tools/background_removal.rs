@@ -271,10 +271,7 @@ pub fn run_native_background_removal_with_progress(
         );
     }
 
-    let env = crate::onnx_runtime::get_ort_environment()?;
-    let mut session = ort::session::Session::builder(&env)
-        .map_err(|e| format!("ORT builder failed: {e}"))?
-        .commit_from_file(model_path)
+    let mut session = crate::onnx_runtime::load_session(model_path)
         .map_err(|e| format!("ORT model load failed: {e}"))?;
 
     let img_tensor = ort::value::Tensor::from_array(img_arr)
@@ -382,10 +379,7 @@ pub fn run_native_depth_map_with_progress(
         );
     }
 
-    let env = crate::onnx_runtime::get_ort_environment()?;
-    let mut session = ort::session::Session::builder(&env)
-        .map_err(|e| format!("ORT builder failed: {e}"))?
-        .commit_from_file(model_path)
+    let mut session = crate::onnx_runtime::load_session(model_path)
         .map_err(|e| format!("ORT model load failed: {e}"))?;
 
     let img_tensor = ort::value::Tensor::from_array(img_arr)

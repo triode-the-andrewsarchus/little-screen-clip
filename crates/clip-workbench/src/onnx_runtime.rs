@@ -64,6 +64,56 @@ pub fn get_ort_environment() -> Result<ort::environment::Environment, String> {
     Ok(env)
 }
 
+/// Loads an ONNX model with CUDA device 0, falling back to CPU with a warning.
+///
+/// Registration can succeed even if CUDA fails during session creation. Both stages
+/// are checked before returning a session. Unsupported individual nodes may still
+/// execute on CPU after CUDA initialization succeeds.
+///
+/// # Errors
+/// Returns an error if the environment, session options, or model cannot be loaded
+/// on either provider. A failed CPU retry retains the CUDA error for diagnostics.
+pub(crate) fn load_session(path: &std::path::Path) -> Result<ort::session::Session, String> {
+    load_session_with_options(path, Ok)
+}
+
+fn load_session_with_options(
+    path: &std::path::Path,
+    configure: impl Fn(
+        ort::session::builder::SessionBuilder,
+    ) -> Result<ort::session::builder::SessionBuilder, String>,
+) -> Result<ort::session::Session, String> {
+    use ort::ep::ExecutionProvider;
+
+    let env = get_ort_environment()?;
+    let build =
+        || ort::session::Session::builder(&env).map_err(|e| format!("ORT builder failed: {e}"));
+    let mut builder = build()?;
+    if let Err(error) = ort::ep::CUDA::default().register(&mut builder) {
+        tracing::warn!(%error, model = %path.display(), "ONNX Runtime: CUDA registration failed; using CPU");
+        // Discard potentially modified options after failed provider registration.
+        return configure(build()?)?
+            .commit_from_file(path)
+            .map_err(|cpu_error| {
+                format!("ORT model load failed: CUDA registration: {error}; CPU: {cpu_error}")
+            });
+    }
+    match configure(builder)?.commit_from_file(path) {
+        Ok(session) => {
+            tracing::info!(model = %path.display(), "ONNX Runtime: CUDA session initialized (device 0)");
+            Ok(session)
+        }
+        Err(cuda_error) => {
+            tracing::warn!(%cuda_error, model = %path.display(), "ONNX Runtime: CUDA session failed; retrying on CPU");
+            configure(build()?)?
+                .commit_from_file(path)
+                .map_err(|cpu_error| {
+                    format!("ORT model load failed: CUDA: {cuda_error}; CPU: {cpu_error}")
+                })
+        }
+    }
+}
+
 /// Resolves the download URL for a named model, checking any explicit override first,
 /// then checking the runtime configuration file (`config.toml`), and finally falling back
 /// to the default hard-coded URL.
@@ -244,9 +294,139 @@ where
     }
 }
 
+/// Runs an opt-in model probe and checks actual execution-provider trace events.
+#[cfg(test)]
+pub(crate) fn assert_cuda_execution(
+    model_name: &str,
+    run: impl FnOnce(&mut ort::session::Session),
+) {
+    let profile = tempfile::tempdir().unwrap();
+    let model = models_cache_dir().join(model_name);
+    assert!(
+        model.is_file(),
+        "Cache {model_name} before running this test"
+    );
+    let mut session = load_session_with_options(&model, |builder| {
+        builder
+            .with_profiling(profile.path().join("ort"))
+            .map_err(|e| e.to_string())
+    })
+    .unwrap();
+    run(&mut session);
+    let trace = session.end_profiling().unwrap();
+    let events: serde_json::Value = serde_json::from_slice(&std::fs::read(trace).unwrap()).unwrap();
+    let cuda_nodes = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["args"]["provider"] == "CUDAExecutionProvider")
+        .count();
+    assert!(
+        cuda_nodes > 0,
+        "{model_name}: no model kernels executed on CUDA"
+    );
+    eprintln!("{model_name}: executed {cuda_nodes} CUDA kernels");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires cached depth model; validates isolated CPU fallback"]
+    fn cpu_fallback_without_visible_gpu() {
+        const CHILD_FLAG: &str = "LITTLE_CLIP_ORT_CPU_FALLBACK_TEST";
+        if std::env::var_os(CHILD_FLAG).is_some() {
+            let mut session =
+                load_session(&models_cache_dir().join(DEPTH_ANYTHING_V2_MODEL_NAME)).unwrap();
+            let outputs = session.run([float_input(&[1, 3, 518, 518])]).unwrap();
+            assert!(!outputs[0].try_extract_array::<f32>().unwrap().is_empty());
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "onnx_runtime::tests::cpu_fallback_without_visible_gpu",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(CHILD_FLAG, "1")
+            .env("CUDA_VISIBLE_DEVICES", "-1")
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "CPU fallback failed with CUDA devices hidden"
+        );
+    }
+
+    fn float_input(shape: &[i64]) -> ort::session::SessionInputValue<'static> {
+        let count = shape.iter().product::<i64>() as usize;
+        ort::value::Tensor::from_array((shape.to_vec(), vec![0.0_f32; count]))
+            .unwrap()
+            .into()
+    }
+
+    #[test]
+    #[ignore = "requires cached Image Studio models and CUDA GPU"]
+    fn image_tools_execute_on_cuda() {
+        assert_cuda_execution(FEYNOBG_FP16_MODEL_NAME, |session| {
+            session.run([float_input(&[1, 3, 1024, 1024])]).unwrap();
+        });
+        assert_cuda_execution(DEPTH_ANYTHING_V2_MODEL_NAME, |session| {
+            session.run([float_input(&[1, 3, 518, 518])]).unwrap();
+        });
+        assert_cuda_execution(BIG_LAMA_MODEL_NAME, |session| {
+            session
+                .run([
+                    float_input(&[1, 3, 512, 512]),
+                    float_input(&[1, 1, 512, 512]),
+                ])
+                .unwrap();
+        });
+    }
+
+    #[test]
+    #[ignore = "requires cached MobileSAM models and CUDA GPU"]
+    fn mobile_sam_executes_on_cuda() {
+        assert_cuda_execution(MOBILE_SAM_ENCODER_MODEL_NAME, |session| {
+            session.run([float_input(&[64, 64, 3])]).unwrap();
+        });
+        assert_cuda_execution(MOBILE_SAM_DECODER_MODEL_NAME, |session| {
+            let size = ort::value::Tensor::from_array(([2], vec![64.0_f32, 64.0])).unwrap();
+            session
+                .run([
+                    float_input(&[1, 256, 64, 64]),
+                    float_input(&[1, 1, 2]),
+                    float_input(&[1, 1]),
+                    float_input(&[1, 1, 256, 256]),
+                    float_input(&[1]),
+                    size.into(),
+                ])
+                .unwrap();
+        });
+    }
+
+    #[test]
+    #[ignore = "requires cached SigLIP text model and CUDA GPU"]
+    fn siglip_text_executes_on_cuda() {
+        assert_cuda_execution(SIGLIP2_GIANT_TEXT_MODEL_NAME, |session| {
+            let tokens = ort::value::Tensor::from_array(([1, 4], vec![1_i64; 4])).unwrap();
+            let mut inputs: Vec<ort::session::SessionInputValue<'_>> = vec![tokens.into()];
+            if session
+                .inputs()
+                .iter()
+                .any(|input| input.name() == "attention_mask")
+            {
+                inputs.push(
+                    ort::value::Tensor::from_array(([1, 4], vec![1_i64; 4]))
+                        .unwrap()
+                        .into(),
+                );
+            }
+            session.run(inputs.as_slice()).unwrap();
+        });
+    }
 
     #[test]
     fn test_resolve_model_url_with_explicit_override() {

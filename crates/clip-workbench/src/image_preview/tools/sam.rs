@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::onnx_runtime::{
-    MOBILE_SAM_DECODER_MODEL_NAME, MOBILE_SAM_ENCODER_MODEL_NAME, get_ort_environment,
+    MOBILE_SAM_DECODER_MODEL_NAME, MOBILE_SAM_ENCODER_MODEL_NAME, load_session,
 };
 
 /// Pure-Rust ONNX Runtime session for Segment Anything (MobileSAM).
@@ -28,16 +28,11 @@ pub struct NativeSamSession {
 
 impl NativeSamSession {
     pub fn new(encoder_path: &Path, decoder_path: &Path) -> Result<Self, String> {
-        let env = get_ort_environment()?;
-        let encoder_session = ort::session::Session::builder(&env)
-            .map_err(|e| format!("ORT encoder builder failed: {e}"))?
-            .commit_from_file(encoder_path)
-            .map_err(|e| format!("ORT encoder load failed: {e}"))?;
+        let encoder_session =
+            load_session(encoder_path).map_err(|e| format!("ORT encoder load failed: {e}"))?;
 
-        let decoder_session = ort::session::Session::builder(&env)
-            .map_err(|e| format!("ORT decoder builder failed: {e}"))?
-            .commit_from_file(decoder_path)
-            .map_err(|e| format!("ORT decoder load failed: {e}"))?;
+        let decoder_session =
+            load_session(decoder_path).map_err(|e| format!("ORT decoder load failed: {e}"))?;
 
         Ok(Self {
             encoder_session,

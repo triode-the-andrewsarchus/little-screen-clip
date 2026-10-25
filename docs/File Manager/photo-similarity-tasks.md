@@ -36,16 +36,40 @@ Architecture comparison against local main: +4,575 non-comment lines, +122 funct
 
 ## GPU and cache behavior
 
-Both SigLIP encoders request CUDA device 0. CUDA registration failure emits a warning and retains CPU support. The runtime trace test verifies actual vision kernel execution, rather than merely enumerating available providers:
+All native ORT image models use the shared model loader and request CUDA device 0. CUDA registration or session-initialization failure emits a warning and retries with fresh CPU session options. The runtime trace test verifies actual vision kernel execution, rather than merely enumerating available providers:
 
 ```bash
 cargo test -p clip-workbench --lib vision_kernels_execute_on_cuda -- --ignored --nocapture
 ```
 
-This opt-in test requires the cached vision model and a working NVIDIA CUDA/cuDNN installation. Ordinary gallery/cache tests do not require a GPU.
+This opt-in test requires the cached vision model and a working NVIDIA CUDA/cuDNN installation. The new cache tests do not require a GPU.
 
 Photo features live in `$XDG_CACHE_HOME/little-screen-clip/photo-similarity.sqlite` (default `~/.cache/little-screen-clip/photo-similarity.sqlite`). This database has its own connection, WAL and schema, independent of `constellation.sqlite`. Cache failures warn and fall back to indexing without persistence.
 
 Rows use raw Unix path bytes, source device/inode/size/mtime/ctime, and an encoder key including preprocessing version and model identity. Source replacement, image edits and model replacement invalidate reuse. Sources are revalidated before publication and storage; model changes during loading/inference reject the affected neural result. Cached neural vectors must have the expected dimensions, finite values and unit norm. Perceptual hashes use a separate encoder key and are upgraded when the neural model is available.
 
 SQLite reads and writes run on indexing workers. Fully cached batches publish without constructing an inference session; partially cached batches compute only missing features. Tests cover reopening the database, skipping initialization on restart, cancellation, source edits/replacement, model-key changes, invalid vectors and byte-exact filenames.
+
+## Shared CUDA verification
+
+The opt-in model probes use the same model loader as the file manager and Image Studio. All seven cached models executed CUDA kernels on the RTX 3090:
+
+| Model | CUDA kernels in probe |
+| --- | ---: |
+| SigLIP vision | 2,561 |
+| SigLIP text | 1,716 |
+| FeyNoBg background removal | 8,178 |
+| Depth Anything V2 | 464 |
+| LaMa inpainting | 1,773 |
+| MobileSAM encoder | 475 |
+| MobileSAM decoder | 364 |
+
+```bash
+cargo test -p clip-workbench --lib cuda -- --ignored --nocapture --test-threads=1
+cargo test -p clip-workbench --lib cpu_fallback_without_visible_gpu -- --ignored --nocapture
+cargo test --workspace -- --test-threads=1
+```
+
+Final workspace validation passed 2,624 tests (32 opt-in/hardware tests ignored), with no failures. The CUDA probes passed all four tests; a separate child-process probe also successfully ran depth inference with all CUDA devices hidden. Python SAM/LaMa helpers already prefer CUDA when their separate Python runtime provides it; the native sessions now share that policy explicitly.
+
+Architecture checks against the pre-change baseline show fewer clone groups (1,447 → 1,446), lower average complexity and no new cycles. The indexing scheduler's complexity fell from 17 to 6. The checker still reports existing clone ranges in touched files as regressions after line shifts; those fragments were already present in the baseline. The additional storage, revision validation and GPU probes implement the requested behavior rather than duplicate the audio database.
