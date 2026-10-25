@@ -41,6 +41,8 @@ fn session_builder() -> Result<SessionBuilder, String> {
 /// Vision feature extractor backed by a SigLIP 2 Giant ONNX model.
 pub struct SiglipEmbedder {
     session: ort::session::Session,
+    /// Revision captured around session creation, rather than after inference.
+    pub(super) encoder_revision: Vec<u8>,
 }
 
 impl SiglipEmbedder {
@@ -54,11 +56,18 @@ impl SiglipEmbedder {
         let model_path = ensure_model(SIGLIP2_GIANT_MODEL_NAME, None)
             .map_err(|e| format!("Failed to ensure SigLIP 2 model: {e}"))?;
 
+        let encoder_revision =
+            super::cache::model_revision().ok_or("Cannot identify SigLIP vision model")?;
         let session = session_builder()?
             .commit_from_file(&model_path)
             .map_err(|e| format!("ORT SigLIP 2 model load failed: {e}"))?;
-
-        Ok(Self { session })
+        if super::cache::model_revision().as_ref() != Some(&encoder_revision) {
+            return Err("SigLIP vision model changed while loading".into());
+        }
+        Ok(Self {
+            session,
+            encoder_revision,
+        })
     }
 
     /// Embeds a batch of images into L2-normalized feature vectors.

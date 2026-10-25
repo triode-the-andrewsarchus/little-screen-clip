@@ -1,9 +1,11 @@
 //! Perceptual similarity gallery layout and zoomable canvas.
 
+mod cache;
 pub mod canvas;
 pub mod dhash;
 pub mod embedding;
 pub mod grid;
+mod index;
 pub mod scanner;
 pub mod siglip;
 #[cfg(test)]

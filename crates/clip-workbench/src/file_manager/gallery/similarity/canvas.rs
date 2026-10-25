@@ -18,7 +18,7 @@ use super::{
     embedding::{FeatureVector, project_features_to_2d},
     grid::{GridPlacement, grid_dimensions, snap_to_grid},
     scanner::scan_recursive_photos,
-    siglip::{SIGLIP_BATCH_SIZE, SiglipEmbedder, SiglipTextEmbedder},
+    siglip::SiglipTextEmbedder,
 };
 use crate::file_manager::filesystem::{Directory, Entry};
 
@@ -777,40 +777,7 @@ impl SimilarityCanvas {
         let (batch_tx, batch_rx) = mpsc::channel();
 
         let (ticket, _completion_rx) = pool.submit(Duration::from_secs(3600), move || {
-            let mut siglip_embedder = SiglipEmbedder::try_new().ok();
-
-            for chunk in missing.chunks(SIGLIP_BATCH_SIZE) {
-                if c.load(Ordering::Relaxed) {
-                    break;
-                }
-                let mut chunk_results = Vec::with_capacity(chunk.len());
-                let mut used_siglip = false;
-
-                if let Some(embedder) = siglip_embedder.as_mut() {
-                    let chunk_paths: Vec<PathBuf> = chunk.iter().map(|(p, _)| p.clone()).collect();
-                    if let Ok(embeddings) = embedder.embed_batch(&chunk_paths, &c) {
-                        for ((path, rev), feat) in chunk.iter().zip(embeddings) {
-                            chunk_results.push((path.clone(), *rev, feat));
-                        }
-                        used_siglip = true;
-                    }
-                }
-
-                if !used_siglip {
-                    for (path, rev) in chunk {
-                        if c.load(Ordering::Relaxed) {
-                            break;
-                        }
-                        if let Some(hash) = compute_dhash_from_path(path, &c) {
-                            chunk_results.push((path.clone(), *rev, FeatureVector::DHash(hash)));
-                        }
-                    }
-                }
-
-                if !chunk_results.is_empty() && batch_tx.send(chunk_results).is_err() {
-                    break;
-                }
-            }
+            super::index::index_images(missing, &c, batch_tx);
         });
         self.hash_job = Some(HashJob {
             ticket,

@@ -5,7 +5,7 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 ## Current priorities
 
 - [x] Verify actual SigLIP GPU execution; configure acceleration and report fallback failures clearly. The opt-in vision test recorded 2,561 CUDA kernels on the RTX 3090. Both encoders now request CUDA, with explicit CPU fallback warnings.
-- [ ] Persist image embeddings in SQLite across file-manager restarts, validating source and model revisions before reuse.
+- [x] Persist image embeddings in SQLite across file-manager restarts, validating source and model revisions before reuse. The photo cache is a separate database; fully cached indexing skips model initialization.
 
 ## Correctness and responsiveness
 
@@ -33,3 +33,19 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 - [ ] Complete broader tests when build resources permit; previous workspace validation ran out of disk space. The focused gallery run passed 55 tests and formatting checks passed.
 
 Architecture comparison against local main: +4,575 non-comment lines, +122 functions, +34 clone groups; duplication 5.67% → 5.68%, cycles unchanged at six. These are review baselines, not targets to reduce by moving code without simplifying it.
+
+## GPU and cache behavior
+
+Both SigLIP encoders request CUDA device 0. CUDA registration failure emits a warning and retains CPU support. The runtime trace test verifies actual vision kernel execution, rather than merely enumerating available providers:
+
+```bash
+cargo test -p clip-workbench --lib vision_kernels_execute_on_cuda -- --ignored --nocapture
+```
+
+This opt-in test requires the cached vision model and a working NVIDIA CUDA/cuDNN installation. Ordinary gallery/cache tests do not require a GPU.
+
+Photo features live in `$XDG_CACHE_HOME/little-screen-clip/photo-similarity.sqlite` (default `~/.cache/little-screen-clip/photo-similarity.sqlite`). This database has its own connection, WAL and schema, independent of `constellation.sqlite`. Cache failures warn and fall back to indexing without persistence.
+
+Rows use raw Unix path bytes, source device/inode/size/mtime/ctime, and an encoder key including preprocessing version and model identity. Source replacement, image edits and model replacement invalidate reuse. Sources are revalidated before publication and storage; model changes during loading/inference reject the affected neural result. Cached neural vectors must have the expected dimensions, finite values and unit norm. Perceptual hashes use a separate encoder key and are upgraded when the neural model is available.
+
+SQLite reads and writes run on indexing workers. Fully cached batches publish without constructing an inference session; partially cached batches compute only missing features. Tests cover reopening the database, skipping initialization on restart, cancellation, source edits/replacement, model-key changes, invalid vectors and byte-exact filenames.
