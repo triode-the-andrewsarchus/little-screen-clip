@@ -1217,6 +1217,16 @@ static SHARED_AUDIO_SINK: std::sync::LazyLock<Option<rodio::stream::MixerDeviceS
             })
     });
 
+/// Attaches an initialized source to the shared application audio sink.
+///
+/// Populate queued sources before connecting: the mixer reads their channel count
+/// and sample rate immediately. The caller retains any playback controls.
+/// Returns `None` when the shared audio device is unavailable.
+pub fn connect_shared_audio_source(source: impl rodio::Source + Send + 'static) -> Option<()> {
+    SHARED_AUDIO_SINK.as_ref()?.mixer().add(source);
+    Some(())
+}
+
 /// Creates a new `rodio::Player` connected to the shared application audio sink.
 /// This avoids opening competing audio hardware sinks across preview widgets.
 pub fn new_shared_audio_player() -> Option<rodio::Player> {

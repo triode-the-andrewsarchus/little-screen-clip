@@ -48,11 +48,11 @@ pub(super) struct PadOutput {
 
 impl PadOutput {
     pub fn new(bypass: bool, history: Arc<super::meter_history::MeterHistory>) -> Option<Self> {
-        Some(Self::with_player_history(
-            crate::ui_ext::new_shared_audio_player()?,
-            bypass,
-            history,
-        ))
+        let (player, source) = Player::new();
+        let output = Self::with_player_history(player, bypass, history);
+        // Populate the queue before the device mixer inspects its format.
+        crate::ui_ext::connect_shared_audio_source(source)?;
+        Some(output)
     }
 
     /// Attaches the rack bus to an owned player, retaining the shared device lifetime.
@@ -101,9 +101,10 @@ impl PadOutput {
 
     /// Attaches a guarded streaming audition to the same headroom/dynamics bus.
     pub fn play_source(&self, source: Box<dyn Source<Item = f32> + Send>) -> Player {
-        let player = Player::connect_new(&self.mixer);
+        let (player, queued) = Player::new();
         player.pause();
         player.append(source.amplify(HEADROOM));
+        self.mixer.add(queued);
         player
     }
 
@@ -175,12 +176,13 @@ impl PadOutput {
         let source = SharedPcm::trimmed(sample)?;
         let frames = source.size_hint().0 / source.channels().get() as usize;
         let source = super::layer_source::LayerSource::new(source, sample, frames);
-        let player = Player::connect_new(&self.mixer);
+        let (player, queued) = Player::new();
         player.append(
             source
                 .speed(sample.speed().abs())
                 .amplify(velocity.min(127) as f32 / 127.0 * HEADROOM),
         );
+        self.mixer.add(queued);
         Some(player)
     }
 }
@@ -345,6 +347,68 @@ impl Source for Glue<MixerSource> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panned_voices_keep_channel_balance_from_the_first_audible_frame() {
+        for (channels, rate, streaming) in [
+            (1, 44100, false),
+            (2, 48000, false),
+            (1, 48000, true),
+            (2, 44100, true),
+        ] {
+            for pan in [-1.0_f32, -0.35, 0.35, 1.0] {
+                let pcm = Arc::new(vec![0.5; rate as usize * channels as usize]);
+                let mut sample = SlotSample::new("hit.wav".into(), "hit.wav".into(), None, 1.0);
+                sample.pan = pan;
+                sample.cached_audio = Some(Arc::new(super::super::sample_pack::CachedAudio {
+                    channels,
+                    sample_rate: rate,
+                    samples: pcm.clone(),
+                    mono_samples: pcm,
+                    waveform_peaks: vec![],
+                    waveform_colors: vec![],
+                }));
+                let (device, mut audio) =
+                    rodio::mixer::mixer(2.try_into().unwrap(), RATE.try_into().unwrap());
+                let (player, queued) = Player::new();
+                let bus = PadOutput::with_player(player, true);
+                device.add(queued); // The bus queue is ready before device attachment too.
+                let voice = if streaming {
+                    bus.play_source(Box::new(super::super::layer_source::LayerSource::new(
+                        SharedPcm::trimmed(&sample).unwrap(),
+                        &sample,
+                        rate as usize,
+                    )))
+                } else {
+                    bus.play(&sample, 127).unwrap()
+                };
+                voice.play();
+                let expected = [
+                    0.5 * HEADROOM * (1.0 - pan.max(0.0)),
+                    0.5 * HEADROOM * (1.0 + pan.min(0.0)),
+                ];
+                let mut audible = 0;
+                for frame in 0..20000 {
+                    let actual = [audio.next().unwrap(), audio.next().unwrap()];
+                    if actual != [0.0, 0.0] {
+                        audible += 1;
+                        assert!(
+                            (actual[0] * expected[1] - actual[1] * expected[0]).abs() < 0.00001,
+                            "Wrong stereo balance at frame {frame}, {rate} Hz, pan {pan}: {actual:?}"
+                        );
+                        // Resuming a paused stream can interpolate its first frame from silence.
+                        if frame > 1024 {
+                            assert!(
+                                (actual[0] - expected[0]).abs() < 0.00001
+                                    && (actual[1] - expected[1]).abs() < 0.00001
+                            );
+                        }
+                    }
+                }
+                assert!(audible > 19000);
+            }
+        }
+    }
 
     #[test]
     fn soft_knee_is_continuous_and_makeup_precedes_the_safety_ceiling() {
