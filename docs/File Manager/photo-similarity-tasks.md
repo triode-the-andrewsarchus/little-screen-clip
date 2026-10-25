@@ -9,6 +9,7 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 
 ## Correctness and responsiveness
 
+- [x] Retain the shared browser focus target in the similarity canvas; tile clicks now keep keyboard and clipboard shortcuts active across frames. The regression test fails without registration.
 - [x] **P1:** Make recursive selection ranges and keyboard navigation use the displayed collection, rather than root-folder entries (`selection.rs`, gallery row actions).
 - [x] **P1:** Remove synchronous, unguarded hover image probing; use guarded metadata workers. Replacing a hovered file with a FIFO can block the UI (`ui/gallery.rs`, `shelf/preview.rs`).
 - [x] **P1:** Cancel or reject searches from an earlier dataset generation when folders or recursive scan results change (`similarity/canvas.rs`).
@@ -30,7 +31,7 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 - [x] Simplify gallery interaction/HUD code. Compact grid headers share typed actions and icon controls; thumbnail admission has one priority scheduler. Complexity fell from 71 to 9 for `similarity_gallery_ui`, 42 to 19 for the masonry gallery, and 23 to 18 for the toolbar.
 - [x] Replace the camera emoji in application chrome with the shared camera SVG icon.
 - [x] Make the multimodal alignment test explicitly opt-in and fail on initialization or fixture errors when enabled, rather than silently passing without exercising inference.
-- [ ] Complete broader tests when build resources permit; previous workspace validation ran out of disk space. The focused gallery run passed 55 tests and formatting checks passed.
+- [x] Complete broader validation. The final workspace run passed 2,637 tests with 33 opt-in/hardware tests ignored; formatting passed. The private Weston/Niri smoke test passed indexing, search, zoomed controls, recursive Ctrl+A selection and folder changes.
 
 Architecture comparison against local main: +4,575 non-comment lines, +122 functions, +34 clone groups; duplication 5.67% → 5.68%, cycles unchanged at six. These are review baselines, not targets to reduce by moving code without simplifying it.
 
@@ -70,8 +71,27 @@ cargo test -p clip-workbench --lib cpu_fallback_without_visible_gpu -- --ignored
 cargo test --workspace -- --test-threads=1
 ```
 
-Final workspace validation passed 2,624 tests (32 opt-in/hardware tests ignored), with no failures. The CUDA probes passed all four tests; a separate child-process probe also successfully ran depth inference with all CUDA devices hidden. Python SAM/LaMa helpers already prefer CUDA when their separate Python runtime provides it; the native sessions now share that policy explicitly.
+The earlier GPU/cache checkpoint passed 2,624 workspace tests (32 opt-in/hardware tests ignored), with no failures. The CUDA probes passed all four tests; a separate child-process probe also successfully ran depth inference with all CUDA devices hidden. Python SAM/LaMa helpers already prefer CUDA when their separate Python runtime provides it; the native sessions now share that policy explicitly.
 
 Architecture checks against the pre-change baseline show fewer clone groups (1,447 → 1,446), lower average complexity and no new cycles. The indexing scheduler's complexity fell from 17 to 6. The checker still reports existing clone ranges in touched files as regressions after line shifts; those fragments were already present in the baseline. The additional storage, revision validation and GPU probes implement the requested behavior rather than duplicate the audio database.
 
 Worker layout snapshots now share entry arrays and dense embedding buffers. PCA checks cancellation between iterations, packing and score generation run on bounded workers, and stale layout requests cannot replace newer grid state. Search allowance buttons use binary searches over cached sorted scores rather than recomputing dot products each frame.
+
+## Classification batching
+
+SigLIP vision inference processes at most eight uncached images per call, on both CUDA and CPU fallback. The final partial batch can be smaller. Persistent hits are published without inference, and a failed batch is retried image by image to isolate bad sources. Eight is the current fixed default; CPU-specific batch tuning and comparisons of alternative batch sizes have not been benchmarked. Image Studio tools operate on one chosen image per user operation.
+
+## Review completion and validation
+
+Each finding was addressed in its own commit. Final checks:
+
+```bash
+cargo test --workspace -- --test-threads=1
+cargo fmt --all --check
+python -m py_compile scripts/file_manager_photo_similarity_acceptance.py
+python scripts/file_manager_photo_similarity_acceptance.py --appearance dark --output-dir /tmp/photo-similarity-acceptance
+```
+
+The workspace passed 2,637 tests with no failures and 33 opt-in/hardware tests ignored. The new focus regression was confirmed failing before the fix and passing afterward. The UI smoke test uses the private Weston/Niri runner, requires the three cached SigLIP files, and isolates configuration and the SQLite database. It verified 24 persisted neural embeddings, a red-image query, compact controls at 97% zoom, Ctrl+A selecting recursive entries, an eight-image subfolder and return to the original collection. The standard English Tesseract language data must be installed or supplied through `TESSDATA_PREFIX`.
+
+Against the pre-review baseline, clone groups fell from 1,446 to 1,442, average complexity fell from 4.07 to 4.05, and dependency cycles remained at six. The checker still labels the comparison REGRESSION because it flags existing clone ranges after edits and shared setup patterns in regression tests; the reported script-cycle changes reorder existing members of untouched scripts. The original canvas grid constructors and score tests already contained the corresponding repeated patterns. No new production complexity hotspot remains from these fixes. The added source implements cancellation, revision validation, worker scheduling and regression coverage; it does not duplicate the audio database.
