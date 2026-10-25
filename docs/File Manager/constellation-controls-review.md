@@ -432,3 +432,75 @@ text-column OCR crop and verified row-center click targets. The scenario now
 explicitly dismisses the context menu before selecting Pad 1, and checks the
 selected pad before editing; manifest assertions continue to verify both pads'
 priorities. No product behavior was weakened for OCR.
+
+## Independent layer speed and editor strip
+
+The selected-layer editor now puts only Gain and Pan in its existing 116-pixel
+left strip. A 140-pixel waveform leaves room for a compact control strip beneath:
+Retrigger at the left, independent Speed and Pitch faders, and Edit in Audio Studio
+at the right. Vertical separators distinguish these sections. Below 660 pixels of
+waveform width, the faders occupy a second compact row. Both themes are checked at
+840×650, 1400×1000 and 2200×1300; no right-sidebar widening is involved.
+The unnecessary choke-priority sentence has been removed from the shared menu.
+
+Speed uses signed rates from −2× to +2×, with negative rates reversing complete
+frames while preserving channel order. Zero is stopped; double-click restores
++1×. Pitch uses single cents over ±2400 cents with its own zero detent and reset.
+Fixed-width editable readouts keep neighboring controls stationary across signs,
+cents and octave labels. The waveform retains fade guides and a pitch-preparation
+status. Reverse playback mirrors the fade flags, drag direction and envelope;
+forward and reverse gestures are tested without changing trim bounds. No source-buffer copies, new playback streams, dependencies or executors
+are introduced. Existing worker-side phase-vocoder preparation and the portable
+export pipeline serve both controls. Old Time-mode packs migrate to their exact
+playback rates, including old +4× settings, with independent pitch reset to zero.
+New edits stay within ±2×. Zero-speed export returns a clear error and publishes
+nothing; reversal and pitch preparation retain the existing bounded PCM limits.
+
+### Architecture review
+
+The `constellation-independent-faders` baseline is `4214707`. After removing the
+temporary diagnostic assertion and redundant finite check (range membership rejects
+NaN), the tool still reports REGRESSION: NLOC 242,253 → 242,529, functions
+7,310 → 7,318, sum CCN 29,655 → 29,695, average 4.06 and maximum 196 unchanged,
+duplication 5.69% → 5.68%, clone groups unchanged at 1,412, cycles unchanged at six,
+and health 62.6969 → 62.6937. The bank validator gains a legacy migration branch;
+the existing export renderer gains rate validation and reverse-buffer selection.
+These are required compatibility and safety behavior, rather than a parallel
+rendering mechanism. Its CCN rises 21 → 24; bank validation rises 16 → 18.
+The cycle identity churn in the diff report concerns unchanged Python functions
+with reordered members; the aggregate cycle count is unchanged in this pass.
+
+A fresh fetch confirms main remains `999cd24`. Entire-branch comparison is still
+REGRESSION: NLOC 227,320 → 242,529, functions 6,934 → 7,318, sum CCN
+27,909 → 29,695, average 4.02 → 4.06, maximum 196 unchanged, duplication
+5.98% → 5.68%, clones 1,382 → 1,412, cycles five → six, and health
+73.8835 → 62.6937. Earlier branch-wide structural debt remains; this pass adds
+no clone groups or cycles and reuses the original source, pitch and export paths.
+
+### Validation
+
+The workspace suite passes 2,576 tests with 23 ignored across 26 targets
+(`/tmp/constellation-faders-workspace.log`). After the final readout and reverse-envelope fixes,
+all 100 constellation tests pass again (`/tmp/constellation-faders-complete-focused.log`).
+These cover frame-aligned stereo reversal without buffer copies, zero-speed silence,
+non-finite rate rejection, legacy defaults/migration, combined pitch/speed exports
+matching live PCM, and cleanup after rejected stopped-layer exports. Rendering tests
+check both themes and three window sizes, including the complete readouts. A separate
+test checks stationary surrounding controls across changing signs and unit labels.
+
+The final file-manager build, formatting check, Python compilation, public and
+private rustdoc generation pass. The rendered `SlotSample` speed field documentation
+was inspected. Two pre-existing Rust float-inference warnings and the unrelated
+image-strip rustdoc bare-URL warning remain.
+
+The private dark and light/hardware-Dvorak scenarios each pass all 47 observations:
+`/tmp/constellation-faders-dark-complete` and
+`/tmp/constellation-faders-light-verified`. These desktop runs precede the final
+reverse-envelope-only follow-up, which is covered by the focused Rust tests. The mixer screenshots were inspected in
+both themes. A real screenshot exposed a numeric readout clipped despite its label
+being visible; the allocation now measures the rendered label width and the
+regression test checks the readouts too. OCR-only failures required text-column
+crops and anchoring the shorter priority menu to its heading, plus a verified
+velocity-button click fallback. Assertions for priority persistence, Studio saves,
+unchanged originals, portable packs and guarded close remain in place. The private
+runner uses ALSA null; these checks do not establish hardware listening or MIDI.

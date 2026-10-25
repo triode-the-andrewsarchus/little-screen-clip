@@ -130,10 +130,10 @@ class Session:
             ("pad-confirm-ocr.png", (494, 478, 584, 497)),
         ]
         if "High" in expected:
-            title = self.word(name, "Choke", required=False)
+            title = self.word(name, "priority", required=False)
             if title:
                 x, y = title
-                regions.insert(0, ("pad-menu-ocr.png", (x, y + 20, x + 95, y + 140)))
+                regions.insert(0, ("pad-menu-ocr.png", (x - 48, y + 20, x + 47, y + 140)))
         for filename, bounds in regions:
             region = self.output / filename
             with Image.open(path) as screen:

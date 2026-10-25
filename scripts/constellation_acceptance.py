@@ -56,13 +56,13 @@ def pad_gestures(session, root, destination, red, stride):
     session.observe("pad-editor-for-studio", ["Edit in Audio Studio", "Pad 1"])
     session.click(*session.word("pad-editor-for-studio", "Group"))
     session.observe("pad-priority-choices", ["High", "Medium", "Low"])
-    priority_title = session.word("pad-priority-choices", "Choke")
-    session.click(priority_title[0] + 60, priority_title[1] + 77)  # Medium row center.
+    priority_title = session.word("pad-priority-choices", "priority")
+    session.click(priority_title[0] + 12, priority_title[1] + 77)  # Medium row center.
     session.observe("pad-priority-medium", ["Medium", "Edit in Audio Studio"])
     session.click(*session.word("pad-priority-medium", "Group"))
     session.observe("pad-priority-reopen", ["High", "Medium", "Low"])
-    priority_title = session.word("pad-priority-reopen", "Choke")
-    session.click(priority_title[0] + 60, priority_title[1] + 35)  # High row center below the menu title.
+    priority_title = session.word("pad-priority-reopen", "priority")
+    session.click(priority_title[0] + 12, priority_title[1] + 35)  # High row center below the menu title.
     session.observe("pad-priority-restored", ["High", "Edit in Audio Studio"])
     session.click(*session.word("pad-priority-restored", "Studio"))
     session.observe("pad-audio-studio", ["AUDIO STUDIO", "Selection info"])
@@ -149,7 +149,7 @@ def exercise(session, root, hardware_keys=False):
     session.scroll_to_visible("compressor-timing-controls", ["Attack", "Release", "Makeup"], position=(1060, 650), step=100)
     session.click(*session.word("compressor-timing-controls", "Rack", minimum_y=300))
     session.observe("rack-return", ["Override MIDI velocity"])
-    session.click(*session.word("rack-return", "Override"))
+    session.click(*(session.word("rack-return", "Override", required=False) or (905, 710)))
     session.observe("before-save", ["Packs"])
     session.click(*(session.word("before-save", "Save", required=False) or (1109, 500)))
     packs = root / "little-screen-clip-sample-packs"
