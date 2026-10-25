@@ -136,7 +136,15 @@ impl ConstellationState {
                 self.render_indexing_progress(ui);
             });
 
-        self.map_viewport = Some(ui.available_rect_before_wrap().shrink(8.0));
+        // Paint the divider at the canvas boundary instead of reserving a
+        // separator row whose lower padding leaves an extra empty top border.
+        let canvas_bounds = ui.available_rect_before_wrap();
+        ui.painter().hline(
+            (canvas_bounds.left() + 8.0)..=(canvas_bounds.right() - 8.0),
+            canvas_bounds.top(),
+            ui.visuals().widgets.noninteractive.bg_stroke,
+        );
+        self.map_viewport = Some(canvas_bounds.shrink(8.0));
         if self.pack_shelf_open {
             egui::SidePanel::right("constellation_pack_shelf_panel")
                 .resizable(true)
@@ -273,6 +281,7 @@ impl ConstellationState {
         let Some(status) = self.indexing_status.clone() else {
             return;
         };
+        ui.separator();
         if self.active_job.is_some() {
             let elapsed = self
                 .indexing_started
@@ -308,7 +317,6 @@ impl ConstellationState {
                 }
             });
         }
-        ui.separator();
     }
 
     fn render_toolbar(
@@ -403,7 +411,6 @@ impl ConstellationState {
                 }
             }
         });
-        ui.separator();
     }
 
     pub(crate) fn sample_count_label(&self) -> String {
@@ -1733,7 +1740,24 @@ mod tests {
                 .unwrap()
         };
         let size = Vec2::new(800.0, 600.0);
-        let (clip, dot, _) = inspect(render_frame(&ctx, &mut state, &palette, size));
+        let output = render_frame(&ctx, &mut state, &palette, size);
+        let dividers: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match shape.shape {
+                egui::Shape::LineSegment { points, .. }
+                    if points[0].y == points[1].y && points[1].x - points[0].x > 500.0 =>
+                {
+                    Some(points[0].y)
+                }
+                _ => None,
+            })
+            .collect();
+        let (clip, dot, _) = inspect(output);
+        assert!(
+            dividers.iter().any(|y| (y - clip.top()).abs() < 0.5),
+            "The header divider must meet the dot canvas without an extra top gap"
+        );
         let target = Pos2::new(clip.left() + dot.width() * 0.5 + 3.0, clip.center().y);
         state.pan += target - dot.center();
         let (_, _, colors) = inspect(render_frame(&ctx, &mut state, &palette, size));
