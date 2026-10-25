@@ -18,7 +18,7 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 - [x] Handle background queue admission, timeout, disconnection and search errors explicitly; clear busy state and expose actionable failures.
 - [x] Include hidden-file policy and explicit refresh/deep-directory changes in recursive scan invalidation.
 - [x] Include valid negative cosine similarities in inverse filters; distinguish missing features from negative scores.
-- [ ] Bound the in-memory feature cache and calculate progress from the current collection, rather than all previously visited folders.
+- [x] Bound the in-memory feature cache and calculate progress from the current collection, rather than all previously visited folders.
 - [ ] Make grid-header painting and hit testing share geometry, including zoom and stacked-grid spacing.
 - [ ] Populate EXIF hover information through the metadata pipeline; current hover previews never populate the photo metadata field.
 - [ ] Include source revision/identity in hover texture cache keys so replacing a file does not retain its old preview.

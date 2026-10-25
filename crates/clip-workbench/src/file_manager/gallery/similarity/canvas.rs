@@ -686,6 +686,13 @@ impl SimilarityCanvas {
         // Search indices belong to the exact collection that submitted the query.
         self.clear_pending_search();
         self.entries = entries;
+        let revisions: HashMap<_, _> = self
+            .entries
+            .iter()
+            .map(|entry| (&entry.path, entry.revision))
+            .collect();
+        self.hashes
+            .retain(|path, (_, revision)| revisions.get(path) == Some(revision));
         let n = self.entries.len();
         let (cols, rows) = grid_dimensions(n);
         self.grid_cols = cols;
@@ -805,10 +812,11 @@ impl SimilarityCanvas {
             loop {
                 match job.batch_rx.try_recv() {
                     Ok(batch) => {
+                        self.hashing_progress.0 =
+                            (self.hashing_progress.0 + batch.len()).min(self.hashing_progress.1);
                         for (path, rev, feat) in batch {
                             self.hashes.insert(path, (feat, rev));
                         }
-                        self.hashing_progress.0 = self.hashes.len().min(self.entries.len());
                         received_any = true;
                     }
                     Err(mpsc::TryRecvError::Empty) => {
@@ -1211,6 +1219,20 @@ impl SimilarityCanvas {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn replacing_collection_evicts_foreign_features_and_resets_progress() {
+        let mut canvas = SimilarityCanvas::default();
+        canvas.insert_hash(
+            PathBuf::from("/old/photo.png"),
+            FeatureVector::Dense(vec![1.0]),
+            1,
+        );
+        canvas.hashing_progress = (99, 100);
+        canvas.set_entries(Vec::new());
+        assert!(canvas.hashes.is_empty());
+        assert_eq!(canvas.hashing_progress, (0, 0));
+    }
 
     #[test]
     fn inverse_search_includes_negative_cosines_but_not_missing_features() {
