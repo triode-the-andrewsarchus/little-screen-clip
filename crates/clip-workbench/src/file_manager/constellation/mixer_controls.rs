@@ -345,23 +345,18 @@ mod tests {
             let ctx = egui::Context::default();
             let mut value = 137.0;
             let mut rect = Rect::NOTHING;
-            let mut draw = |events| {
-                let _ = ctx.run(
-                    egui::RawInput {
-                        modifiers,
-                        events,
-                        ..Default::default()
-                    },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            rect = bipolar_slider(ui, "Pitch", &mut value, 2400.0, 1.0, 0.0, 400.0)
-                                .rect;
-                        });
-                    },
-                );
-            };
-            draw(vec![]);
-            drop(draw);
+            let _ = ctx.run(
+                egui::RawInput {
+                    modifiers,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        rect =
+                            bipolar_slider(ui, "Pitch", &mut value, 2400.0, 1.0, 0.0, 400.0).rect;
+                    });
+                },
+            );
             assert_eq!(value, 137.0, "Idle rendering must preserve typed cents");
             let point = egui::pos2(rect.left() + rect.width() * 0.573, rect.center().y);
             let _ = ctx.run(

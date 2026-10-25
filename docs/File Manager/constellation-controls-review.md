@@ -608,3 +608,67 @@ Against current-main baseline `999cd24`, the entire branch remains REGRESSION:
 NLOC 227,320 → 242,781, functions 6,934 → 7,322, summed CCN 27,909 → 29,729,
 duplication 5.98% → 5.68%, clones 1,382 → 1,413, cycles five → six, health
 73.8835 → 62.6876. The earlier branch-wide debt remains distinct from this fix.
+
+
+## Semitone editing, stereo startup and stable overlap placement
+
+Pitch defaults to semitone steps. Ctrl or Shift enables individual cents, while
+idle rendering preserves typed offsets. Readouts parse cents, `ct`, `st` and `oct`,
+showing whole semitones as `st` and whole octaves as `oct`. The zero detent follows
+the current step size so it does not swallow fine offsets near center. Tests cover
+ordinary/modifier pointer input, preserved cent values, unit round trips and resets.
+
+The pan click reproduced in a PCM regression: a hard-left mono sample initially
+produced `[0.3971641, 0.3971641]` instead of `[0.3971641, 0]`. Connecting an empty
+Player queue let the mixer capture its initial mono format before stereo audio was
+appended. The alternating panned channel gains then became a brief high-frequency
+burst. Both cached and streaming voices now queue their source before mixer
+attachment. The rack bus follows the same ordering when connecting to the shared
+hardware sink. The new shared attachment helper reuses the existing device and
+retains Player ownership; it opens no second device. An end-to-end PCM test checks
+channel ratios from the first audible frame, steady amplitude over 20,000 frames,
+mono/stereo inputs, 44.1/48 kHz and partial/hard pans. A paused streaming source may
+legitimately interpolate its first resumed frame from silence; balance must remain
+correct even there. No attack envelope or source PCM is altered to hide the fault.
+
+Extreme-zoom collision cells now use map coordinates over the whole library.
+Screen-space cell boundaries and viewport membership can no longer change
+collision ownership during a drag. The existing bounded placement algorithm is
+cached by original coordinates and spacing; scale changes naturally invalidate its
+scaled coordinates. Panning translates the placed points, and folder navigation
+releases the cache. Tests check exact pan-relative vertex positions, cache
+invalidation and the existing 68,055-coincident-point displacement bound. The
+cache retains two coordinate vectors, rather than sample audio or per-frame history.
+
+### Architecture review
+
+Against `constellation-pitch-pan-spacing` (`60ec85c`), tools report REGRESSION:
+NLOC 242,781 → 242,974, functions 7,322 → 7,331, summed CCN 29,729 → 29,754,
+average 4.06 and maximum 196 unchanged, duplication 5.68% → 5.67%, clones
+1,413 unchanged, cycles six unchanged, health 62.6876 → 62.6910. There are no
+new high-complexity functions. Reported clone fragments concern short native
+API/test constructions in modified files; no new clone group or cycle is added.
+The new parser/formatter, cache and shared-sink attachment each implement distinct
+required behavior; existing placement and audio rendering mechanisms remain shared.
+
+A fresh fetch confirms main remains `999cd24`. Entire-branch comparison remains
+REGRESSION: NLOC 227,320 → 242,974, functions 6,934 → 7,331, summed CCN
+27,909 → 29,754, average 4.02 → 4.06, maximum 196 unchanged, duplication
+5.98% → 5.67%, clones 1,382 → 1,413, cycles five → six, health
+73.8835 → 62.6910. Earlier branch-wide debt remains.
+
+### Validation
+
+All 108 constellation tests pass
+(`/tmp/constellation-pitch-pan-spacing-verified-tests.log`). The initial unrestricted
+workspace run passed 1,316 workbench tests but failed 13 asynchronous worker,
+subprocess or timeout checks outside the constellation. A serialized workspace
+rerun checks those paths without competing test admissions. The pitch input test
+setup was subsequently simplified without changing its assertions.
+
+The serialized workspace suite passes 2,584 tests with 23 ignored across 26 targets
+(`/tmp/constellation-pitch-pan-spacing-workspace-serial.log`), including all paths
+that failed under unrestricted parallel execution. The final file-manager build
+passes (`/tmp/constellation-pitch-pan-spacing-build.log`), with the same two existing
+unrelated float-inference warnings. Formatting and diff checks pass. Audio evidence
+comes from captured PCM through simulated mixers, not physical-device listening.
