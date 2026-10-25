@@ -136,12 +136,14 @@ impl CanvasGrid {
                             .map(|(&a, &b)| (a * 0.25) * b)
                             .sum::<f32>()
                     }
-                    _ => -1.0,
+                    _ => continue,
                 }
             } else {
-                -1.0
+                continue;
             };
-            scored.push((idx, score));
+            if score.is_finite() {
+                scored.push((idx, score));
+            }
         }
         Some(scored)
     }
@@ -158,11 +160,9 @@ impl CanvasGrid {
         };
 
         if self.is_inverted {
-            // Inverted search: match items where score < threshold (and valid score >= 0.0)
-            let mut matches: Vec<(usize, f32)> = scored
-                .into_iter()
-                .filter(|&(_, s)| s >= 0.0 && s < threshold)
-                .collect();
+            // Inverted search includes valid negative cosines; missing features were skipped.
+            let mut matches: Vec<(usize, f32)> =
+                scored.into_iter().filter(|&(_, s)| s < threshold).collect();
             // Sort ascending: lowest score (least similar to inverted concept) comes first
             matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
             self.indices = matches.into_iter().map(|(idx, _)| idx).collect();
@@ -189,10 +189,7 @@ impl CanvasGrid {
         };
         let threshold = Self::allowance_to_threshold(allowance, self.is_inverted);
         if self.is_inverted {
-            scored
-                .iter()
-                .filter(|&&(_, s)| s >= 0.0 && s < threshold)
-                .count()
+            scored.iter().filter(|&&(_, s)| s < threshold).count()
         } else {
             scored.iter().filter(|&&(_, s)| s >= threshold).count()
         }
@@ -1214,6 +1211,33 @@ impl SimilarityCanvas {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn inverse_search_includes_negative_cosines_but_not_missing_features() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("a.png");
+        std::fs::write(&first, b"fixture").unwrap();
+        std::fs::write(root.path().join("b.png"), b"fixture").unwrap();
+        let mut canvas = SimilarityCanvas::default();
+        canvas.entries = crate::file_manager::filesystem::read_directory(
+            root.path(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap()
+        .entries;
+        canvas.insert_hash(
+            first,
+            FeatureVector::Dense(vec![-1.0, 0.0]),
+            canvas.entries[0].revision,
+        );
+        canvas.recompute_layout();
+        canvas.add_search_grid("opposite", true, vec![0, 1], vec![1.0, 0.0]);
+        assert_eq!(canvas.grids[1].indices, vec![0]);
+        assert_eq!(
+            canvas.grids[1].count_matches_at_allowance(&canvas.hashes, &canvas.entries, 0.5),
+            1
+        );
+    }
 
     #[test]
     fn hidden_policy_changes_stamp_even_when_root_entries_do_not_change() {

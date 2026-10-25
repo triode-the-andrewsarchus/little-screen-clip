@@ -17,7 +17,7 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 - [ ] Move PCA/grid layout and repeated similarity scoring off the UI thread; cache scores. A 5,000-image, 1,536-dimensional PCA took roughly 500 ms in an optimized isolated check.
 - [x] Handle background queue admission, timeout, disconnection and search errors explicitly; clear busy state and expose actionable failures.
 - [x] Include hidden-file policy and explicit refresh/deep-directory changes in recursive scan invalidation.
-- [ ] Include valid negative cosine similarities in inverse filters; distinguish missing features from negative scores.
+- [x] Include valid negative cosine similarities in inverse filters; distinguish missing features from negative scores.
 - [ ] Bound the in-memory feature cache and calculate progress from the current collection, rather than all previously visited folders.
 - [ ] Make grid-header painting and hit testing share geometry, including zoom and stacked-grid spacing.
 - [ ] Populate EXIF hover information through the metadata pipeline; current hover previews never populate the photo metadata field.
