@@ -6,6 +6,26 @@ use super::db::ConstellationSample;
 use super::generated_model::SampleCategory;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
+/// Pan-independent placement; only sample coordinates, zoom/scale or spacing invalidate it.
+#[derive(Default)]
+pub(super) struct OverlapLayout {
+    original: Vec<Pos2>,
+    placed: Vec<Pos2>,
+    spacing: f32,
+}
+
+impl OverlapLayout {
+    fn positions(&mut self, original: Vec<Pos2>, spacing: f32) -> &[Pos2] {
+        if self.spacing != spacing || self.original != original {
+            self.spacing = spacing;
+            self.placed.clone_from(&original);
+            self.original = original;
+            relax_star_positions(&mut self.placed, spacing);
+        }
+        &self.placed
+    }
+}
+
 /// Fades a complete circle uniformly before its extent reaches a visible canvas edge.
 fn circle_edge_opacity(bounds: Rect, position: Pos2, radius: f32) -> f32 {
     let clearance = (position.x - bounds.left())
@@ -671,30 +691,21 @@ impl ConstellationState {
         // projection everywhere else, without building a spatial index per frame.
         let push_factor = spacing_strength(self.zoom);
         let relaxed_map = if push_factor > 0.0 {
-            let visible: Vec<_> = self
+            // Solve in map coordinates over the whole library. Screen-space cells
+            // and viewport culling change collision ownership while panning.
+            let original: Vec<_> = self
                 .samples
                 .iter()
-                .filter_map(|sample| {
-                    let pos = Pos2::new(
-                        center.x + sample.x * view_scale,
-                        center.y - sample.y * view_scale,
-                    );
-                    viewport
-                        .expand(64.0)
-                        .contains(pos)
-                        .then_some((sample.file_path.as_path(), pos))
-                })
+                .map(|sample| Pos2::new(sample.x * view_scale, -sample.y * view_scale))
                 .collect();
-            let mut positions: Vec<_> = visible.iter().map(|(_, pos)| *pos).collect();
-            relax_star_positions(
-                &mut positions,
-                (base_star_radius * 2.2).max(7.5) * push_factor,
-            );
+            let positions = self
+                .overlap_layout
+                .positions(original, (base_star_radius * 2.2).max(7.5) * push_factor);
             Some(
-                visible
-                    .into_iter()
-                    .map(|(path, _)| path)
-                    .zip(positions)
+                self.samples
+                    .iter()
+                    .map(|sample| sample.file_path.as_path())
+                    .zip(positions.iter().map(|pos| *pos + center.to_vec2()))
                     .collect::<std::collections::HashMap<_, _>>(),
             )
         } else {
@@ -1810,6 +1821,44 @@ mod tests {
         assert_eq!(state.sample_count_label(), "1 / 4 samples");
         state.search_query = "absent".into();
         assert_eq!(state.sample_count_label(), "0 / 4 samples");
+    }
+
+    #[test]
+    fn overlap_cache_invalidates_on_coordinate_or_spacing_changes() {
+        let mut layout = OverlapLayout::default();
+        let points = vec![Pos2::ZERO; 2];
+        let first = layout.positions(points.clone(), 10.0).to_vec();
+        assert_eq!(layout.positions(points.clone(), 10.0), first);
+        assert_ne!(layout.positions(points, 20.0), first);
+        let changed = vec![Pos2::new(100.0, 100.0), Pos2::new(200.0, 200.0)];
+        assert_eq!(layout.positions(changed.clone(), 20.0), changed);
+    }
+
+    #[test]
+    fn high_zoom_overlap_placement_moves_only_by_the_pan_delta() {
+        let mut state = ConstellationState::new();
+        state.zoom = 50.0;
+        state.samples = (0..30)
+            .map(|index| {
+                let mut sample = sample_fixture(index);
+                sample.x = (index % 5) as f32 * 0.0008;
+                sample.y = (index / 5) as f32 * 0.0008;
+                sample
+            })
+            .collect();
+        let original = coarse_mesh(&mut state);
+        assert_eq!(original.len(), 120);
+        for pan in [Vec2::new(3.25, 5.75), Vec2::new(-16.0, 10.0), Vec2::ZERO] {
+            state.pan = pan;
+            let translated = coarse_mesh(&mut state);
+            assert_eq!(translated.len(), original.len());
+            for (before, after) in original.iter().zip(translated) {
+                assert!(
+                    (after.pos - before.pos - pan).length() < 0.01,
+                    "Panning must not recompute a different overlap offset"
+                );
+            }
+        }
     }
 
     #[test]

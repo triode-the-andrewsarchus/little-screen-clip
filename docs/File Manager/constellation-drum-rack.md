@@ -261,7 +261,10 @@ density nor opening a dock changes point size. Ordinary zoom levels preserve the
 original projection. Only the final four zoom steps allow bounded local spacing:
 each colliding point checks at most 48 nearby cells and moves at most 64 logical
 pixels. Saturated neighborhoods retain overlaps instead of pushing clusters into
-holes. Saved acoustic coordinates remain unchanged; no samples are dropped.
+holes. Collision cells are anchored to map coordinates across the whole library,
+so panning or crossing a viewport edge cannot change overlap ownership. Placement
+is cached until coordinates, scale or spacing change; dragging only translates it.
+Saved acoustic coordinates remain unchanged; no samples are dropped.
 Empty searches avoid per-sample lowercase allocation on the render path.
 The header divider meets the canvas directly, without extra top spacing.
 The canvas extends to its panel boundaries on all sides, while toolbar and editor

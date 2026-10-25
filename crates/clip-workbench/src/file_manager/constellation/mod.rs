@@ -114,6 +114,7 @@ pub struct ConstellationState {
     pub history_trail: std::collections::VecDeque<HistoryTrailPoint>,
     /// Full canvas before docks obscure it; projection must not depend on dock visibility.
     map_viewport: Option<egui::Rect>,
+    overlap_layout: ui::OverlapLayout,
     pub pan: egui::Vec2,
     pub zoom: f32,
     pub active_job: Option<IndexingJob>,
@@ -186,6 +187,7 @@ impl Default for ConstellationState {
             last_hovered_path: None,
             history_trail: std::collections::VecDeque::new(),
             map_viewport: None,
+            overlap_layout: Default::default(),
             pan: egui::Vec2::ZERO,
             zoom: 1.0,
             active_job: None,
@@ -344,6 +346,7 @@ impl ConstellationState {
         self.visited_samples.clear();
 
         self.samples.clear();
+        self.overlap_layout = Default::default();
         self.hover_cancelled.store(true, Ordering::Relaxed);
         self.hover_previews.clear();
         self.pending_hover_path = None;
