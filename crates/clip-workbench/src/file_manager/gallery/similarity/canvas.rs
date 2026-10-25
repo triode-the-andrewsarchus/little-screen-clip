@@ -345,6 +345,12 @@ fn worker_pool() -> &'static BackgroundJobs {
 }
 
 impl SimilarityCanvas {
+    pub fn is_current_directory(&self, directory: &std::path::Path) -> bool {
+        self.current_signature
+            .as_ref()
+            .is_some_and(|signature| signature.0 == directory)
+    }
+
     /// Resets panning and zoom state.
     pub fn reset_view(&mut self) {
         self.initial_fit_done = false;

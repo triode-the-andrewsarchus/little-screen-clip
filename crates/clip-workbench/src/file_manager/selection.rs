@@ -82,39 +82,50 @@ impl FileManager {
         self.reveal_selection = true;
     }
 
-    fn selection_range(&self, anchor: &PathBuf, end: &PathBuf) -> Vec<PathBuf> {
-        if self.visible.is_empty() {
-            return Vec::new();
+    /// Entries owned by the active view; recursive Photos is independent of root rows.
+    pub(super) fn displayed_entries(&self) -> Vec<&super::filesystem::Entry> {
+        if self.view == super::BrowserView::Photos
+            && self.photo_mode == super::gallery::similarity::PhotoMode::Similarity
+            && self.similarity_canvas.is_current_directory(self.path())
+        {
+            return self.similarity_canvas.entries.iter().collect();
         }
-        let Some(directory) = &self.directory else {
+        self.directory
+            .iter()
+            .flat_map(|directory| {
+                self.visible
+                    .iter()
+                    .filter_map(|&index| directory.entries.get(index))
+            })
+            .filter(|entry| self.view != super::BrowserView::Photos || entry.is_photo())
+            .collect()
+    }
+
+    fn selection_range(&self, anchor: &PathBuf, end: &PathBuf) -> Vec<PathBuf> {
+        let entries = self.displayed_entries();
+        let position = |path| entries.iter().position(|entry| &entry.path == path);
+        let Some(end_index) = position(end) else {
             return Vec::new();
         };
-        let position = |path| {
-            self.visible
-                .iter()
-                .position(|i| &directory.entries[*i].path == path)
-        };
-        let end_index = position(end).unwrap_or(0);
         let start_index = position(anchor).unwrap_or(end_index);
-        self.visible[start_index.min(end_index)..=start_index.max(end_index)]
+        entries[start_index.min(end_index)..=start_index.max(end_index)]
             .iter()
-            .map(|i| directory.entries[*i].path.clone())
+            .map(|entry| entry.path.clone())
             .collect()
     }
 
     pub(super) fn select_all(&mut self) {
         let paths: BTreeSet<_> = self
-            .directory
-            .as_ref()
-            .map(|directory| {
-                self.visible
-                    .iter()
-                    .map(|i| directory.entries[*i].path.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+            .displayed_entries()
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
         if let Some(location) = self.location_mut() {
-            if location.selected.is_none() {
+            if location
+                .selected
+                .as_ref()
+                .is_none_or(|selected| !paths.contains(selected))
+            {
                 location.selected = paths.first().cloned();
             }
             location.anchor = location.selected.clone();
@@ -150,15 +161,10 @@ impl FileManager {
             return;
         };
         let paths: BTreeSet<_> = self
-            .directory
-            .as_ref()
-            .map(|directory| {
-                self.visible
-                    .iter()
-                    .map(|i| &directory.entries[*i].path)
-                    .collect()
-            })
-            .unwrap_or_default();
+            .displayed_entries()
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
         let location = &mut self.history[index];
         location.selection.retain(|path| paths.contains(path));
         if location

@@ -163,16 +163,12 @@ impl FileManager {
         if query.is_empty() {
             return;
         }
-        let target = self.directory.as_ref().and_then(|directory| {
-            self.visible
-                .iter()
-                .filter_map(|index| {
-                    let entry = &directory.entries[*index];
-                    name_rank(&entry.name, &query).map(|rank| (rank, entry))
-                })
-                .min_by_key(|(rank, _)| *rank)
-                .map(|(_, entry)| entry.path.clone())
-        });
+        let target = self
+            .displayed_entries()
+            .into_iter()
+            .filter_map(|entry| name_rank(&entry.name, &query).map(|rank| (rank, entry)))
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, entry)| entry.path.clone());
         self.type_navigation.matched = target.is_some();
         if let Some(path) = target {
             if self

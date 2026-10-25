@@ -766,30 +766,23 @@ impl FileManager {
     }
 
     fn move_selection_by(&mut self, delta: isize, extend: bool) {
-        if self.visible.is_empty() {
+        let entries = self.displayed_entries();
+        if entries.is_empty() {
             return;
         }
-        let directory = self
-            .directory
-            .as_ref()
-            .expect("visible entries have a directory");
         let selected = self
             .location()
             .and_then(|location| location.selected.as_ref());
-        let index = self
-            .visible
+        let index = entries
             .iter()
-            .position(|i| Some(&directory.entries[*i].path) == selected);
+            .position(|entry| Some(&entry.path) == selected);
         let index = match index {
-            Some(i) => i.saturating_add_signed(delta).min(self.visible.len() - 1),
+            Some(i) => i.saturating_add_signed(delta).min(entries.len() - 1),
             None if delta >= 0 => 0,
-            None => self.visible.len() - 1,
+            None => entries.len() - 1,
         };
-        self.select_with(
-            directory.entries[self.visible[index]].path.clone(),
-            false,
-            extend,
-        );
+        let path = entries[index].path.clone();
+        self.select_with(path, false, extend);
         self.reveal_selection = true;
     }
 
@@ -801,14 +794,9 @@ impl FileManager {
             .location()
             .and_then(|location| location.selection.first());
         let path = self
-            .directory
-            .as_ref()
-            .and_then(|directory| {
-                directory
-                    .entries
-                    .iter()
-                    .find(|entry| Some(&entry.path) == selected)
-            })
+            .displayed_entries()
+            .iter()
+            .find(|entry| Some(&entry.path) == selected)
             .map(|entry| entry.path.clone());
         if let Some(path) = path {
             self.open_path(path);

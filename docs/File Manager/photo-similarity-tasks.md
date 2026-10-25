@@ -9,7 +9,7 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 
 ## Correctness and responsiveness
 
-- [ ] **P1:** Make recursive selection ranges and keyboard navigation use the displayed collection, rather than root-folder entries (`selection.rs`, gallery row actions).
+- [x] **P1:** Make recursive selection ranges and keyboard navigation use the displayed collection, rather than root-folder entries (`selection.rs`, gallery row actions).
 - [ ] **P1:** Remove synchronous, unguarded hover image probing; use guarded metadata workers. Replacing a hovered file with a FIFO can block the UI (`ui/gallery.rs`, `shelf/preview.rs`).
 - [ ] **P1:** Cancel or reject searches from an earlier dataset generation when folders or recursive scan results change (`similarity/canvas.rs`).
 - [ ] Resume interrupted scans and clustering when returning to Photos; retiring jobs currently leaves an unchanged sync signature that prevents restarting them.

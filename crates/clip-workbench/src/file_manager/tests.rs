@@ -1582,3 +1582,38 @@ fn status_dismiss_clears_active_status_and_errors() {
     assert!(browser.last_status.is_none());
     assert!(browser.edits.report.is_none());
 }
+
+#[test]
+fn recursive_photo_selection_and_keyboard_use_canvas_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let nested = root.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    for name in ["a.jpg", "b.jpg"] {
+        std::fs::write(nested.join(name), b"fixture").unwrap();
+    }
+    let (mut manager, _jobs) = loaded(root.path());
+    manager.view = BrowserView::Photos;
+    manager.photo_mode = gallery::similarity::PhotoMode::Similarity;
+    manager.similarity_canvas.sync(
+        manager.directory.as_ref().unwrap(),
+        &manager.visible,
+        false,
+        false,
+    );
+    manager.similarity_canvas.set_entries(
+        read_directory(&nested, &AtomicBool::new(false))
+            .unwrap()
+            .entries,
+    );
+    let a = nested.join("a.jpg");
+    let b = nested.join("b.jpg");
+    manager.select(a.clone());
+    manager.select_with(b.clone(), false, true);
+    assert_eq!(manager.selected_paths(), vec![a.clone(), b.clone()]);
+    manager.select(a.clone());
+    manager.move_selection_by(1, false);
+    assert_eq!(manager.selected_paths(), vec![b.clone()]);
+    manager.select_all();
+    manager.reconcile_selection();
+    assert_eq!(manager.selected_paths(), vec![a, b]);
+}
