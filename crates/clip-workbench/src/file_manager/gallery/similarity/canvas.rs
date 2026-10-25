@@ -546,7 +546,10 @@ impl SimilarityCanvas {
         let step = (self.tile_size + self.spacing) * self.zoom;
         let available = (grid.grid_cols.max(1) as f32 + 2.0) * step - 8.0 * scale;
         Rect::from_min_size(
-            egui::pos2(top_left.left(), top_left.top() - 44.0 * scale),
+            egui::pos2(
+                top_left.left(),
+                top_left.top() - 28.0 * scale - self.spacing * self.zoom,
+            ),
             vec2((720.0 * scale).min(available), 28.0 * scale),
         )
     }
@@ -1261,6 +1264,12 @@ mod lifecycle_tests {
             canvas.zoom = zoom;
             let first = canvas.grid_header_rect(Pos2::ZERO, &canvas.grids[1]);
             let second = canvas.grid_header_rect(Pos2::ZERO, &canvas.grids[2]);
+            let photo = canvas.tile_screen_rect(
+                Pos2::ZERO,
+                canvas.grids[1].col_offset,
+                canvas.grids[1].row_offset,
+            );
+            assert!((photo.top() - first.bottom() - canvas.spacing * zoom).abs() < 1e-3);
             assert!(!first.intersects(second));
             assert_eq!(
                 canvas.result_grid_at_pos(Pos2::ZERO, first.center()),
