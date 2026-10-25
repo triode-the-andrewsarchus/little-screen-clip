@@ -714,9 +714,14 @@ fn gallery_preview(path: &Path, edge: u32, orientation: u8, cancelled: &AtomicBo
     if cancelled.load(Ordering::Relaxed) {
         return data;
     }
+    let Ok(source) = crate::file_source::FileSource::capture(path) else {
+        return data;
+    };
     data.image = super::super::gallery::thumbnail::load(path, edge, orientation, cancelled);
     if let Some(ref image) = data.image {
-        let (mut w, mut h) = imagesize::size(path)
+        let (mut w, mut h) = crate::file_source::open_regular_file(path, true)
+            .ok()
+            .and_then(|file| imagesize::reader_size(&mut std::io::BufReader::new(file)).ok())
             .map(|dim| (dim.width, dim.height))
             .unwrap_or((image.width as usize, image.height as usize));
         if (image.width > image.height) != (w > h) {
@@ -725,6 +730,12 @@ fn gallery_preview(path: &Path, edge: u32, orientation: u8, cancelled: &AtomicBo
         data.detail = format!("{w} × {h}");
     } else {
         data.detail = "Preview unavailable; open in Image Studio or externally".into();
+    }
+    if source.check().is_err()
+        || crate::file_source::FileSource::capture(path).ok().as_ref() != Some(&source)
+    {
+        data.image = None;
+        data.detail = "Photo changed while loading".into();
     }
     data
 }
@@ -964,4 +975,32 @@ fn document_preview(path: &Path, token: &AtomicBool) -> Data {
         Err(error) => data.detail = error,
     }
     data
+}
+
+#[cfg(test)]
+mod guarded_gallery_tests {
+    use super::*;
+
+    #[test]
+    fn gallery_preview_rejects_fifo_without_reading_payload() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("substituted.png");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            tx.send(
+                gallery_preview(&path, 128, 1, &AtomicBool::new(false))
+                    .image
+                    .is_none(),
+            )
+            .unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap());
+    }
 }

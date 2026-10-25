@@ -1183,20 +1183,18 @@ fn paint_gallery_tile(
     }
 
     if response.hovered() && !super::popup_open(ui.ctx()) {
-        let orig_dims = imagesize::size(&entry.path)
-            .ok()
-            .map(|dim| (dim.width as f32, dim.height as f32))
-            .or_else(|| {
-                detail.as_deref().and_then(|d| {
-                    let parts: Vec<&str> = d.split('×').map(|s| s.trim()).collect();
-                    if parts.len() == 2 {
-                        let w = parts[0].parse::<f32>().ok()?;
-                        let h = parts[1].parse::<f32>().ok()?;
-                        Some((w, h))
-                    } else {
-                        None
-                    }
-                })
+        // Dimensions arrive with the worker preview; hovering never opens the file.
+        let orig_dims = detail
+            .as_deref()
+            .and_then(|d| {
+                let parts: Vec<&str> = d.split('×').map(|s| s.trim()).collect();
+                if parts.len() == 2 {
+                    let w = parts[0].parse::<f32>().ok()?;
+                    let h = parts[1].parse::<f32>().ok()?;
+                    Some((w, h))
+                } else {
+                    None
+                }
             })
             .or_else(|| texture_info.map(|(_, size)| (size.x, size.y)));
 
