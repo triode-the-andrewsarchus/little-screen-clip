@@ -13,7 +13,7 @@ fn circle_edge_opacity(bounds: Rect, position: Pos2, radius: f32) -> f32 {
         .min(position.y - bounds.top())
         .min(bounds.bottom() - position.y)
         - radius;
-    let t = (clearance / 16.0).clamp(0.0, 1.0);
+    let t = (clearance / 6.0).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
@@ -129,8 +129,12 @@ impl ConstellationState {
         for (pad, _) in notes {
             self.slot_flash[pad] = Some(std::time::Instant::now());
         }
-        self.render_toolbar(ui, current_folder, on_play_sample);
-        self.render_indexing_progress(ui);
+        egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(8.0, 0.0))
+            .show(ui, |ui| {
+                self.render_toolbar(ui, current_folder, on_play_sample);
+                self.render_indexing_progress(ui);
+            });
 
         self.map_viewport = Some(ui.available_rect_before_wrap().shrink(8.0));
         if self.pack_shelf_open {
@@ -226,7 +230,7 @@ impl ConstellationState {
                 });
         }
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().inner_margin(8.0))
+            .frame(egui::Frame::none())
             .show_inside(ui, |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                 if self.samples.is_empty() && self.active_job.is_none() {
@@ -243,7 +247,7 @@ impl ConstellationState {
                         .resizable(true)
                         .default_height(290.0)
                         .height_range(220.0..=420.0)
-                        .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 6.0)))
+                        .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 6.0)))
                         .show_inside(ui, |ui| {
                             ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                             ui.separator();
@@ -1730,13 +1734,13 @@ mod tests {
         };
         let size = Vec2::new(800.0, 600.0);
         let (clip, dot, _) = inspect(render_frame(&ctx, &mut state, &palette, size));
-        let target = Pos2::new(clip.left() + dot.width() * 0.5 + 8.0, clip.center().y);
+        let target = Pos2::new(clip.left() + dot.width() * 0.5 + 3.0, clip.center().y);
         state.pan += target - dot.center();
         let (_, _, colors) = inspect(render_frame(&ctx, &mut state, &palette, size));
         assert_eq!(colors.len(), 4);
         assert!(colors.iter().all(|color| *color == colors[0]));
         assert!(colors[0].a() > 0 && colors[0].a() < 240);
-        state.pan.x -= 8.0;
+        state.pan.x -= 3.0;
         state.selected_path = Some(state.samples[0].file_path.clone());
         let (_, _, colors) = inspect(render_frame(&ctx, &mut state, &palette, size));
         assert_eq!(
@@ -1751,13 +1755,9 @@ mod tests {
     fn circle_edges_fade_uniformly_and_disappear_before_being_cut_off() {
         let bounds = Rect::from_min_max(Pos2::ZERO, Pos2::new(200.0, 200.0));
         for radius in [0.35, 4.0, 8.0, 25.5] {
-            for (clearance, expected) in [
-                (-1.0, 0.0),
-                (0.0, 0.0),
-                (8.0, 0.5),
-                (16.0, 1.0),
-                (30.0, 1.0),
-            ] {
+            for (clearance, expected) in
+                [(-1.0, 0.0), (0.0, 0.0), (3.0, 0.5), (6.0, 1.0), (30.0, 1.0)]
+            {
                 let distance = radius + clearance;
                 for point in [
                     Pos2::new(distance, 100.0),

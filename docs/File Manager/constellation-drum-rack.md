@@ -258,7 +258,8 @@ each colliding point checks at most 48 nearby cells and moves at most 64 logical
 pixels. Saturated neighborhoods retain overlaps instead of pushing clusters into
 holes. Saved acoustic coordinates remain unchanged; no samples are dropped.
 Empty searches avoid per-sample lowercase allocation on the render path.
-Dots fade uniformly over the last 16 pixels before their circular extent reaches
+The canvas extends to its panel boundaries on all sides, while toolbar and editor
+controls retain their own padding. Dots fade uniformly over the last 6 pixels before their circular extent reaches
 the visible map boundary, becoming fully transparent before they would be cut off.
 The entire dot receives one opacity value; there is no overlay or gradient across
 an individual dot. Selected and hovered highlights fade as complete objects too.

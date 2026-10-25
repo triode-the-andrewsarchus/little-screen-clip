@@ -177,7 +177,13 @@ impl FileManager {
             .resizable(true)
             .show_inside(ui, |ui| self.sidebar_ui(ui, colors));
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().inner_margin(8.0))
+            .frame(egui::Frame::none().inner_margin(
+                if self.view == super::BrowserView::Constellation {
+                    0.0
+                } else {
+                    8.0
+                },
+            ))
             .show_inside(ui, |ui| {
                 if ui.is_enabled() && self.view != super::BrowserView::Constellation {
                     self.drop_targets.push((
