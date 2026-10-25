@@ -687,14 +687,15 @@ fn test_search_from_photo_creates_ranked_grid() {
     ])
     .into();
 
-    // p1 and p2 are very similar; p3 is orthogonal
+    // Real image embeddings share a positive baseline even for unrelated photos.
     let mut v1 = vec![0.0f32; 1536];
     v1[0] = 1.0;
     let mut v2 = vec![0.0f32; 1536];
     v2[0] = 0.9;
     v2[1] = 0.43588989; // unit length
     let mut v3 = vec![0.0f32; 1536];
-    v3[10] = 1.0;
+    v3[0] = 0.6;
+    v3[10] = 0.8;
 
     canvas
         .hashes
@@ -721,9 +722,19 @@ fn test_search_from_photo_creates_ranked_grid() {
     assert_eq!(search_grid.title, "Similar to photo1.jpg");
     assert_eq!(canvas.pending_pan_to_grid, Some(1));
 
-    // P1 (index 0) has score 1.0, P2 (index 1) has score 0.9 => both match threshold 0.08
-    // P3 (index 2) has score 0.0 => does not match
+    // The old text-search cutoff (~0.08) incorrectly included all three photos.
+    assert!((search_grid.threshold - 0.75).abs() < 1e-6);
     assert_eq!(search_grid.indices, vec![0, 1]);
+    assert!(canvas.can_decrease_grid_allowance(1));
+    assert!(canvas.adjust_grid_allowance(1, -0.45));
+    canvas.recompute_layout();
+    canvas.settle_layout();
+    assert_eq!(canvas.grids[1].indices, vec![0]);
+    assert!(canvas.can_increase_grid_allowance(1));
+    assert!(canvas.adjust_grid_allowance(1, 0.90));
+    canvas.recompute_layout();
+    canvas.settle_layout();
+    assert_eq!(canvas.grids[1].indices, vec![0, 1, 2]);
 
     // A reference upgraded after the search must remain comparable to new candidates.
     canvas.insert_hash(p1.clone(), FeatureVector::Dense((vec![1.0, 0.0]).into()), 1);
@@ -877,8 +888,8 @@ fn test_per_grid_match_allowance_adjustment() {
     canvas.recompute_layout();
     canvas.settle_layout();
 
-    // 1. Search visual similarity to p1 with initial allowance 50% (~0.08 threshold)
-    let grid_id = canvas.search_from_photo(&p1).expect("search grid created");
+    // Text/concept searches keep their own lower cosine thresholds.
+    let grid_id = canvas.add_search_grid("concept", false, vec![0, 1, 2, 3], v1.clone());
     canvas.settle_layout();
     assert_eq!(grid_id, 1);
     assert_eq!(canvas.grids.len(), 2);

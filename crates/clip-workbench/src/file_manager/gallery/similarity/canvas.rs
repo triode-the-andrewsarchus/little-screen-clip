@@ -80,6 +80,16 @@ impl CanvasGrid {
         }
     }
 
+    /// Image-to-image scores are substantially higher than text-to-image scores.
+    /// Photo queries use cosine cutoffs from 1.0 to 0.5 (0.75 at default allowance).
+    fn threshold_at_allowance(&self, allowance: f32) -> f32 {
+        if self.reference_photo.is_some() {
+            1.0 - 0.5 * allowance.clamp(0.0, 1.0)
+        } else {
+            Self::allowance_to_threshold(allowance, self.is_inverted)
+        }
+    }
+
     /// Converts an internal cosine threshold to a user-facing match allowance `[0.05, 0.95]`.
     #[allow(dead_code)]
     pub fn threshold_to_allowance(threshold: f32, is_inverted: bool) -> f32 {
@@ -100,14 +110,14 @@ impl CanvasGrid {
     pub fn adjust_allowance(&mut self, delta: f32) {
         let new_val = ((self.allowance + delta) * 100.0).round() / 100.0;
         self.allowance = new_val.clamp(MIN_ALLOWANCE, MAX_ALLOWANCE);
-        self.threshold = Self::allowance_to_threshold(self.allowance, self.is_inverted);
+        self.threshold = self.threshold_at_allowance(self.allowance);
     }
 
     /// Sets the match allowance and updates the internal similarity threshold.
     pub fn set_allowance(&mut self, allowance: f32) {
         let new_val = (allowance * 100.0).round() / 100.0;
         self.allowance = new_val.clamp(MIN_ALLOWANCE, MAX_ALLOWANCE);
-        self.threshold = Self::allowance_to_threshold(self.allowance, self.is_inverted);
+        self.threshold = self.threshold_at_allowance(self.allowance);
     }
 
     fn compute_candidate_scores(
@@ -199,7 +209,7 @@ impl CanvasGrid {
         let Some(scored) = &self.scores else {
             return self.indices.len();
         };
-        let threshold = Self::allowance_to_threshold(allowance, self.is_inverted);
+        let threshold = self.threshold_at_allowance(allowance);
         scored.partition_point(|(_, score)| {
             if self.is_inverted {
                 *score < threshold
@@ -616,7 +626,7 @@ impl SimilarityCanvas {
             allowance,
             threshold,
         };
-        grid.refilter(&self.hashes, &self.entries, threshold);
+        grid.set_allowance(allowance);
         for g in &mut self.grids {
             g.selected_for_search = false;
         }
