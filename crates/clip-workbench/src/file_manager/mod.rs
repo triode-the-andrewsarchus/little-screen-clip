@@ -364,6 +364,9 @@ impl FileManager {
         self.gallery_hover.clear();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
+        if matches!(navigation, Navigation::Refresh) {
+            self.similarity_canvas.invalidate();
+        }
         self.type_navigation.clear();
         self.reveal_target = None;
         if path != self.path() {

@@ -266,7 +266,7 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     pub grid_cols: usize,
     pub grid_rows: usize,
     pub(in crate::file_manager) hashes: HashMap<PathBuf, (FeatureVector, u64)>, // path -> (feature, revision)
-    current_signature: Option<(PathBuf, u64, bool, usize)>,
+    current_signature: Option<(PathBuf, u64, bool, usize, bool)>,
     scan_job: Option<Task<Vec<Entry>>>,
     hash_job: Option<HashJob>,
     search_job: Option<Task<Result<Vec<f32>, String>>>,
@@ -650,6 +650,7 @@ impl SimilarityCanvas {
             directory.signature,
             recurse,
             visible_indices.len(),
+            show_hidden,
         );
         if self.current_signature.as_ref() == Some(&sig) {
             return;
@@ -1215,6 +1216,24 @@ mod lifecycle_tests {
     use super::*;
 
     #[test]
+    fn hidden_policy_changes_stamp_even_when_root_entries_do_not_change() {
+        let directory = Directory {
+            path: PathBuf::from("/photos"),
+            signature: 1,
+            entries: Vec::new(),
+            skipped: 0,
+            system: false,
+        };
+        let mut canvas = SimilarityCanvas::default();
+        canvas.sync(&directory, &[], false, false);
+        let before = canvas.current_signature.clone();
+        canvas.sync(&directory, &[], false, true);
+        assert_ne!(canvas.current_signature, before);
+        canvas.invalidate();
+        assert!(canvas.current_signature.is_none());
+    }
+
+    #[test]
     fn timed_out_scan_clears_busy_state_and_reports_failure() {
         let pool = BackgroundJobs::new(1, 2);
         let mut canvas = SimilarityCanvas::default();
@@ -1230,7 +1249,7 @@ mod lifecycle_tests {
     #[test]
     fn retiring_incomplete_scan_invalidates_sync_stamp() {
         let mut canvas = SimilarityCanvas::default();
-        canvas.current_signature = Some((PathBuf::from("/photos"), 1, true, 0));
+        canvas.current_signature = Some((PathBuf::from("/photos"), 1, true, 0, false));
         let pool = BackgroundJobs::new(1, 2);
         canvas.scan_job = Some(Task::start(&pool, Duration::from_secs(2), |_| Vec::new()));
         canvas.retire();
