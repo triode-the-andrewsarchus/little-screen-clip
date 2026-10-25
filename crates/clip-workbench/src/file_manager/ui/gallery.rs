@@ -696,13 +696,38 @@ impl FileManager {
             let is_solo = grid.selected_for_search && total_selected == 1;
             let is_multi = grid.selected_for_search && total_selected > 1;
 
-            let bar_rect = Rect::from_min_size(
-                pos2(top_left.min.x, top_left.min.y - 44.0),
-                vec2(720.0, 28.0),
-            );
+            let bar_rect = self
+                .similarity_canvas
+                .grid_header_rect(canvas_rect.min, grid);
+            if bar_rect.intersects(clip_rect)
+                && (bar_rect.height() < 28.0 || bar_rect.width() < 700.0)
+            {
+                let painter = ui.painter().with_clip_rect(bar_rect.intersect(clip_rect));
+                painter.rect_filled(bar_rect, 2.0, colors.panel);
+                painter.text(
+                    bar_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{} ({})", grid.title, grid.indices.len()),
+                    egui::FontId::proportional(12.0),
+                    colors.text_primary,
+                );
+                if ui
+                    .interact(
+                        bar_rect,
+                        ui.id().with(("compact_grid", grid.id)),
+                        Sense::click(),
+                    )
+                    .on_hover_text("Click to search this grid; zoom in for controls")
+                    .clicked()
+                {
+                    solo_grid = Some(grid.id);
+                }
+                continue;
+            }
 
             if bar_rect.intersects(clip_rect) {
                 ui.allocate_ui_at_rect(bar_rect, |ui| {
+                ui.set_clip_rect(bar_rect.intersect(clip_rect));
                 egui::Frame::popup(ui.style())
                     .fill(colors.panel.gamma_multiply(0.95))
                     .stroke(egui::Stroke::new(

@@ -527,6 +527,18 @@ impl SimilarityCanvas {
         }
     }
 
+    /// Shared painting/hit-test bounds; compact headers shrink with distant grids.
+    pub fn grid_header_rect(&self, origin: Pos2, grid: &CanvasGrid) -> Rect {
+        let top_left = self.tile_screen_rect(origin, grid.col_offset, grid.row_offset);
+        let scale = self.zoom.min(1.0);
+        let step = (self.tile_size + self.spacing) * self.zoom;
+        let available = (grid.grid_cols.max(1) as f32 + 2.0) * step - 8.0 * scale;
+        Rect::from_min_size(
+            egui::pos2(top_left.left(), top_left.top() - 44.0 * scale),
+            vec2((720.0 * scale).min(available), 28.0 * scale),
+        )
+    }
+
     pub fn result_grid_at_pos(&self, canvas_origin: Pos2, pointer_pos: Pos2) -> Option<usize> {
         let step = (self.tile_size + self.spacing) * self.zoom;
         // Search result grids have id > 0
@@ -540,16 +552,11 @@ impl SimilarityCanvas {
                 return Some(grid.id);
             }
         }
-        // If not directly over tiles, check header bars
-        for grid in self.grids.iter().filter(|g| g.id > 0) {
-            let top_left = self.tile_screen_rect(canvas_origin, grid.col_offset, grid.row_offset);
-            let w = (grid.grid_cols.max(1) as f32) * step;
-            let bar_w = w.max(300.0 * self.zoom.clamp(0.5, 1.0));
-            let header_rect = Rect::from_min_size(
-                egui::pos2(top_left.min.x, top_left.min.y - 48.0),
-                vec2(bar_w, 48.0),
-            );
-            if header_rect.contains(pointer_pos) {
+        for grid in self.grids.iter().filter(|grid| grid.id > 0) {
+            if self
+                .grid_header_rect(canvas_origin, grid)
+                .contains(pointer_pos)
+            {
                 return Some(grid.id);
             }
         }
@@ -1209,6 +1216,39 @@ impl SimilarityCanvas {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn header_hit_testing_uses_painted_bounds_at_every_zoom() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.png"), b"fixture").unwrap();
+        let mut canvas = SimilarityCanvas::default();
+        canvas.entries = crate::file_manager::filesystem::read_directory(
+            root.path(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap()
+        .entries
+        .into();
+        canvas.recompute_layout();
+        canvas.settle_layout();
+        canvas.add_search_grid("first", false, vec![0], vec![1.0]);
+        canvas.add_search_grid("second", false, vec![0], vec![1.0]);
+        canvas.settle_layout();
+        for zoom in [MIN_ZOOM, 0.25, 1.0, MAX_ZOOM] {
+            canvas.zoom = zoom;
+            let first = canvas.grid_header_rect(Pos2::ZERO, &canvas.grids[1]);
+            let second = canvas.grid_header_rect(Pos2::ZERO, &canvas.grids[2]);
+            assert!(!first.intersects(second));
+            assert_eq!(
+                canvas.result_grid_at_pos(Pos2::ZERO, first.center()),
+                Some(canvas.grids[1].id)
+            );
+            assert_eq!(
+                canvas.result_grid_at_pos(Pos2::ZERO, second.center()),
+                Some(canvas.grids[2].id)
+            );
+        }
+    }
 
     #[test]
     fn stale_layout_result_does_not_replace_newer_grid_state() {
