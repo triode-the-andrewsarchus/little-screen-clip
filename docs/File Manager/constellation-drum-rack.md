@@ -258,10 +258,12 @@ each colliding point checks at most 48 nearby cells and moves at most 64 logical
 pixels. Saturated neighborhoods retain overlaps instead of pushing clusters into
 holes. Saved acoustic coordinates remain unchanged; no samples are dropped.
 Empty searches avoid per-sample lowercase allocation on the render path.
-A 28-pixel edge vignette fades map content into the themed canvas. It is painted
-after map points/trails and before hover cards, within the visible map boundaries.
-It neither moves points nor changes picking or panning. The center remains clear;
-tiny viewports cap the fade to a quarter of their width/height.
+Dots fade uniformly over the last 16 pixels before their circular extent reaches
+the visible map boundary, becoming fully transparent before they would be cut off.
+The entire dot receives one opacity value; there is no overlay or gradient across
+an individual dot. Selected and hovered highlights fade as complete objects too.
+This does not change point positions, radii, grouping or the number rendered.
+Fully transparent points cannot start hover audition. The background stays flat.
 Middle-drag pans even when it starts over a sample. It never begins a file drag,
 and hover audition stays suppressed after panning until the next pointer movement.
 

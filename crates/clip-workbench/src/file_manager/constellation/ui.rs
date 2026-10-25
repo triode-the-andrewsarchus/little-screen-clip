@@ -6,6 +6,17 @@ use super::db::ConstellationSample;
 use super::generated_model::SampleCategory;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
+/// Fades a complete circle uniformly before its extent reaches a visible canvas edge.
+fn circle_edge_opacity(bounds: Rect, position: Pos2, radius: f32) -> f32 {
+    let clearance = (position.x - bounds.left())
+        .min(bounds.right() - position.x)
+        .min(position.y - bounds.top())
+        .min(bounds.bottom() - position.y)
+        - radius;
+    let t = (clearance / 16.0).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Keeps filtered samples as faint spatial context without competing with matches.
 fn filtered_star_color(base: Color32, category_dimmed: bool, filter_dimmed: bool) -> Color32 {
     let alpha = if category_dimmed || filter_dimmed {
@@ -630,6 +641,7 @@ impl ConstellationState {
         let dot = dot_texture(ui.ctx());
         let mut star_mesh = egui::Mesh::with_texture(dot.id());
         let base_star_radius = map_point_radius(viewport, self.samples.len(), self.zoom);
+        let edge_bounds = rect.intersect(ui.clip_rect());
 
         let mut selected_sample_overlay: Option<(Pos2, Color32)> = None;
 
@@ -707,6 +719,7 @@ impl ConstellationState {
                 continue;
             }
 
+            let opacity = circle_edge_opacity(edge_bounds, pos, base_star_radius);
             let is_selected = self.selected_path.as_ref() == Some(&sample.file_path);
             let base_color = sample.category.color();
 
@@ -715,7 +728,7 @@ impl ConstellationState {
             }
 
             // Check hover directly against screen position (only non-dimmed samples participate in hover)
-            if self.matches_filters(sample, &query_lower) {
+            if opacity > 0.0 && self.matches_filters(sample, &query_lower) {
                 if let Some(mp) = mouse_pos {
                     let dx = sx - mp.x;
                     let dy = sy - mp.y;
@@ -728,12 +741,9 @@ impl ConstellationState {
                 }
             }
 
-            if is_selected {
-                continue;
-            }
-
             let is_filter_dimmed = !self.matches_filters(sample, &query_lower);
-            let color = filtered_star_color(base_color, is_category_dimmed, is_filter_dimmed);
+            let color = filtered_star_color(base_color, is_category_dimmed, is_filter_dimmed)
+                .gamma_multiply(opacity);
 
             star_mesh.add_rect_with_uv(
                 Rect::from_center_size(Pos2::new(sx, sy), Vec2::splat(base_star_radius * 2.0)),
@@ -774,36 +784,45 @@ impl ConstellationState {
         // Render selected sample prominent overlay
         if let Some((pos, color)) = selected_sample_overlay {
             let r = 7.0 * self.zoom.clamp(0.8, 2.5);
-            painter.circle_stroke(pos, r + 4.0, Stroke::new(2.0_f32, Color32::WHITE));
+            let opacity = circle_edge_opacity(edge_bounds, pos, r + 8.0);
+            painter.circle_stroke(
+                pos,
+                r + 4.0,
+                Stroke::new(2.0_f32, Color32::WHITE.gamma_multiply(opacity)),
+            );
             painter.circle_filled(
                 pos,
                 r + 8.0,
-                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 80),
+                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 80)
+                    .gamma_multiply(opacity),
             );
-            painter.circle_filled(pos, r, color);
-            painter.circle_filled(pos, r * 0.45, Color32::WHITE);
+            painter.circle_filled(pos, r, color.gamma_multiply(opacity));
+            painter.circle_filled(pos, r * 0.45, Color32::WHITE.gamma_multiply(opacity));
         }
 
         // Render hovered sample prominent overlay
         if let Some(ref hovered) = hovered_sample {
             let r = 6.0 * self.zoom.clamp(0.8, 2.5);
             let color = hovered.category.color();
-            painter.circle_stroke(hovered_pos, r + 3.0, Stroke::new(1.5_f32, color));
+            let opacity = circle_edge_opacity(edge_bounds, hovered_pos, r + 7.0);
+            painter.circle_stroke(
+                hovered_pos,
+                r + 3.0,
+                Stroke::new(1.5_f32, color.gamma_multiply(opacity)),
+            );
             painter.circle_filled(
                 hovered_pos,
                 r + 7.0,
-                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 60),
+                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 60)
+                    .gamma_multiply(opacity),
             );
-            painter.circle_filled(hovered_pos, r, color);
-            painter.circle_filled(hovered_pos, r * 0.45, Color32::WHITE);
+            painter.circle_filled(hovered_pos, r, color.gamma_multiply(opacity));
+            painter.circle_filled(
+                hovered_pos,
+                r * 0.45,
+                Color32::WHITE.gamma_multiply(opacity),
+            );
         }
-
-        crate::ui_ext::paint_canvas_edge_fade(
-            &painter,
-            rect.intersect(ui.clip_rect()),
-            ui.visuals().panel_fill,
-            28.0,
-        );
 
         // 3. Hover and Click Interactions
         if let Some(hovered) = hovered_sample {
@@ -1685,6 +1704,72 @@ mod tests {
             state.space_audition(false),
             Some(state.samples[0].file_path.clone())
         );
+    }
+
+    #[test]
+    fn rendered_edge_dots_keep_one_alpha_at_all_four_vertices() {
+        let ctx = egui::Context::default();
+        let palette = little_clip_core::palette::AppPalette::default();
+        let mut state = ConstellationState::new();
+        state.pack_shelf_open = false;
+        state.samples.push(sample_fixture(0));
+        let texture = dot_texture(&ctx).id();
+        let inspect = |output: egui::FullOutput| {
+            output
+                .shapes
+                .into_iter()
+                .find_map(|shape| match shape.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == texture => Some((
+                        shape.clip_rect,
+                        mesh.calc_bounds(),
+                        mesh.vertices.iter().map(|v| v.color).collect::<Vec<_>>(),
+                    )),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let size = Vec2::new(800.0, 600.0);
+        let (clip, dot, _) = inspect(render_frame(&ctx, &mut state, &palette, size));
+        let target = Pos2::new(clip.left() + dot.width() * 0.5 + 8.0, clip.center().y);
+        state.pan += target - dot.center();
+        let (_, _, colors) = inspect(render_frame(&ctx, &mut state, &palette, size));
+        assert_eq!(colors.len(), 4);
+        assert!(colors.iter().all(|color| *color == colors[0]));
+        assert!(colors[0].a() > 0 && colors[0].a() < 240);
+        state.pan.x -= 8.0;
+        state.selected_path = Some(state.samples[0].file_path.clone());
+        let (_, _, colors) = inspect(render_frame(&ctx, &mut state, &palette, size));
+        assert_eq!(
+            colors.len(),
+            4,
+            "Selection must retain its ordinary dot beneath the highlight"
+        );
+        assert!(colors.iter().all(|color| color.a() == 0));
+    }
+
+    #[test]
+    fn circle_edges_fade_uniformly_and_disappear_before_being_cut_off() {
+        let bounds = Rect::from_min_max(Pos2::ZERO, Pos2::new(200.0, 200.0));
+        for radius in [0.35, 4.0, 8.0, 25.5] {
+            for (clearance, expected) in [
+                (-1.0, 0.0),
+                (0.0, 0.0),
+                (8.0, 0.5),
+                (16.0, 1.0),
+                (30.0, 1.0),
+            ] {
+                let distance = radius + clearance;
+                for point in [
+                    Pos2::new(distance, 100.0),
+                    Pos2::new(200.0 - distance, 100.0),
+                    Pos2::new(100.0, distance),
+                    Pos2::new(100.0, 200.0 - distance),
+                ] {
+                    assert!((circle_edge_opacity(bounds, point, radius) - expected).abs() < 0.0001);
+                }
+            }
+        }
+        assert_eq!(circle_edge_opacity(bounds, Pos2::new(12.0, 4.0), 4.0), 0.0);
     }
 
     #[test]
