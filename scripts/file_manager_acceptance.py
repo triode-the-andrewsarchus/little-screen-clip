@@ -126,7 +126,9 @@ class Session:
             ("player-ocr.png", (90, 610, 1180, 775)),
             ("dialog-ocr.png", (320, 330, 960, 540)),
             ("pad-mixer-ocr.png", (350, 518, 464, 718)),
-            ("pad-retrigger-ocr.png", (478, 669, 549, 687)),
+            ("pad-retrigger-ocr.png", (419, 685, 488, 704)),
+            ("pad-pan-ocr.png", (512, 685, 542, 704)),
+            ("pad-strip-ocr.png", (420, 660, 790, 730)),
             ("pad-confirm-ocr.png", (494, 478, 584, 497)),
         ]
         if "High" in expected:

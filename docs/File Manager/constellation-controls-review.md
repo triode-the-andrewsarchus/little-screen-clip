@@ -504,3 +504,73 @@ crops and anchoring the shorter priority menu to its heading, plus a verified
 velocity-button click fallback. Assertions for priority persistence, Studio saves,
 unchanged originals, portable packs and guarded close remain in place. The private
 runner uses ALSA null; these checks do not establish hardware listening or MIDI.
+
+
+## Resettable layer strip and uniform dot-edge fade
+
+Gain is now the only vertical control beside the waveform. The strip below it
+orders Retrigger, Pan, Speed, Pitch and Edit in Audio Studio, with separators
+between sections. Each section receives bounded space and wraps as a unit when
+needed; the Studio button cannot overlap the fixed-width pitch readout. Pan shares
+the center-detent fader track with Speed and Pitch. Double-click resets Gain to
+0 dB, Pan to center, Speed to +1× and Pitch to zero. This reuses Audio Studio's
+`slider_double_clicked` helper: native egui sliders sense drags, so checking their
+ordinary `Response::double_clicked` alone never reset them. The original slider
+response retains its change flag. Matching the row height to egui's interaction
+height also prevents invisible vertical overflow. Rendering coverage checks both
+themes at 840×650, 1400×1000, 2200×1300 and 3200×1800, including readouts and
+non-overlapping Studio bounds.
+
+The isolated `1dbde80` commit replaces the canvas vignette with one opacity per
+complete dot. Follow-ups remove nested canvas padding and shorten the fade to six
+pixels of circle-edge clearance; the selected dot remains beneath its larger
+highlight. The final top-edge correction paints the header divider directly at the
+canvas boundary, eliminating separator-row padding below that line. Side and
+bottom boundaries keep their approved geometry. The existing shared vignette
+helper remains available to the photo branch. Dot vertices retain identical alpha,
+and a rendering assertion checks that the canvas starts at the divider.
+
+### Architecture review
+
+The `constellation-pan-dot-fade` baseline is `0768d42`. The final tool comparison
+reports REGRESSION: NLOC 242,529 → 242,737, functions 7,318 → 7,322, summed CCN
+29,695 → 29,720, average 4.06 and maximum 196 unchanged, duplication 5.68%
+unchanged, clones 1,412 → 1,414, cycles six unchanged, health 62.6937 → 62.6894.
+The two added clone groups involve short native-widget row construction and
+synthetic pointer-input test setup. Shared fader behavior and the existing Studio
+reset helper avoid introducing parallel control mechanisms. The remaining new
+hotspot deltas are the existing dock's mode-dependent canvas margin (CCN 16 → 17)
+and the acceptance scenario's optional compact-editor path (37 → 40). The toolbar
+retains its previous complexity: the indexing section owns its own divider.
+There are no new dependencies, playback streams, workers or dependency cycles in
+this pass.
+
+A fresh fetch confirms current main remains `999cd24`. Entire-branch comparison
+still reports REGRESSION: NLOC 227,320 → 242,737, functions 6,934 → 7,322,
+summed CCN 27,909 → 29,720, average 4.02 → 4.06, maximum 196 unchanged,
+duplication 5.98% → 5.68%, clones 1,382 → 1,414, cycles five → six,
+health 73.8835 → 62.6894. Earlier branch-wide debt remains; this UI pass does not
+claim to resolve that structural regression.
+
+### Validation
+
+The workspace suite passed 2,579 tests with 23 ignored across 26 targets
+(`/tmp/constellation-pan-fade-workspace.log`) before the final compact-width and
+canvas-boundary adjustments. All 103 constellation tests pass after those
+adjustments (`/tmp/constellation-top-boundary-final-tests.log`); the extended
+divider assertion also passes after moving separator ownership to the indexing
+section (`/tmp/constellation-top-divider-regression.log`). Three browser UI tests
+passed after the outer margin change (`/tmp/constellation-flush-browser-ui.log`).
+The final file-manager build passes (`/tmp/constellation-top-divider-build.log`).
+Two unrelated existing Rust float-inference warnings remain.
+
+Private Weston/Niri compact-editor checks pass all ten observations in each theme:
+`/tmp/constellation-top-final-dark` and `/tmp/constellation-top-final-light`.
+The light run uses the hardware-Dvorak key configuration. Both verify pad
+assignment, visible Gain/Pan/Speed/Pitch/Retrigger controls, the Studio button's
+hit target, return without replacing the original, undo and clean close. Final
+screenshots were inspected in both themes. The dedicated `--editor-only` scenario
+allows this bounded regression check without repeating the full portable-pack
+scenario. OCR fallbacks use verified text crops and a confirmed modal button
+center. Formatting, Python compilation and `git diff --check` pass. The private
+runner uses ALSA null; these checks do not establish physical audio or MIDI quality.

@@ -75,7 +75,7 @@ def pad_gestures(session, root, destination, red, stride):
     assert (root / "kick.wav").read_bytes() == original
 
 
-def exercise(session, root, hardware_keys=False):
+def exercise(session, root, hardware_keys=False, editor_only=False):
     from file_manager_acceptance import private
     from PIL import Image
     session.observe("folder", ["Constellation", "File"])
@@ -105,6 +105,18 @@ def exercise(session, root, hardware_keys=False):
     session.key(first_key, "shift")
     text = session.observe("assigned-slot", ["Edit in Audio Studio", "Retrigger", "Speed", "Pitch", "Gain", "Pan"])
     assert "Layer actions" not in text and "Fit selection" not in text and "drag IN / OUT" not in text
+    if editor_only:
+        original = (root / "kick.wav").read_bytes()
+        session.click(*session.word("assigned-slot", "Studio"))
+        session.observe("editor-studio-open", ["AUDIO STUDIO", "Selection info"])
+        session.click(*(session.word("editor-studio-open", "Back", tree=True, required=False) or (150, 118)))
+        session.observe("editor-studio-close", ["Return without replacing"])
+        session.click(*(session.word("editor-studio-close", "Return", required=False) or (698, 499)))
+        session.observe("editor-studio-return", ["Retrigger", "Speed", "Pitch", "Pan", "Gain"])
+        assert (root / "kick.wav").read_bytes() == original
+        session.key("z", "ctrl")
+        session.observe("editor-undo-assignment", ["Packs"])
+        return
     session.key("Space")
     session.key("Space")
     # Duplicate keyboard assignments must be confirmable and cancellable.
@@ -218,8 +230,10 @@ def exercise(session, root, hardware_keys=False):
 
 
 def main():
-    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/debug/clip-file-manager",
-                                 lambda parser: parser.add_argument("--hardware-keys", action="store_true"))
+    def configure(parser):
+        parser.add_argument("--hardware-keys", action="store_true")
+        parser.add_argument("--editor-only", action="store_true", help="Check compact controls and Studio hit testing without the full pack scenario")
+    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/debug/clip-file-manager", configure)
     output, root = media_fixture_directory(args)
     with wave.open(str(root / "kick.wav"), "wb") as wav:
         wav.setnchannels(1)
@@ -237,7 +251,8 @@ def main():
             with config.open("a") as file:
                 file.write('\n[file_manager]\nconstellation_pad_keys = [";qjk", "aoeu", "\',.p", "1234"]\n')
 
-    return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.hardware_keys),
+    return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.hardware_keys, args.editor_only),
+                                      "compact constellation editor and Studio return" if args.editor_only else
                                       "constellation controls, pad gestures, studio return, portable saves and close protection",
                                       prepare_environment)
 
