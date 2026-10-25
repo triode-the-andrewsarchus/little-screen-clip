@@ -1150,7 +1150,11 @@ fn paint_gallery_tile(
                 None
             };
             let tex = ready.texture.as_ref().map(|t| (t.id(), t.size_vec2()));
-            let meta = ready.data.photo.as_ref().map(|p| p.metadata.clone());
+            let meta = ready
+                .data
+                .photo_metadata
+                .clone()
+                .or_else(|| ready.data.photo.as_ref().map(|p| p.metadata.clone()));
             (detail, tex, meta)
         } else {
             (None, None, None)

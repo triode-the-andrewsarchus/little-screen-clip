@@ -742,11 +742,16 @@ fn gallery_preview(
     } else {
         data.detail = "Preview unavailable; open in Image Studio or externally".into();
     }
+    // Header metadata stays independent of full image/Hilbert analysis.
+    data.photo_metadata = crate::file_source::read_file_bytes(path, 2 * 1024 * 1024, false, true)
+        .ok()
+        .map(|bytes| little_clip_ops::metadata::extract_image_metadata(&bytes));
     if source.check().is_err()
         || super::super::filesystem::check_revision(path, revision).is_err()
         || crate::file_source::FileSource::capture(path).ok().as_ref() != Some(&source)
     {
         data.image = None;
+        data.photo_metadata = None;
         data.detail = "Photo changed while loading".into();
     }
     data
@@ -992,6 +997,31 @@ fn document_preview(path: &Path, token: &AtomicBool) -> Data {
 #[cfg(test)]
 mod guarded_gallery_tests {
     use super::*;
+
+    #[test]
+    fn gallery_preview_delivers_exif_metadata_without_hilbert_analysis() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("camera.jpg");
+        image::RgbImage::new(16, 16).save(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        // TIFF Make="XO" (inline ASCII) in a standard JPEG APP1 segment.
+        let exif = [
+            b'E', b'x', b'i', b'f', 0, 0, b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 0x0f, 1, 2, 0, 3, 0,
+            0, 0, b'X', b'O', 0, 0, 0, 0, 0, 0,
+        ];
+        let mut tagged = vec![0xff, 0xd8, 0xff, 0xe1, 0, (exif.len() + 2) as u8];
+        tagged.extend_from_slice(&exif);
+        tagged.extend_from_slice(&bytes[2..]);
+        std::fs::write(&path, tagged).unwrap();
+        let entry =
+            crate::file_manager::filesystem::read_directory(root.path(), &AtomicBool::new(false))
+                .unwrap()
+                .entries
+                .remove(0);
+        let data = gallery_preview(&path, entry.revision, 128, 1, &AtomicBool::new(false));
+        assert_eq!(data.photo_metadata.unwrap().make.as_deref(), Some("XO"));
+        assert!(data.photo.is_none());
+    }
 
     #[test]
     fn gallery_preview_rejects_fifo_without_reading_payload() {
