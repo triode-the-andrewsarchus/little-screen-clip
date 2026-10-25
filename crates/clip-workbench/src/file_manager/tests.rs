@@ -1617,3 +1617,22 @@ fn recursive_photo_selection_and_keyboard_use_canvas_entries() {
     manager.reconcile_selection();
     assert_eq!(manager.selected_paths(), vec![a, b]);
 }
+
+#[test]
+fn image_viewer_collection_ignores_a_previous_similarity_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let old = root.path().join("old");
+    let current = root.path().join("current");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::create_dir(&current).unwrap();
+    std::fs::write(old.join("old.png"), b"fixture").unwrap();
+    let target = current.join("current.png");
+    std::fs::write(&target, b"fixture").unwrap();
+    let (mut manager, _jobs) = loaded(&current);
+    manager.photo_mode = gallery::similarity::PhotoMode::Similarity;
+    manager.similarity_canvas.entries = read(&old).entries;
+    for view in [BrowserView::List, BrowserView::Photos] {
+        manager.view = view;
+        assert_eq!(manager.photo_collection(&target), vec![target.clone()]);
+    }
+}

@@ -1091,9 +1091,12 @@ impl FileManager {
         if !little_clip_core::item::is_image_path(path) {
             return Vec::new();
         }
-        if self.photo_mode == super::super::gallery::similarity::PhotoMode::Similarity {
+        if self.view == super::super::BrowserView::Photos
+            && self.photo_mode == super::super::gallery::similarity::PhotoMode::Similarity
+            && self.similarity_canvas.is_current_directory(self.path())
+        {
             let collection = self.similarity_canvas.photo_collection();
-            if !collection.is_empty() {
+            if collection.iter().any(|candidate| candidate == path) {
                 return collection;
             }
         }

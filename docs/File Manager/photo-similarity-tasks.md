@@ -22,7 +22,7 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 - [ ] Make grid-header painting and hit testing share geometry, including zoom and stacked-grid spacing.
 - [ ] Populate EXIF hover information through the metadata pipeline; current hover previews never populate the photo metadata field.
 - [x] Include source revision/identity in hover texture cache keys so replacing a file does not retain its old preview.
-- [ ] Limit similarity collections to their owning folder/view so ordinary image viewing does not inherit stale navigation entries.
+- [x] Limit similarity collections to their owning folder/view so ordinary image viewing does not inherit stale navigation entries.
 
 ## Style, architecture and validation
 
