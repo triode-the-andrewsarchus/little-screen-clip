@@ -1338,8 +1338,9 @@ fn paint_tile_hover_preview(
             if !camera_parts.is_empty() || !exp_parts.is_empty() {
                 ui.horizontal(|ui| {
                     if !camera_parts.is_empty() {
+                        ui.add(Icon::Camera.image_tinted(12.0, ui.visuals().text_color()));
                         ui.label(
-                            egui::RichText::new(format!("📷 {}", camera_parts.join(" ")))
+                            egui::RichText::new(camera_parts.join(" "))
                                 .size(11.0)
                                 .color(ui.visuals().text_color()),
                         );
