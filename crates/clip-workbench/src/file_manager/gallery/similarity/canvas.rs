@@ -2,16 +2,13 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::{atomic::Ordering, mpsc},
     time::Duration,
 };
 
+use crate::file_manager::preview_job::Task;
 use egui::{Pos2, Rect, Ui, vec2};
-use little_clip_core::{BackgroundJobs, JobError, JobTicket};
+use little_clip_core::BackgroundJobs;
 
 use super::{
     embedding::{FeatureVector, project_features_to_2d},
@@ -253,30 +250,9 @@ pub struct PendingSearchMeta {
     pub candidate_indices: Vec<usize>,
 }
 
-struct PendingJob<T> {
-    ticket: JobTicket,
-    cancelled: Arc<AtomicBool>,
-    receiver: mpsc::Receiver<Result<T, JobError>>,
-}
-
-impl<T> Drop for PendingJob<T> {
-    fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Relaxed);
-        self.ticket.cancel();
-    }
-}
-
 struct HashJob {
-    ticket: JobTicket,
-    cancelled: Arc<AtomicBool>,
+    task: Task<()>,
     batch_rx: mpsc::Receiver<Vec<(PathBuf, u64, FeatureVector)>>,
-}
-
-impl Drop for HashJob {
-    fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Relaxed);
-        self.ticket.cancel();
-    }
 }
 
 /// Interactive 2D canvas displaying clustered photo similarity grids.
@@ -291,13 +267,14 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     pub grid_rows: usize,
     pub(in crate::file_manager) hashes: HashMap<PathBuf, (FeatureVector, u64)>, // path -> (feature, revision)
     current_signature: Option<(PathBuf, u64, bool, usize)>,
-    scan_job: Option<PendingJob<Vec<Entry>>>,
+    scan_job: Option<Task<Vec<Entry>>>,
     hash_job: Option<HashJob>,
-    search_job: Option<PendingJob<Option<Vec<f32>>>>,
+    search_job: Option<Task<Result<Vec<f32>, String>>>,
     pub initial_fit_done: bool,
     pub is_middle_panning: bool,
     pub hashing_progress: (usize, usize), // (completed, total)
     pub search_query: String,
+    pub error: Option<String>,
     pub pending_search: Option<PendingSearchMeta>,
     pending_photo_search: Option<PathBuf>,
     pub allowance: f32,
@@ -328,6 +305,7 @@ impl Default for SimilarityCanvas {
             is_middle_panning: false,
             hashing_progress: (0, 0),
             search_query: String::new(),
+            error: None,
             pending_search: None,
             pending_photo_search: None,
             allowance: 0.50,
@@ -444,24 +422,20 @@ impl SimilarityCanvas {
         });
 
         self.schedule_hashing();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let c = Arc::clone(&cancelled);
-        let pool = worker_pool();
-        let (ticket, receiver) = pool.submit(Duration::from_secs(60), move || {
-            if c.load(Ordering::Relaxed) {
-                return None;
-            }
-            let mut embedder = SiglipTextEmbedder::try_new().ok()?;
-            if c.load(Ordering::Relaxed) {
-                return None;
-            }
-            embedder.embed_text(&prompt).ok()
-        });
-        self.search_job = Some(PendingJob {
-            ticket,
-            cancelled,
-            receiver,
-        });
+        self.error = None;
+        self.search_job = Some(
+            Task::start(worker_pool(), Duration::from_secs(60), move |cancelled| {
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err("Search cancelled".into());
+                }
+                let mut embedder = SiglipTextEmbedder::try_new()?;
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err("Search cancelled".into());
+                }
+                embedder.embed_text(&prompt)
+            })
+            .with_response_deadline(Duration::from_secs(60)),
+        );
     }
 
     /// Clears all searches and restores base grid.
@@ -684,18 +658,13 @@ impl SimilarityCanvas {
         self.initial_fit_done = false;
 
         if recurse {
-            let cancelled = Arc::new(AtomicBool::new(false));
             let root = directory.path.clone();
-            let c = Arc::clone(&cancelled);
-            let pool = worker_pool();
-            let (ticket, receiver) = pool.submit(Duration::from_secs(120), move || {
-                scan_recursive_photos(&root, show_hidden, &c)
-            });
-            self.scan_job = Some(PendingJob {
-                ticket,
-                cancelled,
-                receiver,
-            });
+            self.scan_job = Some(
+                Task::start(worker_pool(), Duration::from_secs(120), move |cancelled| {
+                    scan_recursive_photos(&root, show_hidden, cancelled)
+                })
+                .with_response_deadline(Duration::from_secs(120)),
+            );
             let photos: Vec<Entry> = visible_indices
                 .iter()
                 .filter_map(|&idx| directory.entries.get(idx))
@@ -788,34 +757,53 @@ impl SimilarityCanvas {
             return;
         }
 
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let c = Arc::clone(&cancelled);
-        let pool = worker_pool();
         let (batch_tx, batch_rx) = mpsc::channel();
+        let task = Task::start(worker_pool(), Duration::from_secs(3600), move |cancelled| {
+            super::index::index_images(missing, cancelled, batch_tx);
+        })
+        .with_response_deadline(Duration::from_secs(3600));
+        self.hash_job = Some(HashJob { task, batch_rx });
+    }
 
-        let (ticket, _completion_rx) = pool.submit(Duration::from_secs(3600), move || {
-            super::index::index_images(missing, &c, batch_tx);
-        });
-        self.hash_job = Some(HashJob {
-            ticket,
-            cancelled,
-            batch_rx,
-        });
+    pub fn invalidate(&mut self) {
+        self.retire();
+        self.current_signature = None;
+        self.error = None;
     }
 
     /// Polls background jobs and requests repaints.
     pub fn poll(&mut self, ctx: &egui::Context) {
-        if let Some(job) = &self.scan_job
-            && let Ok(Ok(entries)) = job.receiver.try_recv()
-        {
-            self.scan_job = None;
-            self.set_entries(entries);
-            ctx.request_repaint();
+        self.poll_scan(ctx);
+        self.poll_hashing(ctx);
+        if let Some(path) = self.pending_photo_search.take() {
+            if self.hashes.contains_key(&path) {
+                self.search_from_photo(&path);
+            } else if self.hash_job.is_some() {
+                self.pending_photo_search = Some(path);
+            }
         }
 
+        self.poll_search(ctx);
+
+        if self.scan_job.is_some() || self.hash_job.is_some() || self.search_job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(32));
+        }
+    }
+
+    fn poll_scan(&mut self, ctx: &egui::Context) {
+        if let Some(result) = self.scan_job.as_ref().and_then(Task::poll) {
+            self.scan_job = None;
+            match result {
+                Ok(entries) => self.set_entries(entries),
+                Err(error) => self.error = Some(format!("Photo scan failed: {error:?}")),
+            }
+            ctx.request_repaint();
+        }
+    }
+
+    fn poll_hashing(&mut self, ctx: &egui::Context) {
         if let Some(job) = &mut self.hash_job {
             let mut received_any = false;
-            let mut finished = false;
             loop {
                 match job.batch_rx.try_recv() {
                     Ok(batch) => {
@@ -828,11 +816,13 @@ impl SimilarityCanvas {
                     Err(mpsc::TryRecvError::Empty) => {
                         break;
                     }
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        finished = true;
-                        break;
-                    }
+                    Err(mpsc::TryRecvError::Disconnected) => break,
                 }
+            }
+            let completion = job.task.poll();
+            let finished = completion.is_some();
+            if let Some(Err(error)) = completion {
+                self.error = Some(format!("Photo indexing failed: {error:?}"));
             }
             if finished {
                 self.hash_job = None;
@@ -846,21 +836,20 @@ impl SimilarityCanvas {
                 ctx.request_repaint();
             }
         }
+    }
 
-        if let Some(path) = self.pending_photo_search.take() {
-            if self.hashes.contains_key(&path) {
-                self.search_from_photo(&path);
-            } else if self.hash_job.is_some() {
-                self.pending_photo_search = Some(path);
-            }
-        }
-
-        if let Some(job) = &self.search_job
-            && let Ok(res) = job.receiver.try_recv()
-        {
+    fn poll_search(&mut self, ctx: &egui::Context) {
+        if let Some(res) = self.search_job.as_ref().and_then(Task::poll) {
             self.search_job = None;
-            if let Ok(Some(emb)) = res
-                && let Some(meta) = self.pending_search.take()
+            let result = res
+                .map_err(|error| format!("Search failed: {error:?}"))
+                .and_then(|result| result);
+            if let Err(error) = &result {
+                self.error = Some(error.clone());
+            }
+            let meta = self.pending_search.take();
+            if let Ok(emb) = result
+                && let Some(meta) = meta
             {
                 // Deselect other grids so consecutive searches chain to this new grid by default
                 for g in &mut self.grids {
@@ -894,10 +883,6 @@ impl SimilarityCanvas {
                 self.pending_pan_to_grid = Some(new_id);
             }
             ctx.request_repaint();
-        }
-
-        if self.scan_job.is_some() || self.hash_job.is_some() || self.search_job.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(32));
         }
     }
 
@@ -1230,16 +1215,24 @@ mod lifecycle_tests {
     use super::*;
 
     #[test]
+    fn timed_out_scan_clears_busy_state_and_reports_failure() {
+        let pool = BackgroundJobs::new(1, 2);
+        let mut canvas = SimilarityCanvas::default();
+        canvas.scan_job = Some(
+            Task::start(&pool, Duration::from_secs(2), |_| Vec::new())
+                .with_response_deadline(Duration::ZERO),
+        );
+        canvas.poll(&egui::Context::default());
+        assert!(!canvas.is_scanning());
+        assert!(canvas.error.as_deref().unwrap().contains("TimedOut"));
+    }
+
+    #[test]
     fn retiring_incomplete_scan_invalidates_sync_stamp() {
         let mut canvas = SimilarityCanvas::default();
         canvas.current_signature = Some((PathBuf::from("/photos"), 1, true, 0));
         let pool = BackgroundJobs::new(1, 2);
-        let (ticket, receiver) = pool.submit(Duration::from_secs(2), Vec::new);
-        canvas.scan_job = Some(PendingJob {
-            ticket,
-            receiver,
-            cancelled: Arc::new(AtomicBool::new(false)),
-        });
+        canvas.scan_job = Some(Task::start(&pool, Duration::from_secs(2), |_| Vec::new()));
         canvas.retire();
         assert!(canvas.current_signature.is_none());
         assert!(!canvas.is_scanning());
@@ -1249,14 +1242,9 @@ mod lifecycle_tests {
     fn replacing_entries_retires_search_indices_and_receiver() {
         let mut canvas = SimilarityCanvas::default();
         let pool = BackgroundJobs::new(1, 2);
-        let (ticket, _) = pool.submit(Duration::from_secs(2), || ());
-        let (sender, receiver) = mpsc::channel();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        canvas.search_job = Some(PendingJob {
-            ticket,
-            receiver,
-            cancelled: cancelled.clone(),
-        });
+        let task = Task::start(&pool, Duration::from_secs(2), |_| Ok(vec![1.0]));
+        let cancelled = task.token.clone();
+        canvas.search_job = Some(task);
         canvas.pending_search = Some(PendingSearchMeta {
             query: "old folder".into(),
             prompt: "old folder".into(),
@@ -1269,7 +1257,6 @@ mod lifecycle_tests {
         assert!(canvas.pending_search.is_none());
         assert!(canvas.pending_pan_to_grid.is_none());
         assert!(cancelled.load(Ordering::Relaxed));
-        assert!(sender.send(Ok(Some(vec![1.0]))).is_err());
     }
 }
 

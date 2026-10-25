@@ -1059,6 +1059,12 @@ impl FileManager {
                             }
                             ui.label(format!("{:.0}%", self.similarity_canvas.zoom * 100.0));
                             ui.separator();
+                            if let Some(error) = self.similarity_canvas.error.clone() {
+                                ui.label(egui::RichText::new(error).color(colors.text_secondary));
+                                if ui.small_button("Retry").clicked() {
+                                    self.similarity_canvas.invalidate();
+                                }
+                            }
                             if self.similarity_canvas.is_scanning() {
                                 ui.label("Scanning subfolders…");
                             } else if self.similarity_canvas.is_hashing() {
