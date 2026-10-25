@@ -79,7 +79,7 @@ Worker layout snapshots now share entry arrays and dense embedding buffers. PCA 
 
 ## Classification batching
 
-SigLIP vision inference processes at most eight uncached images per call, on both CUDA and CPU fallback. The final partial batch can be smaller. Persistent hits are published without inference, and a failed batch is retried image by image to isolate bad sources. Eight is the current fixed default; CPU-specific batch tuning and comparisons of alternative batch sizes have not been benchmarked. Image Studio tools operate on one chosen image per user operation.
+SigLIP vision inference processes at most six uncached images per call, on both CUDA and CPU fallback. The final partial batch can be smaller. Persistent hits are published without inference, and a failed batch is retried image by image to isolate bad sources. Six is the current fixed default. The RTX 3090 benchmark selected six; CPU-specific tuning has not been measured. Image Studio tools operate on one chosen image per user operation.
 
 ## Review completion and validation
 
@@ -95,3 +95,23 @@ python scripts/file_manager_photo_similarity_acceptance.py --appearance dark --o
 The workspace passed 2,637 tests with no failures and 33 opt-in/hardware tests ignored. The new focus regression was confirmed failing before the fix and passing afterward. The UI smoke test uses the private Weston/Niri runner, requires the three cached SigLIP files, and isolates configuration and the SQLite database. It verified 24 persisted neural embeddings, a red-image query, compact controls at 97% zoom, Ctrl+A selecting recursive entries, an eight-image subfolder and return to the original collection. The standard English Tesseract language data must be installed or supplied through `TESSDATA_PREFIX`.
 
 Against the pre-review baseline, clone groups fell from 1,446 to 1,442, average complexity fell from 4.07 to 4.05, and dependency cycles remained at six. The checker still labels the comparison REGRESSION because it flags existing clone ranges after edits and shared setup patterns in regression tests; the reported script-cycle changes reorder existing members of untouched scripts. The original canvas grid constructors and score tests already contained the corresponding repeated patterns. No new production complexity hotspot remains from these fixes. The added source implements cancellation, revision validation, worker scheduling and regression coverage; it does not duplicate the audio database.
+
+### RTX 3090 batch-size benchmark
+
+An opt-in raw inference benchmark used the cached SigLIP vision model, checked CUDA kernel traces on every run, warmed each session twice, and reported the median of five inferences. Each size ran in its own process. A 100 ms `nvidia-smi` poll stopped the run if total GPU use approached 12 GiB free, to leave room for other applications. Other GPU work was active, so throughput is directional and varied between repeats. The benchmark excludes image decode and thumbnail preprocessing.
+
+| Batch | Images/sec across runs | Additional total VRAM sampled above run baseline |
+|---:|---:|---:|
+| 1 | 2.15 | 415 MiB |
+| 2 | 2.05–2.34 | 544–632 MiB |
+| 4 | 2.33–2.37 | 798–1,075 MiB |
+| 6 | 2.55–2.56 | 798–880 MiB |
+| 8 | 1.82–2.07 | 1,350–1,400 MiB |
+
+Six was the fastest repeatable size. It delivered about 8% more throughput than four while using around 0.8 GiB above baseline in these runs. Eight was slower and used about 0.5 GiB more than six. The highest sampled total GPU use was 6,241 MiB of 24,576 MiB. The host-side baseline changed between runs as other GPU applications allocated memory; this measurement is not per-process VRAM attribution.
+
+The ignored benchmark can be repeated one size per process, up to eight:
+
+```bash
+SIGLIP_BENCH_BATCH_SIZE=6 cargo test -p clip-workbench --lib benchmark_siglip_cuda_batch_size -- --ignored --nocapture
+```

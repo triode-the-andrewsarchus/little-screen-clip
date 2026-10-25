@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// Batch size for SigLIP 2 vision inference.
-pub const SIGLIP_BATCH_SIZE: usize = 8;
+pub const SIGLIP_BATCH_SIZE: usize = 6;
 /// Pixel dimension (width and height) for input images fed to the SigLIP 2 vision encoder.
 pub const SIGLIP_INPUT_SIZE: u32 = 256;
 /// Maximum sequence length for tokenized text inputs.
@@ -332,6 +332,15 @@ impl SiglipTextEmbedder {
 mod tests {
     use super::*;
 
+    fn zero_pixel_batch(batch_size: usize) -> Array4<f32> {
+        Array4::zeros((
+            batch_size,
+            3,
+            SIGLIP_INPUT_SIZE as usize,
+            SIGLIP_INPUT_SIZE as usize,
+        ))
+    }
+
     #[test]
     fn failed_image_does_not_downgrade_other_batch_members() {
         let paths = [
@@ -356,15 +365,51 @@ mod tests {
     #[ignore = "requires cached SigLIP model and CUDA GPU"]
     fn vision_kernels_execute_on_cuda() {
         crate::onnx_runtime::assert_cuda_execution(SIGLIP2_GIANT_MODEL_NAME, |session| {
-            let pixels = Array4::<f32>::zeros((
-                1,
-                3,
-                SIGLIP_INPUT_SIZE as usize,
-                SIGLIP_INPUT_SIZE as usize,
-            ));
-            let input = Tensor::from_array(pixels).unwrap();
+            let input = Tensor::from_array(zero_pixel_batch(1)).unwrap();
             let outputs = session.run(ort::inputs![input]).unwrap();
             assert_eq!(outputs[0].try_extract_array::<f32>().unwrap().shape()[0], 1);
+        });
+    }
+
+    /// Reports repeated CUDA inference timing for one externally selected safe batch size.
+    /// Run as separate processes so each size starts from the same model allocation baseline.
+    #[test]
+    #[ignore = "opt-in RTX benchmark; run one SIGLIP_BENCH_BATCH_SIZE (1..=8) per process"]
+    fn benchmark_siglip_cuda_batch_size() {
+        let batch_size = std::env::var("SIGLIP_BENCH_BATCH_SIZE")
+            .expect("set SIGLIP_BENCH_BATCH_SIZE to a value from 1 through 8")
+            .parse::<usize>()
+            .expect("batch size must be an integer");
+        assert!(
+            (1..=8).contains(&batch_size),
+            "batch size exceeds shared-GPU benchmark ceiling"
+        );
+        crate::onnx_runtime::assert_cuda_execution(SIGLIP2_GIANT_MODEL_NAME, |session| {
+            let mut run = || {
+                let input = Tensor::from_array(zero_pixel_batch(batch_size)).unwrap();
+                let outputs = session.run(ort::inputs![input]).unwrap();
+                assert_eq!(
+                    outputs[0].try_extract_array::<f32>().unwrap().shape()[0],
+                    batch_size
+                );
+            };
+            for _ in 0..2 {
+                run();
+            }
+            let mut timings = (0..5)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    run();
+                    start.elapsed().as_secs_f64()
+                })
+                .collect::<Vec<_>>();
+            timings.sort_by(f64::total_cmp);
+            let median = timings[timings.len() / 2];
+            eprintln!(
+                "SIGLIP_BENCH batch={batch_size} median_ms={:.2} images_per_second={:.2}",
+                median * 1000.0,
+                batch_size as f64 / median,
+            );
         });
     }
 
