@@ -488,7 +488,7 @@ impl ConstellationState {
                 let width = ui.available_width();
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
-                        Vec2::new(116.0, 196.0),
+                        Vec2::new(68.0, 200.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             super::mixer_controls::mixer(ui, sample);
@@ -496,7 +496,7 @@ impl ConstellationState {
                     );
                     let wave = Rect::from_min_size(
                         ui.cursor().min,
-                        Vec2::new((width - 126.0).max(80.0), 196.0),
+                        Vec2::new((width - 78.0).max(80.0), 200.0),
                     );
                     let mut canvas = ui.child_ui(wave, egui::Layout::top_down(egui::Align::Min));
                     canvas.set_clip_rect(ui.clip_rect().intersect(wave));

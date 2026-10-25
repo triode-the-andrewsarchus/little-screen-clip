@@ -185,16 +185,17 @@ actual displayed columns. Wheel zooms around the pointer; Shift+wheel pans. The
 canvas shares Audio Studio's viewport model and time ruler. Tick spacing
 also accounts for available width; envelope guides use the playback fade model.
 
-A compact mixer strip sits to the left of the waveform at every window size. Its
-150-pixel vertical Gain fader has dB ticks and a silent lower stop; double-click
-resets it to 0 dB. Pan is the only knob beside it, with a center detent and
-reset to center on double-click. Retrigger sits below the left edge of the waveform,
-with Edit in Audio Studio at the right edge. Independent Speed and Pitch faders
-share that strip, separated into logical sections; narrow editors use a second
-compact row for the faders. Each fader has a fixed-width editable readout.
-Hover Pan to see its value. The editor defaults to 290 pixels high
-and remains resizable. The waveform and direct Studio button use the remaining
-width without displacing the mixer.
+Gain is the only control beside the waveform. Its 150-pixel vertical fader has
+dB ticks and a silent lower stop; double-click resets it to 0 dB. The strip below
+the waveform follows this order: Retrigger, Pan, Speed and its readout, Pitch and
+its readout, then Edit in Audio Studio at the right. Vertical separators distinguish
+the sections. Narrow windows wrap complete sections in that order, keeping readouts
+with their sliders and giving Studio its own space. Very narrow editors shorten
+the waveform to retain access to every control. The right sidebar stays the same width.
+
+Pan has a center detent. Double-click resets Pan to center, Speed to +1× and Pitch
+to zero. Speed and Pitch readouts keep a fixed width as signs and units change.
+The editor defaults to 290 pixels high and remains resizable.
 
 Trim uses only the waveform's IN/OUT markers. Smaller A and R flags above those
 rails set attack and release (0–500 ms); drag A right or R left to lengthen a fade,

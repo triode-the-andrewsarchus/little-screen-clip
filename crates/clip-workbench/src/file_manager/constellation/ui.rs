@@ -1899,9 +1899,11 @@ mod tests {
                 Vec2::new(840.0, 650.0),
                 Vec2::new(1400.0, 1000.0),
                 Vec2::new(2200.0, 1300.0),
+                Vec2::new(3200.0, 1800.0),
             ] {
                 render_frame(&ctx, &mut state, &palette, size);
                 let output = render_frame(&ctx, &mut state, &palette, size);
+
                 for wanted in [
                     "kick.wav",
                     "Gain",
@@ -1939,23 +1941,16 @@ mod tests {
                         })
                         .unwrap()
                 };
+                let pitch_readout = center("+0 oct");
+                let studio = center("Edit in Audio Studio");
                 assert!(
-                    center("Pan").x > center("Gain").x + 40.0,
-                    "Pan belongs beside the fader"
+                    studio.y > pitch_readout.y + 10.0 || studio.x > pitch_readout.x + 95.0,
+                    "Studio must follow the complete pitch readout without overlap: {studio:?}, {pitch_readout:?}"
                 );
-                let knobs: Vec<_> = output
-                    .shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
-                        egui::Shape::Circle(circle) if circle.radius == 13.0 => Some(circle.center),
-                        _ => None,
-                    })
-                    .collect();
-                assert_eq!(knobs.len(), 1, "Only Pan belongs beside Gain");
-                assert!(center("Retrigger").x > center("Pan").x);
-                assert!(center("Retrigger").y > center("Pan").y);
-                assert!(center("Edit in Audio Studio").x > center("Retrigger").x);
-                assert!(center("Pitch").x > center("Speed").x);
+                assert!(center("Pan").y + 2.0 >= center("Retrigger").y);
+                assert!(center("Pan").y > center("Gain").y);
+                assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Circle(circle) if circle.radius == 13.0)));
                 assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
                     egui::Shape::Text(text) if text.galley.text() == "P" || text.galley.text() == "T")));
                 assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,

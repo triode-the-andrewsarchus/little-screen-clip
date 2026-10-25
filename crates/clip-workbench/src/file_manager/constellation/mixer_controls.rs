@@ -2,131 +2,173 @@
 use super::sample_pack::SlotSample;
 use egui::{Pos2, Rect, Sense, Stroke, Vec2};
 
-/// A bipolar rotary control with a small zero detent and double-click reset.
-pub(super) fn knob(ui: &mut egui::Ui, label: &str, value: &mut f32, limit: f32) {
-    ui.allocate_ui_with_layout(
-        Vec2::new(40.0, 52.0),
-        egui::Layout::top_down(egui::Align::Center),
-        |ui| {
-            let (rect, response) =
-                ui.allocate_exact_size(Vec2::splat(34.0), Sense::click_and_drag());
-            let drag_id = response.id.with("unsnapped");
-            if response.drag_started() {
-                ui.data_mut(|data| data.insert_temp(drag_id, *value));
-            }
-            if response.dragged() {
-                let delta = ui.input(|input| input.pointer.delta());
-                let raw = (ui
-                    .data(|data| data.get_temp::<f32>(drag_id))
-                    .unwrap_or(*value)
-                    + (delta.x - delta.y) * limit / 100.0)
-                    .clamp(-limit, limit);
-                ui.data_mut(|data| data.insert_temp(drag_id, raw));
-                *value = if raw.abs() < limit * 0.025 { 0.0 } else { raw };
-            }
-            if response.double_clicked() {
-                *value = 0.0;
-            }
-            response.clone().on_hover_text(format!(
-                "{label}: {value:+.2}\nDrag to adjust; double-click to reset"
-            ));
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, label));
-            let center = rect.center();
-            let radius = 13.0;
-            let start = std::f32::consts::PI * 0.75;
-            let sweep = std::f32::consts::PI * 1.5;
-            let angle = start + (*value / limit + 1.0) * 0.5 * sweep;
-            let painter = ui.painter();
-            painter.circle(
-                center,
-                radius,
-                ui.visuals().widgets.inactive.weak_bg_fill,
-                ui.visuals().widgets.noninteractive.bg_stroke,
-            );
-            let arc = (0..=32)
-                .map(|i| center + Vec2::angled(start + sweep * i as f32 / 32.0) * (radius + 2.0))
-                .collect();
-            painter.add(egui::Shape::line(
-                arc,
-                Stroke::new(1.0_f32, ui.visuals().weak_text_color()),
-            ));
-            painter.line_segment(
-                [center, center + Vec2::angled(angle) * 10.0],
-                Stroke::new(2.0_f32, ui.visuals().text_color()),
-            );
-            painter.line_segment(
-                [
-                    center + Vec2::new(0.0, -18.0),
-                    center + Vec2::new(0.0, -15.0),
-                ],
-                Stroke::new(1.5_f32, ui.visuals().hyperlink_color),
-            );
-            ui.small(label);
-        },
-    );
-}
-
-/// Places only level and stereo balance beside the waveform.
+/// Places the marked level fader beside the waveform.
 pub(super) fn mixer(ui: &mut egui::Ui, sample: &mut SlotSample) {
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
-            ui.small("Gain");
-            gain_fader(ui, &mut sample.volume);
-        });
-        ui.add_space(4.0);
-        knob(ui, "Pan", &mut sample.pan, 1.0);
-    });
+    ui.small("Gain");
+    gain_fader(ui, &mut sample.volume);
 }
 
-/// Keeps performance controls together and the studio action at the waveform's right edge.
+/// Wraps whole sections in playback order, reserving each button's measured width.
 pub(super) fn layer_strip(
     ui: &mut egui::Ui,
     sample: &mut SlotSample,
     retrigger: &mut bool,
 ) -> bool {
-    let width = ui.available_width();
-    let compact = width < 660.0;
+    let text_width = |label: &str, style: egui::TextStyle| {
+        ui.painter()
+            .layout_no_wrap(
+                label.into(),
+                style.resolve(ui.style()),
+                ui.visuals().text_color(),
+            )
+            .size()
+            .x
+    };
+    let padding = ui.spacing().button_padding.x * 2.0 + 4.0;
+    let mut widths = [
+        text_width("Retrigger", egui::TextStyle::Button) + padding,
+        text_width("Pan", egui::TextStyle::Small) + 78.0,
+        text_width("Speed", egui::TextStyle::Small) + 124.0,
+        text_width("Pitch", egui::TextStyle::Small) + 124.0,
+        text_width("Edit in Audio Studio", egui::TextStyle::Body) + padding + 10.0,
+    ];
+    let gap = 6.0;
+    // Reserve rounding slack so native controls cannot force the final section onto another row.
+    let spare =
+        (ui.available_width() - widths.iter().sum::<f32>() - gap * 4.0 - 16.0).max(0.0) / 3.0;
+    for width in &mut widths[1..4] {
+        *width += spare;
+    }
     let mut studio = false;
-    ui.horizontal(|ui| {
-        if super::ui::outlined_toggle(ui, "Retrigger", *retrigger, ui.visuals().hyperlink_color)
-            .on_hover_text("Restart this pad on every hit. Off allows overlapping hits.")
-            .clicked()
-        {
-            *retrigger = !*retrigger;
+    let bounds = ui.available_rect_before_wrap();
+    let row_height =
+        ui.spacing().interact_size.y.max(
+            ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().button_padding.y * 2.0,
+        );
+    let mut cursor = bounds.min;
+    for (section, width) in widths.into_iter().enumerate() {
+        if cursor.x + width > bounds.right() && cursor.x > bounds.left() {
+            cursor = Pos2::new(bounds.left(), cursor.y + row_height + 4.0);
         }
-        ui.separator();
-        if !compact {
-            tuning_faders(ui, sample, (width - 240.0).max(320.0));
+        if section == 4 {
+            cursor.x = bounds.right() - width;
+        }
+        let rect = Rect::from_min_size(cursor, Vec2::new(width, row_height));
+        let mut child = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center));
+        child.set_clip_rect(ui.clip_rect().intersect(rect));
+        let ui = &mut child;
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if section != 0 {
             ui.separator();
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            studio = ui
-                .small_button("Edit in Audio Studio")
-                .on_hover_text(&sample.filename)
-                .clicked();
-        });
-    });
-    if compact {
-        ui.horizontal(|ui| tuning_faders(ui, sample, width));
+        let width = (ui.available_width() - 4.0).max(0.0);
+        match section {
+            0 => {
+                if super::ui::outlined_toggle(
+                    ui,
+                    "Retrigger",
+                    *retrigger,
+                    ui.visuals().hyperlink_color,
+                )
+                .on_hover_text("Restart this pad on every hit. Off allows overlapping hits.")
+                .clicked()
+                {
+                    *retrigger = !*retrigger;
+                }
+            }
+            1 => {
+                bipolar_slider(ui, "Pan", &mut sample.pan, 1.0, 0.01, 0.0, width);
+            }
+            2 => {
+                fader(
+                    ui,
+                    "Speed",
+                    &mut sample.playback_speed,
+                    2.0,
+                    0.01,
+                    1.0,
+                    width,
+                );
+            }
+            3 => {
+                let mut cents = (sample.pitch_semitones * 100.0).round();
+                fader(ui, "Pitch", &mut cents, 2400.0, 1.0, 0.0, width);
+                sample.pitch_semitones = cents / 100.0;
+            }
+            _ => {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    studio = ui
+                        .add(
+                            egui::Button::new("Edit in Audio Studio")
+                                .small()
+                                .wrap(false),
+                        )
+                        .on_hover_text(&sample.filename)
+                        .clicked();
+                });
+            }
+        }
+        cursor.x = rect.right() + gap;
     }
+    ui.allocate_rect(
+        Rect::from_min_max(bounds.min, Pos2::new(bounds.right(), cursor.y + row_height)),
+        Sense::hover(),
+    );
+
     studio
 }
 
-fn tuning_faders(ui: &mut egui::Ui, sample: &mut SlotSample, width: f32) {
-    let section = (width - ui.spacing().item_spacing.x * 2.0 - 1.0) * 0.5;
-    fader(
-        ui,
-        "Speed",
-        &mut sample.playback_speed,
-        2.0,
-        0.01,
-        1.0,
-        section,
-    );
-    ui.separator();
-    let mut cents = (sample.pitch_semitones * 100.0).round();
-    fader(ui, "Pitch", &mut cents, 2400.0, 1.0, 0.0, section);
-    sample.pitch_semitones = cents / 100.0;
+/// Shares center-detent interaction across Pan, Speed and Pitch tracks.
+fn bipolar_slider(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    limit: f32,
+    step: f64,
+    reset: f32,
+    width: f32,
+) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, ui.spacing().interact_size.y.max(20.0)),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let title = ui.small(label);
+            ui.spacing_mut().slider_width = (width - title.rect.width() - 4.0).max(12.0);
+            let response = ui.add(
+                egui::Slider::new(value, -limit..=limit)
+                    .step_by(step)
+                    .show_value(false)
+                    .clamp_to_range(false),
+            );
+            let double_clicked =
+                crate::shell::studio_controls::slider_double_clicked(ui, &response);
+            if response.changed() {
+                *value = value.clamp(-limit, limit);
+            }
+            // A small physical detent aids pointer use; the readout still accepts single cents.
+            if response.dragged() && value.abs() < limit * 0.015 {
+                *value = 0.0;
+            }
+            if double_clicked {
+                *value = reset;
+            }
+            let center = response.rect.center();
+            ui.painter().line_segment(
+                [center + Vec2::new(0.0, 6.0), center + Vec2::new(0.0, 9.0)],
+                Stroke::new(1.0_f32, ui.visuals().weak_text_color()),
+            );
+            response.clone().on_hover_text(if label == "Pan" {
+                "Stereo balance · center detent · double-click to reset"
+            } else if label == "Speed" {
+                "−2× to +2×. Negative plays backwards; 0 stops. Double-click for +1×."
+            } else {
+                "−2 to +2 octaves, in cents (1200 cents per octave). Double-click to reset."
+            });
+            response
+        },
+    )
+    .inner
 }
 
 /// Uses a fixed-width editable readout, so signs and units never move its neighbours.
@@ -138,40 +180,13 @@ fn fader(
     step: f64,
     reset: f32,
     width: f32,
-) {
+) -> egui::Response {
     ui.allocate_ui_with_layout(
-        Vec2::new(width, 20.0),
+        Vec2::new(width, ui.spacing().interact_size.y.max(20.0)),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let title = ui.small(label);
-            ui.spacing_mut().slider_width = (width - title.rect.width() - 74.0).max(12.0);
-            let response = ui.add(
-                egui::Slider::new(value, -limit..=limit)
-                    .step_by(step)
-                    .show_value(false)
-                    .clamp_to_range(false),
-            );
-            if response.changed() {
-                *value = value.clamp(-limit, limit);
-            }
-            // A small physical detent aids pointer use; the readout still accepts single cents.
-            if response.dragged() && value.abs() < limit * 0.015 {
-                *value = 0.0;
-            }
-            if response.double_clicked() {
-                *value = reset;
-            }
-            let center = response.rect.center();
-            ui.painter().line_segment(
-                [center + Vec2::new(0.0, 6.0), center + Vec2::new(0.0, 9.0)],
-                Stroke::new(1.0_f32, ui.visuals().weak_text_color()),
-            );
-            response.on_hover_text(if label == "Speed" {
-                "−2× to +2×. Negative plays backwards; 0 stops. Double-click for +1×."
-            } else {
-                "−2 to +2 octaves, in cents (1200 cents per octave). Double-click to reset."
-            });
+            let response = bipolar_slider(ui, label, value, limit, step, reset, width - 70.0);
             // Limit user edits while retaining the exact rate of old Time-mode packs (up to 4×).
             let mut edited = *value;
             let readout = ui.add_sized(
@@ -211,12 +226,14 @@ fn fader(
             if readout.double_clicked() {
                 *value = reset;
             }
+            response
         },
-    );
+    )
+    .inner
 }
 
 /// A tall, marked dB fader; its silent lower stop does not require a numeric field.
-fn gain_fader(ui: &mut egui::Ui, volume: &mut f32) {
+fn gain_fader(ui: &mut egui::Ui, volume: &mut f32) -> egui::Response {
     let mut db = if *volume > 0.0 {
         20.0 * volume.log10()
     } else {
@@ -231,10 +248,11 @@ fn gain_fader(ui: &mut egui::Ui, volume: &mut f32) {
                 .suffix(" dB")
                 .show_value(false),
         );
-        if response.double_clicked() {
+        let double_clicked = crate::shell::studio_controls::slider_double_clicked(ui, &response);
+        if double_clicked {
             db = 0.0;
         }
-        if response.changed() || response.double_clicked() {
+        if response.changed() || double_clicked {
             *volume = if db <= -60.0 {
                 0.0
             } else {
@@ -261,12 +279,76 @@ fn gain_fader(ui: &mut egui::Ui, volume: &mut f32) {
             );
         }
         ui.allocate_space(Vec2::new(30.0, 150.0));
-    });
+        response
+    })
+    .inner
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn double_click_resets_each_slider_to_its_own_default() {
+        for (label, initial, limit, step, reset) in [
+            ("Gain", 0.25, 0.0, 0.0, 1.0),
+            ("Pan", -0.75, 1.0, 0.01, 0.0),
+            ("Speed", -1.5, 2.0, 0.01, 1.0),
+            ("Pitch", 1700.0, 2400.0, 1.0, 0.0),
+        ] {
+            let ctx = egui::Context::default();
+            let mut value = initial;
+            let mut slider = Rect::NOTHING;
+            let mut render = |time, events| {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(420.0, 240.0))),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            slider = if label == "Gain" {
+                                gain_fader(ui, &mut value).rect
+                            } else if label == "Pan" {
+                                bipolar_slider(ui, label, &mut value, limit, step, reset, 360.0)
+                                    .rect
+                            } else {
+                                fader(ui, label, &mut value, limit, step, reset, 360.0).rect
+                            };
+                        });
+                    },
+                );
+                (slider.center(), value)
+            };
+            let (pos, _) = render(0.0, vec![]);
+            for (time, pressed) in [(0.1, true), (0.15, false), (0.2, true), (0.25, false)] {
+                let (_, current) = render(
+                    time,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+                if time == 0.15 {
+                    assert_ne!(
+                        current, initial,
+                        "{label} must still respond to ordinary clicks"
+                    );
+                }
+            }
+            assert!(
+                (value - reset).abs() < 0.0001,
+                "{label}: {value} must reset to {reset}"
+            );
+        }
+    }
 
     #[test]
     fn tuning_readouts_do_not_move_controls_when_units_or_signs_change() {
@@ -293,7 +375,7 @@ mod tests {
                 .iter()
                 .filter_map(|shape| match &shape.shape {
                     egui::Shape::Text(text)
-                        if ["Retrigger", "Speed", "Pitch", "Edit in Audio Studio"]
+                        if ["Retrigger", "Pan", "Speed", "Pitch", "Edit in Audio Studio"]
                             .contains(&text.galley.text()) =>
                     {
                         Some((text.galley.text().to_owned(), text.pos))
@@ -301,7 +383,7 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(positions.len(), 4);
+            assert_eq!(positions.len(), 5);
             if let Some(previous) = &previous {
                 assert_eq!(&positions, previous);
             }

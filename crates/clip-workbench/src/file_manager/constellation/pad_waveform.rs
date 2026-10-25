@@ -20,7 +20,11 @@ impl ConstellationState {
         let mut view = ui
             .data(|data| data.get_temp::<AudioViewport>(id))
             .unwrap_or(full);
-        let height = 140.0;
+        let height = if ui.available_width() < 390.0 {
+            100.0
+        } else {
+            140.0
+        };
         let (outer, response) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
             egui::Sense::click_and_drag(),
