@@ -358,11 +358,17 @@ impl SimilarityCanvas {
         self.zoom = 1.0;
     }
 
+    fn clear_pending_search(&mut self) {
+        self.search_job = None;
+        self.pending_search = None;
+        self.pending_pan_to_grid = None;
+    }
+
     /// Retires pending background jobs.
     pub fn retire(&mut self) {
         self.scan_job = None;
         self.hash_job = None;
-        self.search_job = None;
+        self.clear_pending_search();
     }
 
     /// Stores a feature vector for a path (used in tests and internal cache updates).
@@ -710,6 +716,8 @@ impl SimilarityCanvas {
     }
 
     pub fn set_entries(&mut self, entries: Vec<Entry>) {
+        // Search indices belong to the exact collection that submitted the query.
+        self.clear_pending_search();
         self.entries = entries;
         let n = self.entries.len();
         let (cols, rows) = grid_dimensions(n);
@@ -1196,5 +1204,37 @@ impl SimilarityCanvas {
     /// Returns the collection of image paths currently displayed on canvas.
     pub fn photo_collection(&self) -> Vec<PathBuf> {
         self.entries.iter().map(|e| e.path.clone()).collect()
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn replacing_entries_retires_search_indices_and_receiver() {
+        let mut canvas = SimilarityCanvas::default();
+        let pool = BackgroundJobs::new(1, 2);
+        let (ticket, _) = pool.submit(Duration::from_secs(2), || ());
+        let (sender, receiver) = mpsc::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        canvas.search_job = Some(PendingJob {
+            ticket,
+            receiver,
+            cancelled: cancelled.clone(),
+        });
+        canvas.pending_search = Some(PendingSearchMeta {
+            query: "old folder".into(),
+            prompt: "old folder".into(),
+            is_inverted: false,
+            candidate_indices: vec![0, 1],
+        });
+        canvas.pending_pan_to_grid = Some(4);
+        canvas.set_entries(Vec::new());
+        assert!(canvas.search_job.is_none());
+        assert!(canvas.pending_search.is_none());
+        assert!(canvas.pending_pan_to_grid.is_none());
+        assert!(cancelled.load(Ordering::Relaxed));
+        assert!(sender.send(Ok(Some(vec![1.0]))).is_err());
     }
 }
