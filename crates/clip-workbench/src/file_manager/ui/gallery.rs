@@ -2,6 +2,9 @@
 use super::*;
 use crate::file_manager::gallery::similarity::canvas::CanvasGrid;
 
+mod controls;
+mod thumbnails;
+
 const MIN_THUMBNAIL_EDGE: f32 = 80.0;
 const MAX_THUMBNAIL_EDGE: f32 = 280.0;
 const CTRL_ZOOM_SPEED: f32 = 0.4;
@@ -110,69 +113,21 @@ impl FileManager {
                     self.sort_by(next_col);
                 }
                 sort_resp.context_menu(|ui| {
-                    if ui
-                        .selectable_label(
-                            self.sort.column == super::super::sorting::Column::Modified
-                                && self.sort.descending,
-                            "Date (Newest first)",
-                        )
-                        .clicked()
-                    {
-                        self.sort = super::super::sorting::Sort {
-                            column: super::super::sorting::Column::Modified,
-                            descending: true,
-                        };
-                        self.gallery_layout.invalidate_order();
-                        self.rebuild_visible();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .selectable_label(
-                            self.sort.column == super::super::sorting::Column::Modified
-                                && !self.sort.descending,
-                            "Date (Oldest first)",
-                        )
-                        .clicked()
-                    {
-                        self.sort = super::super::sorting::Sort {
-                            column: super::super::sorting::Column::Modified,
-                            descending: false,
-                        };
-                        self.gallery_layout.invalidate_order();
-                        self.rebuild_visible();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .selectable_label(
-                            self.sort.column == super::super::sorting::Column::Name
-                                && !self.sort.descending,
-                            "Name (A to Z)",
-                        )
-                        .clicked()
-                    {
-                        self.sort = super::super::sorting::Sort {
-                            column: super::super::sorting::Column::Name,
-                            descending: false,
-                        };
-                        self.gallery_layout.invalidate_order();
-                        self.rebuild_visible();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .selectable_label(
-                            self.sort.column == super::super::sorting::Column::Name
-                                && self.sort.descending,
-                            "Name (Z to A)",
-                        )
-                        .clicked()
-                    {
-                        self.sort = super::super::sorting::Sort {
-                            column: super::super::sorting::Column::Name,
-                            descending: true,
-                        };
-                        self.gallery_layout.invalidate_order();
-                        self.rebuild_visible();
-                        ui.close_menu();
+                    use super::super::sorting::{Column, Sort};
+                    for (column, descending, label) in [
+                        (Column::Modified, true, "Date (Newest first)"),
+                        (Column::Modified, false, "Date (Oldest first)"),
+                        (Column::Name, false, "Name (A to Z)"),
+                        (Column::Name, true, "Name (Z to A)"),
+                    ] {
+                        let active =
+                            self.sort.column == column && self.sort.descending == descending;
+                        if ui.selectable_label(active, label).clicked() {
+                            self.sort = Sort { column, descending };
+                            self.gallery_layout.invalidate_order();
+                            self.rebuild_visible();
+                            ui.close_menu();
+                        }
                     }
                 });
 
@@ -315,79 +270,46 @@ impl FileManager {
                 self.gallery_last_scroll_y = current_scroll_y;
                 self.gallery_last_scroll_time = now;
             }
-            let is_scroll_settled = (now - self.gallery_last_scroll_time) >= SCROLL_SETTLE_SECONDS;
-
-            // 1. Request base thumbnails for visible tiles
-            for tile in priority.iter() {
-                let entry = &directory.entries[self.visible[tile.index]];
-                if tile.ready && entry.is_photo() {
-                    let edge = tile.thumbnail_edge(unit, ui.ctx().pixels_per_point());
-                    self.gallery_previews
-                        .request_gallery(entry, edge, tile.orientation);
-                }
-            }
-
-            // Check if all visible thumbnails in view have loaded
-            let all_visible_loaded = priority.iter().all(|tile| {
-                let entry = &directory.entries[self.visible[tile.index]];
-                if !tile.ready || !entry.is_photo() {
-                    return true;
-                }
-                self.gallery_previews.is_ready(entry)
+            let dpi = ui.ctx().pixels_per_point();
+            let requests = priority
+                .iter()
+                .filter_map(|tile| {
+                    thumbnails::Request::from_tile(
+                        tile,
+                        &directory.entries[self.visible[tile.index]],
+                        unit,
+                        dpi,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut neighbors = retain_tiles
+                .iter()
+                .filter(|tile| !paths.contains(&directory.entries[self.visible[tile.index]].path))
+                .collect::<Vec<_>>();
+            neighbors.sort_by(|a, b| {
+                let distance = |tile: &&super::super::gallery::Placement| {
+                    (tile.y * unit - viewport.center().y).abs()
+                };
+                distance(a).total_cmp(&distance(b))
             });
-
-            if all_visible_loaded {
-                // 2. Pre-cache buffer tiles (prior and next 10 rows) ordered by closeness to viewport
-                let mut buffer_tiles: Vec<_> = retain_tiles
-                    .iter()
-                    .filter(|t| !priority.iter().any(|p| p.index == t.index))
-                    .collect();
-                buffer_tiles.sort_by(|a, b| {
-                    let dist_a = (a.y * unit - viewport.center().y).abs();
-                    let dist_b = (b.y * unit - viewport.center().y).abs();
-                    dist_a.total_cmp(&dist_b)
-                });
-                for tile in buffer_tiles {
-                    let entry = &directory.entries[self.visible[tile.index]];
-                    if tile.ready && entry.is_photo() {
-                        let edge = tile.thumbnail_edge(unit, ui.ctx().pixels_per_point());
-                        self.gallery_previews
-                            .request_gallery(entry, edge, tile.orientation);
-                    }
-                }
-
-                // 3. Once settled for ~0.2s, fetch higher quality previews of only what's currently visible
-                if is_scroll_settled {
-                    let mut any_pending_upgrade = false;
-                    for tile in priority.iter() {
-                        let entry = &directory.entries[self.visible[tile.index]];
-                        if tile.ready && entry.is_photo() {
-                            let hq_edge = 1024;
-                            let current_size = self.gallery_previews.gallery_size(&entry.path);
-                            if current_size < hq_edge {
-                                any_pending_upgrade = true;
-                            }
-                            self.gallery_previews
-                                .request_gallery(entry, hq_edge, tile.orientation);
-                        }
-                    }
-                    if any_pending_upgrade || self.gallery_previews.has_pending() {
-                        ui.ctx()
-                            .request_repaint_after(std::time::Duration::from_millis(16));
-                    }
-                } else {
-                    let elapsed = now - self.gallery_last_scroll_time;
-                    if elapsed < SCROLL_SETTLE_SECONDS {
-                        ui.ctx()
-                            .request_repaint_after(std::time::Duration::from_secs_f64(
-                                (SCROLL_SETTLE_SECONDS - elapsed).max(0.001),
-                            ));
-                    }
-                }
-            } else {
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(16));
-            }
+            let neighbors = neighbors
+                .into_iter()
+                .filter_map(|tile| {
+                    thumbnails::Request::from_tile(
+                        tile,
+                        &directory.entries[self.visible[tile.index]],
+                        unit,
+                        dpi,
+                    )
+                })
+                .collect::<Vec<_>>();
+            thumbnails::schedule(
+                &mut self.gallery_previews,
+                ui.ctx(),
+                &requests,
+                &neighbors,
+                now - self.gallery_last_scroll_time,
+            );
 
             for tile in &tiles {
                 let index = tile.index;
@@ -428,75 +350,16 @@ impl FileManager {
                 actions.row(ui, &response, entry, selected, can_edit, count);
             }
 
-            let is_alpha = self.sort.column == super::super::sorting::Column::Name;
-            let top_tile = tiles.iter().min_by(|a, b| a.y.total_cmp(&b.y));
-            let badge_content = top_tile.and_then(|t| {
-                let entry = &directory.entries[self.visible[t.index]];
-                if is_alpha {
-                    entry
-                        .name
-                        .chars()
-                        .find(|c| c.is_alphanumeric())
-                        .map(|c| c.to_uppercase().to_string())
-                        .or_else(|| {
-                            entry
-                                .name
-                                .chars()
-                                .next()
-                                .map(|c| c.to_uppercase().to_string())
-                        })
-                } else if let Some(time) = entry.modified_time {
-                    Some(
-                        chrono::DateTime::<chrono::Local>::from(time)
-                            .format("%B %Y")
-                            .to_string(),
-                    )
-                } else if entry.modified.len() >= 7 {
-                    Some(entry.modified[0..7].to_string())
-                } else {
-                    None
-                }
-            });
-
-            if let Some(text) = badge_content {
-                let time_since_scroll = now - self.gallery_last_scroll_time;
-                if time_since_scroll < BADGE_DISPLAY_DURATION {
-                    let alpha = ((BADGE_DISPLAY_DURATION - time_since_scroll) / BADGE_FADE_DURATION)
-                        .clamp(0.0, 1.0) as f32;
-                    let clip = ui.clip_rect();
-                    let (badge_rect, font_size) = if is_alpha {
-                        (
-                            Rect::from_min_size(
-                                pos2(clip.right() - 56.0, clip.top() + 16.0),
-                                vec2(40.0, 40.0),
-                            ),
-                            20.0,
-                        )
-                    } else {
-                        (
-                            Rect::from_min_size(
-                                pos2(clip.right() - 170.0, clip.top() + 16.0),
-                                vec2(150.0, 30.0),
-                            ),
-                            13.0,
-                        )
-                    };
-                    let fill = colors.panel.gamma_multiply(0.92 * alpha);
-                    let text_color = colors.text_primary.gamma_multiply(alpha);
-                    let stroke_color = colors.border.gamma_multiply(alpha);
-
-                    ui.painter()
-                        .rect(badge_rect, 6.0, fill, egui::Stroke::new(1.0, stroke_color));
-                    ui.painter().text(
-                        badge_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        text,
-                        egui::FontId::proportional(font_size),
-                        text_color,
-                    );
-                    ui.ctx().request_repaint();
-                }
-            }
+            controls::scroll_badge(
+                ui,
+                tiles
+                    .iter()
+                    .min_by(|a, b| a.y.total_cmp(&b.y))
+                    .map(|tile| &directory.entries[self.visible[tile.index]]),
+                self.sort.column,
+                self.gallery_last_scroll_time,
+                colors,
+            );
         });
         self.gallery_previews.retain(&retain_paths);
         self.gallery_hover.retain(hovered_path.as_deref());
@@ -629,306 +492,10 @@ impl FileManager {
         self.gallery_previews.retain(&visible_paths);
         self.gallery_hover.retain(hovered_path.as_deref());
 
-        // Grid header bars and dividers
-        let mut solo_grid: Option<usize> = None;
-        let mut toggle_grid: Option<usize> = None;
-        let mut remove_grid: Option<usize> = None;
-        let mut select_all_grid: Option<usize> = None;
-        let mut adjust_grid_allowance: Option<(usize, f32)> = None;
-
-        let total_selected = self
-            .similarity_canvas
-            .grids
-            .iter()
-            .filter(|g| g.selected_for_search)
-            .count();
-
-        for (grid_idx, grid) in self.similarity_canvas.grids.iter().enumerate() {
-            let top_left = self.similarity_canvas.tile_screen_rect(
-                canvas_rect.min,
-                grid.col_offset,
-                grid.row_offset,
-            );
-
-            let step = (self.similarity_canvas.tile_size + self.similarity_canvas.spacing)
-                * self.similarity_canvas.zoom;
-
-            // Dividers: vertical divider between columns, horizontal divider between stacked grids
-            if grid_idx > 0 && grid.row_offset == 0 {
-                let div_x = top_left.min.x - step * 0.5;
-                let total_h = (self.similarity_canvas.grid_rows.max(1) as f32) * step;
-                if div_x >= clip_rect.left() && div_x <= clip_rect.right() {
-                    let y_start = (canvas_rect.min.y + self.similarity_canvas.pan.y - 48.0)
-                        .clamp(clip_rect.top(), clip_rect.bottom());
-                    let y_end = (canvas_rect.min.y + self.similarity_canvas.pan.y + total_h)
-                        .clamp(clip_rect.top(), clip_rect.bottom());
-                    if y_end > y_start {
-                        ui.painter().line_segment(
-                            [pos2(div_x, y_start), pos2(div_x, y_end)],
-                            egui::Stroke::new(1.0, colors.border),
-                        );
-                    }
-                }
-            } else if grid.row_offset > 0 {
-                let div_y = top_left.min.y - step * 0.5;
-                let total_w = (grid.grid_cols.max(1) as f32) * step;
-                if div_y >= clip_rect.top() && div_y <= clip_rect.bottom() {
-                    let x_start = top_left.min.x.clamp(clip_rect.left(), clip_rect.right());
-                    let x_end =
-                        (top_left.min.x + total_w).clamp(clip_rect.left(), clip_rect.right());
-                    if x_end > x_start {
-                        ui.painter().line_segment(
-                            [pos2(x_start, div_y), pos2(x_end, div_y)],
-                            egui::Stroke::new(1.0, colors.border),
-                        );
-                    }
-                }
-            }
-
-            if top_left.min.x > canvas_rect.max.x + 100.0
-                || top_left.min.x + (grid.grid_cols as f32) * step < canvas_rect.min.x - 100.0
-                || top_left.min.y > canvas_rect.max.y + 100.0
-                || top_left.min.y + (grid.grid_rows as f32) * step < canvas_rect.min.y - 100.0
-            {
-                continue;
-            }
-
-            let is_solo = grid.selected_for_search && total_selected == 1;
-            let is_multi = grid.selected_for_search && total_selected > 1;
-
-            let bar_rect = self
-                .similarity_canvas
-                .grid_header_rect(canvas_rect.min, grid);
-            if bar_rect.intersects(clip_rect)
-                && (bar_rect.height() < 28.0 || bar_rect.width() < 700.0)
-            {
-                let painter = ui.painter().with_clip_rect(bar_rect.intersect(clip_rect));
-                painter.rect_filled(bar_rect, 2.0, colors.panel);
-                painter.text(
-                    bar_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    format!("{} ({})", grid.title, grid.indices.len()),
-                    egui::FontId::proportional(12.0),
-                    colors.text_primary,
-                );
-                if ui
-                    .interact(
-                        bar_rect,
-                        ui.id().with(("compact_grid", grid.id)),
-                        Sense::click(),
-                    )
-                    .on_hover_text("Click to search this grid; zoom in for controls")
-                    .clicked()
-                {
-                    solo_grid = Some(grid.id);
-                }
-                continue;
-            }
-
-            if bar_rect.intersects(clip_rect) {
-                ui.allocate_ui_at_rect(bar_rect, |ui| {
-                ui.set_clip_rect(bar_rect.intersect(clip_rect));
-                egui::Frame::popup(ui.style())
-                    .fill(colors.panel.gamma_multiply(0.95))
-                    .stroke(egui::Stroke::new(
-                        1.0,
-                        if grid.selected_for_search {
-                            colors.accent
-                        } else {
-                            colors.border
-                        },
-                    ))
-                    .rounding(4.0)
-                    .inner_margin(egui::Margin::symmetric(6.0, 3.0))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let solo_resp = ui
-                                .selectable_label(is_solo, "Search this grid")
-                                .on_hover_text(
-                                    "Select ONLY this grid as the search set for the next query",
-                                );
-                            if solo_resp.clicked() {
-                                solo_grid = Some(grid.id);
-                            }
-
-                            let add_resp = ui
-                                .selectable_label(is_multi, "+ Add grid to search")
-                                .on_hover_text(if grid.selected_for_search {
-                                    "This grid is currently in the search set. Click to remove."
-                                } else {
-                                    "Add this grid to the active search set alongside other grids."
-                                });
-                            if add_resp.clicked() {
-                                toggle_grid = Some(grid.id);
-                            }
-
-                            ui.separator();
-
-                            let title_text = if grid.id == 0 {
-                                format!("All photos ({})", grid.indices.len())
-                            } else {
-                                format!("\"{}\" ({})", grid.title, grid.indices.len())
-                            };
-                            ui.label(egui::RichText::new(title_text).strong());
-
-                            ui.separator();
-                            let sel_all_resp = ui.small_button("Select all").on_hover_text(
-                                "Select all photos in this grid in the file manager",
-                            );
-                            if sel_all_resp.clicked() {
-                                select_all_grid = Some(grid.id);
-                            }
-
-                            if grid.id > 0 {
-                                ui.separator();
-                                let can_decrease =
-                                    self.similarity_canvas.can_decrease_grid_allowance(grid.id);
-                                let can_increase =
-                                    self.similarity_canvas.can_increase_grid_allowance(grid.id);
-
-                                let minus_resp = ui.add_enabled(
-                                    can_decrease,
-                                    egui::Button::image(
-                                        crate::icons::Icon::Minus.image_tinted(
-                                            10.0,
-                                            if can_decrease {
-                                                colors.text_secondary
-                                            } else {
-                                                colors.text_secondary.gamma_multiply(0.3)
-                                            },
-                                        ),
-                                    )
-                                    .frame(true)
-                                    .min_size(vec2(16.0, 16.0)),
-                                );
-                                if can_decrease {
-                                    if minus_resp
-                                        .on_hover_text("Decrease match allowance (fewer photos)")
-                                        .clicked()
-                                    {
-                                        adjust_grid_allowance =
-                                            Some((grid.id, -CanvasGrid::ALLOWANCE_STEP));
-                                    }
-                                } else {
-                                    minus_resp.on_hover_text(
-                                        "Cannot decrease: further reduction would yield no matching photos",
-                                    );
-                                }
-
-                                let allowance_pct = (grid.allowance * 100.0).round() as i32;
-                                ui.label(format!("{allowance_pct}%"))
-                                    .on_hover_text(format!(
-                                        "Match allowance: {allowance_pct}% (higher includes more photos)"
-                                    ));
-
-                                let plus_resp = ui.add_enabled(
-                                    can_increase,
-                                    egui::Button::image(
-                                        crate::icons::Icon::Plus.image_tinted(
-                                            10.0,
-                                            if can_increase {
-                                                colors.text_secondary
-                                            } else {
-                                                colors.text_secondary.gamma_multiply(0.3)
-                                            },
-                                        ),
-                                    )
-                                    .frame(true)
-                                    .min_size(vec2(16.0, 16.0)),
-                                );
-                                if can_increase {
-                                    if plus_resp
-                                        .on_hover_text(
-                                            "Increase match allowance (include more photos)",
-                                        )
-                                        .clicked()
-                                    {
-                                        adjust_grid_allowance =
-                                            Some((grid.id, CanvasGrid::ALLOWANCE_STEP));
-                                    }
-                                } else {
-                                    let reason = if !grid.candidate_indices.is_empty()
-                                        && grid.indices.len() >= grid.candidate_indices.len()
-                                    {
-                                        "Match allowance includes all photos from the search"
-                                    } else {
-                                        "No additional matching photos found at higher allowance"
-                                    };
-                                    plus_resp.on_hover_text(reason);
-                                }
-
-                                ui.separator();
-                                let close_resp = ui.add(
-                                    egui::Button::image(
-                                        crate::icons::Icon::Close
-                                            .image_tinted(10.0, colors.text_secondary),
-                                    )
-                                    .frame(true)
-                                    .min_size(vec2(16.0, 16.0)),
-                                );
-                                if close_resp
-                                    .on_hover_text("Remove this search grid")
-                                    .clicked()
-                                {
-                                    remove_grid = Some(grid.id);
-                                }
-                            }
-                        });
-                    });
-                });
-            }
-
-            if grid.indices.is_empty() && grid.id > 0 {
-                let msg_pos = pos2(top_left.min.x + 12.0, top_left.min.y + 8.0);
-                let msg_rect = Rect::from_min_size(msg_pos, vec2(260.0, 20.0));
-                if msg_rect.intersects(clip_rect) {
-                    ui.painter().text(
-                        msg_pos,
-                        egui::Align2::LEFT_TOP,
-                        "No matching photos found in target grid.",
-                        egui::FontId::proportional(13.0),
-                        colors.text_secondary,
-                    );
-                }
-            }
-        }
-
-        if let Some(id) = solo_grid {
-            for g in &mut self.similarity_canvas.grids {
-                g.selected_for_search = g.id == id;
-            }
-        }
-
-        if let Some(g) =
-            toggle_grid.and_then(|id| self.similarity_canvas.grids.iter_mut().find(|g| g.id == id))
-        {
-            g.selected_for_search = !g.selected_for_search;
-        }
-
-        if let Some(id) = remove_grid {
-            self.similarity_canvas.remove_grid(id);
-        }
-
-        if let Some((grid_id, delta)) = adjust_grid_allowance {
-            if self.similarity_canvas.adjust_grid_allowance(grid_id, delta) {
-                self.similarity_canvas.recompute_layout();
-            }
-        }
-
-        if let Some(id) = select_all_grid {
-            if let Some(grid) = self.similarity_canvas.grids.iter().find(|g| g.id == id) {
-                let paths: Vec<PathBuf> = grid
-                    .indices
-                    .iter()
-                    .filter_map(|&idx| {
-                        self.similarity_canvas
-                            .entries
-                            .get(idx)
-                            .map(|e| e.path.clone())
-                    })
-                    .collect();
-                self.select_all_paths(paths);
-            }
+        let header_actions =
+            controls::grid_headers(ui, &self.similarity_canvas, canvas_rect, colors);
+        for action in header_actions {
+            self.apply_similarity_header_action(action);
         }
 
         // Paint edge fade vignette on top of canvas tiles, dividers and headers
@@ -939,174 +506,9 @@ impl FileManager {
             CANVAS_EDGE_FADE_SIZE,
         );
 
-        // Floating search HUD pill
-        let search_id = Id::new("similarity_canvas_search");
-        let search_pos = pos2(
-            canvas_rect.left() + HUD_INSET_X,
-            canvas_rect.top() + SEARCH_HUD_INSET_Y,
-        );
-        egui::Area::new(search_id)
-            .order(egui::Order::Middle)
-            .fixed_pos(search_pos)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style())
-                    .fill(colors.panel)
-                    .stroke(egui::Stroke::new(1.0, colors.border))
-                    .rounding(6.0)
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            crate::icons::Icon::Search.ui(ui, 14.0, colors.text_secondary);
-                            let edit_res = ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.similarity_canvas.search_query,
-                                )
-                                .hint_text("Search concept (e.g. cat, !dog, indoors)…")
-                                .desired_width(200.0),
-                            );
-                            if self.similarity_canvas.search_query == "+"
-                                || self.similarity_canvas.search_query == "="
-                                || self.similarity_canvas.search_query == "-"
-                            {
-                                self.similarity_canvas.search_query.clear();
-                            }
-                            if (edit_res.lost_focus()
-                                && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                                || ui.small_button("Search").clicked()
-                            {
-                                self.similarity_canvas.trigger_search();
-                            }
-                            let has_searches = self.similarity_canvas.grids.len() > 1;
-                            if !self.similarity_canvas.search_query.is_empty() || has_searches {
-                                let clear_resp = ui.add(
-                                    egui::Button::image(
-                                        crate::icons::Icon::Close
-                                            .image_tinted(10.0, colors.text_secondary),
-                                    )
-                                    .frame(true)
-                                    .min_size(vec2(16.0, 16.0)),
-                                );
-                                if clear_resp
-                                    .on_hover_text("Clear searches and reset to all photos")
-                                    .clicked()
-                                {
-                                    self.similarity_canvas.clear_all_searches();
-                                }
-                            }
-                            if self.similarity_canvas.is_searching() {
-                                ui.spinner();
-                                ui.label("Searching…");
-                            } else if has_searches {
-                                ui.separator();
-                                let target_grids = self
-                                    .similarity_canvas
-                                    .grids
-                                    .iter()
-                                    .filter(|g| g.selected_for_search)
-                                    .count();
-                                let target_photos: usize = self
-                                    .similarity_canvas
-                                    .grids
-                                    .iter()
-                                    .filter(|g| g.selected_for_search)
-                                    .map(|g| g.indices.len())
-                                    .sum();
-                                ui.label(format!(
-                                    "{target_grids} target grid(s) ({target_photos} photos)"
-                                ));
-                            }
-                        });
-                    });
-            });
-
-        // Floating Grid Jump Navigator
-        let nav_id = Id::new("similarity_grid_nav");
-        let nav_pos = pos2(
-            canvas_rect.left() + HUD_INSET_X,
-            canvas_rect.bottom() - BOTTOM_HUD_HEIGHT,
-        );
-        egui::Area::new(nav_id)
-            .order(egui::Order::Middle)
-            .fixed_pos(nav_pos)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style())
-                    .fill(colors.panel)
-                    .stroke(egui::Stroke::new(1.0, colors.border))
-                    .rounding(6.0)
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Grids:").size(11.0).weak());
-                            let mut jump_to_grid = None;
-                            for grid in &self.similarity_canvas.grids {
-                                let label = if grid.id == 0 {
-                                    format!("All ({})", grid.indices.len())
-                                } else {
-                                    let truncated = if grid.title.chars().count() > 14 {
-                                        let s: String = grid.title.chars().take(12).collect();
-                                        format!("{s}… ({})", grid.indices.len())
-                                    } else {
-                                        format!("{} ({})", grid.title, grid.indices.len())
-                                    };
-                                    truncated
-                                };
-                                let is_active = grid.selected_for_search;
-                                let btn = ui
-                                    .selectable_label(is_active, label)
-                                    .on_hover_text(format!("Jump to grid: {}", grid.title));
-                                if btn.clicked() {
-                                    jump_to_grid = Some(grid.id);
-                                }
-                            }
-                            if let Some(id) = jump_to_grid {
-                                self.similarity_canvas.pending_pan_to_grid = Some(id);
-                            }
-                        });
-                    });
-            });
-
-        // Floating HUD pill
-        let hud_id = Id::new("similarity_canvas_hud");
-        let hud_pos = pos2(canvas_rect.right() - 250.0, canvas_rect.bottom() - 44.0);
-        egui::Area::new(hud_id)
-            .order(egui::Order::Middle)
-            .fixed_pos(hud_pos)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style())
-                    .fill(colors.panel)
-                    .stroke(egui::Stroke::new(1.0, colors.border))
-                    .rounding(6.0)
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            if ui.small_button("Fit").clicked() {
-                                self.similarity_canvas.fit_to_view(canvas_rect);
-                            }
-                            ui.label(format!("{:.0}%", self.similarity_canvas.zoom * 100.0));
-                            ui.separator();
-                            if let Some(error) = self.similarity_canvas.error.clone() {
-                                ui.label(egui::RichText::new(error).color(colors.text_secondary));
-                                if ui.small_button("Retry").clicked() {
-                                    self.similarity_canvas.invalidate();
-                                }
-                            }
-                            if self.similarity_canvas.is_scanning() {
-                                ui.label("Scanning subfolders…");
-                            } else if self.similarity_canvas.is_hashing() {
-                                ui.label(format!(
-                                    "Clustering {}/{}…",
-                                    self.similarity_canvas.hashing_progress.0,
-                                    self.similarity_canvas.hashing_progress.1
-                                ));
-                            } else {
-                                ui.label(format!(
-                                    "{} photos",
-                                    self.similarity_canvas.entries.len()
-                                ));
-                            }
-                        });
-                    });
-            });
+        self.similarity_search_hud(ui, canvas_rect, colors);
+        self.similarity_navigation_hud(ui, canvas_rect, colors);
+        self.similarity_status_hud(ui, canvas_rect, colors);
 
         self.finish_listing(ui, actions, 0.0, &response);
         ui.set_clip_rect(prev_clip);

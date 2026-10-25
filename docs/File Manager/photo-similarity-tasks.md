@@ -27,7 +27,7 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 ## Style, architecture and validation
 
 - [x] Reuse the shared canvas edge-fade painter instead of duplicating it in the gallery.
-- [ ] Simplify gallery interaction/HUD code: `similarity_gallery_ui` has cyclomatic complexity 71; existing gallery rendering grew from 14 to 42, and toolbar logic from 8 to 23.
+- [x] Simplify gallery interaction/HUD code. Compact grid headers share typed actions and icon controls; thumbnail admission has one priority scheduler. Complexity fell from 71 to 9 for `similarity_gallery_ui`, 42 to 19 for the masonry gallery, and 23 to 18 for the toolbar.
 - [x] Replace the camera emoji in application chrome with the shared camera SVG icon.
 - [x] Make the multimodal alignment test explicitly opt-in and fail on initialization or fixture errors when enabled, rather than silently passing without exercising inference.
 - [ ] Complete broader tests when build resources permit; previous workspace validation ran out of disk space. The focused gallery run passed 55 tests and formatting checks passed.

@@ -1112,36 +1112,31 @@ impl SimilarityCanvas {
         // When '+' or '-' is pressed, in similarity view override find/text bars:
         // 1. If hovering over a result grid, always adjust that result grid's allowance.
         // 2. Otherwise (if not over a result grid), zoom the canvas unless actively typing in a non-empty text input.
-        if plus_pressed {
-            if let Some(grid_id) = hovered_result_grid {
-                if self.adjust_grid_allowance(grid_id, CanvasGrid::ALLOWANCE_STEP) {
-                    self.recompute_layout();
-                    ui.ctx().request_repaint();
-                }
-            } else if !text_focused
-                || self.search_query.trim().is_empty()
-                || self.search_query == "+"
-                || self.search_query == "="
-            {
-                let center = canvas_rect.center();
-                let new_zoom = (self.zoom * KEYBOARD_ZOOM_STEP).clamp(MIN_ZOOM, MAX_ZOOM);
-                let origin_offset = center - canvas_rect.min - self.pan;
-                self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
-                self.zoom = new_zoom;
+        for (pressed, direction, factor, accidental_input) in [
+            (
+                plus_pressed,
+                1.0,
+                KEYBOARD_ZOOM_STEP,
+                matches!(self.search_query.as_str(), "+" | "="),
+            ),
+            (
+                minus_pressed,
+                -1.0,
+                1.0 / KEYBOARD_ZOOM_STEP,
+                self.search_query == "-",
+            ),
+        ] {
+            if !pressed {
+                continue;
             }
-        }
-        if minus_pressed {
             if let Some(grid_id) = hovered_result_grid {
-                if self.adjust_grid_allowance(grid_id, -CanvasGrid::ALLOWANCE_STEP) {
+                if self.adjust_grid_allowance(grid_id, direction * CanvasGrid::ALLOWANCE_STEP) {
                     self.recompute_layout();
                     ui.ctx().request_repaint();
                 }
-            } else if !text_focused
-                || self.search_query.trim().is_empty()
-                || self.search_query == "-"
-            {
+            } else if !text_focused || self.search_query.trim().is_empty() || accidental_input {
                 let center = canvas_rect.center();
-                let new_zoom = (self.zoom / KEYBOARD_ZOOM_STEP).clamp(MIN_ZOOM, MAX_ZOOM);
+                let new_zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
                 let origin_offset = center - canvas_rect.min - self.pan;
                 self.pan = center - canvas_rect.min - origin_offset * (new_zoom / self.zoom);
                 self.zoom = new_zoom;
