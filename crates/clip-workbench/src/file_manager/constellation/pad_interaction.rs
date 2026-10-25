@@ -286,7 +286,6 @@ impl ConstellationState {
                 ui.close_menu();
             }
         }
-        ui.weak("Higher priority wins while ringing. Equal: latest hit wins.");
         ui.separator();
         if ui.button("Leave mute group").clicked() {
             self.leave_mute_group(index);
