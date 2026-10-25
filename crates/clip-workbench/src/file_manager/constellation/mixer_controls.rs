@@ -142,6 +142,11 @@ fn bipolar_slider(
             ui.spacing_mut().item_spacing.x = 4.0;
             let title = ui.small(label);
             ui.spacing_mut().slider_width = (width - title.rect.width() - 4.0).max(12.0);
+            let step = if label == "Pitch" {
+                ui.input(|input| if input.modifiers.ctrl || input.modifiers.shift { 1.0 } else { 100.0 })
+            } else {
+                step
+            };
             let response = ui.add(
                 egui::Slider::new(value, -limit..=limit)
                     .step_by(step)
@@ -154,7 +159,7 @@ fn bipolar_slider(
                 *value = value.clamp(-limit, limit);
             }
             // A small physical detent aids pointer use; the readout still accepts single cents.
-            if response.dragged() && value.abs() < limit * 0.015 {
+            if response.dragged() && value.abs() < step as f32 * 0.5 {
                 *value = 0.0;
             }
             if double_clicked {
@@ -170,7 +175,7 @@ fn bipolar_slider(
             } else if label == "Speed" {
                 "−2× to +2×. Negative plays backwards; 0 stops. Double-click for +1×."
             } else {
-                "−2 to +2 octaves, in cents (1200 cents per octave). Double-click to reset."
+                "Semitone steps; hold Ctrl or Shift for cents, or type an offset. Double-click to reset."
             });
             response
         },
@@ -201,29 +206,22 @@ fn fader(
                 egui::DragValue::new(&mut edited)
                     .speed(step)
                     .custom_parser(move |text| {
-                        let text = text.trim();
-                        let octaves = text.ends_with("oct");
-                        let number = text
-                            .trim_end_matches("oct")
-                            .trim_end_matches("ct")
-                            .trim_end_matches('×')
-                            .trim()
-                            .parse::<f64>()
-                            .ok()
-                            .filter(|number| number.is_finite())?;
-                        Some(if label == "Pitch" && octaves {
-                            number * 1200.0
+                        if label == "Pitch" {
+                            parse_pitch_offset(text)
                         } else {
-                            number
-                        })
+                            text.trim()
+                                .trim_end_matches('×')
+                                .trim()
+                                .parse::<f64>()
+                                .ok()
+                                .filter(|v| v.is_finite())
+                        }
                     })
                     .custom_formatter(move |v, _| {
                         if label == "Speed" {
                             format!("{v:+.2}×")
-                        } else if v as i32 % 1200 == 0 {
-                            format!("{:+.0} oct", v / 1200.0)
                         } else {
-                            format!("{v:+.0} ct")
+                            format_pitch_offset(v)
                         }
                     }),
             );
@@ -237,6 +235,31 @@ fn fader(
         },
     )
     .inner
+}
+
+/// Accepts cents by default, with explicit semitone and octave units.
+fn parse_pitch_offset(text: &str) -> Option<f64> {
+    let text = text.trim();
+    let (number, scale) = [("oct", 1200.0), ("st", 100.0), ("ct", 1.0)]
+        .into_iter()
+        .find_map(|(suffix, scale)| text.strip_suffix(suffix).map(|number| (number, scale)))
+        .unwrap_or((text, 1.0));
+    number
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(|v| v * scale)
+        .filter(|v| v.is_finite())
+}
+
+fn format_pitch_offset(cents: f64) -> String {
+    if cents % 1200.0 == 0.0 {
+        format!("{:+.0} oct", cents / 1200.0)
+    } else if cents % 100.0 == 0.0 {
+        format!("{:+.0} st", cents / 100.0)
+    } else {
+        format!("{cents:+.0} ct")
+    }
 }
 
 /// A tall, marked dB fader; its silent lower stop does not require a numeric field.
@@ -294,6 +317,76 @@ fn gain_fader(ui: &mut egui::Ui, volume: &mut f32) -> egui::Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pitch_units_round_trip_and_keep_cent_precision() {
+        for (value, text) in [
+            (0.0, "+0 oct"),
+            (100.0, "+1 st"),
+            (-700.0, "-7 st"),
+            (2400.0, "+2 oct"),
+            (137.0, "+137 ct"),
+        ] {
+            assert_eq!(format_pitch_offset(value), text);
+            assert_eq!(parse_pitch_offset(text), Some(value));
+        }
+        assert_eq!(parse_pitch_offset("123"), Some(123.0));
+        assert_eq!(parse_pitch_offset("1.25 st"), Some(125.0));
+        assert_eq!(parse_pitch_offset("NaN"), None);
+    }
+
+    #[test]
+    fn pitch_slider_steps_in_semitones_unless_a_precision_modifier_is_held() {
+        for modifiers in [
+            egui::Modifiers::NONE,
+            egui::Modifiers::CTRL,
+            egui::Modifiers::SHIFT,
+        ] {
+            let ctx = egui::Context::default();
+            let mut value = 137.0;
+            let mut rect = Rect::NOTHING;
+            let mut draw = |events| {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        modifiers,
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            rect = bipolar_slider(ui, "Pitch", &mut value, 2400.0, 1.0, 0.0, 400.0)
+                                .rect;
+                        });
+                    },
+                );
+            };
+            draw(vec![]);
+            drop(draw);
+            assert_eq!(value, 137.0, "Idle rendering must preserve typed cents");
+            let point = egui::pos2(rect.left() + rect.width() * 0.573, rect.center().y);
+            let _ = ctx.run(
+                egui::RawInput {
+                    modifiers,
+                    events: vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        bipolar_slider(ui, "Pitch", &mut value, 2400.0, 1.0, 0.0, 400.0);
+                    });
+                },
+            );
+            assert_eq!(value % 100.0 == 0.0, modifiers == egui::Modifiers::NONE);
+        }
+    }
 
     #[test]
     fn double_click_resets_each_slider_to_its_own_default() {

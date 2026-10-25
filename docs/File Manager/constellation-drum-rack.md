@@ -195,6 +195,9 @@ the waveform to retain access to every control. The right sidebar stays the same
 
 Pan has a center detent. Double-click resets Pan to center, Speed to +1× and Pitch
 to zero. Speed and Pitch readouts keep a fixed width as signs and units change.
+Pitch sliders step by semitone; hold Ctrl or Shift while dragging for individual
+cents. The readout accepts cents directly, or values suffixed with `ct`, `st` or
+`oct`. Whole semitones display as `st`, and whole octaves as `oct`.
 The editor defaults to 290 pixels high and remains resizable. It reserves only the
 height used by its contents, with room for complete readout borders; the default
 layout fits without a vertical scrollbar.
