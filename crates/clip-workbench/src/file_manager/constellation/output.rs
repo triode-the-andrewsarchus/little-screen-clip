@@ -178,7 +178,7 @@ impl PadOutput {
         let player = Player::connect_new(&self.mixer);
         player.append(
             source
-                .speed(sample.speed())
+                .speed(sample.speed().abs())
                 .amplify(velocity.min(127) as f32 / 127.0 * HEADROOM),
         );
         Some(player)

@@ -59,6 +59,7 @@ fn stage(staged: &Path, bank: &SamplePackBank) -> Result<Vec<File>, String> {
             sample.attack_ms = 0.0;
             sample.release_ms = 0.0;
             sample.pitch_semitones = 0.0;
+            sample.playback_speed = 1.0;
             sample.prepared_pitch = None;
             sample.cached_audio = None;
         }
@@ -107,10 +108,14 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
     if channels > super::MAX_SAMPLE_CHANNELS || rate > super::MAX_SAMPLE_RATE {
         return Err("Unsupported audio header".into());
     }
+    let speed = sample.speed().abs();
+    if !speed.is_finite() || speed * (rate as f32) < 1.0 {
+        return Err("Choose a non-zero playback speed before exporting this layer".into());
+    }
     let start = (sample.start_sec as f64 * rate as f64).round() as u64;
     let end = (sample.end_sec as f64 * rate as f64).round() as u64;
     let frames = end.saturating_sub(start);
-    let expected_frames = (frames as f64 / sample.speed() as f64).ceil() as u64;
+    let expected_frames = (frames as f64 / speed as f64).ceil() as u64;
     expected_frames
         .checked_mul(8)
         .filter(|bytes| *bytes <= u32::MAX as u64 - 128)
@@ -118,7 +123,7 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
     if frames == 0 {
         return Err("Trim contains no complete audio frames".into());
     }
-    let input: Box<dyn Source<Item = f32> + Send> = if sample.pitch_semitones != 0.0 {
+    let input: Box<dyn Source<Item = f32> + Send> = if sample.pitch_semitones != 0.0 || sample.speed() < 0.0 {
         // Match preview's bounded preparation, using this same pinned input.
         let limit = (rate as usize * 15 * channels as usize).min(2_000_000);
         let values: Vec<_> = decoder.by_ref().take(limit).collect();
@@ -143,7 +148,7 @@ fn render(source: &File, sample: &SlotSample, target: &Path) -> Result<f32, Stri
         Box::new(decoder)
     };
     let layer =
-        super::layer_source::LayerSource::new(input, sample, frames as usize).speed(sample.speed());
+        super::layer_source::LayerSource::new(input, sample, frames as usize).speed(sample.speed().abs());
     let mut rendered = rodio::source::UniformSourceIterator::new(
         layer,
         2.try_into().unwrap(),
@@ -204,19 +209,23 @@ mod tests {
             .unwrap();
         }
         wav.finalize().unwrap();
-        for mode in [
-            super::super::sample_pack::PitchMode::Pitch,
-            super::super::sample_pack::PitchMode::Time,
+        use super::super::sample_pack::PitchMode;
+        for (mode, pitch, speed, duration) in [
+            (PitchMode::Pitch, 12.0, 1.0, 0.5),
+            (PitchMode::Time, 12.0, 1.0, 0.25),
+            (PitchMode::Pitch, 7.23, -2.0, 0.25),
+            (PitchMode::Pitch, 0.0, -0.5, 1.0),
         ] {
             let mut bank = SamplePackBank::default();
             let mut sample = SlotSample::new(path.clone(), "tone.wav".into(), None, 0.5);
-            sample.pitch_semitones = 12.0;
+            sample.pitch_semitones = pitch;
+            sample.playback_speed = speed;
             sample.pitch_mode = mode;
             sample.ensure_audio_loaded();
             sample.prepare_pitch().unwrap();
             let pcm = super::super::sample_pack::SharedPcm::trimmed(&sample).unwrap();
             let live = super::super::layer_source::LayerSource::new(pcm, &sample, 24000)
-                .speed(sample.speed());
+                .speed(sample.speed().abs());
             let expected: Vec<_> = rodio::source::UniformSourceIterator::new(
                 live,
                 2.try_into().unwrap(),
@@ -228,7 +237,8 @@ mod tests {
             let manifest = super::super::sample_pack::load_sample_pack(&saved).unwrap();
             let rendered = &manifest.slots[0].samples[0];
             assert_eq!(rendered.pitch_semitones, 0.0);
-            assert_eq!(rendered.pitch_mode, mode);
+            assert_eq!(rendered.pitch_mode, PitchMode::Pitch);
+            assert_eq!(rendered.playback_speed, 1.0);
             let samples: Vec<_> = hound::WavReader::open(&rendered.file_path)
                 .unwrap()
                 .samples::<f32>()
@@ -241,11 +251,6 @@ mod tests {
                     .zip(expected)
                     .all(|(a, b)| (*a - b).abs() < 0.0001)
             );
-            let duration = if mode == super::super::sample_pack::PitchMode::Pitch {
-                0.5
-            } else {
-                0.25
-            };
             assert!((rendered.duration - duration).abs() < 0.0001);
             assert!(saved.join("originals/pad01_layer1.wav").is_file());
         }

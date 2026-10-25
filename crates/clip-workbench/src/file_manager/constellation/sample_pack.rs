@@ -154,10 +154,18 @@ pub struct SlotSample {
     pub pitch_semitones: f32,
     #[serde(default)]
     pub pitch_mode: PitchMode,
+    /// Signed playback rate: negative reverses frames, zero stops the layer.
+    /// New controls use ±2; migrated legacy Time layers may retain rates up to 4.
+    #[serde(default = "default_playback_speed")]
+    pub playback_speed: f32,
     #[serde(skip)]
     pub(super) prepared_pitch: Option<(u32, Arc<CachedAudio>)>,
     #[serde(skip)]
     pub cached_audio: Option<Arc<CachedAudio>>,
+}
+
+fn default_playback_speed() -> f32 {
+    1.0
 }
 
 // Preparation state is not a document edit. Native path comparison also retains
@@ -176,15 +184,16 @@ impl PartialEq for SlotSample {
             && self.release_ms == other.release_ms
             && self.pitch_semitones == other.pitch_semitones
             && self.pitch_mode == other.pitch_mode
+            && self.playback_speed == other.playback_speed
     }
 }
 
 impl SlotSample {
     pub(super) fn speed(&self) -> f32 {
         if self.pitch_mode == PitchMode::Time {
-            2.0_f32.powf(self.pitch_semitones / 12.0)
+            self.playback_speed * 2.0_f32.powf(self.pitch_semitones / 12.0)
         } else {
-            1.0
+            self.playback_speed
         }
     }
     pub(super) fn pitch_pending(&self) -> bool {
@@ -205,6 +214,7 @@ impl SlotSample {
             || self.attack_ms != 0.0
             || self.release_ms != 0.0
             || self.pitch_semitones != 0.0
+            || self.playback_speed != 1.0
     }
 
     pub fn new(
@@ -227,6 +237,7 @@ impl SlotSample {
             release_ms: 0.0,
             pitch_semitones: 0.0,
             pitch_mode: Default::default(),
+            playback_speed: 1.0,
             prepared_pitch: None,
             cached_audio: None,
         }
@@ -274,6 +285,8 @@ impl SlotSample {
             || !(-1.0..=1.0).contains(&self.pan)
             || !(0.0..=500.0).contains(&self.attack_ms)
             || !(0.0..=500.0).contains(&self.release_ms)
+            || !self.playback_speed.is_finite()
+            || !(-4.0..=4.0).contains(&self.playback_speed)
             || !self.pitch_semitones.is_finite()
             || !(-24.0..=24.0).contains(&self.pitch_semitones)
         {
@@ -474,6 +487,13 @@ impl SamplePackBank {
             }
             for sample in &mut slot.samples {
                 sample.validate()?;
+                // Preserve old Time-mode sound while exposing independent parameters.
+                if sample.pitch_mode == PitchMode::Time {
+                    sample.playback_speed = sample.speed();
+                    sample.pitch_semitones = 0.0;
+                    sample.pitch_mode = PitchMode::Pitch;
+                    sample.validate()?;
+                }
                 if sample.file_path.is_relative() {
                     sample.file_path = pack_dir.join(&sample.file_path);
                 }
@@ -677,12 +697,14 @@ pub fn delete_sample_pack(pack_dir: &Path) -> Result<(), String> {
 pub(super) struct SharedPcm {
     audio: Arc<CachedAudio>,
     position: usize,
+    start: usize,
+    reverse: bool,
     end: usize,
     length: usize,
 }
 impl SharedPcm {
     pub(super) fn trimmed(sample: &SlotSample) -> Option<Self> {
-        if sample.pitch_pending() {
+        if sample.pitch_pending() || !sample.speed().is_finite() || sample.speed() == 0.0 {
             return None;
         }
         let audio = if sample.pitch_mode == PitchMode::Pitch && sample.pitch_semitones != 0.0 {
@@ -691,7 +713,7 @@ impl SharedPcm {
             sample.cached_audio.as_ref()?.clone()
         };
         if audio.channels == 0
-            || audio.sample_rate == 0
+            || (audio.sample_rate as f32 * sample.speed().abs()) < 1.0
             || !sample.start_sec.is_finite()
             || !sample.end_sec.is_finite()
             || sample.start_sec < 0.0
@@ -709,6 +731,8 @@ impl SharedPcm {
         (end > start).then_some(Self {
             audio,
             position: start,
+            start,
+            reverse: sample.speed() < 0.0,
             end,
             length: end - start,
         })
@@ -720,7 +744,14 @@ impl Iterator for SharedPcm {
         if self.position >= self.end {
             return None;
         }
-        let sample = self.audio.samples[self.position];
+        let index = if self.reverse {
+            let channels = self.audio.channels as usize;
+            let offset = self.position - self.start;
+            self.end - channels - offset / channels * channels + offset % channels
+        } else {
+            self.position
+        };
+        let sample = self.audio.samples[index];
         self.position += 1;
         Some(sample)
     }
@@ -749,6 +780,49 @@ impl rodio::Source for SharedPcm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reverse_preserves_stereo_frames_and_zero_speed_is_silent() {
+        let mut sample = SlotSample::new("stereo.wav".into(), "stereo.wav".into(), None, 1.0);
+        sample.cached_audio = Some(Arc::new(CachedAudio {
+            channels: 2,
+            sample_rate: 4,
+            samples: Arc::new(vec![0.0, 10.0, 1.0, 11.0, 2.0, 12.0, 3.0, 13.0]),
+            mono_samples: Arc::new(vec![]), waveform_peaks: vec![], waveform_colors: vec![],
+        }));
+        sample.start_sec = 0.25;
+        sample.end_sec = 0.75;
+        sample.playback_speed = -1.0;
+        let mut pcm = SharedPcm::trimmed(&sample).unwrap();
+        assert!(Arc::ptr_eq(&pcm.audio, sample.cached_audio.as_ref().unwrap()));
+        assert_eq!(pcm.next(), Some(2.0));
+        assert_eq!(pcm.size_hint(), (3, Some(3)));
+        assert_eq!(pcm.collect::<Vec<_>>(), [12.0, 1.0, 11.0]);
+        sample.playback_speed = 0.0;
+        assert!(SharedPcm::trimmed(&sample).is_none());
+        sample.playback_speed = f32::NAN;
+        assert!(sample.validate().is_err());
+        assert!(SharedPcm::trimmed(&sample).is_none());
+    }
+
+    #[test]
+    fn legacy_time_modes_migrate_without_changing_the_playback_rate() {
+        for semitones in [-24.0, 0.0, 24.0] {
+            let mut bank = SamplePackBank::default();
+            let mut sample = SlotSample::new("old.wav".into(), "old.wav".into(), None, 1.0);
+            sample.pitch_mode = PitchMode::Time;
+            sample.pitch_semitones = semitones;
+            let expected = sample.speed();
+            bank.slots[0].samples.push(sample);
+            bank.validate(Path::new("/samples")).unwrap();
+            let sample = &bank.slots[0].samples[0];
+            assert_eq!(sample.speed(), expected);
+            assert_eq!(sample.pitch_semitones, 0.0);
+            assert_eq!(sample.pitch_mode, PitchMode::Pitch);
+            let restored: SamplePackBank = serde_json::from_str(&serde_json::to_string(&bank).unwrap()).unwrap();
+            assert_eq!(restored, bank);
+        }
+    }
 
     #[test]
     fn prepared_waveforms_keep_stereo_transients_and_cover_tiny_hits() {
@@ -975,7 +1049,7 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("retrigger");
-        for key in ["pitch_semitones", "pitch_mode"] {
+        for key in ["pitch_semitones", "pitch_mode", "playback_speed"] {
             value["slots"][0]["samples"][0]
                 .as_object_mut()
                 .unwrap()
@@ -983,6 +1057,7 @@ mod tests {
         }
         let restored: SamplePackBank = serde_json::from_value(value).unwrap();
         assert!(restored.slots[0].retrigger);
+        assert_eq!(restored.slots[0].samples[0].playback_speed, 1.0);
         assert_eq!(restored.slots[0].samples[0].pitch_semitones, 0.0);
         assert_eq!(
             restored.slots[0].samples[0].pitch_mode,
@@ -1015,6 +1090,7 @@ mod tests {
             release_ms: 0.0,
             pitch_semitones: 0.0,
             pitch_mode: Default::default(),
+            playback_speed: 1.0,
             prepared_pitch: None,
             cached_audio: None,
         });
