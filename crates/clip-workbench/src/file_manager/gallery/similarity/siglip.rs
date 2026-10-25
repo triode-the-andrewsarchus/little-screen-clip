@@ -56,6 +56,15 @@ impl SiglipEmbedder {
         })
     }
 
+    /// Retries images individually after a batch failure, preserving healthy neural features.
+    pub fn embed_resilient(
+        &mut self,
+        paths: &[PathBuf],
+        cancelled: &AtomicBool,
+    ) -> Vec<Option<FeatureVector>> {
+        embed_with_isolation(paths, cancelled, |paths| self.embed_batch(paths, cancelled))
+    }
+
     /// Embeds a batch of images into L2-normalized feature vectors.
     ///
     /// # Errors
@@ -144,6 +153,28 @@ impl SiglipEmbedder {
         // 3. Extract and L2-normalize embeddings for each image in batch
         let embeddings = extract_normalized_embeddings(&out_tensor, b)?;
         Ok(embeddings.into_iter().map(FeatureVector::Dense).collect())
+    }
+}
+
+fn embed_with_isolation(
+    paths: &[PathBuf],
+    cancelled: &AtomicBool,
+    mut embed: impl FnMut(&[PathBuf]) -> Result<Vec<FeatureVector>, String>,
+) -> Vec<Option<FeatureVector>> {
+    match embed(paths) {
+        Ok(features) => features.into_iter().map(Some).collect(),
+        Err(error) => {
+            tracing::warn!(%error, "SigLIP batch failed; isolating individual images");
+            paths
+                .iter()
+                .map(|path| {
+                    if cancelled.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    embed(std::slice::from_ref(path)).ok()?.into_iter().next()
+                })
+                .collect()
+        }
     }
 }
 
@@ -297,6 +328,24 @@ impl SiglipTextEmbedder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_image_does_not_downgrade_other_batch_members() {
+        let paths = [
+            PathBuf::from("good"),
+            PathBuf::from("bad"),
+            PathBuf::from("good2"),
+        ];
+        let features = embed_with_isolation(&paths, &AtomicBool::new(false), |paths| {
+            if paths.len() != 1 || paths[0] == PathBuf::from("bad") {
+                return Err("decode failure".into());
+            }
+            Ok(vec![FeatureVector::Dense(vec![1.0])])
+        });
+        assert!(features[0].is_some());
+        assert!(features[1].is_none());
+        assert!(features[2].is_some());
+    }
 
     /// Requires the cached vision model and a working CUDA runtime. Unlike provider
     /// availability checks, the ORT trace proves that model kernels execute on CUDA.

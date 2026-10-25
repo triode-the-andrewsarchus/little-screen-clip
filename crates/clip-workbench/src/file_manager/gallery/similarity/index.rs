@@ -75,14 +75,9 @@ fn index_with_cache(
             return;
         }
         let paths: Vec<PathBuf> = missing.iter().map(|(path, _, _)| (*path).clone()).collect();
-        let features = neural.as_mut().and_then(|model| {
-            model
-                .embed_batch(&paths, cancelled)
-                .map_err(|error| {
-                    tracing::warn!(%error, "SigLIP batch failed; using perceptual hashes");
-                })
-                .ok()
-        });
+        let features = neural
+            .as_mut()
+            .map(|model| model.embed_resilient(&paths, cancelled));
         results = complete_batch(
             missing,
             features,
@@ -138,7 +133,7 @@ fn cached_features(
 
 fn complete_batch(
     missing: Vec<PendingFeature>,
-    features: Option<Vec<FeatureVector>>,
+    features: Option<Vec<Option<FeatureVector>>>,
     cache: Option<&FeatureCache>,
     encoder: Option<&[u8]>,
     cancelled: &AtomicBool,
@@ -150,7 +145,11 @@ fn complete_batch(
             break;
         }
         let feature = match &features {
-            Some(features) if stable_model => features.get(index).cloned(),
+            Some(features) if stable_model => features
+                .get(index)
+                .cloned()
+                .flatten()
+                .or_else(|| compute_dhash_from_path(&path, cancelled).map(FeatureVector::DHash)),
             Some(_) => None, // Model was replaced while inference was in flight.
             None => compute_dhash_from_path(&path, cancelled).map(FeatureVector::DHash),
         };

@@ -13,7 +13,7 @@ Review of `feat/photo-similarity-canvas` at `2dcc2b1`, compared with local main 
 - [x] **P1:** Remove synchronous, unguarded hover image probing; use guarded metadata workers. Replacing a hovered file with a FIFO can block the UI (`ui/gallery.rs`, `shelf/preview.rs`).
 - [x] **P1:** Cancel or reject searches from an earlier dataset generation when folders or recursive scan results change (`similarity/canvas.rs`).
 - [x] Resume interrupted scans and clustering when returning to Photos; retiring jobs currently leaves an unchanged sync signature that prevents restarting them.
-- [ ] Keep reverse-image queries and candidates in the same feature space. Avoid downgrading an entire neural batch to dHash when one image fails decoding.
+- [x] Keep reverse-image queries and candidates in the same feature space. Avoid downgrading an entire neural batch to dHash when one image fails decoding.
 - [ ] Move PCA/grid layout and repeated similarity scoring off the UI thread; cache scores. A 5,000-image, 1,536-dimensional PCA took roughly 500 ms in an optimized isolated check.
 - [ ] Handle background queue admission, timeout, disconnection and search errors explicitly; clear busy state and expose actionable failures.
 - [ ] Include hidden-file policy and explicit refresh/deep-directory changes in recursive scan invalidation.

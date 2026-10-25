@@ -14,7 +14,6 @@ use egui::{Pos2, Rect, Ui, vec2};
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 
 use super::{
-    dhash::compute_dhash_from_path,
     embedding::{FeatureVector, project_features_to_2d},
     grid::{GridPlacement, grid_dimensions, snap_to_grid},
     scanner::scan_recursive_photos,
@@ -59,6 +58,7 @@ pub struct CanvasGrid {
     pub title: String,
     #[allow(dead_code)]
     pub query: Option<String>,
+    pub reference_photo: Option<PathBuf>,
     pub is_inverted: bool,
     pub candidate_indices: Vec<usize>,
     pub concept_embedding: Option<Vec<f32>>,
@@ -299,6 +299,7 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     pub hashing_progress: (usize, usize), // (completed, total)
     pub search_query: String,
     pub pending_search: Option<PendingSearchMeta>,
+    pending_photo_search: Option<PathBuf>,
     pub allowance: f32,
     pub similarity_threshold: f32,
     pub grids: Vec<CanvasGrid>,
@@ -328,6 +329,7 @@ impl Default for SimilarityCanvas {
             hashing_progress: (0, 0),
             search_query: String::new(),
             pending_search: None,
+            pending_photo_search: None,
             allowance: 0.50,
             similarity_threshold: 0.08,
             grids: Vec::new(),
@@ -361,6 +363,7 @@ impl SimilarityCanvas {
     fn clear_pending_search(&mut self) {
         self.search_job = None;
         self.pending_search = None;
+        self.pending_photo_search = None;
         self.pending_pan_to_grid = None;
     }
 
@@ -465,6 +468,7 @@ impl SimilarityCanvas {
     pub fn clear_all_searches(&mut self) {
         self.search_query.clear();
         self.pending_search = None;
+        self.pending_photo_search = None;
         self.search_job = None;
         self.grids.retain(|g| g.id == 0);
         if let Some(base) = self.grids.first_mut() {
@@ -562,21 +566,12 @@ impl SimilarityCanvas {
 
     /// Creates a new search grid searching for photos visually similar to the reference photo.
     pub fn search_from_photo(&mut self, entry_path: &std::path::Path) -> Option<usize> {
-        let feature = if let Some((feat, _)) = self.hashes.get(entry_path) {
-            feat.clone()
-        } else if let Some(hash) = compute_dhash_from_path(entry_path, &AtomicBool::new(false)) {
-            FeatureVector::DHash(hash)
-        } else {
+        let Some((feature, _)) = self.hashes.get(entry_path) else {
+            self.pending_photo_search = Some(entry_path.to_path_buf());
+            self.schedule_hashing();
             return None;
         };
-
-        let mut vec = feature.to_vec();
-        let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 1e-6 {
-            for x in &mut vec {
-                *x /= norm;
-            }
-        }
+        let vec = normalized_feature(feature);
 
         let selected: Vec<_> = self
             .grids
@@ -606,6 +601,7 @@ impl SimilarityCanvas {
             id,
             title: format!("Similar to {file_name}"),
             query: None,
+            reference_photo: Some(entry_path.to_path_buf()),
             is_inverted: false,
             candidate_indices,
             concept_embedding: Some(vec),
@@ -644,6 +640,7 @@ impl SimilarityCanvas {
             id,
             title: query.to_string(),
             query: Some(query.to_string()),
+            reference_photo: None,
             is_inverted,
             candidate_indices,
             concept_embedding: Some(concept_embedding),
@@ -732,6 +729,7 @@ impl SimilarityCanvas {
             id: 0,
             title: "All photos".to_string(),
             query: None,
+            reference_photo: None,
             is_inverted: false,
             candidate_indices: (0..n).collect(),
             concept_embedding: None,
@@ -849,6 +847,14 @@ impl SimilarityCanvas {
             }
         }
 
+        if let Some(path) = self.pending_photo_search.take() {
+            if self.hashes.contains_key(&path) {
+                self.search_from_photo(&path);
+            } else if self.hash_job.is_some() {
+                self.pending_photo_search = Some(path);
+            }
+        }
+
         if let Some(job) = &self.search_job
             && let Ok(res) = job.receiver.try_recv()
         {
@@ -867,6 +873,7 @@ impl SimilarityCanvas {
                     id: self.next_grid_id,
                     title: meta.query.clone(),
                     query: Some(meta.query),
+                    reference_photo: None,
                     is_inverted: meta.is_inverted,
                     candidate_indices: meta.candidate_indices,
                     concept_embedding: Some(emb),
@@ -909,6 +916,7 @@ impl SimilarityCanvas {
                 id: 0,
                 title: "All photos".to_string(),
                 query: None,
+                reference_photo: None,
                 is_inverted: false,
                 candidate_indices: (0..n).collect(),
                 concept_embedding: None,
@@ -929,8 +937,13 @@ impl SimilarityCanvas {
             base.indices = (0..n).collect();
         }
 
-        // Refilter any search grids with their own threshold
+        // Reverse-image queries track upgrades from perceptual hashes to neural vectors.
         for grid in self.grids.iter_mut().skip(1) {
+            if let Some(path) = &grid.reference_photo
+                && let Some((feature, _)) = self.hashes.get(path)
+            {
+                grid.concept_embedding = Some(normalized_feature(feature));
+            }
             let threshold = grid.threshold;
             grid.refilter(&self.hashes, &self.entries, threshold);
         }
@@ -1258,4 +1271,15 @@ mod lifecycle_tests {
         assert!(cancelled.load(Ordering::Relaxed));
         assert!(sender.send(Ok(Some(vec![1.0]))).is_err());
     }
+}
+
+fn normalized_feature(feature: &FeatureVector) -> Vec<f32> {
+    let mut vector = feature.to_vec();
+    let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm > 1e-6 {
+        for value in &mut vector {
+            *value /= norm;
+        }
+    }
+    vector
 }

@@ -704,6 +704,17 @@ fn test_search_from_photo_creates_ranked_grid() {
     // P1 (index 0) has score 1.0, P2 (index 1) has score 0.9 => both match threshold 0.08
     // P3 (index 2) has score 0.0 => does not match
     assert_eq!(search_grid.indices, vec![0, 1]);
+
+    // A reference upgraded after the search must remain comparable to new candidates.
+    canvas
+        .hashes
+        .insert(p1.clone(), (FeatureVector::Dense(vec![1.0, 0.0]), 1));
+    canvas
+        .hashes
+        .insert(p2.clone(), (FeatureVector::Dense(vec![1.0, 0.0]), 1));
+    canvas.recompute_layout();
+    assert_eq!(canvas.grids[1].concept_embedding.as_ref().unwrap().len(), 2);
+    assert_eq!(canvas.grids[1].indices, vec![0, 1]);
 }
 
 #[test]
