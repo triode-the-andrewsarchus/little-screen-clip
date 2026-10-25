@@ -27,7 +27,7 @@ pub(super) fn layer_strip(
     let padding = ui.spacing().button_padding.x * 2.0 + 4.0;
     let mut widths = [
         text_width("Retrigger", egui::TextStyle::Button) + padding,
-        text_width("Pan", egui::TextStyle::Small) + 78.0,
+        text_width("Pan", egui::TextStyle::Small) + 66.0,
         text_width("Speed", egui::TextStyle::Small) + 124.0,
         text_width("Pitch", egui::TextStyle::Small) + 124.0,
         text_width("Edit in Audio Studio", egui::TextStyle::Body) + padding + 10.0,
