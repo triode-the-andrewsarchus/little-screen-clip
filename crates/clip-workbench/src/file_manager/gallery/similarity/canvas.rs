@@ -366,6 +366,9 @@ impl SimilarityCanvas {
 
     /// Retires pending background jobs.
     pub fn retire(&mut self) {
+        if self.scan_job.is_some() || self.hash_job.is_some() {
+            self.current_signature = None;
+        }
         self.scan_job = None;
         self.hash_job = None;
         self.clear_pending_search();
@@ -756,6 +759,8 @@ impl SimilarityCanvas {
     }
 
     fn schedule_hashing(&mut self) {
+        // Replacement datasets must retire the old receiver, including empty/hit-only ones.
+        self.hash_job = None;
         if self.entries.is_empty() {
             self.hashing_progress = (0, 0);
             return;
@@ -1210,6 +1215,22 @@ impl SimilarityCanvas {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn retiring_incomplete_scan_invalidates_sync_stamp() {
+        let mut canvas = SimilarityCanvas::default();
+        canvas.current_signature = Some((PathBuf::from("/photos"), 1, true, 0));
+        let pool = BackgroundJobs::new(1, 2);
+        let (ticket, receiver) = pool.submit(Duration::from_secs(2), Vec::new);
+        canvas.scan_job = Some(PendingJob {
+            ticket,
+            receiver,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        });
+        canvas.retire();
+        assert!(canvas.current_signature.is_none());
+        assert!(!canvas.is_scanning());
+    }
 
     #[test]
     fn replacing_entries_retires_search_indices_and_receiver() {
