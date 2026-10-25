@@ -156,3 +156,9 @@ constellation_pad_keys = ["zxcv", "asdf", "qwer", "1234"]
 video_timeline_decimation = 1
 photo_mode = "similarity"
 photo_recurse = true
+# Maximum photos loaded by recursive similarity scans (default: 10000).
+photo_recursive_limit = 1000000
+# Maximum subdirectory depth for recursive similarity scans (default: 16).
+photo_recursive_depth = 64
+# Similarity scan and indexing timeout in seconds; 0 disables it (default: 3600).
+photo_recursive_timeout_seconds = 0

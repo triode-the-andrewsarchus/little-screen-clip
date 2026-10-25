@@ -277,7 +277,8 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     pub grid_cols: usize,
     pub grid_rows: usize,
     pub(in crate::file_manager) hashes: HashMap<PathBuf, (FeatureVector, u64)>, // path -> (feature, revision)
-    current_signature: Option<(PathBuf, u64, bool, usize, bool)>,
+    current_signature: Option<(PathBuf, u64, bool, usize, bool, usize, usize, u64)>,
+    timeout_seconds: u64,
     scan_job: Option<Task<Vec<Entry>>>,
     hash_job: Option<HashJob>,
     search_job: Option<Task<Result<Vec<f32>, String>>>,
@@ -311,6 +312,7 @@ impl Default for SimilarityCanvas {
             grid_rows: 0,
             hashes: HashMap::new(),
             current_signature: None,
+            timeout_seconds: 3600,
             scan_job: None,
             hash_job: None,
             search_job: None,
@@ -671,6 +673,9 @@ impl SimilarityCanvas {
         visible_indices: &[usize],
         recurse: bool,
         show_hidden: bool,
+        photo_limit: usize,
+        max_depth: usize,
+        timeout_seconds: u64,
     ) {
         let sig = (
             directory.path.clone(),
@@ -678,21 +683,29 @@ impl SimilarityCanvas {
             recurse,
             visible_indices.len(),
             show_hidden,
+            photo_limit,
+            max_depth,
+            timeout_seconds,
         );
         if self.current_signature.as_ref() == Some(&sig) {
             return;
         }
         self.current_signature = Some(sig);
         self.initial_fit_done = false;
+        self.timeout_seconds = timeout_seconds;
 
         if recurse {
             let root = directory.path.clone();
-            self.scan_job = Some(
-                Task::start(worker_pool(), Duration::from_secs(120), move |cancelled| {
-                    scan_recursive_photos(&root, show_hidden, cancelled)
-                })
-                .with_response_deadline(Duration::from_secs(120)),
-            );
+            let scan = move |cancelled: &std::sync::atomic::AtomicBool| {
+                scan_recursive_photos(&root, show_hidden, photo_limit, max_depth, cancelled)
+            };
+            let task = if timeout_seconds == 0 {
+                Task::start_unbounded(worker_pool(), scan)
+            } else {
+                let timeout = Duration::from_secs(timeout_seconds);
+                Task::start(worker_pool(), timeout, scan).with_response_deadline(timeout)
+            };
+            self.scan_job = Some(task);
             let photos: Vec<Entry> = visible_indices
                 .iter()
                 .filter_map(|&idx| directory.entries.get(idx))
@@ -795,10 +808,15 @@ impl SimilarityCanvas {
         }
 
         let (batch_tx, batch_rx) = mpsc::channel();
-        let task = Task::start(worker_pool(), Duration::from_secs(3600), move |cancelled| {
+        let index = move |cancelled: &std::sync::atomic::AtomicBool| {
             super::index::index_images(missing, cancelled, batch_tx);
-        })
-        .with_response_deadline(Duration::from_secs(3600));
+        };
+        let task = if self.timeout_seconds == 0 {
+            Task::start_unbounded(worker_pool(), index)
+        } else {
+            let timeout = Duration::from_secs(self.timeout_seconds);
+            Task::start(worker_pool(), timeout, index).with_response_deadline(timeout)
+        };
         self.hash_job = Some(HashJob { task, batch_rx });
     }
 
@@ -1321,9 +1339,9 @@ mod lifecycle_tests {
             system: false,
         };
         let mut canvas = SimilarityCanvas::default();
-        canvas.sync(&directory, &[], false, false);
+        canvas.sync(&directory, &[], false, false, 10_000, 16, 900);
         let before = canvas.current_signature.clone();
-        canvas.sync(&directory, &[], false, true);
+        canvas.sync(&directory, &[], false, true, 10_000, 16, 900);
         assert_ne!(canvas.current_signature, before);
         canvas.invalidate();
         assert!(canvas.current_signature.is_none());
@@ -1345,7 +1363,8 @@ mod lifecycle_tests {
     #[test]
     fn retiring_incomplete_scan_invalidates_sync_stamp() {
         let mut canvas = SimilarityCanvas::default();
-        canvas.current_signature = Some((PathBuf::from("/photos"), 1, true, 0, false));
+        canvas.current_signature =
+            Some((PathBuf::from("/photos"), 1, true, 0, false, 10_000, 16, 900));
         let pool = BackgroundJobs::new(1, 2);
         canvas.scan_job = Some(Task::start(&pool, Duration::from_secs(2), |_| Vec::new()));
         canvas.retire();

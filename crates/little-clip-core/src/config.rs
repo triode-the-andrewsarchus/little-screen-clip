@@ -59,6 +59,12 @@ pub struct FileManagerConfig {
     pub photo_mode: String,
     /// Whether the photo similarity canvas recurses into subdirectories.
     pub photo_recurse: bool,
+    /// Maximum number of photos collected by a recursive similarity scan (default: 10,000).
+    pub photo_recursive_limit: usize,
+    /// Maximum subdirectory depth for a recursive similarity scan (default: 16).
+    pub photo_recursive_depth: usize,
+    /// Similarity scan and indexing timeout in seconds; 0 disables it (default: 3600).
+    pub photo_recursive_timeout_seconds: u64,
 }
 impl Default for FileManagerConfig {
     fn default() -> Self {
@@ -69,6 +75,9 @@ impl Default for FileManagerConfig {
             constellation_pad_keys: ["zxcv", "asdf", "qwer", "1234"].map(str::to_owned),
             photo_mode: "masonry".to_string(),
             photo_recurse: false,
+            photo_recursive_limit: 10_000,
+            photo_recursive_depth: 16,
+            photo_recursive_timeout_seconds: 3600,
         }
     }
 }
@@ -1034,10 +1043,16 @@ constellation_pad_keys = [";qjk", "aoeu", "',.p", "1234"]
         let defaults: AppConfig = toml::from_str("").unwrap();
         assert_eq!(defaults.file_manager.photo_mode, "masonry");
         assert!(!defaults.file_manager.photo_recurse);
-        let original = "[file_manager]\nphoto_mode = \"similarity\"\nphoto_recurse = true\n";
+        assert_eq!(defaults.file_manager.photo_recursive_limit, 10_000);
+        assert_eq!(defaults.file_manager.photo_recursive_depth, 16);
+        assert_eq!(defaults.file_manager.photo_recursive_timeout_seconds, 3600);
+        let original = "[file_manager]\nphoto_mode = \"similarity\"\nphoto_recurse = true\nphoto_recursive_limit = 12000\nphoto_recursive_depth = 24\nphoto_recursive_timeout_seconds = 0\n";
         let configured: AppConfig = toml::from_str(original).unwrap();
         assert_eq!(configured.file_manager.photo_mode, "similarity");
         assert!(configured.file_manager.photo_recurse);
+        assert_eq!(configured.file_manager.photo_recursive_limit, 12_000);
+        assert_eq!(configured.file_manager.photo_recursive_depth, 24);
+        assert_eq!(configured.file_manager.photo_recursive_timeout_seconds, 0);
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
@@ -1047,6 +1062,9 @@ constellation_pad_keys = [";qjk", "aoeu", "',.p", "1234"]
         let loaded = AppConfig::load_from_path(&path).unwrap();
         assert_eq!(loaded.file_manager.photo_mode, "masonry");
         assert!(!loaded.file_manager.photo_recurse);
+        assert_eq!(loaded.file_manager.photo_recursive_limit, 12_000);
+        assert_eq!(loaded.file_manager.photo_recursive_depth, 24);
+        assert_eq!(loaded.file_manager.photo_recursive_timeout_seconds, 0);
     }
 
     #[test]

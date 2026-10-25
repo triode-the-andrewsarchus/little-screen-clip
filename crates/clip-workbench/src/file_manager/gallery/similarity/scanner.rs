@@ -8,14 +8,17 @@ use std::{
 
 use super::super::super::filesystem::{Entry, read_entry};
 
-const MAX_RECURSIVE_ITEMS: usize = 10_000;
-const MAX_DIRECTORY_DEPTH: usize = 16;
-
 /// Recursively scans a directory for image files.
 ///
 /// Avoids symlink cycles, bind mount recursion, and kernel filesystems. Returns early
-/// with collected entries if `cancelled` is set or if the recursive item budget is reached.
-pub fn scan_recursive_photos(root: &Path, show_hidden: bool, cancelled: &AtomicBool) -> Vec<Entry> {
+/// with collected entries if `cancelled` is set or if `photo_limit` is reached.
+pub fn scan_recursive_photos(
+    root: &Path,
+    show_hidden: bool,
+    photo_limit: usize,
+    max_depth: usize,
+    cancelled: &AtomicBool,
+) -> Vec<Entry> {
     let mut results = Vec::new();
     let mut visited_dirs = HashSet::new();
 
@@ -34,10 +37,10 @@ pub fn scan_recursive_photos(root: &Path, show_hidden: bool, cancelled: &AtomicB
         if cancelled.load(Ordering::Relaxed) {
             break;
         }
-        if depth > MAX_DIRECTORY_DEPTH {
+        if depth > max_depth {
             continue;
         }
-        if results.len() >= MAX_RECURSIVE_ITEMS {
+        if results.len() >= photo_limit {
             break;
         }
 
@@ -53,7 +56,7 @@ pub fn scan_recursive_photos(root: &Path, show_hidden: bool, cancelled: &AtomicB
         };
 
         for child in reader.flatten() {
-            if cancelled.load(Ordering::Relaxed) || results.len() >= MAX_RECURSIVE_ITEMS {
+            if cancelled.load(Ordering::Relaxed) || results.len() >= photo_limit {
                 break;
             }
             let file_name = child.file_name();
@@ -83,6 +86,8 @@ pub fn scan_recursive_photos(root: &Path, show_hidden: bool, cancelled: &AtomicB
 mod tests {
     use super::*;
 
+    const DEFAULT_TEST_DIRECTORY_DEPTH: usize = 16;
+
     #[test]
     fn recursive_scanner_skips_over_depth_branches_without_abandoning_siblings() {
         let temp = tempfile::tempdir().unwrap();
@@ -93,9 +98,9 @@ mod tests {
         std::fs::create_dir_all(&branch_a).unwrap();
         std::fs::write(branch_a.join("photo_a.jpg"), b"fake_jpeg").unwrap();
 
-        // Branch B: deep branch exceeding MAX_DIRECTORY_DEPTH
+        // Branch B: deep branch exceeding the default configured depth.
         let mut deep = root.join("branch_b");
-        for i in 0..=MAX_DIRECTORY_DEPTH + 2 {
+        for i in 0..=DEFAULT_TEST_DIRECTORY_DEPTH + 2 {
             deep = deep.join(format!("depth_{i}"));
         }
         std::fs::create_dir_all(&deep).unwrap();
@@ -107,7 +112,13 @@ mod tests {
         std::fs::write(branch_c.join("photo_c.png"), b"fake_png").unwrap();
 
         let cancelled = AtomicBool::new(false);
-        let photos = scan_recursive_photos(root, false, &cancelled);
+        let photos = scan_recursive_photos(
+            root,
+            false,
+            10_000,
+            DEFAULT_TEST_DIRECTORY_DEPTH,
+            &cancelled,
+        );
 
         let names: Vec<String> = photos.into_iter().map(|e| e.name).collect();
         assert!(names.contains(&"photo_a.jpg".to_string()));
@@ -124,11 +135,48 @@ mod tests {
         std::fs::write(root.join(".hidden.jpg"), b"fake_jpeg").unwrap();
 
         let cancelled = AtomicBool::new(false);
-        let without_hidden = scan_recursive_photos(root, false, &cancelled);
+        let without_hidden = scan_recursive_photos(
+            root,
+            false,
+            10_000,
+            DEFAULT_TEST_DIRECTORY_DEPTH,
+            &cancelled,
+        );
         assert_eq!(without_hidden.len(), 1);
         assert_eq!(without_hidden[0].name, "visible.jpg");
 
-        let with_hidden = scan_recursive_photos(root, true, &cancelled);
+        let with_hidden =
+            scan_recursive_photos(root, true, 10_000, DEFAULT_TEST_DIRECTORY_DEPTH, &cancelled);
         assert_eq!(with_hidden.len(), 2);
+    }
+
+    #[test]
+    fn recursive_scanner_stops_at_configured_photo_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        for index in 0..5 {
+            std::fs::write(temp.path().join(format!("photo_{index}.jpg")), b"fixture").unwrap();
+        }
+
+        let photos = scan_recursive_photos(
+            temp.path(),
+            false,
+            3,
+            DEFAULT_TEST_DIRECTORY_DEPTH,
+            &AtomicBool::new(false),
+        );
+        assert_eq!(photos.len(), 3);
+    }
+
+    #[test]
+    fn recursive_scanner_respects_configured_max_depth() {
+        let temp = tempfile::tempdir().unwrap();
+        let nested = temp.path().join("one").join("two").join("three");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("photo.jpg"), b"fixture").unwrap();
+
+        let shallow = scan_recursive_photos(temp.path(), false, 10, 2, &AtomicBool::new(false));
+        assert!(shallow.is_empty());
+        let deep = scan_recursive_photos(temp.path(), false, 10, 3, &AtomicBool::new(false));
+        assert_eq!(deep.len(), 1);
     }
 }

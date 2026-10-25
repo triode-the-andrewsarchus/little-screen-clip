@@ -87,6 +87,10 @@ impl FileManagerApp {
         browser.photo_mode =
             super::gallery::similarity::PhotoMode::from_str(&config.file_manager.photo_mode);
         browser.photo_recurse = config.file_manager.photo_recurse;
+        browser.photo_recursive_limit = config.file_manager.photo_recursive_limit;
+        browser.photo_recursive_depth = config.file_manager.photo_recursive_depth;
+        browser.photo_recursive_timeout_seconds =
+            config.file_manager.photo_recursive_timeout_seconds;
         if let Some(path) = initial {
             browser.navigate(path, Navigation::New);
         }

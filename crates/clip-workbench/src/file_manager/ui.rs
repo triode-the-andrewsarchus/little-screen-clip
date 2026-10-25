@@ -691,6 +691,9 @@ impl FileManager {
                     &self.visible,
                     self.photo_recurse,
                     self.show_hidden,
+                    self.photo_recursive_limit,
+                    self.photo_recursive_depth,
+                    self.photo_recursive_timeout_seconds,
                 );
             }
             self.similarity_canvas.search_from_photo(&path);

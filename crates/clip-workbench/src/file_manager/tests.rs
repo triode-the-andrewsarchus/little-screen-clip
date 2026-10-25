@@ -1599,6 +1599,9 @@ fn recursive_photo_selection_and_keyboard_use_canvas_entries() {
         &manager.visible,
         false,
         false,
+        manager.photo_recursive_limit,
+        manager.photo_recursive_depth,
+        manager.photo_recursive_timeout_seconds,
     );
     manager.similarity_canvas.set_entries(
         read_directory(&nested, &AtomicBool::new(false))
