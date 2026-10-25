@@ -213,7 +213,7 @@ fn test_siglip_giant_1536d_embedding_and_normalization() {
     use super::embedding::FeatureVector;
     use super::siglip::SIGLIP_BATCH_SIZE;
 
-    assert_eq!(SIGLIP_BATCH_SIZE, 6);
+    assert_eq!(SIGLIP_BATCH_SIZE, 32);
 
     // SigLIP 2 Giant embedding dimension: 1536
     const D: usize = 1536;

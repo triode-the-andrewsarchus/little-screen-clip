@@ -32,7 +32,8 @@ def prepare(output, model_cache, appearance, env, children):
     cache = output / "cache"
     models = cache / "little-screen-clip/models"
     models.mkdir(parents=True)
-    for name in ["siglip2-giant-vision.onnx", "siglip2-giant-text.onnx",
+    for name in ["vision_model_fp16.onnx", "vision_model_fp16.onnx_data",
+                 "siglip2-giant-text.onnx",
                  "siglip2-giant-tokenizer.json"]:
         shutil.copyfile(model_cache / name, models / name)
     env["XDG_CACHE_HOME"] = str(cache)
@@ -101,7 +102,8 @@ def exercise(session, root):
 
 def main():
     args = application_arguments(__doc__, Path("target/debug/clip-file-manager"), configure)
-    for name in ["siglip2-giant-vision.onnx", "siglip2-giant-text.onnx",
+    for name in ["vision_model_fp16.onnx", "vision_model_fp16.onnx_data",
+                 "siglip2-giant-text.onnx",
                  "siglip2-giant-tokenizer.json"]:
         if not (args.model_cache / name).is_file():
             raise SystemExit(f"Required cached model: {args.model_cache / name}")

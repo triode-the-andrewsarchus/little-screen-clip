@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::embedding::FeatureVector;
 use crate::{
     file_source::FileSource,
-    onnx_runtime::{SIGLIP2_GIANT_MODEL_NAME, models_cache_dir},
+    onnx_runtime::{SIGLIP2_GIANT_MODEL_DATA_NAME, SIGLIP2_GIANT_MODEL_NAME, models_cache_dir},
 };
 
 const VISION_DIMENSIONS: usize = 1536;
@@ -18,8 +18,13 @@ const DHASH_REVISION: &[u8] = b"dhash-v1";
 
 pub(super) fn model_revision() -> Option<Vec<u8>> {
     let source = FileSource::capture(&models_cache_dir().join(SIGLIP2_GIANT_MODEL_NAME)).ok()?;
-    let mut revision = b"siglip2-giant-rgb256-normalized-v1".to_vec();
+    let mut revision = b"siglip2-giant-fp16-rgb256-normalized-v1".to_vec();
     revision.extend(source.revision_key());
+    if let Ok(weights) =
+        FileSource::capture(&models_cache_dir().join(SIGLIP2_GIANT_MODEL_DATA_NAME))
+    {
+        revision.extend(weights.revision_key());
+    }
     Some(revision)
 }
 

@@ -157,8 +157,10 @@ pub const DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL: &str =
 /// Default download URL for the MobileSAM decoder ONNX model.
 pub const DEFAULT_MOBILE_SAM_DECODER_MODEL_URL: &str =
     "https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx";
-/// Default download URL for the SigLIP 2 Giant vision encoder ONNX model.
-pub const DEFAULT_SIGLIP2_GIANT_MODEL_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_quantized.onnx";
+/// Default download URL for the FP16 SigLIP 2 Giant vision encoder ONNX graph.
+pub const DEFAULT_SIGLIP2_GIANT_MODEL_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_fp16.onnx";
+/// Default download URL for the FP16 SigLIP 2 Giant vision encoder weights.
+pub const DEFAULT_SIGLIP2_GIANT_MODEL_DATA_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_fp16.onnx_data";
 /// Default download URL for the SigLIP 2 Giant text encoder ONNX model.
 pub const DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/text_model_quantized.onnx";
 /// Default download URL for the SigLIP 2 Giant tokenizer JSON configuration.
@@ -197,6 +199,8 @@ pub struct AiModelsConfig {
         alias = "siglip_url"
     )]
     pub siglip2_giant_url: Option<String>,
+    /// Optional URL override for the external FP16 SigLIP 2 Giant vision weights.
+    pub siglip2_giant_data_url: Option<String>,
     /// Optional URL override for downloading the SigLIP 2 Giant text encoder ONNX model.
     #[serde(
         alias = "siglip2_text_url",
@@ -812,6 +816,15 @@ impl AppConfig {
             .unwrap_or(DEFAULT_SIGLIP2_GIANT_MODEL_URL)
     }
 
+    /// Returns the configured or default FP16 SigLIP vision weights URL.
+    pub fn siglip2_giant_model_data_url(&self) -> &str {
+        self.ai_models
+            .siglip2_giant_data_url
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or(DEFAULT_SIGLIP2_GIANT_MODEL_DATA_URL)
+    }
+
     /// Returns the URL for downloading the SigLIP 2 Giant text encoder ONNX model.
     pub fn siglip2_giant_text_model_url(&self) -> &str {
         self.ai_models
@@ -1127,6 +1140,10 @@ triangle_limit = 2500
             DEFAULT_SIGLIP2_GIANT_MODEL_URL
         );
         assert_eq!(
+            default_cfg.siglip2_giant_model_data_url(),
+            DEFAULT_SIGLIP2_GIANT_MODEL_DATA_URL
+        );
+        assert_eq!(
             default_cfg.siglip2_giant_text_model_url(),
             DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL
         );
@@ -1144,6 +1161,7 @@ depth_url = "https://custom.mirror/depth.onnx"
 sam_encoder_url = "https://custom.mirror/sam_enc.onnx"
 sam_decoder_url = "https://custom.mirror/sam_dec.onnx"
 siglip2_giant_url = "https://custom.mirror/siglip2.onnx"
+siglip2_giant_data_url = "https://custom.mirror/siglip2.onnx_data"
 siglip2_giant_text_url = "https://custom.mirror/siglip2_text.onnx"
 siglip2_giant_tokenizer_url = "https://custom.mirror/siglip2_tokenizer.json"
 "#;
@@ -1169,6 +1187,10 @@ siglip2_giant_tokenizer_url = "https://custom.mirror/siglip2_tokenizer.json"
         assert_eq!(
             ai_cfg.siglip2_giant_model_url(),
             "https://custom.mirror/siglip2.onnx"
+        );
+        assert_eq!(
+            ai_cfg.siglip2_giant_model_data_url(),
+            "https://custom.mirror/siglip2.onnx_data"
         );
         assert_eq!(
             ai_cfg.siglip2_giant_text_model_url(),

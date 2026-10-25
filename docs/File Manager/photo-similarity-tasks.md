@@ -79,7 +79,7 @@ Worker layout snapshots now share entry arrays and dense embedding buffers. PCA 
 
 ## Classification batching
 
-SigLIP vision inference processes at most six uncached images per call, on both CUDA and CPU fallback. The final partial batch can be smaller. Persistent hits are published without inference, and a failed batch is retried image by image to isolate bad sources. Six is the current fixed default. The RTX 3090 benchmark selected six; CPU-specific tuning has not been measured. Image Studio tools operate on one chosen image per user operation.
+SigLIP vision inference processes at most 32 uncached images per call. The final partial batch can be smaller. Persistent hits are published without inference, and a failed batch is retried image by image to isolate bad sources. The vision encoder is the FP16 ONNX export with its external weights cached alongside it; both files contribute to the embedding-cache revision. The RTX 3090 benchmark selected 32. CPU-specific tuning has not been measured, and CPU fallback uses the same batch size. Image Studio tools operate on one chosen image per user operation.
 
 ## Review completion and validation
 
@@ -92,26 +92,30 @@ python -m py_compile scripts/file_manager_photo_similarity_acceptance.py
 python scripts/file_manager_photo_similarity_acceptance.py --appearance dark --output-dir /tmp/photo-similarity-acceptance
 ```
 
-The workspace passed 2,637 tests with no failures and 33 opt-in/hardware tests ignored. The new focus regression was confirmed failing before the fix and passing afterward. The UI smoke test uses the private Weston/Niri runner, requires the three cached SigLIP files, and isolates configuration and the SQLite database. It verified 24 persisted neural embeddings, a red-image query, compact controls at 97% zoom, Ctrl+A selecting recursive entries, an eight-image subfolder and return to the original collection. The standard English Tesseract language data must be installed or supplied through `TESSDATA_PREFIX`.
+The workspace passed 2,637 tests with no failures and 33 opt-in/hardware tests ignored. The new focus regression was confirmed failing before the fix and passing afterward. The UI smoke test uses the private Weston/Niri runner, requires the FP16 SigLIP vision graph and weights plus the text model and tokenizer, and isolates configuration and the SQLite database. It verified 24 persisted neural embeddings, a red-image query, compact controls at 97% zoom, Ctrl+A selecting recursive entries, an eight-image subfolder and return to the original collection. The standard English Tesseract language data must be installed or supplied through `TESSDATA_PREFIX`.
 
 Against the pre-review baseline, clone groups fell from 1,446 to 1,442, average complexity fell from 4.07 to 4.05, and dependency cycles remained at six. The checker still labels the comparison REGRESSION because it flags existing clone ranges after edits and shared setup patterns in regression tests; the reported script-cycle changes reorder existing members of untouched scripts. The original canvas grid constructors and score tests already contained the corresponding repeated patterns. No new production complexity hotspot remains from these fixes. The added source implements cancellation, revision validation, worker scheduling and regression coverage; it does not duplicate the audio database.
 
 ### RTX 3090 batch-size benchmark
 
-An opt-in raw inference benchmark used the cached SigLIP vision model, checked CUDA kernel traces on every run, warmed each session twice, and reported the median of five inferences. Each size ran in its own process. A 100 ms `nvidia-smi` poll stopped the run if total GPU use approached 12 GiB free, to leave room for other applications. Other GPU work was active, so throughput is directional and varied between repeats. The benchmark excludes image decode and thumbnail preprocessing.
+An opt-in raw inference benchmark used the cached FP16 vision model. Each run verified CUDA kernels in a separate profiled session, then measured five inferences in a normal session after two warmups, avoiding profiler overhead in the timings. Each size ran in its own process. A 100 ms `nvidia-smi` poll stopped a run below 12 GiB free. Other GPU work was active, so throughput is directional. The benchmark excludes image decode and thumbnail preprocessing.
 
-| Batch | Images/sec across runs | Additional total VRAM sampled above run baseline |
+| Batch | Images/sec | Minimum free VRAM sampled |
 |---:|---:|---:|
-| 1 | 2.15 | 415 MiB |
-| 2 | 2.05–2.34 | 544–632 MiB |
-| 4 | 2.33–2.37 | 798–1,075 MiB |
-| 6 | 2.55–2.56 | 798–880 MiB |
-| 8 | 1.82–2.07 | 1,350–1,400 MiB |
+| 1 | 66.96–70.58 | 14.5 GiB |
+| 2 | 77.58 | 14.2 GiB |
+| 4 | 77.24 | 14.3 GiB |
+| 8 | 83.10 | 14.5 GiB |
+| 12 | 86.09 | 14.5 GiB |
+| 16 | 83.35–86.64 | 14.2–14.5 GiB |
+| 20 | 88.48 | 14.3 GiB |
+| 24 | 86.39 | 14.5 GiB |
+| 32 | 89.55–90.33 | 14.2–14.5 GiB |
 
-Six was the fastest repeatable size. It delivered about 8% more throughput than four while using around 0.8 GiB above baseline in these runs. Eight was slower and used about 0.5 GiB more than six. The highest sampled total GPU use was 6,241 MiB of 24,576 MiB. The host-side baseline changed between runs as other GPU applications allocated memory; this measurement is not per-process VRAM attribution.
+Batch 32 is the current default: it gave the best repeatable throughput among the tested sizes while leaving more than 14 GiB free for concurrent GPU applications. The 2.33 GB external FP16 weight file is stored separately from the small ONNX graph.
 
-The ignored benchmark can be repeated one size per process, up to eight:
+The ignored benchmark can be repeated one size per process, up to 32:
 
 ```bash
-SIGLIP_BENCH_BATCH_SIZE=6 cargo test -p clip-workbench --lib benchmark_siglip_cuda_batch_size -- --ignored --nocapture
+SIGLIP_BENCH_BATCH_SIZE=32 cargo test -p clip-workbench --lib benchmark_siglip_cuda_batch_size -- --ignored --nocapture
 ```

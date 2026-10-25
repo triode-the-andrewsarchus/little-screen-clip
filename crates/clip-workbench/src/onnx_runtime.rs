@@ -26,10 +26,15 @@ pub const MOBILE_SAM_ENCODER_MODEL_URL: &str = DEFAULT_MOBILE_SAM_ENCODER_MODEL_
 pub const MOBILE_SAM_DECODER_MODEL_NAME: &str = "mobile_sam_decoder.onnx";
 pub const MOBILE_SAM_DECODER_MODEL_URL: &str = DEFAULT_MOBILE_SAM_DECODER_MODEL_URL;
 
-/// File name for the SigLIP 2 Giant vision encoder ONNX model.
-pub const SIGLIP2_GIANT_MODEL_NAME: &str = "siglip2-giant-vision.onnx";
+/// File name for the FP16 SigLIP 2 Giant vision encoder ONNX graph.
+pub const SIGLIP2_GIANT_MODEL_NAME: &str = "vision_model_fp16.onnx";
 /// Default download URL for the SigLIP 2 Giant vision encoder ONNX model.
 pub const SIGLIP2_GIANT_MODEL_URL: &str = DEFAULT_SIGLIP2_GIANT_MODEL_URL;
+/// File name for the FP16 SigLIP 2 Giant vision encoder's external weights.
+pub const SIGLIP2_GIANT_MODEL_DATA_NAME: &str = "vision_model_fp16.onnx_data";
+/// Default download URL for the FP16 SigLIP 2 Giant vision encoder's external weights.
+pub const SIGLIP2_GIANT_MODEL_DATA_URL: &str =
+    little_clip_core::config::DEFAULT_SIGLIP2_GIANT_MODEL_DATA_URL;
 
 /// File name for the SigLIP 2 Giant text encoder ONNX model.
 pub const SIGLIP2_GIANT_TEXT_MODEL_NAME: &str = "siglip2-giant-text.onnx";
@@ -131,6 +136,7 @@ pub fn resolve_model_url(model_name: &str, url_override: Option<&str>) -> String
         MOBILE_SAM_ENCODER_MODEL_NAME => config.sam_encoder_model_url().to_string(),
         MOBILE_SAM_DECODER_MODEL_NAME => config.sam_decoder_model_url().to_string(),
         SIGLIP2_GIANT_MODEL_NAME => config.siglip2_giant_model_url().to_string(),
+        SIGLIP2_GIANT_MODEL_DATA_NAME => config.siglip2_giant_model_data_url().to_string(),
         SIGLIP2_GIANT_TEXT_MODEL_NAME => config.siglip2_giant_text_model_url().to_string(),
         SIGLIP2_GIANT_TOKENIZER_NAME => config.siglip2_giant_tokenizer_url().to_string(),
         _ => String::new(),
@@ -146,7 +152,8 @@ pub fn expected_model_size(model_name: &str) -> Option<u64> {
         "rmbg-1.4.onnx" => Some(176_153_355),
         MOBILE_SAM_ENCODER_MODEL_NAME => Some(28_157_093),
         MOBILE_SAM_DECODER_MODEL_NAME => Some(16_501_323),
-        SIGLIP2_GIANT_MODEL_NAME => Some(1_170_827_444),
+        SIGLIP2_GIANT_MODEL_NAME => Some(903_822),
+        SIGLIP2_GIANT_MODEL_DATA_NAME => Some(2_326_336_512),
         SIGLIP2_GIANT_TEXT_MODEL_NAME => Some(711_572_480),
         SIGLIP2_GIANT_TOKENIZER_NAME => Some(34_363_039),
         _ => None,
@@ -170,7 +177,7 @@ pub fn models_cache_dir() -> PathBuf {
 pub fn is_model_cached(model_name: &str) -> bool {
     let model_path = models_cache_dir().join(model_name);
     if let Ok(meta) = std::fs::metadata(&model_path) {
-        meta.len() > MIN_VALID_MODEL_BYTES
+        is_valid_cached_model(model_name, meta.len())
     } else {
         false
     }
@@ -204,7 +211,36 @@ where
     if url.is_empty() {
         return Err(format!("No download URL configured for model {model_name}"));
     }
-    ensure_model_with_url_progress(model_name, &url, on_progress)
+    let has_external_data = if model_name == SIGLIP2_GIANT_MODEL_NAME {
+        let config = little_clip_core::AppConfig::load();
+        let has_custom_data_url = config
+            .ai_models
+            .siglip2_giant_data_url
+            .as_deref()
+            .is_some_and(|url| !url.trim().is_empty());
+        if url == SIGLIP2_GIANT_MODEL_URL || has_custom_data_url {
+            ensure_model_with_url_progress(
+                SIGLIP2_GIANT_MODEL_DATA_NAME,
+                config.siglip2_giant_model_data_url(),
+                |fraction, message| on_progress(fraction * 0.9, message),
+            )?;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    ensure_model_with_url_progress(model_name, &url, |fraction, message| {
+        on_progress(
+            if has_external_data {
+                0.9 + fraction * 0.1
+            } else {
+                fraction
+            },
+            message,
+        )
+    })
 }
 
 /// Ensure that a named ONNX model is available locally in the cache directory,
@@ -222,7 +258,7 @@ where
     if model_path.exists() {
         if let Ok(meta) = std::fs::metadata(&model_path) {
             // Verify file has non-trivial size (> 1MB) so corrupted/stub downloads are discarded
-            if meta.len() > MIN_VALID_MODEL_BYTES {
+            if is_valid_cached_model(model_name, meta.len()) {
                 return Ok(model_path);
             }
         }
@@ -274,10 +310,10 @@ where
     match status {
         st if st.success() && tmp_path.exists() => {
             if let Ok(meta) = std::fs::metadata(&tmp_path) {
-                if meta.len() <= 1_000_000 {
+                if !is_valid_cached_model(model_name, meta.len()) {
                     let _ = std::fs::remove_file(&tmp_path);
                     return Err(format!(
-                        "Downloaded model {model_name} is too small ({} bytes)",
+                        "Downloaded model {model_name} has an invalid size ({} bytes)",
                         meta.len()
                     ));
                 }
@@ -292,6 +328,14 @@ where
             Err(format!("curl download failed with exit code {st}"))
         }
     }
+}
+
+fn is_valid_cached_model(model_name: &str, size: u64) -> bool {
+    if model_name == SIGLIP2_GIANT_MODEL_DATA_NAME {
+        return expected_model_size(model_name) == Some(size);
+    }
+    size > MIN_VALID_MODEL_BYTES
+        || (model_name == SIGLIP2_GIANT_MODEL_NAME && expected_model_size(model_name) == Some(size))
 }
 
 /// Runs an opt-in model probe and checks actual execution-provider trace events.
@@ -450,6 +494,10 @@ mod tests {
             custom
         );
         assert_eq!(
+            resolve_model_url(SIGLIP2_GIANT_MODEL_DATA_NAME, Some(custom)),
+            custom
+        );
+        assert_eq!(
             resolve_model_url(SIGLIP2_GIANT_TEXT_MODEL_NAME, Some(custom)),
             custom
         );
@@ -486,6 +534,10 @@ mod tests {
             SIGLIP2_GIANT_MODEL_URL
         );
         assert_eq!(
+            resolve_model_url(SIGLIP2_GIANT_MODEL_DATA_NAME, None),
+            SIGLIP2_GIANT_MODEL_DATA_URL
+        );
+        assert_eq!(
             resolve_model_url(SIGLIP2_GIANT_TEXT_MODEL_NAME, None),
             SIGLIP2_GIANT_TEXT_MODEL_URL
         );
@@ -493,6 +545,24 @@ mod tests {
             resolve_model_url(SIGLIP2_GIANT_TOKENIZER_NAME, None),
             SIGLIP2_GIANT_TOKENIZER_URL
         );
+    }
+
+    #[test]
+    fn fp16_siglip_external_assets_validate_their_expected_sizes() {
+        assert_eq!(expected_model_size(SIGLIP2_GIANT_MODEL_NAME), Some(903_822));
+        assert_eq!(
+            expected_model_size(SIGLIP2_GIANT_MODEL_DATA_NAME),
+            Some(2_326_336_512)
+        );
+        assert!(is_valid_cached_model(SIGLIP2_GIANT_MODEL_NAME, 903_822));
+        assert!(is_valid_cached_model(
+            SIGLIP2_GIANT_MODEL_DATA_NAME,
+            2_326_336_512
+        ));
+        assert!(!is_valid_cached_model(
+            SIGLIP2_GIANT_MODEL_DATA_NAME,
+            2_326_336_511
+        ));
     }
 
     #[test]
