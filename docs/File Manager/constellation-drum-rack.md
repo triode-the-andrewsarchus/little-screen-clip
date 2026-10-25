@@ -201,7 +201,8 @@ rails set attack and release (0–500 ms); drag A right or R left to lengthen a 
 or double-click the flag to reset it. Crowded flags use separate lanes so both
 remain reachable. The envelope guides show the resulting fades, including after
 trimming; overlapping fades use the lower envelope. No duplicate numeric trim
-fields or selected-duration text occupy the editor.
+fields or selected-duration text occupy the editor. For reverse playback, A starts
+at OUT and R ends at IN; their drag directions and envelope guides reverse.
 
 Retrigger controls restarting for the entire selected pad.
 Speed and Pitch apply independently to the selected layer. Speed ranges from
