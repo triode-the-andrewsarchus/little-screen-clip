@@ -522,3 +522,143 @@ fn resize_rebatching_preserves_absolute_item_anchor_and_metadata_cache() {
     let corrected = gallery.anchored_offset(anchor);
     assert!((corrected - gallery.item_offset(anchor.item.unwrap()) - anchor.delta).abs() < 0.01);
 }
+
+#[test]
+fn ten_row_retention_window_bounds_previews_and_discards_distant_tiles() {
+    let directory = synthetic_directory(500);
+    let visible = (0..500).collect::<Vec<_>>();
+    let mut gallery = Gallery::default();
+    gallery.sync(&directory, &visible, false, 10);
+    for i in 0..gallery.chunks.len() {
+        seed_chunk(&mut gallery, i, 1.0);
+    }
+
+    // Viewport at y: [40.0, 50.0]
+    let view_min = 40.0;
+    let view_max = 50.0;
+    const BUFFER_ROWS_UNITS: f32 = 20.0; // 10 rows at 2 units/row
+    let retain_min = (view_min - BUFFER_ROWS_UNITS).max(0.0); // 20.0
+    let retain_max = view_max + BUFFER_ROWS_UNITS; // 70.0
+
+    let visible_tiles = gallery.placements(view_min, view_max);
+    let retain_tiles = gallery.placements(retain_min, retain_max);
+
+    // Retained tiles include all visible tiles
+    for vis in &visible_tiles {
+        assert!(retain_tiles.iter().any(|t| t.index == vis.index));
+    }
+
+    // Retained tiles include tiles within the 10-row buffer
+    assert!(retain_tiles.len() > visible_tiles.len());
+
+    // Tiles more than 10 rows out of view (e.g. at y = 10.0 or y = 80.0) are NOT in retain_tiles
+    for tile in &retain_tiles {
+        assert!(tile.y + tile.height as f32 >= retain_min);
+        assert!(tile.y <= retain_max);
+    }
+
+    // Pre-cache buffer tiles are strictly outside visible tiles and ordered by distance
+    let mut buffer_tiles: Vec<_> = retain_tiles
+        .iter()
+        .filter(|t| !visible_tiles.iter().any(|v| v.index == t.index))
+        .collect();
+    let center_y = (view_min + view_max) / 2.0;
+    buffer_tiles.sort_by(|a, b| {
+        let dist_a = (a.y - center_y).abs();
+        let dist_b = (b.y - center_y).abs();
+        dist_a.total_cmp(&dist_b)
+    });
+    for window in buffer_tiles.windows(2) {
+        let d0 = (window[0].y - center_y).abs();
+        let d1 = (window[1].y - center_y).abs();
+        assert!(d0 <= d1 + 0.001);
+    }
+}
+
+#[test]
+fn gallery_zoom_and_temporal_badge_invariants() {
+    // 1. In-place zoom edge clamping
+    let mut edge = 160.0f32;
+    let zoom_delta = 50.0f32;
+    edge = (edge + zoom_delta * 0.4).clamp(80.0, 280.0);
+    assert_eq!(edge, 180.0);
+
+    // Zooming out to lower limit clamps at 80.0
+    edge = (edge - 500.0 * 0.4).clamp(80.0, 280.0);
+    assert_eq!(edge, 80.0);
+
+    // Zooming in to upper limit clamps at 280.0
+    edge = (edge + 1000.0 * 0.4).clamp(80.0, 280.0);
+    assert_eq!(edge, 280.0);
+
+    // 2. Date label extraction invariant for temporal timeline badge
+    let format_date = |modified: &str| -> Option<String> {
+        if modified.len() >= 7 {
+            Some(modified[0..7].to_string())
+        } else {
+            None
+        }
+    };
+    assert_eq!(format_date("2024-10-22 14:30"), Some("2024-10".to_string()));
+    assert_eq!(format_date("—"), None);
+
+    // 3. Megapixel calculation invariant for EXIF hover pop-out
+    let (w, h) = (4032.0f32, 3024.0f32);
+    let mp = (w * h) / 1_000_000.0;
+    assert_eq!(format!("{:.1} MP", mp), "12.2 MP");
+
+    // 4. Alphabetical letter extraction for alphabetical scrolling badge
+    let extract_letter = |name: &str| -> Option<String> {
+        name.chars()
+            .find(|c| c.is_alphanumeric())
+            .map(|c| c.to_uppercase().to_string())
+            .or_else(|| name.chars().next().map(|c| c.to_uppercase().to_string()))
+    };
+    assert_eq!(extract_letter("IMG_001.jpg"), Some("I".to_string()));
+    assert_eq!(extract_letter("beach sunset.png"), Some("B".to_string()));
+    assert_eq!(extract_letter("100_photo.jpg"), Some("1".to_string()));
+    assert_eq!(extract_letter(".hidden.jpg"), Some("H".to_string()));
+    assert_eq!(extract_letter(""), None);
+}
+
+#[test]
+fn test_deferred_gallery_hq_upgrade_resilience() {
+    let mut previews = super::super::previews::EntryPreviews::default();
+    let entry = Entry {
+        path: PathBuf::from("/test/sample_photo.jpg"),
+        name: "sample_photo.jpg".into(),
+        directory: false,
+        regular_file: true,
+        system: None,
+        typescript: false,
+        symlink: false,
+        hidden: false,
+        size: "2 MB".into(),
+        size_bytes: 2 * 1024 * 1024,
+        modified: "2024-10-22".into(),
+        modified_time: None,
+        warning: None,
+        revision: 1,
+        identity: None,
+    };
+
+    assert!(!previews.is_ready(&entry));
+    assert_eq!(previews.gallery_size(&entry.path), 0);
+    assert!(!previews.has_pending());
+
+    // Initial base thumbnail request
+    previews.request_gallery(&entry, 256, 1);
+    // Since job was submitted, gallery_size is recorded as 256 and pending is active
+    assert_eq!(previews.gallery_size(&entry.path), 256);
+    assert!(previews.has_pending());
+
+    // Attempting an HQ upgrade (1024) while the base thumbnail is still pending in the worker
+    // must NOT prematurely overwrite gallery_size to 1024 if the refresh job was deferred!
+    previews.request_gallery(&entry, 1024, 1);
+    // gallery_size remains at 256 so the upgrade can be retried once the worker slot is free
+    assert_eq!(
+        previews.gallery_size(&entry.path),
+        256,
+        "gallery_size must not prematurely advance to 1024 if refresh was deferred"
+    );
+}

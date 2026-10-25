@@ -31,6 +31,13 @@ impl<T: Send + 'static> Task<T> {
             response_deadline: None,
         }
     }
+    /// Starts work without a time limit; dropping the task still requests cancellation.
+    pub fn start_unbounded(
+        pool: &BackgroundJobs,
+        work: impl FnOnce(&AtomicBool) -> T + Send + 'static,
+    ) -> Self {
+        Self::start(pool, Duration::MAX, work)
+    }
     pub fn poll(&self) -> Option<Result<T, JobError>> {
         let result = poll(&self.receiver, self.response_deadline);
         if matches!(result, Some(Err(JobError::TimedOut))) {
@@ -40,7 +47,8 @@ impl<T: Send + 'static> Task<T> {
         result
     }
     pub fn with_response_deadline(mut self, timeout: Duration) -> Self {
-        self.response_deadline = Some(Instant::now() + timeout);
+        // An unrepresentably distant deadline cannot expire within this process lifetime.
+        self.response_deadline = Instant::now().checked_add(timeout);
         self
     }
 }
@@ -109,5 +117,35 @@ mod tests {
             poll(&receiver, Some(Instant::now())),
             Some(Err(JobError::TimedOut))
         ));
+    }
+
+    #[test]
+    fn overflowing_response_deadline_preserves_completion() {
+        let pool = BackgroundJobs::new(1, 2);
+        let task = Task::start(&pool, Duration::MAX, |_| 42).with_response_deadline(Duration::MAX);
+        assert!(task.response_deadline.is_none());
+        assert_eq!(
+            task.receiver
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .unwrap(),
+            42
+        );
+    }
+
+    #[test]
+    fn unbounded_task_has_no_response_deadline_and_completes() {
+        let pool = BackgroundJobs::new(1, 2);
+        let task = Task::start_unbounded(&pool, |_| 42);
+        assert!(task.response_deadline.is_none());
+        let started = Instant::now();
+        loop {
+            if let Some(result) = task.poll() {
+                assert_eq!(result.unwrap(), 42);
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(3));
+            std::thread::yield_now();
+        }
     }
 }

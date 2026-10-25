@@ -127,6 +127,10 @@ viewer = "nomacs"
 # depth_url = "https://huggingface.co/mtbui2010/depth-anything-v2-small-ONNX/resolve/main/model.onnx"
 # sam_encoder_url = "https://huggingface.co/Acly/MobileSAM/resolve/main/mobile_sam_image_encoder.onnx"
 # sam_decoder_url = "https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx"
+# siglip2_giant_url = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_fp16.onnx"
+# siglip2_giant_data_url = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_fp16.onnx_data"
+# siglip2_giant_text_url = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/text_model_quantized.onnx"
+# siglip2_giant_tokenizer_url = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/tokenizer.json"
 
 [text]
 # Preferred external text editor command for text preview escape hatch
@@ -150,3 +154,11 @@ workbench_triangle_limit = 150000
 constellation_pad_keys = ["zxcv", "asdf", "qwer", "1234"]
 # Pixels per video timeline sample: 1 (native resolution), 2, 4, 8, or 16.
 video_timeline_decimation = 1
+photo_mode = "similarity"
+photo_recurse = true
+# Maximum photos loaded by recursive similarity scans (default: 10000).
+photo_recursive_limit = 1000000
+# Maximum subdirectory depth for recursive similarity scans (default: 16).
+photo_recursive_depth = 64
+# Similarity scan and indexing timeout in seconds; 0 disables it (default: 3600).
+photo_recursive_timeout_seconds = 0

@@ -53,12 +53,13 @@ filmr = { path = "../../vendor/filmr", default-features = false, features = ["co
 
 object = { version = "0.40", default-features = false, features = ["read", "std"] }
 sha2 = "0.10"
-ort = { version = "2.0.0-rc.15", features = ["download-binaries"] }
+ort = { version = "2.0.0-rc.15", features = ["download-binaries", "cuda"] }
 ndarray = "0.17.2"
 fuse-binwalk = { git = "https://github.com/triode-the-andrewsarchus/fuse-binwalk" }
 rusqlite = { version = "0.35", features = ["bundled", "backup", "limits", "hooks", "functions"] }
 realfft = "3.5.0"
 midir = "0.11"
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 
 [dev-dependencies]
 rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }

@@ -220,6 +220,15 @@ pub(crate) struct FileManager {
     gallery_columns: usize,
     gallery_layout: gallery::Gallery,
     gallery_selecting: bool,
+    gallery_last_scroll_y: f32,
+    gallery_last_scroll_time: f64,
+    gallery_hover: gallery::GalleryHover,
+    pub(in crate::file_manager) photo_mode: gallery::similarity::PhotoMode,
+    pub(in crate::file_manager) photo_recurse: bool,
+    pub(in crate::file_manager) photo_recursive_limit: usize,
+    pub(in crate::file_manager) photo_recursive_depth: usize,
+    pub(in crate::file_manager) photo_recursive_timeout_seconds: u64,
+    pub(in crate::file_manager) similarity_canvas: gallery::similarity::SimilarityCanvas,
     music: music::Music,
     midi: midi_strip::Preview,
     audio_entries: Vec<PathBuf>,
@@ -293,6 +302,15 @@ impl FileManager {
             gallery_columns: 1,
             gallery_layout: Default::default(),
             gallery_selecting: false,
+            gallery_last_scroll_y: 0.0,
+            gallery_last_scroll_time: 0.0,
+            gallery_hover: Default::default(),
+            photo_mode: gallery::similarity::PhotoMode::default(),
+            photo_recurse: false,
+            photo_recursive_limit: 10_000,
+            photo_recursive_depth: 16,
+            photo_recursive_timeout_seconds: 3600,
+            similarity_canvas: gallery::similarity::SimilarityCanvas::default(),
             music: music::Music::default(),
             midi: midi_strip::Preview::default(),
             audio_entries: Vec::new(),
@@ -349,8 +367,12 @@ impl FileManager {
         self.constellation.stop_map_audition = false;
         self.music.stop();
         self.midi.stop();
+        self.gallery_hover.clear();
     }
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
+        if matches!(navigation, Navigation::Refresh) {
+            self.similarity_canvas.invalidate();
+        }
         self.type_navigation.clear();
         self.reveal_target = None;
         if path != self.path() {
@@ -753,30 +775,23 @@ impl FileManager {
     }
 
     fn move_selection_by(&mut self, delta: isize, extend: bool) {
-        if self.visible.is_empty() {
+        let entries = self.displayed_entries();
+        if entries.is_empty() {
             return;
         }
-        let directory = self
-            .directory
-            .as_ref()
-            .expect("visible entries have a directory");
         let selected = self
             .location()
             .and_then(|location| location.selected.as_ref());
-        let index = self
-            .visible
+        let index = entries
             .iter()
-            .position(|i| Some(&directory.entries[*i].path) == selected);
+            .position(|entry| Some(&entry.path) == selected);
         let index = match index {
-            Some(i) => i.saturating_add_signed(delta).min(self.visible.len() - 1),
+            Some(i) => i.saturating_add_signed(delta).min(entries.len() - 1),
             None if delta >= 0 => 0,
-            None => self.visible.len() - 1,
+            None => entries.len() - 1,
         };
-        self.select_with(
-            directory.entries[self.visible[index]].path.clone(),
-            false,
-            extend,
-        );
+        let path = entries[index].path.clone();
+        self.select_with(path, false, extend);
         self.reveal_selection = true;
     }
 
@@ -788,14 +803,9 @@ impl FileManager {
             .location()
             .and_then(|location| location.selection.first());
         let path = self
-            .directory
-            .as_ref()
-            .and_then(|directory| {
-                directory
-                    .entries
-                    .iter()
-                    .find(|entry| Some(&entry.path) == selected)
-            })
+            .displayed_entries()
+            .iter()
+            .find(|entry| Some(&entry.path) == selected)
             .map(|entry| entry.path.clone());
         if let Some(path) = path {
             self.open_path(path);

@@ -22,6 +22,7 @@ pub(in crate::file_manager) enum Source {
     Slot(SlotId, uuid::Uuid),
     Gallery {
         path: PathBuf,
+        revision: u64,
         edge: u32,
         orientation: u8,
     },
@@ -93,9 +94,10 @@ impl Source {
             Source::Slot(slot, expected) => slot_preview(slot, expected),
             Source::Gallery {
                 path,
+                revision,
                 edge,
                 orientation,
-            } => gallery_preview(&path, edge, orientation, token),
+            } => gallery_preview(&path, revision, edge, orientation, token),
             Source::Photo { path, revision } => {
                 super::super::image_strip::load(&path, revision, token)
             }
@@ -244,6 +246,9 @@ pub(in crate::file_manager) struct Previews {
 }
 
 impl Previews {
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
     pub fn needs(&self, id: uuid::Uuid) -> bool {
         !self.pending.contains_key(&id) && !self.ready.contains_key(&id)
     }
@@ -265,8 +270,8 @@ impl Previews {
         self.ready.get(&id)
     }
 
-    pub fn request(&mut self, id: uuid::Uuid, source: Source) {
-        let _ = self.start(id, source, false);
+    pub fn request(&mut self, id: uuid::Uuid, source: Source) -> bool {
+        self.start(id, source, false)
     }
     pub fn refresh(&mut self, id: uuid::Uuid, source: Source) -> bool {
         self.start(id, source, true)
@@ -706,14 +711,48 @@ fn thumbnail(bytes: &[u8], mime: Option<&str>) -> Option<ImageThumbnail> {
     sized_thumbnail(bytes, mime, 128, 80)
 }
 
-fn gallery_preview(path: &Path, edge: u32, orientation: u8, cancelled: &AtomicBool) -> Data {
+fn gallery_preview(
+    path: &Path,
+    revision: u64,
+    edge: u32,
+    orientation: u8,
+    cancelled: &AtomicBool,
+) -> Data {
     let mut data = Data::new(display_path(path), "Photo".into(), Icon::Image);
     if cancelled.load(Ordering::Relaxed) {
         return data;
     }
+    let Ok(source) = crate::file_source::FileSource::capture(path) else {
+        return data;
+    };
+    if super::super::filesystem::check_revision(path, revision).is_err() {
+        return data;
+    }
     data.image = super::super::gallery::thumbnail::load(path, edge, orientation, cancelled);
-    if data.image.is_none() {
+    if let Some(ref image) = data.image {
+        let (mut w, mut h) = crate::file_source::open_regular_file(path, true)
+            .ok()
+            .and_then(|file| imagesize::reader_size(&mut std::io::BufReader::new(file)).ok())
+            .map(|dim| (dim.width, dim.height))
+            .unwrap_or((image.width as usize, image.height as usize));
+        if (image.width > image.height) != (w > h) {
+            std::mem::swap(&mut w, &mut h);
+        }
+        data.detail = format!("{w} × {h}");
+    } else {
         data.detail = "Preview unavailable; open in Image Studio or externally".into();
+    }
+    // Header metadata stays independent of full image/Hilbert analysis.
+    data.photo_metadata = crate::file_source::read_file_bytes(path, 2 * 1024 * 1024, false, true)
+        .ok()
+        .map(|bytes| little_clip_ops::metadata::extract_image_metadata(&bytes));
+    if source.check().is_err()
+        || super::super::filesystem::check_revision(path, revision).is_err()
+        || crate::file_source::FileSource::capture(path).ok().as_ref() != Some(&source)
+    {
+        data.image = None;
+        data.photo_metadata = None;
+        data.detail = "Photo changed while loading".into();
     }
     data
 }
@@ -953,4 +992,57 @@ fn document_preview(path: &Path, token: &AtomicBool) -> Data {
         Err(error) => data.detail = error,
     }
     data
+}
+
+#[cfg(test)]
+mod guarded_gallery_tests {
+    use super::*;
+
+    #[test]
+    fn gallery_preview_delivers_exif_metadata_without_hilbert_analysis() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("camera.jpg");
+        image::RgbImage::new(16, 16).save(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        // TIFF Make="XO" (inline ASCII) in a standard JPEG APP1 segment.
+        let exif = [
+            b'E', b'x', b'i', b'f', 0, 0, b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 0x0f, 1, 2, 0, 3, 0,
+            0, 0, b'X', b'O', 0, 0, 0, 0, 0, 0,
+        ];
+        let mut tagged = vec![0xff, 0xd8, 0xff, 0xe1, 0, (exif.len() + 2) as u8];
+        tagged.extend_from_slice(&exif);
+        tagged.extend_from_slice(&bytes[2..]);
+        std::fs::write(&path, tagged).unwrap();
+        let entry =
+            crate::file_manager::filesystem::read_directory(root.path(), &AtomicBool::new(false))
+                .unwrap()
+                .entries
+                .remove(0);
+        let data = gallery_preview(&path, entry.revision, 128, 1, &AtomicBool::new(false));
+        assert_eq!(data.photo_metadata.unwrap().make.as_deref(), Some("XO"));
+        assert!(data.photo.is_none());
+    }
+
+    #[test]
+    fn gallery_preview_rejects_fifo_without_reading_payload() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("substituted.png");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            tx.send(
+                gallery_preview(&path, 0, 128, 1, &AtomicBool::new(false))
+                    .image
+                    .is_none(),
+            )
+            .unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap());
+    }
 }

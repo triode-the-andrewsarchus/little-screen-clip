@@ -574,23 +574,55 @@ impl EntryPreviews {
         self.show(ui, rect, entry);
         rect
     }
+    pub fn is_ready(&mut self, entry: &Entry) -> bool {
+        let id = self.identity(entry);
+        self.cache.get(id).is_some()
+    }
+    pub fn has_pending(&self) -> bool {
+        self.cache.has_pending()
+    }
+
+    pub const MIN_GALLERY_EDGE: u32 = 128;
+    pub const MAX_GALLERY_EDGE: u32 = 4096;
+    pub const GALLERY_EDGE_STEP: u32 = 128;
+
+    pub fn gallery_size(&self, path: &std::path::Path) -> u32 {
+        self.gallery_sizes.get(path).copied().unwrap_or(0)
+    }
+
     pub fn request_gallery(&mut self, entry: &Entry, edge: u32, orientation: u8) {
         let id = self.identity(entry);
-        let edge = edge.clamp(128, 4096).div_ceil(128) * 128;
+        let edge = edge
+            .clamp(Self::MIN_GALLERY_EDGE, Self::MAX_GALLERY_EDGE)
+            .div_ceil(Self::GALLERY_EDGE_STEP)
+            * Self::GALLERY_EDGE_STEP;
         let previous = self.gallery_sizes.entry(entry.path.clone()).or_default();
         if edge > *previous {
-            *previous = edge;
-            self.cache.invalidate(id);
-        }
-        if self.cache.needs(id) {
-            self.cache.request(
+            let started = self.cache.refresh(
                 id,
                 Source::Gallery {
                     path: entry.path.clone(),
+                    revision: entry.revision,
                     edge,
                     orientation,
                 },
             );
+            if started {
+                *previous = edge;
+            }
+        } else if self.cache.needs(id) {
+            let started = self.cache.request(
+                id,
+                Source::Gallery {
+                    path: entry.path.clone(),
+                    revision: entry.revision,
+                    edge,
+                    orientation,
+                },
+            );
+            if started {
+                *previous = edge;
+            }
         }
     }
     pub fn show_gallery(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
@@ -635,7 +667,7 @@ impl EntryPreviews {
                     .icon
                     .paint(ui.painter(), rect, ui.visuals().text_color());
             }
-            if !super::ui::popup_open(ui.ctx()) {
+            if !gallery && !super::ui::popup_open(ui.ctx()) {
                 ui.interact(
                     rect,
                     egui::Id::new(("listing_preview", id)),

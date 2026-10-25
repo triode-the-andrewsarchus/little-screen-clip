@@ -9,7 +9,7 @@ use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext;
 
 mod bookmarks;
-mod gallery;
+pub(crate) mod gallery;
 mod list;
 mod mounts;
 pub(super) mod music;
@@ -462,13 +462,9 @@ impl FileManager {
         }
         let selection = self.location().map(|location| &location.selection);
         let selected = selection.is_some_and(|paths| !paths.is_empty());
-        let entries = self
-            .directory
-            .iter()
-            .flat_map(|directory| self.visible.iter().map(|&index| &directory.entries[index]))
-            .filter(|entry| {
-                !selected || selection.is_some_and(|paths| paths.contains(&entry.path))
-            });
+        let entries = self.displayed_entries().into_iter().filter(|entry| {
+            !selected || selection.is_some_and(|paths| paths.contains(&entry.path))
+        });
         let mut folders = 0;
         let mut files = 0;
         let mut bytes = 0_u64;
@@ -685,6 +681,22 @@ impl FileManager {
             self.set_status(Icon::Hourglass, "Unmounting binary contents…", false);
             self.fuse_mounts
                 .request_unmount(mount_point, super::BackgroundJobs::global());
+        }
+        if let Some(path) = actions.search_similar {
+            self.set_view(super::BrowserView::Photos);
+            self.photo_mode = super::gallery::similarity::PhotoMode::Similarity;
+            if let Some(directory) = &self.directory {
+                self.similarity_canvas.sync(
+                    directory,
+                    &self.visible,
+                    self.photo_recurse,
+                    self.show_hidden,
+                    self.photo_recursive_limit,
+                    self.photo_recursive_depth,
+                    self.photo_recursive_timeout_seconds,
+                );
+            }
+            self.similarity_canvas.search_from_photo(&path);
         }
     }
 
@@ -1291,6 +1303,7 @@ struct ListActions {
     transfer: Option<(Vec<PathBuf>, PathBuf, bool)>,
     mount_binary: Option<(PathBuf, bool)>,
     unmount_binary: Option<PathBuf>,
+    search_similar: Option<PathBuf>,
 }
 
 impl ListActions {
@@ -1319,7 +1332,7 @@ impl ListActions {
         path: &PathBuf,
         selected: Option<&std::collections::BTreeSet<PathBuf>>,
     ) {
-        if !response.drag_started() {
+        if !response.drag_started_by(egui::PointerButton::Primary) {
             return;
         }
         let marked = selected.is_some_and(|paths| paths.contains(path));
@@ -1411,6 +1424,11 @@ impl ListActions {
             if !entry.directory && entry.system.is_none() && ui.button("Open externally").clicked()
             {
                 let _ = super::viewers::external(entry.path.clone());
+                ui.close_menu();
+            }
+
+            if entry.is_photo() && ui.button("Find similar photos in canvas").clicked() {
+                self.search_similar = Some(entry.path.clone());
                 ui.close_menu();
             }
 

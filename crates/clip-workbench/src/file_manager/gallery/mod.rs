@@ -1,12 +1,15 @@
 //! Independent, cached chunks with header metadata, background packing and a height index.
+pub(in crate::file_manager) mod hover;
 mod jobs;
 pub(super) mod metadata;
 mod packing;
+pub(in crate::file_manager) mod similarity;
 #[cfg(test)]
 mod tests;
 pub(super) mod thumbnail;
 mod thumbnail_cache;
 use super::{filesystem::Directory, filesystem::Entry};
+pub(in crate::file_manager) use hover::GalleryHover;
 use metadata::Metadata;
 use packing::{Layout, square_placeholder};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};

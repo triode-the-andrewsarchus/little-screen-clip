@@ -1582,3 +1582,88 @@ fn status_dismiss_clears_active_status_and_errors() {
     assert!(browser.last_status.is_none());
     assert!(browser.edits.report.is_none());
 }
+
+#[test]
+fn recursive_photo_selection_and_keyboard_use_canvas_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let nested = root.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    for name in ["a.jpg", "b.jpg"] {
+        std::fs::write(nested.join(name), b"fixture").unwrap();
+    }
+    let (mut manager, _jobs) = loaded(root.path());
+    manager.view = BrowserView::Photos;
+    manager.photo_mode = gallery::similarity::PhotoMode::Similarity;
+    manager.similarity_canvas.sync(
+        manager.directory.as_ref().unwrap(),
+        &manager.visible,
+        false,
+        false,
+        manager.photo_recursive_limit,
+        manager.photo_recursive_depth,
+        manager.photo_recursive_timeout_seconds,
+    );
+    manager.similarity_canvas.set_entries(
+        read_directory(&nested, &AtomicBool::new(false))
+            .unwrap()
+            .entries,
+    );
+    let a = nested.join("a.jpg");
+    let b = nested.join("b.jpg");
+    manager.select(a.clone());
+    manager.select_with(b.clone(), false, true);
+    assert_eq!(manager.selected_paths(), vec![a.clone(), b.clone()]);
+    assert!(manager.selection_summary().contains("2 files"));
+    manager.select(a.clone());
+    manager.move_selection_by(1, false);
+    assert_eq!(manager.selected_paths(), vec![b.clone()]);
+    manager.select_all();
+    manager.reconcile_selection();
+    assert_eq!(manager.selected_paths(), vec![a, b]);
+}
+
+#[test]
+fn image_viewer_collection_ignores_a_previous_similarity_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let old = root.path().join("old");
+    let current = root.path().join("current");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::create_dir(&current).unwrap();
+    std::fs::write(old.join("old.png"), b"fixture").unwrap();
+    let target = current.join("current.png");
+    std::fs::write(&target, b"fixture").unwrap();
+    let (mut manager, _jobs) = loaded(&current);
+    manager.photo_mode = gallery::similarity::PhotoMode::Similarity;
+    manager.similarity_canvas.entries = (read(&old).entries).into();
+    for view in [BrowserView::List, BrowserView::Photos] {
+        manager.view = view;
+        assert_eq!(manager.photo_collection(&target), vec![target.clone()]);
+    }
+}
+
+#[test]
+fn masonry_keyboard_selection_includes_visible_folder_tiles() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    let (mut manager, _jobs) = loaded(root.path());
+    manager.view = BrowserView::Photos;
+    manager.photo_mode = gallery::similarity::PhotoMode::Masonry;
+    manager.move_selection_by(1, false);
+    assert_eq!(manager.selected_paths(), vec![folder]);
+}
+
+#[test]
+fn similarity_canvas_retains_browser_keyboard_focus_across_frames() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut manager, _jobs, ctx) = rendered(root.path());
+    manager.view = BrowserView::Photos;
+    manager.photo_mode = gallery::similarity::PhotoMode::Similarity;
+    frame(&mut manager, &ctx, vec![]);
+    let focus = super::ui::list_id();
+    ctx.memory_mut(|memory| memory.request_focus(focus));
+    for _ in 0..3 {
+        frame(&mut manager, &ctx, vec![]);
+    }
+    assert!(ctx.memory(|memory| memory.has_focus(focus)));
+}

@@ -84,6 +84,13 @@ impl FileManagerApp {
             value @ (1 | 2 | 4 | 8 | 16) => value,
             _ => 1,
         };
+        browser.photo_mode =
+            super::gallery::similarity::PhotoMode::from_str(&config.file_manager.photo_mode);
+        browser.photo_recurse = config.file_manager.photo_recurse;
+        browser.photo_recursive_limit = config.file_manager.photo_recursive_limit;
+        browser.photo_recursive_depth = config.file_manager.photo_recursive_depth;
+        browser.photo_recursive_timeout_seconds =
+            config.file_manager.photo_recursive_timeout_seconds;
         if let Some(path) = initial {
             browser.navigate(path, Navigation::New);
         }
@@ -467,6 +474,51 @@ impl eframe::App for FileManagerApp {
                 for title in ["File", "Edit", "View"] {
                     ui.menu_button(title, |ui| {
                         if title == "View" {
+                            ui.menu_button("Photos", |ui| {
+                                ui.style_mut().wrap = Some(false);
+                                let current_mode = self.browser.photo_mode;
+                                if ui
+                                    .selectable_label(
+                                        current_mode
+                                            == super::gallery::similarity::PhotoMode::Masonry,
+                                        "Masonry Grid",
+                                    )
+                                    .clicked()
+                                {
+                                    let mode = super::gallery::similarity::PhotoMode::Masonry;
+                                    self.browser.photo_mode = mode;
+                                    self.browser.gallery_last_scroll_time = ui.input(|i| i.time);
+                                    let _ = AppConfig::save_file_manager_photo_mode_to_file(
+                                        mode.as_str(),
+                                    );
+                                }
+                                if ui
+                                    .selectable_label(
+                                        current_mode
+                                            == super::gallery::similarity::PhotoMode::Similarity,
+                                        "Similarity Canvas (1x1)",
+                                    )
+                                    .clicked()
+                                {
+                                    let mode = super::gallery::similarity::PhotoMode::Similarity;
+                                    self.browser.photo_mode = mode;
+                                    let _ = AppConfig::save_file_manager_photo_mode_to_file(
+                                        mode.as_str(),
+                                    );
+                                }
+                                ui.separator();
+                                let mut recurse = self.browser.photo_recurse;
+                                if ui
+                                    .checkbox(&mut recurse, "Recurse into subfolders")
+                                    .clicked()
+                                {
+                                    self.browser.photo_recurse = recurse;
+                                    let _ =
+                                        AppConfig::save_file_manager_photo_recurse_to_file(recurse);
+                                    self.browser.similarity_canvas.reset_view();
+                                    self.browser.refresh();
+                                }
+                            });
                             ui.menu_button("Audio", |ui| {
                                 ui.style_mut().wrap = Some(false);
                                 let mut spectrum = self.browser.music_previews.audio_spectrum();

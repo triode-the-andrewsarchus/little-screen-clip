@@ -55,6 +55,16 @@ pub struct FileManagerConfig {
     /// Letters are case-insensitive; Shift assigns a sample instead of playing it.
     #[serde(deserialize_with = "deserialize_constellation_pad_keys")]
     pub constellation_pad_keys: [String; 4],
+    /// Photo gallery layout mode: "masonry" (default) or "similarity".
+    pub photo_mode: String,
+    /// Whether the photo similarity canvas recurses into subdirectories.
+    pub photo_recurse: bool,
+    /// Maximum number of photos collected by a recursive similarity scan (default: 10,000).
+    pub photo_recursive_limit: usize,
+    /// Maximum subdirectory depth for a recursive similarity scan (default: 16).
+    pub photo_recursive_depth: usize,
+    /// Similarity scan and indexing timeout in seconds; 0 disables it (default: 3600).
+    pub photo_recursive_timeout_seconds: u64,
 }
 impl Default for FileManagerConfig {
     fn default() -> Self {
@@ -63,6 +73,11 @@ impl Default for FileManagerConfig {
             audio_spectrum: false,
             video_timeline_decimation: 1,
             constellation_pad_keys: ["zxcv", "asdf", "qwer", "1234"].map(str::to_owned),
+            photo_mode: "masonry".to_string(),
+            photo_recurse: false,
+            photo_recursive_limit: 10_000,
+            photo_recursive_depth: 16,
+            photo_recursive_timeout_seconds: 3600,
         }
     }
 }
@@ -145,10 +160,20 @@ pub const DEFAULT_FEYNOBG_FP16_MODEL_URL: &str =
 pub const DEFAULT_RMBG_14_MODEL_URL: &str = DEFAULT_FEYNOBG_FP16_MODEL_URL;
 pub const DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL: &str =
     "https://huggingface.co/mtbui2010/depth-anything-v2-small-ONNX/resolve/main/model.onnx";
+/// Default download URL for the MobileSAM encoder ONNX model.
 pub const DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL: &str =
     "https://huggingface.co/Acly/MobileSAM/resolve/main/mobile_sam_image_encoder.onnx";
+/// Default download URL for the MobileSAM decoder ONNX model.
 pub const DEFAULT_MOBILE_SAM_DECODER_MODEL_URL: &str =
     "https://huggingface.co/Acly/MobileSAM/resolve/main/sam_mask_decoder_single.onnx";
+/// Default download URL for the FP16 SigLIP 2 Giant vision encoder ONNX graph.
+pub const DEFAULT_SIGLIP2_GIANT_MODEL_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_fp16.onnx";
+/// Default download URL for the FP16 SigLIP 2 Giant vision encoder weights.
+pub const DEFAULT_SIGLIP2_GIANT_MODEL_DATA_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/vision_model_fp16.onnx_data";
+/// Default download URL for the SigLIP 2 Giant text encoder ONNX model.
+pub const DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/onnx/text_model_quantized.onnx";
+/// Default download URL for the SigLIP 2 Giant tokenizer JSON configuration.
+pub const DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL: &str = "https://huggingface.co/onnx-community/siglip2-giant-opt-patch16-256-ONNX/resolve/main/tokenizer.json";
 
 /// AI/ONNX model download URL overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -175,6 +200,30 @@ pub struct AiModelsConfig {
     /// Optional URL override for downloading the MobileSAM decoder ONNX model.
     #[serde(alias = "sam_decoder_model_url")]
     pub sam_decoder_url: Option<String>,
+    /// Optional URL override for downloading the SigLIP 2 Giant vision encoder ONNX model.
+    #[serde(
+        alias = "siglip2_url",
+        alias = "siglip2_giant_url",
+        alias = "siglip_giant_url",
+        alias = "siglip_url"
+    )]
+    pub siglip2_giant_url: Option<String>,
+    /// Optional URL override for the external FP16 SigLIP 2 Giant vision weights.
+    pub siglip2_giant_data_url: Option<String>,
+    /// Optional URL override for downloading the SigLIP 2 Giant text encoder ONNX model.
+    #[serde(
+        alias = "siglip2_text_url",
+        alias = "siglip2_giant_text_url",
+        alias = "siglip_text_url"
+    )]
+    pub siglip2_giant_text_url: Option<String>,
+    /// Optional URL override for downloading the SigLIP 2 Giant tokenizer JSON.
+    #[serde(
+        alias = "siglip2_tokenizer_url",
+        alias = "siglip2_giant_tokenizer_url",
+        alias = "siglip_tokenizer_url"
+    )]
+    pub siglip2_giant_tokenizer_url: Option<String>,
 }
 
 /// External tool paths for image viewing, editing, and background removal.
@@ -696,7 +745,29 @@ impl AppConfig {
         save_setting_to_file("file_manager", "audio_spectrum", spectrum)
     }
 
-    /// URL for downloading the Big-LaMa inpainting ONNX model.
+    /// Saves the Files photo-gallery layout mode preference ("masonry" or "similarity").
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the configuration file fails.
+    pub fn save_file_manager_photo_mode_to_file(
+        photo_mode: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        save_setting_to_file("file_manager", "photo_mode", photo_mode)
+    }
+
+    /// Saves the Files photo-gallery subfolder recursion preference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the configuration file fails.
+    pub fn save_file_manager_photo_recurse_to_file(
+        recurse: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        save_setting_to_file("file_manager", "photo_recurse", recurse)
+    }
+
+    /// Returns the URL for downloading the Big-LaMa inpainting ONNX model.
     pub fn lama_model_url(&self) -> &str {
         self.ai_models
             .lama_url
@@ -705,7 +776,7 @@ impl AppConfig {
             .unwrap_or(DEFAULT_BIG_LAMA_MODEL_URL)
     }
 
-    /// URL for downloading the background removal (FeyNoBg) ONNX model.
+    /// Returns the URL for downloading the background removal (FeyNoBg) ONNX model.
     pub fn rmbg_model_url(&self) -> &str {
         self.ai_models
             .rmbg_url
@@ -714,12 +785,12 @@ impl AppConfig {
             .unwrap_or(DEFAULT_FEYNOBG_FP16_MODEL_URL)
     }
 
-    /// URL for downloading the background removal (FeyNoBg) ONNX model.
+    /// Returns the URL for downloading the background removal (FeyNoBg) ONNX model.
     pub fn bg_removal_model_url(&self) -> &str {
         self.rmbg_model_url()
     }
 
-    /// URL for downloading the Depth-Anything-V2 depth estimation ONNX model.
+    /// Returns the URL for downloading the Depth-Anything-V2 depth estimation ONNX model.
     pub fn depth_model_url(&self) -> &str {
         self.ai_models
             .depth_url
@@ -728,7 +799,7 @@ impl AppConfig {
             .unwrap_or(DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL)
     }
 
-    /// URL for downloading the MobileSAM encoder ONNX model.
+    /// Returns the URL for downloading the MobileSAM encoder ONNX model.
     pub fn sam_encoder_model_url(&self) -> &str {
         self.ai_models
             .sam_encoder_url
@@ -737,13 +808,46 @@ impl AppConfig {
             .unwrap_or(DEFAULT_MOBILE_SAM_ENCODER_MODEL_URL)
     }
 
-    /// URL for downloading the MobileSAM decoder ONNX model.
+    /// Returns the URL for downloading the MobileSAM decoder ONNX model.
     pub fn sam_decoder_model_url(&self) -> &str {
         self.ai_models
             .sam_decoder_url
             .as_deref()
             .or(self.image.sam_decoder_model_url.as_deref())
             .unwrap_or(DEFAULT_MOBILE_SAM_DECODER_MODEL_URL)
+    }
+
+    /// Returns the URL for downloading the SigLIP 2 Giant vision encoder ONNX model.
+    pub fn siglip2_giant_model_url(&self) -> &str {
+        self.ai_models
+            .siglip2_giant_url
+            .as_deref()
+            .unwrap_or(DEFAULT_SIGLIP2_GIANT_MODEL_URL)
+    }
+
+    /// Returns the configured or default FP16 SigLIP vision weights URL.
+    pub fn siglip2_giant_model_data_url(&self) -> &str {
+        self.ai_models
+            .siglip2_giant_data_url
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or(DEFAULT_SIGLIP2_GIANT_MODEL_DATA_URL)
+    }
+
+    /// Returns the URL for downloading the SigLIP 2 Giant text encoder ONNX model.
+    pub fn siglip2_giant_text_model_url(&self) -> &str {
+        self.ai_models
+            .siglip2_giant_text_url
+            .as_deref()
+            .unwrap_or(DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL)
+    }
+
+    /// Returns the URL for downloading the SigLIP 2 Giant tokenizer JSON.
+    pub fn siglip2_giant_tokenizer_url(&self) -> &str {
+        self.ai_models
+            .siglip2_giant_tokenizer_url
+            .as_deref()
+            .unwrap_or(DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL)
     }
 }
 
@@ -935,6 +1039,35 @@ constellation_pad_keys = [";qjk", "aoeu", "',.p", "1234"]
     }
 
     #[test]
+    fn files_photo_mode_and_recurse_defaults_and_updates() {
+        let defaults: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(defaults.file_manager.photo_mode, "masonry");
+        assert!(!defaults.file_manager.photo_recurse);
+        assert_eq!(defaults.file_manager.photo_recursive_limit, 10_000);
+        assert_eq!(defaults.file_manager.photo_recursive_depth, 16);
+        assert_eq!(defaults.file_manager.photo_recursive_timeout_seconds, 3600);
+        let original = "[file_manager]\nphoto_mode = \"similarity\"\nphoto_recurse = true\nphoto_recursive_limit = 12000\nphoto_recursive_depth = 24\nphoto_recursive_timeout_seconds = 0\n";
+        let configured: AppConfig = toml::from_str(original).unwrap();
+        assert_eq!(configured.file_manager.photo_mode, "similarity");
+        assert!(configured.file_manager.photo_recurse);
+        assert_eq!(configured.file_manager.photo_recursive_limit, 12_000);
+        assert_eq!(configured.file_manager.photo_recursive_depth, 24);
+        assert_eq!(configured.file_manager.photo_recursive_timeout_seconds, 0);
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let updated = update_setting_in_text(original, "file_manager", "photo_mode", "masonry");
+        let updated = update_setting_in_text(&updated, "file_manager", "photo_recurse", false);
+        std::fs::write(&path, updated).unwrap();
+        let loaded = AppConfig::load_from_path(&path).unwrap();
+        assert_eq!(loaded.file_manager.photo_mode, "masonry");
+        assert!(!loaded.file_manager.photo_recurse);
+        assert_eq!(loaded.file_manager.photo_recursive_limit, 12_000);
+        assert_eq!(loaded.file_manager.photo_recursive_depth, 24);
+        assert_eq!(loaded.file_manager.photo_recursive_timeout_seconds, 0);
+    }
+
+    #[test]
     fn workbench_appearance_save_preserves_unrelated_config() {
         let original = "[colors]\ntheme = \"zenburn\"\n\n[workbench]\n# editor preference\neditor = \"code\"\n";
         let updated = update_setting_in_text(original, "workbench", "appearance", "light");
@@ -1020,6 +1153,22 @@ triangle_limit = 2500
             default_cfg.sam_decoder_model_url(),
             DEFAULT_MOBILE_SAM_DECODER_MODEL_URL
         );
+        assert_eq!(
+            default_cfg.siglip2_giant_model_url(),
+            DEFAULT_SIGLIP2_GIANT_MODEL_URL
+        );
+        assert_eq!(
+            default_cfg.siglip2_giant_model_data_url(),
+            DEFAULT_SIGLIP2_GIANT_MODEL_DATA_URL
+        );
+        assert_eq!(
+            default_cfg.siglip2_giant_text_model_url(),
+            DEFAULT_SIGLIP2_GIANT_TEXT_MODEL_URL
+        );
+        assert_eq!(
+            default_cfg.siglip2_giant_tokenizer_url(),
+            DEFAULT_SIGLIP2_GIANT_TOKENIZER_URL
+        );
 
         // Test overrides under [ai_models]
         let ai_models_toml = r#"
@@ -1029,6 +1178,10 @@ feynobg_url = "https://custom.mirror/feynobg.onnx"
 depth_url = "https://custom.mirror/depth.onnx"
 sam_encoder_url = "https://custom.mirror/sam_enc.onnx"
 sam_decoder_url = "https://custom.mirror/sam_dec.onnx"
+siglip2_giant_url = "https://custom.mirror/siglip2.onnx"
+siglip2_giant_data_url = "https://custom.mirror/siglip2.onnx_data"
+siglip2_giant_text_url = "https://custom.mirror/siglip2_text.onnx"
+siglip2_giant_tokenizer_url = "https://custom.mirror/siglip2_tokenizer.json"
 "#;
         let ai_cfg: AppConfig = toml::from_str(ai_models_toml).unwrap();
         assert_eq!(ai_cfg.lama_model_url(), "https://custom.mirror/lama.onnx");
@@ -1048,6 +1201,22 @@ sam_decoder_url = "https://custom.mirror/sam_dec.onnx"
         assert_eq!(
             ai_cfg.sam_decoder_model_url(),
             "https://custom.mirror/sam_dec.onnx"
+        );
+        assert_eq!(
+            ai_cfg.siglip2_giant_model_url(),
+            "https://custom.mirror/siglip2.onnx"
+        );
+        assert_eq!(
+            ai_cfg.siglip2_giant_model_data_url(),
+            "https://custom.mirror/siglip2.onnx_data"
+        );
+        assert_eq!(
+            ai_cfg.siglip2_giant_text_model_url(),
+            "https://custom.mirror/siglip2_text.onnx"
+        );
+        assert_eq!(
+            ai_cfg.siglip2_giant_tokenizer_url(),
+            "https://custom.mirror/siglip2_tokenizer.json"
         );
 
         // Test overrides under [image]
