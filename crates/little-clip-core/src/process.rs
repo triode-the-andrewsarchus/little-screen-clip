@@ -33,6 +33,7 @@ pub struct CommandRequest {
     max_output_bytes: usize,
     capture_stdout: bool,
     capture_stderr: bool,
+    own_process_group: bool,
 }
 
 impl CommandRequest {
@@ -47,7 +48,17 @@ impl CommandRequest {
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
             capture_stdout: true,
             capture_stderr: true,
+            own_process_group: false,
         }
+    }
+
+    /// Owns a read-only helper's process group, including its decoder children.
+    ///
+    /// Bounded runs terminate remaining group members before draining pipes.
+    /// Persistent callers using `build_command` must manage the group themselves.
+    pub fn own_process_group(mut self) -> Self {
+        self.own_process_group = true;
+        self
     }
 
     /// Appends one opaque operating-system argument.
@@ -125,23 +136,35 @@ impl CommandRequest {
         self.arg_content_handle(directory, &suffix)
     }
 
-    fn arg_content_handle(
+    /// Retains an explicitly supplied handle and inherits a duplicate in the child.
+    ///
+    /// Returns the descriptor number in that child. The caller supplies the
+    /// handle's admission policy; this does not open or classify any pathname.
+    /// Parent close-on-exec flags remain unchanged.
+    ///
+    /// # Errors
+    /// Returns an I/O error if descriptor duplication fails.
+    pub fn inherit_handle(
         mut self,
-        source: std::fs::File,
-        suffix: &OsStr,
-    ) -> std::io::Result<Self> {
-        // SAFETY: source owns a live descriptor; F_DUPFD_CLOEXEC returns a new
-        // owned descriptor above stdio, which is transferred into File exactly once.
+        source: &std::fs::File,
+    ) -> std::io::Result<(Self, std::os::fd::RawFd)> {
+        // SAFETY: source owns a live descriptor; the new descriptor is transferred
+        // into File exactly once and retained through child execution.
         let fd = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
         let source = unsafe { std::fs::File::from_raw_fd(fd) };
+        self.content_inputs.push(std::sync::Arc::new(source));
+        Ok((self, fd))
+    }
+
+    fn arg_content_handle(self, source: std::fs::File, suffix: &OsStr) -> std::io::Result<Self> {
+        let (mut request, fd) = self.inherit_handle(&source)?;
         let mut argument = OsString::from(format!("/proc/self/fd/{fd}"));
         argument.push(suffix);
-        self.args.push(argument);
-        self.content_inputs.push(std::sync::Arc::new(source));
-        Ok(self)
+        request.args.push(argument);
+        Ok(request)
     }
 
     /// Appends multiple opaque operating-system arguments.
@@ -268,6 +291,9 @@ impl CommandRequest {
     pub fn build_command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.args);
+        if self.own_process_group {
+            command.process_group(0);
+        }
         self.inherit_content_inputs(&mut command);
         command
     }
@@ -317,12 +343,22 @@ impl CommandRequest {
         let status = match self.wait(&mut child, cancelled, progress) {
             Ok(status) => status,
             Err(error) => {
+                if self.own_process_group {
+                    // SAFETY: this run created the child's private process group.
+                    unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 drain_threads(stdout_reader, stderr_reader, stdin_writer);
                 return Err(error);
             }
         };
+
+        if self.own_process_group {
+            // A helper may exit before a descendant closes its inherited pipes.
+            // SAFETY: this run created the child's private process group.
+            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+        }
 
         let (stdout, stdout_truncated) = stdout_reader
             .map(|reader| reader.join().map_err(|_| CommandError::Reader))
@@ -523,6 +559,27 @@ mod tests {
             .run()
             .unwrap_err();
         assert!(matches!(error, CommandError::TimedOut { .. }));
+    }
+    #[test]
+    fn owned_helper_group_does_not_leave_descendants_holding_pipes() {
+        let started = Instant::now();
+        let error = CommandRequest::new("sh")
+            .args(["-c", "sleep 30 & wait"])
+            .own_process_group()
+            .timeout(Duration::from_millis(40))
+            .run()
+            .unwrap_err();
+        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let started = Instant::now();
+        let output = CommandRequest::new("sh")
+            .args(["-c", "sleep 30 & printf done"])
+            .own_process_group()
+            .run()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"done");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
     #[test]
     fn progress_polling_preserves_cancellation_and_reaps_the_child() {

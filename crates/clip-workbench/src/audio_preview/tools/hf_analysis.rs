@@ -167,6 +167,7 @@ impl AudioPreviewState {
     ///
     /// * `start_sec` - Audio start position in seconds.
     pub fn play_hf_audio_at(&mut self, start_sec: f32) {
+        self.playback_load = None;
         self.ensure_player();
         if let Some(ref p) = self.player {
             p.clear();
@@ -225,21 +226,11 @@ impl AudioPreviewState {
                 self.is_playing = true;
                 self.playback_start_instant = Some(Instant::now());
                 self.playback_start_offset_sec = start_sec;
-            } else if let Ok(file) = File::open(&self.path) {
-                if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
-                    if mode == HfPlaybackMode::TimeExpansion {
-                        let speed = (1.0 / ratio) as f32;
-                        p.append(decoder.speed(speed));
-                    } else {
-                        p.append(decoder);
-                    }
-                    let target_pos = Duration::from_secs_f32(start_sec);
-                    let _ = p.try_seek(target_pos);
-                    p.play();
-                    self.is_playing = true;
-                    self.playback_start_instant = Some(Instant::now());
-                    self.playback_start_offset_sec = start_sec;
-                }
+            } else {
+                self.is_playing = false;
+                self.playback_start_instant = None;
+                self.status_toast =
+                    Some(("Waiting for audio analysis before HF playback".into(), 0.0));
             }
         }
     }

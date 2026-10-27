@@ -75,6 +75,9 @@ pub struct SplatViewerState {
 
 impl SplatViewerState {
     pub fn from_file(path: PathBuf) -> Self {
+        Self::from_file_checked(path, crate::file_source::ReadCheck::default())
+    }
+    pub(crate) fn from_file_checked(path: PathBuf, check: crate::file_source::ReadCheck) -> Self {
         let title = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -84,21 +87,23 @@ impl SplatViewerState {
             size: [640, 360],
         };
         let (ticket, rx) = BackgroundJobs::global().submit(Duration::from_secs(120), move || {
-            let scene = match SplatScene::load(&path) {
-                Ok(scene) => scene,
-                Err(little_clip_scene::SceneError::MeshGlb) => {
-                    let model = little_clip_core::model3d::Model3d::load_file(&path)?;
-                    return Ok(RenderCompletion::Mesh {
-                        model: Arc::new(model),
-                        path,
-                    });
-                }
-                Err(error) => return Err(error.to_string()),
-            };
-            let points = scene.len();
-            let renderer =
-                SplatRenderer::new(Arc::new(scene)).map_err(|error| error.to_string())?;
-            Completion::render(renderer, request, points).map(RenderCompletion::Splat)
+            check.read(&std::sync::atomic::AtomicBool::new(false), || {
+                let scene = match SplatScene::load(&path) {
+                    Ok(scene) => scene,
+                    Err(little_clip_scene::SceneError::MeshGlb) => {
+                        let model = little_clip_core::model3d::Model3d::load_file(&path)?;
+                        return Ok(RenderCompletion::Mesh {
+                            model: Arc::new(model),
+                            path,
+                        });
+                    }
+                    Err(error) => return Err(error.to_string()),
+                };
+                let points = scene.len();
+                let renderer =
+                    SplatRenderer::new(Arc::new(scene)).map_err(|error| error.to_string())?;
+                Completion::render(renderer, request, points).map(RenderCompletion::Splat)
+            })
         });
         Self {
             title,
@@ -320,6 +325,19 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(viewer.error.is_none(), "{:?}", viewer.error);
+    }
+
+    #[test]
+    fn deferred_scene_parse_checks_the_original_source_before_opening() {
+        let source = tempfile::tempdir().unwrap();
+        let mut viewer = SplatViewerState::from_file_checked(
+            source.path().join("missing.sog"),
+            crate::file_source::ReadCheck::new(|_| Err("source context expired".into())),
+        );
+        crate::file_source::read_check_tests::assert_deferred_rejected(
+            &viewer.job.as_ref().unwrap().rx,
+        );
+        viewer.job = None;
     }
 
     #[test]

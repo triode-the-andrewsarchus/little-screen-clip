@@ -5,6 +5,120 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+type InputValidation = dyn Fn(&std::sync::atomic::AtomicBool) -> Result<(), String> + Send + Sync;
+
+/// Optional source-observation validation retained across deferred studio jobs.
+#[derive(Clone, Default)]
+pub(crate) struct ReadCheck(Option<std::sync::Arc<InputValidation>>);
+impl PartialEq for ReadCheck {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(left), Some(right)) => std::sync::Arc::ptr_eq(left, right),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+impl std::fmt::Debug for ReadCheck {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReadCheck")
+            .field("active", &self.active())
+            .finish()
+    }
+}
+impl ReadCheck {
+    pub fn new(
+        check: impl Fn(&std::sync::atomic::AtomicBool) -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        Self(Some(std::sync::Arc::new(check)))
+    }
+    pub fn active(&self) -> bool {
+        self.0.is_some()
+    }
+    pub fn validate(&self, cancel: &std::sync::atomic::AtomicBool) -> Result<(), String> {
+        self.0.as_ref().map_or(Ok(()), |check| check(cancel))
+    }
+    /// Pins ordinary content and checks its observed identity before payload access.
+    pub fn open(
+        &self,
+        path: &Path,
+        expected: Option<&FileSource>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<(File, FileSource), String> {
+        self.validate(cancel)?;
+        let input = little_clip_core::kernel_interface::open_content(path, true)
+            .map_err(|error| error.to_string())?;
+        let observed = FileSource::capture_file(&input)?;
+        if expected.is_some_and(|expected| *expected != observed) {
+            return Err("File source changed; reload before reading.".into());
+        }
+        self.validate(cancel)?;
+        Ok((input, observed))
+    }
+    pub fn read<T>(
+        &self,
+        cancel: &std::sync::atomic::AtomicBool,
+        read: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.validate(cancel)?;
+        let result = read()?;
+        self.validate(cancel)?;
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod read_check_tests {
+    use super::ReadCheck;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    pub fn assert_deferred_rejected<T>(
+        receiver: &std::sync::mpsc::Receiver<Result<Result<T, String>, little_clip_core::JobError>>,
+    ) {
+        let result = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.err().as_deref(), Some("source context expired"));
+    }
+
+    #[test]
+    fn deferred_checks_reject_before_read_and_before_returning_content() {
+        let changed = Arc::new(AtomicBool::new(false));
+        let observed = changed.clone();
+        let check = ReadCheck::new(move |_| {
+            if observed.load(Ordering::Relaxed) {
+                Err("source changed".into())
+            } else {
+                Ok(())
+            }
+        });
+        let cancel = AtomicBool::new(false);
+        assert!(check.active());
+        assert_eq!(
+            check
+                .read(&cancel, || {
+                    changed.store(true, Ordering::Relaxed);
+                    Ok(42)
+                })
+                .unwrap_err(),
+            "source changed"
+        );
+        assert_eq!(
+            check
+                .read(&cancel, || -> Result<(), String> {
+                    panic!("a stale source must not be read")
+                })
+                .unwrap_err(),
+            "source changed"
+        );
+        assert_eq!(ReadCheck::default().read(&cancel, || Ok(42)).unwrap(), 42);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileSource {
     path: PathBuf,
@@ -12,6 +126,11 @@ pub struct FileSource {
     mode: u32,
 }
 impl FileSource {
+    /// The pathname retained with this observed or successfully saved revision.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Captures the resolved regular file's identity and timestamps on a worker.
     ///
     /// Classification, metadata and the resolved name come from the same pinned file.

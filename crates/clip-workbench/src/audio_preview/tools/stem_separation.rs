@@ -118,42 +118,11 @@ pub(crate) fn prepare_isolated_audacity_command(
     Ok(())
 }
 
-fn run_stem_worker(
-    worker: StemWorkerCommand,
-    source: &Path,
-    workspace: &Path,
-    control: &crate::image_preview::ImageToolProcessControl,
-) -> Result<Vec<(String, PathBuf)>, String> {
-    let mut command = worker.command(source, workspace);
-    command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let child = crate::image_preview::spawn_image_tool_child(command, control)
-        .map_err(|error| format!("Could not launch Python stem worker: {error}"))?;
-    let pid = child.id();
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("Could not wait for Python stem worker: {error}"));
-    crate::image_preview::clear_image_tool_pid_if_owned(&control.child_pid, pid);
-    if control.cancel.load(Ordering::Acquire) {
-        return Err("Stem separation cancelled.".to_string());
-    }
-    let output = output?;
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if message.is_empty() {
-            "HTDemucs separation failed.".to_string()
-        } else {
-            message
-        });
-    }
-    parse_stem_manifest(&output.stdout).map_err(|error| {
-        format!(
-            "Could not read stem worker output: {error}\n{}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-    })
-}
+mod editor;
+mod group_playback;
+mod save;
+mod worker;
+use worker::{StemOutput, StemWorkerCommand, run_stem_worker};
 
 pub(crate) struct SeparatedStem {
     pub(crate) name: String,
@@ -167,11 +136,12 @@ pub(crate) struct StemSeparationState {
     pub(crate) in_progress: bool,
     pub(crate) status: Option<String>,
     pub(crate) error: Option<String>,
-    result_rx: Option<Receiver<Result<Result<Vec<(String, PathBuf)>, String>, JobError>>>,
+    result_rx: Option<Receiver<Result<Result<Vec<StemOutput>, String>, JobError>>>,
     job_ticket: Option<JobTicket>,
     process_control: Option<Arc<crate::image_preview::ImageToolProcessControl>>,
     retry_at: Option<Instant>,
     worker_command: Option<StemWorkerCommand>,
+    group_load: Option<group_playback::GroupLoad>,
     pub(crate) stems: Vec<SeparatedStem>,
     pub(crate) selected_stem: usize,
     pub(crate) solo_stem: Option<usize>,
@@ -186,36 +156,6 @@ pub(crate) struct StemSeparationState {
     pub(crate) group_playback_offset_sec: f32,
 }
 
-#[derive(Clone)]
-struct StemWorkerCommand {
-    program: PathBuf,
-    prefix_args: Vec<std::ffi::OsString>,
-}
-
-impl StemWorkerCommand {
-    fn configured() -> Self {
-        let worker =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/separate_stems.py");
-        let venv_python = std::env::var("HOME")
-            .map(|home| {
-                PathBuf::from(home).join(".local/share/little-screen-clip/nobg-venv/bin/python")
-            })
-            .ok()
-            .filter(|path| path.is_file())
-            .unwrap_or_else(|| PathBuf::from("python3"));
-        Self {
-            program: venv_python,
-            prefix_args: vec![worker.into_os_string()],
-        }
-    }
-
-    fn command(&self, source: &Path, workspace: &Path) -> std::process::Command {
-        let mut command = std::process::Command::new(&self.program);
-        command.args(&self.prefix_args).arg(source).arg(workspace);
-        command
-    }
-}
-
 impl AudioPreviewState {
     pub(crate) fn start_stem_separation(&mut self) {
         self.start_stem_separation_on(BackgroundJobs::global(), StemWorkerCommand::configured());
@@ -225,7 +165,10 @@ impl AudioPreviewState {
         if self.stem_separation.in_progress {
             return;
         }
-        let source = self.path.clone();
+        self.pause_group_playback();
+        self.pause();
+        let source = self.edit_snapshot();
+        let filter = self.editor_render_filter();
         let workspace = self.stem_separation.workspace.clone().unwrap_or_else(|| {
             little_clip_core::ArtifactStore::new()
                 .and_then(|store| store.create_workspace("stems", "separation"))
@@ -240,7 +183,7 @@ impl AudioPreviewState {
         let command = worker.clone();
         let worker_workspace = workspace.clone();
         let (ticket, rx) = jobs.submit(Duration::MAX, move || {
-            run_stem_worker(command, &source, &worker_workspace, &worker_control)
+            run_stem_worker(command, source, filter, &worker_workspace, &worker_control)
         });
         self.stem_separation.in_progress = true;
         self.stem_separation.status = Some("Starting local HTDemucs v4 separation…".to_string());
@@ -307,15 +250,19 @@ impl AudioPreviewState {
                     let volume = self.volume;
                     self.stem_separation.stems = stems
                         .into_iter()
-                        .map(|(name, path)| {
+                        .map(|output| {
+                            let name = output.name;
                             let group_player = crate::ui_ext::new_shared_audio_player();
                             if let Some(ref p) = group_player {
                                 p.set_volume(volume);
                             }
-                            let mut preview = AudioPreviewState::new(
-                                path,
+                            let mut preview = AudioPreviewState::new_with_metadata_checked(
+                                output.identity.path().to_owned(),
                                 format!("{} stem — {}", name.to_uppercase(), self.title),
+                                output.metadata,
+                                output.check,
                             )
+                            .with_file_source(output.identity)
                             .with_editor(editor.clone());
                             preview.set_studio_volume(volume);
                             SeparatedStem {
@@ -334,7 +281,10 @@ impl AudioPreviewState {
                     self.stem_separation.status =
                         Some("HTDemucs created four temporary stereo stems.".to_string());
                 }
-                Ok(Err(error)) => self.stem_separation.error = Some(error),
+                Ok(Err(error)) => {
+                    self.stem_separation.status = None;
+                    self.stem_separation.error = Some(error);
+                }
                 Err(JobError::QueueFull) => {
                     self.stem_separation.retry_at =
                         Some(Instant::now() + Duration::from_millis(500));
@@ -348,137 +298,11 @@ impl AudioPreviewState {
                     self.stem_separation.status = Some("Stem separation cancelled.".to_string())
                 }
                 Err(error) => {
+                    self.stem_separation.status = None;
                     self.stem_separation.error = Some(format!("HTDemucs worker failed: {error}"))
                 }
             }
         }
-    }
-
-    pub(crate) fn group_duration(&self) -> f32 {
-        self.stem_separation
-            .stems
-            .iter()
-            .map(|stem| stem.preview.duration_sec)
-            .fold(self.duration_sec, f32::max)
-            .max(0.01)
-    }
-
-    pub(crate) fn load_group_stem(stem: &SeparatedStem, offset: f32) {
-        let Some(player) = &stem.group_player else {
-            return;
-        };
-        player.clear();
-        if let Ok(file) = File::open(&stem.preview.path) {
-            if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
-                player.append(decoder);
-                let _ = player.try_seek(Duration::from_secs_f32(offset.max(0.0)));
-                player.play();
-            }
-        }
-    }
-
-    pub(crate) fn start_group_playback(&mut self) {
-        self.stem_separation.editor_playhead_active = false;
-        let duration = self.group_duration();
-        if self.stem_separation.group_current_time_sec >= duration - 0.05 {
-            self.stem_separation.group_current_time_sec = 0.0;
-        }
-        for stem in &mut self.stem_separation.stems {
-            stem.preview.pause();
-        }
-        let offset = self.stem_separation.group_current_time_sec;
-        let solo = self.stem_separation.solo_stem;
-        for (index, stem) in self.stem_separation.stems.iter().enumerate() {
-            if stem_is_audible(index, stem.muted, solo) {
-                Self::load_group_stem(stem, offset);
-            } else if let Some(player) = &stem.group_player {
-                player.clear();
-            }
-        }
-        self.stem_separation.group_playback_offset_sec = offset;
-        self.stem_separation.group_playback_start = Some(Instant::now());
-        self.stem_separation.group_is_playing = true;
-    }
-
-    pub(crate) fn update_group_playback(&mut self, ctx: &egui::Context) {
-        if !self.stem_separation.group_is_playing {
-            return;
-        }
-        ctx.request_repaint();
-        if let Some(started) = self.stem_separation.group_playback_start {
-            let current =
-                self.stem_separation.group_playback_offset_sec + started.elapsed().as_secs_f32();
-            let duration = self.group_duration();
-            if current >= duration {
-                self.stop_group_playback();
-                self.stem_separation.group_current_time_sec = duration;
-            } else {
-                self.stem_separation.group_current_time_sec = current;
-            }
-        }
-    }
-
-    pub(crate) fn pause_group_playback(&mut self) {
-        if self.stem_separation.group_is_playing {
-            if let Some(started) = self.stem_separation.group_playback_start {
-                self.stem_separation.group_current_time_sec =
-                    self.stem_separation.group_playback_offset_sec
-                        + started.elapsed().as_secs_f32();
-            }
-        }
-        for stem in &self.stem_separation.stems {
-            if let Some(player) = &stem.group_player {
-                player.pause();
-            }
-        }
-        self.stem_separation.group_is_playing = false;
-        self.stem_separation.group_playback_start = None;
-    }
-
-    pub(crate) fn stop_group_playback(&mut self) {
-        self.stem_separation.editor_playhead_active = false;
-        for stem in &self.stem_separation.stems {
-            if let Some(player) = &stem.group_player {
-                player.stop();
-            }
-        }
-        self.stem_separation.group_is_playing = false;
-        self.stem_separation.group_playback_start = None;
-        self.stem_separation.group_playback_offset_sec = 0.0;
-        self.stem_separation.group_current_time_sec = 0.0;
-    }
-
-    pub(crate) fn seek_group_playback(&mut self, time_sec: f32) {
-        self.stem_separation.editor_playhead_active = false;
-        let target = time_sec.clamp(0.0, self.group_duration());
-        self.stem_separation.group_current_time_sec = target;
-        self.stem_separation.group_playback_offset_sec = target;
-        if self.stem_separation.group_is_playing {
-            self.stem_separation.group_playback_start = Some(Instant::now());
-            let solo = self.stem_separation.solo_stem;
-            for (index, stem) in self.stem_separation.stems.iter().enumerate() {
-                if stem_is_audible(index, stem.muted, solo) {
-                    Self::load_group_stem(stem, target);
-                }
-            }
-        }
-    }
-
-    pub(crate) fn refresh_group_routing(&mut self) {
-        if !self.stem_separation.group_is_playing {
-            return;
-        }
-        let target = self.stem_separation.group_current_time_sec;
-        let solo = self.stem_separation.solo_stem;
-        for (index, stem) in self.stem_separation.stems.iter().enumerate() {
-            if stem_is_audible(index, stem.muted, solo) {
-                Self::load_group_stem(stem, target);
-            } else if let Some(player) = &stem.group_player {
-                player.clear();
-            }
-        }
-        self.stem_separation.group_playback_offset_sec = target;
-        self.stem_separation.group_playback_start = Some(Instant::now());
     }
 
     pub(crate) fn select_editor_stem(&mut self, requested_index: usize) {
@@ -493,63 +317,6 @@ impl AudioPreviewState {
             previous.preview.stop();
         }
         self.stem_separation.selected_stem = next_index;
-    }
-
-    pub(crate) fn launch_stems_in_external_editor(
-        &mut self,
-        _ctx: &egui::Context,
-        _close_requested: &mut bool,
-    ) {
-        let editor = if self.audio_editor.is_empty() {
-            "audacity".to_string()
-        } else {
-            self.audio_editor.clone()
-        };
-        let stem_paths = self
-            .stem_separation
-            .stems
-            .iter()
-            .map(|stem| stem.preview.path.clone())
-            .collect::<Vec<_>>();
-        let mut command = std::process::Command::new(&editor);
-        if editor_is_audacity(&editor) {
-            let Some(workspace) = self.stem_separation.workspace.as_deref() else {
-                self.stem_separation.error =
-                    Some("The temporary stem workspace is no longer available.".to_string());
-                return;
-            };
-            if let Err(error) =
-                prepare_isolated_audacity_command(&mut command, workspace, &stem_paths)
-            {
-                self.stem_separation.error = Some(error);
-                return;
-            }
-        } else {
-            command.args(&stem_paths);
-        }
-        match command.spawn() {
-            Ok(_) => {
-                self.stop_group_playback();
-                for stem in &mut self.stem_separation.stems {
-                    stem.preview.stop();
-                }
-                self.status_toast = Some((
-                    crate::ui_ext::StatusMessage::new(
-                        crate::icons::Icon::ArrowRight,
-                        format!("Opened stems in {}", editor),
-                    ),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs_f64(),
-                ));
-            }
-            Err(error) => {
-                self.stem_separation.error = Some(format!(
-                    "Failed to open separated tracks in {editor}: {error}"
-                ));
-            }
-        }
     }
 
     pub(crate) fn render_stem_waveform(
@@ -643,39 +410,6 @@ impl AudioPreviewState {
             .map(|pos| waveform_scrub_time(pos.x, rect.min.x, rect.width(), duration_sec))
     }
 
-    pub(crate) fn save_all_stems(&mut self) {
-        let destination = PathBuf::from(self.stem_separation.save_destination_dir.trim());
-        if destination.as_os_str().is_empty() {
-            self.stem_separation.error = Some("Choose a destination folder first.".to_string());
-            return;
-        }
-        if let Err(error) = std::fs::create_dir_all(&destination) {
-            self.stem_separation.error = Some(format!("Cannot create destination folder: {error}"));
-            return;
-        }
-        let base = self
-            .path
-            .file_stem()
-            .and_then(|v| v.to_str())
-            .unwrap_or("audio");
-        let mut saved = 0;
-        for stem in &self.stem_separation.stems {
-            let out = destination.join(format!("{base}_{}.wav", stem.name));
-            if std::fs::copy(&stem.preview.path, out).is_ok() {
-                saved += 1;
-            }
-        }
-        if saved == self.stem_separation.stems.len() {
-            self.stem_separation.status = Some(format!("Saved all {saved} stereo stems."));
-            self.stem_separation.save_dialog_open = false;
-        } else {
-            self.stem_separation.error = Some(format!(
-                "Saved {saved} of {} stems.",
-                self.stem_separation.stems.len()
-            ));
-        }
-    }
-
     pub(crate) fn render_stem_separation_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -735,14 +469,14 @@ impl AudioPreviewState {
                                 .color(hex_to_c32(&palette.diff_add)),
                         );
                     }
-                    if let Some(error) = &self.stem_separation.error {
-                        ui.label(
-                            egui::RichText::new(error)
-                                .size(crate::ui_ext::BODY_FONT_SIZE)
-                                .color(hex_to_c32(&palette.diff_del)),
-                        );
-                    }
                 });
+                if let Some(error) = &self.stem_separation.error {
+                    ui.label(
+                        egui::RichText::new(error)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(hex_to_c32(&palette.diff_del)),
+                    );
+                }
 
                 ui.add_space(5.0);
                 if self.stem_separation.stems.is_empty() {
@@ -986,6 +720,10 @@ mod tests {
 
     fn fake_worker(directory: &Path, body: &str) -> StemWorkerCommand {
         let path = directory.join("fake-stem-worker.sh");
+        let body = body.replace(
+            "$2/descendant",
+            &format!("{}/workspace/descendant", directory.display()),
+        );
         std::fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
         let mut permissions = std::fs::metadata(&path).unwrap().permissions();
         permissions.set_mode(0o755);
@@ -999,13 +737,20 @@ mod tests {
     fn manifest_worker(directory: &Path) -> StemWorkerCommand {
         fake_worker(
             directory,
-            r#"mkdir -p "$2"
-for stem in vocals drums bass other; do : > "$2/$stem.wav"; done
-printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","other":"%s/other.wav"}\n' "$2" "$2" "$2" "$2""#,
+            r#"for stem in vocals drums bass other; do cp "$1" "$2/$stem.wav"; done
+printf '{"vocals":"vocals.wav","drums":"drums.wav","bass":"bass.wav","other":"other.wav"}\n'"#,
         )
     }
 
     fn test_state(path: &Path) -> AudioPreviewState {
+        if !path.exists() {
+            crate::audio_preview::tests::write_stereo_pcm_fixture(
+                path,
+                &[8192; 800],
+                &[-4096; 800],
+                8000,
+            );
+        }
         let mut state = AudioPreviewState::new(path.to_path_buf(), "stem-test.wav".into());
         state.cancel_session_analysis();
         let workspace = path.parent().unwrap().join("workspace");
@@ -1038,6 +783,105 @@ printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","o
     }
 
     #[test]
+    fn stem_preparation_rejects_expired_and_replaced_sources() {
+        for changed in [false, true] {
+            let directory = test_dir("checked-input");
+            let input = directory.join("input.wav");
+            let mut state = test_state(&input);
+            state.file_source = Some(crate::file_source::FileSource::capture(&input).unwrap());
+            if changed {
+                std::fs::write(&input, b"replacement").unwrap();
+            } else {
+                state.read_check =
+                    crate::file_source::ReadCheck::new(|_| Err("source context expired".into()));
+            }
+            let jobs = BackgroundJobs::new(1, 1);
+            state.start_stem_separation_on(
+                &jobs,
+                fake_worker(&directory, "echo must-not-run >&2; exit 9"),
+            );
+            wait_for_stem_terminal(&mut state, &jobs);
+            let error = state.stem_separation.error.as_deref().unwrap();
+            assert!(
+                error.contains(if changed {
+                    "source changed"
+                } else {
+                    "source context expired"
+                }),
+                "{error}"
+            );
+            assert!(state.stem_separation.stems.is_empty());
+            assert_eq!(
+                std::fs::read_dir(state.stem_separation.workspace.as_ref().unwrap())
+                    .unwrap()
+                    .count(),
+                0
+            );
+            drop(state);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn separated_stems_own_output_lifetime_and_reject_external_manifests() {
+        let directory = test_dir("owned-output");
+        let input = directory.join("input.wav");
+        let state = test_state(&input);
+        let control = crate::image_preview::ImageToolProcessControl::new();
+        let outputs = run_stem_worker(
+            manifest_worker(&directory),
+            state.edit_snapshot(),
+            state.editor_render_filter(),
+            state.stem_separation.workspace.as_ref().unwrap(),
+            &control,
+        )
+        .unwrap();
+        let identity = outputs[0].identity.clone();
+        let check = outputs[0].check.clone();
+        let output = identity.path().to_owned();
+        let job = output.parent().unwrap().to_owned();
+        assert_eq!(
+            std::fs::metadata(&job).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        std::fs::remove_file(&input).unwrap();
+        drop(outputs);
+        check
+            .open(&output, Some(&identity), &AtomicBool::new(false))
+            .unwrap();
+        assert!(job.is_dir());
+        drop(check);
+        assert!(
+            !job.exists(),
+            "the final read-context owner must release the private job"
+        );
+        drop(state);
+        let state = test_state(&input);
+        let malformed = fake_worker(
+            &directory,
+            r#"printf '{"vocals":"/etc/passwd","drums":"../drums.wav","bass":"bass.wav","other":"other.wav"}\n'"#,
+        );
+        let error = run_stem_worker(
+            malformed,
+            state.edit_snapshot(),
+            state.editor_render_filter(),
+            state.stem_separation.workspace.as_ref().unwrap(),
+            &control,
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("outside its job directory"));
+        assert_eq!(
+            std::fs::read_dir(state.stem_separation.workspace.as_ref().unwrap())
+                .unwrap()
+                .count(),
+            0
+        );
+        drop(state);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn save_all_stems_copies_declared_files_and_closes_dialog() {
         let directory = test_dir("save-all");
         let destination = directory.join("chosen-output");
@@ -1063,11 +907,22 @@ printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","o
         }
 
         state.save_all_stems();
-
+        assert!(state.file_write_pending());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state.file_write_pending() {
+            assert!(Instant::now() < deadline);
+            state.poll_save_job(&egui::Context::default(), 0.0);
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert!(!state.stem_separation.save_dialog_open);
-        assert_eq!(
-            state.stem_separation.status.as_deref(),
-            Some("Saved all 4 stereo stems.")
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .unwrap()
+                .0
+                .text
+                .contains("Saved 4 file(s)")
         );
         assert!(state.stem_separation.error.is_none());
         for (name, contents) in stems {
@@ -1461,7 +1316,13 @@ printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","o
     fn escape_during_stem_separation_closes_and_cancels_worker_without_changing_source() {
         let directory = test_dir("escape-running");
         let source = directory.join("input.wav");
-        std::fs::write(&source, b"synthetic audio source").unwrap();
+        crate::audio_preview::tests::write_stereo_pcm_fixture(
+            &source,
+            &[8192; 800],
+            &[-4096; 800],
+            8000,
+        );
+        let original_bytes = std::fs::read(&source).unwrap();
         let jobs = BackgroundJobs::new(1, 1);
         let script =
             "(sleep 1; touch \"$2/descendant-finished\") &\necho $! > \"$2/descendant.pid\"\nwait";
@@ -1518,7 +1379,7 @@ printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","o
         wait_for_process_exit(direct_pid);
         std::thread::sleep(Duration::from_millis(1100));
         assert!(!workspace.join("descendant-finished").exists());
-        assert_eq!(std::fs::read(source).unwrap(), b"synthetic audio source");
+        assert_eq!(std::fs::read(source).unwrap(), original_bytes);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

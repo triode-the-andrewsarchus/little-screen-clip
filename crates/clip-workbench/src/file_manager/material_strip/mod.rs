@@ -21,6 +21,7 @@ pub(in crate::file_manager) enum Request {
 }
 #[derive(Default)]
 pub(super) struct Previews {
+    pub(in crate::file_manager) context: super::search::PreviewContext,
     cache: Cache,
     spheres: BTreeMap<(uuid::Uuid, usize), (u32, uuid::Uuid)>,
     hover: HoverRaster,
@@ -31,7 +32,10 @@ impl Previews {
         self.hover.poll(ctx);
     }
     pub fn clear(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            context: self.context.clone(),
+            ..Self::default()
+        };
     }
     pub fn retain(&mut self, visible: &BTreeSet<uuid::Uuid>) {
         self.spheres
@@ -114,7 +118,8 @@ impl Previews {
                     Source::Material(Request::Sphere {
                         material: material.clone(),
                         edge,
-                    }),
+                    })
+                    .checked(&entry.path, &self.context),
                 );
             }
             let size = cell.height().min(cell.width() - 16.0).max(1.0);
@@ -181,13 +186,14 @@ impl Previews {
                 .galley(label.min + vec2(0.0, 6.0), name, colors.text_secondary);
             if super::ui::preview_hovered(ui, cell) {
                 let fallback = ready.and_then(|ready| ready.texture.clone());
-                self.show_hover(ui, source, index, material, fallback.as_ref());
+                self.show_hover(ui, entry, source, index, material, fallback.as_ref());
             }
         }
     }
     fn show_hover(
         &mut self,
         ui: &mut Ui,
+        entry: &Entry,
         source: uuid::Uuid,
         index: usize,
         material: &Arc<Material>,
@@ -203,7 +209,8 @@ impl Previews {
             Source::Material(Request::Sphere {
                 material: material.clone(),
                 edge,
-            }),
+            })
+            .checked(&entry.path, &self.context),
         );
         let texture = ready.and_then(|ready| ready.texture.as_ref()).or(fallback);
         egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("material-strip-hover"), |ui| {

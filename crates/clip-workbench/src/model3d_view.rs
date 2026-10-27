@@ -166,6 +166,9 @@ impl InlineModel3dPreview {
 impl Model3dViewerState {
     /// Begins loading a 3D model asynchronously from disk on a background thread.
     pub fn from_file(path: PathBuf) -> Self {
+        Self::from_file_checked(path, crate::file_source::ReadCheck::default())
+    }
+    pub(crate) fn from_file_checked(path: PathBuf, check: crate::file_source::ReadCheck) -> Self {
         let title = path
             .file_name()
             .and_then(|s| s.to_str())
@@ -184,9 +187,11 @@ impl Model3dViewerState {
         };
 
         let load_path = path.clone();
-        let (ticket, rx) = little_clip_core::BackgroundJobs::global()
-            .submit(Duration::from_secs(30), move || {
-                Model3d::load_file(&load_path).map(Arc::new)
+        let (ticket, rx) =
+            little_clip_core::BackgroundJobs::global().submit(Duration::from_secs(30), move || {
+                check.read(&std::sync::atomic::AtomicBool::new(false), || {
+                    Model3d::load_file(&load_path).map(Arc::new)
+                })
             });
 
         Self {
@@ -998,6 +1003,16 @@ mod tests {
         assert_eq!(second.zoom, 1.0);
         assert!(!second.wireframe);
         assert_eq!((inline.pitch, inline.yaw, inline.zoom), (0.4, 0.6, 1.0));
+    }
+
+    #[test]
+    fn deferred_model_parse_checks_the_original_source_before_opening() {
+        let source = tempfile::tempdir().unwrap();
+        let viewer = Model3dViewerState::from_file_checked(
+            source.path().join("missing.obj"),
+            crate::file_source::ReadCheck::new(|_| Err("source context expired".into())),
+        );
+        crate::file_source::read_check_tests::assert_deferred_rejected(viewer.rx.as_ref().unwrap());
     }
 
     #[test]

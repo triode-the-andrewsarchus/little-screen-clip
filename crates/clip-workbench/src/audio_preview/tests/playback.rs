@@ -425,6 +425,7 @@ fn audio_save_reports_destination_directory_creation_failure() {
     std::fs::write(&blocker, b"file blocks directory creation").unwrap();
     let plan = AudioSavePlan {
         versioned: false,
+        read_check: Default::default(),
         file_source: None,
         destination: blocker.join("child"),
         source,
@@ -450,6 +451,7 @@ fn file_backed_audio_export_preserves_collisions_and_reports_partial_success() {
     let source_bytes = std::fs::read(&source).unwrap();
     let outcome = run_audio_save(AudioSavePlan {
         versioned: false,
+        read_check: Default::default(),
         file_source: Some(crate::file_source::FileSource::capture(&source).unwrap()),
         source: source.clone(),
         destination: destination.path().to_owned(),
@@ -487,6 +489,7 @@ fn file_backed_audio_export_rejects_a_changed_source_before_creating_outputs() {
     let destination = tempfile::tempdir().unwrap();
     let error = run_audio_save(AudioSavePlan {
         versioned: false,
+        read_check: Default::default(),
         file_source: Some(file_source),
         source,
         destination: destination.path().to_owned(),
@@ -511,6 +514,7 @@ fn audio_exports_use_seekable_staging_in_the_held_directory() {
     std::os::unix::fs::symlink("/proc", &original).unwrap();
     let plan = AudioSavePlan {
         versioned: false,
+        read_check: Default::default(),
         file_source: Some(crate::file_source::FileSource::capture(&source).unwrap()),
         source,
         destination: original.clone(),
@@ -556,6 +560,7 @@ fn audio_exports_use_seekable_staging_in_the_held_directory() {
     std::os::unix::fs::symlink("/proc", &alias).unwrap();
     let error = run_audio_save(AudioSavePlan {
         versioned: false,
+        read_check: Default::default(),
         file_source: plan.file_source,
         source: plan.source,
         destination: alias,
@@ -571,6 +576,7 @@ fn audio_save_reports_ffmpeg_process_failure_with_filename() {
     let destination = tempfile::tempdir().unwrap();
     let result = run_audio_save(AudioSavePlan {
         versioned: false,
+        read_check: Default::default(),
         file_source: None,
         destination: destination.path().to_owned(),
         source: destination.path().join("missing-source.wav"),
@@ -782,4 +788,86 @@ fn pad_studio_export_publishes_a_trimmed_sibling_without_overwriting_sources() {
     assert_eq!(std::fs::read(existing).unwrap(), b"keep existing sibling");
     let analysis = compute_full_audio_analysis(&files[0], 100).unwrap();
     assert!(analysis.duration_ms.abs_diff(200) < 20);
+}
+
+#[test]
+fn deferred_playback_opens_a_checked_seekable_decoder_and_rejects_stale_sources() {
+    let (_dir, path) = generate_fixture_wav("checked-playback", 0.5);
+    let cancel = AtomicBool::new(false);
+    let mut decoder =
+        super::super::playback::load_decoder(&path, &Default::default(), None, &cancel, 0.1)
+            .unwrap();
+    assert!(decoder.next().is_some());
+    let deny = crate::file_source::ReadCheck::new(|_| Err("source context expired".into()));
+    let missing = path.with_file_name("must-not-open.wav");
+    let result = super::super::playback::load_decoder(&missing, &deny, None, &cancel, 0.0);
+    assert_eq!(result.err().as_deref(), Some("source context expired"));
+}
+
+#[test]
+fn stopped_or_replaced_playback_loads_cannot_later_install_a_decoder() {
+    let (_dir, path) = generate_fixture_wav("cancel-playback", 0.1);
+    let mut state = AudioPreviewState::from_completed_source(
+        path,
+        "Checked".into(),
+        None,
+        Arc::new(empty_audio_analysis()),
+    );
+    state.start_file_playback(0.0);
+    let old_cancel = state.playback_load.as_ref().unwrap().cancel.clone();
+    state.start_file_playback(0.01);
+    assert!(old_cancel.load(Ordering::Acquire));
+    let newest_cancel = state.playback_load.as_ref().unwrap().cancel.clone();
+    state.stop();
+    assert!(newest_cancel.load(Ordering::Acquire));
+    assert!(state.playback_load.is_none());
+    state.poll_file_playback(&egui::Context::default());
+    assert!(!state.is_playing);
+}
+
+#[test]
+fn search_source_validation_rejects_audio_exports_before_outputs_and_keeps_completed_items() {
+    let (_dir, source) = generate_fixture_wav("checked-export", 0.1);
+    let destination = tempfile::tempdir().unwrap();
+    let installed = destination.path().join("first.wav");
+    let watch = installed.clone();
+    // Become stale after the first region is installed, before the second starts.
+    let check = crate::file_source::ReadCheck::new(move |_| {
+        if watch.exists() {
+            Err("source context expired".into())
+        } else {
+            Ok(())
+        }
+    });
+    let outcome = run_audio_save(AudioSavePlan {
+        versioned: false,
+        read_check: check,
+        file_source: Some(crate::file_source::FileSource::capture(&source).unwrap()),
+        source: source.clone(),
+        destination: destination.path().to_owned(),
+        open_folder: false,
+        regions: ["first.wav", "second.wav"]
+            .into_iter()
+            .map(|name| AudioSaveRegion {
+                start: 0.0,
+                end: 0.05,
+                filename: name.into(),
+                filter: None,
+            })
+            .collect(),
+    })
+    .unwrap();
+    assert_eq!(outcome.saved_count, 1);
+    assert_eq!(outcome.failures.len(), 1);
+    assert!(outcome.failures[0].contains("source context expired"));
+    assert!(installed.exists());
+    assert!(!destination.path().join("second.wav").exists());
+    let mut plan = audio_slice_copy_plan(&source, 0.0, 0.05, ChannelCopyMode::Native, None);
+    plan.output = destination.path().join("copy.wav");
+    plan.read_check = crate::file_source::ReadCheck::new(|_| Err("source context expired".into()));
+    assert_eq!(
+        extract_audio_slice_file(&plan, &AtomicBool::new(false)).unwrap_err(),
+        "source context expired"
+    );
+    assert!(!plan.output.exists());
 }

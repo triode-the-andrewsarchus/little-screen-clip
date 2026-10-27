@@ -50,12 +50,7 @@ fn analyze(
     cancelled: &AtomicBool,
 ) -> Result<(little_clip_core::ImageThumbnail, Analysis), String> {
     let source = FileSource::capture(path)?;
-    let dimensions = super::gallery::metadata::probe(path, revision)?;
-    if cancelled.load(Ordering::Relaxed) {
-        return Err("Cancelled".into());
-    }
-    let thumbnail = super::gallery::thumbnail::load(path, 256, dimensions.orientation, cancelled)
-        .ok_or("Image preview unavailable")?;
+    let (dimensions, thumbnail) = thumbnail(path, revision, cancelled)?;
     let rgba = straight_pixels(&thumbnail).ok_or("Invalid image thumbnail")?;
     let hilbert_strip = Arc::new(
         hilbert::HilbertStrip::read(&rgba, hilbert::STRIP_SEGMENTS, cancelled)
@@ -115,6 +110,50 @@ fn straight_pixels(thumbnail: &little_clip_core::ImageThumbnail) -> Option<image
         }
     }
     image::RgbaImage::from_raw(thumbnail.width, thumbnail.height, pixels)
+}
+
+/// Parses only the dHash field; version and mean-color bits are not distances.
+pub(super) fn parse_dhash(encoded: &str) -> Option<u64> {
+    (encoded.len() == 20
+        && encoded.starts_with('1')
+        && encoded.bytes().all(|b| b.is_ascii_hexdigit()))
+    .then(|| u64::from_str_radix(&encoded[4..], 16).ok())
+    .flatten()
+}
+
+/// Shared image preprocessing without full-file hashing or metadata extraction.
+pub(super) fn perceptual(
+    path: &Path,
+    revision: u64,
+    cancelled: &AtomicBool,
+) -> Result<u64, String> {
+    let source = FileSource::capture(path)?;
+    let (_, thumbnail) = thumbnail(path, revision, cancelled)?;
+    let image = straight_pixels(&thumbnail).ok_or("Invalid image thumbnail")?;
+    let hash = parse_dhash(&difference_hash(&image)).ok_or("Invalid perceptual hash")?;
+    source.check()?;
+    super::filesystem::check_revision(path, revision)?;
+    Ok(hash)
+}
+
+fn thumbnail(
+    path: &Path,
+    revision: u64,
+    cancelled: &AtomicBool,
+) -> Result<
+    (
+        super::gallery::metadata::Metadata,
+        little_clip_core::ImageThumbnail,
+    ),
+    String,
+> {
+    let dimensions = super::gallery::metadata::probe(path, revision)?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Cancelled".into());
+    }
+    let thumbnail = super::gallery::thumbnail::load(path, 256, dimensions.orientation, cancelled)
+        .ok_or("Image preview unavailable")?;
+    Ok((dimensions, thumbnail))
 }
 
 // Version 1: four format bits, twelve coarse mean-color bits, then 64 dHash bits.
@@ -197,6 +236,7 @@ mod tests {
             size_bytes: 100,
             modified: "".into(),
             modified_time: None,
+            created_time: None,
             warning: None,
             revision: 1,
             identity: None,

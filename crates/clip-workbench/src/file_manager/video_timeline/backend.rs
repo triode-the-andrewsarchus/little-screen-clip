@@ -18,6 +18,20 @@ pub(super) struct Rendered {
     pub timeline: Result<ImageThumbnail, String>,
 }
 
+/// Verify intermediate snapshots before they enter the UI's progress channel.
+pub(super) struct Progress<'a> {
+    pub sender: mpsc::SyncSender<ImageThumbnail>,
+    pub context: &'a super::super::search::PreviewContext,
+    pub path: &'a Path,
+    pub cancel: &'a AtomicBool,
+}
+impl Progress<'_> {
+    fn try_send(&self, image: ImageThumbnail) -> Result<(), String> {
+        let image = self.context.read(self.path, self.cancel, || Ok(image))?;
+        self.sender.try_send(image).map_err(|e| e.to_string())
+    }
+}
+
 pub(super) fn load(
     path: &Path,
     revision: u64,
@@ -25,10 +39,14 @@ pub(super) fn load(
     peers: usize,
     token: &AtomicBool,
     inspected: mpsc::SyncSender<Arc<media::VideoMetadata>>,
-    progress: mpsc::SyncSender<ImageThumbnail>,
+    progress: Progress<'_>,
 ) -> Result<Rendered, String> {
     filesystem::check_revision(path, revision)?;
-    let metadata = Arc::new(media::inspect_video(path)?);
+    let metadata = Arc::new(
+        progress
+            .context
+            .read(path, token, || media::inspect_video(path))?,
+    );
     if metadata.duration_ms == 0 {
         return Err("Video duration is unavailable".into());
     }
@@ -37,6 +55,7 @@ pub(super) fn load(
     let timeline = timeline(path, &metadata, width, policy, token, &progress);
     metadata.source.check()?;
     filesystem::check_revision(path, revision)?;
+    progress.context.read(path, token, || Ok(()))?;
     Ok(Rendered { metadata, timeline })
 }
 
@@ -90,7 +109,7 @@ fn timeline(
     width: u32,
     policy: super::dispatch::Policy,
     token: &AtomicBool,
-    progress: &mpsc::SyncSender<ImageThumbnail>,
+    progress: &Progress<'_>,
 ) -> Result<ImageThumbnail, String> {
     let cached = cache_path(&metadata.source, metadata.stream, width);
     if let Some(image) = cached
@@ -130,7 +149,7 @@ fn generate(
     output: &Path,
     policy: super::dispatch::Policy,
     token: &AtomicBool,
-    progress: &mpsc::SyncSender<ImageThumbnail>,
+    progress: &Progress<'_>,
 ) -> Result<(), String> {
     let mut command = CommandRequest::new(helper().into_os_string())
         .arg_content_file(path)
@@ -221,7 +240,7 @@ fn generate_indexed(
     output: &Path,
     policy: super::dispatch::Policy,
     token: &AtomicBool,
-    progress: &mpsc::SyncSender<ImageThumbnail>,
+    progress: &Progress<'_>,
 ) -> bool {
     if metadata.duration_ms <= 600_000 {
         return false;
@@ -279,7 +298,7 @@ fn run_progressive(
     metadata: &media::VideoMetadata,
     width: u32,
     token: &AtomicBool,
-    progress: &mpsc::SyncSender<ImageThumbnail>,
+    progress: &Progress<'_>,
     snapshots: bool,
 ) -> Result<CommandOutput, CommandError> {
     // Retries start a fresh snapshot sequence. The AV1 FFmpeg fallback has no snapshots.
@@ -300,7 +319,7 @@ fn poll_progress(
     metadata: &media::VideoMetadata,
     width: u32,
     previous: &mut Option<std::time::SystemTime>,
-    progress: &mpsc::SyncSender<ImageThumbnail>,
+    progress: &Progress<'_>,
 ) {
     let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) else {
         return;
@@ -331,5 +350,33 @@ mod tests {
         assert_eq!((image.width, image.height), (3200, 64));
         assert_eq!(&image.premultiplied_rgba[..4], &[12, 64, 192, 255]);
         assert!(decode(&ppm, 1600, 64).is_err());
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+    #[test]
+    fn progress_cannot_publish_a_frame_outside_its_result_context() {
+        let context = super::super::super::search::PreviewContext::empty_results();
+        let cancel = AtomicBool::new(false);
+        let (sender, frames) = mpsc::sync_channel(1);
+        let mut progress = Progress {
+            sender,
+            context: &context,
+            path: Path::new("/unpublished"),
+            cancel: &cancel,
+        };
+        let image = || ImageThumbnail {
+            width: 1,
+            height: 1,
+            premultiplied_rgba: vec![0; 4],
+        };
+        assert!(progress.try_send(image()).is_err());
+        assert!(frames.try_recv().is_err());
+        let ordinary = super::super::super::search::PreviewContext::default();
+        progress.context = &ordinary;
+        progress.try_send(image()).unwrap();
+        assert_eq!(frames.try_recv().unwrap().width, 1);
     }
 }

@@ -8,6 +8,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 #[derive(Default)]
 pub(in crate::file_manager) struct Hover {
+    pub(in crate::file_manager) context: super::super::search::PreviewContext,
     cache: Previews,
     key: Option<(PathBuf, uuid::Uuid, u32, uuid::Uuid)>,
     seen: bool,
@@ -82,7 +83,8 @@ impl Hover {
                     revision: entry.revision,
                     edge,
                     orientation: analysis.orientation,
-                },
+                }
+                .checked(&entry.path, &self.context),
             );
         }
         let texture = self

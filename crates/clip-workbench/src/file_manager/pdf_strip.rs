@@ -13,6 +13,7 @@ use std::{
 
 #[derive(Default)]
 pub(super) struct Pages {
+    pub(in crate::file_manager) context: super::search::PreviewContext,
     cache: Previews,
     hover: HoverRaster,
     files: BTreeMap<PathBuf, (uuid::Uuid, u32, BTreeMap<usize, uuid::Uuid>)>,
@@ -100,7 +101,8 @@ impl Pages {
                         path: entry.path.clone(),
                         page,
                         edge,
-                    },
+                    }
+                    .checked(&entry.path, &self.context),
                 );
             }
             let image_box = egui::Rect::from_min_max(
@@ -161,7 +163,8 @@ impl Pages {
                 path: entry.path.clone(),
                 page,
                 edge,
-            },
+            }
+            .checked(&entry.path, &self.context),
         );
         let texture = ready.and_then(|ready| ready.texture.as_ref()).or(fallback);
         egui::show_tooltip_at_pointer(

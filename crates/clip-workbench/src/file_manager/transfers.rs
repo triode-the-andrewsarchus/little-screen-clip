@@ -331,7 +331,13 @@ impl Running {
 
 impl FileManager {
     pub(super) fn filesystem_busy(&self) -> bool {
-        self.edit_busy() || self.transfers.busy()
+        self.edit_busy()
+            || self.transfers.busy()
+            || self
+                .search
+                .service
+                .as_ref()
+                .is_some_and(|service| service.maintenance_busy())
     }
 
     pub(super) fn tick_transfers(&mut self, jobs: &BackgroundJobs) {
@@ -408,15 +414,16 @@ impl FileManager {
     }
 
     pub(super) fn selection_is_mutable(&self) -> bool {
-        self.directory.as_ref().is_some_and(|directory| {
-            !directory.system
-                && self.selected_paths().iter().all(|path| {
-                    directory
-                        .entries
-                        .iter()
-                        .any(|entry| entry.path == *path && entry.system.is_none())
-                })
-        })
+        !self.search.has_offline_results()
+            && self.directory.as_ref().is_some_and(|directory| {
+                !directory.system
+                    && self.selected_paths().iter().all(|path| {
+                        directory
+                            .entries
+                            .iter()
+                            .any(|entry| entry.path == *path && entry.system.is_none())
+                    })
+            })
     }
     pub(super) fn copy_selection(&mut self, cut: bool) {
         if cut && !self.selection_is_mutable() {
@@ -424,6 +431,11 @@ impl FileManager {
         }
 
         let paths = self.selected_paths();
+        if paths.iter().any(|path| self.search.is_offline(path)) {
+            self.error =
+                Some("Reconnect and refresh before copying last-known unavailable files.".into());
+            return;
+        }
         if !paths.is_empty() {
             self.transfers.clipboard = Some(FileClipboard {
                 paths: paths.clone(),

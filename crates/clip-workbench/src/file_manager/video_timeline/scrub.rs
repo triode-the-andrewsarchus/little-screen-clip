@@ -22,14 +22,28 @@ pub(super) struct Session {
     ended: bool,
 }
 impl Session {
-    pub fn new(file: FrameKey, metadata: Arc<VideoMetadata>, ctx: egui::Context) -> Self {
+    pub fn new(
+        file: FrameKey,
+        metadata: Arc<VideoMetadata>,
+        ctx: egui::Context,
+        context: super::super::search::PreviewContext,
+    ) -> Self {
         let latest = Arc::new(Mutex::new(None));
         let worker = latest.clone();
         let (wake, receiver) = mpsc::sync_channel(1);
         let (output, results) = mpsc::sync_channel(2);
         let source = file.clone();
         let task = Task::start(&FRAMES, Duration::from_secs(86400), move |token| {
-            run(source, metadata, worker, receiver, output, token, ctx);
+            Worker {
+                file: source,
+                metadata,
+                latest: worker,
+                wake: receiver,
+                output,
+                ctx,
+                context,
+            }
+            .run(token);
         });
         Self {
             latest,
@@ -59,30 +73,44 @@ impl Session {
         self.ended
     }
 }
-fn run(
+struct Worker {
     file: FrameKey,
     metadata: Arc<VideoMetadata>,
     latest: Arc<Mutex<Option<FrameKey>>>,
     wake: mpsc::Receiver<()>,
     output: mpsc::SyncSender<Completion>,
-    token: &AtomicBool,
     ctx: egui::Context,
-) {
-    let mut decoder = None;
-    while !token.load(Ordering::Relaxed) {
-        let _ = wake.recv_timeout(Duration::from_millis(50));
-        let Some(key) = latest.lock().unwrap().take() else {
-            continue;
-        };
-        let result = extract(&file, &metadata, &mut decoder, &key, token);
-        if token.load(Ordering::Relaxed) {
-            break;
-        }
-        let failed = result.is_err();
-        let _ = output.try_send(Completion { key, result });
-        ctx.request_repaint();
-        if failed {
-            break;
+    context: super::super::search::PreviewContext,
+}
+impl Worker {
+    fn run(self, token: &AtomicBool) {
+        let Self {
+            file,
+            metadata,
+            latest,
+            wake,
+            output,
+            ctx,
+            context,
+        } = self;
+        let mut decoder = None;
+        while !token.load(Ordering::Relaxed) {
+            let _ = wake.recv_timeout(Duration::from_millis(50));
+            let Some(key) = latest.lock().unwrap().take() else {
+                continue;
+            };
+            let result = context.read(&file.path, token, || {
+                extract(&file, &metadata, &mut decoder, &key, token)
+            });
+            if token.load(Ordering::Relaxed) {
+                break;
+            }
+            let failed = result.is_err();
+            let _ = output.try_send(Completion { key, result });
+            ctx.request_repaint();
+            if failed {
+                break;
+            }
         }
     }
 }

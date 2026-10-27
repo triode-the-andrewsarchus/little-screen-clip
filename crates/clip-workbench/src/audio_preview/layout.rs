@@ -212,6 +212,40 @@ impl AudioWorkspace {
 }
 
 impl AudioPreviewState {
+    /// Paints the shared pending/failed state before a tool paints its analysis.
+    pub(super) fn paint_analysis_placeholder(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        color: egui::Color32,
+    ) -> bool {
+        if !self.is_loading_analysis && self.analysis.is_some() {
+            return false;
+        }
+        let (icon, message) = if self.is_loading_analysis {
+            (
+                crate::icons::Icon::Hourglass,
+                format!(
+                    "Decoding audio & building analysis... ({:.1}s)",
+                    self.loading_start_time.elapsed().as_secs_f32()
+                ),
+            )
+        } else {
+            (
+                crate::icons::Icon::Alert,
+                "Audio analysis unavailable".to_owned(),
+            )
+        };
+        icon.paint_text(
+            painter,
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            message,
+            egui::FontId::proportional(15.0),
+            color,
+        );
+        true
+    }
     fn render_volume_control(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         ui.horizontal(|ui| {
@@ -316,6 +350,22 @@ impl AudioPreviewState {
             |_ui| {},
         );
 
+        let now = ctx.input(|i| i.time);
+        if let Some((message, started)) = &self.status_toast
+            && now - started < 4.5
+        {
+            ui.horizontal(|ui| {
+                message.icon.ui(
+                    ui,
+                    crate::ui_ext::CONTROL_ICON_SIZE,
+                    ui.visuals().text_color(),
+                );
+                ui.add(egui::Label::new(&message.text).truncate(true))
+                    .on_hover_text(&message.text);
+            });
+            ctx.request_repaint_after(Duration::from_secs_f64((4.5 - (now - started)).max(0.01)));
+        }
+
         if clicked.is_some() {
             if has_separated_stems {
                 self.launch_stems_in_external_editor(ctx, close_requested);
@@ -326,6 +376,7 @@ impl AudioPreviewState {
 
         if *close_requested {
             self.stop();
+            self.stop_group_playback();
             for stem in &mut self.stem_separation.stems {
                 stem.preview.stop();
             }

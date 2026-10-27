@@ -3,6 +3,7 @@ use crate::{file_source::FileSource, icons::Icon};
 use little_clip_core::ImageThumbnail;
 use std::time::Duration;
 
+pub(in crate::file_manager) mod timing;
 mod video_details;
 
 #[derive(Default)]
@@ -146,7 +147,7 @@ pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, Str
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,codec_name,profile,width,height,avg_frame_rate,r_frame_rate,bit_rate,channels,channel_layout:stream_disposition=attached_pic,default:stream_tags=BPS,BPS-eng,bps,bps-eng,DATE,date,YEAR,year,release_year,RELEASE_YEAR,release_date,RELEASE_DATE,date_released,DATE_RELEASED,originaldate,ORIGINALDATE:format=duration,size:format_tags=DATE,date,YEAR,year,release_year,RELEASE_YEAR,release_date,RELEASE_DATE,date_released,DATE_RELEASED,originaldate,ORIGINALDATE",
+            "stream=index,start_time,duration,codec_type,codec_name,profile,width,height,avg_frame_rate,r_frame_rate,bit_rate,channels,channel_layout:stream_disposition=attached_pic,default:stream_tags=DURATION,BPS,BPS-eng,bps,bps-eng,DATE,date,YEAR,year,release_year,RELEASE_YEAR,release_date,RELEASE_DATE,date_released,DATE_RELEASED,originaldate,ORIGINALDATE:format=start_time,duration,size:format_tags=DATE,date,YEAR,year,release_year,RELEASE_YEAR,release_date,RELEASE_DATE,date_released,DATE_RELEASED,originaldate,ORIGINALDATE",
             "-of",
             "json",
         ])
@@ -211,15 +212,14 @@ fn stream_metadata(value: &serde_json::Value) -> Result<(usize, u32, u32, u64), 
     if width == 0 || height == 0 || width > 4096 || height > 4096 || width * height > 4096 * 2160 {
         return Err("Video dimensions are invalid or exceed the 4096×2160 pixel budget; use Open externally.".into());
     }
-    let duration_ms = value["format"]["duration"]
-        .as_str()
-        .and_then(|text| text.parse::<f64>().ok())
-        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
-        .map_or(0, |seconds| (seconds * 1000.0) as u64);
+    let duration_ms = timing::Track::from_stream(value, stream)
+        .map_or(0, |track| ((track.start + track.duration) * 1000.0) as u64);
     Ok((index, width as u32, height as u32, duration_ms))
 }
 
-fn selected_video_stream(value: &serde_json::Value) -> Result<(usize, &serde_json::Value), String> {
+pub(in crate::file_manager) fn selected_video_stream(
+    value: &serde_json::Value,
+) -> Result<(usize, &serde_json::Value), String> {
     value["streams"]
         .as_array()
         .into_iter()
@@ -235,11 +235,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn video_preview_and_extraction_share_source_relative_duration() {
+        let mut value = serde_json::json!({
+            "streams": [{"index":0,"codec_type":"video","width":80,"height":40,
+                "start_time":"5","tags":{"DURATION":"00:00:06.000000000"}}],
+            "format":{"start_time":"5","duration":"6"}
+        });
+        assert_eq!(stream_metadata(&value).unwrap().3, 1000);
+        value["streams"][0]["duration"] = serde_json::json!("0.5");
+        assert_eq!(stream_metadata(&value).unwrap().3, 500);
+        value["streams"][0]["duration"] = serde_json::json!("NaN");
+        value["streams"][0]["tags"]["DURATION"] = serde_json::json!("99:99:99");
+        value["format"]["duration"] = serde_json::json!("NaN");
+        assert_eq!(stream_metadata(&value).unwrap().3, 0);
+    }
+    #[test]
     fn selected_stream_skips_cover_art_and_enforces_the_played_pixel_budget() {
         let mut metadata = serde_json::json!({
             "streams": [
-                {"width":160, "height":160, "disposition":{"attached_pic":1}},
-                {"width":1920, "height":1080, "disposition":{"attached_pic":0}}
+                {"index":0,"width":160, "height":160, "disposition":{"attached_pic":1}},
+                {"index":1,"width":1920, "height":1080, "disposition":{"attached_pic":0}}
             ], "format":{"duration":"3.5"}
         });
         assert_eq!(stream_metadata(&metadata).unwrap(), (1, 1920, 1080, 3500));

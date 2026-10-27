@@ -61,6 +61,7 @@ impl Chunk {
 }
 #[derive(Default)]
 pub(super) struct Gallery {
+    context: super::search::PreviewContext,
     chunks: Vec<Chunk>,
     metadata_cache: BTreeMap<Key, Metadata>,
     offsets: Vec<f32>,
@@ -103,6 +104,15 @@ struct Anchor {
     delta: f32,
 }
 impl Gallery {
+    pub fn set_context(&mut self, context: &super::search::PreviewContext) {
+        if !self.context.same(context) {
+            *self = Self {
+                context: context.clone(),
+                ..Self::default()
+            };
+        }
+    }
+
     pub fn sync(
         &mut self,
         directory: &Directory,

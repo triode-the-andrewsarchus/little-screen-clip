@@ -140,15 +140,27 @@ impl AudioPreviewState {
             }
         }
 
-        // Clear focus from background palette inputs so they cannot swallow shortcuts
-        ctx.memory_mut(|m| {
-            if let Some(id) = m.focused() {
-                m.surrender_focus(id);
+        // Poll asynchronous folder browsing dialog if running
+        if let Some(ref rx) = self.browse_rx {
+            match rx.try_recv() {
+                Ok(res) => {
+                    if let Some(dir) = res {
+                        self.save_destination_dir = dir;
+                    }
+                    self.browse_rx = None;
+                }
+                Err(TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(50));
+                }
+                Err(TryRecvError::Disconnected) => self.browse_rx = None,
             }
-        });
+        }
 
         // Global Keybindings for Audio Preview
-        let accepts_tool_shortcuts = !ctx.wants_keyboard_input();
+        let accepts_tool_shortcuts = ui.is_enabled()
+            && !self.save_dialog_open
+            && !self.stem_separation.save_dialog_open
+            && !ctx.wants_keyboard_input();
         if accepts_tool_shortcuts
             && matches!(
                 self.active_mode,
@@ -176,109 +188,109 @@ impl AudioPreviewState {
                 ));
             }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
-            self.toggle_play();
-        }
+        if accepts_tool_shortcuts {
+            if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+                self.toggle_play();
+            }
 
-        // Poll asynchronous folder browsing dialog if running
-        if let Some(ref rx) = self.browse_rx {
-            match rx.try_recv() {
-                Ok(res) => {
-                    if let Some(dir) = res {
-                        self.save_destination_dir = dir;
+            let copy_requested = ctx.input(|i| {
+                i.events.iter().any(|e| matches!(e, egui::Event::Copy))
+                    || i.raw.events.iter().any(|e| matches!(e, egui::Event::Copy))
+                    || (i.key_pressed(egui::Key::C)
+                        && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd))
+            }) || ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
+                    || i.consume_key(egui::Modifiers::CTRL, egui::Key::C)
+            });
+
+            if copy_requested {
+                match self.selection_mode {
+                    SelectionMode::Single => {
+                        self.copy_selected_segment(now, ChannelCopyMode::Native)
                     }
-                    self.browse_rx = None;
-                }
-                Err(TryRecvError::Empty) => {
-                    ctx.request_repaint_after(Duration::from_millis(50));
-                }
-                Err(TryRecvError::Disconnected) => self.browse_rx = None,
-            }
-        }
-
-        let copy_requested = ctx.input(|i| {
-            i.events.iter().any(|e| matches!(e, egui::Event::Copy))
-                || i.raw.events.iter().any(|e| matches!(e, egui::Event::Copy))
-                || (i.key_pressed(egui::Key::C)
-                    && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd))
-        }) || ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::C)
-        });
-
-        if copy_requested {
-            match self.selection_mode {
-                SelectionMode::Single => self.copy_selected_segment(now, ChannelCopyMode::Native),
-                SelectionMode::Multi => self.copy_all_multi_segments(now, ChannelCopyMode::Native),
-            }
-        }
-
-        let save_requested = ctx.input(|i| {
-            i.key_pressed(egui::Key::S)
-                && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd)
-        }) || ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::S)
-        });
-
-        if save_requested {
-            if ctx.input(|i| i.modifiers.shift) {
-                self.quick_save(now);
-            } else {
-                self.open_save_dialog();
-            }
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
-            let step = if ctx.input(|i| i.modifiers.shift) {
-                5.0
-            } else {
-                1.0
-            };
-            self.seek_to(self.current_time_sec - step);
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
-            let step = if ctx.input(|i| i.modifiers.shift) {
-                5.0
-            } else {
-                1.0
-            };
-            self.seek_to(self.current_time_sec + step);
-        }
-        if ctx.input(|i| {
-            i.key_pressed(egui::Key::Home)
-                || (self.active_mode != AudioToolMode::ChannelTools
-                    && i.key_pressed(egui::Key::Num0))
-        }) {
-            self.seek_to(0.0);
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete)) {
-            self.delete_active_slice_from_session(now);
-        }
-
-        self.handle_undo_shortcuts(ctx);
-
-        // 'Z' key: Snap selection to zero-crossings / Toggle zero-crossing snap mode
-        if ctx.input(|i| {
-            i.key_pressed(egui::Key::Z)
-                && !i.modifiers.ctrl
-                && !i.modifiers.command
-                && !i.modifiers.alt
-        }) {
-            self.snap_zero_crossings = !self.snap_zero_crossings;
-            let status = if self.snap_zero_crossings {
-                "ON"
-            } else {
-                "OFF"
-            };
-            if self.snap_zero_crossings {
-                let has_sel = match self.selection_mode {
-                    SelectionMode::Single => self.selection.is_some(),
                     SelectionMode::Multi => {
-                        self.active_multi_index.is_some() && !self.multi_selections.is_empty()
+                        self.copy_all_multi_segments(now, ChannelCopyMode::Native)
                     }
+                }
+            }
+
+            let save_requested = ctx.input(|i| {
+                i.key_pressed(egui::Key::S)
+                    && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd)
+            }) || ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)
+                    || i.consume_key(egui::Modifiers::CTRL, egui::Key::S)
+            });
+
+            if save_requested {
+                if ctx.input(|i| i.modifiers.shift) {
+                    self.quick_save(now);
+                } else {
+                    self.open_save_dialog();
+                }
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+                let step = if ctx.input(|i| i.modifiers.shift) {
+                    5.0
+                } else {
+                    1.0
                 };
-                if has_sel {
-                    self.snap_active_selection_to_zero_crossings(now);
+                self.seek_to(self.current_time_sec - step);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+                let step = if ctx.input(|i| i.modifiers.shift) {
+                    5.0
+                } else {
+                    1.0
+                };
+                self.seek_to(self.current_time_sec + step);
+            }
+            if ctx.input(|i| {
+                i.key_pressed(egui::Key::Home)
+                    || (self.active_mode != AudioToolMode::ChannelTools
+                        && i.key_pressed(egui::Key::Num0))
+            }) {
+                self.seek_to(0.0);
+            }
+            if ctx
+                .input(|i| i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete))
+            {
+                self.delete_active_slice_from_session(now);
+            }
+
+            self.handle_undo_shortcuts(ctx);
+
+            // 'Z' key: Snap selection to zero-crossings / Toggle zero-crossing snap mode
+            if ctx.input(|i| {
+                i.key_pressed(egui::Key::Z)
+                    && !i.modifiers.ctrl
+                    && !i.modifiers.command
+                    && !i.modifiers.alt
+            }) {
+                self.snap_zero_crossings = !self.snap_zero_crossings;
+                let status = if self.snap_zero_crossings {
+                    "ON"
+                } else {
+                    "OFF"
+                };
+                if self.snap_zero_crossings {
+                    let has_sel = match self.selection_mode {
+                        SelectionMode::Single => self.selection.is_some(),
+                        SelectionMode::Multi => {
+                            self.active_multi_index.is_some() && !self.multi_selections.is_empty()
+                        }
+                    };
+                    if has_sel {
+                        self.snap_active_selection_to_zero_crossings(now);
+                    } else {
+                        self.status_toast = Some((
+                            crate::ui_ext::StatusMessage::new(
+                                crate::icons::Icon::Waves,
+                                format!("Snap to Zero-Crossing: {}", status),
+                            ),
+                            now,
+                        ));
+                    }
                 } else {
                     self.status_toast = Some((
                         crate::ui_ext::StatusMessage::new(
@@ -288,90 +300,82 @@ impl AudioPreviewState {
                         now,
                     ));
                 }
-            } else {
-                self.status_toast = Some((
-                    crate::ui_ext::StatusMessage::new(
-                        crate::icons::Icon::Waves,
-                        format!("Snap to Zero-Crossing: {}", status),
-                    ),
-                    now,
-                ));
             }
-        }
 
-        // 'T' key: Toggle transient detection markers & snapping (when transients are ready)
-        if ctx.input(|i| {
-            i.key_pressed(egui::Key::T)
-                && !i.modifiers.ctrl
-                && !i.modifiers.command
-                && !i.modifiers.alt
-        }) {
-            let transients_ready = self
-                .analysis
-                .as_ref()
-                .map(|a| a.is_transients_ready)
-                .unwrap_or(false);
-            if transients_ready {
-                self.show_transients = !self.show_transients;
-                let status = if self.show_transients {
-                    "ON (Snapping Enabled)"
-                } else {
-                    "OFF"
-                };
-                self.status_toast = Some((
-                    crate::ui_ext::StatusMessage::new(
-                        crate::icons::Icon::Zap,
-                        format!("Transients: {}", status),
-                    ),
-                    now,
-                ));
+            // 'T' key: Toggle transient detection markers & snapping (when transients are ready)
+            if ctx.input(|i| {
+                i.key_pressed(egui::Key::T)
+                    && !i.modifiers.ctrl
+                    && !i.modifiers.command
+                    && !i.modifiers.alt
+            }) {
+                let transients_ready = self
+                    .analysis
+                    .as_ref()
+                    .map(|a| a.is_transients_ready)
+                    .unwrap_or(false);
+                if transients_ready {
+                    self.show_transients = !self.show_transients;
+                    let status = if self.show_transients {
+                        "ON (Snapping Enabled)"
+                    } else {
+                        "OFF"
+                    };
+                    self.status_toast = Some((
+                        crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Zap,
+                            format!("Transients: {}", status),
+                        ),
+                        now,
+                    ));
+                }
             }
-        }
 
-        // Zoom keyboard shortcuts: Plus / Minus / Ctrl+0
-        if ctx.input(|i| i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)) {
-            self.zoom(0.88, self.current_time_sec);
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Minus)) {
-            self.zoom(1.136, self.current_time_sec);
-        }
-        if ctx
-            .input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Num0))
-        {
-            self.fit_to_window();
-        }
+            // Zoom keyboard shortcuts: Plus / Minus / Ctrl+0
+            if ctx.input(|i| i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)) {
+                self.zoom(0.88, self.current_time_sec);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Minus)) {
+                self.zoom(1.136, self.current_time_sec);
+            }
+            if ctx.input(|i| {
+                (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Num0)
+            }) {
+                self.fit_to_window();
+            }
 
-        // Number keys 1..9: preview corresponding slice from start to stop
-        if self.active_mode != AudioToolMode::ChannelTools
-            && self.selection_mode == SelectionMode::Multi
-            && !self.multi_selections.is_empty()
-        {
-            for (idx, &k) in AUDIO_NUMBER_KEYS.iter().skip(1).enumerate() {
-                if ctx.input(|i| {
-                    i.key_pressed(k)
-                        && !i.modifiers.ctrl
-                        && !i.modifiers.command
-                        && !i.modifiers.alt
-                }) {
-                    if idx < self.multi_selections.len() {
-                        let (s, e) = self.multi_selections[idx];
-                        self.active_multi_index = Some(idx);
-                        self.play_slice_preview(s, e);
-                        self.status_toast = Some((
-                            crate::ui_ext::StatusMessage::new(
-                                crate::icons::Icon::Play,
-                                format!(
-                                    "Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
-                                    idx + 1,
-                                    (s / 60.0) as u32,
-                                    s % 60.0,
-                                    (e / 60.0) as u32,
-                                    e % 60.0
+            // Number keys 1..9: preview corresponding slice from start to stop
+            if self.active_mode != AudioToolMode::ChannelTools
+                && self.selection_mode == SelectionMode::Multi
+                && !self.multi_selections.is_empty()
+            {
+                for (idx, &k) in AUDIO_NUMBER_KEYS.iter().skip(1).enumerate() {
+                    if ctx.input(|i| {
+                        i.key_pressed(k)
+                            && !i.modifiers.ctrl
+                            && !i.modifiers.command
+                            && !i.modifiers.alt
+                    }) {
+                        if idx < self.multi_selections.len() {
+                            let (s, e) = self.multi_selections[idx];
+                            self.active_multi_index = Some(idx);
+                            self.play_slice_preview(s, e);
+                            self.status_toast = Some((
+                                crate::ui_ext::StatusMessage::new(
+                                    crate::icons::Icon::Play,
+                                    format!(
+                                        "Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
+                                        idx + 1,
+                                        (s / 60.0) as u32,
+                                        s % 60.0,
+                                        (e / 60.0) as u32,
+                                        e % 60.0
+                                    ),
                                 ),
-                            ),
-                            now,
-                        ));
-                        break;
+                                now,
+                            ));
+                            break;
+                        }
                     }
                 }
             }

@@ -1,0 +1,52 @@
+{
+  "nuextract3": {
+    "repository": "numind/NuExtract3-GGUF",
+    "revision": "28a1aae6288c5d50bdf999ca2e572240966d669b",
+    "reviewed_source_revision": "c99dc8f5641b866aa0192b6ea78f84bf9f3535f1",
+    "license": "Apache-2.0",
+    "files": [
+      [
+        "NuExtract3-Q8_0.gguf",
+        4610579424,
+        "e01f77b8c5acf716cffc94bc5caae6e139a179e07c8e829bf0f571a10fe13c95"
+      ]
+    ],
+    "vision_file": [
+      "mmproj-NuExtract3-BF16.gguf",
+      675569184,
+      "9a506ce43544691f4f56f1533768f43e1887ef69b8cd74b2e7a46c4d9a155a01"
+    ]
+  },
+  "qwen3.5": {
+    "repository": "bartowski/Qwen_Qwen3.5-4B-GGUF",
+    "revision": "4168f45a16a1290d65a4ec0fa312ae917a4c15d6",
+    "source": "Qwen/Qwen3.5-4B",
+    "license": "Apache-2.0",
+    "files": [
+      [
+        "Qwen_Qwen3.5-4B-Q8_0.gguf",
+        4622131168,
+        "5c74c0ede371924357dff0cb6ba145bd67208b9b2389ded681adfff3f7608db7"
+      ]
+    ]
+  },
+  "qwen3.5-9b": {
+    "repository": "bartowski/Qwen_Qwen3.5-9B-GGUF",
+    "revision": "182be2fd6c7bc44887d88a91cb03ff009cc9f549",
+    "source": "Qwen/Qwen3.5-9B",
+    "license": "Apache-2.0",
+    "files": [
+      [
+        "Qwen_Qwen3.5-9B-Q8_0.gguf",
+        9804541984,
+        "b58fe056b5435070240de259f3f981aa38fee96825bbd78c088d5fd90e46f2b5"
+      ]
+    ],
+    "reviewed_source_revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+    "vision_file": [
+      "mmproj-Qwen_Qwen3.5-9B-f16.gguf",
+      918165952,
+      "97f420245a85ce129bb764e86a5e21e27d782fe6d6056c6839b9c5fdb8f38289"
+    ]
+  }
+}

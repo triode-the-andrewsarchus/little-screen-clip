@@ -64,7 +64,7 @@ fn internal_rack_stop_cancels_pending_map_load_without_poisoning_other_music() {
     std::fs::write(&path, b"pending audio fixture").unwrap();
     let (mut manager, _jobs) = loaded(root.path());
     manager.view = BrowserView::Constellation;
-    manager.music.play(&path);
+    manager.music.play(&path, None);
     assert!(manager.music.busy());
     manager.constellation.stop_playback();
     manager.retire_constellation_audition();
@@ -73,13 +73,13 @@ fn internal_rack_stop_cancels_pending_map_load_without_poisoning_other_music() {
     // A request left by the old view cannot retire an explicit new Music preview.
     manager.constellation.stop_playback();
     manager.view = BrowserView::Music;
-    manager.music.play(&path);
+    manager.music.play(&path, None);
     manager.retire_constellation_audition();
     assert_eq!(manager.music.current(), Some(&path));
     // Owner-level stop already handles Music and must consume its own signal.
     manager.view = BrowserView::Constellation;
     manager.stop_previews();
-    manager.music.play(&path);
+    manager.music.play(&path, None);
     manager.retire_constellation_audition();
     assert_eq!(manager.music.current(), Some(&path));
 }
@@ -259,7 +259,7 @@ fn music_threshold_uses_visible_regular_files_and_manual_history_choices_survive
     let (mut manager, jobs) = loaded(temp.path());
     assert_eq!(manager.view, BrowserView::Music);
     assert_eq!(manager.visible.len(), 5);
-    manager.music.play(&temp.path().join("b.mp3"));
+    manager.music.play(&temp.path().join("b.mp3"), None);
     manager.set_view(BrowserView::List);
     manager.refresh();
     finish(&mut manager, &jobs);
@@ -604,6 +604,82 @@ fn type_navigation_selects_reveals_and_edits_a_literal_query_without_opening() {
 }
 
 #[test]
+fn type_navigation_progresses_without_filtering_and_keeps_stronger_matches() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["report.txt", "r_e_p_o_r_t.txt", "foo_2.md", "a_foo_b.md"] {
+        std::fs::write(temp.path().join(name), "text").unwrap();
+    }
+    let (mut manager, _jobs, ctx) = rendered(temp.path());
+    for (query, name, suffix) in [
+        ("report", "report.txt", ""),
+        ("reprot", "report.txt", " — Typo match"),
+        ("foo.md", "foo_2.md", " — Extension match"),
+        ("a_ foo", "a_foo_b.md", " — Name fragments"),
+    ] {
+        press(&mut manager, &ctx, egui::Key::Escape, egui::Modifiers::NONE);
+        type_in_browser(&mut manager, &ctx, query);
+        assert_type_navigation(
+            &manager,
+            &ctx,
+            Some(&temp.path().join(name)),
+            Some(&format!("Find: {query}{suffix}")),
+        );
+        assert_eq!(manager.visible.len(), 4, "navigation must not filter rows");
+        assert!(
+            manager.search.service.is_none(),
+            "local matching needs no index"
+        );
+    }
+}
+
+#[test]
+fn type_navigation_recursive_fallback_debounces_and_cancels_without_enrollment() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("report.txt"), "text").unwrap();
+    let (mut manager, _jobs) = loaded(temp.path());
+    let ctx = egui::Context::default();
+    for (time, text) in [(10.0, Some("unmatched-name")), (10.2, None), (10.4, None)] {
+        let _ = ctx.run(
+            egui::RawInput {
+                time: Some(time),
+                events: text
+                    .map(|text| vec![egui::Event::Text(text.into())])
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+            |ctx| manager.type_navigation_keys(ctx),
+        );
+        assert_eq!(manager.search.open, time > 10.35);
+    }
+    assert!(manager.search.automatic);
+    assert_eq!(
+        manager.search.applied.as_ref().unwrap().scope,
+        search::query::Scope::Recursive
+    );
+    assert!(manager.search.settings.roots.is_empty());
+    manager.search.draft = "reprot".into();
+    manager.apply_search();
+    assert_eq!(
+        manager.search.applied.as_ref().unwrap().scope,
+        search::query::Scope::Here
+    );
+    assert_eq!(manager.visible.len(), 1);
+    manager.search.draft = "unmatched-again".into();
+    manager.apply_search();
+    manager.close_search();
+    assert_eq!(manager.visible.len(), 1);
+    // Explicit commands never gain the implicit widening or typo behavior.
+    manager.search.open(":*.txt reprot".into());
+    manager.apply_search();
+    assert!(!manager.search.automatic);
+    assert_eq!(
+        manager.search.applied.as_ref().unwrap().scope,
+        search::query::Scope::Here
+    );
+    assert!(manager.visible.is_empty());
+}
+
+#[test]
 fn type_navigation_respects_hidden_entries_address_fields_and_navigation() {
     let temp = tempfile::tempdir().unwrap();
     let child = temp.path().join("child");
@@ -852,6 +928,7 @@ fn stale_published_completion_cannot_replace_a_new_request() {
     sender.send(Ok(Ok(directory))).unwrap();
     manager.pending = Some(Request {
         browser_target: None,
+        search_target: None,
         path: old,
         navigation: Navigation::New,
         job: Some(DirectoryJob {
@@ -1002,6 +1079,7 @@ fn stalled_directory_worker_leaves_address_navigation_responsive() {
     let (job, release_tx) = paused_directory(temp.path(), &jobs);
     manager.pending = Some(Request {
         browser_target: None,
+        search_target: None,
         path: temp.path().join("stalled"),
         navigation: Navigation::New,
         job: Some(job),
@@ -1092,6 +1170,7 @@ fn background_completion_preserves_an_in_progress_address_edit() {
     let (job, release_tx) = paused_directory(temp.path(), &jobs);
     manager.pending = Some(Request {
         browser_target: None,
+        search_target: None,
         path: temp.path().into(),
         navigation: Navigation::Refresh,
         job: Some(job),
@@ -1666,4 +1745,56 @@ fn similarity_canvas_retains_browser_keyboard_focus_across_frames() {
         frame(&mut manager, &ctx, vec![]);
     }
     assert!(ctx.memory(|memory| memory.has_focus(focus)));
+}
+
+#[test]
+fn command_prefix_is_captured_before_filename_navigation_and_respects_editors() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("1-first.txt"), "first").unwrap();
+    let (mut manager, _) = loaded(temp.path());
+    let ctx = egui::Context::default();
+    let _ = ctx.run(
+        egui::RawInput {
+            events: vec![egui::Event::Text(":10kb..2MB foo".into())],
+            ..Default::default()
+        },
+        |ctx| manager.type_navigation_keys(ctx),
+    );
+    assert!(manager.search.open);
+    assert_eq!(manager.search.draft, ":10kb..2MB foo");
+    assert!(manager.location().unwrap().selected.is_none());
+    assert!(
+        manager
+            .type_navigation
+            .hint(ctx.input(|input| input.time))
+            .is_none()
+    );
+
+    manager.close_search();
+    let editor = egui::Id::new("unrelated_editor");
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        ctx.memory_mut(|memory| memory.request_focus(editor));
+    });
+    let _ = ctx.run(
+        egui::RawInput {
+            events: vec![egui::Event::Text(":image".into())],
+            ..Default::default()
+        },
+        |ctx| manager.type_navigation_keys(ctx),
+    );
+    assert!(!manager.search.open);
+}
+
+#[test]
+fn returning_to_current_folder_exits_search_and_restores_unfiltered_rows() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("foo.txt"), "first").unwrap();
+    std::fs::write(temp.path().join("bar.txt"), "second").unwrap();
+    let (mut manager, _) = loaded(temp.path());
+    manager.search.open(":*.txt foo".into());
+    manager.apply_search();
+    assert_eq!(manager.visible.len(), 1);
+    manager.navigate(temp.path().into(), Navigation::New);
+    assert!(!manager.search.open);
+    assert_eq!(manager.visible.len(), 2);
 }

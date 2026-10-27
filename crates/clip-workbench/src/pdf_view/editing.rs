@@ -80,13 +80,16 @@ impl PdfEditorState {
             .page_count
             .saturating_sub(usize::from(operation == "delete"));
         let protect_outputs = self.protect_outputs;
+        let check = self.read_check.clone();
         let (ticket, rx) = jobs.submit(Duration::MAX, move || {
             let result = super::output::PdfOutput::generate(
                 &input,
                 &output,
                 expected_page_count,
                 protect_outputs,
-                perform_edit,
+                move |source, staged| {
+                    check.read(&AtomicBool::new(false), || perform_edit(source, staged))
+                },
             );
             PdfEditMsg {
                 operation,
@@ -148,6 +151,8 @@ impl PdfEditorState {
                 .and_then(|output| output.publish(self.protect_outputs))
             {
                 Ok(output) => {
+                    // An explicitly created derivative is a new, owned input.
+                    self.read_check = Default::default();
                     self.reset_navigation();
                     self.document_tools.invalidate_layout();
                     self.path = output;

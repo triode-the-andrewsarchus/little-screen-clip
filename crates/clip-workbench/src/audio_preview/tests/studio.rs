@@ -132,6 +132,15 @@ fn inspect_space_starts_playback_with_a_silent_player() {
         }],
     );
 
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while state.playback_load.is_some() {
+        state.poll_file_playback(&ctx);
+        assert!(
+            Instant::now() < deadline,
+            "Space playback decoder did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert!(state.is_playing, "Space should start idle Inspect playback");
     assert!(state.playback_start_instant.is_some());
     state.stop();
@@ -1106,4 +1115,63 @@ fn inspect_canvas_right_click_preview_loop_and_shift_remove_stay_session_owned()
     assert_eq!(state.region_low_pass_hz, vec![Some(2_000.0)]);
     assert_eq!(state.region_high_pass_hz, vec![Some(120.0)]);
     assert_eq!(state.region_crossfade_sec, vec![0.2]);
+}
+
+#[test]
+fn embedded_audio_editor_preserves_text_focus_and_yields_editing_shortcuts() {
+    let ctx = egui::Context::default();
+    let palette =
+        crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+    let mut state = AudioPreviewState::from_completed_source(
+        PathBuf::from("/missing-focused-audio.wav"),
+        "focus".into(),
+        None,
+        Arc::new(empty_audio_analysis()),
+    );
+    state.analysis = None;
+    state.duration_sec = 1.0;
+    state.view_duration_sec = 0.5;
+    state.current_time_sec = 0.2;
+    state.selection = Some((0.1, 0.4));
+    let mut text = String::new();
+    let mut focused = None;
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let field = ui.add(egui::TextEdit::singleline(&mut text).id_source("stem-destination"));
+            focused = Some(field.id);
+            field.request_focus();
+        });
+    });
+    for key in [
+        egui::Key::Space,
+        egui::Key::Delete,
+        egui::Key::Home,
+        egui::Key::Minus,
+        egui::Key::S,
+    ] {
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut text).id_source("stem-destination"));
+                    state.render_standard_ui(ui, ctx, &palette, &mut false, Some(100.0));
+                });
+            },
+        );
+        assert_eq!(ctx.memory(|memory| memory.focused()), focused);
+        assert!(state.playback_load.is_none());
+        assert!(state.session_edit_job.is_none());
+        assert!(state.save_job.is_none());
+        assert_eq!(state.current_time_sec, 0.2);
+        assert_eq!(state.view_duration_sec, 0.5);
+    }
 }

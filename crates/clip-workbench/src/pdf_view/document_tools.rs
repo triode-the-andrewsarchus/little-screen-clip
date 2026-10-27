@@ -144,6 +144,7 @@ impl PdfDocumentTools {
         page: Option<usize>,
         ctx: &egui::Context,
         lease: Option<Arc<tempfile::TempDir>>,
+        check: crate::file_source::ReadCheck,
     ) {
         if self.page != page {
             self.invalidate_layout();
@@ -152,18 +153,21 @@ impl PdfDocumentTools {
                 let source = path.to_owned();
                 self.layout_job = Some(ToolJob::start(move |control| {
                     let _lease = lease;
-                    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
-                    let output = directory.path().join("layout.json");
-                    run_pdf_tool(
-                        "layout",
-                        &source,
-                        &output,
-                        &["--page".into(), page.to_string()],
-                        None,
-                        &control,
-                    )?;
-                    let file = std::fs::File::open(output).map_err(|error| error.to_string())?;
-                    serde_json::from_reader(file).map_err(|error| error.to_string())
+                    check.read(&control.cancel, || {
+                        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+                        let output = directory.path().join("layout.json");
+                        run_pdf_tool(
+                            "layout",
+                            &source,
+                            &output,
+                            &["--page".into(), page.to_string()],
+                            None,
+                            &control,
+                        )?;
+                        let file =
+                            std::fs::File::open(output).map_err(|error| error.to_string())?;
+                        serde_json::from_reader(file).map_err(|error| error.to_string())
+                    })
                 }));
             }
         }
@@ -185,6 +189,7 @@ impl PdfDocumentTools {
         output: PathBuf,
         count: usize,
         lease: Option<Arc<tempfile::TempDir>>,
+        check: crate::file_source::ReadCheck,
     ) {
         if self.ocr_busy() || self.ocr_complete {
             return;
@@ -198,14 +203,16 @@ impl PdfDocumentTools {
         self.ocr_job = Some(ToolJob::start(move |control| {
             let _lease = lease;
             super::output::PdfOutput::generate(&source, &output, count, true, |source, staged| {
-                run_pdf_tool(
-                    "ocr",
-                    source,
-                    staged,
-                    &["--language".into(), language],
-                    None,
-                    &control,
-                )
+                check.read(&control.cancel, || {
+                    run_pdf_tool(
+                        "ocr",
+                        source,
+                        staged,
+                        &["--language".into(), language],
+                        None,
+                        &control,
+                    )
+                })
             })
         }));
     }
@@ -216,28 +223,31 @@ impl PdfDocumentTools {
         page: usize,
         image: usize,
         lease: Option<Arc<tempfile::TempDir>>,
+        check: crate::file_source::ReadCheck,
     ) {
         if self.copy_job.is_some() {
             return;
         }
         self.copy_job = Some(ToolJob::start(move |control| {
             let _lease = lease;
-            let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
-            let output = directory.path().join("image.png");
-            run_pdf_tool(
-                "image",
-                &source,
-                &output,
-                &[
-                    "--page".into(),
-                    page.to_string(),
-                    "--image".into(),
-                    image.to_string(),
-                ],
-                None,
-                &control,
-            )?;
-            let bytes = std::fs::read(output).map_err(|error| error.to_string())?;
+            let bytes = check.read(&control.cancel, || {
+                let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+                let output = directory.path().join("image.png");
+                run_pdf_tool(
+                    "image",
+                    &source,
+                    &output,
+                    &[
+                        "--page".into(),
+                        page.to_string(),
+                        "--image".into(),
+                        image.to_string(),
+                    ],
+                    None,
+                    &control,
+                )?;
+                std::fs::read(output).map_err(|error| error.to_string())
+            })?;
             little_clip_core::copy_bytes_to_system_clipboard(&bytes, "image/png")
                 .map_err(|error| error.to_string())
         }));
@@ -299,8 +309,13 @@ impl PdfEditorState {
 
     pub(super) fn poll_document_tools(&mut self, ctx: &egui::Context, now: f64) {
         let page = self.selected_page.filter(|_| self.info_job.is_none());
-        self.document_tools
-            .service_layout(&self.path, page, ctx, self.source_directory.clone());
+        self.document_tools.service_layout(
+            &self.path,
+            page,
+            ctx,
+            self.source_directory.clone(),
+            self.read_check.clone(),
+        );
         if let Some(result) = self
             .document_tools
             .ocr_job
@@ -310,6 +325,7 @@ impl PdfEditorState {
             self.document_tools.ocr_job = None;
             match result.and_then(|output| output.publish(self.protect_outputs)) {
                 Ok(path) => {
+                    self.read_check = Default::default();
                     self.document_tools.ocr_complete = true;
                     self.path = path;
                     self.title = self
@@ -358,6 +374,7 @@ impl PdfEditorState {
                 self.sibling_output_path("ocr"),
                 self.page_count,
                 self.source_directory.clone(),
+                self.read_check.clone(),
             );
         }
     }
@@ -369,6 +386,7 @@ impl PdfEditorState {
                 page,
                 image,
                 self.source_directory.clone(),
+                self.read_check.clone(),
             );
         }
     }

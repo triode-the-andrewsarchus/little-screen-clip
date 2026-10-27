@@ -18,6 +18,11 @@ use std::time::Duration;
 
 #[derive(Clone)]
 pub(in crate::file_manager) enum Source {
+    Checked {
+        source: Box<Source>,
+        path: PathBuf,
+        context: super::super::search::PreviewContext,
+    },
     Payload(Payload),
     Slot(SlotId, uuid::Uuid),
     Gallery {
@@ -69,8 +74,20 @@ pub(in crate::file_manager) enum Source {
 }
 
 impl Source {
+    pub fn checked(self, path: &Path, context: &super::super::search::PreviewContext) -> Self {
+        if context.active() {
+            Self::Checked {
+                source: Box::new(self),
+                path: path.into(),
+                context: context.clone(),
+            }
+        } else {
+            self
+        }
+    }
     fn execution(&self) -> (&'static BackgroundJobs, usize, u64) {
         match self {
+            Self::Checked { source, .. } => source.execution(),
             Self::System(_) => (super::super::system::jobs(), 2, 3),
             Self::Music(..) => (music_preview_jobs(), music_preview_workers(), 30),
             Self::Gallery { .. } | Self::PdfPage { .. } | Self::Photo { .. } | Self::Blend(_) => {
@@ -90,6 +107,15 @@ impl Source {
     }
     fn load(self, token: &AtomicBool) -> Data {
         match self {
+            Self::Checked {
+                source,
+                path,
+                context,
+            } => context
+                .read(&path, token, || Ok(source.load(token)))
+                .unwrap_or_else(|error| {
+                    Data::new("Preview unavailable".into(), error, Icon::Alert)
+                }),
             Source::Payload(payload) => payload_preview(&payload),
             Source::Slot(slot, expected) => slot_preview(slot, expected),
             Source::Gallery {

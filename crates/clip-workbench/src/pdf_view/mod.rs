@@ -69,6 +69,7 @@ impl PdfPageDecodeSlot {
         raster: Arc<PdfPageRasterResource>,
         source: Option<(PathBuf, u32)>,
         ctx: &egui::Context,
+        check: crate::file_source::ReadCheck,
     ) -> Self {
         let worker_raster = Arc::clone(&raster);
         let repaint = ctx.clone();
@@ -78,8 +79,9 @@ impl PdfPageDecodeSlot {
         let (ticket, rx) = BackgroundJobs::global().submit(Duration::from_secs(10), move || {
             let result = (|| {
                 let raster = if let Some((source, render_width)) = source {
-                    let (png, width, height) =
-                        render_pdf_page_preview(&source, worker_raster.page_num(), render_width)?;
+                    let (png, width, height) = check.read(&AtomicBool::new(false), || {
+                        render_pdf_page_preview(&source, worker_raster.page_num(), render_width)
+                    })?;
                     let path = worker_raster._raster_directory.path().join(format!(
                         "page-{}-{render_width}px.png",
                         worker_raster.page_num()
@@ -233,6 +235,7 @@ impl InlinePdfPagePreview {
                         Arc::clone(&self.raster),
                         None,
                         ctx,
+                        crate::file_source::ReadCheck::default(),
                     ));
                     ctx.request_repaint_after(Duration::from_millis(20));
                 }
@@ -524,6 +527,7 @@ pub struct PdfPageItem {
 
 /// Interactive state for the multi-page PDF thumbnail grid editor.
 pub struct PdfEditorState {
+    read_check: crate::file_source::ReadCheck,
     pub path: PathBuf,
     pub title: String,
     pub page_count: usize,
@@ -564,6 +568,7 @@ impl PdfEditorState {
             .unwrap_or_else(|| "document.pdf".to_string());
 
         Self {
+            read_check: Default::default(),
             path,
             title,
             page_count: 0,
@@ -615,8 +620,13 @@ impl PdfEditorState {
     }
     /// Starts loading page metadata and thumbnail previews for the given PDF file.
     pub fn new(path: PathBuf) -> Self {
+        Self::new_checked(path, crate::file_source::ReadCheck::default())
+    }
+    pub(crate) fn new_checked(path: PathBuf, check: crate::file_source::ReadCheck) -> Self {
         let mut state = Self::without_jobs(path);
-        if !state.start_existing_ocr_check() {
+        state.read_check = check;
+        // Search opens the selected observation, never an opportunistic sibling.
+        if state.read_check.active() || !state.start_existing_ocr_check() {
             state.start_info_worker();
         }
         state

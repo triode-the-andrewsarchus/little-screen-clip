@@ -72,9 +72,11 @@ impl FileManager {
     }
 
     pub(super) fn can_edit(&self) -> bool {
-        self.directory
-            .as_ref()
-            .is_some_and(|directory| !directory.system)
+        !self.search.has_offline_results()
+            && self
+                .directory
+                .as_ref()
+                .is_some_and(|directory| !directory.system)
             && self.pending.is_none()
             && !self.filesystem_busy()
             && self.edits.dialog.is_none()

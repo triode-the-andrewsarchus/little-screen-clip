@@ -310,6 +310,7 @@ fn audio_batch_handoff_uses_ordered_clipboard_fallback() {
 fn single_slice_copy_surfaces_ffmpeg_failure() {
     let temp = tempfile::tempdir().unwrap();
     let plan = AudioSliceCopyPlan {
+        read_check: Default::default(),
         source: temp.path().join("missing.wav"),
         output: temp.path().join("copy.wav"),
         start: 0.0,

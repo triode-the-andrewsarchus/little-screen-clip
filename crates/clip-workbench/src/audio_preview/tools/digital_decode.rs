@@ -402,16 +402,7 @@ impl AudioPreviewState {
             Stroke::new(1.0_f32, border_frame),
         );
 
-        if self.is_loading_analysis || self.analysis.is_none() {
-            let elapsed = self.loading_start_time.elapsed().as_secs_f32();
-            crate::icons::Icon::Hourglass.paint_text(
-                &painter,
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                format!("Decoding audio buffer... ({:.1}s)", elapsed),
-                egui::FontId::proportional(15.0),
-                text_f_med,
-            );
+        if self.paint_analysis_placeholder(&painter, rect, text_f_med) {
             return;
         }
 

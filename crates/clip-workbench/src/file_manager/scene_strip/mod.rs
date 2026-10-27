@@ -36,10 +36,18 @@ struct Cached {
 }
 #[derive(Default)]
 pub(super) struct Previews {
+    context: super::search::PreviewContext,
     files: BTreeMap<PathBuf, Cached>,
     hover: hover::Hover,
 }
 impl Previews {
+    pub fn set_context(&mut self, context: &super::search::PreviewContext) {
+        if self.context.replace(context) {
+            self.clear();
+            self.hover.set_context(context);
+        }
+    }
+
     pub fn clear(&mut self) {
         self.files.clear();
         self.hover.clear();
@@ -86,27 +94,32 @@ impl Previews {
         let path = entry.path.clone();
         let revision = entry.revision;
         let palette = palette.clone();
+        let context = self.context.clone();
         let task = Task::start(&STRIPS, Duration::from_secs(120), move |token| {
-            let mut loaded = backend::load(
-                &path,
-                revision,
-                backend::camera(0, 0.0),
-                SIZE,
-                &palette,
-                token,
-            )?;
+            let mut loaded = context.read(&path, token, || {
+                backend::load(
+                    &path,
+                    revision,
+                    backend::camera(0, 0.0),
+                    SIZE,
+                    &palette,
+                    token,
+                )
+            })?;
             let _ = tx.send(Progress {
                 metadata: loaded.metadata.clone(),
                 view: 0,
                 frame: loaded.frame,
             });
             for view in 1..4 {
-                let frame = backend::render(
-                    &mut loaded.renderer,
-                    backend::camera(view, 0.0),
-                    SIZE,
-                    token,
-                )?;
+                let frame = context.read(&path, token, || {
+                    backend::render(
+                        &mut loaded.renderer,
+                        backend::camera(view, 0.0),
+                        SIZE,
+                        token,
+                    )
+                })?;
                 super::filesystem::check_revision(&path, revision)?;
                 let _ = tx.send(Progress {
                     metadata: loaded.metadata.clone(),

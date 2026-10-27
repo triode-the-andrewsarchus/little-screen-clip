@@ -340,6 +340,7 @@ fn deleting_a_region_restores_the_previous_session_on_undo() {
     state.selection = Some((0.25, 0.5));
     state.adjust_active_region_gain(6.0, Instant::now());
     state.delete_active_slice_from_session(0.0);
+    wait_for_session_edit(&mut state);
     let edited = state.path.clone();
     assert_ne!(edited, original);
     assert!(edited.is_file());
@@ -353,7 +354,121 @@ fn deleting_a_region_restores_the_previous_session_on_undo() {
     assert_eq!(state.path, edited);
     assert_eq!(state.selection, None);
     assert_eq!(state.duration_sec, 0.75);
-    let _ = std::fs::remove_file(edited);
+}
+
+#[test]
+fn range_deletion_bakes_gain_and_handles_reversed_and_boundary_ranges() {
+    for (range, frames) in [
+        ((0.75, 0.25), 4000),
+        ((0.0, 0.25), 6000),
+        ((0.75, 1.0), 6000),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("range.wav");
+        write_stereo_pcm_fixture(&input, &[8192; 8000], &[-16384; 8000], 8000);
+        let mut state = AudioPreviewState::new(input.clone(), "range".into());
+        state.cancel_session_analysis();
+        state.duration_sec = 1.0;
+        state.selection = Some(range);
+        state.track_gain_db = -6.020_6;
+        state.delete_active_slice_from_session(0.0);
+        assert_eq!(
+            state.path, input,
+            "submission must leave the visible session intact"
+        );
+        wait_for_session_edit(&mut state);
+        assert_ne!(state.path, input, "{:?}", state.status_toast);
+        let analysis = state.analysis.as_ref().unwrap();
+        assert_eq!(analysis.total_frames, frames);
+        assert!((analysis.ch1_samples[frames / 2] - 0.125).abs() < 0.0001);
+        assert!((analysis.ch2_samples.as_ref().unwrap()[frames / 2] + 0.25).abs() < 0.0001);
+        assert_eq!(state.track_gain_db, 0.0, "the gain is baked exactly once");
+        assert!(state.has_session_edits());
+        state.undo();
+        assert_eq!(state.path, input);
+        assert_eq!(state.track_gain_db, -6.020_6);
+    }
+}
+
+#[test]
+fn range_deletion_keeps_mono_and_preserves_crossfaded_surviving_effects() {
+    let (directory, stereo) = generate_fixture_wav("delete-stereo", 1.0);
+    let input = directory.path().join("mono.wav");
+    assert!(
+        std::process::Command::new("ffmpeg")
+            .args(["-nostdin", "-v", "error", "-i"])
+            .arg(stereo)
+            .args(["-ac", "1"])
+            .arg(&input)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let original = compute_full_audio_analysis(&input, 50).unwrap();
+    let mut state = AudioPreviewState::new(input.clone(), "mono".into());
+    state.cancel_session_analysis();
+    state.duration_sec = 1.0;
+    state.selection_mode = SelectionMode::Multi;
+    state.multi_selections = vec![(0.0, 0.2), (0.4, 0.6)];
+    state.region_gain_db = vec![-6.020_6, 0.0];
+    state.region_crossfade_sec = vec![0.02, 0.0];
+    state.active_multi_index = Some(1);
+    state.delete_active_slice_from_session(0.0);
+    wait_for_session_edit(&mut state);
+    assert_ne!(state.path, input, "{:?}", state.status_toast);
+    let edited = state.analysis.as_ref().unwrap();
+    assert_eq!(original.channels, 1);
+    assert_eq!(edited.channels, 1);
+    assert_eq!(edited.ch2_samples.is_some(), original.ch2_samples.is_some());
+    let before = (0.1 * original.sample_rate as f32) as usize;
+    let after = (0.7 * original.sample_rate as f32) as usize;
+    assert!((edited.ch1_samples[before] - original.ch1_samples[before] * 0.5).abs() < 0.001);
+    assert!(
+        (edited.ch1_samples[after]
+            - original.ch1_samples[after + (0.2 * original.sample_rate as f32) as usize])
+            .abs()
+            < 0.001
+    );
+}
+
+#[test]
+fn range_deletion_rejects_expired_source_and_stale_completion() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("checked.wav");
+    write_stereo_pcm_fixture(&input, &[8192; 8000], &[4096; 8000], 8000);
+    let mut state = AudioPreviewState::new(input.clone(), "checked".into());
+    state.cancel_session_analysis();
+    state.duration_sec = 1.0;
+    state.selection = Some((0.25, 0.5));
+    state.read_check =
+        crate::file_source::ReadCheck::new(|_| Err("expired source observation".into()));
+    state.delete_active_slice_from_session(0.0);
+    wait_for_session_edit(&mut state);
+    assert_eq!(state.path, input);
+    assert!(
+        state
+            .status_toast
+            .as_ref()
+            .unwrap()
+            .0
+            .text
+            .contains("expired source observation")
+    );
+    state.read_check = Default::default();
+    state.delete_active_slice_from_session(0.0);
+    state.selection = Some((0.5, 0.75));
+    wait_for_session_edit(&mut state);
+    assert_eq!(state.path, input);
+    assert_eq!(state.selection, Some((0.5, 0.75)));
+    assert!(
+        state
+            .status_toast
+            .as_ref()
+            .unwrap()
+            .0
+            .text
+            .contains("session changed")
+    );
 }
 
 #[test]
@@ -389,9 +504,24 @@ fn editor_handoff_renders_crossfade_filter_graph() {
     state.selection = Some((0.4, 0.6));
     state.single_region_gain_db = -6.0;
     state.single_crossfade_sec = 0.2;
-    let rendered = state.editor_handoff_path().unwrap();
-    assert!(rendered.is_file());
-    let _ = std::fs::remove_file(rendered);
+    let (filter, mode) = state.editor_render_filter();
+    let rendered = session_edit::render_session_file(
+        &state.path,
+        None,
+        &Default::default(),
+        filter,
+        mode,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let analysis = compute_full_audio_analysis(rendered.staging.path(), 50).unwrap();
+    assert_eq!(analysis.total_frames, 44100);
+    assert!(
+        analysis
+            .ch1_samples
+            .iter()
+            .any(|sample| sample.abs() > 0.01)
+    );
 }
 
 #[test]

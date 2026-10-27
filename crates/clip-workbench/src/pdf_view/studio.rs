@@ -245,6 +245,9 @@ impl PdfEditorState {
             });
         }
         let page = self.pages.iter().find(|page| page.page_num == page_num);
+        if let Some(error) = page.and_then(|page| page.error.as_deref()) {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
         let texture = page
             .and_then(|page| page.texture.as_ref())
             .map(|texture| texture.id());

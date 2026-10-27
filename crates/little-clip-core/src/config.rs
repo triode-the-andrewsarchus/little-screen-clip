@@ -65,6 +65,8 @@ pub struct FileManagerConfig {
     pub photo_recursive_depth: usize,
     /// Similarity scan and indexing timeout in seconds; 0 disables it (default: 3600).
     pub photo_recursive_timeout_seconds: u64,
+    /// Explicitly enrolled search roots; empty by default.
+    pub search: FileSearchConfig,
 }
 impl Default for FileManagerConfig {
     fn default() -> Self {
@@ -78,6 +80,7 @@ impl Default for FileManagerConfig {
             photo_recursive_limit: 10_000,
             photo_recursive_depth: 16,
             photo_recursive_timeout_seconds: 3600,
+            search: FileSearchConfig::default(),
         }
     }
 }
@@ -103,6 +106,142 @@ fn deserialize_constellation_pad_keys<'de, D: serde::Deserializer<'de>>(
         }
     }
     Ok(rows)
+}
+
+/// Optional local file-search indexing preferences.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileSearchConfig {
+    /// Reversible browser addresses for explicitly enrolled content directories.
+    pub roots: Vec<String>,
+    /// Extra ordinary folders searched by automatic filename fallback, without indexing.
+    pub always_search: Vec<String>,
+    /// Exact reversible addresses excluded from background search, including descendants.
+    pub excluded_paths: Vec<String>,
+    pub include_hidden: bool,
+    pub paused: bool,
+    pub keep_model_loaded: bool,
+    pub show_offline_results: bool,
+    pub limits: FileSearchLimits,
+    /// Per-modality cosine overrides, independent of stored vectors.
+    pub semantic_floors: std::collections::BTreeMap<String, f32>,
+}
+
+impl FileSearchConfig {
+    /// Returns the provisional default cosine cutoff for a semantic modality.
+    ///
+    /// Unknown modalities use `1.0`. This function does not enable unsupported modalities.
+    pub fn default_semantic_floor(modality: &str) -> f32 {
+        match modality {
+            "text" => 0.72,
+            "image" => 0.68,
+            "audio" => 0.64,
+            _ => 1.0,
+        }
+    }
+}
+
+/// Soft limits for generated search data; model weights are accounted separately.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileSearchLimits {
+    pub max_mib: u64,
+    pub max_vectors: u64,
+}
+impl Default for FileSearchLimits {
+    fn default() -> Self {
+        Self {
+            max_mib: 10_240,
+            max_vectors: 1_000_000,
+        }
+    }
+}
+
+/// Persists search preferences while preserving enrollment and unrelated settings.
+pub fn save_file_search_preferences(
+    config: &FileSearchConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    save_settings_to_file(&file_search_preferences(config))
+}
+
+fn file_search_preferences(
+    config: &FileSearchConfig,
+) -> Vec<(&'static str, &'static str, toml::Value)> {
+    let mut values = vec![
+        (
+            "file_manager.search",
+            "always_search",
+            toml::Value::Array(
+                config
+                    .always_search
+                    .iter()
+                    .cloned()
+                    .map(toml::Value::String)
+                    .collect(),
+            ),
+        ),
+        (
+            "file_manager.search",
+            "excluded_paths",
+            toml::Value::Array(
+                config
+                    .excluded_paths
+                    .iter()
+                    .cloned()
+                    .map(toml::Value::String)
+                    .collect(),
+            ),
+        ),
+        (
+            "file_manager.search",
+            "include_hidden",
+            config.include_hidden.into(),
+        ),
+        ("file_manager.search", "paused", config.paused.into()),
+        (
+            "file_manager.search",
+            "show_offline_results",
+            config.show_offline_results.into(),
+        ),
+        (
+            "file_manager.search",
+            "keep_model_loaded",
+            config.keep_model_loaded.into(),
+        ),
+    ];
+    values.push((
+        "file_manager.search.limits",
+        "max_mib",
+        toml::Value::Integer(i64::try_from(config.limits.max_mib).unwrap_or(i64::MAX)),
+    ));
+    values.push((
+        "file_manager.search.limits",
+        "max_vectors",
+        toml::Value::Integer(i64::try_from(config.limits.max_vectors).unwrap_or(i64::MAX)),
+    ));
+    for modality in ["text", "image", "audio"] {
+        values.push((
+            "file_manager.search.semantic_floors",
+            modality,
+            toml::Value::Float(f64::from(
+                config
+                    .semantic_floors
+                    .get(modality)
+                    .copied()
+                    .unwrap_or_else(|| FileSearchConfig::default_semantic_floor(modality)),
+            )),
+        ));
+    }
+    values
+}
+
+/// Persists explicit enrollment without rewriting unrelated application settings.
+pub fn save_file_search_roots(roots: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    save_setting_to_file(
+        "file_manager.search",
+        "roots",
+        toml::Value::Array(roots.iter().cloned().map(toml::Value::String).collect()),
+    )
 }
 
 /// Slot depth configuration for the dual-stack model.
@@ -871,76 +1010,60 @@ fn save_setting_to_file(
     setting: &str,
     value: impl Into<toml::Value>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    save_settings_to_file(&[(table, setting, value.into())])
+}
+
+fn save_settings_to_file(
+    settings: &[(&str, &str, toml::Value)],
+) -> Result<(), Box<dyn std::error::Error>> {
     let path = find_config_file_path();
-    let current = if path.exists() {
+    let mut current = if path.exists() {
         std::fs::read_to_string(&path)?
     } else {
         String::new()
     };
-    std::fs::write(
-        &path,
-        update_setting_in_text(&current, table, setting, value),
-    )?;
+    for (table, setting, value) in settings {
+        current = update_setting_in_text(&current, table, setting, value.clone())?;
+    }
+    // Validate combined edits before replacing the active configuration.
+    let _: toml::Value = toml::from_str(&current)?;
+    std::fs::write(&path, current)?;
     Ok(())
 }
 
-/// Update one scalar setting without rewriting the rest of the TOML file.
+/// Update a setting while retaining comments and unrelated TOML formatting.
 fn update_setting_in_text(
     text: &str,
     table: &str,
     setting: &str,
     value: impl Into<toml::Value>,
-) -> String {
-    let value = value.into().to_string();
-    let mut output = Vec::new();
-    let mut in_table = false;
-    let mut updated = false;
-    let mut table_found = false;
-
-    for line in text.lines() {
-        let trimmed = line.trim();
-        // Check for a table header such as [workbench] or [display].
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if in_table && !updated {
-                output.push(format!("{setting} = {value}"));
-                updated = true;
-            }
-            in_table = trimmed == format!("[{table}]");
-            table_found |= in_table;
-            output.push(line.to_string());
-            continue;
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut document: toml_edit::DocumentMut = text.parse()?;
+    let mut current = document.as_item_mut();
+    for part in table.split('.') {
+        if current.is_none() {
+            let mut table = toml_edit::Table::new();
+            table.set_implicit(true);
+            *current = toml_edit::Item::Table(table);
         }
-
-        if in_table && !updated {
-            let key = trimmed.split('=').next().unwrap_or("").trim();
-            if key == setting {
-                let leading: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                output.push(format!("{leading}{setting} = {value}"));
-                updated = true;
-                continue;
-            }
+        let parent = current
+            .as_table_like_mut()
+            .ok_or("Configuration parent is not a table")?;
+        if !parent.contains_key(part) {
+            let mut table = toml_edit::Table::new();
+            table.set_implicit(true);
+            parent.insert(part, toml_edit::Item::Table(table));
         }
-
-        output.push(line.to_string());
+        current = parent
+            .get_mut(part)
+            .ok_or("Cannot edit configuration table")?;
     }
-
-    if in_table && !updated {
-        output.push(format!("{setting} = {value}"));
-    }
-
-    if !table_found {
-        if !output.is_empty() && !output.last().map(|s| s.is_empty()).unwrap_or(false) {
-            output.push(String::new());
-        }
-        output.push(format!("[{table}]"));
-        output.push(format!("{setting} = {value}"));
-    }
-
-    let mut res = output.join("\n");
-    if text.ends_with('\n') {
-        res.push('\n');
-    }
-    res
+    let parsed: toml_edit::Value = value.into().to_string().parse()?;
+    let parent = current
+        .as_table_like_mut()
+        .ok_or("Configuration destination is not a table")?;
+    parent.insert(setting, toml_edit::Item::Value(parsed));
+    Ok(document.to_string())
 }
 
 /// Computes the default user configuration file path according to XDG base directory specifications.
@@ -991,13 +1114,81 @@ constellation_pad_keys = [";qjk", "aoeu", "',.p", "1234"]
     }
 
     #[test]
+    fn search_defaults_enroll_nothing_and_preserve_explicit_choices() {
+        let config: AppConfig = toml::from_str("").unwrap();
+        assert!(config.file_manager.search.roots.is_empty());
+        assert!(!config.file_manager.search.include_hidden);
+        assert!(!config.file_manager.search.keep_model_loaded);
+        assert!(!config.file_manager.search.show_offline_results);
+        assert_eq!(config.file_manager.search.limits.max_mib, 10_240);
+        assert_eq!(config.file_manager.search.limits.max_vectors, 1_000_000);
+        let updated = update_setting_in_text(
+            "[audio]\nsample_rate = 48000\n",
+            "file_manager.search",
+            "roots",
+            toml::Value::Array(vec![toml::Value::String("/home/test/Documents".into())]),
+        )
+        .unwrap();
+        let config: AppConfig = toml::from_str(&updated).unwrap();
+        assert_eq!(config.file_manager.search.roots, ["/home/test/Documents"]);
+        assert!(updated.contains("sample_rate = 48000"));
+    }
+
+    #[test]
+    fn search_preferences_preserve_multiline_enrollment_comments_and_inline_tables() {
+        let original = "# keep this comment\n[audio]\nsample_rate = 48000\n[file_manager.search]\nroots = [\n  \"/home/test/Indexed\",\n]\nalways_search = [\n  \"/home/test/Old\",\n]\nsemantic_floors = { text = 0.4 }\n";
+        let preferences = FileSearchConfig {
+            paused: true,
+            include_hidden: true,
+            keep_model_loaded: true,
+            show_offline_results: true,
+            always_search: vec!["/home/test/New".into()],
+            excluded_paths: vec!["/home/test/Indexed/Private".into()],
+            ..Default::default()
+        };
+        let mut updated = original.to_owned();
+        for (table, setting, value) in file_search_preferences(&preferences) {
+            updated = update_setting_in_text(&updated, table, setting, value).unwrap();
+        }
+        let config: AppConfig = toml::from_str(&updated).unwrap();
+        assert_eq!(config.file_manager.search.roots, ["/home/test/Indexed"]);
+        assert_eq!(
+            config.file_manager.search.always_search,
+            preferences.always_search
+        );
+        assert_eq!(
+            config.file_manager.search.excluded_paths,
+            preferences.excluded_paths
+        );
+        assert!(config.file_manager.search.paused);
+        assert!(config.file_manager.search.keep_model_loaded);
+        assert!(config.file_manager.search.show_offline_results);
+        assert!(config.file_manager.search.include_hidden);
+        assert_eq!(
+            config.file_manager.search.semantic_floors["text"],
+            FileSearchConfig::default_semantic_floor("text")
+        );
+        assert!(updated.contains("# keep this comment"));
+        assert!(updated.contains("sample_rate = 48000"));
+        assert!(updated.contains("roots = [\n  \"/home/test/Indexed\",\n]"));
+        let invalid = update_setting_in_text(
+            "[file_manager]\nsearch = 4\n",
+            "file_manager.search",
+            "paused",
+            true,
+        );
+        assert!(invalid.is_err());
+    }
+
+    #[test]
     fn audio_spectrum_persists_as_a_boolean_without_rewriting_other_settings() {
         let defaults: AppConfig = toml::from_str("").unwrap();
         assert!(!defaults.file_manager.audio_spectrum);
         let original = "# custom preferences\n[workbench]\nappearance = \"light\"\n[file_manager]\n# timeline quality\nvideo_timeline_decimation = 4\n";
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
-        let enabled = update_setting_in_text(original, "file_manager", "audio_spectrum", true);
+        let enabled =
+            update_setting_in_text(original, "file_manager", "audio_spectrum", true).unwrap();
         assert!(enabled.contains("audio_spectrum = true"));
         assert!(enabled.starts_with(original.trim_end()));
         std::fs::write(&path, &enabled).unwrap();
@@ -1005,7 +1196,8 @@ constellation_pad_keys = [";qjk", "aoeu", "',.p", "1234"]
         assert!(loaded.file_manager.audio_spectrum);
         assert_eq!(loaded.file_manager.video_timeline_decimation, 4);
         assert_eq!(loaded.workbench.appearance, WorkbenchAppearance::Light);
-        let disabled = update_setting_in_text(&enabled, "file_manager", "audio_spectrum", false);
+        let disabled =
+            update_setting_in_text(&enabled, "file_manager", "audio_spectrum", false).unwrap();
         assert_eq!(disabled.matches("audio_spectrum =").count(), 1);
         std::fs::write(&path, disabled).unwrap();
         assert!(
@@ -1056,8 +1248,10 @@ constellation_pad_keys = [";qjk", "aoeu", "',.p", "1234"]
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
-        let updated = update_setting_in_text(original, "file_manager", "photo_mode", "masonry");
-        let updated = update_setting_in_text(&updated, "file_manager", "photo_recurse", false);
+        let updated =
+            update_setting_in_text(original, "file_manager", "photo_mode", "masonry").unwrap();
+        let updated =
+            update_setting_in_text(&updated, "file_manager", "photo_recurse", false).unwrap();
         std::fs::write(&path, updated).unwrap();
         let loaded = AppConfig::load_from_path(&path).unwrap();
         assert_eq!(loaded.file_manager.photo_mode, "masonry");
@@ -1070,13 +1264,13 @@ constellation_pad_keys = [";qjk", "aoeu", "',.p", "1234"]
     #[test]
     fn workbench_appearance_save_preserves_unrelated_config() {
         let original = "[colors]\ntheme = \"zenburn\"\n\n[workbench]\n# editor preference\neditor = \"code\"\n";
-        let updated = update_setting_in_text(original, "workbench", "appearance", "light");
+        let updated = update_setting_in_text(original, "workbench", "appearance", "light").unwrap();
         assert!(updated.contains("theme = \"zenburn\""));
         assert!(updated.contains("# editor preference\neditor = \"code\""));
         let config: AppConfig = toml::from_str(&updated).unwrap();
         assert_eq!(config.workbench.appearance, WorkbenchAppearance::Light);
 
-        let reversed = update_setting_in_text(&updated, "workbench", "appearance", "dark");
+        let reversed = update_setting_in_text(&updated, "workbench", "appearance", "dark").unwrap();
         assert_eq!(reversed.matches("appearance =").count(), 1);
         assert_eq!(
             toml::from_str::<AppConfig>(&reversed)

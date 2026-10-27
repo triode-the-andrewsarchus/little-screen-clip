@@ -71,10 +71,12 @@ impl AudioToolMode {
 }
 
 mod analysis;
+mod editor;
 mod edits;
 mod export;
 mod playback;
 mod selection;
+mod session_edit;
 mod studio;
 
 pub use export::{copy_file_audio_segment, run_audio_command_cancellable};
@@ -609,6 +611,8 @@ impl InlineAudioWaveform {
 #[derive(Clone, PartialEq)]
 struct AudioEditSnapshot {
     path: PathBuf,
+    read_check: crate::file_source::ReadCheck,
+    file_source: Option<crate::file_source::FileSource>,
     duration_sec: f32,
     track_gain_db: f32,
     selection_mode: SelectionMode,
@@ -671,6 +675,8 @@ pub struct AudioPreviewState {
     note_strip_texture: Option<egui::TextureHandle>,
     pub inspect_viewport_cache: ViewportSpectrogramCache,
     channel_tools: ChannelToolsState,
+    session_edit_job: Option<session_edit::SessionEditJob>,
+    editor_job: Option<editor::AudioEditorJob>,
 
     // Audio Playback Engine (rodio)
     player: Option<Player>,
@@ -711,7 +717,7 @@ pub struct AudioPreviewState {
     pub audio_editor: String,
     active_drag: Option<DragAction>,
     pub loop_selection: bool,
-    last_seek_reload: Option<Instant>,
+    playback_load: Option<playback::PlaybackLoad>,
 
     // Toast Notification
     pub status_toast: Option<(crate::ui_ext::StatusMessage, f64)>,
@@ -724,6 +730,7 @@ pub struct AudioPreviewState {
     browse_rx: Option<Receiver<Option<String>>>,
     save_job: Option<AudioSaveJob>,
     completed_saves: Vec<PathBuf>,
+    read_check: crate::file_source::ReadCheck,
     file_source: Option<crate::file_source::FileSource>,
     slice_copy_job: Option<AudioSliceCopyJob>,
 
@@ -742,6 +749,7 @@ struct AudioSaveJob {
     ticket: JobTicket,
     receiver: Receiver<Result<Result<AudioSaveOutcome, String>, JobError>>,
     destination_name: String,
+    stem_export: bool,
 }
 
 impl Drop for AudioSaveJob {
@@ -759,6 +767,7 @@ struct AudioSaveRegion {
 
 struct AudioSavePlan {
     versioned: bool,
+    read_check: crate::file_source::ReadCheck,
     file_source: Option<crate::file_source::FileSource>,
     destination: PathBuf,
     source: PathBuf,
@@ -787,6 +796,7 @@ impl Drop for AudioSliceCopyJob {
 }
 
 struct AudioSliceCopyPlan {
+    read_check: crate::file_source::ReadCheck,
     source: PathBuf,
     output: PathBuf,
     start: f32,
@@ -794,9 +804,43 @@ struct AudioSliceCopyPlan {
     filter: Option<String>,
 }
 
+// Validate on the worker before decoding and before every progressive publication.
+// Cancelling on a failed check stops later decode stages without replacing the
+// useful source error with the decoder's cancellation message.
+fn checked_analysis(
+    check: &crate::file_source::ReadCheck,
+    cancel: &AtomicBool,
+    tx: &std::sync::mpsc::Sender<AudioAnalysisProgress>,
+    run: impl FnOnce(&mut dyn FnMut(AudioAnalysisProgress)),
+) {
+    if let Err(error) = check.validate(cancel) {
+        let _ = tx.send(AudioAnalysisProgress::Failed(error));
+        return;
+    }
+    let mut failure = None;
+    run(&mut |progress| {
+        if failure.is_some() || cancel.load(Ordering::Acquire) {
+            return;
+        }
+        match check.validate(cancel) {
+            Ok(()) => {
+                let _ = tx.send(progress);
+            }
+            Err(error) => {
+                failure = Some(error);
+                cancel.store(true, Ordering::Release);
+            }
+        }
+    });
+    if let Some(error) = failure {
+        let _ = tx.send(AudioAnalysisProgress::Failed(error));
+    }
+}
+
 fn submit_session_analysis(
     path: PathBuf,
     jobs: &BackgroundJobs,
+    check: crate::file_source::ReadCheck,
 ) -> (
     Arc<AtomicBool>,
     JobTicket,
@@ -807,8 +851,8 @@ fn submit_session_analysis(
     let job_cancelled = Arc::clone(&cancelled);
     let (progress_tx, progress_rx) = channel();
     let (ticket, job_rx) = jobs.submit(Duration::MAX, move || {
-        compute_audio_analysis_progressive_cancellable(&path, 1200, &job_cancelled, |progress| {
-            let _ = progress_tx.send(progress);
+        checked_analysis(&check, &job_cancelled, &progress_tx, |send| {
+            compute_audio_analysis_progressive_cancellable(&path, 1200, &job_cancelled, send);
         });
     });
     (cancelled, ticket, progress_rx, job_rx)
@@ -862,13 +906,29 @@ impl AudioPreviewState {
         Self::new_with_metadata_on_jobs(path, title, metadata, BackgroundJobs::global())
     }
 
+    pub(crate) fn new_with_metadata_checked(
+        path: PathBuf,
+        title: String,
+        metadata: Option<AudioMetadata>,
+        check: crate::file_source::ReadCheck,
+    ) -> Self {
+        Self::with_source_analysis_on_jobs(
+            path,
+            title,
+            metadata,
+            BackgroundJobs::global(),
+            None,
+            check,
+        )
+    }
+
     fn new_with_metadata_on_jobs(
         path: PathBuf,
         title: String,
         metadata: Option<AudioMetadata>,
         jobs: &BackgroundJobs,
     ) -> Self {
-        Self::with_source_analysis_on_jobs(path, title, metadata, jobs, None)
+        Self::with_source_analysis_on_jobs(path, title, metadata, jobs, None, Default::default())
     }
 
     /// Creates an independent Audio Studio view over a completed source analysis.
@@ -886,6 +946,7 @@ impl AudioPreviewState {
             metadata,
             BackgroundJobs::global(),
             Some(source_analysis),
+            Default::default(),
         )
     }
 
@@ -910,6 +971,7 @@ impl AudioPreviewState {
         metadata: Option<AudioMetadata>,
         jobs: &BackgroundJobs,
         source_analysis: Option<Arc<FullAudioAnalysis>>,
+        read_check: crate::file_source::ReadCheck,
     ) -> Self {
         let default_save_dir = path
             .parent()
@@ -927,14 +989,14 @@ impl AudioPreviewState {
             .unwrap_or(0.0);
         let is_loading_analysis = source_analysis.is_none();
 
-        let (analysis_cancel, analysis_ticket, analysis_rx, analysis_job_rx) = if source_analysis
-            .is_some()
-        {
-            (None, None, None, None)
-        } else {
-            let (cancel, ticket, progress_rx, job_rx) = submit_session_analysis(path.clone(), jobs);
-            (Some(cancel), Some(ticket), Some(progress_rx), Some(job_rx))
-        };
+        let (analysis_cancel, analysis_ticket, analysis_rx, analysis_job_rx) =
+            if source_analysis.is_some() {
+                (None, None, None, None)
+            } else {
+                let (cancel, ticket, progress_rx, job_rx) =
+                    submit_session_analysis(path.clone(), jobs, read_check.clone());
+                (Some(cancel), Some(ticket), Some(progress_rx), Some(job_rx))
+            };
 
         let initial_viewport = AudioViewport::new(duration_sec);
 
@@ -975,6 +1037,8 @@ impl AudioPreviewState {
             note_strip_texture: None,
             inspect_viewport_cache: ViewportSpectrogramCache::default(),
             channel_tools: ChannelToolsState::default(),
+            session_edit_job: None,
+            editor_job: None,
             player: None,
             player_factory: crate::ui_ext::new_shared_audio_player,
             _sink: None,
@@ -1005,7 +1069,7 @@ impl AudioPreviewState {
             audio_editor: "audacity".to_string(),
             active_drag: None,
             loop_selection: false,
-            last_seek_reload: None,
+            playback_load: None,
             status_toast: None,
             save_dialog_open: false,
             save_destination_dir: default_save_dir,
@@ -1014,6 +1078,7 @@ impl AudioPreviewState {
             browse_rx: None,
             save_job: None,
             completed_saves: Vec::new(),
+            read_check,
             file_source: None,
             slice_copy_job: None,
             preview_stop_time: None,
@@ -1043,6 +1108,10 @@ impl AudioPreviewState {
     /// Reports temporary channel/region edits, which persist only through export.
     pub fn has_session_edits(&self) -> bool {
         self.session_audio_edits() != SessionAudioEdits::default()
+            || self
+                .undo_stack
+                .iter()
+                .any(|snapshot| snapshot.path != self.path)
     }
     pub fn with_editor(mut self, editor: String) -> Self {
         if !editor.is_empty() {

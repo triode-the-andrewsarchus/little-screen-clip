@@ -86,6 +86,9 @@ impl TextSession {
             editor: None,
         }
     }
+    pub fn file_source(&self) -> Option<&FileSource> {
+        self.editor.as_ref().map(|editor| &editor.source)
+    }
     pub fn path(&self) -> &Path {
         self.editor.as_ref().map_or_else(
             || self.preview.path.as_deref().unwrap_or(Path::new(".")),
