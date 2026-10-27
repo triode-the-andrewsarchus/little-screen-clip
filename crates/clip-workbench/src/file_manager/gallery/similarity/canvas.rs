@@ -1352,6 +1352,8 @@ mod lifecycle_tests {
     fn hidden_policy_changes_stamp_even_when_root_entries_do_not_change() {
         let directory = Directory {
             path: PathBuf::from("/photos"),
+            object: None,
+            mount: None,
             signature: 1,
             entries: Vec::new(),
             skipped: 0,

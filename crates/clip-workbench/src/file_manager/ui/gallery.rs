@@ -18,7 +18,9 @@ const BOTTOM_HUD_HEIGHT: f32 = 44.0;
 
 impl FileManager {
     pub(in crate::file_manager) fn set_view(&mut self, view: super::super::BrowserView) {
-        if view == self.view {
+        if view == self.view
+            || (self.search.has_offline_results() && view != super::super::BrowserView::List)
+        {
             return;
         }
         self.type_navigation.clear();
@@ -60,21 +62,28 @@ impl FileManager {
     pub(super) fn media_view_toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
         use crate::ui_tabs::{Tab, TabBar};
         ui.horizontal_wrapped(|ui| {
-            if let Some(view) = TabBar::new(
-                "files_media_views",
-                self.view,
-                &[
-                    Tab::new(super::super::BrowserView::List, "List"),
-                    Tab::new(super::super::BrowserView::Photos, "Photos"),
-                    Tab::new(super::super::BrowserView::Music, "Music"),
-                    Tab::new(super::super::BrowserView::Videos, "Videos"),
-                    Tab::new(super::super::BrowserView::Constellation, "Constellation"),
-                ],
-                palette,
-            )
-            .show(ui)
+            if let Some(view) = ui
+                .add_enabled_ui(!self.search.has_offline_results(), |ui| {
+                    TabBar::new(
+                        "files_media_views",
+                        self.view,
+                        &[
+                            Tab::new(super::super::BrowserView::List, "List"),
+                            Tab::new(super::super::BrowserView::Photos, "Photos"),
+                            Tab::new(super::super::BrowserView::Music, "Music"),
+                            Tab::new(super::super::BrowserView::Videos, "Videos"),
+                            Tab::new(super::super::BrowserView::Constellation, "Constellation"),
+                        ],
+                        palette,
+                    )
+                    .show(ui)
+                })
+                .inner
             {
                 self.set_view(view);
+            }
+            if self.search.has_offline_results() {
+                ui.small("Last-known matches: metadata list");
             }
             self.transfer_toolbar(ui);
             if self.view == super::super::BrowserView::Photos {
@@ -221,6 +230,7 @@ impl FileManager {
         let can_edit = self.can_edit();
         let count = self.selection_count();
         let mut actions = ListActions {
+            search_results: self.search.has_result_sources(),
             additive: self.gallery_selecting,
             ..Default::default()
         };
@@ -344,6 +354,10 @@ impl FileManager {
                     Some(&mut self.gallery_hover),
                     &mut hovered_path,
                 );
+                if !super::popup_open(ui.ctx()) {
+                    response.clone().on_hover_text(&entry.name);
+                    self.search.result_hover(&response, entry);
+                }
                 if entry.directory {
                     targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
                 }

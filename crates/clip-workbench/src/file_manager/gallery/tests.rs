@@ -100,6 +100,8 @@ fn exact_camera_shapes_and_resize_are_preserved_when_rows_fit() {
 pub(super) fn synthetic_directory(count: usize) -> Directory {
     Directory {
         system: false,
+        object: None,
+        mount: None,
         path: "/synthetic-gallery".into(),
         signature: 1,
         skipped: 0,
@@ -117,6 +119,7 @@ pub(super) fn synthetic_directory(count: usize) -> Directory {
                 size_bytes: 0,
                 modified: "".into(),
                 modified_time: None,
+                created_time: None,
                 warning: None,
                 revision: 1,
                 identity: None,
@@ -637,6 +640,7 @@ fn test_deferred_gallery_hq_upgrade_resilience() {
         size_bytes: 2 * 1024 * 1024,
         modified: "2024-10-22".into(),
         modified_time: None,
+        created_time: None,
         warning: None,
         revision: 1,
         identity: None,

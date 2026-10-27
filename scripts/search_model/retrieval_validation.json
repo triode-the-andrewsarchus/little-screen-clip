@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "purpose": "Additional short-query and independent negative stress set, frozen after the initial exploratory run and before testing candidate cutoffs. Initial corpus queries are unchanged.",
+  "positives": [
+    {
+      "id": "validation-positive-01",
+      "target": "text-01",
+      "query": "puncture",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-02",
+      "target": "text-02",
+      "query": "sourdough",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-03",
+      "target": "text-03",
+      "query": "orchid",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-04",
+      "target": "pdf-05",
+      "query": "window invoice",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-05",
+      "target": "pdf-12",
+      "query": "wheelchair ramp",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-06",
+      "target": "audio-08",
+      "query": "airport boarding",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-07",
+      "target": "audio-10",
+      "query": "watchmaker",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-08",
+      "target": "image-07",
+      "query": "chair",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-09",
+      "target": "image-10",
+      "query": "house",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-10",
+      "target": "video-08",
+      "query": "coffee",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-11",
+      "target": "video-11",
+      "query": "clock",
+      "split": "validation"
+    },
+    {
+      "id": "validation-positive-12",
+      "target": "video-12",
+      "query": "guitar",
+      "split": "validation"
+    }
+  ],
+  "negatives": [
+    {
+      "id": "validation-negative-01",
+      "query": "training a rescue dog to follow scent trails",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-02",
+      "query": "astronomical measurements of pulsar timing",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-03",
+      "query": "sewing leather shoes by hand",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-04",
+      "query": "analyzing fingerprints at a crime scene",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-05",
+      "query": "repairing a hydraulic excavator pump",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-06",
+      "query": "the rules of a cricket test match",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-07",
+      "query": "how blockchain miners choose a nonce",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-08",
+      "query": "how fluorescent proteins are used in microscopy",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-09",
+      "query": "operating an industrial refrigeration compressor",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-10",
+      "query": "harpsichord tuning with historical temperaments",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-11",
+      "query": "constructing a dry stone bridge arch",
+      "split": "validation"
+    },
+    {
+      "id": "validation-negative-12",
+      "query": "evaluating the credit risk of municipal bonds",
+      "split": "validation"
+    }
+  ]
+}

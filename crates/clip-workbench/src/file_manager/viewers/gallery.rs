@@ -4,6 +4,7 @@ use std::time::Instant;
 
 pub(super) struct Collection {
     paths: Vec<PathBuf>,
+    guards: std::collections::HashMap<PathBuf, super::super::search::SourceGuard>,
     index: usize,
     slideshow: bool,
     interval: f32,
@@ -16,7 +17,12 @@ impl Viewers {
             collection.slideshow = false;
         }
     }
-    pub(in crate::file_manager) fn open_collection(&mut self, path: PathBuf, paths: Vec<PathBuf>) {
+    pub(in crate::file_manager) fn open_collection(
+        &mut self,
+        path: PathBuf,
+        paths: Vec<PathBuf>,
+        guards: std::collections::HashMap<PathBuf, super::super::search::SourceGuard>,
+    ) {
         if self.active() {
             return;
         }
@@ -25,6 +31,7 @@ impl Viewers {
             .position(|p| p == &path)
             .map(|index| Collection {
                 paths,
+                guards,
                 index,
                 slideshow: false,
                 interval: 4.0,
@@ -62,6 +69,7 @@ impl Viewers {
         } else {
             collection.index = target;
             collection.ready_since = None;
+            self.source_guard = collection.guards.get(&collection.paths[target]).cloned();
             self.open(collection.paths[target].clone());
         }
         self.gallery = Some(collection);
@@ -163,7 +171,13 @@ mod tests {
             .collect();
         let config = AppConfig::default();
         let loaded = load(&paths[0], &config).unwrap();
-        let viewer = session(loaded, paths[0].clone(), &config, 0.0);
+        let viewer = session(
+            loaded,
+            paths[0].clone(),
+            &config,
+            0.0,
+            crate::file_source::ReadCheck::default(),
+        );
         (
             dir,
             Viewers {
@@ -171,6 +185,7 @@ mod tests {
                 session: Some(viewer),
                 gallery: Some(Collection {
                     paths,
+                    guards: Default::default(),
                     index: 0,
                     slideshow: true,
                     interval: 1.0,

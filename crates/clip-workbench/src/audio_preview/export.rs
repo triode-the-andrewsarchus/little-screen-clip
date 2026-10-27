@@ -94,112 +94,6 @@ impl AudioPreviewState {
         Some((graph.join(";"), format!("[{input}]")))
     }
 
-    pub(super) fn editor_handoff_path(&self) -> Result<PathBuf, String> {
-        let Some(filter) = self.session_edit_filter() else {
-            return Ok(self.path.clone());
-        };
-        let out = std::env::temp_dir()
-            .join("little_clip_audio_sessions")
-            .join(format!("audacity-handoff-{}.wav", uuid::Uuid::new_v4()));
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Could not prepare audio handoff: {e}"))?;
-        }
-        let mut command = std::process::Command::new("ffmpeg");
-        command.args(["-y", "-i"]).arg(&self.path);
-        if let Some((graph, output)) = self.session_crossfade_filter_complex() {
-            command.args(["-filter_complex", &graph, "-map", &output]);
-        } else {
-            command.args(["-af", &filter]);
-        }
-        let ok = command
-            .args(["-c:a", "pcm_s16le"])
-            .arg(&out)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ok && out.is_file() {
-            Ok(out)
-        } else {
-            Err("Could not render audio edits for editor handoff".to_string())
-        }
-    }
-
-    /// Launches an external audio editor (e.g. Audacity) for the current file.
-    pub fn launch_external_audio_editor(
-        &mut self,
-        _ctx: &egui::Context,
-        _close_requested: &mut bool,
-    ) {
-        let editor = if self.audio_editor.is_empty() {
-            "audacity"
-        } else {
-            &self.audio_editor
-        };
-        let handoff_path = match self.editor_handoff_path() {
-            Ok(path) => path,
-            Err(error) => {
-                self.status_toast = Some((error.into(), _ctx.input(|i| i.time)));
-                return;
-            }
-        };
-        let mut cmd = std::process::Command::new(editor);
-        cmd.arg(&handoff_path);
-        match cmd.spawn() {
-            Ok(_) => {
-                let filename = self
-                    .path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "file".to_string());
-                self.status_toast = Some((
-                    crate::ui_ext::StatusMessage::new(
-                        crate::icons::Icon::ArrowRight,
-                        format!("Opened {} in {}", filename, editor),
-                    ),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs_f64(),
-                ));
-                self.stop();
-            }
-            Err(e) => {
-                // Try xdg-open fallback
-                if std::process::Command::new("xdg-open")
-                    .arg(&handoff_path)
-                    .spawn()
-                    .is_ok()
-                {
-                    self.status_toast = Some((
-                        crate::ui_ext::StatusMessage::new(
-                            crate::icons::Icon::ArrowRight,
-                            "Opened audio in default application via xdg-open".to_string(),
-                        ),
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs_f64(),
-                    ));
-                    self.stop();
-                } else {
-                    self.status_toast = Some((
-                        crate::ui_ext::StatusMessage::new(
-                            crate::icons::Icon::Alert,
-                            format!("Failed to launch '{}': {}", editor, e),
-                        ),
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs_f64(),
-                    ));
-                }
-            }
-        }
-    }
-
     pub fn copy_selected_segment(&mut self, now: f64, mode: ChannelCopyMode) {
         let (start, end) = self
             .active_selection_range()
@@ -216,13 +110,14 @@ impl AudioPreviewState {
             active_region.high_pass_hz,
         );
 
-        let plan = audio_slice_copy_plan(
+        let mut plan = audio_slice_copy_plan(
             &self.path,
             start,
             end,
             mode,
             Self::channel_edit_filter(mode, region),
         );
+        plan.read_check = self.read_check.clone();
         if self.slice_copy_job.is_some() {
             self.status_toast = Some((
                 crate::ui_ext::StatusMessage::new(
@@ -320,13 +215,15 @@ impl AudioPreviewState {
                     self.region_low_pass_hz.get(i).copied().flatten(),
                     self.region_high_pass_hz.get(i).copied().flatten(),
                 );
-                audio_slice_copy_plan(
+                let mut plan = audio_slice_copy_plan(
                     &self.path,
                     s,
                     e,
                     mode,
                     Self::channel_edit_filter(mode, region),
-                )
+                );
+                plan.read_check = self.read_check.clone();
+                plan
             })
             .collect::<Vec<_>>();
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -696,6 +593,7 @@ impl AudioPreviewState {
         }
         let plan = AudioSavePlan {
             versioned,
+            read_check: self.read_check.clone(),
             file_source: self.file_source.clone(),
             destination: dest_dir,
             source: self.path.clone(),
@@ -709,6 +607,7 @@ impl AudioPreviewState {
             ticket,
             receiver,
             destination_name,
+            stem_export: false,
         });
         self.status_toast = Some((
             crate::ui_ext::StatusMessage::new(
@@ -725,6 +624,7 @@ impl AudioPreviewState {
             return;
         };
         let destination_name = job.destination_name.clone();
+        let stem_export = job.stem_export;
         ctx.request_repaint_after(Duration::from_millis(80));
         let result = match job.receiver.try_recv() {
             Ok(result) => result,
@@ -732,11 +632,15 @@ impl AudioPreviewState {
             Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
         };
         self.save_job = None;
+        let successful = matches!(&result, Ok(Ok(outcome)) if outcome.failures.is_empty());
         let message = match result {
             Ok(Ok(outcome)) => {
                 self.completed_saves = outcome.saved_paths;
                 self.save_dialog_open = false;
                 if outcome.failures.is_empty() {
+                    if stem_export {
+                        self.stem_separation.save_dialog_open = false;
+                    }
                     crate::ui_ext::StatusMessage::new(
                         crate::icons::Icon::Save,
                         format!(
@@ -761,6 +665,10 @@ impl AudioPreviewState {
                 format!("Audio save failed: {error}"),
             ),
         };
+        if stem_export {
+            self.stem_separation.status = successful.then(|| "Stem export complete.".into());
+            self.stem_separation.error = (!successful).then(|| message.text.clone());
+        }
         self.status_toast = Some((message, now));
         ctx.request_repaint();
     }
@@ -996,33 +904,44 @@ pub(super) fn extract_audio_slice_file(
     if cancelled.load(Ordering::Acquire) {
         return Err("Audio slice copy cancelled".to_owned());
     }
+    use std::os::fd::AsRawFd;
+    plan.read_check.validate(cancelled)?;
+    let source = crate::file_source::FileSource::capture(&plan.source)
+        .map_err(|e| format!("Failed to extract audio segment via ffmpeg: {e}"))?;
     let staging_dir = plan.output.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(staging_dir)
+    let directory = little_clip_core::kernel_interface::create_content_directory(staging_dir)
         .map_err(|error| format!("Failed to create audio staging directory: {error}"))?;
-    let mut command = std::process::Command::new("ffmpeg");
-    command
-        .arg("-y")
-        .arg("-ss")
-        .arg(format!("{:.4}", plan.start))
-        .arg("-to")
-        .arg(format!("{:.4}", plan.end))
-        .arg("-i")
-        .arg(&plan.source);
-    if let Some(filter) = &plan.filter {
-        command.arg("-af").arg(filter);
-    }
-    command.arg("-c:a").arg("pcm_s16le").arg(&plan.output);
-    command
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let staging = tempfile::NamedTempFile::new_in(&anchor).map_err(|e| e.to_string())?;
+    let region = AudioSaveRegion {
+        start: plan.start,
+        end: plan.end,
+        filename: "slice.wav".into(),
+        filter: plan.filter.clone(),
+    };
+    let mut command = audio_export_command(
+        &plan.source,
+        &region,
+        staging.as_file().try_clone().map_err(|e| e.to_string())?,
+        AudioRenderMode::Export,
+    )?;
     let status = run_audio_command_cancellable(&mut command, cancelled)
         .map_err(|error| format!("ffmpeg process failed: {error}"))?;
-    if !status.success() || !plan.output.exists() {
+    if !status.success() {
         return Err(format!(
             "Failed to extract audio segment via ffmpeg ({status})"
         ));
     }
+    plan.read_check.validate(cancelled)?;
+    source.check()?;
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Audio slice copy cancelled".into());
+    }
+    staging.as_file().sync_all().map_err(|e| e.to_string())?;
+    let filename = plan.output.file_name().ok_or("Missing slice filename")?;
+    staging
+        .persist_noclobber(anchor.join(filename))
+        .map_err(|e| e.to_string())?;
     Ok(plan.output.clone())
 }
 
@@ -1200,6 +1119,7 @@ pub(super) fn audio_slice_copy_plan(
     let filename =
         format_sample_filename(base_name, start, (end - start).max(0.001), suffix, "wav");
     AudioSliceCopyPlan {
+        read_check: Default::default(),
         source: source.to_owned(),
         output: std::env::temp_dir()
             .join("little_clip_audio_segments")
@@ -1212,6 +1132,7 @@ pub(super) fn audio_slice_copy_plan(
 }
 
 pub(super) fn run_audio_save(plan: AudioSavePlan) -> Result<AudioSaveOutcome, String> {
+    plan.read_check.validate(&AtomicBool::new(false))?;
     if let Some(source) = &plan.file_source {
         source.check()?;
     }
@@ -1252,6 +1173,8 @@ pub(super) fn save_audio_region(
     directory: &std::fs::File,
 ) -> Result<PathBuf, String> {
     use std::os::fd::AsRawFd;
+    let cancel = AtomicBool::new(false);
+    plan.read_check.validate(&cancel)?;
     if Path::new(&region.filename).file_name() != Some(std::ffi::OsStr::new(&region.filename)) {
         return Err("Enter one audio export filename".into());
     }
@@ -1266,6 +1189,7 @@ pub(super) fn save_audio_region(
             .as_file()
             .try_clone()
             .map_err(|error| error.to_string())?,
+        AudioRenderMode::Export,
     )?
     .status()
     .map_err(|error| error.to_string())?;
@@ -1276,6 +1200,7 @@ pub(super) fn save_audio_region(
         .as_file()
         .sync_all()
         .map_err(|error| error.to_string())?;
+    plan.read_check.validate(&cancel)?;
     if let Some(source) = &plan.file_source {
         source.check()?;
         out_path = install_saved_audio(staging, &anchor, &region.filename, plan.versioned)?;
@@ -1321,10 +1246,18 @@ fn install_saved_audio(
     Err("No unused edited sample name is available".into())
 }
 
-fn audio_export_command(
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum AudioRenderMode {
+    Export,
+    Session,
+    SessionGraph,
+}
+
+pub(super) fn audio_export_command(
     source: &Path,
     region: &AudioSaveRegion,
     output: std::fs::File,
+    mode: AudioRenderMode,
 ) -> Result<std::process::Command, String> {
     let extension = Path::new(&region.filename)
         .extension()
@@ -1340,21 +1273,36 @@ fn audio_export_command(
         "mka" | "mkv" => "matroska",
         value => value,
     };
-    let mut request = little_clip_core::process::CommandRequest::new("ffmpeg")
-        .arg("-y")
-        .arg("-ss")
-        .arg(format!("{:.4}", region.start))
-        .arg("-to")
-        .arg(format!("{:.4}", region.end))
+    let mut request = little_clip_core::process::CommandRequest::new("ffmpeg").args([
+        "-nostdin",
+        "-protocol_whitelist",
+        "file,pipe",
+        "-y",
+    ]);
+    if mode == AudioRenderMode::Export {
+        request = request
+            .arg("-ss")
+            .arg(format!("{:.4}", region.start))
+            .arg("-to")
+            .arg(format!("{:.4}", region.end));
+    }
+    request = request
         .arg("-i")
         .arg_content_file(source)
         .map_err(|error| error.to_string())?;
     if let Some(filter) = &region.filter {
-        request = request.arg("-af").arg(filter);
+        request = if mode == AudioRenderMode::SessionGraph {
+            request.args(["-filter_complex", filter, "-map", "[out]"])
+        } else {
+            request.arg("-af").arg(filter)
+        };
     }
-    request = match format {
-        "wav" => request.args(["-c:a", "pcm_s16le"]),
-        "flac" => request.args(["-c:a", "flac"]),
+    request = match (format, mode) {
+        ("wav", AudioRenderMode::Session | AudioRenderMode::SessionGraph) => {
+            request.args(["-c:a", "pcm_f32le"])
+        }
+        ("wav", _) => request.args(["-c:a", "pcm_s16le"]),
+        ("flac", _) => request.args(["-c:a", "flac"]),
         _ => request,
     };
     // stdout is the owned regular staging file, so FFmpeg can seek to finalize

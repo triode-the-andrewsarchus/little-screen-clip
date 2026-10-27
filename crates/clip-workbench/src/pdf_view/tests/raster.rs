@@ -195,55 +195,80 @@ fn dropping_editor_cancels_queued_preview_before_rendering() {
 }
 
 #[test]
-fn active_preview_publishes_selected_page_before_remaining_pages() {
-    let jobs = BackgroundJobs::new(1, 1);
-    let mut state = raster_state(3, 16);
-    state.selected_page = Some(3);
-    for page in &mut state.pages {
-        page.raster = None;
-    }
-    let (started_tx, started_rx) = channel();
-    let (release_tx, release_rx) = channel();
-    state.start_preview_worker_on(&jobs, move |_, page_num, max_dim| {
-        started_tx.send((page_num, max_dim)).unwrap();
-        if page_num == 1 {
-            release_rx.recv().unwrap();
+fn active_preview_publishes_selected_page_and_rejects_changed_source_during_later_reads() {
+    for expire_source in [false, true] {
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = raster_state(3, 16);
+        state.selected_page = Some(3);
+        let changed = Arc::new(AtomicBool::new(false));
+        let observed = changed.clone();
+        state.read_check = crate::file_source::ReadCheck::new(move |_| {
+            if observed.load(Ordering::Acquire) {
+                Err("source context expired".into())
+            } else {
+                Ok(())
+            }
+        });
+        for page in &mut state.pages {
+            page.raster = None;
         }
-        Ok((vec![page_num as u8], 1, 1))
-    });
-    assert_eq!(
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-        (3, PAGE_RASTER_MAX_DIM)
-    );
-    let ctx = egui::Context::default();
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    while state.pages[2].raster.is_none() && std::time::Instant::now() < deadline {
-        state.poll_preview_worker(&ctx);
-        std::thread::yield_now();
-    }
-    assert!(state.pages[2].raster.is_some());
-    assert!(state.pages[0].raster.is_none());
-    assert!(state.pages[1].raster.is_none());
-    assert_eq!(
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-        (1, 360)
-    );
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        state.start_preview_worker_on(&jobs, move |_, page_num, max_dim| {
+            started_tx.send((page_num, max_dim)).unwrap();
+            if page_num == 1 {
+                release_rx.recv().unwrap();
+            }
+            Ok((vec![page_num as u8], 1, 1))
+        });
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            (3, PAGE_RASTER_MAX_DIM)
+        );
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while state.pages[2].raster.is_none() && std::time::Instant::now() < deadline {
+            state.poll_preview_worker(&ctx);
+            std::thread::yield_now();
+        }
+        assert!(state.pages[2].raster.is_some());
+        assert!(state.pages[0].raster.is_none());
+        assert!(state.pages[1].raster.is_none());
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            (1, 360)
+        );
 
-    release_tx.send(()).unwrap();
-    while state.previews_loading && std::time::Instant::now() < deadline {
-        state.poll_preview_worker(&ctx);
-        std::thread::yield_now();
+        changed.store(expire_source, Ordering::Release);
+        release_tx.send(()).unwrap();
+        while state.previews_loading && std::time::Instant::now() < deadline {
+            state.poll_preview_worker(&ctx);
+            std::thread::yield_now();
+        }
+        assert!(!state.previews_loading);
+        if expire_source {
+            assert!(
+                started_rx.try_recv().is_err(),
+                "the next page must fail before rendering"
+            );
+            assert!(
+                state.pages[2].raster.is_some(),
+                "the verified captured page remains valid"
+            );
+            assert!(state.pages[..2].iter().all(|page| page.raster.is_none()
+                && page.error.as_deref() == Some("source context expired")));
+        } else {
+            assert_eq!(
+                started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+                (2, 360)
+            );
+            assert!(state.pages.iter().all(|page| {
+                page.raster
+                    .as_ref()
+                    .is_some_and(|raster| raster.path().exists())
+            }));
+        }
     }
-    assert!(!state.previews_loading);
-    assert_eq!(
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-        (2, 360)
-    );
-    assert!(state.pages.iter().all(|page| {
-        page.raster
-            .as_ref()
-            .is_some_and(|raster| raster.path().exists())
-    }));
 }
 
 #[test]
@@ -375,4 +400,17 @@ fn pdf_keyboard_page_actions_reach_the_guarded_selected_page_methods() {
     );
     assert!(state.edit_in_progress);
     assert!(state.edit_rx.is_some());
+}
+
+#[test]
+fn pdf_detail_rerenders_validate_before_reopening_the_selected_source() {
+    let state = raster_state(1, 16);
+    let raster = state.pages[0].raster.clone().unwrap();
+    let job = PdfPageDecodeSlot::start(
+        raster,
+        Some((state.path.clone(), 1024)),
+        &egui::Context::default(),
+        crate::file_source::ReadCheck::new(|_| Err("source context expired".into())),
+    );
+    crate::file_source::read_check_tests::assert_deferred_rejected(&job.rx);
 }

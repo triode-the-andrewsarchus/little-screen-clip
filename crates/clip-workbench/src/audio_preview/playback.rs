@@ -1,8 +1,47 @@
 use super::*;
 
+pub(super) type FileDecoder = Decoder<BufReader<File>>;
+pub(super) struct PlaybackLoad {
+    ticket: JobTicket,
+    pub(super) cancel: Arc<AtomicBool>,
+    receiver: Receiver<Result<Result<FileDecoder, String>, JobError>>,
+    position: f32,
+}
+impl Drop for PlaybackLoad {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+        self.ticket.cancel();
+    }
+}
+
+pub(super) fn load_decoder(
+    path: &Path,
+    check: &crate::file_source::ReadCheck,
+    expected: Option<&crate::file_source::FileSource>,
+    cancel: &AtomicBool,
+    position: f32,
+) -> Result<FileDecoder, String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err("Playback cancelled".into());
+    }
+    let (file, observed) = check.open(path, expected, cancel)?;
+    let mut decoder = Decoder::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+    if position > 0.0 {
+        decoder
+            .try_seek(Duration::from_secs_f32(position))
+            .map_err(|e| e.to_string())?;
+    }
+    check.validate(cancel)?;
+    observed.check()?;
+    if cancel.load(Ordering::Acquire) {
+        return Err("Playback cancelled".into());
+    }
+    Ok(decoder)
+}
+
 impl AudioPreviewState {
     pub fn toggle_play(&mut self) {
-        if self.is_playing {
+        if self.is_playing || self.playback_load.is_some() {
             self.pause();
         } else {
             self.play();
@@ -57,21 +96,7 @@ impl AudioPreviewState {
             return;
         }
 
-        if let Some(ref p) = self.player {
-            p.clear();
-            if let Ok(file) = File::open(&self.path) {
-                if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
-                    p.append(ChannelMonitorSource::new(
-                        EditedPreviewSource::new(decoder, Arc::clone(&self.playback_edits)),
-                        Arc::clone(&self.channel_tools.monitor),
-                    ));
-                    let target_pos = Duration::from_secs_f32(s);
-                    let _ = p.try_seek(target_pos);
-                    p.play();
-                    self.is_playing = true;
-                }
-            }
-        }
+        self.start_file_playback(s);
     }
 
     pub fn play_slice_preview(&mut self, start_sec: f32, end_sec: f32) {
@@ -109,26 +134,11 @@ impl AudioPreviewState {
             return;
         }
 
-        if let Some(ref p) = self.player {
-            p.clear();
-            if let Ok(file) = File::open(&self.path) {
-                if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
-                    p.append(ChannelMonitorSource::new(
-                        EditedPreviewSource::new(decoder, Arc::clone(&self.playback_edits)),
-                        Arc::clone(&self.channel_tools.monitor),
-                    ));
-                    let target_pos = Duration::from_secs_f32(self.current_time_sec);
-                    let _ = p.try_seek(target_pos);
-                    p.play();
-                    self.is_playing = true;
-                    self.playback_start_instant = Some(Instant::now());
-                    self.playback_start_offset_sec = self.current_time_sec;
-                }
-            }
-        }
+        self.start_file_playback(self.current_time_sec);
     }
 
     pub fn pause(&mut self) {
+        self.playback_load = None;
         self.preview_stop_time = None;
         self.preview_slice_range = None;
         self.preview_is_looping = false;
@@ -140,6 +150,7 @@ impl AudioPreviewState {
     }
 
     pub fn stop(&mut self) {
+        self.playback_load = None;
         self.preview_stop_time = None;
         self.preview_slice_range = None;
         self.preview_is_looping = false;
@@ -167,33 +178,68 @@ impl AudioPreviewState {
             return;
         }
 
-        if let Some(ref p) = self.player {
-            if self.is_playing {
-                let target_pos = Duration::from_secs_f32(clamped);
-                if p.try_seek(target_pos).is_err() {
-                    let can_reload = self
-                        .last_seek_reload
-                        .map(|t| t.elapsed().as_millis() >= 150)
-                        .unwrap_or(true);
-                    if can_reload {
-                        self.last_seek_reload = Some(Instant::now());
-                        p.clear();
-                        if let Ok(file) = File::open(&self.path) {
-                            if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
-                                p.append(ChannelMonitorSource::new(
-                                    EditedPreviewSource::new(
-                                        decoder,
-                                        Arc::clone(&self.playback_edits),
-                                    ),
-                                    Arc::clone(&self.channel_tools.monitor),
-                                ));
-                                let _ = p.try_seek(target_pos);
-                                p.play();
-                            }
-                        }
-                    }
+        let reload = self.playback_load.is_some()
+            || (self.is_playing
+                && self
+                    .player
+                    .as_ref()
+                    .is_some_and(|p| p.try_seek(Duration::from_secs_f32(clamped)).is_err()));
+        if reload {
+            self.start_file_playback(clamped);
+        }
+    }
+
+    pub(super) fn start_file_playback(&mut self, position: f32) {
+        self.playback_load = None;
+        if let Some(player) = &self.player {
+            player.clear();
+        }
+        self.is_playing = false;
+        self.playback_start_instant = None;
+        let path = self.path.clone();
+        let check = self.read_check.clone();
+        let expected = self.file_source.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker = cancel.clone();
+        let (ticket, receiver) = BackgroundJobs::global()
+            .submit(Duration::from_secs(60), move || {
+                load_decoder(&path, &check, expected.as_ref(), &worker, position)
+            });
+        self.playback_load = Some(PlaybackLoad {
+            ticket,
+            cancel,
+            receiver,
+            position,
+        });
+    }
+
+    pub(super) fn poll_file_playback(&mut self, ctx: &egui::Context) {
+        let Some(pending) = &self.playback_load else {
+            return;
+        };
+        let result = match pending.receiver.try_recv() {
+            Ok(result) => result.map_err(|e| e.to_string()).and_then(|r| r),
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(20));
+                return;
+            }
+            Err(TryRecvError::Disconnected) => Err("Playback worker stopped".into()),
+        };
+        let position = self.playback_load.take().unwrap().position;
+        match result {
+            Ok(decoder) => {
+                if let Some(player) = &self.player {
+                    player.append(ChannelMonitorSource::new(
+                        EditedPreviewSource::new(decoder, Arc::clone(&self.playback_edits)),
+                        Arc::clone(&self.channel_tools.monitor),
+                    ));
+                    player.play();
+                    self.is_playing = true;
+                    self.playback_start_instant = Some(Instant::now());
+                    self.playback_start_offset_sec = position;
                 }
             }
+            Err(error) => self.status_toast = Some((error.into(), ctx.input(|i| i.time))),
         }
     }
 

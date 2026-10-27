@@ -183,6 +183,7 @@ mod tests {
                 .next()
                 .unwrap()
                 .unwrap(),
+            true,
         );
         let database = directory.path().join("photos.sqlite");
         let source = FileSource::capture(&path).unwrap();

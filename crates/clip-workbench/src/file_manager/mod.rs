@@ -8,6 +8,7 @@ pub(super) mod constellation;
 mod content;
 mod edit_ui;
 mod edits;
+mod external;
 mod filesystem;
 mod font_strip;
 pub(crate) mod fuse_binwalk;
@@ -19,10 +20,12 @@ mod midi_strip;
 pub(crate) mod mounts;
 mod music;
 mod native_drag;
+mod path_serde;
 mod pdf_strip;
 mod preview_job;
 mod previews;
 mod scene_strip;
+pub(crate) mod search;
 mod selection;
 mod shelf;
 mod sorting;
@@ -120,19 +123,23 @@ enum Completion {
 
 impl DirectoryJob {
     fn new(path: PathBuf, jobs: &BackgroundJobs) -> Self {
-        Self::guarded(path, None, jobs)
+        Self::guarded(path, None, None, jobs)
     }
 
     fn guarded(
         path: PathBuf,
         target: Option<system::BrowserTarget>,
+        search: Option<search::SourceGuard>,
         jobs: &BackgroundJobs,
     ) -> Self {
         let cancelled = Arc::new(AtomicBool::new(false));
         let token = Arc::clone(&cancelled);
         let (ticket, receiver) = jobs.submit(Duration::from_secs(120), move || match target {
             Some(target) => target.read_directory(&token),
-            None => read_directory(&path, &token),
+            None => match search {
+                Some(guard) => guard.read_directory(&path, &token),
+                None => read_directory(&path, &token),
+            },
         });
         Self {
             ticket,
@@ -167,6 +174,7 @@ struct Request {
     path: PathBuf,
     navigation: Navigation,
     browser_target: Option<system::BrowserTarget>,
+    search_target: Option<search::SourceGuard>,
     job: Option<DirectoryJob>,
 }
 
@@ -189,6 +197,7 @@ pub(crate) struct FileManager {
     restore_scroll: bool,
     reveal_selection: bool,
     type_navigation: type_navigation::TypeNavigation,
+    search: search::Search,
     reveal_target: Option<PathBuf>,
     focus_address: bool,
     address_editing: bool,
@@ -202,6 +211,7 @@ pub(crate) struct FileManager {
     was_modal: bool,
     shelf: shelf::Shelf,
     open_file: Option<PathBuf>,
+    external_file: Option<PathBuf>,
     inspect_file: Option<PathBuf>,
     text_start: Option<(PathBuf, usize)>,
     pdf_start: Option<(PathBuf, usize)>,
@@ -271,6 +281,7 @@ impl FileManager {
             restore_scroll: false,
             reveal_selection: false,
             type_navigation: type_navigation::TypeNavigation::default(),
+            search: search::Search::default(),
             reveal_target: None,
             focus_address: false,
             address_editing: false,
@@ -284,6 +295,7 @@ impl FileManager {
             was_modal: false,
             shelf: shelf::Shelf::default(),
             open_file: None,
+            external_file: None,
             inspect_file: None,
             text_start: None,
             pdf_start: None,
@@ -374,6 +386,10 @@ impl FileManager {
             self.similarity_canvas.invalidate();
         }
         self.type_navigation.clear();
+        self.search.answers.leave();
+        if !matches!(navigation, Navigation::Refresh) && self.search.open {
+            self.close_search();
+        }
         self.reveal_target = None;
         if path != self.path() {
             self.gallery_layout.retire();
@@ -397,6 +413,7 @@ impl FileManager {
             path,
             navigation,
             browser_target: None,
+            search_target: None,
             job: None,
         });
         self.error = None;
@@ -441,7 +458,9 @@ impl FileManager {
         fuse_binwalk::refresh_cached_mount_table();
         self.mounts.request_scan(BackgroundJobs::global());
         self.tree.refresh(self.path().to_path_buf());
-        self.navigate(self.path().to_path_buf(), Navigation::Refresh);
+        if !self.refresh_search_results() {
+            self.navigate(self.path().to_path_buf(), Navigation::Refresh);
+        }
     }
 
     fn retry(&mut self) {
@@ -461,6 +480,7 @@ impl FileManager {
             self.last_status = None;
             self.edits.report = None;
         }
+        self.tick_search(jobs);
         self.shelf.tick();
         self.bookmarks.tick(jobs);
         self.constellation.tick();
@@ -480,7 +500,12 @@ impl FileManager {
         let mut completion = None;
         if let Some(request) = &mut self.pending {
             let job = request.job.get_or_insert_with(|| {
-                DirectoryJob::guarded(request.path.clone(), request.browser_target.clone(), jobs)
+                DirectoryJob::guarded(
+                    request.path.clone(),
+                    request.browser_target.clone(),
+                    request.search_target.clone(),
+                    jobs,
+                )
             });
             completion = job.poll();
         }
@@ -491,7 +516,12 @@ impl FileManager {
         } else if let Some(Completion::Ready(result)) = completion {
             let request = self.pending.take().expect("completion has a request");
             match result {
-                Ok(directory) => self.commit(directory, request.navigation),
+                Ok(directory) => {
+                    if request.search_target.is_some() {
+                        self.close_search();
+                    }
+                    self.commit(directory, request.navigation);
+                }
                 Err(error) => {
                     self.set_error(format!(
                         "Cannot open {}: {error}",
@@ -503,7 +533,9 @@ impl FileManager {
                     self.failed = request
                         .browser_target
                         .is_none()
-                        .then_some((request.path, request.navigation));
+                        .then_some(())
+                        .filter(|_| request.search_target.is_none())
+                        .map(|_| (request.path, request.navigation));
                 }
             }
             if !self.address_editing {
@@ -700,6 +732,10 @@ impl FileManager {
             .unwrap_or_default();
         if let Some(directory) = &self.directory {
             self.sort.apply(directory, &mut self.visible);
+            self.search.filter(directory, &mut self.visible);
+            self.search.answers.reconcile(directory, &self.visible);
+            self.search.answers.sort(directory, &mut self.visible);
+            self.search.paginate(&mut self.visible);
         }
         self.reconcile_selection();
         self.audio_entries.clear();
@@ -717,14 +753,16 @@ impl FileManager {
                 self.video_count += usize::from(video);
                 self.video_offsets.push(
                     self.video_offsets.last().copied().unwrap_or(0.0)
-                        + if video { VIDEO_ROW_HEIGHT } else { 28.0 },
+                        + if video { VIDEO_ROW_HEIGHT } else { 28.0 }
+                        + self.search.result_height(entry),
                 );
                 if audio {
                     self.audio_entries.push(entry.path.clone());
                 }
                 self.music_offsets.push(
                     self.music_offsets.last().copied().unwrap_or(0.0)
-                        + if audio { 108.0 } else { 28.0 },
+                        + if audio { 108.0 } else { 28.0 }
+                        + self.search.result_height(entry),
                 );
             }
         }
@@ -738,7 +776,9 @@ impl FileManager {
         if let Some(directory) = &self.directory {
             for index in &self.visible {
                 let entry = &directory.entries[*index];
-                let height = if entry.system.is_some()
+                let height = if self.search.has_offline_results() {
+                    28.0
+                } else if entry.system.is_some()
                     || self.previews.is_text(entry)
                     || (entry.regular_file && font_strip::known(&entry.path))
                     || entry.is_playable_media()
@@ -754,8 +794,11 @@ impl FileManager {
                 } else {
                     28.0
                 };
-                self.list_offsets
-                    .push(self.list_offsets.last().copied().unwrap_or(0.0) + height);
+                self.list_offsets.push(
+                    self.list_offsets.last().copied().unwrap_or(0.0)
+                        + height
+                        + self.search.result_height(entry),
+                );
             }
         }
     }
@@ -819,7 +862,11 @@ impl FileManager {
                 .iter()
                 .any(|entry| entry.path == path && entry.directory)
         }) {
-            self.navigate(path, Navigation::New);
+            if self.search_source_guard(&path).is_some() {
+                self.reveal_search_result(path, true);
+            } else {
+                self.navigate(path, Navigation::New);
+            }
         } else {
             self.open_file = Some(path);
         }
@@ -828,6 +875,16 @@ impl FileManager {
 
 impl FileManager {
     fn tick_watch(&mut self, jobs: &BackgroundJobs) {
+        if self.search.applied.as_ref().is_some_and(|query| {
+            query.scope != search::query::Scope::Here
+                || matches!(
+                    query.operator,
+                    search::query::Operator::Content(_) | search::query::Operator::Embedding(_)
+                )
+        }) {
+            self.watch = None;
+            return;
+        }
         if self.pending.is_some() || self.directory.is_none() {
             return;
         }

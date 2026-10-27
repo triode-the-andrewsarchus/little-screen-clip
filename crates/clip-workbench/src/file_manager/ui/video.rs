@@ -38,14 +38,18 @@ impl FileManager {
         let selected = current_selection(&self.history, self.index);
         let can_edit = self.can_edit();
         let count = self.selection_count();
-        let mut actions = ListActions::default();
+        let mut actions = ListActions {
+            search_results: self.search.has_result_sources(),
+            ..Default::default()
+        };
         let background = actions.background(ui, can_edit, count > 0);
         let mut targets = Vec::new();
         let mut hovered = false;
         let mut visible = Vec::new();
         let output = media_rows(ui, scroll, &self.video_offsets, |ui, index, rect| {
             let entry = &directory.entries[self.visible[index]];
-            let response = media_row(
+            let (rect, detail) = self.search.result_row(ui, rect, entry, colors);
+            let mut response = media_row(
                 ui,
                 rect,
                 selected.is_some_and(|s| s.contains(&entry.path)),
@@ -66,6 +70,9 @@ impl FileManager {
                 colors,
             );
             hovered |= time.is_some();
+            if let Some(detail) = detail {
+                response = response.union(detail);
+            }
             actions.row(ui, &response, entry, selected, can_edit, count);
             actions.video_click(ui, &response, entry, time, &mut self.video_start);
             if entry.directory {

@@ -47,6 +47,7 @@ impl AudioPreviewState {
         // Nested save dialogs handle Escape themselves, leaving the studio open.
         if !dialog_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.stop();
+            self.stop_group_playback();
             *close_requested = true;
             return true;
         }
@@ -89,7 +90,9 @@ impl AudioPreviewState {
         mut start_stem_separation: impl FnMut(&mut Self),
     ) {
         let mode_before_frame = self.active_mode;
-        self.poll_channel_edit(ctx);
+        self.poll_file_playback(ctx);
+        self.poll_session_edit(ctx);
+        self.poll_audio_editor(ctx);
         self.poll_slice_copy_job(ctx, ctx.input(|input| input.time));
         self.poll_save_job(ctx, ctx.input(|input| input.time));
         self.poll_digital_decode(ctx);
@@ -105,6 +108,7 @@ impl AudioPreviewState {
                 && self.active_mode != AudioToolMode::StemSeparation
             {
                 self.cancel_stem_separation();
+                self.pause_group_playback();
             } else if mode_before_frame != AudioToolMode::StemSeparation
                 && self.active_mode == AudioToolMode::StemSeparation
                 && self.stem_separation.stems.is_empty()

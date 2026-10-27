@@ -4,6 +4,7 @@ use super::*;
 
 struct ListPreviews<'a> {
     columns: ListColumns,
+    metadata_only: bool,
     files: &'a mut EntryPreviews,
     music: &'a mut EntryPreviews,
     videos: &'a mut video_timeline::Previews,
@@ -72,6 +73,12 @@ impl<'a> ListPreviews<'a> {
         palette: &AppPalette,
         actions: &mut ListActions,
     ) -> (egui::Response, bool) {
+        if self.metadata_only {
+            return (
+                file_row(ui, rect, entry, marked, self.columns, None, colors),
+                false,
+            );
+        }
         let is_audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
         let mut response = self.response(ui, rect, entry, marked, colors);
         let mut engaged = false;
@@ -175,14 +182,44 @@ impl<'a> ListPreviews<'a> {
 
 impl FileManager {
     pub(super) fn list_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
+        let count = self.search.answers.count();
+        if count == 0 {
+            self.list_contents(ui, colors, palette);
+            return;
+        }
+        egui::ScrollArea::horizontal()
+            .id_source("answer_columns_horizontal")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let extras = count + usize::from(self.search.images.active());
+                ui.set_min_width((600.0 + 145.0 * extras as f32).max(ui.available_width()));
+                self.list_contents(ui, colors, palette);
+            });
+    }
+    fn list_header(&mut self, ui: &mut Ui, colors: WorkbenchColors) -> ListColumns {
         let width = ui.available_width();
         let (header, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
-        let columns = ListColumns::new(header);
-        if let Some(column) = columns.sort_header(ui, header, self.sort, colors) {
+        let columns = self.search_columns(ui, header, colors);
+        let sort = (self
+            .search
+            .answers
+            .current()
+            .is_none_or(|folder| folder.sort.is_none())
+            && !self
+                .search
+                .applied
+                .as_ref()
+                .is_some_and(|query| query.browser_sort().is_none()))
+        .then_some(self.sort);
+        if let Some(column) = columns.sort_header(ui, header, sort, colors) {
             self.sort_by(column);
             ui.memory_mut(|memory| memory.request_focus(list_id()));
         }
         ui.separator();
+        columns
+    }
+    fn list_contents(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
+        let columns = self.list_header(ui, colors);
         if self.previews.poll(ui.ctx()) {
             self.rebuild_list_offsets();
         }
@@ -211,7 +248,9 @@ impl FileManager {
             return;
         };
         if self.visible.is_empty() {
-            ui.label(if directory.entries.is_empty() {
+            ui.label(if self.search.applied.is_some() {
+                "No matching files."
+            } else if directory.entries.is_empty() {
                 "This folder is empty."
             } else {
                 "No visible items. Enable hidden files to see this folder's contents."
@@ -221,7 +260,11 @@ impl FileManager {
             .index
             .and_then(|index| self.history.get(index))
             .map(|location| &location.selection);
-        let mut actions = ListActions::default();
+        let mut actions = ListActions {
+            search_results: self.search.has_result_sources(),
+            metadata_only: self.search.has_offline_results(),
+            ..Default::default()
+        };
         let can_edit = self.can_edit();
         let selection_count = self.selection_count();
         let background = actions.background(ui, can_edit, selection_count > 0);
@@ -230,6 +273,7 @@ impl FileManager {
         let mut previews = ListPreviews {
             columns,
             midi: &mut self.midi,
+            metadata_only: self.search.has_offline_results(),
             files: &mut self.previews,
             music: &mut self.music_previews,
             videos: &mut self.video_previews,
@@ -246,20 +290,44 @@ impl FileManager {
             hovered_video: false,
             play: None,
         };
+        let mut hash_priority = Vec::new();
+        let search = &self.search;
+        let images = &self.search.images;
+        let answers = &self.search.answers;
+        let mut answer_priority = Vec::new();
         let output = media_rows(ui, scroll, &self.list_offsets, |ui, index, rect| {
             let entry = &directory.entries[self.visible[index]];
             let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
-            let (response, engaged) =
+            let (rect, detail) = search.result_row(ui, rect, entry, colors);
+            let (mut response, engaged) =
                 previews.row(ui, rect, entry, marked, colors, palette, &mut actions);
+            if let Some(detail) = detail {
+                response = response.union(detail);
+            }
+            hash_priority.push(entry.path.clone());
+            images.paint_cell(ui, columns, rect, entry, colors);
+            answers.paint_cells(
+                ui,
+                columns,
+                rect,
+                entry,
+                usize::from(images.active()),
+                colors,
+            );
+            answer_priority.push(self.visible[index]);
             if entry.directory && ui.is_enabled() {
                 targets.push((response.rect.intersect(ui.clip_rect()), entry.path.clone()));
             }
             if engaged {
                 actions.selection = Some((entry.path.clone(), false, false));
+            } else if search.is_offline(&entry.path) {
+                actions.unavailable_row(ui, &response, entry, selected);
             } else {
                 actions.row(ui, &response, entry, selected, can_edit, selection_count);
             }
         });
+        self.search.images.prioritize(hash_priority);
+        self.search.answers.priority = answer_priority;
         if previews.paths.is_empty() {
             previews.files.retire();
         } else {
@@ -280,9 +348,8 @@ impl FileManager {
         }
         if let Some((path, time)) = play {
             self.midi.stop();
-            if self.music.current() != Some(&path) {
-                self.music.play(&path);
-            }
+            let guard = self.search_source_guard(&path);
+            self.music.play(&path, guard);
             self.music.seek(time);
         }
     }

@@ -14,14 +14,52 @@ fn audio_file(path: &std::path::Path) -> Result<File, String> {
 fn decode_file(path: &std::path::Path) -> Result<AudioDecoder, String> {
     Decoder::try_from(audio_file(path)?).map_err(|e| e.to_string())
 }
+fn prepare(path: &std::path::Path, range: Option<MusicRange>) -> Result<Prepared, String> {
+    let source = crate::file_source::FileSource::capture(path)?;
+    let decoder = decode_file(path)?;
+    let duration = decoder
+        .total_duration()
+        .map(|d| d.as_secs_f32())
+        .unwrap_or_else(|| {
+            little_clip_core::audio::read_audio_metadata(path)
+                .map_or(0.0, |m| m.duration_ms as f32 / 1000.0)
+        });
+    let prepared = if let Some(range) = range {
+        let range = selection::snap(range)?;
+        if source != range.source {
+            return Err("Audio changed while opening the selection".into());
+        }
+        let start = range.start.min(range.end);
+        let end = range.start.max(range.end);
+        if end <= start {
+            return Err("Select a non-empty audio range.".into());
+        }
+        let mut decoder = decoder;
+        decoder
+            .try_seek(Duration::from_secs_f32(start))
+            .map_err(|e| e.to_string())?;
+        Prepared {
+            audio: Box::new(decoder.take_duration(Duration::from_secs_f32(end - start))),
+            duration,
+            offset: start,
+        }
+    } else {
+        Prepared {
+            audio: Box::new(decoder),
+            duration,
+            offset: 0.0,
+        }
+    };
+    source.check()?;
+    if crate::file_source::FileSource::capture(path)? != source {
+        return Err("Audio path changed while opening".into());
+    }
+    Ok(prepared)
+}
 struct Prepared {
     audio: Box<dyn Source<Item = f32> + Send>,
     duration: f32,
     offset: f32,
-}
-struct Loading {
-    ticket: JobTicket,
-    receiver: mpsc::Receiver<Result<Result<Prepared, String>, JobError>>,
 }
 
 struct CopyJob {
@@ -36,17 +74,13 @@ impl Drop for CopyJob {
         self.ticket.cancel();
     }
 }
-impl Drop for Loading {
-    fn drop(&mut self) {
-        self.ticket.cancel();
-    }
-}
 
 #[derive(Default)]
 pub(super) struct Music {
     current: Option<PathBuf>,
     player: Option<Player>,
-    loading: Option<Loading>,
+    loading: Option<super::preview_job::Task<Result<Prepared, String>>>,
+    source_guard: Option<super::search::SourceGuard>,
     pub duration: f32,
     pub error: Option<String>,
     seek_pending: Option<f32>,
@@ -60,13 +94,23 @@ impl Music {
     pub fn current(&self) -> Option<&PathBuf> {
         self.current.as_ref()
     }
-    pub fn play(&mut self, path: &std::path::Path) {
+    pub fn play(&mut self, path: &std::path::Path, guard: Option<super::search::SourceGuard>) {
+        let same_source = match (&self.source_guard, &guard) {
+            (Some(old), Some(new)) => old.same_observation(new),
+            (None, None) => true,
+            _ => false,
+        };
+        if self.current.as_deref() == Some(path) && same_source {
+            return;
+        }
         self.stop();
+        self.source_guard = guard;
         self.current = Some(path.to_path_buf());
         self.load_current();
     }
-    pub fn play_range(&mut self, range: MusicRange) {
+    pub fn play_range(&mut self, range: MusicRange, guard: Option<super::search::SourceGuard>) {
         self.stop();
+        self.source_guard = guard;
         self.current = Some(range.path.clone());
         self.range_playback = true;
         self.load(Some(range));
@@ -83,52 +127,17 @@ impl Music {
         let Some(path) = self.current.clone() else {
             return;
         };
-        let (ticket, receiver) =
-            BackgroundJobs::global().submit(Duration::from_secs(30), move || {
-                let source = crate::file_source::FileSource::capture(&path)?;
-                let decoder = decode_file(&path)?;
-                let duration = decoder
-                    .total_duration()
-                    .map(|d| d.as_secs_f32())
-                    .unwrap_or_else(|| {
-                        little_clip_core::audio::read_audio_metadata(&path)
-                            .map_or(0.0, |m| m.duration_ms as f32 / 1000.0)
-                    });
-                let prepared = if let Some(range) = range {
-                    let range = selection::snap(range)?;
-                    if source != range.source {
-                        return Err("Audio changed while opening the selection".into());
-                    }
-                    let start = range.start.min(range.end);
-                    let end = range.start.max(range.end);
-                    if end <= start {
-                        return Err("Select a non-empty audio range.".into());
-                    }
-                    let mut decoder = decoder;
-                    decoder
-                        .try_seek(Duration::from_secs_f32(start))
-                        .map_err(|e| e.to_string())?;
-                    Prepared {
-                        audio: Box::new(
-                            decoder.take_duration(Duration::from_secs_f32(end - start)),
-                        ),
-                        duration,
-                        offset: start,
-                    }
-                } else {
-                    Prepared {
-                        audio: Box::new(decoder),
-                        duration,
-                        offset: 0.0,
-                    }
-                };
-                source.check()?;
-                if crate::file_source::FileSource::capture(&path)? != source {
-                    return Err("Audio path changed while opening".into());
-                }
-                Ok(prepared)
-            });
-        self.loading = Some(Loading { ticket, receiver });
+        let guard = self.source_guard.clone();
+        let loading = super::preview_job::Task::start(
+            BackgroundJobs::global(),
+            Duration::from_secs(30),
+            move |cancel| {
+                super::search::SourceGuard::read_checked(guard.as_ref(), cancel, || {
+                    prepare(&path, range)
+                })
+            },
+        );
+        self.loading = Some(loading);
     }
     pub fn tick(&mut self, ctx: &egui::Context, selection: &mut Option<MusicRange>) {
         self.tick_with_output(ctx, selection, |source| {
@@ -164,7 +173,12 @@ impl Music {
         if let Some(result) = self
             .loading
             .as_ref()
-            .and_then(|l| super::poll_job(&l.receiver))
+            .and_then(|loading| loading.poll())
+            .map(|result| {
+                result
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result)
+            })
         {
             self.loading = None;
             match result {
@@ -244,6 +258,7 @@ impl Music {
         self.player = None;
         self.loading = None;
         self.current = None;
+        self.source_guard = None;
         self.duration = 0.0;
         self.seek_pending = None;
         self.offset = 0.0;

@@ -156,7 +156,12 @@ impl PdfEditorState {
                 let source = (self.selected_page == Some(page_num)
                     && raster.needs_render(requested_width))
                 .then(|| (self.path.clone(), requested_width));
-                self.decode_job = Some(PdfPageDecodeSlot::start(raster, source, ctx));
+                self.decode_job = Some(PdfPageDecodeSlot::start(
+                    raster,
+                    source,
+                    ctx,
+                    self.read_check.clone(),
+                ));
             }
         }
         if self.decode_job.is_some() {

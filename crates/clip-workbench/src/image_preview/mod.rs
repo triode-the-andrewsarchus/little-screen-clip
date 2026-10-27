@@ -769,6 +769,10 @@ impl ImagePreviewState {
         self
     }
 
+    pub(crate) fn file_source(&self) -> Option<&crate::file_source::FileSource> {
+        self.file_source.as_ref()
+    }
+
     /// Reports edits made since this file-backed session's last successful save.
     pub fn has_unsaved_changes(&self) -> bool {
         self.saved_stamp

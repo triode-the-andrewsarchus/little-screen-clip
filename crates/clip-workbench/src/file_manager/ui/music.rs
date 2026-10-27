@@ -38,7 +38,9 @@ impl FileManager {
         let keep_constellation = self.view == BrowserView::Constellation
             && (!self.audio_entries.is_empty()
                 || self.constellation.folder_has_audio != Some(false));
-        let view = if keep_constellation {
+        let view = if self.search.has_offline_results() {
+            BrowserView::List
+        } else if keep_constellation {
             BrowserView::Constellation
         } else {
             self.location()
@@ -132,7 +134,10 @@ impl FileManager {
             return;
         };
         let selected = current_selection(&self.history, self.index);
-        let mut actions = ListActions::default();
+        let mut actions = ListActions {
+            search_results: self.search.has_result_sources(),
+            ..Default::default()
+        };
         let can_edit = self.can_edit();
         let count = self.selection_count();
         let background = actions.background(ui, can_edit, count > 0);
@@ -142,6 +147,7 @@ impl FileManager {
         let mut seek = None;
         let output = media_rows(ui, scroll, &self.music_offsets, |ui, index, rect| {
             let entry = &directory.entries[self.visible[index]];
+            let (rect, detail) = self.search.result_row(ui, rect, entry, colors);
             let mut response = media_row(
                 ui,
                 rect,
@@ -167,6 +173,9 @@ impl FileManager {
                 &self.music,
                 colors,
             );
+            if let Some(detail) = detail {
+                response = response.union(detail);
+            }
             if !engaged {
                 actions.row(ui, &response, entry, selected, can_edit, count);
             } else {
@@ -187,9 +196,8 @@ impl FileManager {
         self.finish_listing(ui, actions, output.state.offset.y, &background);
         if let Some(path) = play {
             self.midi.stop();
-            if self.music.current() != Some(&path) {
-                self.music.play(&path);
-            }
+            let guard = self.search_source_guard(&path);
+            self.music.play(&path, guard);
             if let Some(time) = seek {
                 self.music.seek(time);
             }

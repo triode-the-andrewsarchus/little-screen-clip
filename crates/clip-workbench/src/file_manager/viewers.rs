@@ -23,6 +23,7 @@ mod video;
 enum Loaded {
     System(super::system::Document),
     Image(DecodedImageData, FileSource),
+    Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
     Text(super::text_editor::TextSession),
     Sheet(little_clip_core::presentation::spreadsheet::SpreadsheetData),
     Midi(little_clip_core::presentation::midi::MidiData),
@@ -31,7 +32,7 @@ enum Loaded {
         workspace_dir: PathBuf,
         original_path: PathBuf,
     },
-    Path(FileSource),
+    Path,
     Video(super::media::VideoMetadata),
     External,
 }
@@ -64,9 +65,11 @@ impl Drop for Loading {
 #[derive(Default)]
 pub(super) struct Viewers {
     loading: Option<Loading>,
+    pub(super) source_guard: Option<super::search::SourceGuard>,
     session: Option<ViewerSession>,
     path: Option<PathBuf>,
     error: Option<String>,
+    pub(super) external_request: Option<super::external::Request>,
     confirm_close: bool,
     pad_audio: bool,
     pad_trim: Option<(f32, f32)>,
@@ -88,6 +91,9 @@ impl Viewers {
     }
     pub fn active(&self) -> bool {
         self.loading.is_some() || self.session.is_some() || self.error.is_some()
+    }
+    pub(super) fn external_error(&mut self, error: String) {
+        self.error = Some(error);
     }
     pub fn uses_audio(&self) -> bool {
         matches!(
@@ -129,12 +135,15 @@ impl Viewers {
         };
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker = cancelled.clone();
+        let guard = self.source_guard.clone();
         let (ticket, receiver) = executor.submit(Duration::from_secs(120), move || {
-            if system {
-                super::system::collect(&source, &worker).map(Loaded::System)
-            } else {
-                load(&source, &config)
-            }
+            super::search::SourceGuard::read_checked(guard.as_ref(), &worker, || {
+                if system {
+                    super::system::collect(&source, &worker).map(Loaded::System)
+                } else {
+                    load(&source, &config)
+                }
+            })
         });
         self.loading = Some(Loading {
             response_deadline: system
@@ -193,6 +202,10 @@ impl Viewers {
                     path,
                     &self.config,
                     self.video_start_seconds,
+                    self.source_guard
+                        .as_ref()
+                        .map(super::search::SourceGuard::read_check)
+                        .unwrap_or_default(),
                 ))
             }
             Err(error) => self.error = Some(error),
@@ -384,6 +397,7 @@ impl Viewers {
             state.stop();
         }
         self.session = None;
+        self.source_guard = None;
         self.loading = None;
         self.path = None;
         self.error = None;
@@ -397,10 +411,21 @@ impl Viewers {
         if let Some(ViewerSession::Video(state)) = &mut self.session {
             state.stop();
         }
-        if let Some(path) = &self.path {
-            if let Err(error) = external(path.clone()) {
-                self.error = Some(error);
-            }
+        let saved = match &self.session {
+            Some(ViewerSession::Text(state)) => state.file_source().cloned(),
+            Some(ViewerSession::Image(state)) => state.file_source().cloned(),
+            _ => None,
+        };
+        let path = saved
+            .as_ref()
+            .map(|source| source.path().to_path_buf())
+            .or_else(|| self.path.clone());
+        if let Some(path) = path {
+            self.external_request = Some(super::external::Request {
+                path,
+                search: self.source_guard.clone(),
+                saved,
+            });
         }
     }
 }
@@ -484,6 +509,12 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
             }
             Ok(Loaded::Image(decoded, source))
         }
+        Kind::Audio => {
+            let source = FileSource::capture(path)?;
+            let metadata = little_clip_core::audio::read_audio_metadata(path);
+            source.check()?;
+            Ok(Loaded::Audio(metadata, source))
+        }
         Kind::Sheet => {
             little_clip_core::presentation::spreadsheet::load_spreadsheet(path).map(Loaded::Sheet)
         }
@@ -535,10 +566,16 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         Kind::Text => super::text_editor::TextSession::load(path, config).map(Loaded::Text),
         Kind::Video => video::prepare(path).map(Loaded::Video),
         Kind::External => Ok(Loaded::External),
-        _ => FileSource::capture(path).map(Loaded::Path),
+        _ => FileSource::capture(path).map(|_| Loaded::Path),
     }
 }
-fn session(loaded: Loaded, path: PathBuf, config: &AppConfig, video_start: f64) -> ViewerSession {
+fn session(
+    loaded: Loaded,
+    path: PathBuf,
+    config: &AppConfig,
+    video_start: f64,
+    check: crate::file_source::ReadCheck,
+) -> ViewerSession {
     match loaded {
         Loaded::System(document) => ViewerSession::System(super::system::Inspector::new(document)),
         Loaded::Image(data, source) => ViewerSession::Image(
@@ -572,21 +609,24 @@ fn session(loaded: Loaded, path: PathBuf, config: &AppConfig, video_start: f64) 
                     .with_protected_outputs(),
             )
         }
-        Loaded::Path(source) if little_clip_core::audio::is_audio_path(&path) => {
-            ViewerSession::Audio(
-                AudioPreviewState::new(path.clone(), super::display_path(&path))
-                    .with_editor(config.audio.editor.clone())
-                    .with_file_source(source),
+        Loaded::Audio(metadata, source) => ViewerSession::Audio(
+            AudioPreviewState::new_with_metadata_checked(
+                path.clone(),
+                super::display_path(&path),
+                metadata,
+                check,
             )
-        }
+            .with_editor(config.audio.editor.clone())
+            .with_file_source(source),
+        ),
         _ if little_clip_core::pdf::is_pdf_path(&path) => {
-            ViewerSession::Pdf(PdfEditorState::new(path).with_protected_outputs())
+            ViewerSession::Pdf(PdfEditorState::new_checked(path, check).with_protected_outputs())
         }
         _ if little_clip_scene::is_splat_file(&path) => ViewerSession::Scene(
-            SplatViewerState::from_file(path).with_config(config.model3d.clone()),
+            SplatViewerState::from_file_checked(path, check).with_config(config.model3d.clone()),
         ),
         _ => ViewerSession::Model(
-            Model3dViewerState::from_file(path).with_config(config.model3d.clone()),
+            Model3dViewerState::from_file_checked(path, check).with_config(config.model3d.clone()),
         ),
     }
 }
@@ -604,20 +644,6 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
         ViewerSession::Scene(state) => state.render_ui(ui, palette, close),
         ViewerSession::Video(state) => state.ui(ui, close),
     }
-}
-pub(super) fn external(path: PathBuf) -> Result<(), String> {
-    std::thread::Builder::new()
-        .name("file-external-launch".into())
-        .spawn(move || {
-            if little_clip_core::kernel_interface::require_content(&path).is_err() {
-                return;
-            }
-            if let Ok(mut child) = std::process::Command::new("xdg-open").arg(path).spawn() {
-                let _ = child.wait();
-            }
-        })
-        .map(|_| ())
-        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ struct Pending {
 }
 #[derive(Default)]
 pub(super) struct Hover {
+    context: super::super::search::PreviewContext,
     key: Option<(PathBuf, u64, AppPalette)>,
     renderer: Option<Renderer>,
     pending: Option<Pending>,
@@ -27,8 +28,16 @@ pub(super) struct Hover {
     seen: bool,
 }
 impl Hover {
+    pub fn set_context(&mut self, context: &super::super::search::PreviewContext) {
+        if self.context.replace(context) {
+            self.clear();
+        }
+    }
     pub fn clear(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            context: self.context.clone(),
+            ..Self::default()
+        };
     }
     pub fn retain(&mut self, visible: &BTreeSet<PathBuf>) {
         if !self.seen
@@ -146,19 +155,22 @@ impl Hover {
         let path = entry.path.clone();
         let revision = entry.revision;
         let palette = palette.clone();
+        let context = self.context.clone();
         let task = Task::start(&LIVE, Duration::from_secs(120), move |token| {
-            if let Some(mut renderer) = renderer {
-                super::super::filesystem::check_revision(&path, revision)?;
-                let frame = backend::render(&mut renderer, camera, size, token)?;
-                super::super::filesystem::check_revision(&path, revision)?;
-                Ok(Completion { renderer, frame })
-            } else {
-                let loaded = backend::load(&path, revision, camera, size, &palette, token)?;
-                Ok(Completion {
-                    renderer: loaded.renderer,
-                    frame: loaded.frame,
-                })
-            }
+            context.read(&path, token, || {
+                if let Some(mut renderer) = renderer {
+                    super::super::filesystem::check_revision(&path, revision)?;
+                    let frame = backend::render(&mut renderer, camera, size, token)?;
+                    super::super::filesystem::check_revision(&path, revision)?;
+                    Ok(Completion { renderer, frame })
+                } else {
+                    let loaded = backend::load(&path, revision, camera, size, &palette, token)?;
+                    Ok(Completion {
+                        renderer: loaded.renderer,
+                        frame: loaded.frame,
+                    })
+                }
+            })
         });
         self.pending = Some(Pending { size, task });
     }

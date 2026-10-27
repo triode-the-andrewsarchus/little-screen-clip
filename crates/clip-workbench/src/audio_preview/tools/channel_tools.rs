@@ -1,6 +1,6 @@
 //! Stereo routing edits and synchronized signal inspection.
 use super::super::*;
-use little_clip_core::audio::build_peak_pyramid;
+use crate::audio_preview::session_edit::build_channel_signals;
 use little_clip_ops::hf_audio::HfSpectrogramConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,103 +71,6 @@ impl ChannelEdit {
     }
 }
 
-#[derive(Debug)]
-struct ChannelEditOutcome {
-    path: PathBuf,
-    source: Arc<FullAudioAnalysis>,
-    displayed: Option<Arc<FullAudioAnalysis>>,
-    derived: FullAudioAnalysis,
-    spectrum: egui::ColorImage,
-    notes: egui::ColorImage,
-}
-
-fn build_channel_signals(source: &FullAudioAnalysis) -> FullAudioAnalysis {
-    let left = &source.ch1_samples;
-    let right = source.ch2_samples.as_deref().unwrap_or(&[]);
-    let sum: Arc<[f32]> = left.iter().zip(right).map(|(l, r)| l + r).collect();
-    let difference: Arc<[f32]> = left.iter().zip(right).map(|(l, r)| l - r).collect();
-    let (s0, s1, s2) = build_peak_pyramid(&sum, source.sample_rate as f32);
-    let (d0, d1, d2) = build_peak_pyramid(&difference, source.sample_rate as f32);
-    FullAudioAnalysis {
-        channels: 2,
-        sample_rate: source.sample_rate,
-        duration_ms: source.duration_ms,
-        total_frames: sum.len(),
-        ch1_samples: sum,
-        ch2_samples: Some(difference),
-        peaks_lvl0_ch1: s0,
-        peaks_lvl1_ch1: s1,
-        peaks_lvl2_ch1: s2,
-        peaks_lvl0_ch2: Some(d0),
-        peaks_lvl1_ch2: Some(d1),
-        peaks_lvl2_ch2: Some(d2),
-        ..Default::default()
-    }
-}
-
-fn prepare_channel_edit(
-    path: &Path,
-    edits: &SessionAudioEdits,
-    cancelled: &AtomicBool,
-) -> Result<ChannelEditOutcome, String> {
-    let source = compute_audio_analysis_progressive_cancellable(path, 1200, cancelled, |_| {})
-        .ok_or_else(|| "Could not analyze edited audio".to_owned())?;
-    let displayed = if *edits == SessionAudioEdits::default() {
-        None
-    } else {
-        Some(Arc::new(
-            compute_audio_analysis_progressive_with_gain_and_edits_cancellable(
-                path,
-                1200,
-                edits.track_gain_db,
-                &edits.regions,
-                cancelled,
-                |_| {},
-            )
-            .ok_or_else(|| "Could not analyze audio effects".to_owned())?,
-        ))
-    };
-    if cancelled.load(Ordering::Acquire) {
-        return Err("Channel edit cancelled".into());
-    }
-    let source = Arc::new(source);
-    let derived = build_channel_signals(displayed.as_deref().unwrap_or(&source));
-    if cancelled.load(Ordering::Acquire) {
-        return Err("Channel edit cancelled".into());
-    }
-    let visual = displayed.as_deref().unwrap_or(&source);
-    let spectrum = egui::ColorImage::from_rgba_unmultiplied(
-        [visual.spectrogram_width, visual.spectrogram_height],
-        &visual.spectrogram_rgba,
-    );
-    let notes = egui::ColorImage::from_rgba_unmultiplied(
-        [visual.note_strip_width, visual.note_strip_height],
-        &visual.note_strip_rgba,
-    );
-    Ok(ChannelEditOutcome {
-        path: path.to_owned(),
-        source,
-        displayed,
-        derived,
-        spectrum,
-        notes,
-    })
-}
-
-struct ChannelEditJob {
-    ticket: JobTicket,
-    cancelled: Arc<AtomicBool>,
-    receiver: Receiver<Result<Result<ChannelEditOutcome, String>, JobError>>,
-    before: AudioEditSnapshot,
-}
-
-impl Drop for ChannelEditJob {
-    fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Release);
-        self.ticket.cancel();
-    }
-}
-
 struct DerivedSignalsJob {
     ticket: JobTicket,
     receiver: Receiver<Result<FullAudioAnalysis, JobError>>,
@@ -185,11 +88,25 @@ pub(in crate::audio_preview) struct ChannelToolsState {
     reverse_difference: bool,
     solo: u64,
     pub(in crate::audio_preview) monitor: Arc<AtomicU64>,
-    edit_job: Option<ChannelEditJob>,
     source_samples: Option<[Arc<[f32]>; 2]>,
     derived: Option<FullAudioAnalysis>,
     derived_job: Option<DerivedSignalsJob>,
     spectra: spectra::ChannelSpectra,
+}
+
+impl ChannelToolsState {
+    pub(in crate::audio_preview) fn install_analysis(
+        &mut self,
+        display: &FullAudioAnalysis,
+        derived: Option<FullAudioAnalysis>,
+    ) {
+        self.source_samples = display
+            .ch2_samples
+            .as_ref()
+            .map(|right| [display.ch1_samples.clone(), right.clone()]);
+        self.derived_job = None;
+        self.derived = derived;
+    }
 }
 
 impl AudioPreviewState {
@@ -357,7 +274,7 @@ impl AudioPreviewState {
                     }
                 }
             });
-        if self.channel_tools.edit_job.is_some() {
+        if self.session_edit_job.is_some() {
             ui.label("Applying channel edit…");
         }
         self.render_channel_selection_controls(ui, palette);
@@ -440,7 +357,7 @@ impl AudioPreviewState {
             SelectionMode::Multi => !self.multi_selections.is_empty(),
         };
         self.is_stereo()
-            && self.channel_tools.edit_job.is_none()
+            && self.session_edit_job.is_none()
             && !self.is_loading_analysis
             && (self.channel_tools.entire_track || selected)
     }
@@ -473,7 +390,7 @@ impl AudioPreviewState {
     }
 
     fn start_channel_edit(&mut self, operation: ChannelEdit) {
-        if !self.is_stereo() || self.channel_tools.edit_job.is_some() {
+        if !self.is_stereo() || self.session_edit_job.is_some() {
             return;
         }
         let regions = if self.channel_tools.entire_track {
@@ -488,107 +405,12 @@ impl AudioPreviewState {
             return;
         }
         let filter = operation.filter(&regions);
-        let before = self.edit_snapshot();
-        let source = self.path.clone();
-        let edits = self.session_audio_edits();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let worker_cancelled = Arc::clone(&cancelled);
-        let (ticket, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
-            let output = std::env::temp_dir()
-                .join("little_clip_audio_sessions")
-                .join(format!("channels-{}.wav", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(output.parent().unwrap()).map_err(|error| error.to_string())?;
-            let mut command = std::process::Command::new("ffmpeg");
-            command
-                .args(["-v", "error", "-y", "-i"])
-                .arg(source)
-                .args(["-af", &filter, "-c:a", "pcm_f32le"])
-                .arg(&output);
-            let result = run_audio_command_cancellable(&mut command, &worker_cancelled);
-            match result {
-                Ok(status) if status.success() => {
-                    let prepared = prepare_channel_edit(&output, &edits, &worker_cancelled);
-                    if prepared.is_err() {
-                        let _ = std::fs::remove_file(&output);
-                    }
-                    prepared
-                }
-                result => {
-                    let _ = std::fs::remove_file(&output);
-                    Err(format!("Channel edit failed: {result:?}"))
-                }
-            }
-        });
-        self.channel_tools.edit_job = Some(ChannelEditJob {
-            ticket,
-            cancelled,
-            receiver,
-            before,
-        });
-    }
-
-    pub(in crate::audio_preview) fn poll_channel_edit(&mut self, ctx: &egui::Context) {
-        let Some(job) = self.channel_tools.edit_job.take() else {
-            return;
-        };
-        let now = ctx.input(|input| input.time);
-        match job.receiver.try_recv() {
-            Ok(Ok(Ok(outcome))) => {
-                if self.edit_snapshot() != job.before {
-                    let _ = std::fs::remove_file(outcome.path);
-                    self.status_toast = Some((
-                        "Channel edit discarded because the session changed".into(),
-                        now,
-                    ));
-                    return;
-                }
-                let current = self.current_time_sec;
-                let playing = self.is_playing;
-                self.stop();
-                self.cancel_session_analysis();
-                self.cancel_edit_analysis();
-                self.path = outcome.path;
-                self.analysis = Some(outcome.source.clone());
-                self.install_audio_textures(ctx, outcome.spectrum, outcome.notes);
-                self.completed_source_analysis = Some(outcome.source);
-                self.edited_waveform = outcome.displayed;
-                self.session_transients = self
-                    .analysis
-                    .as_ref()
-                    .map(|analysis| analysis.transients.clone().into());
-                self.is_loading_analysis = false;
-                let display = self
-                    .edited_waveform
-                    .as_ref()
-                    .or(self.analysis.as_ref())
-                    .unwrap();
-                self.channel_tools.source_samples = display
-                    .ch2_samples
-                    .as_ref()
-                    .map(|right| [display.ch1_samples.clone(), right.clone()]);
-                self.channel_tools.derived_job = None;
-                self.channel_tools.derived = Some(outcome.derived);
-                self.edit_analysis_observed = self.session_audio_edits();
-                self.edit_analysis_inflight = self.edit_analysis_observed.clone();
-                self.edit_analysis_displayed = self.edit_analysis_observed.clone();
-                self.record_edit(job.before.clone());
-                self.current_time_sec = current;
-                if playing {
-                    self.play();
-                }
-                self.status_toast = Some(("Channel edit applied; undo with Ctrl+Z".into(), now));
-            }
-            Err(TryRecvError::Empty) => {
-                self.channel_tools.edit_job = Some(job);
-                ctx.request_repaint_after(Duration::from_millis(30));
-            }
-            result => {
-                self.status_toast = Some((
-                    format!("Could not apply channel edit: {result:?}").into(),
-                    now,
-                ))
-            }
-        }
+        self.start_session_edit(
+            filter,
+            export::AudioRenderMode::Session,
+            self.session_audio_edits(),
+            session_edit::SessionEditAction::Channels,
+        );
     }
 
     fn poll_derived_signals(&mut self, ctx: &egui::Context) {

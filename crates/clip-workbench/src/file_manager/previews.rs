@@ -22,6 +22,7 @@ pub(super) fn strip_slots(count: usize, capacity: usize) -> Vec<Option<usize>> {
 }
 #[derive(Default)]
 pub(super) struct EntryPreviews {
+    context: super::search::PreviewContext,
     cache: Previews,
     audio_spectrum: bool,
     identities: BTreeMap<std::path::PathBuf, (u64, uuid::Uuid)>,
@@ -36,6 +37,24 @@ pub(super) struct EntryPreviews {
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
 impl EntryPreviews {
+    pub fn set_context(&mut self, context: &super::search::PreviewContext) {
+        if self.context.replace(context) {
+            self.retire();
+            self.text_status.clear();
+            self.pdf_pages.context = context.clone();
+            self.image_hover.context = context.clone();
+            self.scenes.set_context(context);
+            self.materials.context = context.clone();
+        }
+    }
+    pub(super) fn cached_dhash(&self, entry: &Entry) -> Option<u64> {
+        let (revision, id) = self.identities.get(&entry.path)?;
+        if *revision != entry.revision {
+            return None;
+        }
+        let ready = self.cache.get(*id)?;
+        super::image_strip::parse_dhash(&ready.data.photo.as_ref()?.perceptual)
+    }
     pub fn audio_spectrum(&self) -> bool {
         self.audio_spectrum
     }
@@ -221,7 +240,7 @@ impl EntryPreviews {
         if self.cache.needs(id) {
             self.cache.request(
                 id,
-                if entry.system.is_some() {
+                (if entry.system.is_some() {
                     Source::System(entry.path.clone())
                 } else if entry.regular_file && entry.is_photo() {
                     Source::Photo {
@@ -247,7 +266,8 @@ impl EntryPreviews {
                         paths: vec![entry.path.clone()],
                         cut: false,
                     })
-                },
+                })
+                .checked(&entry.path, &self.context),
             );
         }
         self.cache.get(id)
@@ -518,7 +538,11 @@ impl EntryPreviews {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Loading text preview…",
+                if self.cache.get(id).is_some() {
+                    "Text preview unavailable"
+                } else {
+                    "Loading text preview…"
+                },
                 egui::FontId::proportional(14.0),
                 ui.visuals().weak_text_color(),
             );
@@ -605,7 +629,8 @@ impl EntryPreviews {
                     revision: entry.revision,
                     edge,
                     orientation,
-                },
+                }
+                .checked(&entry.path, &self.context),
             );
             if started {
                 *previous = edge;
@@ -636,7 +661,8 @@ impl EntryPreviews {
                 Source::Payload(Payload::Files {
                     paths: vec![entry.path.clone()],
                     cut: false,
-                }),
+                })
+                .checked(&entry.path, &self.context),
             );
         }
         if let Some(ready) = self.cache.get(id) {
@@ -774,6 +800,60 @@ mod tests {
         .unwrap();
         assert_eq!(directory.entries.len(), 1, "fixture must contain one file");
         directory.entries.pop().unwrap()
+    }
+
+    fn await_listing<'a>(
+        previews: &'a mut EntryPreviews,
+        ctx: &egui::Context,
+        entry: &Entry,
+    ) -> &'a super::super::shelf::preview::Ready {
+        previews.listing(entry);
+        wait_for_preview(|| {
+            previews.poll(ctx);
+            previews.listing(entry).is_some()
+        });
+        previews.listing(entry).unwrap()
+    }
+
+    #[test]
+    fn result_context_retires_old_previews_and_survives_preview_retirement() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("note.txt"), "ordinary content").unwrap();
+        let entry = single_entry(folder.path());
+        let ctx = egui::Context::default();
+        let mut previews = EntryPreviews::default();
+        assert!(
+            await_listing(&mut previews, &ctx, &entry)
+                .data
+                .document
+                .is_some()
+        );
+        let context = super::super::search::PreviewContext::empty_results();
+        previews.set_context(&context);
+        assert!(previews.listing(&entry).is_none());
+        let rejected = await_listing(&mut previews, &ctx, &entry);
+        assert!(rejected.data.document.is_none());
+        assert!(
+            rejected
+                .data
+                .detail
+                .contains("outside the published search")
+        );
+        // A view/spectrum change must not silently discard source expectations.
+        previews.set_audio_spectrum(true);
+        assert!(
+            await_listing(&mut previews, &ctx, &entry)
+                .data
+                .document
+                .is_none()
+        );
+        previews.set_context(&super::super::search::PreviewContext::default());
+        assert!(
+            await_listing(&mut previews, &ctx, &entry)
+                .data
+                .document
+                .is_some()
+        );
     }
 
     #[test]

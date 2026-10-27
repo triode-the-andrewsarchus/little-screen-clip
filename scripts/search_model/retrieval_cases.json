@@ -1,0 +1,580 @@
+{
+  "version": 2,
+  "purpose": "Frozen synthetic cross-modal retrieval fixture; not a representative public benchmark or universal accuracy claim. Opaque filenames prevent name-match leakage. Expected targets and splits are fixed before threshold calibration.",
+  "positives": [
+    {
+      "id": "text-01",
+      "kind": "text",
+      "body": "A bicycle inner tube loses air because a thorn has pierced the rubber. Remove the wheel, find the puncture with soapy water, roughen the surface and glue on a patch before reinflating.",
+      "query": "instructions for patching a punctured bicycle tire",
+      "split": "calibration"
+    },
+    {
+      "id": "text-02",
+      "kind": "text",
+      "body": "Maintain the sourdough starter by discarding half and feeding equal weights of fresh flour and water every morning. Bubbles and a pleasantly sour smell indicate an active culture.",
+      "query": "how to feed and maintain a sourdough starter",
+      "split": "held-out"
+    },
+    {
+      "id": "text-03",
+      "kind": "text",
+      "body": "An orchid with soft brown roots has been overwatered. Trim rotten roots with clean scissors and repot in coarse bark. Allow the pot to drain fully between waterings.",
+      "query": "help for an orchid suffering from rotten roots",
+      "split": "calibration"
+    },
+    {
+      "id": "text-04",
+      "kind": "text",
+      "body": "This knitting pattern makes a ribbed wool scarf. Cast on forty stitches, then repeat knit two and purl two across every row. Bind off loosely when the scarf is long enough.",
+      "query": "a knitting pattern for a ribbed scarf",
+      "split": "held-out"
+    },
+    {
+      "id": "text-05",
+      "kind": "text",
+      "body": "For a meteor shower, observe after midnight from a dark rural site. Lie back and allow your eyes to adapt. The annual Perseids appear to radiate from the constellation Perseus.",
+      "query": "advice for watching the Perseid meteor shower",
+      "split": "calibration"
+    },
+    {
+      "id": "text-06",
+      "kind": "text",
+      "body": "The hiking route follows a ridge to a stone summit cairn. Carry water and waterproof clothing. Turn back if thunder approaches; exposed ridges are unsafe during lightning.",
+      "query": "a mountain hiking route with thunderstorm safety guidance",
+      "split": "held-out"
+    },
+    {
+      "id": "text-07",
+      "kind": "text",
+      "body": "To restore the wooden table, remove loose varnish with sandpaper. Wipe away dust, apply a thin wood stain and finish with several coats of protective clear oil.",
+      "query": "steps for refinishing an old wooden table",
+      "split": "calibration"
+    },
+    {
+      "id": "text-08",
+      "kind": "text",
+      "body": "The compost heap needs a mixture of dry leaves and vegetable scraps. Turn it regularly to supply oxygen. Do not add meat or cooking oil, which can attract pests.",
+      "query": "guidance on balancing and turning a compost heap",
+      "split": "held-out"
+    },
+    {
+      "id": "text-09",
+      "kind": "text",
+      "body": "The camera exposure combines shutter speed, lens aperture and sensor sensitivity. A fast shutter freezes motion, while a wide aperture blurs the background in portraits.",
+      "query": "an explanation of aperture shutter speed and photographic exposure",
+      "split": "calibration"
+    },
+    {
+      "id": "text-10",
+      "kind": "text",
+      "body": "A hand-drawn map shows the bus interchange beside the library. Route seven departs every twenty minutes and connects the railway station to the public swimming pool.",
+      "query": "bus connections between the train station and swimming pool",
+      "split": "held-out"
+    },
+    {
+      "id": "text-11",
+      "kind": "text",
+      "body": "The pottery workshop uses a foot-powered wheel. Center a ball of wet clay, press an opening into the middle, then lift the walls evenly to form a bowl.",
+      "query": "how to throw a clay bowl on a pottery wheel",
+      "split": "calibration"
+    },
+    {
+      "id": "text-12",
+      "kind": "text",
+      "body": "The stormwater study measures rain flowing off paved roads. A shallow garden of native plants captures runoff and allows water to soak into the soil instead of flooding drains.",
+      "query": "a study of rain gardens reducing runoff from paved streets",
+      "split": "held-out"
+    },
+    {
+      "id": "pdf-01",
+      "kind": "pdf",
+      "body": "The neighborhood tool library lends drills, saws and ladders. Members sign out equipment for seven days and must return each item clean with all accessories. The annual membership costs twenty dollars. Reservations can be made at the community center desk.",
+      "query": "rules for borrowing tools from a community lending library",
+      "split": "calibration"
+    },
+    {
+      "id": "pdf-02",
+      "kind": "pdf",
+      "body": "The theater rehearsal schedule lists a full cast read-through on Monday evening, movement practice on Wednesday and a dress rehearsal on Friday. Performers must bring scripts and wear comfortable shoes. The public opening is Saturday at seven oclock.",
+      "query": "a theater cast rehearsal timetable",
+      "split": "held-out"
+    },
+    {
+      "id": "pdf-03",
+      "kind": "pdf",
+      "body": "The museum catalog describes a collection of glazed ceramic vessels recovered from a coastal trading settlement. Blue painted decoration and makers marks help establish the period of manufacture. The artifacts illustrate exchange between ports along the Mediterranean.",
+      "query": "a museum catalog of ancient Mediterranean pottery",
+      "split": "calibration"
+    },
+    {
+      "id": "pdf-04",
+      "kind": "pdf",
+      "body": "The annual bird census records swallows, herons and kingfishers along the river. Volunteers observed nests from marked trails and avoided disturbing breeding sites. Comparing spring observations with earlier surveys shows a gradual recovery of wetland species.",
+      "query": "results of a river bird population survey",
+      "split": "held-out"
+    },
+    {
+      "id": "pdf-05",
+      "kind": "pdf",
+      "body": "This invoice covers replacement windows installed at the workshop. Materials cost 840 dollars and labor costs 360 dollars. The amount due is 1200 dollars, payable within thirty days. The document lists the contractor, customer reference and installation date.",
+      "query": "an invoice for installing replacement windows",
+      "split": "calibration"
+    },
+    {
+      "id": "pdf-06",
+      "kind": "pdf",
+      "body": "The rehearsal room booking agreement permits acoustic instruments until nine in the evening. Amplified practice requires advance approval. Users must leave exits clear, put chairs away and report damaged equipment. A refundable key deposit is collected at reception.",
+      "query": "conditions for renting a music rehearsal room",
+      "split": "held-out"
+    },
+    {
+      "id": "pdf-07",
+      "kind": "pdf",
+      "body": "The emergency exercise evaluates evacuation from a warehouse after a simulated smoke alarm. Wardens checked each aisle and assembled staff at the marked meeting point. The report recommends brighter exit signs and more frequent training for temporary workers.",
+      "query": "a warehouse fire evacuation exercise report",
+      "split": "calibration"
+    },
+    {
+      "id": "pdf-08",
+      "kind": "pdf",
+      "body": "The laboratory log compares three water filter cartridges. Samples were tested for turbidity before and after filtration. The activated carbon cartridge removed odors, while the ceramic cartridge trapped the finest suspended particles. Each trial used the same volume of water.",
+      "query": "laboratory comparisons of water filtration cartridges",
+      "split": "held-out"
+    },
+    {
+      "id": "pdf-09",
+      "kind": "pdf",
+      "body": "The catalog lists heritage apple varieties suitable for a small orchard. Early and late flowering trees are paired to provide pollination. Each entry describes fruit flavor, harvest month, storage life and resistance to common fungal diseases.",
+      "query": "a catalog for choosing apple trees for an orchard",
+      "split": "calibration"
+    },
+    {
+      "id": "pdf-10",
+      "kind": "pdf",
+      "body": "The minutes of the chess club meeting record approval of new clocks and folding tables. Members agreed to hold a junior tournament during the school holiday. The treasurer will purchase score sheets, and volunteers will supervise the beginners practice sessions.",
+      "query": "chess club meeting minutes about a junior tournament",
+      "split": "held-out"
+    },
+    {
+      "id": "pdf-11",
+      "kind": "pdf",
+      "body": "The quilt exhibition brochure describes patchwork textiles sewn from reused cotton garments. Geometric blocks repeat across each panel. Notes explain hand stitching, natural dyes and the family histories preserved through the fabric. Visitors may attend a demonstration of traditional binding.",
+      "query": "an exhibition brochure about patchwork quilts",
+      "split": "calibration"
+    },
+    {
+      "id": "pdf-12",
+      "kind": "pdf",
+      "body": "The accessibility audit examines the town hall entrance. A steep step prevents wheelchair access, and the bell is mounted too high. Recommendations include a gently sloped ramp, lower door controls and clear high-contrast signage for visitors.",
+      "query": "an accessibility report recommending a wheelchair ramp",
+      "split": "held-out"
+    },
+    {
+      "id": "audio-01",
+      "kind": "audio",
+      "body": "Welcome to the ferry. The crossing takes forty minutes. Keep life jackets under your seats and wait for the crew before disembarking.",
+      "query": "a spoken announcement to ferry passengers",
+      "split": "calibration"
+    },
+    {
+      "id": "audio-02",
+      "kind": "audio",
+      "body": "For this breathing exercise, sit comfortably, inhale slowly through your nose and exhale gently. Keep your shoulders relaxed and repeat at a steady pace.",
+      "query": "a guided slow breathing exercise",
+      "split": "held-out"
+    },
+    {
+      "id": "audio-03",
+      "kind": "audio",
+      "body": "Today we explain how honeybees communicate. A waggle dance tells other workers the direction and distance of a rich source of nectar.",
+      "query": "a talk explaining the honeybee waggle dance",
+      "split": "calibration"
+    },
+    {
+      "id": "audio-04",
+      "kind": "audio",
+      "body": "The match is underway. The striker passes to the winger, who crosses the ball into the penalty area. A header sends it into the goal.",
+      "query": "a commentator describing a soccer goal",
+      "split": "held-out"
+    },
+    {
+      "id": "audio-05",
+      "kind": "audio",
+      "body": "To assemble the flat pack bookcase, attach the side panels to the base with the supplied screws. Slide the back panel into its groove before fitting the shelves.",
+      "query": "spoken instructions for assembling a flat pack bookcase",
+      "split": "calibration"
+    },
+    {
+      "id": "audio-06",
+      "kind": "audio",
+      "body": "The weather forecast predicts heavy snow overnight. Temperatures will stay below freezing tomorrow. Drivers should prepare for icy roads and limited visibility.",
+      "query": "a snowy weather forecast warning of icy roads",
+      "split": "held-out"
+    },
+    {
+      "id": "audio-07",
+      "kind": "audio",
+      "body": "The next stop on our walking tour is the old lighthouse. It once guided fishing vessels through the narrow harbor entrance during fog and storms.",
+      "query": "a tour guide describing a historic harbor lighthouse",
+      "split": "calibration"
+    },
+    {
+      "id": "audio-08",
+      "kind": "audio",
+      "body": "Please check your boarding pass. The flight to Lisbon is now boarding at gate twelve. Passengers needing assistance may board first.",
+      "query": "an airport boarding announcement for a flight to Lisbon",
+      "split": "held-out"
+    },
+    {
+      "id": "audio-09",
+      "kind": "audio",
+      "body": "In this music lesson, we practice a major scale slowly. Start on the tonic, play each ascending note evenly, and then return to the starting pitch.",
+      "query": "a music teacher explaining how to practice a major scale",
+      "split": "calibration"
+    },
+    {
+      "id": "audio-10",
+      "kind": "audio",
+      "body": "Our interview guest repairs mechanical watches. She describes cleaning tiny gears, replacing worn springs and adjusting the escapement so the watch keeps accurate time.",
+      "query": "an interview with a mechanical watch repairer",
+      "split": "held-out"
+    },
+    {
+      "id": "audio-11",
+      "kind": "audio",
+      "body": "The public library invites children to story time on Tuesday morning. A librarian will read picture books, followed by a short craft activity. Parents and carers are welcome.",
+      "query": "a library invitation to childrens story time",
+      "split": "calibration"
+    },
+    {
+      "id": "audio-12",
+      "kind": "audio",
+      "body": "This lecture describes volcanic eruptions. Pressure builds as dissolved gases expand in rising magma. Lava flows and ash deposits reveal how past eruptions changed the landscape.",
+      "query": "a lecture about magma gases and volcanic eruptions",
+      "split": "held-out"
+    },
+    {
+      "id": "image-01",
+      "kind": "image",
+      "scene": "red_triangle",
+      "query": "a single large red triangle on a white background",
+      "split": "calibration"
+    },
+    {
+      "id": "image-02",
+      "kind": "image",
+      "scene": "blue_circles",
+      "query": "three blue circles arranged side by side",
+      "split": "held-out"
+    },
+    {
+      "id": "image-03",
+      "kind": "image",
+      "scene": "yellow_star",
+      "query": "a yellow five pointed star",
+      "split": "calibration"
+    },
+    {
+      "id": "image-04",
+      "kind": "image",
+      "scene": "checkerboard",
+      "query": "a green and white checkerboard",
+      "split": "held-out"
+    },
+    {
+      "id": "image-05",
+      "kind": "image",
+      "scene": "keyboard",
+      "query": "a piano keyboard with black and white keys",
+      "split": "calibration"
+    },
+    {
+      "id": "image-06",
+      "kind": "image",
+      "scene": "basketball",
+      "query": "an orange basketball with dark curved markings",
+      "split": "held-out"
+    },
+    {
+      "id": "image-07",
+      "kind": "image",
+      "scene": "chair",
+      "query": "a simple brown chair with a backrest",
+      "split": "calibration"
+    },
+    {
+      "id": "image-08",
+      "kind": "image",
+      "scene": "umbrella",
+      "query": "an open purple umbrella with a hooked handle",
+      "split": "held-out"
+    },
+    {
+      "id": "image-09",
+      "kind": "image",
+      "scene": "snowman",
+      "query": "a snowman with a carrot nose and a black hat",
+      "split": "calibration"
+    },
+    {
+      "id": "image-10",
+      "kind": "image",
+      "scene": "house",
+      "query": "a house with a red roof and a blue door",
+      "split": "held-out"
+    },
+    {
+      "id": "image-11",
+      "kind": "image",
+      "scene": "sailboat",
+      "query": "a sailboat with triangular sails above blue water",
+      "split": "calibration"
+    },
+    {
+      "id": "image-12",
+      "kind": "image",
+      "scene": "chart",
+      "query": "a line chart rising from left to right",
+      "split": "held-out"
+    },
+    {
+      "id": "video-01",
+      "kind": "video",
+      "scene": "trafficlight",
+      "query": "a traffic signal with red yellow and green lights",
+      "split": "calibration"
+    },
+    {
+      "id": "video-02",
+      "kind": "video",
+      "scene": "soccerball",
+      "query": "a white soccer ball with black patches",
+      "split": "held-out"
+    },
+    {
+      "id": "video-03",
+      "kind": "video",
+      "scene": "tree",
+      "query": "a green tree with a brown trunk",
+      "split": "calibration"
+    },
+    {
+      "id": "video-04",
+      "kind": "video",
+      "scene": "fish",
+      "query": "an orange fish with a triangular tail",
+      "split": "held-out"
+    },
+    {
+      "id": "video-05",
+      "kind": "video",
+      "scene": "flower",
+      "query": "a pink flower with a yellow center",
+      "split": "calibration"
+    },
+    {
+      "id": "video-06",
+      "kind": "video",
+      "scene": "train",
+      "query": "a blue locomotive with wheels and a chimney",
+      "split": "held-out"
+    },
+    {
+      "id": "video-07",
+      "kind": "video",
+      "scene": "airplane",
+      "query": "an airplane viewed from above with broad wings",
+      "split": "calibration"
+    },
+    {
+      "id": "video-08",
+      "kind": "video",
+      "scene": "coffee",
+      "query": "a white coffee cup containing dark brown coffee",
+      "split": "held-out"
+    },
+    {
+      "id": "video-09",
+      "kind": "video",
+      "scene": "padlock",
+      "query": "a closed gold padlock with a metal shackle",
+      "split": "calibration"
+    },
+    {
+      "id": "video-10",
+      "kind": "video",
+      "scene": "mountains",
+      "query": "a mountain landscape with snowy peaks and blue sky",
+      "split": "held-out"
+    },
+    {
+      "id": "video-11",
+      "kind": "video",
+      "scene": "clock",
+      "query": "a round analog clock with two black hands",
+      "split": "calibration"
+    },
+    {
+      "id": "video-12",
+      "kind": "video",
+      "scene": "guitar",
+      "query": "a brown acoustic guitar with a long neck and strings",
+      "split": "held-out"
+    }
+  ],
+  "negatives": [
+    {
+      "id": "negative-01",
+      "query": "evidence of dark matter from gravitational lensing",
+      "split": "calibration"
+    },
+    {
+      "id": "negative-02",
+      "query": "a manual for repairing a nuclear submarine reactor",
+      "split": "held-out"
+    },
+    {
+      "id": "negative-03",
+      "query": "an analysis of Sanskrit verb conjugation",
+      "split": "calibration"
+    },
+    {
+      "id": "negative-04",
+      "query": "deep sea hydrothermal vent chemistry",
+      "split": "held-out"
+    },
+    {
+      "id": "negative-05",
+      "query": "a tutorial on solving a Rubiks cube",
+      "split": "calibration"
+    },
+    {
+      "id": "negative-06",
+      "query": "a contract for satellite launch insurance",
+      "split": "held-out"
+    },
+    {
+      "id": "negative-07",
+      "query": "a study of microbial life in Antarctic ice cores",
+      "split": "calibration"
+    },
+    {
+      "id": "negative-08",
+      "query": "notes on medieval Icelandic inheritance law",
+      "split": "held-out"
+    },
+    {
+      "id": "negative-09",
+      "query": "a tutorial for producing holographic laser interference",
+      "split": "calibration"
+    },
+    {
+      "id": "negative-10",
+      "query": "a recipe for fermented soybean paste",
+      "split": "held-out"
+    },
+    {
+      "id": "negative-11",
+      "query": "instructions for servicing a diesel fuel injector",
+      "split": "calibration"
+    },
+    {
+      "id": "negative-12",
+      "query": "a guide to identifying tropical venomous snakes",
+      "split": "held-out"
+    },
+    {
+      "id": "negative-13",
+      "query": "measurements from a semiconductor lithography process",
+      "split": "calibration"
+    },
+    {
+      "id": "negative-14",
+      "query": "a description of competitive fencing scoring rules",
+      "split": "held-out"
+    },
+    {
+      "id": "negative-15",
+      "query": "an inventory of military camouflage uniforms",
+      "split": "calibration"
+    },
+    {
+      "id": "negative-16",
+      "query": "a diagram showing the anatomy of a human kidney",
+      "split": "held-out"
+    },
+    {
+      "id": "negative-17",
+      "query": "an analysis of cryptocurrency proof of stake consensus",
+      "split": "calibration"
+    },
+    {
+      "id": "negative-18",
+      "query": "a report about the migration of monarch butterflies",
+      "split": "held-out"
+    },
+    {
+      "id": "negative-19",
+      "query": "instructions for using a scuba diving decompression table",
+      "split": "calibration"
+    },
+    {
+      "id": "negative-20",
+      "query": "a lesson on calculating a matrix determinant",
+      "split": "held-out"
+    }
+  ],
+  "exact_queries": [
+    {
+      "query": "item_000.txt",
+      "file_ordinal": 0,
+      "id": "exact-01"
+    },
+    {
+      "query": "item_001.txt",
+      "file_ordinal": 1,
+      "id": "exact-02"
+    },
+    {
+      "query": "item_002.txt",
+      "file_ordinal": 2,
+      "id": "exact-03"
+    },
+    {
+      "query": "item_003.txt",
+      "file_ordinal": 3,
+      "id": "exact-04"
+    },
+    {
+      "query": "item_004.txt",
+      "file_ordinal": 4,
+      "id": "exact-05"
+    },
+    {
+      "query": "item_005.txt",
+      "file_ordinal": 5,
+      "id": "exact-06"
+    },
+    {
+      "query": "item_006.txt",
+      "file_ordinal": 6,
+      "id": "exact-07"
+    },
+    {
+      "query": "item_007.txt",
+      "file_ordinal": 7,
+      "id": "exact-08"
+    },
+    {
+      "query": "item_008.txt",
+      "file_ordinal": 8,
+      "id": "exact-09"
+    },
+    {
+      "query": "item_009.txt",
+      "file_ordinal": 9,
+      "id": "exact-10"
+    }
+  ]
+}

@@ -10,6 +10,8 @@ impl AudioPreviewState {
     pub(super) fn edit_snapshot(&self) -> AudioEditSnapshot {
         AudioEditSnapshot {
             path: self.path.clone(),
+            read_check: self.read_check.clone(),
+            file_source: self.file_source.clone(),
             duration_sec: self.duration_sec,
             track_gain_db: self.track_gain_db,
             selection_mode: self.selection_mode,
@@ -80,11 +82,15 @@ impl AudioPreviewState {
     }
 
     pub(super) fn restore_edit(&mut self, snapshot: AudioEditSnapshot) {
-        let session_changed = self.path != snapshot.path;
+        let session_changed = self.path != snapshot.path
+            || self.read_check != snapshot.read_check
+            || self.file_source != snapshot.file_source;
         if session_changed {
             self.stop();
         }
         self.path = snapshot.path;
+        self.read_check = snapshot.read_check;
+        self.file_source = snapshot.file_source;
         self.duration_sec = snapshot.duration_sec;
         self.track_gain_db = snapshot.track_gain_db;
         self.selection_mode = snapshot.selection_mode;
@@ -884,79 +890,41 @@ impl AudioPreviewState {
             self.status_toast = Some(("Hover/select a slice before deleting it".into(), now));
             return;
         };
-        let start = start.min(end).max(0.0);
-        let end = end.max(start).min(self.duration_sec);
+        if self.session_edit_job.is_some() {
+            self.status_toast = Some(("Wait for the current audio edit to finish".into(), now));
+            return;
+        }
+        if !start.is_finite() || !end.is_finite() || !self.duration_sec.is_finite() {
+            self.status_toast = Some(("Invalid audio selection".into(), now));
+            return;
+        }
+        let (start, end) = AudioSelectionModel::normalize((start, end));
+        let start = start.clamp(0.0, self.duration_sec.max(0.0));
+        let end = end.clamp(0.0, self.duration_sec.max(0.0));
         if end - start < 0.001 || end >= self.duration_sec && start <= 0.0 {
-            self.status_toast = Some(("Cannot delete the entire session".into(), now));
+            self.status_toast = Some((
+                "Cannot delete an empty range or the entire session".into(),
+                now,
+            ));
             return;
         }
-        let out = std::env::temp_dir()
-            .join("little_clip_audio_sessions")
-            .join(format!("edited-{}.wav", uuid::Uuid::new_v4()));
-        if let Some(parent) = out.parent() {
-            if let Err(err) = std::fs::create_dir_all(parent) {
-                tracing::warn!(
-                    "Failed to create audio session directory {}: {err}",
-                    parent.display()
-                );
-                self.status_toast = Some(("Failed to create session directory".into(), now));
-                return;
-            }
-        }
-        let mut filters = Vec::new();
-        let mut labels = Vec::new();
-        if start > 0.001 {
-            filters.push(format!("[0:a]atrim=0:{start:.6},asetpts=PTS-STARTPTS[a0]"));
-            labels.push("[a0]");
-        }
-        if end < self.duration_sec - 0.001 {
-            filters.push(format!("[0:a]atrim={end:.6},asetpts=PTS-STARTPTS[a1]"));
-            labels.push("[a1]");
-        }
-        let filter = if labels.len() == 2 {
-            format!(
-                "{};{}concat=n=2:v=0:a=1[out]",
-                filters.join(";"),
-                labels.join("")
-            )
-        } else {
-            format!("{};{}anull[out]", filters.join(";"), labels[0])
-        };
-        let ok = std::process::Command::new("ffmpeg")
-            .args(["-y", "-i"])
-            .arg(&self.path)
-            .args([
-                "-filter_complex",
-                &filter,
-                "-map",
-                "[out]",
-                "-c:a",
-                "pcm_s16le",
-            ])
-            .arg(&out)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !ok || !out.is_file() {
-            self.status_toast = Some(("Failed to create edited audio session".into(), now));
-            return;
-        }
-        let before = self.edit_snapshot();
-        self.stop();
-        self.path = out;
-        self.duration_sec = (self.duration_sec - (end - start)).max(0.0);
-        self.view_start_sec = 0.0;
-        self.view_duration_sec = self.duration_sec;
-        self.current_time_sec = start.min(self.duration_sec);
-        self.selection = None;
-        self.track_gain_db = 0.0;
-        self.clear_multi_regions();
-        self.clear_single_region_effects();
-        self.restart_session_analysis();
-        self.record_edit(before);
-        self.status_toast = Some((
-            format!("Deleted {:.2}s; waveform recomputing", end - start).into(),
-            now,
-        ));
+        let prefix = self.session_crossfade_filter_complex().or_else(|| {
+            self.session_edit_filter().map(|filter| {
+                (
+                    format!("[0:a]{filter}[delete_input]"),
+                    "[delete_input]".into(),
+                )
+            })
+        });
+        let filter = session_edit::deletion_filter(start, end, self.duration_sec, prefix);
+        self.start_session_edit(
+            filter,
+            export::AudioRenderMode::SessionGraph,
+            SessionAudioEdits::default(),
+            session_edit::SessionEditAction::Delete {
+                start,
+                deleted: end - start,
+            },
+        );
     }
 }

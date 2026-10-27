@@ -117,7 +117,7 @@ impl Gallery {
         for index in order {
             let chunk = &mut self.chunks[index];
             if chunk.metadata.is_none() && chunk.probe.is_none() && probes < workers() {
-                chunk.probe = Some(start_probe(chunk, &self.metadata_cache));
+                chunk.probe = Some(start_probe(chunk, &self.metadata_cache, &self.context));
                 probes += 1;
             }
             if chunk.metadata.is_some()
@@ -131,7 +131,12 @@ impl Gallery {
         }
     }
 }
-fn start_probe(chunk: &Chunk, cache: &BTreeMap<Key, Metadata>) -> Pending<Vec<Metadata>> {
+fn start_probe(
+    chunk: &Chunk,
+    cache: &BTreeMap<Key, Metadata>,
+    context: &super::super::search::PreviewContext,
+) -> Pending<Vec<Metadata>> {
+    let context = context.clone();
     let keys = chunk.keys.clone();
     let known: Vec<_> = keys.iter().map(|key| cache.get(key).copied()).collect();
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -147,7 +152,13 @@ fn start_probe(chunk: &Chunk, cache: &BTreeMap<Key, Metadata>) -> Pending<Vec<Me
                     cached
                         .or_else(|| {
                             key.photo
-                                .then(|| metadata::probe(&key.path, key.revision).ok())
+                                .then(|| {
+                                    context
+                                        .read(&key.path, &token, || {
+                                            metadata::probe(&key.path, key.revision)
+                                        })
+                                        .ok()
+                                })
                                 .flatten()
                         })
                         .unwrap_or(Metadata {
