@@ -109,6 +109,19 @@ fn raw_preview(
     orientation: u8,
     cancelled: &AtomicBool,
 ) -> Option<ImageThumbnail> {
+    if cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
+    if let Ok((bytes, preview_orientation)) =
+        little_clip_core::raw_image::extract_raw_preview_bytes(path, edge)
+    {
+        let orient = if preview_orientation > 1 {
+            preview_orientation
+        } else {
+            orientation
+        };
+        return raster(&bytes, "image/jpeg", edge, orient, cancelled);
+    }
     let mut largest = None;
     for tag in ["-ThumbnailImage", "-PreviewImage", "-JpgFromRaw"] {
         if cancelled.load(Ordering::Relaxed) {

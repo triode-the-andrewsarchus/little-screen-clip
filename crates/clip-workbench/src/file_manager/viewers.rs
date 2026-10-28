@@ -421,7 +421,9 @@ enum Kind {
 fn kind(path: &Path) -> Kind {
     if super::text_strip::is_typescript_source(path) {
         Kind::Text
-    } else if little_clip_core::item::is_image_path(path) {
+    } else if little_clip_core::item::is_image_path(path)
+        || little_clip_core::raw_image::is_raw_image_path(path)
+    {
         Kind::Image
     } else if little_clip_core::audio::is_audio_path(path) {
         Kind::Audio
@@ -465,7 +467,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
     }
     let kind = kind(path);
     let limit = match kind {
-        Kind::Image => 64 * 1024 * 1024,
+        Kind::Image => 128 * 1024 * 1024,
         Kind::Sheet | Kind::Midi => 32 * 1024 * 1024,
         _ => u64::MAX,
     };
@@ -478,7 +480,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
     match kind {
         Kind::Image => {
             let source = FileSource::capture(path)?;
-            let decoded = DecodedImageData::from_path_bounded(path, 64 * 1024 * 1024)?;
+            let decoded = DecodedImageData::from_path_bounded(path, 128 * 1024 * 1024)?;
             if FileSource::capture(path)? != source {
                 return Err("Source changed while opening; open it again.".into());
             }

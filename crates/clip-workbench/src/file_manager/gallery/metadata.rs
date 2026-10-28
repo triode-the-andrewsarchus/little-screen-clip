@@ -125,6 +125,13 @@ fn header_orientation(reader: &mut BufReader<std::fs::File>, mime: &str) -> u8 {
 }
 
 fn raw_metadata(path: &Path) -> Result<Metadata, String> {
+    if let Ok(meta) = little_clip_core::raw_image::read_raw_metadata(path) {
+        return Ok(Metadata {
+            width: meta.width,
+            height: meta.height,
+            orientation: meta.orientation,
+        });
+    }
     let output = little_clip_core::process::CommandRequest::new("exiftool")
         .args([
             "-j",

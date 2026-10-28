@@ -303,6 +303,10 @@ impl DecodedImageData {
                 .as_ref()
                 .and_then(|path| path.extension())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"));
+        let is_raw = path
+            .as_ref()
+            .is_some_and(|p| little_clip_core::raw_image::is_raw_image_path(p))
+            || little_clip_core::raw_image::is_raw_image_bytes(&bytes);
         let rgba = if is_svg {
             if let Some(png_bytes) = render_svg_to_png(&bytes) {
                 image::load_from_memory(&png_bytes)
@@ -311,6 +315,15 @@ impl DecodedImageData {
             } else {
                 return Err("Failed to rasterize SVG via rsvg-convert. Ensure librsvg / rsvg-convert is installed.".to_string());
             }
+        } else if is_raw {
+            if let Some(path_ref) = path.as_deref() {
+                little_clip_core::raw_image::decode_raw_image(path_ref)
+                    .or_else(|_| little_clip_core::raw_image::decode_raw_image_from_bytes(&bytes))
+                    .map_err(|error| format!("Failed to decode RAW image: {error}"))?
+            } else {
+                little_clip_core::raw_image::decode_raw_image_from_bytes(&bytes)
+                    .map_err(|error| format!("Failed to decode RAW image: {error}"))?
+            }
         } else {
             little_clip_core::item::image_reader(&bytes, Some(&mime))
                 .and_then(|reader| reader.decode())
@@ -318,7 +331,28 @@ impl DecodedImageData {
                 .to_rgba8()
         };
 
-        let metadata = extract_image_metadata(&bytes);
+        let mut metadata = extract_image_metadata(&bytes);
+        if is_raw && !metadata.has_any_metadata() {
+            if let Some(details) = path
+                .as_deref()
+                .and_then(little_clip_core::raw_image::read_raw_details_from_path)
+                .or_else(|| little_clip_core::raw_image::read_raw_details_from_bytes(&bytes))
+            {
+                metadata.make = details.make;
+                metadata.model = details.model;
+                metadata.lens_model = details.lens_model;
+                metadata.date_time = details.date_time;
+                metadata.iso = details.iso;
+                metadata.f_number = details.f_number;
+                metadata.exposure_time = details.exposure_time;
+                metadata.focal_length = details.focal_length;
+                metadata.software = details.software;
+                metadata.gps_latitude = details.gps_latitude;
+                metadata.gps_longitude = details.gps_longitude;
+                metadata.gps_altitude = details.gps_altitude;
+                metadata.has_exif = true;
+            }
+        }
         Ok(Self {
             mime,
             encoded_bytes: Arc::new(bytes),

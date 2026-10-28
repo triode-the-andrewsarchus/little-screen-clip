@@ -140,3 +140,38 @@ fn invalid_heif_is_rejected_and_signatures_override_hints() {
             .is_ok()
     );
 }
+
+#[test]
+fn raw_image_formats_are_detected_and_handled() {
+    use little_clip_core::raw_image::{
+        decode_raw_image_from_bytes, is_raw_image_bytes, is_raw_image_path, read_raw_metadata,
+    };
+
+    let sample_extensions = [
+        "raw", "cr2", "cr3", "crw", "nef", "nrw", "arw", "sr2", "srf", "dng", "raf", "orf", "rw2",
+        "pef", "srw", "iiq", "mos", "3fr", "fff", "mrw", "x3f", "kdc", "dcr", "dcs", "erf", "mef",
+        "mdc", "ari",
+    ];
+
+    for ext in sample_extensions {
+        assert!(
+            is_raw_image_path(Path::new(&format!("test_photo.{}", ext.to_uppercase()))),
+            "Failed to detect extension {ext}"
+        );
+        assert!(
+            is_raw_image_path(Path::new(&format!("test_photo.{ext}"))),
+            "Failed to detect extension {ext}"
+        );
+    }
+
+    assert!(!is_raw_image_path(Path::new("not_raw.png")));
+    assert!(!is_raw_image_path(Path::new("not_raw.jpg")));
+    assert!(!is_raw_image_path(Path::new("not_raw.txt")));
+
+    assert!(!is_raw_image_bytes(b""));
+    assert!(!is_raw_image_bytes(b"plain text bytes"));
+    assert!(!is_raw_image_bytes(b"\x89PNG\r\n\x1a\n"));
+
+    assert!(decode_raw_image_from_bytes(b"corrupt raw bytes").is_err());
+    assert!(read_raw_metadata(Path::new("/nonexistent/photo.cr2")).is_err());
+}
