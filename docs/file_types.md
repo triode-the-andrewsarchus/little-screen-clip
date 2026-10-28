@@ -73,6 +73,15 @@
     - [ ] `.eps` — Encapsulated PostScript
     - [ ] `.emf`, `.wmf` — Enhanced / Windows Metafile
     - [ ] `.brush`, `.brushset` — Procreate brush and brush set
+    - [ ] `.clip` — Clip Studio Paint / Manga Studio illustration
+      - [ ] SQLite 3 database header, canvas dimensions, resolution (DPI), and layer names
+      - [ ] Embedded canvas preview thumbnail (`CanvasPreview` record)
+    - [ ] `.kra` — Krita document
+      - [ ] Document properties (`maindoc.xml`: canvas dimensions, color profile, layer tree)
+      - [ ] Embedded composite image preview (`preview.png`)
+    - [ ] `.afphoto`, `.afdesign`, `.afpub` — Serif Affinity suite (Photo, Designer, Publisher)
+      - [ ] Compound document properties and embedded thumbnail preview
+    - [ ] `.pxd`, `.pxm` — Pixelmator / Pixelmator Pro document
     - [ ] `.cgm` — Computer Graphics Metafile (ISO engineering and technical documentation)
     - [ ] `.dpx` — Digital Picture Exchange (SMPTE VFX and film mastering)
       - [ ] SMPTE header metadata (timecode, edgecode, film stock, colorimetric specifications)
@@ -404,6 +413,18 @@
   - [ ] `.chm` — Compiled HTML Help
   - [ ] `.mht`, `.mhtml` — MIME HTML web archive
   - [ ] `.ris` — Research Information Systems bibliography format
+  - [ ] UI/UX design, publishing, and visual canvases
+    - [ ] `.fig` — Figma offline design file
+      - [ ] Canvas node hierarchy, frame count, component definitions, and style catalog
+    - [ ] `.sketch` — Sketch vector design document
+      - [ ] Document metadata (`meta.json`, `document.json`: artboard count, page names, fonts)
+      - [ ] Embedded artboard preview renders
+    - [ ] `.idml` — Adobe InDesign Markup Language
+      - [ ] Package contents (stories, spreads, master spreads, fonts, swatches, page count)
+    - [ ] `.indd` — Adobe InDesign document
+      - [ ] Embedded XMP packet (title, page count, document geometry, fonts, swatches)
+    - [ ] `.canvas` — Obsidian visual canvas
+      - [ ] Node count (cards, markdown notes, files), edge / connector count, group count
 - [ ] Spreadsheets
   - [x] `.csv`
   - [x] `.ods`
@@ -444,20 +465,61 @@
     - [ ] `.igs` — Initial Graphics Exchange Specification (alternative to `.iges`)
     - [ ] `.p21`, `.210`, `.stpnc`, `.stpx`, `.stpz` — STEP CAD model variants (Part 21, XML, and compressed)
     - [ ] `.x3db`, `.x3dv` — X3D binary and VRML encodings
+    - [ ] Parametric mechanical CAD and Open BIM
+      - [ ] `.FCStd` — FreeCAD document archive
+        - [ ] Feature tree and component list (`Document.xml`)
+        - [ ] Embedded preview render (`thumbnails/Thumbnail.png`)
+      - [ ] `.scad` — OpenSCAD programmatic 3D CAD script
+        - [ ] Module definitions, parameters, and customizer variable annotations
+      - [ ] `.ifc` — Industry Foundation Classes (ISO 16739 open BIM)
+        - [ ] Header section (schema version, project name), building storeys, structural spaces, IFC entity counts
+      - [ ] `.sldprt`, `.sldasm`, `.slddrw` — SolidWorks Part, Assembly, and Drawing
+        - [ ] Summary info (mass properties, configuration count, embedded thumbnail)
+      - [ ] `.ipt`, `.iam` — Autodesk Inventor Part and Assembly
+        - [ ] Document summary properties, physical mass properties, active material
+    - [ ] Point clouds and LiDAR surveys
+      - [ ] `.las`, `.laz` — ASPRS LiDAR point cloud (binary / compressed LAS)
+        - [ ] LAS header (point count, bounding box X/Y/Z, coordinate reference system, GPS time range, return breakdown)
+      - [ ] `.e57` — ASTM E57 3D imaging and point cloud standard
+        - [ ] XML metadata header (coordinate system, camera calibrations, point count), binary scan streams
   - [ ] Gaussian splats
     - [x] `.glb` — Gaussian splat extension
     - [x] `.ply` — Gaussian PLY
     - [x] `.sog`
     - [x] `.splat`
     - [x] `.spz`
-  - [ ] PCB design and manufacturing
-    - [ ] `.gbr` — Gerber
-    - [ ] `.drl` — Excellon drill
+  - [ ] Electronic Design Automation (EDA), PCB design, and circuit simulation
+    - [ ] `.kicad_pcb` — KiCad PCB layout (S-expression)
+      - [ ] Board outline dimensions, layer stackup count, footprint/component count, net count, track segment length
+    - [ ] `.kicad_sch` — KiCad schematic (S-expression)
+      - [ ] Sheet title, symbol count, wire/bus count, net labels
+    - [ ] `.kicad_pro` — KiCad project configuration (JSON)
+    - [ ] `.kicad_mod` — KiCad footprint module (S-expression)
+    - [ ] `.kicad_sym` — KiCad symbol library (S-expression)
+    - [ ] `.brd`, `.sch` — Autodesk EAGLE board layout and schematic (XML/binary) (May need disambiguation with generic board and schematic files)
+      - [ ] Layer setup, component count, net count
+    - [ ] `.PcbDoc`, `.SchDoc` — Altium Designer PCB layout and schematic (OLE compound binary)
+      - [ ] Embedded document summary, sheet parameters, layer definitions
+    - [ ] `.cir`, `.sp`, `.spice` — SPICE circuit simulation netlist
+      - [ ] Subcircuit definitions, node count, component count, analysis directives
+    - [ ] `.gbr`, `.ger` — Gerber PCB fabrication layer
+      - [ ] RS-274X header attributes (layer type, copper thickness, polarity, units)
+    - [ ] `.drl`, `.xln` — Excellon drill file
+      - [ ] Tool count, hole count, coordinates format
     - [ ] `.plt`, `.hpgl` — plotter / HPGL
 - [ ] 3D printing and fabrication
-  - [ ] `.3mf` — 3D Manufacturing Format
+  - [ ] `.3mf` — 3D Manufacturing Format (and slicer project packages: PrusaSlicer, OrcaSlicer, Bambu Studio)
+    - [ ] Core model metadata (designer, license, title)
+    - [ ] Slicer project settings (`Metadata/model_settings.config`, plate previews `Metadata/plate_*.png`, filament type/color, estimated print time, filament length/mass)
   - [ ] `.amf` — Additive Manufacturing Format
-  - [ ] `.gcode`
+  - [ ] `.gcode` — CNC toolpaths and 3D printer instructions
+    - [ ] Slicer generator comments (slicer name/version, print time, filament used, layer height, nozzle/bed temperatures, layer count)
+  - [ ] Resin (SLA / DLP / LCD) 3D printing sliced packages
+    - [ ] `.ctb` — ChituBox resin print file
+      - [ ] Header metadata (resolution, layer height, exposure time, bottom exposure time, lift speed, layer count, embedded preview images)
+    - [ ] `.pws`, `.pwma`, `.photon` — Anycubic Photon resin print file
+      - [ ] Layer parameters, print duration, embedded preview thumbnail
+    - [ ] `.fdg` — Formlabs Form 2/3 print file
   - [ ] `.ppd` — PostScript Printer Description
 - [ ] Technical diagrams, schematics, and diagram-as-code
   - [ ] GUI diagram suites and whiteboard drawings
@@ -504,6 +566,19 @@
     - [ ] `.kar`, `.rmi` — Karaoke MIDI / RIFF MIDI
     - [ ] `.mscz` — MuseScore compressed score
     - [ ] `.orca` — ORCA live-coding music sequencer
+    - [ ] `.gp`, `.gp3`, `.gp4`, `.gp5`, `.gpx` — Guitar Pro tablature (May need disambiguation with Gnuplot scripts on `.gp`)
+      - [ ] Song title, artist, album, composer, tempo, key signature, tuning, track count, measure count
+  - [ ] Digital Audio Workstation (DAW) projects
+    - [ ] `.als` — Ableton Live Set (GZIP-compressed XML)
+      - [ ] Ableton version, tempo (BPM), time signature, track count, audio clip references, plugin devices
+    - [ ] `.flp` — FL Studio Project (chunk-based binary)
+      - [ ] Project title, tempo (BPM), pattern count, channel rack plugins, sample references
+    - [ ] `.rpp` — Cockos REAPER Project (plain text S-expression)
+      - [ ] Project sample rate, tempo/BPM, time signature, track count, marker/region count, FX chains
+    - [ ] `.logicx` — Apple Logic Pro project package
+      - [ ] Project bundle settings, track count, tempo, markers
+    - [ ] `.bwproject` — Bitwig Studio project package
+      - [ ] Metadata JSON, tempo, track count, sample references
   - [ ] Tracker modules
     - [ ] `.s3m` — Scream Tracker 3 module
     - [ ] `.xm` — FastTracker 2 extended module
@@ -627,6 +702,10 @@
   - [ ] `.hdf` — Hierarchical Data Format (HDF4 / HDF5)
   - [ ] `.nc` — NetCDF scientific data (May need disambiguation with CNC numeric control / G-code toolpaths)
     - [ ] Global root attributes, variable attributes (units, long_name, standard_name), and dimension definitions
+  - [ ] `.mat` — MATLAB / GNU Octave data workspace (Level 5 binary or Level 7.3 HDF5) (May need disambiguation with Unity Material YAML on `.mat`)
+    - [ ] MATLAB version string, endianness, workspace variable names, variable dimensions, array data types
+  - [ ] `.nb` — Wolfram Mathematica Notebook
+    - [ ] Cell count, evaluation state, front-end version
 - [ ] Medical imaging and data
   - [ ] `.dcm` — DICOM medical imaging (CT, MRI, ultrasound)
     - [ ] DICOM dataset tags (Patient Name, Patient ID, Study Date, Modality, Series Description, Manufacturer, Image Position/Orientation)
@@ -640,11 +719,64 @@
   - [ ] `.cbz` — Comic Book ZIP archive
   - [ ] `.cbx` — comic-book archive (format varies by application)
 - [ ] Game engines, interactive fiction, and game assets
-  - [ ] `.bsp` — Valve Source Engine compiled map
-  - [ ] `.vtf` — Valve Source Engine texture
-  - [ ] `.wad` — DOOM / id Tech game data archive (May need disambiguation with Nintendo Wii WAD packages)
-  - [ ] `.unityweb` — Unity WebGL data archive
-  - [ ] `.sm`, `.smzip` — StepMania stepchart and song package (May need disambiguation with Smalltalk source files on `.sm`)
+  - [ ] Minecraft worlds, regions, structures, and resource packs
+    - [ ] `.nbt` — Named Binary Tag (GZIP/ZLIB compressed tree)
+      - [ ] Level metadata (`level.dat`: world name, game mode, seed, spawn coordinates, generator version, player data)
+    - [ ] `.mca`, `.mcr` — Minecraft Anvil / Region chunk storage
+      - [ ] Region coordinates (X, Z), chunk modification timestamps, present chunk count
+    - [ ] `.schematic`, `.schem`, `.litematic` — WorldEdit / Sponge / Litematica schematic structures
+      - [ ] Bounding dimensions (X × Y × Z), block volume, palette count, tile entity count
+    - [ ] `.mcworld`, `.mctemplate` — Minecraft Bedrock world archive / template (ZIP container)
+      - [ ] World name (`levelname.txt`), game mode, embedded `world_icon.jpeg` preview
+    - [ ] `.mcpack`, `.mcaddon` — Minecraft Bedrock resource/behavior pack and add-on (ZIP container)
+      - [ ] Manifest metadata (`manifest.json`: pack UUID, name, description, min_engine_version), embedded `pack_icon.png`
+  - [ ] Valve Source and GoldSrc engine
+    - [ ] `.bsp` — Valve Source / GoldSrc compiled map
+      - [ ] Header metadata (bsp version, game title, lump directory, entity string)
+    - [ ] `.vtf` — Valve Source Engine texture
+      - [ ] VTF header (width, height, format, flags, frame count, low-res preview image)
+    - [ ] `.vpk` — Valve Pak package archive
+      - [ ] VPK v1/v2 header, directory tree item count, embedded archive checksums
+    - [ ] `.vmt` — Valve Material Type
+      - [ ] Shader name, `$basetexture`, `$bumpmap`, `$surfaceprop`
+    - [ ] `.vmf` — Valve Map Format (Hammer editor uncompiled map)
+      - [ ] Entity count, world brush count, visgroup count, Hammer version
+    - [ ] `.mdl` — Valve StudioModel 3D model (May need disambiguation with MATLAB / Simulink simulation models on `.mdl`)
+      - [ ] Model header (bone count, bodypart count, animation sequence count, texture directories)
+    - [ ] `.dem` — Source Engine gameplay demo recording (May need disambiguation with USGS Digital Elevation Models on `.dem`)
+      - [ ] Header metadata (demo protocol, network protocol, server name, client name, map name, playback duration / tick count)
+  - [ ] Godot Engine
+    - [ ] `.tscn`, `.scn` — Godot scene (text / binary)
+      - [ ] Root node type, node count, external resource count, script dependencies
+    - [ ] `.tres`, `.res` — Godot resource (text / binary)
+    - [ ] `project.godot`, `.godot` — Godot project descriptor
+      - [ ] Project name, main scene path, rendering backend, icon path
+    - [ ] `.pck` — Godot exported package
+      - [ ] Package magic, format version, embedded file table count
+  - [ ] Unity Engine
+    - [ ] `.unity` — Unity scene (YAML text)
+      - [ ] Scene GameObject count, component hierarchy, lighting settings
+    - [ ] `.prefab` — Unity prefab asset (YAML text)
+      - [ ] Prefab root object name, serialized component count
+    - [ ] `.mat` — Unity material (YAML text) (May need disambiguation with MATLAB workspace data files on `.mat`)
+    - [ ] `.unitypackage` — Unity asset package (tar.gz archive)
+      - [ ] Package manifest, GUID-mapped asset pathnames, embedded thumbnail extraction
+    - [ ] `.unityweb` — Unity WebGL data archive
+  - [ ] Unreal Engine
+    - [ ] `.uproject` — Unreal Engine project descriptor (JSON text)
+      - [ ] Engine association version, target platforms, enabled plugins, project modules
+    - [ ] `.pak`, `.ucas`, `.utoc` — Unreal Engine asset container packages / Zen IoStore packages (May need disambiguation with Quake / Chromium pak archives on `.pak`)
+      - [ ] Mount point, chunk count, compression method, encryption key GUID
+  - [ ] id Tech and Retro FPS mod packages
+    - [ ] `.wad` — DOOM / id Tech game data archive (May need disambiguation with Nintendo Wii WAD packages)
+    - [ ] `.pk3`, `.pk4` — Quake 3 / Doom 3 mod package (ZIP archive)
+      - [ ] Internal map/model/sound counts, texture manifests
+  - [ ] Rhythm games and stepcharts
+    - [ ] `.sm`, `.smzip` — StepMania stepchart and song package (May need disambiguation with Smalltalk source files on `.sm`)
+  - [ ] Roblox
+    - [ ] `.rbxl`, `.rbxlx` — Roblox Place (binary / XML)
+      - [ ] DataModel hierarchy, game version, service configurations
+    - [ ] `.rbxm`, `.rbxmx` — Roblox Model (binary / XML)
   - [ ] Interactive fiction and text adventures
     - [ ] `.z1`, `.z2`, `.z3`, `.z4`, `.z5`, `.z6`, `.z7`, `.z8` — Z-Machine story files
     - [ ] `.ulx` — Glulx interactive fiction VM story file

@@ -1,0 +1,845 @@
+# Reasonable Sort Fields and File Columns
+
+`[x]` indicates columns currently implemented and available for file sorting in the file manager. Unchecked (`[ ]`) entries are candidate columns for future metadata extraction, media probing, and custom table column configuration.
+
+This document follows the organizational structure of [file_types.md](file:///home/vcarlson/little-screen-clip/docs/file_types.md). Higher-level concepts that apply to broad groups of files appear higher in the tree, with format-specific properties nested underneath their respective domains.
+
+- [ ] Universal File Attributes (All Files)
+  - [x] Name (natural / alphanumeric sort)
+  - [x] Type (file extension and high-level mime/content classification)
+  - [x] Size (file size on disk in bytes / formatted units)
+  - [x] Modification date (mtime / timestamp of last file write)
+  - [ ] Creation / Birth date (btime / birthtime where supported by filesystem)
+  - [ ] Access date (atime / timestamp of last read)
+  - [ ] Change date (ctime / timestamp of inode metadata change)
+  - [ ] File permissions (numeric mode e.g. `0644`, `0755` or symbolic `rwxr-xr-x`)
+  - [ ] Owner / User (UID and username)
+  - [ ] Group (GID and group name)
+  - [ ] Inode number
+  - [ ] Device ID / Mount point
+  - [ ] Hard link count
+  - [ ] Symlink status (target path, broken vs valid link)
+  - [ ] Hidden status (dotfile prefix or hidden flag)
+  - [ ] Read-only / Write-protected flag
+  - [ ] Cryptographic checksum / Hash (BLAKE3, SHA-256, MD5)
+
+- [ ] Images
+  - [ ] General Image Attributes (all raster and vector images)
+    - [ ] Resolution / Dimensions (pixel width × height)
+    - [ ] Width (pixels)
+    - [ ] Height (pixels)
+    - [ ] Total Megapixels (MP)
+    - [ ] Aspect ratio (numeric ratio and standard fractions: 16:9, 4:3, 1:1, 3:2)
+    - [ ] Orientation (portrait, landscape, square)
+    - [ ] Color space (sRGB, Display P3, Adobe RGB, ProPhoto, Rec.2020, Grayscale, CMYK)
+    - [ ] Color bit depth (8-bit, 10-bit, 12-bit, 16-bit, 32-bit float per channel)
+    - [ ] Channel count (1-channel gray, 3-channel RGB, 4-channel RGBA, CMYK)
+    - [ ] Alpha / Transparency presence (binary boolean)
+    - [ ] Compression type (Lossless, Lossy, Uncompressed)
+    - [ ] Bits per pixel (bpp) / Compression density (bytes per pixel)
+    - [ ] Embedded color profile presence (ICC / ICM profile name)
+  - [ ] Camera RAW & Photography (EXIF / Capture Metadata)
+    - [ ] Capture date / Date taken (original exposure timestamp)
+    - [ ] Camera manufacturer / Make (Sony, Canon, Nikon, Fujifilm, Leica, Apple)
+    - [ ] Camera model
+    - [ ] Lens model / Lens specification
+    - [ ] Focal length (actual mm)
+    - [ ] 35mm equivalent focal length (full-frame equivalent mm)
+    - [ ] Aperture / F-number (e.g. f/1.4, f/2.8, f/8)
+    - [ ] Shutter speed / Exposure time (fractions of a second e.g. 1/250s, or seconds)
+    - [ ] ISO sensitivity (ISO rating e.g. 100, 400, 3200)
+    - [ ] Exposure compensation (EV offset e.g. +0.7 EV, -1.0 EV)
+    - [ ] Exposure program (Manual, Aperture priority, Shutter priority, Program)
+    - [ ] Metering mode (Matrix, Center-weighted, Spot)
+    - [ ] Flash fired status (Fired / Did not fire)
+    - [ ] White balance mode (Auto, Daylight, Tungsten, Custom Kelvin)
+    - [ ] Color temperature (Kelvin)
+    - [ ] Focus distance / Subject distance (meters)
+    - [ ] User rating / Star rating (1 to 5 stars)
+    - [ ] Color label / Tag (Red, Yellow, Green, Blue, Purple)
+    - [ ] Copyright notice / Photographer credit
+    - [ ] Geolocation presence (has GPS coordinates)
+    - [ ] GPS Latitude / Longitude
+    - [ ] GPS Altitude (elevation above sea level)
+    - [ ] GPS City / Region / Country (reverse-geocoded place names)
+    - [ ] Sidecar XMP status (linked `.xmp` file exists)
+  - [ ] Multi-layer & Deep Raster Images (PSD, TIFF, EXR, AI)
+    - [ ] Layer count
+    - [ ] Channel count (beauty, cryptomatte, depth/Z, normals, emission)
+    - [ ] Multi-page / Sub-image count (multi-page TIFF, PDF layers)
+    - [ ] Canvas physical dimensions and print resolution (DPI / PPI)
+    - [ ] Has clipping path / Embedded vector mask
+  - [ ] Vector Images (SVG, AI, CDR, EPS, CGM)
+    - [ ] ViewBox / Canvas dimensions
+    - [ ] Vector object / Path count
+    - [ ] Embedded font count
+    - [ ] Embedded raster image count
+    - [ ] CSS stylesheet presence
+  - [ ] Animated Images (GIF, APNG, animated WebP, animated AVIF)
+    - [ ] Animation frame count
+    - [ ] Total duration (seconds / milliseconds)
+    - [ ] Frame rate / Average FPS
+    - [ ] Loop count (Infinite vs fixed repeat count)
+  - [ ] Digital Painting, Manga & Motion Packages (Clip Studio Paint, Krita, Procreate, Affinity, dotLottie)
+    - [ ] Canvas dimensions (Width × Height px)
+    - [ ] Print resolution / DPI
+    - [ ] Layer count
+    - [ ] Layer blend modes present
+    - [ ] Color profile / Color space (sRGB, Display P3, Adobe RGB, CMYK)
+    - [ ] Canvas orientation (Portrait, Landscape, Square)
+    - [ ] Brush engine / Tool type
+    - [ ] Animation duration (Lottie)
+    - [ ] Vector keyframe count
+  - [ ] Texture Maps & GPU Game Textures (KTX, KTX2, DDS, TGA, PNG)
+    - [ ] Texture semantic role (Albedo / Diffuse, Normal, Roughness, Metallic, Height / Displacement, Ambient Occlusion, ORM packed, Emissive, Lightmap)
+    - [ ] Mipmap levels count / Has mipmaps
+    - [ ] GPU block compression format (BC1/DXT1, BC3/DXT5, BC4, BC5, BC7, ASTC, ETC2, Basis Universal ETC1S, UASTC)
+    - [ ] Texture target dimensionality (2D, 3D volume, Cube map, 2D Array)
+    - [ ] Texture channel packing layout (e.g. R=AO, G=Roughness, B=Metallic)
+    - [ ] Seamless / Tileable status
+    - [ ] Normal map tangent space (OpenGL Y+ vs DirectX Y-)
+  - [ ] Environment Lighting & HDRI Panoramas (HDR, EXR)
+    - [ ] Dynamic range (exposure stops EV)
+    - [ ] Peak luminance (nits / cd/m²)
+    - [ ] Sun / Key light elevation angle (degrees above horizon)
+    - [ ] Sun / Key light azimuth angle (degrees compass heading)
+    - [ ] Dominant color temperature (Kelvin)
+    - [ ] Average scene illuminance (lux)
+    - [ ] Projection type (Equirectangular / LatLong, Angular probe, Cube map, Mirrored ball)
+  - [ ] Color Grading & Look-Up Tables (Cube, 3DL, Look)
+    - [ ] LUT dimensionality (1D LUT vs 3D LUT)
+    - [ ] Grid resolution / Size (e.g. 17×17×17, 33×33×33, 65×65×65)
+    - [ ] Input color space / Log curve (Arri LogC, Sony S-Log3, Canon C-Log, REDWideGamut)
+    - [ ] Target / Output color space (Rec.709, Rec.2020, DCI-P3)
+
+- [ ] Fonts
+  - [ ] Font family name
+  - [ ] Subfamily / Style (Regular, Italic, Bold, Bold Italic, Light, Medium, Black)
+  - [ ] PostScript font name
+  - [ ] Typographic weight class (numeric 100–900: Thin to Black)
+  - [ ] Typographic width class (Ultra-condensed to Ultra-expanded)
+  - [ ] Font format (TrueType outline, OpenType CFF, WOFF, WOFF2, Bitmap, Type 1)
+  - [ ] Glyph count (total character glyphs defined)
+  - [ ] Variable font status (boolean: is variable font)
+  - [ ] Variable font axes count and names (Weight `wght`, Width `wdth`, Slant `slnt`, Italic `ital`)
+  - [ ] OpenType layout features count (ligatures, kerning, small caps, tabular figures)
+  - [ ] Supported character sets / Scripts (Latin, Cyrillic, Greek, CJK, Arabic, Hebrew)
+  - [ ] Font version string
+  - [ ] Designer / Typographer name
+  - [ ] Foundry / Vendor name
+  - [ ] License type / EULA link
+
+- [ ] Video
+  - [ ] General Video Attributes
+    - [ ] Duration (hours:minutes:seconds or total seconds)
+    - [ ] Resolution / Dimensions (pixel width × height: 4K, 1080p, 720p)
+    - [ ] Video width (pixels)
+    - [ ] Video height (pixels)
+    - [ ] Aspect ratio (16:9, 21:9 anamorphic, 4:3, 9:16 vertical)
+    - [ ] Display aspect ratio (DAR) vs Storage aspect ratio (SAR / pixel aspect ratio)
+    - [ ] Video codec (H.264 / AVC, H.265 / HEVC, AV1, VP9, ProRes, DNxHD)
+    - [ ] Container format (MP4, MKV, QuickTime MOV, WebM, AVI, MXF, TS)
+    - [ ] Video stream bitrate (kbps / Mbps)
+    - [ ] Overall file bitrate (kbps / Mbps)
+    - [ ] Frame rate / FPS (23.976, 24, 25, 29.97, 30, 50, 60, 120 fps)
+    - [ ] Variable frame rate (VFR) vs Constant frame rate (CFR)
+    - [ ] Total video frame count
+    - [ ] Color bit depth (8-bit, 10-bit HDR, 12-bit)
+    - [ ] Chroma subsampling (4:2:0, 4:2:2, 4:4:4)
+    - [ ] Color profile / Transfer characteristics (BT.709, BT.2020, HDR10 PQ, HLG, Dolby Vision)
+    - [ ] Scan type (Progressive vs Interlaced)
+    - [ ] Video stream count
+  - [ ] Audio Tracks in Video
+    - [ ] Audio track count
+    - [ ] Primary audio codec (AAC, Opus, AC-3, E-AC-3, DTS, PCM, FLAC)
+    - [ ] Audio channels (Mono, Stereo, 5.1 surround, 7.1 surround, Dolby Atmos)
+    - [ ] Audio sample rate (44.1 kHz, 48 kHz, 96 kHz)
+    - [ ] Audio stream languages (ISO 639-1 / 639-2 codes)
+  - [ ] Subtitles & Chapters in Video
+    - [ ] Subtitle track count
+    - [ ] Subtitle languages
+    - [ ] Subtitle formats (SRT, ASS/SSA, VTT, PGS, VobSub)
+    - [ ] Chapter count (number of embedded chapter markers)
+  - [ ] Specialized Video Metadata
+    - [ ] Production timecode (SMPTE timecode start e.g. `01:00:00:00`)
+    - [ ] Title / Episode name / Show title
+    - [ ] Recording date / Creation time
+    - [ ] Scene cut / Shot count
+    - [ ] Average shot duration (seconds)
+    - [ ] Motion activity level (High action vs static)
+    - [ ] Dialogue / Speech ratio vs Music/Silence
+    - [ ] Crop bar detection (letterbox / pillarbox aspect ratio)
+    - [ ] 360-degree video projection (Equirectangular, Cubemap, Half-equirectangular)
+    - [ ] Stereoscopic 3D mode (Monoscopic, Side-by-side, Top-and-bottom)
+  - [ ] Subtitle and Caption Files (Standalone)
+    - [ ] Subtitle entry / Cue count
+    - [ ] Total subtitle duration (time from first cue to last cue)
+    - [ ] Spoken language
+
+- [ ] Audio
+  - [ ] General Audio Attributes
+    - [ ] Duration (minutes:seconds or total seconds)
+    - [ ] Audio channels (1 Mono, 2 Stereo, 4 Quad, 6 5.1 Surround, 8 7.1)
+    - [ ] Channel configuration / Layout name
+    - [ ] Sample rate (kHz: 44.1, 48, 88.2, 96, 176.4, 192 kHz)
+    - [ ] Bit depth (16-bit CD, 24-bit Hi-Res, 32-bit float)
+    - [ ] Audio bitrate (kbps: 128, 192, 256, 320 kbps, or average VBR bitrate)
+    - [ ] Bitrate mode (Constant Bitrate CBR vs Variable Bitrate VBR)
+    - [ ] Audio codec / Encoding format (FLAC, MP3, AAC, ALAC, Opus, Vorbis, PCM WAV, AIFF, DSD)
+    - [ ] Compression class (Lossless vs Lossy vs Uncompressed)
+  - [ ] Musical Metadata (ID3, Vorbis Comments, MP4 iTunes Atoms, RIFF INFO)
+    - [ ] Track title
+    - [ ] Artist / Performer
+    - [ ] Album name
+    - [ ] Album artist
+    - [ ] Track number (track index within album / total tracks)
+    - [ ] Disc number (disc index within set / total discs)
+    - [ ] Release year / Date (YYYY or YYYY-MM-DD)
+    - [ ] Original release year
+    - [ ] Genre
+    - [ ] Composer
+    - [ ] Lyricist / Songwriter
+    - [ ] Producer
+    - [ ] Publisher / Record label
+    - [ ] ISRC (International Standard Recording Code)
+    - [ ] Compilation flag (part of multi-artist compilation)
+    - [ ] User rating (1 to 5 stars)
+    - [ ] Embedded album art presence (has front cover thumbnail)
+    - [ ] Embedded lyrics presence (synchronized or unsynchronized lyrics)
+  - [ ] Musical & Audio Analysis Properties
+    - [ ] Tempo / BPM (Beats per minute)
+    - [ ] Musical key / Pitch class (e.g. C major, A minor, Camelot wheel: 8B, 5A)
+    - [ ] Integrated loudness (LUFS / LKFS)
+    - [ ] Loudness range (LU)
+    - [ ] True peak level (dBTP)
+    - [ ] Dynamic range rating (DR value)
+    - [ ] ReplayGain track gain (dB)
+    - [ ] ReplayGain album gain (dB)
+    - [ ] Silence duration / Intro silence length
+  - [ ] Audio Samples, Loops & One-Shots
+    - [ ] Root note / Unity pitch (MIDI note number e.g. 60 = C4, pitch name)
+    - [ ] Has loop points (boolean)
+    - [ ] Loop start and loop end markers
+    - [ ] Loop type (Forward, Ping-pong, Crossfaded)
+    - [ ] Beat count / Bar length in loop (1 bar, 2 bars, 4 bars)
+    - [ ] Detected fundamental frequency (Hz)
+    - [ ] Tuning reference (A4 = 440 Hz, 432 Hz)
+    - [ ] Transient attack time (percussive vs sustained)
+    - [ ] Harmonicity / Inharmonicity score (tonal vs noisy / metallic)
+  - [ ] Audiobooks & Podcasts
+    - [ ] Audiobook chapter count
+    - [ ] Narrator / Reader
+    - [ ] Series name and book number
+    - [ ] Bookmark / Last played position
+  - [ ] Synthesizer Presets, Instruments & SoundFonts
+    - [ ] Instrument / SoundFont name
+    - [ ] Sample count (number of multisample PCM recordings)
+    - [ ] Preset / Patch count
+    - [ ] Bank number and program change index
+    - [ ] Category / Sound type (Bass, Lead, Pad, Strings, Pluck, FX)
+    - [ ] Target synthesizer engine / plugin
+    - [ ] Polyphony (Monophonic vs Polyphonic voice count)
+    - [ ] Primary oscillator waveforms (Saw, Square/Pulse, Triangle, Sine, Wavetable, Noise)
+    - [ ] Filter type (Lowpass 12/24dB, Highpass, Bandpass, Comb, Ladder)
+    - [ ] Filter cutoff frequency (Hz) and resonance (Q)
+    - [ ] Envelope count (ADSR)
+    - [ ] LFO count and modulation routings
+    - [ ] Arpeggiator / Step sequencer presence
+    - [ ] Effect processor count (Reverb, Delay, Chorus, Distortion, Compressor)
+  - [ ] Tracker Modules (MOD, S3M, XM, IT)
+    - [ ] Song title
+    - [ ] Channel count (4-channel Amiga, 8-channel, 16, 32, 64)
+    - [ ] Pattern count
+    - [ ] Order length / Song sequence length
+    - [ ] Instrument count
+    - [ ] Sample count
+    - [ ] Tracker software used (ProTracker, FastTracker 2, Scream Tracker 3, OpenMPT)
+  - [ ] Musical Notation & Sheet Music (MusicXML, MIDI, MuseScore)
+    - [ ] Composition / Piece title
+    - [ ] Composer
+    - [ ] Total measure / Bar count
+    - [ ] Total note count
+    - [ ] Part / Stave count
+    - [ ] Time signature (e.g. 4/4, 3/4, 6/8)
+    - [ ] Initial key signature (e.g. 2 sharps, 3 flats)
+    - [ ] Pitch range (Lowest pitch to highest pitch e.g. C2 to G5)
+  - [ ] Digital Audio Workstation (DAW) Projects (Ableton Live, FL Studio, REAPER, Logic Pro, Bitwig)
+    - [ ] Project title
+    - [ ] Authoring DAW and version (Ableton 12, FL Studio 24, REAPER 7, Logic Pro 11, Bitwig 5)
+    - [ ] Master tempo / BPM
+    - [ ] Project time signature
+    - [ ] Project sample rate and bit depth (44.1 kHz, 48 kHz, 96 kHz; 24-bit, 32-bit float)
+    - [ ] Track count (Audio, MIDI, Bus, Group tracks)
+    - [ ] Audio clip and sample reference count
+    - [ ] Virtual instrument and plugin FX count (VST2, VST3, AU, CLAP)
+    - [ ] Missing media / Unresolved sample reference count
+    - [ ] Marker and cue point count
+    - [ ] Automation lane count
+  - [ ] Guitar Tablature & Notation (Guitar Pro GP, GP3, GP4, GP5, GPX)
+    - [ ] Song title and artist / band
+    - [ ] Album and transcriber credit
+    - [ ] Master tempo and time signature
+    - [ ] Track and instrument count (Lead guitar, Rhythm guitar, Bass, Drums)
+    - [ ] Instrument tunings (Standard E, Drop D, DADGAD, 7-string B)
+    - [ ] Measure / Bar count
+    - [ ] Key signature
+
+- [ ] Documents and Text
+  - [ ] General Document Attributes
+    - [ ] Page count
+    - [ ] Word count
+    - [ ] Character count (with spaces and without spaces)
+    - [ ] Reading time estimate (minutes)
+    - [ ] Document title
+    - [ ] Author / Creator
+    - [ ] Subject / Description
+    - [ ] Keywords / Tags
+    - [ ] Primary language (ISO language code)
+    - [ ] Creation application / Generating tool
+    - [ ] Document creation date
+    - [ ] Document modification / Last saved date
+    - [ ] Revision / Version number
+    - [ ] Editing time / Total editing duration
+    - [ ] Security / Encryption status (password protected, permissions flags)
+    - [ ] Digital signature status (signed vs unsigned, certificate validity)
+  - [ ] Plain Text, Logs & Source Code
+    - [ ] Total line count
+    - [ ] Non-empty line count
+    - [ ] Code lines vs Comment lines vs Blank lines (SLOC count)
+    - [ ] Programming / Markup language
+    - [ ] Character encoding (UTF-8, UTF-16, ASCII, ISO-8859-1)
+    - [ ] Byte Order Mark (BOM) status
+    - [ ] Line endings format (LF Unix, CRLF Windows, CR legacy Mac)
+    - [ ] Indentation style (Spaces vs Tabs)
+    - [ ] Indentation size (2 spaces, 4 spaces, 8 spaces)
+    - [ ] Maximum line length (columns)
+    - [ ] Has shebang line (`#!`)
+    - [ ] Log entry count (for `.log` files)
+    - [ ] Earliest and latest log timestamps
+    - [ ] Error / Warning count in log
+  - [ ] Software Engineering & Source Code Metrics
+    - [ ] Cyclomatic complexity / Cognitive complexity score
+    - [ ] Function / Method count
+    - [ ] Class / Struct / Enum count
+    - [ ] Exported / Public API symbol count
+    - [ ] Unit test count / Test assertion count
+    - [ ] External dependency / Import statement count
+    - [ ] Documentation comment coverage percentage
+    - [ ] TODO / FIXME / HACK comment count
+  - [ ] Markup, Structured Data & Schemas
+    - [ ] Root element / Object type
+    - [ ] Node / Element / Key count
+    - [ ] Maximum hierarchy depth / Nesting level
+    - [ ] Validation status against schema (Valid, Invalid, Unvalidated)
+    - [ ] Associated schema URI / Namespace
+    - [ ] Front matter format (YAML, TOML, JSON, None)
+    - [ ] Front matter field count
+  - [ ] Data Science Notebooks & Computational Workspaces (Jupyter, Mathematica, MATLAB)
+    - [ ] Total cell count
+    - [ ] Code cell count
+    - [ ] Markdown cell count
+    - [ ] Raw cell count
+    - [ ] Execution state (All executed, Partially executed, Unexecuted)
+    - [ ] Kernel / Language specification (Python 3, R, Julia, Wolfram, MATLAB)
+    - [ ] Total output figure / image count
+    - [ ] Workspace variable count (for `.mat`)
+    - [ ] Total array footprint / Memory size (for `.mat`)
+  - [ ] UI/UX Design, Publishing & Visual Canvases (Figma, Sketch, InDesign, Obsidian Canvas)
+    - [ ] Artboard / Frame / Spread count
+    - [ ] Page count (InDesign, Sketch)
+    - [ ] Canvas node count (cards, notes, files)
+    - [ ] Edge / Connection count
+    - [ ] Component / Symbol definition count
+    - [ ] Referenced font family count
+    - [ ] Color swatch / Style count
+  - [ ] Presentations & Slides (PPTX, Keynote, ODP)
+    - [ ] Slide count
+    - [ ] Hidden slide count
+    - [ ] Slide aspect ratio (16:9 widescreen vs 4:3 standard)
+    - [ ] Master slide / Theme name
+    - [ ] Presentation notes presence (slide speaker notes count)
+    - [ ] Embedded video / audio count
+  - [ ] Spreadsheets (XLSX, ODS, Numbers, CSV, TSV)
+    - [ ] Sheet / Tab count
+    - [ ] Sheet names
+    - [ ] Total row count
+    - [ ] Total column count
+    - [ ] Total non-empty cell count
+    - [ ] Formula count
+    - [ ] Embedded chart count
+    - [ ] Delimiter character (CSV, TSV, semicolon, pipe)
+    - [ ] Has header row
+  - [ ] eBooks & Scanned Documents (EPUB, MOBI, PDF, DjVu)
+    - [ ] Chapter count
+    - [ ] Publisher
+    - [ ] ISBN / Identifier
+    - [ ] Table of contents depth
+    - [ ] Embedded illustrations / Image count
+    - [ ] OCR / Searchable text layer presence (for scanned PDFs/DjVu)
+  - [ ] Technical Diagrams, Schematics & Diagram-as-Code (Visio, Draw.io, PlantUML, Mermaid, D2, Graphviz, BPMN, Excalidraw)
+    - [ ] Page / Sheet count
+    - [ ] Shape / Node / Box count
+    - [ ] Connector / Edge / Arrow count
+    - [ ] Diagram family / Type (Flowchart, Sequence, Class, State, Architecture C4, ERD, Timing, Network)
+    - [ ] Target renderer / Engine (PlantUML, Mermaid, D2, Graphviz, BPMN, Diagrams.net / Draw.io, Excalidraw, WaveDrom, WireViz)
+    - [ ] Layout direction (Top-to-Bottom TB/TD, Left-to-Right LR, Radial)
+    - [ ] Subgraph / Cluster / Container count
+    - [ ] Participant / Lifeline count (for sequence diagrams)
+    - [ ] Entity / Table count (for ERD, DBML)
+    - [ ] Signal / Bus channel count (for WaveDrom timing diagrams)
+    - [ ] Cable / Harness connector count (for WireViz)
+    - [ ] Whiteboard element / Freehand stroke count (for Excalidraw)
+    - [ ] Stencil / Master names
+  - [ ] Calendars & Contact Cards (ICS, VCF)
+    - [ ] Event count (VCALENDAR VEVENT count)
+    - [ ] To-Do / Task count (VTODO count)
+    - [ ] Date range (Earliest event to latest event)
+    - [ ] Contact count (vCard card count)
+
+- [ ] 3D and CAD
+  - [ ] General 3D Models & Meshes (glTF, OBJ, STL, FBX, USD, Blend)
+    - [ ] Vertex count
+    - [ ] Polygon / Face count
+    - [ ] Triangle count
+    - [ ] Submesh / Node count
+    - [ ] Material count
+    - [ ] Texture / Image map count
+    - [ ] Total texture memory / VRAM footprint
+    - [ ] Bounding box dimensions (Width X × Height Y × Depth Z in scene units)
+    - [ ] Bounding box volume
+    - [ ] Scene unit (meters, centimeters, millimeters, inches)
+    - [ ] Up-axis (Y-up vs Z-up)
+    - [ ] Coordinate handedness (Right-handed vs Left-handed)
+    - [ ] Rigged / Skeletal hierarchy presence
+    - [ ] Bone / Joint count
+    - [ ] Animation clip count
+    - [ ] Total animation duration
+    - [ ] Morph target / Blend shape count
+    - [ ] Vertex color presence
+    - [ ] UV map / Texture coordinate channel count
+    - [ ] Normal map presence / Tangent space availability
+    - [ ] Level of Detail (LOD) count
+  - [ ] 3D Materials, Shaders & Surface Appearances (.mtl, .mtlx, Material Bindings)
+    - [ ] Material name
+    - [ ] Shading model (Principled BSDF, Metallic-Roughness, Specular-Glossiness, Blinn-Phong, Lambert)
+    - [ ] Roughness (numeric 0.0 to 1.0: mirror smooth to fully rough / diffuse)
+    - [ ] Metallic / Metallicity (numeric 0.0 to 1.0: dielectric to pure metal)
+    - [ ] Emissive luminance / Intensity (candelas/m² or scalar multiplier)
+    - [ ] Emissive color (hex code, dominant hue, or RGB vector)
+    - [ ] Base color / Albedo / Diffuse reflectance (dominant hue, average RGB, luminance)
+    - [ ] Opacity / Transparency / Alpha (0.0 invisible to 1.0 fully opaque)
+    - [ ] Index of Refraction (IOR e.g. 1.0 Air, 1.33 Water, 1.5 Glass, 2.4 Diamond)
+    - [ ] Transmission weight / Glass transparency
+    - [ ] Subsurface scattering (SSS) weight and scatter radius / color
+    - [ ] Clearcoat weight and clearcoat roughness
+    - [ ] Sheen / Velvet weight, roughness, and tint
+    - [ ] Anisotropy level and rotation angle
+    - [ ] Specular reflectance intensity and tint
+    - [ ] Normal map presence and bump scale
+    - [ ] Height / Displacement map presence and scale
+    - [ ] Ambient Occlusion (AO) strength
+    - [ ] Two-sided / Double-sided lighting flag
+    - [ ] Referenced texture map count
+  - [ ] 3D Geometry & Mesh Diagnostics
+    - [ ] Watertight / Manifold status (boolean: 3D printable without holes)
+    - [ ] Non-manifold edge count
+    - [ ] Boundary / Open naked edge count
+    - [ ] Degenerate / Zero-area face count
+    - [ ] Inverted / Flipped normal count
+    - [ ] Self-intersecting face count
+    - [ ] Total surface area (m², cm²)
+    - [ ] Enclosed volume (m³, cm³)
+    - [ ] Center of mass / Centroid coordinates (X, Y, Z)
+    - [ ] Principal bounding dimension / Longest axis length
+    - [ ] Topology type (Triangles-only, Quads-only, N-gons, Mixed topology)
+    - [ ] Subdivision surface modifier level
+  - [ ] Gaussian Splats (PLY, Splat, SPZ, SOG)
+    - [ ] Splat count / Gaussian point count
+    - [ ] Spherical Harmonics (SH) degree (0, 1, 2, or 3)
+    - [ ] Compressed format status (SPZ, SOG, quantized)
+    - [ ] Bounding sphere radius
+    - [ ] Mean / Median splat radius (scale)
+    - [ ] Min / Max splat scale
+    - [ ] Mean alpha / Opacity distribution
+    - [ ] Color distribution / Mean RGB
+    - [ ] Spatial point density (splats per unit volume)
+  - [ ] CAD, Parametric & Solid Modeling (STEP, IGES, Parasolid, JT, DWF, DXF, DWG, FreeCAD, OpenSCAD, SolidWorks, Inventor)
+    - [ ] Solid / Body count
+    - [ ] Feature tree step count (FreeCAD, SolidWorks, Inventor)
+    - [ ] OpenSCAD parameter / customizer variable count
+    - [ ] Surface / Face count
+    - [ ] Edge count
+    - [ ] Assembly component count
+    - [ ] Part / Component hierarchy depth
+    - [ ] Physical mass / Volume / Surface area (mass properties)
+    - [ ] Material assignment (Steel, Aluminum 6061, Brass, Delrin, ABS, PLA)
+    - [ ] Material density (g/cm³)
+    - [ ] Computed mass / Weight (kg, grams, lbs)
+    - [ ] Center of gravity (CG coordinates)
+    - [ ] Principal moments of inertia (Ixx, Iyy, Izz)
+    - [ ] Threaded hole / Fastener count (M3, M4, M5, 1/4"-20)
+    - [ ] Surface roughness finish specification (Ra µm)
+    - [ ] Geometric Dimensioning and Tolerancing (GD&T) datum count
+    - [ ] Design units (millimeters, inches)
+    - [ ] Drawing sheet count (for 2D CAD DWG/DXF/DWF)
+    - [ ] Layer / Level count
+    - [ ] Authoring CAD system / Kernel (FreeCAD, OpenSCAD, Siemens NX, SolidWorks, CATIA, AutoCAD, Inventor)
+  - [ ] Open BIM & Architectural Models (IFC)
+    - [ ] Building storey count
+    - [ ] Structural space / Room count
+    - [ ] IFC entity count (IfcWall, IfcSlab, IfcDoor, IfcWindow)
+    - [ ] Schema version (IFC2X3, IFC4, IFC4X3)
+    - [ ] Project name and site geographic coordinates
+  - [ ] Point Clouds & LiDAR Surveys (LAS, LAZ, E57)
+    - [ ] Point count (e.g. 15.2M points)
+    - [ ] Coordinate Reference System (CRS / EPSG code)
+    - [ ] GPS time range
+    - [ ] Bounding box dimensions (X × Y × Z meters)
+    - [ ] Return pulse breakdown (First return, Last return)
+    - [ ] Classification breakdown (Ground, High Vegetation, Buildings)
+    - [ ] Intensity range (min / max / mean)
+  - [ ] 3D Printing & Additive Fabrication (3MF, AMF, G-code, Resin CTB/Photon)
+    - [ ] Print bounding box (X × Y × Z mm)
+    - [ ] Layer count (G-code slice count)
+    - [ ] Estimated print time (hours:minutes)
+    - [ ] Plate / Bed model count
+    - [ ] Filament material type (PLA, PETG, ABS, TPU, PC, PA-CF)
+    - [ ] Filament color / Spool slot count (multi-color / AMS / MMU)
+    - [ ] Filament length / Material volume required (meters, cm³)
+    - [ ] Total filament weight (grams)
+    - [ ] Layer height (mm: 0.12, 0.16, 0.20, 0.28)
+    - [ ] Infill density percentage
+    - [ ] Nozzle temperature / Bed temperature settings (°C)
+    - [ ] Resin normal exposure time and bottom exposure time (seconds)
+    - [ ] Resin lift speed and retract speed (mm/min)
+    - [ ] Slicer application name and version (PrusaSlicer, OrcaSlicer, Bambu Studio, Cura, ChituBox)
+  - [ ] Electronic Design Automation (EDA), PCB Design & Circuit Simulation (KiCad, EAGLE, Altium, SPICE, Gerber, Drill)
+    - [ ] Board outline dimensions (Width × Height mm)
+    - [ ] Board surface area (cm²)
+    - [ ] Copper layer count (1, 2, 4, 6, 8+ layers)
+    - [ ] Footprint / Component count (SMD vs Through-hole)
+    - [ ] Unique component count (BOM line items)
+    - [ ] Electrical net count
+    - [ ] Total copper trace length (mm / meters)
+    - [ ] Drill hole / Via count
+    - [ ] Blind / Buried via count
+    - [ ] Schematic sheet count
+    - [ ] Schematic symbol count
+    - [ ] SPICE subcircuit / component / node count
+    - [ ] Minimum trace width (mils / mm)
+    - [ ] Minimum trace clearance (mils / mm)
+    - [ ] Surface finish specification (ENIG, HASL, OSP)
+
+- [ ] Radio, RF, and Embedded-Device Captures
+  - [ ] Capture duration (seconds / milliseconds)
+  - [ ] Sample rate (samples per second / MSps)
+  - [ ] Center frequency (Hz / MHz / GHz)
+  - [ ] Bandwidth (Hz / MHz)
+  - [ ] Channel count (I/Q complex pairs, logic channels)
+  - [ ] Total sample count
+  - [ ] Modulation type / Protocol decoded (ASK, FSK, PSK, LoRa, BLE)
+  - [ ] Packet / Frame count
+  - [ ] Target hardware / Device make (HackRF, RTL-SDR, Saleae, Flipper Zero, Proxmark)
+  - [ ] Signal-to-noise ratio estimate (SNR dB)
+  - [ ] CAN bus message count (for CAN logs)
+  - [ ] CAN bus unique arbitration IDs count
+  - [ ] CAN bus baud rate (kbps: 125, 250, 500, 1000)
+
+- [ ] Networking and Messages
+  - [ ] Packet Captures (PCAP, PCAPNG)
+    - [ ] Total packet count
+    - [ ] Capture duration
+    - [ ] First packet timestamp
+    - [ ] Last packet timestamp
+    - [ ] Average packet rate (packets/sec)
+    - [ ] Average data rate (kbps / Mbps)
+    - [ ] Protocol distribution (TCP %, UDP %, ICMP %, DNS %, HTTP %, TLS %)
+    - [ ] Unique IP addresses count (Source and Destination endpoints)
+    - [ ] Unique conversation / Flow count
+    - [ ] Dropped packet count / Capture error count
+    - [ ] Capture interface name and link-layer type (Ethernet, 802.11 Wi-Fi, Loopback)
+  - [ ] Email & Mailbox Archives (EML, MSG, MBOX)
+    - [ ] Message sender (From address and display name)
+    - [ ] Primary recipients (To addresses count and list)
+    - [ ] Carbon copy recipients (Cc addresses count)
+    - [ ] Message subject
+    - [ ] Date sent
+    - [ ] Date received
+    - [ ] Has attachments flag
+    - [ ] Attachment count
+    - [ ] Total attachment size
+    - [ ] Attachment file extensions
+    - [ ] In-Reply-To / Thread ID
+    - [ ] Total email message count (for `.mbox` archives)
+
+- [ ] Security, Cryptography, and Certificates
+  - [ ] X.509 Certificates & Keystores (PEM, DER, CRT, CER, P12, PFX)
+    - [ ] Common Name (CN) / Primary domain
+    - [ ] Subject organization (O) and unit (OU)
+    - [ ] Issuer Common Name / Certificate Authority (CA)
+    - [ ] Valid From date / Not Before
+    - [ ] Expiration date / Not After
+    - [ ] Days until expiration / Validity status (Valid, Expired, Not Yet Valid)
+    - [ ] Public key algorithm (RSA, ECDSA, Ed25519)
+    - [ ] Public key bit length (2048, 4096, 256, 384)
+    - [ ] Signature algorithm (SHA256withRSA, SHA384withECDSA)
+    - [ ] Subject Alternative Name (SAN) count and domains list
+    - [ ] Self-signed status (boolean)
+    - [ ] CA / Certificate Authority status (is CA)
+    - [ ] SHA-256 / SHA-1 fingerprint
+    - [ ] Key usage flags (Digital Signature, Key Encipherment, Server Auth, Client Auth)
+    - [ ] Certificate chain length (for P12/PFX bundles)
+  - [ ] PGP Keys and Signatures (PGP, ASC, SIG)
+    - [ ] Primary User ID (Name and email)
+    - [ ] Key ID (Long 64-bit hex or Short 32-bit hex)
+    - [ ] Key fingerprint
+    - [ ] Key creation date
+    - [ ] Key expiration date
+    - [ ] Key algorithm and bit length
+    - [ ] Subkey count
+    - [ ] Signature verification status (Valid signature, Bad signature, Unknown key)
+  - [ ] Password Databases (KDBX)
+    - [ ] Database title
+    - [ ] Total credential entry count
+    - [ ] Group / Folder count
+    - [ ] KDBX format version (KDBX 3.1 vs KDBX 4)
+    - [ ] Encryption cipher (AES-256, ChaCha20, Twofish)
+    - [ ] Key derivation function (Argon2id, Argon2d, AES-KDF)
+    - [ ] Last database modification / backup date
+
+- [ ] Geographic Data and GPS Tracks
+  - [ ] Distance / Track length (km, miles)
+  - [ ] Total elapsed time
+  - [ ] Total moving time
+  - [ ] Average speed / Pace (km/h, mph, min/km)
+  - [ ] Maximum speed
+  - [ ] Elevation gain / Total ascent (meters, feet)
+  - [ ] Elevation loss / Total descent (meters, feet)
+  - [ ] Minimum elevation
+  - [ ] Maximum elevation
+  - [ ] Track start time
+  - [ ] Track end time
+  - [ ] Activity type / Sport (Cycling, Running, Hiking, Walking, Skiing)
+  - [ ] Average heart rate (bpm)
+  - [ ] Maximum heart rate (bpm)
+  - [ ] Average cadence (rpm / spm)
+  - [ ] Average power / Normalized power (Watts)
+  - [ ] Total energy expenditure (calories / kJ)
+  - [ ] Trackpoint / Waypoint count
+  - [ ] Geographic bounding box (Southwest and Northeast latitude/longitude bounds)
+  - [ ] Start location (reverse-geocoded place name)
+  - [ ] End location (reverse-geocoded place name)
+  - [ ] Feature / Geometry count (for GeoJSON, Shapefiles, KML)
+  - [ ] Coordinate Reference System (CRS / EPSG code e.g. EPSG:4326)
+
+- [ ] Astronomy and Scientific Imaging
+  - [ ] Astronomical Images (FITS, XISF)
+    - [ ] Target object name / Catalog identifier (Messier, NGC, IC)
+    - [ ] Right Ascension (RA) coordinates
+    - [ ] Declination (Dec) coordinates
+    - [ ] Exposure time / Integration time (seconds)
+    - [ ] Total stacked exposure duration
+    - [ ] Observation date and UTC time
+    - [ ] Telescope / Optical tube assembly
+    - [ ] Focal length (mm) and Focal ratio (f-number)
+    - [ ] Camera sensor / Instrument name
+    - [ ] Optical filter (Luminance, Red, Green, Blue, H-alpha, O-III, S-II)
+    - [ ] Sensor temperature (°C)
+    - [ ] Gain and offset settings
+    - [ ] Binning mode (1×1, 2×2, 3×3)
+    - [ ] Pixel scale (arcseconds per pixel)
+    - [ ] World Coordinate System (WCS) calibration status
+  - [ ] Multidimensional Scientific Datasets (HDF5, NetCDF, Parquet)
+    - [ ] Dataset / Variable count
+    - [ ] Array dimensionality / Rank (1D, 2D, 3D, 4D spatial/temporal grids)
+    - [ ] Array shape (e.g. `[12, 360, 720]` time × lat × lon)
+    - [ ] Total record / Row count
+    - [ ] Primary variable names
+    - [ ] Physical measurement units (e.g. Kelvin, Pascal, m/s)
+    - [ ] Time step count and temporal range
+    - [ ] Spatial coverage bounds
+    - [ ] Compression algorithm (GZIP, LZF, Blosc, Snappy, Zstandard)
+  - [ ] Medical Imaging (DICOM)
+    - [ ] Modality (CT, MRI, Ultrasound, X-Ray, PET, Mammography)
+    - [ ] Patient identifier / Anonymized ID
+    - [ ] Patient sex and age
+    - [ ] Study date and time
+    - [ ] Study description / Reason for exam
+    - [ ] Series description
+    - [ ] Body part examined (Head, Chest, Abdomen, Pelvis, Spine, Extremity)
+    - [ ] Image slice count (total slices in series)
+    - [ ] Slice thickness (mm)
+    - [ ] Pixel spacing (in-plane mm resolution)
+    - [ ] Scanner manufacturer and model (Siemens, GE, Philips, Canon)
+    - [ ] Magnetic field strength (Tesla e.g. 1.5T, 3.0T for MRI)
+    - [ ] KVP and X-ray tube current (for CT / X-Ray)
+    - [ ] Contrast agent used (boolean)
+  - [ ] Machine Learning & AI Weights (GGUF, Safetensors, ONNX, Checkpoints)
+    - [ ] Total parameter count (Billions: 1B, 7B, 13B, 70B)
+    - [ ] Quantization precision (FP32, FP16, BF16, INT8, Q4_K_M, Q8_0)
+    - [ ] Context window token limit (4k, 8k, 32k, 128k)
+    - [ ] Model architecture family (Llama, Mistral, Gemma, BERT, Whisper, Stable Diffusion)
+    - [ ] Attention head count
+    - [ ] Transformer layer count
+    - [ ] Embedding dimension / Hidden size
+    - [ ] Vocabulary size
+    - [ ] Tensor / Weight count
+
+- [ ] Game Engines, Interactive Fiction, and Game Assets
+  - [ ] Minecraft Worlds, Regions & Schematics (NBT, MCA, Schematic, Litematic, MCWorld, MCPack)
+    - [ ] World / Level name (`levelname.txt`, `level.dat`)
+    - [ ] Game mode (Survival, Creative, Adventure, Spectator)
+    - [ ] Dimension / Generator type (Overworld, Nether, The End, Flat, Custom)
+    - [ ] World seed
+    - [ ] Bounding box dimensions (X × Y × Z blocks)
+    - [ ] Structure block volume (X × Y × Z)
+    - [ ] Block palette count
+    - [ ] Tile entity / Entity count
+    - [ ] Minimum engine version (for Bedrock packs)
+    - [ ] Pack UUID and pack version
+  - [ ] Valve Source / GoldSrc Assets (VPK, VTF, VMT, VMF, MDL, DEM, BSP)
+    - [ ] Map / Level title (BSP, DEM)
+    - [ ] Target game / Engine version (Source Engine, GoldSrc)
+    - [ ] Archive contained item count (VPK)
+    - [ ] Texture dimensions (Width × Height) and pixel format (VTF)
+    - [ ] Texture frame count (animated VTF)
+    - [ ] Shader name and surface property (VMT)
+    - [ ] World brush / Geometry count (VMF, BSP)
+    - [ ] Entity count (lights, triggers, spawns) (VMF, BSP)
+    - [ ] Bone / Skeleton count (MDL)
+    - [ ] Hitbox / Bodypart count (MDL)
+    - [ ] Gameplay duration / Recorded tick count (DEM)
+    - [ ] Demo player name / Server name (DEM)
+    - [ ] Lightmap resolution / Baked lighting presence
+    - [ ] NavMesh / Navigation surface area
+    - [ ] Physics collision hull count
+  - [ ] Game Engine Projects & Scene Packages (Godot, Unity, Unreal Engine, Roblox)
+    - [ ] Target engine version (Unreal 5.x, Godot 4.x, Unity 202x)
+    - [ ] Scene node / GameObject count
+    - [ ] Root node / Prefab name
+    - [ ] External resource / Asset dependency count
+    - [ ] Target platforms / Build targets
+    - [ ] Enabled plugin count
+    - [ ] Package chunk count / Compression method (IoStore, Pak)
+  - [ ] id Tech and Retro FPS Mod Packages (WAD, PK3, PK4)
+    - [ ] Wad / Package type (IWAD vs PWAD)
+    - [ ] Map count / Level lump count
+    - [ ] Texture / Graphic lump count
+    - [ ] Sound effect / Music lump count
+  - [ ] Interactive Fiction & Text Adventures (Z-Machine, Glulx, TADS)
+    - [ ] Story title
+    - [ ] Author
+    - [ ] Release number and serial code
+    - [ ] Inform / Z-Machine version (v1 through v8)
+    - [ ] IFID (Interactive Fiction Identifier UUID)
+    - [ ] Story dictionary word count
+    - [ ] Object / Room count
+  - [ ] Rhythm Game Charts (StepMania)
+    - [ ] Song title and artist
+    - [ ] Song BPM (min, max, average)
+    - [ ] Song duration
+    - [ ] Difficulty tier (Beginner, Easy, Medium, Hard, Challenge)
+    - [ ] Difficulty meter rating (numeric 1–20)
+    - [ ] Total step / Note count
+    - [ ] Jump / Hand / Freeze / Mine count
+
+- [ ] System Packages, Disk Images, and Virtualization
+  - [ ] Software Packages & Installers (DEB, RPM, MSI, AppX, MSIX, APK, CRX)
+    - [ ] Package / Application name
+    - [ ] Package version string
+    - [ ] Release / Build number
+    - [ ] Target CPU architecture (x86_64 / amd64, aarch64 / arm64, noarch)
+    - [ ] Installed / Unpacked disk footprint
+    - [ ] Software license (MIT, Apache-2.0, GPL-3.0, Proprietary)
+    - [ ] Maintainer / Vendor name
+    - [ ] Short summary / Package description
+    - [ ] Direct dependency count
+    - [ ] Minimum OS / SDK version required (e.g. min Android SDK)
+  - [ ] Disk Images & Optical Media (ISO, DMG, IMG)
+    - [ ] Volume label / Disc title
+    - [ ] Filesystem type (ISO 9660, UDF, Apple HFS+, APFS, FAT32, ext4)
+    - [ ] Bootable flag (is bootable installer image)
+    - [ ] Partition count and partition table scheme (GPT vs MBR)
+    - [ ] El Torito boot specification / EFI boot partition presence
+    - [ ] Sector size (bytes: 512, 2048, 4096)
+  - [ ] Virtual Machine Disks & Appliances (VDI, VMDK, VHD, OVA, OVF)
+    - [ ] Virtual disk capacity / Maximum provisioned size
+    - [ ] Actual allocated file size
+    - [ ] Allocation type (Dynamic / Thin provisioned vs Fixed / Pre-allocated)
+    - [ ] Virtual disk format version
+    - [ ] Guest operating system identifier
+    - [ ] Virtual hardware revision
+    - [ ] Snapshot count / Parent snapshot chain depth
+  - [ ] BitTorrent Metainfo Files (Torrent)
+    - [ ] Content name
+    - [ ] Total payload size (cumulative size of all torrent files)
+    - [ ] File count in torrent
+    - [ ] Piece size (KB / MB)
+    - [ ] Total piece count
+    - [ ] Info hash (SHA-1 / BitTorrent v1, SHA-256 / BitTorrent v2)
+    - [ ] Primary tracker URL
+    - [ ] Tracker announce tier count
+    - [ ] Creation date
+    - [ ] Created by client software
+    - [ ] Private torrent flag
+
+- [ ] Archives and Compressed Containers
+  - [ ] Compressed archive size
+  - [ ] Uncompressed / Extracted content size
+  - [ ] Compression ratio (percentage saved / space reduction factor)
+  - [ ] Contained file count
+  - [ ] Contained directory count
+  - [ ] Encryption / Password protection status (boolean)
+  - [ ] Encryption cipher (ZipCrypto, AES-128, AES-256)
+  - [ ] Compression method / Algorithm (Deflate, LZMA, LZMA2, BZip2, Zstandard, PPMd)
+  - [ ] Multi-part / Split archive status (is part of `.001`, `.part1.rar` volume set)
+  - [ ] Archive comment presence and text
+  - [ ] Solid archive status (boolean)
+  - [ ] Integrity check algorithm (CRC32, Adler32, SHA-256)
+
+- [ ] Specialized Craft & Niche Formats
+  - [ ] Machine Embroidery & Sewing (DST, PES, JEF, EXP, VP3)
+    - [ ] Total stitch count
+    - [ ] Color / Thread change count
+    - [ ] Hoop / Pattern dimensions (Width × Height mm)
+    - [ ] Thread length required (meters)
+    - [ ] Machine stop count
+  - [ ] Chess Games & Databases (PGN, CBH)
+    - [ ] White player name
+    - [ ] Black player name
+    - [ ] White Elo rating
+    - [ ] Black Elo rating
+    - [ ] Game result (1-0, 0-1, 1/2-1/2)
+    - [ ] Event / Tournament name
+    - [ ] Event date / Year
+    - [ ] ECO opening code (e.g. B90, E60)
+    - [ ] Move count / Half-move count
+  - [ ] Comics & Graphic Novels (CBZ, CBR, CB7)
+    - [ ] Page count (image files inside archive)
+    - [ ] Series / Comic title
+    - [ ] Issue number
+    - [ ] Publication volume
+    - [ ] Writer
+    - [ ] Penciller / Artist
+    - [ ] Colorist
+    - [ ] Letterer
+    - [ ] Cover artist
+    - [ ] Comic age / Imprint
+  - [ ] Screenwriting (FDX)
+    - [ ] Script title
+    - [ ] Author
+    - [ ] Page count
+    - [ ] Scene count
+    - [ ] Speaking character count
+    - [ ] Dialogue count
+  - [ ] Brewing Recipes (BeerXML, BSMX)
+    - [ ] Recipe name
+    - [ ] Beer style (BJCP category e.g. American IPA, Dry Stout)
+    - [ ] Original Gravity (OG)
+    - [ ] Final Gravity (FG)
+    - [ ] Alcohol by Volume (ABV %)
+    - [ ] International Bitterness Units (IBU)
+    - [ ] Color (SRM / EBC)
+    - [ ] Batch volume (liters / gallons)
+    - [ ] Fermentable / Grain count
+    - [ ] Hop addition count
