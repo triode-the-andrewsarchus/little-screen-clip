@@ -279,8 +279,23 @@ pub fn extract_raw_preview_bytes(path: &Path, target_edge: u32) -> Result<(Vec<u
                 raw.preview_bytes(p).ok().map(|b| b.to_vec())
             } else if let Ok(rgb_preview) = raw.decode_preview_rgb(p) {
                 encode_rgb_to_jpeg(rgb_preview.width, rgb_preview.height, rgb_preview.rgb).ok()
+            } else if let Ok(b) = raw.preview_bytes(p)
+                && let Ok(dyn_img) = image::load_from_memory(b)
+            {
+                let mut jpeg_bytes = Vec::new();
+                if dyn_img
+                    .write_to(
+                        &mut std::io::Cursor::new(&mut jpeg_bytes),
+                        image::ImageFormat::Jpeg,
+                    )
+                    .is_ok()
+                {
+                    Some(jpeg_bytes)
+                } else {
+                    None
+                }
             } else {
-                raw.preview_bytes(p).ok().map(|b| b.to_vec())
+                None
             };
 
             if let Some(bytes) = bytes_opt {
@@ -331,6 +346,20 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
             } else if let Ok(rgb_preview) = raw.decode_preview_rgb(p) {
                 let (w, h) = (rgb_preview.width, rgb_preview.height);
                 if let Ok(jpeg_bytes) = encode_rgb_to_jpeg(w, h, rgb_preview.rgb) {
+                    return Ok((jpeg_bytes, w, h));
+                }
+            } else if let Ok(bytes) = raw.preview_bytes(p)
+                && let Ok(img) = image::load_from_memory(bytes)
+            {
+                let (w, h) = (img.width(), img.height());
+                let mut jpeg_bytes = Vec::new();
+                if img
+                    .write_to(
+                        &mut std::io::Cursor::new(&mut jpeg_bytes),
+                        image::ImageFormat::Jpeg,
+                    )
+                    .is_ok()
+                {
                     return Ok((jpeg_bytes, w, h));
                 }
             }
