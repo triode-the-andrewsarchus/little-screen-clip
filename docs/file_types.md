@@ -4,6 +4,9 @@
 
 - [ ] Images
   - [ ] Camera RAW
+    - [ ] EXIF, IPTC, and XMP metadata extraction
+    - [ ] Embedded JPEG preview extraction
+    - [ ] Sidecar `.xmp` metadata association
     - [x] `.arw` — Sony
     - [x] `.cr2`, `.cr3` — Canon
     - [x] `.dng` — Adobe Digital Negative
@@ -28,25 +31,42 @@
     - [ ] `.x3f` — Sigma
   - [ ] Raster and vector images
     - [x] `.avif`
+      - [ ] ISOBMFF metadata items (`meta` box, EXIF, XMP) and HDR color profiles
     - [x] `.bmp`
     - [x] `.dds`
     - [x] `.exr`
+      - [ ] Multi-part / multi-channel layer names (cryptomatte, AOVs) and chromaticity / display window metadata
     - [x] `.ff` — Farbfeld
     - [x] `.gif` — still and animated
+      - [ ] Frame delay, loop count, disposal methods, and comment extension blocks
     - [x] `.hdr`
     - [x] `.heic`, `.heif`
+      - [ ] ISOBMFF metadata items (`meta` box, EXIF, XMP), auxiliary depth maps, and burst sequences
     - [x] `.ico`
     - [x] `.jpg`, `.jpeg`
+      - [ ] EXIF, IPTC, and XMP metadata blocks (camera settings, timestamps, GPS geolocation)
+      - [ ] Embedded ICC color profile (`APP2`) and embedded thumbnail extraction
     - [x] `.png`, `.apng`
+      - [ ] Textual metadata chunks (`tEXt`, `zTXt`, `iTXt`, including AI generation prompts/parameters)
+      - [ ] Embedded ICC color profile (`iCCP`) and EXIF chunk (`eXIf`)
+      - [ ] Animation control metadata chunks (`acTL`, `fcTL`)
     - [x] `.pnm`, `.pbm`, `.pgm`, `.ppm`
     - [x] `.qoi`
     - [x] `.svg` — requires `rsvg-convert`
+      - [ ] Embedded `<metadata>` (RDF / Dublin Core)
+      - [ ] Inline stylesheets (`<style>`) and embedded base64 raster images
     - [x] `.tga`
     - [x] `.tif`, `.tiff`
+      - [ ] EXIF, IPTC, and XMP IFD tags
+      - [ ] GeoTIFF cartographic projection tags
+      - [ ] Multi-page image directories (IFDs)
     - [x] `.webp` — still and animated
+      - [ ] EXIF, XMP, and ICC profile chunks
+      - [ ] Animation frame timing and canvas size metadata
     - [ ] `.jxl` — JPEG XL
     - [ ] `.jp2`, `.j2k`, `.jpf` — JPEG 2000
     - [ ] `.psd` — Photoshop
+      - [ ] Layer hierarchy, blend modes, layer masks, and image resource blocks (slices, guides, IPTC/XMP)
     - [ ] `.xcf` — GIMP
     - [ ] `.ai` — Adobe Illustrator
     - [ ] `.cdr` — CorelDRAW
@@ -55,6 +75,7 @@
     - [ ] `.brush`, `.brushset` — Procreate brush and brush set
     - [ ] `.cgm` — Computer Graphics Metafile (ISO engineering and technical documentation)
     - [ ] `.dpx` — Digital Picture Exchange (SMPTE VFX and film mastering)
+      - [ ] SMPTE header metadata (timecode, edgecode, film stock, colorimetric specifications)
     - [ ] `.drm` — Procreate Dreams animation project
     - [ ] `.heics`, `.heifs` — HEIC / HEIF image sequence
     - [ ] `.icc`, `.icm` — ICC color profile / Image Color Matching profile
@@ -69,8 +90,13 @@
     - [ ] `.xpm`, `.xbm` — X11 pixmap / bitmap
 - [ ] Fonts
   - [ ] `.ttf`, `.ttc` — TrueType font / collection
+    - [ ] Naming table metadata (`name` table: family, subfamily, designer, license, version)
+    - [ ] OpenType layout feature tables (`GSUB`, `GPOS`)
   - [ ] `.otf`, `.otc` — OpenType font / collection
+    - [ ] Naming table metadata (`name` table: family, subfamily, designer, license, version)
+    - [ ] OpenType layout feature tables (`GSUB`, `GPOS`)
   - [ ] `.woff`, `.woff2` — Web Open Font Format
+    - [ ] WOFF / WOFF2 XML metadata block and private data
   - [ ] `.eot` — Embedded OpenType
   - [ ] `.pfa`, `.pfb` — PostScript Type 1
   - [ ] `.afm`, `.pfm` — Adobe Type 1 font metrics (ASCII / printer font metrics)
@@ -84,8 +110,14 @@
     - [x] `.flv`
     - [x] `.m4v`
     - [x] `.mkv`
+      - [ ] Matroska tags, segment info, and chapter markers (`SimpleTag`, `Chapters`)
+      - [ ] Embedded attachments (fonts, cover art)
     - [x] `.mov`
     - [x] `.mp4`
+      - [ ] QuickTime / iTunes metadata atoms (`moov.udta.meta.ilst`: title, artist, album, cover art)
+      - [ ] Chapter tracks and markers
+      - [ ] Spatial / 360-degree video metadata (Spherical Video V2)
+      - [ ] Embedded subtitle and audio stream tracks
     - [x] `.ogv`
     - [x] `.ts`
     - [x] `.webm`
@@ -99,6 +131,7 @@
     - [ ] `.f4v` — Flash MP4 video
     - [ ] `.m1v`, `.m2v` — MPEG-1 / MPEG-2 elementary video stream
     - [ ] `.mxf` — Material eXchange Format (SMPTE broadcast and digital cinema container)
+      - [ ] Material Package metadata, track timecodes, and descriptive metadata tracks
     - [ ] `.qt` — QuickTime movie (alternative extension to `.mov`)
   - [ ] Streaming media playlists and segments
     - [ ] `.m3u8` — HLS playlist
@@ -114,11 +147,16 @@
     - [ ] `.ttml` — Timed Text Markup Language
 - [ ] Audio
   - [x] `.aif`, `.aiff`
+    - [ ] AIFF annotation (`ANNO`), comment (`COMT`), and embedded ID3 chunks
   - [x] `.aac`, `.m4a`
   - [x] `.flac`
+    - [ ] Vorbis comments, embedded cover art (`METADATA_BLOCK_PICTURE`), and cue sheets
   - [x] `.mp3`
+    - [ ] ID3v1, ID3v2.3, ID3v2.4 tags (title, artist, album, track, cover art, replaygain) and APEv2 tags
   - [x] `.oga`, `.ogg`, `.opus`
+    - [ ] Vorbis comments and Opus identification / comment headers
   - [x] `.wav`, `.wave`
+    - [ ] RIFF `INFO` list chunk, Broadcast Wave Format (`bext`) timecodes/metadata, and embedded ID3 chunks
   - [ ] `.ac3`
   - [ ] `.ape`
   - [ ] `.mpc`
@@ -131,17 +169,31 @@
   - [ ] `.dts`, `.dtshd` — DTS / DTS-HD audio (May need disambiguation with Device Tree Source files on `.dts`)
   - [ ] `.m3u` — audio playlist
   - [ ] `.m4b` — MPEG-4 audiobook
+    - [ ] Chapter markers, bookmark metadata, and audiobook tags
   - [ ] `.mka` — Matroska audio
+    - [ ] Matroska audio tags, track headers, and chapter markers
   - [ ] `.mp2` — MPEG-1 Audio Layer II
 - [ ] Documents and text
   - [x] `.pdf`
+    - [ ] Document information dictionary (`/Info`: Title, Author, Subject, Keywords, Creator)
+    - [ ] XMP metadata stream (`/Metadata`)
+    - [ ] Table of contents / bookmark outline hierarchy (`/Outlines`)
+    - [ ] Embedded file attachments (`/EmbeddedFiles`)
   - [ ] `.ics` — iCalendar events and calendars
+    - [ ] VCALENDAR properties (`PRODID`, `VERSION`, `CALSCALE`, `X-WR-CALNAME`)
   - [ ] Plain text
     - [x] `.txt`, `.text`
+      - [ ] Byte order mark (BOM) detection and line-ending normalization
     - [x] `.log` — plain text logs
+      - [ ] Timestamp prefix parsing, log level classification, and stack trace folding
   - [ ] Markup and structured data
     - [x] `.html`, `.htm`, `.xhtml` — HTML syntax highlighting
+      - [ ] `<head>` metadata (`<meta>` tags, Open Graph, Twitter Cards, canonical URL)
+      - [ ] Embedded JSON-LD structured data (`<script type="application/ld+json">`)
     - [x] `.md`, `.markdown` — Markdown syntax highlighting
+      - [ ] Front matter parsing (YAML `---`, TOML `+++`, JSON `;;;` / `{...}`)
+      - [ ] Embedded LaTeX math blocks (`$...$`, `$$...$$`)
+      - [ ] Embedded Mermaid diagram blocks
     - [x] `.json` — JSON syntax highlighting
     - [x] `.toml` — TOML syntax highlighting
     - [x] `.xml`, `.svg` — XML syntax highlighting
@@ -153,13 +205,17 @@
     - [ ] `.hbs` — Handlebars template
     - [ ] `.hjson` — Human JSON
     - [ ] `.ipynb` — Jupyter Notebook
+      - [ ] Notebook metadata (`kernelspec`, language info, authors) and cell execution counts / metadata
     - [ ] `.json5` — JSON5 data interchange
     - [ ] `.jsonld` — JSON-LD linked data
     - [ ] `.map` — JavaScript / CSS source map (May need disambiguation with game engine level / GIS map files)
     - [ ] `.mdx` — Markdown with embedded JSX components
+      - [ ] Front matter parsing (YAML, TOML) and exported component / layout metadata
     - [ ] `.parquet` — Apache Parquet columnar storage
+      - [ ] File metadata footer (schema, row group counts, creator string, key-value metadata dictionaries)
     - [ ] `.raml` — RESTful API Modeling Language
     - [ ] `.sqlite`, `.sqlite3` — SQLite database
+      - [ ] Database schema metadata, `PRAGMA user_version`, `PRAGMA application_id`, and table row counts
     - [ ] `.styl`, `.stylus` — Stylus stylesheet
     - [ ] `.ttl`, `.n3`, `.nq`, `.nt` — RDF semantic data formats (Turtle, Notation3, N-Quads, N-Triples)
     - [ ] `.webmanifest`, `.webapp` — Web App Manifest
@@ -172,6 +228,8 @@
       - [x] `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`, `.c++` — C++
       - [x] `.rs` — Rust
       - [x] `.py`, `.pyw` — Python (also used by MicroPython and CircuitPython)
+        - [ ] Shebang line (`#!`) and file encoding declarations (`# -*- coding: ... -*-`)
+        - [ ] Module docstrings (`"""..."""`)
       - [x] `.asm`, `.s` — Assembly (processor/toolchain dialects)
       - [x] `.zig` — Zig
       - [x] `.nim` — Nim
@@ -227,6 +285,7 @@
       - [x] `.groovy`, `.gradle` — Groovy / Gradle scripts
     - [x] Shell languages
       - [x] `.sh`, `.bash`, `.zsh`, `.ksh` — POSIX-style shell / Bash / Zsh / KornShell
+        - [ ] Shebang line interpretation (`#!/usr/bin/env ...`)
       - [x] `.fish` — Fish
       - [x] `.nu` — Nushell
       - [x] `.xsh` — Xonsh
@@ -290,6 +349,7 @@
       - [ ] n8n workflow export (JSON; `.json` text preview is already supported)
     - [ ] Other programming formats and environments
       - [x] `.tex` — TeX / LaTeX
+        - [ ] Document preamble parsing (`\title`, `\author`, `\date`, `\documentclass`, package imports)
       - [ ] Tasker task/profile export (format varies)
       - [ ] Tool-specific visual project formats for tooll.io (no stable extension)
       - [ ] `.vi` — LabVIEW virtual instrument
@@ -298,18 +358,24 @@
       - [x] `.bf` — Brainfuck
   - [x] `.doc`
   - [x] `.docx`
+    - [ ] OPC core, extended, and custom document properties (`docProps/core.xml`, `docProps/app.xml`: title, author, edit duration, revision)
   - [x] `.odt`
+    - [ ] OpenDocument meta properties (`meta.xml`: title, creator, creation date, statistics)
   - [x] `.rtf`
   - [ ] `.epub`
+    - [ ] OPF package metadata (`content.opf`: Dublin Core title, creator, identifier, cover image metadata)
+    - [ ] Table of contents navigation (NCX / EPUB 3 Navigation Document)
   - [ ] `.azw3` — Kindle Format 8
   - [ ] `.mobi` — Mobipocket
   - [ ] `.fb2` — FictionBook
   - [ ] `.djvu`, `.djv` — scanned-document format
   - [x] `.ppt`, `.pptx`, `.odp`
+    - [ ] Presentation properties, slide titles, and presentation notes
   - [ ] `.pages` — Apple Pages document
   - [ ] `.key` — Apple Keynote presentation (May need disambiguation with cryptographic private keys)
   - [ ] `.one`, `.onepkg` — Microsoft OneNote notebook / package
   - [ ] `.org` — Emacs Org-mode document (May need disambiguation with Lotus Organizer files)
+    - [ ] File keywords (`#+TITLE:`, `#+AUTHOR:`, `#+TAGS:`) and property drawers (`:PROPERTIES:`)
   - [ ] `.xps`, `.oxps` — XML Paper Specification
   - [ ] `.chm` — Compiled HTML Help
   - [ ] `.mht`, `.mhtml` — MIME HTML web archive
@@ -319,13 +385,17 @@
   - [x] `.ods`
   - [x] `.tsv`
   - [x] `.xls`, `.xlsx`, `.xlsb`
+    - [ ] Workbook metadata, sheet names, and author properties
   - [ ] `.numbers` — Apple Numbers spreadsheet
 - [ ] 3D and CAD
   - [ ] Mesh models
     - [x] `.glb` — glTF binary; mesh or splat content is detected when opened
     - [x] `.gltf`
+      - [ ] Asset metadata (`asset.copyright`, `asset.generator`, `asset.version`)
+      - [ ] Khronos extension declarations (`extensionsUsed`, `extensionsRequired`)
     - [x] `.obj`
     - [x] `.stl`
+      - [ ] Solid header title / 80-byte binary header text
     - [ ] `.wrl` — VRML model (Low Priority)
     - [ ] `.x3d` — X3D model (Low Priority)
     - [ ] `.3ds`
@@ -333,10 +403,12 @@
     - [ ] `.fbx`
     - [ ] `.iges`
     - [ ] `.step`, `.stp` — CAD / DesignaKnit use of `.stp`
+      - [ ] Header section metadata (`FILE_DESCRIPTION`, `FILE_NAME`, `FILE_SCHEMA`, author, organization, timestamp)
     - [ ] `.dxf` — CAD drawing interchange
     - [ ] `.dwg` — AutoCAD drawing
     - [ ] `.usd`, `.usdz`
     - [ ] `.usda` — Universal Scene Description ASCII
+      - [ ] Layer metadata (`metersPerUnit`, `upAxis`, `defaultPrim`, `doc`, `comment`)
     - [ ] `.blend`
     - [ ] `.mtl` — Wavefront Material Template Library (companion to `.obj`)
     - [ ] `.x_t`, `.x_b` — Parasolid CAD model (text / binary)
@@ -370,7 +442,9 @@
 - [ ] Music and sound design
   - [ ] MIDI and notation
     - [x] `.mid`, `.midi` — piano-roll viewer
+      - [ ] Track names, copyright notices, tempo events, time signature, and lyric meta-events
     - [ ] `.musicxml`, `.mxl` — MusicXML score (uncompressed and compressed)
+      - [ ] Work, movement, and score identification metadata (composer, lyricist, rights, encoding software)
     - [ ] `.kar`, `.rmi` — Karaoke MIDI / RIFF MIDI
     - [ ] `.mscz` — MuseScore compressed score
     - [ ] `.orca` — ORCA live-coding music sequencer
@@ -424,19 +498,27 @@
 - [ ] Networking and messages
   - [ ] `.pcap`
   - [ ] `.pcapng`
+    - [ ] Capture file comments, interface descriptions, hardware/OS metadata, and packet timestamps
   - [ ] `.eml` — email message
   - [ ] `.msg` — Microsoft Outlook saved message
+    - [ ] Internet message headers (From, To, Cc, Bcc, Subject, Date, Message-ID, In-Reply-To)
+    - [ ] Attachment metadata and extraction
   - [ ] `.mbox` — mbox email mailbox archive
+    - [ ] `From ` separator lines and per-message header indices
 - [ ] Security, cryptography, and certificates
   - [ ] `.pem` — Privacy-Enhanced Mail (PEM) certificate or key
   - [ ] `.der` — Distinguished Encoding Rules (DER) binary certificate or key
   - [ ] `.cer`, `.crt` — X.509 certificate (May need disambiguation with CRTD / OVMS CAN bus logs on `.crt`)
+    - [ ] X.509 certificate fields (Subject, Issuer, Validity period, SANs, Key Usage, Fingerprints)
   - [ ] `.p12`, `.pfx` — PKCS#12 certificate and private key archive
+    - [ ] PKCS#12 friendly name attributes, local key ID, and certificate chain metadata
   - [ ] `.p7b`, `.p7s`, `.p7c` — PKCS#7 certificate bundle and detached signature
   - [ ] `.p8` — PKCS#8 private key
   - [ ] `.kdbx` — KeePass password database
+    - [ ] Database metadata (database name, description, custom icons)
   - [ ] `.pgp`, `.sig` — PGP encrypted file / detached signature
   - [ ] `.asc` — ASCII-armored PGP key / signature (May need disambiguation with Vector CANalyzer ASCII logs)
+    - [ ] PGP armor headers (Version, Comment, Hash), Key ID, user IDs, validity/expiration dates
 - [ ] Sewing, embroidery, and cutting machines
   - [ ] Machine embroidery stitch formats
     - [ ] `.dst` — Tajima
@@ -460,11 +542,15 @@
     - [ ] `.studio`, `.studio3` — Silhouette Studio
 - [ ] Geographic data and GPS tracks
   - [ ] `.fit` — activity / GPS recording
+    - [ ] File ID and device metadata (manufacturer, serial, device type, timestamp)
   - [ ] `.geojson`
   - [ ] `.gpx`
+    - [ ] `<metadata>` header (name, description, author, copyright, bounds, time)
   - [ ] `.kml`, `.kmz`
+    - [ ] Document / folder name, description, author, and schema metadata
   - [ ] `.tcx`
   - [ ] `.osm` — OpenStreetMap XML vector data
+    - [ ] Node/way/relation metadata (OSM tags, user, changeset, timestamp, version)
   - [ ] `.mvt` — Mapbox Vector Tile
   - [ ] `.gml` — Geography Markup Language
 - [ ] Genealogy
@@ -479,12 +565,15 @@
   - [ ] `.fdx` — Final Draft
 - [ ] Astronomy and scientific imaging
   - [ ] `.fits` — Flexible Image Transport System (astronomy and scientific multidimensional imaging)
+    - [ ] Header Data Unit (HDU) 80-column FITS header cards (WCS coordinates, telescope, instrument, exposure metadata)
   - [ ] `.xisf` — Extensible Image Serialization Format
 - [ ] Scientific data and multidimensional arrays
   - [ ] `.hdf` — Hierarchical Data Format (HDF4 / HDF5)
   - [ ] `.nc` — NetCDF scientific data (May need disambiguation with CNC numeric control / G-code toolpaths)
+    - [ ] Global root attributes, variable attributes (units, long_name, standard_name), and dimension definitions
 - [ ] Medical imaging and data
   - [ ] `.dcm` — DICOM medical imaging (CT, MRI, ultrasound)
+    - [ ] DICOM dataset tags (Patient Name, Patient ID, Study Date, Modality, Series Description, Manufacturer, Image Position/Orientation)
 - [ ] Brewing recipes
   - [ ] `.bsmx` — BeerSmith
   - [ ] `.beerxml`, `.xml` — BeerXML recipe data (XML is also used by other types)
@@ -507,29 +596,35 @@
     - [ ] `.gam` — TADS interactive fiction story file
 - [ ] Executables and compiled binaries
   - [ ] `.apk` — Android application package
+    - [ ] Android manifest metadata (`AndroidManifest.xml`: package name, version, permissions, min/target SDK)
   - [ ] `.class` — Java bytecode class
   - [ ] `.dll` — Windows dynamic-link library
   - [ ] `.elf` — Executable and Linkable Format binary (extension is optional)
   - [ ] `.exe` — Windows executable
   - [ ] `.jar`, `.war`, `.ear` — Java application/archive / Web Archive / Enterprise Archive
+    - [ ] JAR manifest metadata (`META-INF/MANIFEST.MF`: Main-Class, Implementation-Version, Bundle-SymbolicName)
   - [ ] `.o` — Unix object file
   - [ ] `.obj` — Windows/COFF object file (extension conflicts with supported Wavefront OBJ meshes)
   - [ ] `.so` — ELF shared object library
 - [ ] System packages, disk images, and virtualization
   - [ ] `.deb` — Debian software package
+    - [ ] Debian control metadata (Package, Version, Architecture, Maintainer, Depends, Description)
   - [ ] `.rpm` — Red Hat package
+    - [ ] RPM header tags (Name, Version, Release, Architecture, Summary, License, Vendor)
   - [ ] `.msi` — Windows Installer package
   - [ ] `.appx`, `.msix` — Windows App package
   - [ ] `.crx` — Google Chrome extension
   - [ ] `.xpi` — Mozilla Firefox extension
   - [ ] `.dmg` — Apple disk image
   - [ ] `.iso` — ISO 9660 optical disc image
+    - [ ] Volume descriptors (volume identifier, system identifier, publisher, preparer, timestamps)
   - [ ] `.img` — raw disk image (May need disambiguation with GEM bitmap images)
   - [ ] `.vdi` — VirtualBox disk image
   - [ ] `.vmdk` — VMware virtual disk image
   - [ ] `.vbox` — VirtualBox virtual machine settings
   - [ ] `.ova`, `.ovf` — Open Virtualization Format archive and package
   - [ ] `.torrent` — BitTorrent metainfo file
+    - [ ] Torrent metainfo dictionary (name, piece length, announce list, creation date, created by, comment)
 - [ ] Archives
   - [ ] `.7z`
   - [ ] `.bz2`
@@ -539,4 +634,5 @@
   - [ ] `.tar`
   - [ ] `.xz`
   - [ ] `.zip`
+    - [ ] Central directory file comments and archive comment metadata
   - [ ] `.zst`
