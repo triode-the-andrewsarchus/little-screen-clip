@@ -402,4 +402,46 @@ mod tests {
     fn test_decode_raw_invalid_bytes() {
         assert!(decode_raw_image_from_bytes(b"not a valid raw file").is_err());
     }
+
+    #[test]
+    fn test_real_raw_files_if_available() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let raw_dir = std::path::PathBuf::from(home).join("Pictures/Raw");
+        if !raw_dir.is_dir() {
+            return;
+        }
+
+        let mut count = 0;
+        for entry in std::fs::read_dir(&raw_dir).unwrap().flatten() {
+            let path = entry.path();
+            if !is_raw_image_path(&path) {
+                continue;
+            }
+            count += 1;
+            let file_name = path.file_name().unwrap().to_string_lossy();
+            let meta = read_raw_metadata(&path);
+            assert!(
+                meta.is_ok(),
+                "Failed to read metadata for {file_name}: {:?}",
+                meta.err()
+            );
+            let meta = meta.unwrap();
+            assert!(meta.width > 0 && meta.height > 0);
+            println!(
+                "Verified {file_name}: {}x{}, orientation {}",
+                meta.width, meta.height, meta.orientation
+            );
+
+            let preview = extract_raw_image_preview(&path);
+            assert!(
+                preview.is_ok(),
+                "Failed to extract preview for {file_name}: {:?}",
+                preview.err()
+            );
+            let (preview_bytes, pw, ph) = preview.unwrap();
+            assert!(!preview_bytes.is_empty() && pw > 0 && ph > 0);
+            println!("  Preview: {pw}x{ph}, {} KB", preview_bytes.len() / 1024);
+        }
+        println!("Successfully verified {count} real camera RAW files!");
+    }
 }
