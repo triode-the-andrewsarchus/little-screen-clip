@@ -240,6 +240,19 @@ pub fn read_raw_metadata(path: &Path) -> Result<RawMetadataSummary, String> {
     }
 }
 
+fn encode_rgb_to_jpeg(width: u32, height: u32, rgb: Vec<u8>) -> Result<Vec<u8>, String> {
+    let img = image::RgbImage::from_raw(width, height, rgb)
+        .ok_or_else(|| "Failed to construct RgbImage from RGB8 buffer".to_string())?;
+    let mut jpeg_bytes = Vec::new();
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut jpeg_bytes),
+            image::ImageFormat::Jpeg,
+        )
+        .map_err(|e| format!("Failed to encode preview RGB to JPEG: {e}"))?;
+    Ok(jpeg_bytes)
+}
+
 /// Extracts embedded preview JPEG bytes and preview-specific orientation from a camera RAW image file.
 pub fn extract_raw_preview_bytes(path: &Path, target_edge: u32) -> Result<(Vec<u8>, u8), String> {
     if let Ok(raw) = FlashRaw::open_path(path) {
@@ -250,30 +263,53 @@ pub fn extract_raw_preview_bytes(path: &Path, target_edge: u32) -> Result<(Vec<u
         let mut largest: Option<(Vec<u8>, u8, usize)> = None;
 
         for p in raw.previews() {
-            if let Ok(bytes) = raw.preview_bytes(p) {
-                let orient = {
-                    let o = p.orientation.exif() as u8;
-                    if (1..=8).contains(&o) {
-                        o
-                    } else if (1..=8).contains(&fallback_orient) {
-                        fallback_orient
-                    } else {
-                        1
-                    }
-                };
-                let max_dim = p.width.max(p.height) as usize;
+            let orient = {
+                let o = p.orientation.exif() as u8;
+                if (1..=8).contains(&o) {
+                    o
+                } else if (1..=8).contains(&fallback_orient) {
+                    fallback_orient
+                } else {
+                    1
+                }
+            };
+            let max_dim = p.width.max(p.height) as usize;
+
+            let bytes_opt = if p.encoding == flashraw::PreviewEncoding::Jpeg {
+                raw.preview_bytes(p).ok().map(|b| b.to_vec())
+            } else if let Ok(rgb_preview) = raw.decode_preview_rgb(p) {
+                encode_rgb_to_jpeg(rgb_preview.width, rgb_preview.height, rgb_preview.rgb).ok()
+            } else {
+                raw.preview_bytes(p).ok().map(|b| b.to_vec())
+            };
+
+            if let Some(bytes) = bytes_opt {
                 if max_dim >= target_edge as usize {
-                    best = Some((bytes.to_vec(), orient));
+                    best = Some((bytes, orient));
                     break;
                 }
                 if largest.as_ref().is_none_or(|(_, _, d)| max_dim > *d) {
-                    largest = Some((bytes.to_vec(), orient, max_dim));
+                    largest = Some((bytes, orient, max_dim));
                 }
             }
         }
 
         if let Some((b, o)) = best.or_else(|| largest.map(|(b, o, _)| (b, o))) {
             return Ok((b, o));
+        }
+
+        // If no preview is available, develop sensor pixels and encode to JPEG
+        if let Ok(rgba_img) = decode_flashraw(&raw) {
+            let mut jpeg_bytes = Vec::new();
+            if image::DynamicImage::ImageRgba8(rgba_img)
+                .write_to(
+                    &mut std::io::Cursor::new(&mut jpeg_bytes),
+                    image::ImageFormat::Jpeg,
+                )
+                .is_ok()
+            {
+                return Ok((jpeg_bytes, 1));
+            }
         }
     }
 
@@ -285,12 +321,35 @@ pub fn extract_raw_preview_bytes(path: &Path, target_edge: u32) -> Result<(Vec<u
 /// Extracts embedded preview bytes and dimensions from a camera RAW image file.
 pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), String> {
     // 1. Try FlashRaw embedded preview extraction (in-process, instant)
-    if let Ok(raw) = FlashRaw::open_path(path)
-        && let Some(p) = raw.metadata().largest_preview().or_else(|| raw.preview())
-        && let Ok(bytes) = raw.preview_bytes(p)
-        && let Ok(img) = image::load_from_memory(bytes)
-    {
-        return Ok((bytes.to_vec(), img.width(), img.height()));
+    if let Ok(raw) = FlashRaw::open_path(path) {
+        if let Some(p) = raw.metadata().largest_preview().or_else(|| raw.preview()) {
+            if p.encoding == flashraw::PreviewEncoding::Jpeg
+                && let Ok(bytes) = raw.preview_bytes(p)
+                && let Ok(img) = image::load_from_memory(bytes)
+            {
+                return Ok((bytes.to_vec(), img.width(), img.height()));
+            } else if let Ok(rgb_preview) = raw.decode_preview_rgb(p) {
+                let (w, h) = (rgb_preview.width, rgb_preview.height);
+                if let Ok(jpeg_bytes) = encode_rgb_to_jpeg(w, h, rgb_preview.rgb) {
+                    return Ok((jpeg_bytes, w, h));
+                }
+            }
+        }
+
+        // If embedded preview is missing or failed, develop full raw frame
+        if let Ok(rgba_img) = decode_flashraw(&raw) {
+            let (w, h) = (rgba_img.width(), rgba_img.height());
+            let mut jpeg_bytes = Vec::new();
+            if image::DynamicImage::ImageRgba8(rgba_img)
+                .write_to(
+                    &mut std::io::Cursor::new(&mut jpeg_bytes),
+                    image::ImageFormat::Jpeg,
+                )
+                .is_ok()
+            {
+                return Ok((jpeg_bytes, w, h));
+            }
+        }
     }
 
     // 2. Try exiftool embedded preview extraction

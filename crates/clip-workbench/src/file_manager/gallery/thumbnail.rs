@@ -254,4 +254,32 @@ mod tests {
         assert_eq!((preview.width, preview.height), (128, 64));
         assert!(preview.premultiplied_rgba[0] > 200 && preview.premultiplied_rgba[2] < 50);
     }
+
+    #[test]
+    fn test_all_downloaded_raw_thumbnails_if_present() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let raw_dir = std::path::PathBuf::from(home).join("Pictures/Raw");
+        if !raw_dir.is_dir() {
+            return;
+        }
+        let mut count = 0;
+        for entry in std::fs::read_dir(raw_dir).unwrap().flatten() {
+            let p = entry.path();
+            if !little_clip_core::raw_image::is_raw_image_path(&p) {
+                continue;
+            }
+            let name = p.file_name().unwrap().to_string_lossy();
+            let thumb = raw_preview(&p, 256, 1, &AtomicBool::new(false));
+            assert!(thumb.is_some(), "Failed to generate thumbnail for {name}");
+            let thumb = thumb.unwrap();
+            assert!(thumb.width > 0 && thumb.height > 0);
+            assert_eq!(
+                thumb.premultiplied_rgba.len(),
+                (thumb.width * thumb.height * 4) as usize
+            );
+            count += 1;
+            println!("Thumbnail ok for {name}: {}x{}", thumb.width, thumb.height);
+        }
+        println!("Successfully generated thumbnails for all {count} RAW files in Pictures/Raw!");
+    }
 }
