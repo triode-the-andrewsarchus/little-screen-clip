@@ -52,12 +52,29 @@
     - [ ] `.cdr` — CorelDRAW
     - [ ] `.eps` — Encapsulated PostScript
     - [ ] `.emf`, `.wmf` — Enhanced / Windows Metafile
+    - [ ] `.brush`, `.brushset` — Procreate brush and brush set
+    - [ ] `.cgm` — Computer Graphics Metafile (ISO engineering and technical documentation)
+    - [ ] `.dpx` — Digital Picture Exchange (SMPTE VFX and film mastering)
+    - [ ] `.drm` — Procreate Dreams animation project
+    - [ ] `.heics`, `.heifs` — HEIC / HEIF image sequence
+    - [ ] `.icc`, `.icm` — ICC color profile / Image Color Matching profile
+    - [ ] `.jfif` — JPEG File Interchange Format
+    - [ ] `.jxr`, `.wdp` — JPEG XR / Windows Media Photo
+    - [ ] `.ktx`, `.ktx2` — Khronos Texture format (ASTC/BCn and Basis Universal)
+    - [ ] `.lottie` — dotLottie vector animation
+    - [ ] `.pct`, `.pic` — Apple QuickDraw PICT (May need disambiguation with PIC microcontroller files and Bio-Rad microscopy on `.pic`)
+    - [ ] `.pcx` — PC Paintbrush / ZBrush alpha brush
+    - [ ] `.sgi`, `.rgb` — Silicon Graphics Image
+    - [ ] `.svgz` — compressed SVG
+    - [ ] `.xpm`, `.xbm` — X11 pixmap / bitmap
 - [ ] Fonts
   - [ ] `.ttf`, `.ttc` — TrueType font / collection
   - [ ] `.otf`, `.otc` — OpenType font / collection
   - [ ] `.woff`, `.woff2` — Web Open Font Format
   - [ ] `.eot` — Embedded OpenType
   - [ ] `.pfa`, `.pfb` — PostScript Type 1
+  - [ ] `.afm`, `.pfm` — Adobe Type 1 font metrics (ASCII / printer font metrics)
+  - [ ] `.psf` — Linux PC Screen Font (console font)
   - [ ] `.bdf`, `.pcf` — bitmap fonts
   - [ ] `.fon`, `.fnt` — legacy bitmap / Windows font resources
   - [ ] `.sfd` — FontForge source
@@ -77,6 +94,16 @@
     - [ ] `.m2ts`, `.mts`
     - [ ] `.mpeg`, `.mpg`
     - [ ] `.vob`
+    - [ ] `.3g2` — 3GPP2 multimedia
+    - [ ] `.asf`, `.asx` — Advanced Systems Format / Stream Redirector
+    - [ ] `.f4v` — Flash MP4 video
+    - [ ] `.m1v`, `.m2v` — MPEG-1 / MPEG-2 elementary video stream
+    - [ ] `.mxf` — Material eXchange Format (SMPTE broadcast and digital cinema container)
+    - [ ] `.qt` — QuickTime movie (alternative extension to `.mov`)
+  - [ ] Streaming media playlists and segments
+    - [ ] `.m3u8` — HLS playlist
+    - [ ] `.mpd` — MPEG-DASH media presentation description
+    - [ ] `.m4s` — MPEG-DASH ISO media segment
   - [ ] 360-degree camera video and metadata
     - [ ] `.insv` — Insta360 video
     - [ ] `.insp` — Insta360 photo
@@ -84,6 +111,7 @@
     - [ ] `.srt` — SubRip
     - [ ] `.ass`, `.ssa` — Advanced SubStation Alpha / SubStation Alpha
     - [ ] `.vtt` — WebVTT
+    - [ ] `.ttml` — Timed Text Markup Language
 - [ ] Audio
   - [x] `.aif`, `.aiff`
   - [x] `.aac`, `.m4a`
@@ -97,6 +125,14 @@
   - [ ] `.tta`
   - [ ] `.wv`
   - [ ] `.wma`
+  - [ ] `.adts` — Audio Data Transport Stream (raw AAC)
+  - [ ] `.au`, `.snd` — Sun/NeXT audio (May need disambiguation with Akai MPC sound samples on `.snd`)
+  - [ ] `.caf` — Apple Core Audio Format
+  - [ ] `.dts`, `.dtshd` — DTS / DTS-HD audio (May need disambiguation with Device Tree Source files on `.dts`)
+  - [ ] `.m3u` — audio playlist
+  - [ ] `.m4b` — MPEG-4 audiobook
+  - [ ] `.mka` — Matroska audio
+  - [ ] `.mp2` — MPEG-1 Audio Layer II
 - [ ] Documents and text
   - [x] `.pdf`
   - [ ] `.ics` — iCalendar events and calendars
@@ -112,6 +148,24 @@
     - [x] `.yaml`, `.yml` — YAML syntax highlighting
     - [x] `.kdl`
     - [x] `.xsd` — XML Schema
+    - [ ] `.conf`, `.ini` — configuration and INI files
+    - [ ] `.dtd` — XML Document Type Definition
+    - [ ] `.hbs` — Handlebars template
+    - [ ] `.hjson` — Human JSON
+    - [ ] `.ipynb` — Jupyter Notebook
+    - [ ] `.json5` — JSON5 data interchange
+    - [ ] `.jsonld` — JSON-LD linked data
+    - [ ] `.map` — JavaScript / CSS source map (May need disambiguation with game engine level / GIS map files)
+    - [ ] `.mdx` — Markdown with embedded JSX components
+    - [ ] `.parquet` — Apache Parquet columnar storage
+    - [ ] `.raml` — RESTful API Modeling Language
+    - [ ] `.sqlite`, `.sqlite3` — SQLite database
+    - [ ] `.styl`, `.stylus` — Stylus stylesheet
+    - [ ] `.ttl`, `.n3`, `.nq`, `.nt` — RDF semantic data formats (Turtle, Notation3, N-Quads, N-Triples)
+    - [ ] `.webmanifest`, `.webapp` — Web App Manifest
+    - [ ] `.wsdl`, `.wadl` — Web Services / Application Description Language
+    - [ ] `.xaml` — Extensible Application Markup Language
+    - [ ] `.xlf`, `.xliff` — XML Localization Interchange File Format
   - [ ] Code (language families follow the [programming language guide](https://opguides.info/engineering/programming/languages/))
     - [x] Low-level and systems languages
       - [x] `.c`, `.h` — C
@@ -131,6 +185,7 @@
       - [x] `.kt`, `.kts` — Kotlin
       - [x] `.js`, `.mjs`, `.cjs`, `.jsx` — JavaScript
       - [x] `.coffee` — CoffeeScript
+      - [ ] `.litcoffee` — Literate CoffeeScript
       - [x] `.ts`, `.tsx` — TypeScript
       - [x] `.php` — PHP (Hack also commonly uses `.php`)
       - [x] `.rb` — Ruby
@@ -216,10 +271,14 @@
       - [x] `.cmake` — CMake
       - [x] `.vim` — Vim script
       - [x] `.awk` — AWK
+      - [ ] `.gv` — Graphviz DOT graph visualization
+      - [ ] `.spdx` — Software Package Data Exchange (SBOM)
+      - [ ] `.yang` — YANG data modeling language
     - [x] Graphics and shader languages
       - [x] `.glsl`, `.vert`, `.frag` — GLSL
       - [x] `.hlsl` — HLSL
       - [x] `.metal` — Metal Shading Language
+      - [ ] `.wgsl` — WebGPU Shading Language
     - [ ] Visual and node-based programming
       - [ ] `.pd` — Pure Data patch
       - [ ] `.maxpat` — Max/MSP patch
@@ -234,6 +293,7 @@
       - [ ] Tasker task/profile export (format varies)
       - [ ] Tool-specific visual project formats for tooll.io (no stable extension)
       - [ ] `.vi` — LabVIEW virtual instrument
+      - [ ] `.pde` — Processing sketch (May need disambiguation with legacy Arduino sketches)
     - [x] Esoteric programming languages
       - [x] `.bf` — Brainfuck
   - [x] `.doc`
@@ -246,11 +306,20 @@
   - [ ] `.fb2` — FictionBook
   - [ ] `.djvu`, `.djv` — scanned-document format
   - [x] `.ppt`, `.pptx`, `.odp`
+  - [ ] `.pages` — Apple Pages document
+  - [ ] `.key` — Apple Keynote presentation (May need disambiguation with cryptographic private keys)
+  - [ ] `.one`, `.onepkg` — Microsoft OneNote notebook / package
+  - [ ] `.org` — Emacs Org-mode document (May need disambiguation with Lotus Organizer files)
+  - [ ] `.xps`, `.oxps` — XML Paper Specification
+  - [ ] `.chm` — Compiled HTML Help
+  - [ ] `.mht`, `.mhtml` — MIME HTML web archive
+  - [ ] `.ris` — Research Information Systems bibliography format
 - [ ] Spreadsheets
   - [x] `.csv`
   - [x] `.ods`
   - [x] `.tsv`
   - [x] `.xls`, `.xlsx`, `.xlsb`
+  - [ ] `.numbers` — Apple Numbers spreadsheet
 - [ ] 3D and CAD
   - [ ] Mesh models
     - [x] `.glb` — glTF binary; mesh or splat content is detected when opened
@@ -267,7 +336,18 @@
     - [ ] `.dxf` — CAD drawing interchange
     - [ ] `.dwg` — AutoCAD drawing
     - [ ] `.usd`, `.usdz`
+    - [ ] `.usda` — Universal Scene Description ASCII
     - [ ] `.blend`
+    - [ ] `.mtl` — Wavefront Material Template Library (companion to `.obj`)
+    - [ ] `.x_t`, `.x_b` — Parasolid CAD model (text / binary)
+    - [ ] `.jt` — Siemens JT lightweight CAD visualization (ISO 14306)
+    - [ ] `.dwf` — Autodesk Design Web Format
+    - [ ] `.ogex` — Open Game Engine Exchange
+    - [ ] `.u3d` — Universal 3D (3D PDF embedding)
+    - [ ] `.prc` — Product Representation Compact (3D PDF / CAD) (May need disambiguation with Palm OS applications and Mobipocket eBooks)
+    - [ ] `.igs` — Initial Graphics Exchange Specification (alternative to `.iges`)
+    - [ ] `.p21`, `.210`, `.stpnc`, `.stpx`, `.stpz` — STEP CAD model variants (Part 21, XML, and compressed)
+    - [ ] `.x3db`, `.x3dv` — X3D binary and VRML encodings
   - [ ] Gaussian splats
     - [x] `.glb` — Gaussian splat extension
     - [x] `.ply` — Gaussian PLY
@@ -277,16 +357,26 @@
   - [ ] PCB design and manufacturing
     - [ ] `.gbr` — Gerber
     - [ ] `.drl` — Excellon drill
-    - [ ] `.plt` — plotter / HPGL
+    - [ ] `.plt`, `.hpgl` — plotter / HPGL
 - [ ] 3D printing and fabrication
   - [ ] `.3mf` — 3D Manufacturing Format
   - [ ] `.amf` — Additive Manufacturing Format
   - [ ] `.gcode`
+  - [ ] `.ppd` — PostScript Printer Description
+- [ ] Technical diagrams and schematics
+  - [ ] `.vsd`, `.vsdx`, `.vdx` — Microsoft Visio drawing
+  - [ ] `.vss` — Microsoft Visio stencil
+  - [ ] `.vst` — Microsoft Visio template (May need disambiguation with VST audio plugins)
 - [ ] Music and sound design
   - [ ] MIDI and notation
     - [x] `.mid`, `.midi` — piano-roll viewer
+    - [ ] `.musicxml`, `.mxl` — MusicXML score (uncompressed and compressed)
+    - [ ] `.kar`, `.rmi` — Karaoke MIDI / RIFF MIDI
     - [ ] `.mscz` — MuseScore compressed score
     - [ ] `.orca` — ORCA live-coding music sequencer
+  - [ ] Tracker modules
+    - [ ] `.s3m` — Scream Tracker 3 module
+    - [ ] `.xm` — FastTracker 2 extended module
   - [ ] Synthesizer presets and patches
     - [ ] `.sysx` — MIDI System Exclusive preset dump
     - [ ] `.pgm` — MIDI program-change / synth patch bank (extension conflicts with supported PGM grayscale images)
@@ -324,17 +414,29 @@
     - [ ] `.ir` — Flipper Zero infrared capture
     - [ ] `.ibtn` — Flipper Zero iButton data
   - [ ] CAN bus logs (SavvyCAN-compatible families; CSV deliberately omitted because it is already listed under spreadsheets)
-    - [ ] `.asc` — Vector CANalyzer ASCII
+    - [ ] `.asc` — Vector CANalyzer ASCII (May need disambiguation with ASCII-armored PGP keys)
     - [ ] `.avc`, `.evc`, `.qcc` — CAN-DO logs
     - [ ] `.blf` — Vector CANalyzer binary
     - [ ] `.can` — Microchip / CAN-DO log
-    - [ ] `.crt`, `.crtd` — CRTD / OVMS
+    - [ ] `.crt`, `.crtd` — CRTD / OVMS (May need disambiguation with X.509 certificates)
     - [ ] `.trc` — IXXAT / PCAN trace
     - [ ] `.trace` — Vector CANalyzer trace (same extension as Proxmark trace)
 - [ ] Networking and messages
   - [ ] `.pcap`
   - [ ] `.pcapng`
   - [ ] `.eml` — email message
+  - [ ] `.msg` — Microsoft Outlook saved message
+  - [ ] `.mbox` — mbox email mailbox archive
+- [ ] Security, cryptography, and certificates
+  - [ ] `.pem` — Privacy-Enhanced Mail (PEM) certificate or key
+  - [ ] `.der` — Distinguished Encoding Rules (DER) binary certificate or key
+  - [ ] `.cer`, `.crt` — X.509 certificate (May need disambiguation with CRTD / OVMS CAN bus logs on `.crt`)
+  - [ ] `.p12`, `.pfx` — PKCS#12 certificate and private key archive
+  - [ ] `.p7b`, `.p7s`, `.p7c` — PKCS#7 certificate bundle and detached signature
+  - [ ] `.p8` — PKCS#8 private key
+  - [ ] `.kdbx` — KeePass password database
+  - [ ] `.pgp`, `.sig` — PGP encrypted file / detached signature
+  - [ ] `.asc` — ASCII-armored PGP key / signature (May need disambiguation with Vector CANalyzer ASCII logs)
 - [ ] Sewing, embroidery, and cutting machines
   - [ ] Machine embroidery stitch formats
     - [ ] `.dst` — Tajima
@@ -362,6 +464,9 @@
   - [ ] `.gpx`
   - [ ] `.kml`, `.kmz`
   - [ ] `.tcx`
+  - [ ] `.osm` — OpenStreetMap XML vector data
+  - [ ] `.mvt` — Mapbox Vector Tile
+  - [ ] `.gml` — Geography Markup Language
 - [ ] Genealogy
   - [ ] `.ged` — GEDCOM genealogy data
   - [ ] `.gdz` — genealogy database/archive
@@ -373,7 +478,13 @@
 - [ ] Screenwriting
   - [ ] `.fdx` — Final Draft
 - [ ] Astronomy and scientific imaging
+  - [ ] `.fits` — Flexible Image Transport System (astronomy and scientific multidimensional imaging)
   - [ ] `.xisf` — Extensible Image Serialization Format
+- [ ] Scientific data and multidimensional arrays
+  - [ ] `.hdf` — Hierarchical Data Format (HDF4 / HDF5)
+  - [ ] `.nc` — NetCDF scientific data (May need disambiguation with CNC numeric control / G-code toolpaths)
+- [ ] Medical imaging and data
+  - [ ] `.dcm` — DICOM medical imaging (CT, MRI, ultrasound)
 - [ ] Brewing recipes
   - [ ] `.bsmx` — BeerSmith
   - [ ] `.beerxml`, `.xml` — BeerXML recipe data (XML is also used by other types)
@@ -383,19 +494,46 @@
   - [ ] `.cbt` — Comic Book TAR archive
   - [ ] `.cbz` — Comic Book ZIP archive
   - [ ] `.cbx` — comic-book archive (format varies by application)
+- [ ] Game engines, interactive fiction, and game assets
+  - [ ] `.bsp` — Valve Source Engine compiled map
+  - [ ] `.vtf` — Valve Source Engine texture
+  - [ ] `.wad` — DOOM / id Tech game data archive (May need disambiguation with Nintendo Wii WAD packages)
+  - [ ] `.unityweb` — Unity WebGL data archive
+  - [ ] `.sm`, `.smzip` — StepMania stepchart and song package (May need disambiguation with Smalltalk source files on `.sm`)
+  - [ ] Interactive fiction and text adventures
+    - [ ] `.z1`, `.z2`, `.z3`, `.z4`, `.z5`, `.z6`, `.z7`, `.z8` — Z-Machine story files
+    - [ ] `.ulx` — Glulx interactive fiction VM story file
+    - [ ] `.blorb`, `.blb` — Blorb interactive fiction resource container
+    - [ ] `.gam` — TADS interactive fiction story file
 - [ ] Executables and compiled binaries
   - [ ] `.apk` — Android application package
   - [ ] `.class` — Java bytecode class
   - [ ] `.dll` — Windows dynamic-link library
   - [ ] `.elf` — Executable and Linkable Format binary (extension is optional)
   - [ ] `.exe` — Windows executable
-  - [ ] `.jar` — Java application/archive
+  - [ ] `.jar`, `.war`, `.ear` — Java application/archive / Web Archive / Enterprise Archive
   - [ ] `.o` — Unix object file
   - [ ] `.obj` — Windows/COFF object file (extension conflicts with supported Wavefront OBJ meshes)
   - [ ] `.so` — ELF shared object library
+- [ ] System packages, disk images, and virtualization
+  - [ ] `.deb` — Debian software package
+  - [ ] `.rpm` — Red Hat package
+  - [ ] `.msi` — Windows Installer package
+  - [ ] `.appx`, `.msix` — Windows App package
+  - [ ] `.crx` — Google Chrome extension
+  - [ ] `.xpi` — Mozilla Firefox extension
+  - [ ] `.dmg` — Apple disk image
+  - [ ] `.iso` — ISO 9660 optical disc image
+  - [ ] `.img` — raw disk image (May need disambiguation with GEM bitmap images)
+  - [ ] `.vdi` — VirtualBox disk image
+  - [ ] `.vmdk` — VMware virtual disk image
+  - [ ] `.vbox` — VirtualBox virtual machine settings
+  - [ ] `.ova`, `.ovf` — Open Virtualization Format archive and package
+  - [ ] `.torrent` — BitTorrent metainfo file
 - [ ] Archives
   - [ ] `.7z`
   - [ ] `.bz2`
+  - [ ] `.cab` — Windows Cabinet archive
   - [ ] `.gz`
   - [ ] `.rar`
   - [ ] `.tar`
