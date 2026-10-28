@@ -193,7 +193,31 @@
     - [x] `.md`, `.markdown` — Markdown syntax highlighting
       - [ ] Front matter parsing (YAML `---`, TOML `+++`, JSON `;;;` / `{...}`)
       - [ ] Embedded LaTeX math blocks (`$...$`, `$$...$$`)
-      - [ ] Embedded Mermaid diagram blocks
+      - [ ] Inline diagram block rendering (Kroki-compatible)
+        - [ ] Mermaid (`mermaid`, `mmd`)
+        - [ ] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`)
+        - [ ] D2 (`d2`)
+        - [ ] Graphviz DOT (`graphviz`, `dot`)
+        - [ ] DBML database markup (`dbml`)
+        - [ ] BPMN business process (`bpmn`)
+        - [ ] Diagrams.net / draw.io (`drawio`, `diagramsnet`)
+        - [ ] Excalidraw whiteboards (`excalidraw`)
+        - [ ] WaveDrom digital timing diagrams (`wavedrom`)
+        - [ ] Structurizr software architecture (`structurizr`)
+        - [ ] BlockDiag family (`blockdiag`, `seqdiag`, `actdiag`, `nwdiag`, `packetdiag`, `rackdiag`)
+        - [ ] Bytefield packet layouts (`bytefield`)
+        - [ ] Ditaa ASCII art diagrams (`ditaa`)
+        - [ ] Erd entity-relationship diagrams (`erd`)
+        - [ ] Nomnoml UML diagrams (`nomnoml`)
+        - [ ] Pikchr diagrams (`pikchr`)
+        - [ ] Svgbob ASCII art diagrams (`svgbob`)
+        - [ ] GoAT ASCII diagrams (`goat`)
+        - [ ] Lini text diagrams (`lini`)
+        - [ ] TikZ / PGF diagrams (`tikz`, `pgf`)
+        - [ ] UMLet diagrams (`umlet`)
+        - [ ] Vega and Vega-Lite charts (`vega`, `vegalite`)
+        - [ ] WireViz wiring harnesses (`wireviz`)
+        - [ ] Symbolator circuit symbols (`symbolator`)
     - [x] `.json` — JSON syntax highlighting
     - [x] `.toml` — TOML syntax highlighting
     - [x] `.xml`, `.svg` — XML syntax highlighting
@@ -330,7 +354,7 @@
       - [x] `.cmake` — CMake
       - [x] `.vim` — Vim script
       - [x] `.awk` — AWK
-      - [ ] `.gv` — Graphviz DOT graph visualization
+      - [ ] `.dot`, `.gv` — Graphviz DOT graph visualization (May need disambiguation with legacy Microsoft Word templates on `.dot`)
       - [ ] `.spdx` — Software Package Data Exchange (SBOM)
       - [ ] `.yang` — YANG data modeling language
     - [x] Graphics and shader languages
@@ -435,10 +459,42 @@
   - [ ] `.amf` — Additive Manufacturing Format
   - [ ] `.gcode`
   - [ ] `.ppd` — PostScript Printer Description
-- [ ] Technical diagrams and schematics
-  - [ ] `.vsd`, `.vsdx`, `.vdx` — Microsoft Visio drawing
-  - [ ] `.vss` — Microsoft Visio stencil
-  - [ ] `.vst` — Microsoft Visio template (May need disambiguation with VST audio plugins)
+- [ ] Technical diagrams, schematics, and diagram-as-code
+  - [ ] GUI diagram suites and whiteboard drawings
+    - [ ] `.vsd`, `.vsdx`, `.vdx` — Microsoft Visio drawing
+    - [ ] `.vss` — Microsoft Visio stencil
+    - [ ] `.vst` — Microsoft Visio template (May need disambiguation with VST audio plugins)
+    - [ ] `.drawio`, `.dio` — diagrams.net / draw.io diagram (May need disambiguation with digital I/O data on `.dio`; also commonly saved as compound `.drawio.xml`, `.drawio.svg`, `.drawio.png`)
+      - [ ] XML root metadata (`<mxfile>`: agent, version, etag, modified, compressed/raw boolean, page IDs/names)
+    - [ ] `.excalidraw`, `.excalidraw.json` — Excalidraw whiteboard drawing
+    - [ ] `.uxf` — UMLet eXchange Format
+  - [ ] Business process and architecture modeling
+    - [ ] `.bpmn`, `.bpmn2` — Business Process Model and Notation (BPMN 2.0 XML)
+    - [ ] `.structurizr`, `.dsl` — Structurizr architecture DSL (May need disambiguation with generic DSL scripts and Lingvo dictionary files on `.dsl`)
+  - [ ] Diagram as code (declarative architecture, flow, and schema DSLs)
+    - [ ] `.puml`, `.plantuml`, `.iuml` — PlantUML / C4-PlantUML diagram
+    - [ ] `.mmd`, `.mermaid` — Mermaid diagram (May need disambiguation with MultiMarkdown documents on `.mmd`)
+    - [ ] `.d2` — Terrastruct D2 diagram (May need disambiguation with Diablo II game data files on `.d2`)
+    - [ ] `.dot`, `.gv` — Graphviz DOT graph visualization (May need disambiguation with legacy Microsoft Word templates on `.dot`)
+    - [ ] `.dbml` — Database Markup Language (May need disambiguation with Microsoft LINQ to SQL database mapping files on `.dbml`)
+    - [ ] `.erd` — BurntSushi entity-relationship diagram (May need disambiguation with Eclipse ERMaster files on `.erd`)
+    - [ ] `.nomnoml` — Nomnoml UML diagram
+    - [ ] `.pikchr` — Pikchr diagram markup
+    - [ ] `.diag`, `.blockdiag`, `.seqdiag`, `.actdiag`, `.nwdiag`, `.packetdiag`, `.rackdiag` — BlockDiag family diagram (May need disambiguation with system diagnostic log files on `.diag`)
+  - [ ] Hardware, electrical, and packet layout diagrams
+    - [ ] `.bytefield`, `.bf` — Bytefield-SVG network/binary packet layout (May need disambiguation with Brainfuck source files on `.bf`)
+    - [ ] `.wavedrom`, `.wave.json` — WaveDrom digital timing diagram (conventional compound extension for JSON)
+    - [ ] `.wireviz`, `.wire.yaml`, `.wire.yml` — WireViz cable and wiring harness diagram (conventional compound extension for YAML)
+    - [ ] `.sym` — Symbolator circuit component pinout diagram (May need disambiguation with compiler debug symbol files on `.sym`)
+  - [ ] ASCII-art and text-to-vector diagram tools
+    - [ ] `.ditaa` — Ditaa ASCII art diagram
+    - [ ] `.bob`, `.svgbob` — Svgbob ASCII-to-SVG diagram (May need disambiguation with BOB raytracer / CAD files on `.bob`)
+    - [ ] `.goat` — GoAT ASCII diagram
+    - [ ] `.lini` — Lini text diagram
+  - [ ] Scientific and statistical charting specifications
+    - [ ] `.vg.json`, `.vega` — Vega visualization specification (conventional compound extension for JSON)
+    - [ ] `.vl.json`, `.vegalite` — Vega-Lite visualization specification (conventional compound extension for JSON)
+    - [ ] `.tikz`, `.pgf` — TikZ / PGF LaTeX graphics (May need disambiguation with Progressive Graphics File raster images on `.pgf`)
 - [ ] Music and sound design
   - [ ] MIDI and notation
     - [x] `.mid`, `.midi` — piano-roll viewer
