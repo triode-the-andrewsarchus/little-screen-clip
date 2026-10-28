@@ -299,6 +299,9 @@ impl DecodedImageData {
             || path.as_ref().is_some_and(|path| {
                 little_clip_core::item::guess_image_mime(path) == "image/svg+xml"
             });
+        let is_raw = little_clip_core::raw_image::is_raw_image_bytes(&bytes)
+            || (image::guess_format(&bytes).is_err()
+                && path.as_deref().is_some_and(little_clip_core::raw_image::is_raw_image_path));
         let rgba = if is_svg {
             let source = svg.as_deref().map_err(|error| error.to_string())?;
             little_clip_core::svg_image::render_rgba(
@@ -306,6 +309,8 @@ impl DecodedImageData {
                 None,
                 &std::sync::atomic::AtomicBool::new(false),
             )?
+        } else if is_raw {
+            little_clip_core::raw_image::decode_raw_image_from_bytes(&bytes)?
         } else {
             use image::ImageDecoder;
             let mut decoder = little_clip_core::item::image_reader(&bytes, Some(&mime))
@@ -329,7 +334,25 @@ impl DecodedImageData {
         };
 
         drop(svg);
-        let metadata = extract_image_metadata(&bytes);
+        let mut metadata = extract_image_metadata(&bytes);
+        if is_raw
+            && !metadata.has_any_metadata()
+            && let Some(details) = little_clip_core::raw_image::read_raw_details_from_bytes(&bytes)
+        {
+            metadata.make = details.make;
+            metadata.model = details.model;
+            metadata.lens_model = details.lens_model;
+            metadata.date_time = details.date_time;
+            metadata.iso = details.iso;
+            metadata.f_number = details.f_number;
+            metadata.exposure_time = details.exposure_time;
+            metadata.focal_length = details.focal_length;
+            metadata.software = details.software;
+            metadata.gps_latitude = details.gps_latitude;
+            metadata.gps_longitude = details.gps_longitude;
+            metadata.gps_altitude = details.gps_altitude;
+            metadata.has_exif = true;
+        }
         let layer_document = layers::Document::from_bytes(&bytes, &rgba)?;
         Ok(Self {
             mime,

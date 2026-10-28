@@ -282,3 +282,17 @@ fn clipped_inline_image_preview_defers_texture_upload() {
 
     assert!(preview.texture.is_some());
 }
+
+#[test]
+fn raw_format_is_recognized_and_handled_in_decoded_image_data() {
+    let dummy_raw_path = PathBuf::from("sample_camera_photo.NEF");
+    let result = DecodedImageData::from_bytes(
+        b"corrupt-or-unsupported-raw-payload".to_vec(),
+        "image/x-nikon-nef".to_string(),
+        Some(dummy_raw_path),
+    );
+    match result {
+        Err(err) => assert!(err.contains("RAW")),
+        Ok(_) => panic!("Expected error decoding invalid RAW payload"),
+    }
+}

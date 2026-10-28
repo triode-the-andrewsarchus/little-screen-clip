@@ -603,7 +603,9 @@ fn kind(path: &Path) -> Kind {
         Kind::Document(format)
     } else if super::midi_strip::is_midi(path) {
         Kind::Midi
-    } else if little_clip_core::item::is_image_path(path) {
+    } else if little_clip_core::item::is_image_path(path)
+        || little_clip_core::raw_image::is_raw_image_path(path)
+    {
         Kind::Image
     } else if little_clip_core::audio::is_audio_path(path) {
         Kind::Audio
