@@ -397,4 +397,8 @@ fn save_dialogs_use_the_in_workbench_modal_and_keep_default_extensions() {
     state.open_save_dialog_with_ext("webp");
     assert!(state.show_fallback_save_modal);
     assert_eq!(state.fallback_save_path, "/tmp/source_converted.webp");
+
+    state.path = Some(PathBuf::from("/tmp/source.CR2"));
+    state.open_save_dialog();
+    assert_eq!(state.fallback_save_path, "/tmp/source_edit.png");
 }

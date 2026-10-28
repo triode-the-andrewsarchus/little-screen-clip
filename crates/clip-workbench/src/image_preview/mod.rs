@@ -813,9 +813,14 @@ impl ImagePreviewState {
     pub fn open_save_dialog(&mut self) {
         let default_target = if let Some(p) = &self.path {
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
-            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("png");
+            let is_raw = little_clip_core::raw_image::is_raw_image_path(p);
+            let ext = if is_raw {
+                "png"
+            } else {
+                p.extension().and_then(|s| s.to_str()).unwrap_or("png")
+            };
             let parent = p.parent().unwrap_or_else(|| Path::new("."));
-            if self.undo_stack.is_empty() {
+            if !is_raw && self.undo_stack.is_empty() {
                 parent.join(format!("{}.{}", stem, ext))
             } else {
                 parent.join(format!("{}_edit.{}", stem, ext))
