@@ -2,6 +2,7 @@
 mod inventory;
 mod media;
 mod svg;
+pub(super) mod verification;
 mod video;
 use super::{
     policy::{self, Root},
@@ -15,7 +16,7 @@ use std::{
     io::Read,
     os::fd::AsRawFd,
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
@@ -97,6 +98,9 @@ pub(super) enum Request {
         root: SourceRoot,
         entry: Entry,
         cursor: usize,
+        /// Literal search never decodes unsupported media or renders PDF pages.
+        #[serde(default)]
+        text_only: bool,
     },
     Header {
         root: SourceRoot,
@@ -121,12 +125,18 @@ pub(super) enum Request {
     },
 }
 #[derive(Serialize, Deserialize)]
+pub(super) enum WatchRegistration {
+    Ready(i32),
+    /// Registration did not change the inotify instance.
+    Unavailable(String),
+}
+#[derive(Serialize, Deserialize)]
 pub(super) enum Reply {
     Restored(u64),
     ImageHash(u64),
-    Watch(i32),
+    Watch(WatchRegistration),
     Root(SourceRoot),
-    Directory(Directory),
+    Directory(Inventory),
     DirectoryWritten,
     Prepared(Prepared),
     Header(String),
@@ -134,6 +144,15 @@ pub(super) enum Reply {
     Fingerprint(Option<[u8; 32]>),
     VerifiedBatch(Vec<usize>),
 }
+#[derive(Serialize, Deserialize)]
+pub(super) struct Inventory {
+    pub directory: Directory,
+    pub storage_bytes: u64,
+    // In-process admission ownership; never accepted from a helper response.
+    #[serde(skip)]
+    pub permit: Option<Arc<()>>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Prepared {
     pub text: String,
@@ -145,6 +164,22 @@ pub(super) struct Prepared {
     pub coverage: String,
     #[serde(default)]
     pub vision_tokens: Option<u32>,
+}
+impl Prepared {
+    fn validate_staging(&self) -> Result<(), String> {
+        if self.text.len() > 8 * 1024 * 1024
+            || self
+                .data
+                .as_ref()
+                .is_some_and(|data| data.len() > 16 * 1024 * 1024)
+            || self.location.len() > 2048
+            || self.coverage.len() > 3072
+            || !matches!(self.modality.as_str(), "" | "text" | "image" | "audio")
+        {
+            return Err("Prepared source exceeds its staging budget".into());
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn call(request: &Request, cancel: &AtomicBool) -> Result<Reply, String> {
@@ -160,7 +195,7 @@ pub(super) fn watch(
     path: &Path,
     handle: &std::fs::File,
     cancel: &AtomicBool,
-) -> Result<i32, String> {
+) -> Result<WatchRegistration, String> {
     let (command, fd) = CommandRequest::new("/proc/self/exe")
         .inherit_handle(handle)
         .map_err(|e| e.to_string())?;
@@ -244,12 +279,13 @@ fn call_with(
     command: CommandRequest,
     cancel: &AtomicBool,
 ) -> Result<Reply, String> {
-    let timeout = if matches!(request, Request::Restore { .. }) {
-        300
-    } else {
-        90
+    let timeout = match request {
+        Request::Restore { .. } => 300,
+        Request::Extract { entry, .. } if little_clip_core::document::is_rtf(&entry.path) => 30,
+        _ => 90,
     };
     let output = command
+        .die_with_parent()
         .arg("--internal-file-search-reader")
         .stdin_bytes(serde_json::to_vec(request).map_err(|e| e.to_string())?)
         .own_process_group()
@@ -260,8 +296,12 @@ fn call_with(
     if !output.status.success() || output.stdout_truncated {
         return Err(format!("Search reader failed: {}", output.stderr_lossy()));
     }
-    serde_json::from_slice::<Result<Reply, String>>(&output.stdout)
-        .map_err(|e| format!("Invalid search reader reply: {e}"))?
+    let reply = serde_json::from_slice::<Result<Reply, String>>(&output.stdout)
+        .map_err(|e| format!("Invalid search reader reply: {e}"))??;
+    if let Reply::Prepared(prepared) = &reply {
+        prepared.validate_staging()?;
+    }
+    Ok(reply)
 }
 
 pub(crate) fn run() -> Result<(), String> {
@@ -281,10 +321,12 @@ pub(crate) fn run() -> Result<(), String> {
 
 // Called only in the disposable helper, never by in-process test execution.
 fn reader_limits(request: &Request) -> Result<(), String> {
-    let (cpu, hard) = if matches!(request, Request::Restore { .. }) {
-        (240, 250)
-    } else {
-        (60, 70)
+    let (cpu, hard) = match request {
+        Request::Restore { .. } => (240, 250),
+        Request::Extract { entry, .. } if little_clip_core::document::is_rtf(&entry.path) => {
+            (20, 25)
+        }
+        _ => (60, 70),
     };
     for (resource, soft, hard) in [
         (libc::RLIMIT_AS, 2_147_483_648, 2_147_483_648),
@@ -328,10 +370,11 @@ fn execute(request: Request) -> Result<Reply, String> {
             root,
             entry,
             cursor,
+            text_only,
         } => {
             let origin = root.validate()?;
             let mut file = source(&origin, &entry)?;
-            let prepared = extract(&entry, &mut file, cursor)?;
+            let prepared = extract(&entry, &mut file, cursor, text_only)?;
             verify(&origin, &entry, &file)?;
             Ok(Reply::Prepared(prepared))
         }
@@ -378,15 +421,22 @@ fn fingerprint(root: &SourceRoot, entry: &Entry) -> Result<Reply, String> {
     Ok(Reply::Fingerprint(Some(digest.finalize().into())))
 }
 
-fn attach_watch(root: &SourceRoot, path: &Path, fd: i32) -> Result<i32, String> {
-    let origin = root.validate()?;
-    if !path.starts_with(&root.path) {
-        return Err("Watch is outside the enrolled root".into());
-    }
-    let folder = origin.child(path)?;
-    if folder.path != path || folder.device != root.device {
-        return Err("Watch crosses an alias or mount".into());
-    }
+fn attach_watch(root: &SourceRoot, path: &Path, fd: i32) -> Result<WatchRegistration, String> {
+    let prepare = || -> Result<_, String> {
+        let origin = root.validate()?;
+        if !path.starts_with(&root.path) {
+            return Err("Watch is outside the enrolled root".into());
+        }
+        let folder = origin.child(path)?;
+        if folder.path != path || folder.device != root.device {
+            return Err("Watch crosses an alias or mount".into());
+        }
+        Ok((origin, folder))
+    };
+    let (origin, folder) = match prepare() {
+        Ok(pinned) => pinned,
+        Err(error) => return Ok(WatchRegistration::Unavailable(error)),
+    };
     let label =
         std::ffi::CString::new(format!("/proc/self/fd/{}", folder.directory.as_raw_fd())).unwrap();
     let mask = libc::IN_ONLYDIR
@@ -403,7 +453,9 @@ fn attach_watch(root: &SourceRoot, path: &Path, fd: i32) -> Result<i32, String> 
     // held ordinary directory, and the kernel copies its nul-terminated bytes.
     let wd = unsafe { libc::inotify_add_watch(fd, label.as_ptr(), mask) };
     if wd < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
+        return Ok(WatchRegistration::Unavailable(
+            std::io::Error::last_os_error().to_string(),
+        ));
     }
     if let Err(error) = folder.revalidate().and_then(|_| origin.revalidate()) {
         // SAFETY: remove only the registration just returned by this instance.
@@ -412,7 +464,7 @@ fn attach_watch(root: &SourceRoot, path: &Path, fd: i32) -> Result<i32, String> 
         }
         return Err(error);
     }
-    Ok(wd)
+    Ok(WatchRegistration::Ready(wd))
 }
 
 fn image_hash(entry: &Entry, cached: Option<u64>) -> Result<Reply, String> {
@@ -538,23 +590,36 @@ fn admit_inventory(
         if !eligible(&entry, origin, hidden) || policy::excluded_by_user(&entry.path, exclusions) {
             continue;
         }
-        match origin.admit(&entry.path) {
-            Ok(Some(pinned)) => {
-                let identity = pinned
-                    .metadata()
-                    .ok()
-                    .map(|metadata| filesystem::identity(&metadata));
-                if identity == entry.identity {
-                    directory.entries.push(entry);
-                } else {
-                    directory.skipped += 1;
-                }
-            }
+        match admit_entry(origin, entry) {
+            Ok(Some(entry)) => directory.entries.push(entry),
             Ok(None) => {} // Nested mounts/aliases need their own explicit root.
             Err(_) => directory.skipped += 1,
         }
     }
     directory
+}
+
+fn admit_entry(origin: &Root, mut entry: Entry) -> Result<Option<Entry>, String> {
+    let Some(pinned) = origin.admit(&entry.path)? else {
+        return Ok(None);
+    };
+    let identity = filesystem::identity(&pinned.metadata().map_err(|error| error.to_string())?);
+    if Some(identity) != entry.identity {
+        return Err("Search source changed during inventory".into());
+    }
+    if entry.regular_file && crate::file_manager::text_strip::typescript_suffix(&entry.path) {
+        // Descriptor-relative enumeration deliberately performs no path-based
+        // sniffing. Probe only after policy admission, through a verified pin.
+        let file = source(origin, &entry)?;
+        let mut bytes = Vec::new();
+        (&file)
+            .take(crate::file_manager::text_strip::TYPESCRIPT_PROBE_BYTES as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        verify(origin, &entry, &file)?;
+        entry.typescript = crate::file_manager::text_strip::typescript_bytes(&bytes);
+    }
+    Ok(Some(entry))
 }
 
 fn eligible(entry: &Entry, root: &Root, hidden: bool) -> bool {
@@ -607,7 +672,12 @@ fn verify(root: &Root, entry: &Entry, file: &std::fs::File) -> Result<(), String
     root.revalidate()
 }
 
-fn extract(entry: &Entry, file: &mut std::fs::File, cursor: usize) -> Result<Prepared, String> {
+fn extract(
+    entry: &Entry,
+    file: &mut std::fs::File,
+    cursor: usize,
+    text_only: bool,
+) -> Result<Prepared, String> {
     let held = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
     if little_clip_core::pdf::is_pdf_path(&entry.path) {
         if entry.size_bytes > 512 * 1024 * 1024 {
@@ -616,7 +686,15 @@ fn extract(entry: &Entry, file: &mut std::fs::File, cursor: usize) -> Result<Pre
                 ..Default::default()
             });
         }
-        return pdf(&held, cursor);
+        return pdf(&held, cursor, text_only);
+    }
+    if text_only && !supports_text(entry) {
+        return Ok(Prepared {
+            coverage:
+                "name-only: no supported text extractor for this type; OCR/transcription is not enabled"
+                    .into(),
+            ..Default::default()
+        });
     }
     if entry.is_photo() {
         if entry.size_bytes > 256 * 1024 * 1024 {
@@ -635,25 +713,54 @@ fn extract(entry: &Entry, file: &mut std::fs::File, cursor: usize) -> Result<Pre
     }
     text(entry, file, cursor)
 }
-fn text(entry: &Entry, file: &mut std::fs::File, cursor: usize) -> Result<Prepared, String> {
+pub(super) const NAME_ONLY_UNSUPPORTED: &str = "name-only: extractor unavailable";
+
+pub(super) fn supports_content(entry: &Entry) -> bool {
+    supports_text(entry)
+        || entry.is_photo()
+        || little_clip_core::audio::is_audio_path(&entry.path)
+        || entry.is_video()
+}
+
+pub(super) fn supports_text(entry: &Entry) -> bool {
+    little_clip_core::pdf::is_pdf_path(&entry.path)
+        || (!entry.is_photo()
+            && !little_clip_core::audio::is_audio_path(&entry.path)
+            && !entry.is_video()
+            && text_kind(entry).is_some())
+}
+
+fn text_kind(entry: &Entry) -> Option<&'static str> {
     let extension = entry
         .path
         .extension()
         .unwrap_or_default()
         .to_string_lossy()
         .to_lowercase();
-    let kind = if matches!(
-        extension.as_str(),
-        "html" | "htm" | "xhtml" | "docx" | "odt" | "pptx" | "xlsx"
-    ) {
-        extension.as_str()
-    } else if crate::file_manager::text_strip::known_text(&entry.path)
-        || matches!(extension.as_str(), "rst" | "org")
-    {
-        "txt"
-    } else {
+    match extension.as_str() {
+        "html" => Some("html"),
+        "htm" => Some("htm"),
+        "xhtml" => Some("xhtml"),
+        "docx" => Some("docx"),
+        "odt" => Some("odt"),
+        "pptx" => Some("pptx"),
+        "xlsx" => Some("xlsx"),
+        "rtf" => Some("rtf"),
+        _ if entry.typescript => Some("txt"),
+        _ if crate::file_manager::text_strip::typescript_suffix(&entry.path) => None,
+        _ if crate::file_manager::text_strip::known_text(&entry.path)
+            || matches!(extension.as_str(), "rst" | "org") =>
+        {
+            Some("txt")
+        }
+        _ => None,
+    }
+}
+
+fn text(entry: &Entry, file: &mut std::fs::File, cursor: usize) -> Result<Prepared, String> {
+    let Some(kind) = text_kind(entry) else {
         return Ok(Prepared {
-            coverage: "name-only: extractor unavailable".into(),
+            coverage: NAME_ONLY_UNSUPPORTED.into(),
             ..Default::default()
         });
     };
@@ -663,9 +770,32 @@ fn text(entry: &Entry, file: &mut std::fs::File, cursor: usize) -> Result<Prepar
             ..Default::default()
         });
     }
+    if kind == "rtf" {
+        if cursor != 0 {
+            return Err("RTF cursor is outside extracted coverage".into());
+        }
+        let mut bytes = Vec::new();
+        file.take(64 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        let extracted = little_clip_core::document::extract_rtf_text(&bytes, 8 * 1024 * 1024)?;
+        return Ok(Prepared {
+            text: extracted.text,
+            modality: "text".into(),
+            location: "RTF body text".into(),
+            coverage: if extracted.complete {
+                "complete"
+            } else {
+                "partial: RTF text only; skipped content, embedded images or text budget"
+            }
+            .into(),
+            ..Default::default()
+        });
+    }
     let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/search_model");
     let script = super::runtime::helper_script("documents.py", &bundled)?;
     let output = CommandRequest::new("python3")
+        .die_with_parent()
         .arg("-I")
         .arg(script)
         .args(["--kind", kind, "--cursor", &cursor.to_string()])
@@ -685,14 +815,20 @@ fn text(entry: &Entry, file: &mut std::fs::File, cursor: usize) -> Result<Prepar
         .map_err(|e| format!("Invalid document extraction reply: {e}"))?
 }
 
-fn pdf(path: &Path, cursor: usize) -> Result<Prepared, String> {
+fn pdf(path: &Path, cursor: usize, text_only: bool) -> Result<Prepared, String> {
     let info = little_clip_core::pdf::get_pdf_info(path)?;
     let page = cursor + 1;
     if page > info.page_count.min(512) {
         return Err("PDF page is outside extraction budget".into());
     }
     let text = little_clip_core::pdf::extract_pdf_page_text(path, page)?;
-    let data = if text.trim().chars().count() < 200 {
+    let sparse = text
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .take(200)
+        .count()
+        < 200;
+    let data = if sparse && !text_only {
         Some(STANDARD.encode(little_clip_core::pdf::render_pdf_page_thumbnail(path, page, 1024)?.0))
     } else {
         None
@@ -705,6 +841,8 @@ fn pdf(path: &Path, cursor: usize) -> Result<Prepared, String> {
         next: (page < info.page_count.min(512)).then_some(page),
         coverage: if info.page_count > 512 {
             "partial: 512 page limit"
+        } else if sparse && text_only {
+            "partial: PDF page has insufficient extracted text; OCR is not enabled"
         } else {
             "complete"
         }
@@ -718,6 +856,7 @@ fn photo(entry: &Entry, file: &mut std::fs::File, held: &Path) -> Result<Prepare
     let mime = little_clip_core::item::guess_image_mime(&entry.path);
     let bytes = if little_clip_core::raw_image::is_raw_image_path(&entry.path) {
         let output = CommandRequest::new("exiftool")
+            .die_with_parent()
             .args(["-b", "-PreviewImage"])
             .arg_content_file(held)
             .map_err(|e| e.to_string())?
@@ -782,11 +921,52 @@ fn audio(path: &Path, cursor: usize, bytes: u64) -> Result<Prepared, String> {
 mod tests {
     use super::*;
 
-    fn only_source(folder: &Path) -> (SourceRoot, Entry) {
+    #[test]
+    fn prepared_reply_budgets_cover_payload_and_repeated_location_metadata() {
+        let mut prepared = Prepared {
+            text: "x".repeat(8 * 1024 * 1024),
+            data: Some("A".repeat(16 * 1024 * 1024)),
+            modality: "image".into(),
+            location: "x".repeat(2048),
+            coverage: "x".repeat(3072),
+            ..Default::default()
+        };
+        assert!(prepared.validate_staging().is_ok());
+        prepared.text.push('x');
+        assert!(prepared.validate_staging().is_err());
+        prepared.text.pop();
+        prepared.data.as_mut().unwrap().push('A');
+        assert!(prepared.validate_staging().is_err());
+        prepared.data.as_mut().unwrap().pop();
+        prepared.location.push('x');
+        assert!(prepared.validate_staging().is_err());
+        prepared.location.pop();
+        prepared.coverage.push('x');
+        assert!(prepared.validate_staging().is_err());
+        prepared.coverage.pop();
+        prepared.modality = "unexpected".into();
+        assert!(prepared.validate_staging().is_err());
+        assert!(Prepared::default().validate_staging().is_ok());
+    }
+
+    pub(super) fn only_source(folder: &Path) -> (SourceRoot, Entry) {
         let root = SourceRoot::capture(folder).unwrap();
         let mut directory = filesystem::read_directory(folder, &AtomicBool::new(false)).unwrap();
         assert_eq!(directory.entries.len(), 1);
         (root, directory.entries.remove(0))
+    }
+    fn prepared_source(root: &SourceRoot, entry: &Entry, text_only: bool) -> Prepared {
+        match execute(Request::Extract {
+            root: root.clone(),
+            entry: entry.clone(),
+            cursor: 0,
+            text_only,
+        })
+        .unwrap()
+        {
+            Reply::Prepared(prepared) => prepared,
+            _ => panic!("Unexpected extraction reply"),
+        }
     }
     #[test]
     fn full_fingerprint_hashes_verified_bytes_and_skips_large_payloads() {
@@ -857,7 +1037,7 @@ mod tests {
             "This must exercise same-filesystem mounts"
         );
         let root = SourceRoot::capture(&enrolled).unwrap();
-        let Reply::Directory(directory) = execute(Request::List {
+        let Reply::Directory(Inventory { directory, .. }) = execute(Request::List {
             output: None,
             root: root.clone(),
             path: enrolled.clone(),
@@ -887,7 +1067,8 @@ mod tests {
             execute(Request::Extract {
                 root: root.clone(),
                 entry: entry.clone(),
-                cursor: 0
+                cursor: 0,
+                text_only: false,
             })
             .is_err()
         );
@@ -923,7 +1104,8 @@ mod tests {
             execute(Request::Extract {
                 root: root.clone(),
                 entry: mounted_file,
-                cursor: 0
+                cursor: 0,
+                text_only: false,
             })
             .is_err()
         );
@@ -938,8 +1120,14 @@ mod tests {
         let descriptor = unsafe { libc::inotify_init1(libc::IN_CLOEXEC | libc::IN_NONBLOCK) };
         assert!(descriptor >= 0);
         let watch = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(descriptor) };
-        assert!(attach_watch(&root, &nested, watch.as_raw_fd()).is_err());
-        assert!(attach_watch(&root, &enrolled, watch.as_raw_fd()).is_ok());
+        assert!(matches!(
+            attach_watch(&root, &nested, watch.as_raw_fd()).unwrap(),
+            WatchRegistration::Unavailable(_)
+        ));
+        assert!(matches!(
+            attach_watch(&root, &enrolled, watch.as_raw_fd()).unwrap(),
+            WatchRegistration::Ready(_)
+        ));
         let chosen = SourceRoot::capture(&nested).unwrap();
         // Same backing inode through two independently mounted source views
         // must not overwrite one another's file record or source context.
@@ -974,6 +1162,7 @@ mod tests {
             root: chosen,
             entry,
             cursor: 0,
+            text_only: false,
         })
         .unwrap() else {
             panic!()
@@ -1017,6 +1206,137 @@ mod tests {
     }
 
     #[test]
+    fn rtf_uses_passive_text_in_both_search_modes_with_coverage_and_source_guards() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("record.RTF");
+        for (bytes, complete) in [
+            (
+                br"{\rtf1\ansi Stored date: \b 2019-06-30\b0.}".as_slice(),
+                true,
+            ),
+            (
+                br"{\rtf1\ansi Stored date: 2019-06-30.{\header Hidden header}}",
+                false,
+            ),
+        ] {
+            std::fs::write(&path, bytes).unwrap();
+            let (root, entry) = only_source(folder.path());
+            assert!(supports_text(&entry));
+            for text_only in [false, true] {
+                let prepared = prepared_source(&root, &entry, text_only);
+                assert!(prepared.text.contains("Stored date: 2019-06-30."));
+                assert!(!prepared.text.contains("Hidden"));
+                assert_eq!(prepared.coverage == "complete", complete);
+                assert_eq!(prepared.location, "RTF body text");
+                assert_eq!(prepared.modality, "text");
+                assert!(prepared.next.is_none() && prepared.data.is_none());
+            }
+            assert!(
+                execute(Request::Extract {
+                    root: root.clone(),
+                    entry: entry.clone(),
+                    cursor: 1,
+                    text_only: true,
+                })
+                .is_err()
+            );
+            let replacement = folder.path().join("replacement");
+            std::fs::write(&replacement, bytes).unwrap();
+            std::fs::rename(replacement, &path).unwrap();
+            assert!(
+                execute(Request::Extract {
+                    root,
+                    entry,
+                    cursor: 0,
+                    text_only: true,
+                })
+                .is_err()
+            );
+        }
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(64 * 1024 * 1024 + 1)
+            .unwrap();
+        let (root, entry) = only_source(folder.path());
+        assert!(
+            prepared_source(&root, &entry, true)
+                .coverage
+                .contains("64 MiB")
+        );
+    }
+
+    #[test]
+    fn pinned_inventory_disambiguates_typescript_before_filters_and_extraction() {
+        use crate::file_manager::search::query::Query;
+        let folder = tempfile::tempdir().unwrap();
+        let code = "export const sentinel = \"violet lighthouse\";\n";
+        for extension in ["ts", "mts", "cts", "TS"] {
+            std::fs::write(folder.path().join(format!("module.{extension}")), code).unwrap();
+            std::fs::write(
+                folder.path().join(format!("recording.{extension}")),
+                [0x47, 0, 0, 0xff],
+            )
+            .unwrap();
+        }
+        let root = SourceRoot::capture(folder.path()).unwrap();
+        let directory = list(&root, folder.path(), false, &[]).unwrap();
+        assert_eq!(directory.skipped, 0);
+        assert_eq!(directory.entries.len(), 8);
+        for entry in directory.entries {
+            let script = entry.name.starts_with("module.");
+            assert_eq!(entry.typescript, script, "{}", entry.name);
+            assert_eq!(supports_text(&entry), script, "{}", entry.name);
+            assert_eq!(
+                Query::parse(":document").unwrap().metadata_matches(&entry),
+                script
+            );
+            if script {
+                assert!(!Query::parse(":video").unwrap().metadata_matches(&entry));
+            }
+            for text_only in [true, false] {
+                if !script && !text_only {
+                    continue;
+                }
+                let prepared = prepared_source(&root, &entry, text_only);
+                if script {
+                    assert_eq!(prepared.text, code);
+                    assert_eq!(prepared.coverage, "complete");
+                } else {
+                    assert!(prepared.text.is_empty() && prepared.data.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn subtype_probe_runs_only_after_admission_and_rejects_changed_revisions() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("module.ts"), "export const value = 1;").unwrap();
+        let (root, mut entry) = only_source(folder.path());
+        let origin = root.validate().unwrap();
+        entry.typescript = false;
+        entry.revision = entry.revision.wrapping_add(1);
+        assert!(admit_entry(&origin, entry.clone()).is_err());
+        let mut directory =
+            filesystem::read_directory(folder.path(), &AtomicBool::new(false)).unwrap();
+        directory.entries = vec![entry.clone()];
+        let excluded = admit_inventory(
+            &origin,
+            directory.clone(),
+            true,
+            std::slice::from_ref(&entry.path),
+        );
+        assert!(excluded.entries.is_empty());
+        assert_eq!(
+            excluded.skipped, 0,
+            "excluded files must not enter the failing probe"
+        );
+        let changed = admit_inventory(&origin, directory, true, &[]);
+        assert!(changed.entries.is_empty());
+        assert_eq!(changed.skipped, 1);
+    }
+
+    #[test]
     fn enumeration_excludes_aliases_secrets_and_generated_subtrees() {
         let folder = tempfile::tempdir().unwrap();
         std::fs::write(folder.path().join("notes.txt"), "hello").unwrap();
@@ -1024,7 +1344,7 @@ mod tests {
         std::fs::create_dir(folder.path().join(".git")).unwrap();
         std::os::unix::fs::symlink("notes.txt", folder.path().join("alias.txt")).unwrap();
         let root = SourceRoot::capture(folder.path()).unwrap();
-        let Reply::Directory(dir) = execute(Request::List {
+        let Reply::Directory(Inventory { directory: dir, .. }) = execute(Request::List {
             output: None,
             path: root.path.clone(),
             root,
@@ -1058,7 +1378,7 @@ mod tests {
             ],
         };
         let request = serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
-        let Reply::Directory(directory) = execute(request).unwrap() else {
+        let Reply::Directory(Inventory { directory, .. }) = execute(request).unwrap() else {
             panic!()
         };
         assert_eq!(
@@ -1120,6 +1440,7 @@ mod tests {
                 root: root.clone(),
                 entry: entry.clone(),
                 cursor,
+                text_only: false,
             })
             .unwrap() else {
                 panic!()
@@ -1165,7 +1486,8 @@ mod tests {
             execute(Request::Extract {
                 root,
                 entry,
-                cursor: 0
+                cursor: 0,
+                text_only: false,
             })
             .is_err()
         );
@@ -1212,14 +1534,7 @@ mod tests {
         let root = SourceRoot::capture(folder.path()).unwrap();
         let directory = filesystem::read_directory(folder.path(), &AtomicBool::new(false)).unwrap();
         for entry in directory.entries {
-            let Reply::Prepared(prepared) = execute(Request::Extract {
-                root: root.clone(),
-                entry,
-                cursor: 0,
-            })
-            .unwrap() else {
-                panic!()
-            };
+            let prepared = prepared_source(&root, &entry, false);
             assert!(prepared.coverage.starts_with("name-only:"));
             assert!(prepared.text.is_empty() && prepared.data.is_none() && prepared.next.is_none());
         }
@@ -1235,6 +1550,7 @@ mod tests {
             root,
             entry: directory.entries[0].clone(),
             cursor: 0,
+            text_only: false,
         })
         .unwrap() else {
             panic!()
@@ -1242,6 +1558,187 @@ mod tests {
         assert_eq!(prepared.text, source);
         assert_eq!(prepared.coverage, "complete");
     }
+    #[test]
+    fn content_admission_shares_text_media_and_typescript_classification() {
+        let folder = tempfile::tempdir().unwrap();
+        for name in [
+            "archive.zip",
+            "program.exe",
+            "scene.stl",
+            "score.mid",
+            "unknown.data",
+            "notes.txt",
+            "source.rs",
+            "document.rtf",
+            "document.pdf",
+            "image.png",
+            "audio.wav",
+            "video.mp4",
+        ] {
+            std::fs::write(folder.path().join(name), b"owned fixture").unwrap();
+        }
+        let directory = filesystem::read_directory(folder.path(), &AtomicBool::new(false)).unwrap();
+        for entry in directory.entries {
+            let expected = !matches!(
+                entry.name.as_str(),
+                "archive.zip" | "program.exe" | "scene.stl" | "score.mid" | "unknown.data"
+            );
+            assert_eq!(supports_content(&entry), expected, "{}", entry.name);
+            assert_eq!(
+                super::super::answer::supports(&entry),
+                expected && !entry.is_playable_media(),
+                "{}",
+                entry.name
+            );
+        }
+        let mut entry = filesystem::read_directory(folder.path(), &AtomicBool::new(false))
+            .unwrap()
+            .entries
+            .remove(0);
+        entry.path = folder.path().join("module.ts");
+        entry.typescript = true;
+        assert!(supports_text(&entry) && supports_content(&entry));
+        entry.typescript = false;
+        assert!(
+            !supports_text(&entry) && supports_content(&entry),
+            "transport streams retain the video route"
+        );
+    }
+
+    #[test]
+    fn text_only_requests_skip_invalid_media_without_invoking_decoders() {
+        for name in [
+            "invalid.png",
+            "invalid.mp3",
+            "invalid.mp4",
+            "unsupported.mid",
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            std::fs::write(folder.path().join(name), b"not valid media").unwrap();
+            let (root, entry) = only_source(folder.path());
+            assert!(!supports_text(&entry), "{}", entry.name);
+            let Reply::Prepared(prepared) = execute(Request::Extract {
+                root,
+                entry,
+                cursor: 0,
+                text_only: true,
+            })
+            .unwrap() else {
+                panic!()
+            };
+            assert!(prepared.data.is_none() && prepared.text.is_empty() && prepared.next.is_none());
+            assert!(prepared.coverage.starts_with("name-only:"));
+        }
+    }
+
+    #[test]
+    fn text_only_preserves_document_text_and_legacy_requests_keep_full_extraction() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("notes.txt");
+        std::fs::write(&path, "A literal invoice number in ordinary text.").unwrap();
+        let (root, entry) = only_source(folder.path());
+        let legacy: Request = serde_json::from_value(serde_json::json!({
+            "Extract": { "root": root, "entry": entry, "cursor": 0 }
+        }))
+        .unwrap();
+        assert!(matches!(
+            legacy,
+            Request::Extract {
+                text_only: false,
+                ..
+            }
+        ));
+        for text_only in [false, true] {
+            let prepared = prepared_source(&root, &entry, text_only);
+            assert_eq!(prepared.text, "A literal invoice number in ordinary text.");
+            assert!(prepared.data.is_none());
+            assert_eq!(prepared.coverage, "complete");
+        }
+        // The text-only flag must not bypass the ordinary source identity gate.
+        std::fs::write(folder.path().join("replacement.txt"), "replacement").unwrap();
+        std::fs::rename(folder.path().join("replacement.txt"), &path).unwrap();
+        assert!(
+            execute(Request::Extract {
+                root,
+                entry,
+                cursor: 0,
+                text_only: true
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn pdf_pages_preserve_lexical_text_and_ignore_layout_whitespace_for_sparse_detection() {
+        let folder = tempfile::tempdir().unwrap();
+        let generator =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/ui_acceptance_fixtures.py");
+        let output = CommandRequest::new("python3")
+            .die_with_parent()
+            .args([
+                "-I",
+                "-c",
+                r#"
+import runpy,sys
+from pathlib import Path
+pages=[b'BT /F1 18 Tf 40 140 Td (Acceptance page '+f'{n:02}'.encode()+b') Tj ET' for n in [1,2]]
+pages += [b'BT /F1 1 Tf 5 140 Td ('+b'A'*n+b') Tj 170 0 Td (B) Tj ET' for n in [198,199]]
+runpy.run_path(sys.argv[1])['pdf_fixture'](Path(sys.argv[2]),4,'sample.pdf',page_streams=pages)
+"#,
+            ])
+            .arg(generator)
+            .arg(folder.path())
+            .timeout(Duration::from_secs(30))
+            .run()
+            .unwrap();
+        assert!(output.status.success(), "{}", output.stderr_lossy());
+        let (root, entry) = only_source(folder.path());
+        let before = std::fs::read(&entry.path).unwrap();
+        for cursor in 0..4 {
+            let mut text = String::new();
+            let sparse = cursor != 3;
+            for text_only in [false, true] {
+                let Reply::Prepared(prepared) = execute(Request::Extract {
+                    root: root.clone(),
+                    entry: entry.clone(),
+                    cursor,
+                    text_only,
+                })
+                .unwrap() else {
+                    panic!()
+                };
+                if cursor < 2 {
+                    assert!(
+                        prepared
+                            .text
+                            .contains(&format!("Acceptance page {:02}", cursor + 1))
+                    );
+                } else {
+                    assert!(
+                        prepared.text.trim().chars().count() >= 200,
+                        "The extracted layout must reproduce the old decision"
+                    );
+                    assert_eq!(
+                        prepared.text.chars().filter(|c| !c.is_whitespace()).count(),
+                        197 + cursor
+                    );
+                }
+                assert_eq!(prepared.next, (cursor < 3).then_some(cursor + 1));
+                assert_eq!(prepared.data.is_some(), sparse && !text_only);
+                if text_only {
+                    assert_eq!(prepared.text, text);
+                    assert_eq!(prepared.coverage.contains("OCR is not enabled"), sparse);
+                    assert_eq!(prepared.modality, "text");
+                } else {
+                    text = prepared.text;
+                    assert_eq!(prepared.coverage, "complete");
+                    assert_eq!(prepared.modality, if sparse { "image" } else { "text" });
+                }
+            }
+        }
+        assert_eq!(std::fs::read(&entry.path).unwrap(), before);
+    }
+
     #[test]
     fn guarded_image_and_audio_preparation_produce_bounded_model_inputs() {
         let (folder, _) = crate::audio_preview::tests::generate_fixture_wav("sample", 0.1);
@@ -1251,14 +1748,7 @@ mod tests {
         let root = SourceRoot::capture(folder.path()).unwrap();
         let directory = filesystem::read_directory(folder.path(), &AtomicBool::new(false)).unwrap();
         for entry in directory.entries {
-            let Reply::Prepared(prepared) = execute(Request::Extract {
-                root: root.clone(),
-                entry,
-                cursor: 0,
-            })
-            .unwrap() else {
-                panic!()
-            };
+            let prepared = prepared_source(&root, &entry, false);
             let bytes = STANDARD.decode(prepared.data.unwrap()).unwrap();
             assert!(prepared.next.is_none());
             assert_eq!(prepared.coverage, "complete");
@@ -1290,7 +1780,8 @@ mod tests {
             execute(Request::Extract {
                 root,
                 entry: directory.entries[0].clone(),
-                cursor: 0
+                cursor: 0,
+                text_only: false,
             })
             .is_err()
         );

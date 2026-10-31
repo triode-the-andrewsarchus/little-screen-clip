@@ -46,6 +46,8 @@ def evaluate_variant(args, label, folder, specifications):
                 '--folder', str(output), '--binary', str(args.test_binary),
                 '--profile', 'release', '--report', str(ranking)]),
         ]
+        if getattr(args, 'corpus', None):
+            commands[0][1].extend(['--corpus', str(args.corpus.resolve())])
         for stage, command in commands:
             print(json.dumps({'variant': label, 'stage': stage}), flush=True)
             with (args.output_dir / f'{label}-{stage}.log').open('w') as log:
@@ -84,6 +86,7 @@ def evaluation_parser(description):
     parser = argparse.ArgumentParser(description=description)
     for name in ('runtime', 'models', 'binary', 'test-binary', 'output-dir'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--corpus', type=Path, help='Use a declared real-file corpus instead of the generated synthetic fixture')
     return parser
 
 

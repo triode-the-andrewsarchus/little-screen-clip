@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 from search_retrieval_benchmark import resolve_binary, execute
+from search_model.quality_fixtures import validation_path
 
 TEST = 'file_manager::search::retrieval::quality::production_quality_fixture'
 
@@ -93,9 +94,9 @@ def main():
     data['comparison_driver_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     data['input_sha256'] = {name: hashlib.sha256((args.folder / name).read_bytes()).hexdigest()
         for name in ['vectors.json', 'fixture-manifest.json', 'report.json']}
-    data['validation_sha256'] = hashlib.sha256((repo / 'scripts/search_model/retrieval_validation.json').read_bytes()).hexdigest()
+    data['validation_sha256'] = hashlib.sha256(validation_path(args.folder).read_bytes()).hexdigest()
     data['source_sha256'] = {name: hashlib.sha256((repo/'crates/clip-workbench/src/file_manager/search'/name).read_bytes()).hexdigest()
-        for name in ['retrieval.rs', 'retrieval/quality.rs', 'store.rs', 'store/vectors.rs', 'policy.rs']}
+        for name in ['retrieval.rs', 'retrieval/quality.rs', 'store.rs', 'store/vectors.rs', 'store/lexical.rs', 'policy.rs']}
     data['test_binary'] = str(binary)
     report.write_text(json.dumps(data, indent=2))
     checked = [result for result in data['results'] if result['name'] in {'candidate', 'defaults'}]

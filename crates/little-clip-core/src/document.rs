@@ -307,6 +307,49 @@ pub fn render_to_markdown(input: &Path) -> Result<String, String> {
     anydoc::to_markdown(input).map_err(|e| format!("anydoc markdown error: {e}"))
 }
 
+/// Body text and coverage from a passive RTF conversion.
+pub struct RtfText {
+    /// Accepted body paragraphs and table cells in document order.
+    pub text: String,
+    /// Whether conversion completed without reported loss, images or truncation.
+    pub complete: bool,
+}
+
+/// Extracts bounded body text from RTF bytes without resolving external resources.
+///
+/// The native reader accepts at most 64 MiB and limits group nesting, retained
+/// content, runs and tables. This function performs no file or network access,
+/// field evaluation, rendering or script execution. The caller must read a
+/// verified ordinary source and isolate parsing in a bounded worker process.
+/// Conversion diagnostics and embedded images make coverage partial, including
+/// skipped headers, footnotes, objects and field results. Output is truncated
+/// at a UTF-8 boundary to `max_text_bytes`.
+///
+/// # Errors
+///
+/// Returns an error for malformed RTF or an exceeded native-reader limit.
+///
+/// # Examples
+///
+/// ```
+/// let result = little_clip_core::document::extract_rtf_text(
+///     br"{\rtf1\ansi Hello \b world\b0.}", 1024,
+/// )?;
+/// assert!(result.text.contains("Hello world."));
+/// assert!(result.complete);
+/// # Ok::<(), String>(())
+/// ```
+pub fn extract_rtf_text(bytes: &[u8], max_text_bytes: usize) -> Result<RtfText, String> {
+    let parsed = rdocx::Document::from_rtf_bytes(bytes)
+        .map_err(|error| format!("RTF extraction failed: {error}"))?;
+    let mut text = parsed.document.text();
+    let complete = parsed.diagnostics.is_empty()
+        && parsed.document.images().is_empty()
+        && text.len() <= max_text_bytes;
+    text.truncate(text.floor_char_boundary(max_text_bytes.min(text.len())));
+    Ok(RtfText { text, complete })
+}
+
 fn which_exists(binary: &str) -> bool {
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path_var) {
@@ -350,6 +393,52 @@ mod tests {
 
         assert!(is_rtf(Path::new("file.RTF")));
         assert!(!is_rtf(Path::new("file.odt")));
+    }
+
+    #[test]
+    fn passive_rtf_text_preserves_formatting_boundaries_codepages_and_unicode() {
+        let result = extract_rtf_text(
+            br"{\rtf1\ansi\ansicpg1252 Hello \b world\b0.\par caf\'e9 \u-10179?\u-8704?}",
+            1024,
+        )
+        .unwrap();
+        assert!(result.complete);
+        assert_eq!(result.text, "Hello world.\ncafé 😀\n");
+        let short = extract_rtf_text(br"{\rtf1\ansi A\u233?B}", 2).unwrap();
+        assert_eq!(short.text, "A");
+        assert!(
+            !short.complete,
+            "UTF-8 output truncation is partial coverage"
+        );
+    }
+
+    #[test]
+    fn passive_rtf_skipped_resources_and_embedded_images_cannot_claim_complete_text() {
+        for input in [
+            br"{\rtf1\ansi visible{\header hidden header}}".as_slice(),
+            br"{\rtf1\ansi visible{\object\objautlink{\*\objclass Package}{\*\objdata 010203}}}",
+            br#"{\rtf1\ansi visible{\field{\*\fldinst INCLUDETEXT "/proc/self/environ"}{\fldrslt hidden result}}}"#,
+            br"{\rtf1\ansi visible{\pict\pngblip\picwgoal100\pichgoal100 89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360f8cff00000040101089d1de10000000049454e44ae426082}}",
+        ] {
+            let extracted = extract_rtf_text(input, 1024).unwrap();
+            assert!(extracted.text.contains("visible"));
+            assert!(!extracted.text.contains("hidden"));
+            assert!(!extracted.text.contains("/proc"));
+            assert!(!extracted.complete);
+        }
+    }
+
+    #[test]
+    fn passive_rtf_rejects_malformed_input_and_excessive_nesting() {
+        for input in [
+            b"not RTF".as_slice(),
+            br"{\rtf1 truncated",
+            br"{\rtf1\ansi\bin100 short}",
+        ] {
+            assert!(extract_rtf_text(input, 1024).is_err());
+        }
+        let nested = format!("{{\\rtf1 {}text{}}}", "{".repeat(257), "}".repeat(257));
+        assert!(extract_rtf_text(nested.as_bytes(), 1024).is_err());
     }
 
     #[test]

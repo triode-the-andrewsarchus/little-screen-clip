@@ -6,7 +6,7 @@ use std::{
     io::Read,
     os::fd::{AsRawFd, FromRawFd},
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -16,6 +16,7 @@ const PERIODIC: Duration = Duration::from_secs(300);
 struct RootWatch {
     source: SourceRoot,
     last_full: Instant,
+    full_scan_inflight: bool,
     due: Option<Instant>,
     full: bool,
     dirty: BTreeSet<PathBuf>,
@@ -29,7 +30,7 @@ pub(super) struct Refresh {
 }
 #[derive(Default)]
 pub(super) struct Monitor {
-    fd: Option<File>,
+    fd: Option<Arc<File>>,
     roots: BTreeMap<i64, RootWatch>,
     expected: HashMap<PathBuf, SourceRoot>,
     watches: HashMap<i32, Vec<(i64, PathBuf)>>,
@@ -50,6 +51,7 @@ impl Monitor {
         self.roots.entry(id).or_insert_with(|| RootWatch {
             source,
             last_full: Instant::now(),
+            full_scan_inflight: false,
             due: None,
             full: false,
             dirty: BTreeSet::new(),
@@ -62,6 +64,7 @@ impl Monitor {
         let root = self.roots.get_mut(&id).unwrap();
         root.source = source;
         root.last_full = Instant::now();
+        root.full_scan_inflight = true;
         root.dirty.clear();
         root.full = false;
         root.due = None;
@@ -91,6 +94,7 @@ impl Monitor {
     }
     pub fn failed(&mut self, id: i64) {
         if let Some(root) = self.roots.get_mut(&id) {
+            root.full_scan_inflight = false;
             let seconds = (30u64 << root.failures.min(4)).min(300);
             root.failures = root.failures.saturating_add(1);
             root.full = true;
@@ -98,10 +102,25 @@ impl Monitor {
         }
     }
     pub fn succeeded(&mut self, id: i64) {
+        if let Some(root) = self.roots.get_mut(&id) {
+            if root.full_scan_inflight {
+                // A crawl can outlast the backstop. Measure the next interval
+                // from completion instead of immediately invalidating it again.
+                root.last_full = Instant::now();
+                root.full_scan_inflight = false;
+            }
+            if !root.full {
+                root.failures = 0;
+            }
+        }
+    }
+    pub fn retry_directory(&mut self, id: i64, path: &Path, delay: Duration) {
         if let Some(root) = self.roots.get_mut(&id)
-            && !root.full
+            && path.starts_with(&root.source.path)
         {
-            root.failures = 0;
+            root.dirty.insert(path.into());
+            let due = Instant::now() + delay;
+            root.due = Some(root.due.map_or(due, |pending| pending.min(due)));
         }
     }
     pub fn remove(&mut self, id: i64, path: Option<&Path>) {
@@ -133,38 +152,33 @@ impl Monitor {
             }
         }
     }
-    pub fn watch(
-        &mut self,
-        id: i64,
-        root: &SourceRoot,
-        path: &Path,
-        cancel: &AtomicBool,
-    ) -> Result<(), String> {
+    pub fn prepare_watch(&mut self, pending: usize) -> Result<Arc<File>, String> {
+        // Even a known pathname may now refer to a different inode. Reserve
+        // space for every unaccepted registration, including replacements.
+        if self.watches.len().saturating_add(pending) >= WATCH_LIMIT {
+            return Err("Directory watch limit reached".into());
+        }
         if self.fd.is_none() {
             // SAFETY: successful initialization returns a newly owned descriptor.
             let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
             if fd < 0 {
                 return Err(std::io::Error::last_os_error().to_string());
             }
-            self.fd = Some(unsafe { File::from_raw_fd(fd) });
+            self.fd = Some(Arc::new(unsafe { File::from_raw_fd(fd) }));
         }
-        let known = self.watches.values().any(|owners| {
-            owners
-                .iter()
-                .any(|(owner, old)| *owner == id && old == path)
-        });
-        if self.watches.len() >= WATCH_LIMIT && !known {
-            return Err("Directory watch limit reached".into());
+        Ok(self.fd.as_ref().unwrap().clone())
+    }
+    pub fn complete_watch(
+        &mut self,
+        id: i64,
+        path: &Path,
+        instance: &Arc<File>,
+        registration: Result<reader::WatchRegistration, String>,
+    ) -> Result<(), String> {
+        if !self.owns_instance(instance) {
+            return Err("Watch registration belongs to a retired instance".into());
         }
-        let wd = match reader::watch(root, path, self.fd.as_ref().unwrap(), cancel) {
-            Ok(wd) => wd,
-            Err(error) => {
-                // A timed-out helper might have installed a watch before its
-                // reply was lost. Closing the instance bounds those unknown registrations.
-                self.retire_instance(Instant::now());
-                return Err(error);
-            }
-        };
+        let wd = self.accept_registration(registration)?;
         // A replaced directory at the same name must not keep the old inode's watch.
         let mut retired = Vec::new();
         self.watches.retain(|old_wd, owners| {
@@ -183,6 +197,33 @@ impl Monitor {
         owners.retain(|(owner, _)| *owner != id);
         owners.push((id, path.into()));
         Ok(())
+    }
+    fn owns_instance(&self, instance: &Arc<File>) -> bool {
+        self.fd
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, instance))
+    }
+    pub fn abandon_watch(&mut self, instance: &Arc<File>) {
+        // Cancellation cannot prove whether the helper installed a watch.
+        // Never retire a replacement instance on an old helper's behalf.
+        if self.owns_instance(instance) {
+            self.retire_instance(Instant::now());
+        }
+    }
+    fn accept_registration(
+        &mut self,
+        reply: Result<reader::WatchRegistration, String>,
+    ) -> Result<i32, String> {
+        match reply {
+            Ok(reader::WatchRegistration::Ready(wd)) => Ok(wd),
+            Ok(reader::WatchRegistration::Unavailable(error)) => Err(error),
+            Err(error) => {
+                // A lost helper reply or failed post-install validation can
+                // conceal a watch change. Retire only these uncertain outcomes.
+                self.retire_instance(Instant::now());
+                Err(error)
+            }
+        }
     }
     fn retire_instance(&mut self, now: Instant) {
         self.fd = None;
@@ -250,9 +291,10 @@ impl Monitor {
         let now = Instant::now();
         let mut bytes = [0u8; 65536];
         for _ in 0..8 {
-            let Some(fd) = self.fd.as_mut() else {
+            let Some(fd) = self.fd.as_ref() else {
                 break;
             };
+            let mut fd = fd.as_ref();
             match fd.read(&mut bytes) {
                 Ok(0) => {
                     self.retire_instance(now);
@@ -267,6 +309,9 @@ impl Monitor {
                 }
             }
         }
+        self.take_invalidations()
+    }
+    pub fn take_invalidations(&mut self) -> Vec<(i64, Option<PathBuf>)> {
         std::mem::take(&mut self.invalidations)
             .into_iter()
             .collect()
@@ -304,6 +349,33 @@ impl Monitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retry_deadline_uses_directory_scheduling_and_waits_for_busy_root() {
+        let mut monitor = fixture();
+        let now = Instant::now();
+        monitor.retry_directory(1, Path::new("/content/late"), Duration::from_secs(120));
+        monitor.retry_directory(1, Path::new("/content/early"), Duration::from_secs(60));
+        monitor.retry_directory(1, Path::new("/elsewhere"), Duration::ZERO);
+        assert!(
+            monitor
+                .due(&HashSet::new(), now + Duration::from_secs(59))
+                .is_empty()
+        );
+        assert!(
+            monitor
+                .due(&HashSet::from([1]), now + Duration::from_secs(61))
+                .is_empty()
+        );
+        let refresh = monitor.due(&HashSet::new(), now + Duration::from_secs(61));
+        assert_eq!(refresh.len(), 1);
+        assert_eq!(
+            refresh[0].directories.as_ref().unwrap(),
+            &vec![
+                PathBuf::from("/content/early"),
+                PathBuf::from("/content/late")
+            ]
+        );
+    }
     fn fixture() -> Monitor {
         let mut monitor = Monitor::default();
         monitor.register(
@@ -372,6 +444,112 @@ mod tests {
         );
     }
     #[test]
+    fn retired_watch_replies_and_cancellation_cannot_change_a_replacement_instance() {
+        let mut monitor = fixture();
+        let path = Path::new("/content/leaf");
+        let old = monitor.prepare_watch(0).unwrap();
+        monitor.abandon_watch(&old);
+        assert_eq!(monitor.take_invalidations(), [(1, None)]);
+        let current = monitor.prepare_watch(0).unwrap();
+        assert!(!Arc::ptr_eq(&old, &current));
+        monitor
+            .complete_watch(1, path, &current, Ok(reader::WatchRegistration::Ready(42)))
+            .unwrap();
+        assert!(
+            monitor
+                .complete_watch(1, path, &old, Ok(reader::WatchRegistration::Ready(41)))
+                .is_err()
+        );
+        assert!(
+            monitor
+                .complete_watch(1, path, &old, Err("Late lost reply".into()))
+                .is_err()
+        );
+        monitor.abandon_watch(&old);
+        assert!(monitor.owns_instance(&current));
+        assert_eq!(monitor.watches.len(), 1);
+        assert_eq!(monitor.watches[&42], [(1, path.into())]);
+        assert!(monitor.take_invalidations().is_empty());
+        monitor.abandon_watch(&current);
+        assert!(monitor.fd.is_none());
+        assert_eq!(monitor.take_invalidations(), [(1, None)]);
+    }
+
+    #[test]
+    fn pending_registrations_reserve_the_remaining_watch_budget() {
+        let mut monitor = fixture();
+        monitor.watches = (0..WATCH_LIMIT as i32 - 1)
+            .map(|wd| (wd, vec![(1, PathBuf::from("/content/known"))]))
+            .collect();
+        assert!(monitor.prepare_watch(1).is_err());
+        assert!(monitor.prepare_watch(0).is_ok());
+        monitor.watches.insert(
+            WATCH_LIMIT as i32 - 1,
+            vec![(1, PathBuf::from("/content/known"))],
+        );
+        assert!(monitor.prepare_watch(0).is_err());
+        assert_eq!(monitor.watches.len(), WATCH_LIMIT);
+    }
+
+    #[test]
+    fn definite_registration_failure_preserves_coverage_but_unknown_outcomes_retire_it() {
+        let mut monitor = fixture();
+        let definite = Ok(reader::WatchRegistration::Unavailable(
+            "Permission denied".into(),
+        ));
+        assert!(monitor.accept_registration(definite).is_err());
+        assert_eq!(monitor.watches.len(), 1);
+        assert!(monitor.invalidations.is_empty());
+        assert!(monitor.roots[&1].due.is_none());
+        assert!(
+            monitor
+                .accept_registration(Err("Helper reply lost".into()))
+                .is_err()
+        );
+        assert!(monitor.watches.is_empty());
+        assert_eq!(monitor.poll(), [(1, None)]);
+        assert!(
+            monitor.due(&HashSet::new(), Instant::now())[0]
+                .directories
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn shared_watch_routes_each_owner_and_survives_removing_the_enclosing_root() {
+        let mut monitor = fixture();
+        let mut child = monitor.expected(Path::new("/content")).unwrap().clone();
+        child.path = "/content/leaf".into();
+        monitor.register(2, child);
+        monitor
+            .watches
+            .get_mut(&7)
+            .unwrap()
+            .push((2, "/content/leaf".into()));
+        let now = Instant::now();
+        monitor.event(7, libc::IN_CLOSE_WRITE, now);
+        assert_eq!(monitor.poll().len(), 2);
+        let ready = monitor.due(&HashSet::from([1]), now + Duration::from_secs(2));
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, 2);
+        monitor.remove(1, None);
+        assert_eq!(monitor.watches[&7], [(2, PathBuf::from("/content/leaf"))]);
+        monitor.event(7, libc::IN_MODIFY, now + Duration::from_secs(3));
+        assert_eq!(monitor.poll(), [(2, Some(PathBuf::from("/content/leaf")))]);
+        let ready = monitor.due(&HashSet::new(), now + Duration::from_secs(5));
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, 2);
+        monitor.event(7, libc::IN_IGNORED, now + Duration::from_secs(6));
+        assert!(!monitor.watches.contains_key(&7));
+        assert_eq!(monitor.poll(), [(2, None)]);
+        assert!(
+            monitor.due(&HashSet::new(), now + Duration::from_secs(8))[0]
+                .directories
+                .is_none()
+        );
+    }
+
+    #[test]
     fn events_debounce_parent_work_and_never_overlap_a_busy_root() {
         let mut monitor = fixture();
         let now = Instant::now();
@@ -419,6 +597,50 @@ mod tests {
         assert!(monitor.watches.is_empty());
         assert!(monitor.due(&HashSet::new(), now + PERIODIC).is_empty());
     }
+    #[test]
+    fn long_full_scan_restarts_backstop_at_completion_but_deltas_do_not() {
+        let mut monitor = fixture();
+        let source = monitor.roots[&1].source.clone();
+        monitor.started(1, source.clone());
+        monitor.roots.get_mut(&1).unwrap().last_full = Instant::now() - PERIODIC;
+        monitor.succeeded(1);
+        let completed = monitor.roots[&1].last_full;
+        assert!(
+            monitor
+                .due(
+                    &HashSet::new(),
+                    completed + PERIODIC - Duration::from_secs(1)
+                )
+                .is_empty()
+        );
+        monitor.event(7, libc::IN_MODIFY, completed);
+        let delta = monitor.due(&HashSet::new(), completed + Duration::from_secs(1));
+        assert_eq!(delta.len(), 1);
+        assert_eq!(
+            delta[0].directories.as_ref().unwrap(),
+            &[PathBuf::from("/content/leaf")]
+        );
+        monitor.succeeded(1);
+        assert_eq!(
+            monitor.roots[&1].last_full, completed,
+            "directory deltas cannot postpone the full backstop"
+        );
+        assert!(
+            monitor.due(&HashSet::new(), completed + PERIODIC)[0]
+                .directories
+                .is_none()
+        );
+        monitor.started(1, source);
+        monitor.event(-1, libc::IN_Q_OVERFLOW, Instant::now());
+        monitor.succeeded(1);
+        assert!(
+            monitor.due(&HashSet::new(), Instant::now())[0]
+                .directories
+                .is_none(),
+            "completion must not discard a coverage gap received during the scan"
+        );
+    }
+
     #[test]
     fn periodic_checks_cannot_be_postponed_forever_by_dirty_events() {
         let mut monitor = fixture();

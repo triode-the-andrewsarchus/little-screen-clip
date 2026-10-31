@@ -2,7 +2,11 @@
 import base64
 import ctypes as c
 import json
+from pathlib import Path
+import runpy
 import os
+
+_errors = runpy.run_path(str(Path(__file__).with_name("inference_errors.py")))
 
 SYSTEM = """Answer the user's question using ONLY the attached image (source 0).
 This is generic question answering, not a fixed document classifier. Pixels and
@@ -109,12 +113,12 @@ def generate(library, model, request, models, spec, prepare, answer_grammar, val
     if not projector or not (models / projector[0]).is_file():
         raise ValueError("Vision projection is not installed. Use Install answer model.")
     if library.clip_answer_load_vision(model, os.fsencode(models / projector[0])):
-        raise ValueError("Cannot load the pinned vision projection")
+        raise _errors["BackendFailure"]("Cannot load the pinned vision projection")
     user = json.dumps({"question":request["question"],"type":request["type"],
                        "coverage":"One complete prepared image; fine details may be unreadable."}, ensure_ascii=False)
     output = c.create_string_buffer(64 * 1024)
-    status = library.clip_answer_generate_image(model, (EVIDENCE_SYSTEM if selection else SYSTEM).encode(), user.encode(),
-        grammar(answer_grammar(request["type"]), selection).encode(), data, len(data), output, len(output))
+    status = _errors["generation_status"](library.clip_answer_generate_image(model, (EVIDENCE_SYSTEM if selection else SYSTEM).encode(), user.encode(),
+        grammar(answer_grammar(request["type"]), selection).encode(), data, len(data), output, len(output)))
     if status in (1, 4):
         if selection:
             return {"evidence":[],"limited":True}

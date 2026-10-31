@@ -134,7 +134,7 @@ impl FileSearchConfig {
     pub fn default_semantic_floor(modality: &str) -> f32 {
         match modality {
             "text" => 0.72,
-            "image" => 0.68,
+            "image" => 0.65,
             "audio" => 0.64,
             _ => 1.0,
         }

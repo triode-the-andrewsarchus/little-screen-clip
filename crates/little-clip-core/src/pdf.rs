@@ -60,6 +60,7 @@ pub fn is_pdf_path(p: &Path) -> bool {
 /// Runs `pdfinfo` on a file and parses its page count and metadata tags.
 pub fn get_pdf_info(path: &Path) -> Result<PdfInfo, String> {
     let output = CommandRequest::new("pdfinfo")
+        .die_with_parent()
         .arg_content_file(path)
         .map_err(|error| error.to_string())?
         .run()
@@ -132,6 +133,7 @@ fn render_pdf_page_png(
     let page_str = page.to_string();
 
     let mut command = CommandRequest::new("pdftoppm")
+        .die_with_parent()
         .arg("-png")
         .arg("-f")
         .arg(&page_str)
@@ -292,6 +294,7 @@ fn flatten_pdf_outline(
 /// Returns an error if `pdftotext` fails, times out, or exceeds the output limit.
 pub fn extract_pdf_page_text(path: &Path, page: usize) -> Result<String, String> {
     let output = CommandRequest::new("pdftotext")
+        .die_with_parent()
         .args(["-layout", "-enc", "UTF-8", "-f"])
         .arg(page.to_string())
         .arg("-l")

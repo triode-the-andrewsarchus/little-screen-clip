@@ -23,6 +23,10 @@ impl Document {
     pub fn needs_vision(&self) -> bool {
         self.complete && !self.images.is_empty()
     }
+
+    pub fn complete_single_text(&self) -> Option<&Source> {
+        (self.complete && self.images.is_empty() && self.text.len() == 1).then(|| &self.text[0])
+    }
 }
 
 pub(in super::super) fn read_document(
@@ -36,6 +40,7 @@ pub(in super::super) fn read_document(
                 root: root.clone(),
                 entry: entry.clone(),
                 cursor,
+                text_only: false,
             },
             cancel,
         )?
@@ -195,6 +200,29 @@ fn answer_images(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn labelled_fast_path_requires_one_complete_text_source_without_images() {
+        let source = Source {
+            id: 0,
+            text: "Date: 2021-11-18".into(),
+            location: "page 1".into(),
+        };
+        let mut document = Document {
+            text: vec![source.clone()],
+            complete: true,
+            ..Default::default()
+        };
+        assert!(document.complete_single_text().is_some());
+        document.complete = false;
+        assert!(document.complete_single_text().is_none());
+        document.complete = true;
+        document.text.push(source);
+        assert!(document.complete_single_text().is_none());
+        document.text.pop();
+        document.images.push(Prepared::default());
+        assert!(document.complete_single_text().is_none());
+    }
 
     fn page(location: &str, next: Option<usize>) -> Prepared {
         Prepared {

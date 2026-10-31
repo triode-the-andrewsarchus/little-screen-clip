@@ -251,7 +251,7 @@ impl Settings {
                         if let Some(error) = &root.error { ui.small(error); }
                         ui.horizontal(|ui| {
                             if ui.button("Refresh index").clicked() { command = Some(Command::Rebuild(root.path.clone())); }
-                            if ui.button("Remove indexed folder").clicked() { command = Some(Command::Remove(root.id)); }
+                            if ui.button("Remove indexed folder").clicked() { command = Some(Command::Remove(root.path.clone())); }
                         });
                     });
                 }

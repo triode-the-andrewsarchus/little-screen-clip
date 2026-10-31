@@ -86,18 +86,27 @@ def probe_cases(args):
 
 
 def attach_metrics(output, rows):
-    records = {'ANSWER_PROBE':[], 'ANSWER_SAMPLER_PROBE':[]}
-    for line in (output/'model.stderr.log').read_text().splitlines():
-        prefix, _, payload = line.partition(' ')
-        if prefix in records:
-            records[prefix].append(json.loads(payload))
-    assert all(len(values) == len(rows) for values in records.values()), 'Missing native timing observations'
-    for row, metric, sample in zip(rows, records['ANSWER_PROBE'], records['ANSWER_SAMPLER_PROBE']):
-        assert metric['status'] == 0, metric
-        for field in ('prompt_ms', 'generation_ms', 'prompt_tokens', 'generated_tokens'):
-            assert math.isfinite(metric[field]) and metric[field] > 0, metric
-        row['native'] = metric
-        row['sampler'] = sample
+    data = (output/'model.stderr.log').read_bytes()
+    for row in rows:
+        start, end = row.pop('native_log_bytes')
+        records = {'ANSWER_PROBE':[], 'ANSWER_SAMPLER_PROBE':[]}
+        for line in data[start:end].decode().splitlines():
+            prefix, _, payload = line.partition(' ')
+            if prefix in records:
+                records[prefix].append(json.loads(payload))
+        calls, samplers = records['ANSWER_PROBE'], records['ANSWER_SAMPLER_PROBE']
+        assert calls and len(calls) == len(samplers), 'Missing native timing observations'
+        for metric in calls:
+            assert metric['status'] == 0, metric
+            for field in ('prompt_ms', 'generation_ms', 'prompt_tokens', 'generated_tokens'):
+                assert math.isfinite(metric[field]) and metric[field] > 0, metric
+        row['native_calls'] = calls
+        row['sampler_calls'] = samplers
+        row['native'] = {field:sum(call[field] for call in calls)
+                        for field in ('prompt_ms', 'generation_ms', 'prompt_tokens', 'generated_tokens')}
+        row['sampler'] = {field:sum(call[field] for call in samplers)
+                         for field in ('init_cpu_ms', 'sample_cpu_ms')}
+        metric = row['native']
         row['prompt_tokens_per_second'] = metric['prompt_tokens']*1000/metric['prompt_ms']
         row['generated_tokens_per_second'] = metric['generated_tokens']*1000/metric['generation_ms']
 
@@ -128,9 +137,16 @@ def evaluate(args, output, runtime):
         for case, group in cases:
             name, question, kind, text, complete, _, _ = case
             before = time.monotonic()
-            response = worker.request({'op':'answer', 'question':question, 'type':kind,
-                'sources':[{'id':0, 'text':text}], 'complete':complete})
-            rows.append({'group':group, 'seconds':time.monotonic()-before, **check(case, response)})
+            log_start = (output/'model.stderr.log').stat().st_size
+            try:
+                response = worker.request({'op':'answer', 'question':question, 'type':kind,
+                    'sources':[{'id':0, 'text':text}], 'complete':complete})
+                result = check(case, response)
+            except RuntimeError as error:
+                # A rejected model response is a failed case, not a lost report.
+                result = {'case':name, 'passed':False, 'error':str(error)}
+            rows.append({'group':group, 'seconds':time.monotonic()-before,
+                'native_log_bytes':[log_start, (output/'model.stderr.log').stat().st_size], **result})
             (output/'progress.json').write_text(json.dumps({'completed':len(rows), 'total':len(cases),
                 'last_case':name, 'passed':sum(row['passed'] for row in rows)}))
         ready = worker.ready

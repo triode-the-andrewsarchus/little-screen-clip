@@ -66,6 +66,14 @@ pub(super) fn inspect(source: &str) -> Result<Option<Header>, String> {
     if !flatten(&value, &mut Vec::new(), &mut fields) || fields.is_empty() {
         return Ok(None);
     }
+    header(format, fields, raw)
+}
+
+pub(super) fn header(
+    format: &str,
+    fields: Vec<Field>,
+    raw: &str,
+) -> Result<Option<Header>, String> {
     let shape = fields
         .iter()
         .map(|field| (&field.path, &field.kind))

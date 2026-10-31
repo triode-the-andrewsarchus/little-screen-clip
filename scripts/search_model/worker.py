@@ -20,6 +20,9 @@ DIMENSION = 768
 REQUEST_LIMIT = 16 * 1024 * 1024
 
 
+_errors = runpy.run_path(str(Path(__file__).with_name("inference_errors.py")))
+
+
 def emit(value):
     print(json.dumps(value, allow_nan=False), flush=True)
 
@@ -162,7 +165,7 @@ def encode(library, model, request):
     else:
         raise ValueError("Unknown embedding operation")
     if result:
-        raise ValueError(error.value.decode(errors="replace"))
+        _errors["embedding_error"](error.value.decode(errors="replace"))
     return normalized_output(output)
 
 
@@ -239,7 +242,7 @@ def serve(args):
                     break
                 emit({"id": request_id, "ok": True, **encode(library, model, request)})
             except (ValueError, TypeError, KeyError) as error:
-                emit({"id": request_id, "ok": False, "error": str(error)[:500]})
+                emit(_errors["error_reply"](request_id, error))
     finally:
         library.clip_search_close(model)
 

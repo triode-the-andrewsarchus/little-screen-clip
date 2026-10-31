@@ -39,7 +39,7 @@ impl Store {
             params![id, observation, scope])?;
         Ok(())
     }
-    fn source_scope(&self, source: &SourceRoot, observation: Option<&str>) -> String {
+    pub(super) fn source_scope(&self, source: &SourceRoot, observation: Option<&str>) -> String {
         let Some(session) = source.session.as_ref().filter(|session| session.unique()) else {
             // No unique mount observation: even two unknown observations cannot
             // establish continuity. Re-extraction still reuses matching inputs.
@@ -161,15 +161,20 @@ pub(crate) mod tests {
             source.session = Some(serde_json::from_value(observation).unwrap());
             source
         }
-        fn legacy_version_four(&self) {
+        fn legacy_version(&self, version: u32) {
             // A real legacy shape, independent of the current file-table schema.
-            self.store.connection.execute_batch("PRAGMA foreign_keys=OFF; BEGIN;
+            let (scope_column, scope_select, scope_key, sessions) = match version {
+                4 => ("", "", "", "DROP TABLE source_sessions;"),
+                5 => ("scope TEXT NOT NULL DEFAULT '',", ",scope", ",scope", ""),
+                _ => panic!("Unsupported legacy fixture version"),
+            };
+            self.store.connection.execute_batch(&format!("PRAGMA foreign_keys=OFF; BEGIN;
                 CREATE TABLE files_v4(id INTEGER PRIMARY KEY,device INTEGER NOT NULL,inode INTEGER NOT NULL,
                   revision INTEGER NOT NULL,pipeline TEXT NOT NULL,metadata TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',
-                  coverage TEXT,error TEXT,extraction_version INTEGER NOT NULL DEFAULT 0,UNIQUE(device,inode));
-                INSERT INTO files_v4 SELECT id,device,inode,revision,pipeline,metadata,state,coverage,error,extraction_version FROM files;
-                DROP TABLE files; ALTER TABLE files_v4 RENAME TO files; DROP TABLE source_sessions;
-                PRAGMA user_version=4; COMMIT; PRAGMA foreign_keys=ON;").unwrap();
+                  coverage TEXT,error TEXT,extraction_version INTEGER NOT NULL DEFAULT 0,{scope_column}UNIQUE(device,inode{scope_key}));
+                INSERT INTO files_v4 SELECT id,device,inode,revision,pipeline,metadata,state,coverage,error,extraction_version{scope_select} FROM files;
+                DROP TABLE files; ALTER TABLE files_v4 RENAME TO files; {sessions}
+                PRAGMA user_version={version}; COMMIT; PRAGMA foreign_keys=ON;")).unwrap();
         }
         fn canonical_backup(&self) -> (tempfile::NamedTempFile, u64) {
             let backup = self.cache.path().join("backup.sqlite");
@@ -267,7 +272,7 @@ pub(crate) mod tests {
     #[test]
     fn version_four_upgrade_preserves_ids_vectors_and_foreign_key_enforcement() {
         let fixture = Fixture::new();
-        fixture.legacy_version_four();
+        fixture.legacy_version(4);
         let mut fixture = fixture.reopen();
         let connection = &fixture.store.connection;
         assert!(
@@ -279,7 +284,7 @@ pub(crate) mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            5
+            super::super::SCHEMA_VERSION
         );
         assert_eq!(
             connection
@@ -313,9 +318,101 @@ pub(crate) mod tests {
         );
     }
     #[test]
+    fn version_five_upgrade_and_backup_preserve_vectors_without_ambiguous_ready_state() {
+        let fixture = Fixture::new();
+        let original: Vec<u8> = fixture
+            .store
+            .connection
+            .query_row("SELECT vector FROM segments", [], |row| row.get(0))
+            .unwrap();
+        fixture.legacy_version(5);
+        let (backup, count) = fixture.canonical_backup();
+        assert_eq!(count, 1);
+        let imported = Connection::open(backup.path()).unwrap();
+        let restored: (String, Vec<u8>, String) = imported
+            .query_row("SELECT state,format,scope FROM files", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(
+            restored,
+            (
+                "pending".into(),
+                Vec::new(),
+                format!("restored:{}", fixture.file)
+            )
+        );
+        assert_eq!(
+            imported
+                .query_row("SELECT vector FROM segments", [], |row| row
+                    .get::<_, Vec<u8>>(0))
+                .unwrap(),
+            original
+        );
+        let mut fixture = fixture.reopen();
+        let legacy: (i64, String, Vec<u8>) = fixture
+            .store
+            .connection
+            .query_row("SELECT id,state,format FROM files", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(legacy, (fixture.file, "pending".into(), Vec::new()));
+        assert_eq!(
+            fixture
+                .store
+                .connection
+                .query_row("SELECT vector FROM segments", [], |row| row
+                    .get::<_, Vec<u8>>(0))
+                .unwrap(),
+            original
+        );
+        let source = SourceRoot::from_root(&fixture.root);
+        let (file, changed) = fixture.observe(&source);
+        assert!(changed);
+        assert_ne!(file, fixture.file);
+        assert_eq!(
+            fixture
+                .store
+                .reusable_vector("model", "text", &[1; 32])
+                .unwrap(),
+            Some(super::super::decode_vector(&original).unwrap())
+        );
+        fixture.publish(file);
+        assert_eq!(
+            fixture
+                .store
+                .connection
+                .query_row(
+                    "SELECT file_id FROM paths WHERE path=?1",
+                    [fixture.entry.path.as_os_str().as_encoded_bytes()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            file
+        );
+        assert!(
+            fixture
+                .store
+                .connection
+                .pragma_query_value(None, "foreign_keys", |row| row.get::<_, bool>(0))
+                .unwrap()
+        );
+        assert!(
+            !fixture
+                .store
+                .connection
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .exists([])
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn failed_v4_rebuild_rolls_back_schema_rows_and_foreign_key_setting() {
         let fixture = Fixture::new();
-        fixture.legacy_version_four();
+        fixture.legacy_version(4);
         fixture
             .store
             .connection
@@ -349,7 +446,7 @@ pub(crate) mod tests {
     #[test]
     fn legacy_backup_is_upgraded_without_accepting_source_continuity() {
         let fixture = Fixture::new();
-        fixture.legacy_version_four();
+        fixture.legacy_version(4);
         let (backup, vectors) = fixture.canonical_backup();
         let connection = Connection::open(backup.path()).unwrap();
         assert_eq!(vectors, 1);
@@ -370,7 +467,7 @@ pub(crate) mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            5
+            super::super::SCHEMA_VERSION
         );
     }
     #[test]

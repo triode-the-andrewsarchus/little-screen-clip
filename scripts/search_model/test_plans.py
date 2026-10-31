@@ -28,6 +28,17 @@ class Plans(unittest.TestCase):
             with self.assertRaises(ValueError):
                 answers.plan_reply(Library(response), None, self.request(), 'qwen3.5-9b')
 
+    def test_labelled_document_plan_exposes_only_schema_and_rejects_unknown_layout(self):
+        library = Library({'path':['date']})
+        request = dict(self.request(), layout='labelled_document')
+        answers.plan_reply(library, None, request, 'qwen3.5-9b')
+        system, user, _ = library.calls[0]
+        self.assertIn('complete text document', system)
+        self.assertIn('Values were withheld', user['extraction_coverage'])
+        self.assertNotIn('2021-11-18', json.dumps(user))
+        with self.assertRaises(ValueError):
+            answers.plan_reply(Library({}), None, dict(request, layout='shell'), 'qwen3.5-9b')
+
     def test_untrusted_field_names_remain_double_escaped_grammar_literals(self):
         path = ['date"] | command ::= "exec\\n\\"']
         library = Library({'path':path})

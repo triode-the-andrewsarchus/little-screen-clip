@@ -1,13 +1,53 @@
 """Owned synthetic source files for retrieval evaluation; no user content is used."""
 from pathlib import Path
+import hashlib
+import os
+import stat
 import subprocess
 import textwrap
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
-from quality_visuals import render
 
 
 BACKGROUND = 'The archive register records numbered storage bins. Each shelf has a location code, and staff check the quantities against the previous inventory. '
+
+
+def validation_path(folder=None):
+    candidate = folder / 'validation-manifest.json' if folder else None
+    return candidate if candidate and candidate.is_file() else Path(__file__).with_name('retrieval_validation.json')
+
+
+def frozen_bytes(path, record):
+    size = record['bytes']
+    if not isinstance(size, int) or not 0 < size <= 256 * 1024 * 1024:
+        raise ValueError('Frozen fixture requires bounded ordinary files')
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    with os.fdopen(os.open(path, flags), 'rb') as source:
+        metadata = os.fstat(source.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != size:
+            raise ValueError('Frozen fixture file type or size changed')
+        payload = source.read(size + 1)
+    if len(payload) != size or hashlib.sha256(payload).hexdigest() != record['sha256']:
+        raise ValueError(f'Frozen fixture content changed: {path.name}')
+    return payload
+
+
+def copy_frozen(source, destination, manifest):
+    """Copy only a declared, checksum-pinned, flat ordinary-file fixture."""
+    records = manifest['files']
+    names = [row['name'] for row in records]
+    if not 1 <= len(names) <= 500 or len(set(names)) != len(names):
+        raise ValueError('Frozen fixture requires 1..500 unique files')
+    if any(Path(name).name != name or name in {'.', '..'} for name in names):
+        raise ValueError('Frozen fixture filenames must be single basenames')
+    if set(path.name for path in source.iterdir()) != set(names):
+        raise ValueError('Frozen fixture inventory differs from its manifest')
+    destination.mkdir()
+    for row in records:
+        payload = frozen_bytes(source / row['name'], row)
+        with (destination / row['name']).open('xb') as target:
+            target.write(payload)
+    return manifest['positives']
 
 
 def make_pdf(path, body, long=False):
@@ -23,6 +63,10 @@ def make_pdf(path, body, long=False):
 
 
 def build(cases, root):
+    if __package__:
+        from .quality_visuals import render
+    else:
+        from quality_visuals import render
     root.mkdir(parents=True)
     for ordinal, case in enumerate(cases):
         extension={'text':'txt','pdf':'pdf','image':'png','audio':'wav','video':'mp4'}[case['kind']]

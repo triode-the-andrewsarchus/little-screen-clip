@@ -10,6 +10,14 @@ import time
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance
 
 
+def link_installed_inference(index):
+    """Expose installed weights only when the scenario explicitly requests them."""
+    index.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    installed = Path.home() / ".local/share/little-screen-clip/search"
+    for directory in ["runtime", "models"]:
+        (index.parent / directory).symlink_to(installed / directory, target_is_directory=True)
+
+
 def inventory(index, after=0):
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
@@ -77,7 +85,7 @@ def exercise(session, root):
     assert paths == [str(root / "Zulu/renamed.txt")] and vectors == 1
     with sqlite3.connect(index) as db:
         assert db.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 1
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 6
     root.rename(session.output / "displaced-root")
     root.mkdir()
     session.click(993, 118)

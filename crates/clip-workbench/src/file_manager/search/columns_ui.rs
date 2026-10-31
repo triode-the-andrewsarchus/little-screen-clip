@@ -35,7 +35,11 @@ impl FileManager {
                             folder.focused == column.id,
                             format!("{} / {}", column.finished, column.total),
                         )
-                        .on_hover_text(&column.title)
+                        .on_hover_text(format!(
+                            "{}\n{}",
+                            column.title,
+                            column.query.date_summary().unwrap_or_default()
+                        ))
                         .clicked()
                     {
                         folder.focused = column.id;
@@ -104,7 +108,7 @@ impl FileManager {
                         colors.accent,
                     );
                 }
-                let response = ui.interact(cell, Id::new(("answer_header", column.id)), Sense::click()).on_hover_text(format!("{}\n{:?} · {} / {} rows complete\nClick to sort; right-click for column actions. Dates group by precision; numbers group by exact currency/unit.", column.title, column.query.answer_type, column.finished, column.total));
+                let response = ui.interact(cell, Id::new(("answer_header", column.id)), Sense::click()).on_hover_text(format!("{}\n{:?} · {} / {} rows complete\nClick to sort; right-click for column actions. Dates group by precision; numbers group by exact currency/unit.\n{}", column.title, column.query.answer_type, column.finished, column.total, column.query.date_summary().unwrap_or_default()));
                 if response.clicked() {
                     action = Some(Action::Sort(column.id));
                 }
@@ -139,6 +143,7 @@ impl FileManager {
             None => return,
         }
         self.rebuild_visible();
+        self.focus_list = true;
     }
 }
 impl Columns {

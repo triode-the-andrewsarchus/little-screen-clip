@@ -1321,13 +1321,59 @@ fn escape_clears_rendered_selection_without_losing_list_focus() {
     assert!(ctx.memory(|memory| memory.has_focus(super::ui::list_id())));
 }
 
-fn visible_names(manager: &FileManager) -> Vec<String> {
+pub(super) fn visible_names(manager: &FileManager) -> Vec<String> {
     let directory = manager.directory.as_ref().unwrap();
     manager
         .visible
         .iter()
         .map(|i| directory.entries[*i].name.clone())
         .collect()
+}
+
+#[test]
+fn clicking_sort_headers_returns_keyboard_shortcuts_to_the_selected_file_list() {
+    let root = populated_folder(&["selected.txt"]);
+    let (mut manager, _jobs, ctx) = rendered(root.path());
+    let selected = root.path().join("selected.txt");
+    manager.select(selected.clone());
+    manager.search.draft = ":q:\"Ready?\";type:boolean".into();
+    manager.apply_search();
+    manager.search.answers.set_suspended(true);
+    for label in ["Ready?", "Name"] {
+        let output = frame(&mut manager, &ctx, vec![]);
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+            .expect("visible sort header");
+        let mut events = vec![egui::Event::PointerMoved(point)];
+        events.extend([true, false].map(|pressed| egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }));
+        frame(&mut manager, &ctx, events);
+        frame(&mut manager, &ctx, vec![]);
+        assert!(
+            ctx.memory(|memory| memory.has_focus(super::ui::list_id())),
+            "{label}"
+        );
+        assert_eq!(
+            ctx.data(|data| data
+                .get_temp::<bool>(egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS))),
+            Some(true)
+        );
+        assert_eq!(
+            manager.location().unwrap().selected.as_ref(),
+            Some(&selected)
+        );
+    }
 }
 
 #[test]

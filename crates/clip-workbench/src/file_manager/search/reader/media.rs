@@ -4,6 +4,7 @@ use serde_json::Value;
 
 pub(super) fn command(program: &str, demuxers: &str) -> CommandRequest {
     CommandRequest::new(program)
+        .die_with_parent()
         .args([
             "-protocol_whitelist",
             "file,pipe",
@@ -70,6 +71,8 @@ pub(super) fn audio_window(
             "1",
             "-ar",
             "16000",
+            "-af",
+            "aresample=16000:async=1:min_hard_comp=0:first_pts=0",
             "-c:a",
             "pcm_s16le",
             "-f",
@@ -121,4 +124,58 @@ fn wav(pcm: &[u8]) -> Result<Vec<u8>, String> {
     wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
     wav.extend_from_slice(pcm);
     Ok(wav)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+    use std::io::Write;
+
+    #[test]
+    fn quiet_windows_cover_short_tails_and_stop_at_the_two_hour_horizon() {
+        let folder = tempfile::tempdir().unwrap();
+        for (seconds, expected_count) in [
+            (1.25_f64, 1),
+            (30.0, 1),
+            (30.5, 2),
+            (51.0, 2),
+            (55.5, 3),
+            (7201.0, 1),
+        ] {
+            let path = folder.path().join(format!("{seconds}.wav"));
+            let data_size = (seconds * 32000.0) as u32;
+            let mut header = wav(&[0, 0]).unwrap();
+            header[4..8].copy_from_slice(&(36 + data_size).to_le_bytes());
+            header[40..44].copy_from_slice(&data_size.to_le_bytes());
+            let mut file = std::fs::File::create(&path).unwrap();
+            file.write_all(&header[..44]).unwrap();
+            file.set_len(44 + u64::from(data_size)).unwrap();
+            drop(file);
+            let track = audio_track(&probe(&path, "wav").unwrap()).unwrap();
+            let mut cursor = if seconds > 7200.0 { 7175 } else { 0 };
+            let mut count = 0;
+            loop {
+                let prepared = audio_window(&path, "wav", &track, cursor).unwrap();
+                let bytes = STANDARD.decode(prepared.data.unwrap()).unwrap();
+                let end = (cursor as f64 + 30.0).min(seconds.min(7200.0));
+                assert_eq!((bytes.len() - 44) as f64 / 32000.0, end - cursor as f64);
+                assert_eq!(prepared.location, format!("audio seconds {cursor}..{end}"));
+                assert_eq!(&bytes[22..24], &1_u16.to_le_bytes());
+                assert_eq!(&bytes[24..28], &16000_u32.to_le_bytes());
+                assert_eq!(&bytes[34..36], &16_u16.to_le_bytes());
+                assert!(
+                    bytes[44..].iter().all(|byte| *byte == 0),
+                    "Quiet input must remain represented"
+                );
+                assert_eq!(prepared.coverage.starts_with("partial:"), seconds > 7200.0);
+                count += 1;
+                let Some(next) = prepared.next else { break };
+                assert_eq!(next, cursor + 25);
+                cursor = next;
+            }
+            assert_eq!(count, expected_count);
+            assert!(audio_window(&path, "wav", &track, 7200).is_err());
+        }
+    }
 }

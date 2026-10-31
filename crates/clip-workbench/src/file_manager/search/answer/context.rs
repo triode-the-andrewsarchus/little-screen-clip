@@ -45,6 +45,7 @@ pub(in super::super) fn answer_document(
     if cancel.load(Ordering::Relaxed) {
         return Err("Answer cancelled".into());
     }
+    let deadline = Instant::now() + Duration::from_secs(180);
     let full = payload(question, kind, sources, true);
     if sources.len() <= 64
         && sources
@@ -54,16 +55,37 @@ pub(in super::super) fn answer_document(
             <= 24 * 1024
         && fits(&full)
     {
-        return Answer::decode(infer(full, Duration::from_secs(90))?, kind, sources, true);
+        if let Ok(answer) = infer(full, Duration::from_secs(90))
+            .and_then(|reply| Answer::decode(reply, kind, sources, true))
+        {
+            return Ok(answer);
+        }
+        // Failed validation is not an answer. Reuse bounded source-window
+        // selection rather than accepting a repaired/fuzzy quotation or retrying
+        // the same full prompt. All stages share the original deadline.
+        tracing::debug!(target: "little_clip_search_timing", "column direct answer rejected; trying bounded evidence");
     }
+    let tool =
+        super::extraction::tools::try_answer(sources, question, kind, cancel, deadline, &mut infer);
+    let feedback = match tool {
+        Ok(super::extraction::Attempt::Answer(answer)) => return Ok(answer),
+        Ok(super::extraction::Attempt::Escalate(reason)) => Some(reason),
+        Err(error) if cancel.load(Ordering::Relaxed) => return Err(error),
+        _ => None,
+    };
     answer_selected_document(
         sources,
         Vec::new(),
         question,
         kind,
         cancel,
-        Instant::now() + Duration::from_secs(180),
-        infer,
+        deadline,
+        |mut request, timeout| {
+            if let Some(reason) = &feedback {
+                request["review_feedback"] = json!(reason);
+            }
+            infer(request, timeout)
+        },
     )
 }
 
@@ -113,7 +135,7 @@ pub(super) fn answer_selected_document(
     reconcile(&evidence, question, kind, cancel, deadline, infer)
 }
 
-fn reconcile(
+pub(super) fn reconcile(
     evidence: &[Source],
     question: &str,
     kind: AnswerType,
@@ -258,6 +280,7 @@ mod tests {
         let result = answer_document(&sources, true, "What rating?", AnswerType::Number,
             &AtomicBool::new(false), |request, timeout| {
                 assert!(timeout <= Duration::from_secs(90));
+                if request["op"] == "text_search_plan" { return Ok(Value::Null); }
                 if request["op"] == "evidence" {
                     maps += 1;
                     let relevant = request["sources"].as_array().unwrap().iter()
@@ -279,6 +302,72 @@ mod tests {
     }
 
     #[test]
+    fn invalid_direct_answers_recover_only_through_verified_evidence() {
+        for worker_rejection in [false, true] {
+            let sources = [Source {
+                id: 7,
+                text: "Rating: 18 points.".into(),
+                location: "page 19".into(),
+            }];
+            let mut stages = Vec::new();
+            let answer = answer_document(&sources, true, "What rating?", AnswerType::Number,
+                &AtomicBool::new(false), |request, _| {
+                    if request["op"] == "text_search_plan" {
+                        stages.push("plan");
+                        return Ok(Value::Null);
+                    }
+                    if request["op"] == "evidence" {
+                        stages.push("select");
+                        return Ok(json!({"limited":false,"evidence":[{"source":7,"quote":"Rating: 18 points."}]}));
+                    }
+                    if request["context"] != "evidence" {
+                        stages.push("direct");
+                        if worker_rejection { return Err("Answer quotation is not present".into()); }
+                        return Ok(json!({"applicability":"applicable","state":"value",
+                            "value":"999","unit":"points","reason":"Invented rating.",
+                            "evidence":[{"source":7,"quote":"Rating: 999 points."}]}));
+                    }
+                    stages.push("reconcile");
+                    assert_eq!(request["sources"][0]["text"], "Rating: 18 points.");
+                    Ok(json!({"basis":"direct","applicability":"applicable","state":"value",
+                        "value":"18","unit":"points","reason":"Verified rating.",
+                        "evidence":[{"source":0,"quote":"Rating: 18 points."}]}))
+                }).unwrap();
+            assert_eq!(stages, ["direct", "plan", "select", "reconcile"]);
+            assert_eq!(answer.label(), "18 points");
+            assert_eq!(
+                answer.evidence,
+                [("page 19".into(), "Rating: 18 points.".into())]
+            );
+        }
+    }
+
+    #[test]
+    fn cancellation_after_rejected_direct_answer_cannot_start_recovery() {
+        let cancel = AtomicBool::new(false);
+        let sources = [Source {
+            id: 0,
+            text: "Rating: 18 points.".into(),
+            location: "text".into(),
+        }];
+        let mut calls = 0;
+        let result = answer_document(
+            &sources,
+            true,
+            "What rating?",
+            AnswerType::Number,
+            &cancel,
+            |_, _| {
+                calls += 1;
+                cancel.store(true, Ordering::Relaxed);
+                Err("Cancelled direct answer".into())
+            },
+        );
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
     fn saturated_evidence_abstains_without_reconciling() {
         let sources = vec![Source {
             id: 0,
@@ -292,7 +381,10 @@ mod tests {
             "Question?",
             AnswerType::Text,
             &AtomicBool::new(false),
-            |_, _| {
+            |request, _| {
+                if request["op"] == "text_search_plan" {
+                    return Ok(Value::Null);
+                }
                 calls += 1;
                 Ok(json!({"limited":true,"evidence":[]}))
             },
@@ -398,7 +490,10 @@ mod tests {
             "Question?",
             AnswerType::Text,
             &AtomicBool::new(false),
-            |_, _| {
+            |request, _| {
+                if request["op"] == "text_search_plan" {
+                    return Ok(Value::Null);
+                }
                 Ok(json!({"limited":false,
                 "evidence":[{"source":0,"quote":"Invented fact"}]}))
             },

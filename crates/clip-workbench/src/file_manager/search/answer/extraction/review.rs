@@ -8,6 +8,7 @@ pub(super) struct Context<'a> {
     pub question: &'a str,
     pub kind: AnswerType,
     pub header: &'a str,
+    pub document_location: Option<&'a str>,
 }
 
 impl Context<'_> {
@@ -19,7 +20,7 @@ impl Context<'_> {
         let sources = [Source {
             id: 0,
             text: self.header.into(),
-            location: "front matter".into(),
+            location: self.document_location.unwrap_or("front matter").into(),
         }];
         // This selected evidence cannot prove body-wide absence/non-applicability.
         // Do NOT include the proposed value/path: avoid candidate anchoring.
@@ -47,12 +48,16 @@ impl Context<'_> {
     }
 
     pub fn request(&self, path: &[String], value: &str, may_reuse: bool) -> Value {
-        json!({
+        let mut request = json!({
             "op":"extraction_review", "question":self.question, "type":self.kind,
-            "sources":[{"id":0,"text":self.header,"location":"front matter"}],
+            "sources":[{"id":0,"text":self.header,"location":self.document_location.unwrap_or("front matter")}],
             "complete":false, "may_reuse":may_reuse,
             "candidate":{"path":path,"value":value},
-        })
+        });
+        if self.document_location.is_some() {
+            request["layout"] = json!("labelled_document");
+        }
+        request
     }
 }
 
@@ -111,6 +116,7 @@ mod tests {
             question: "What is the exact identifier?",
             kind: AnswerType::Text,
             header: "identifier: Foo\nalternative: foo\n",
+            document_location: None,
         };
         let candidate = Answer::status(
             State::Value(super::super::super::Value::Text("foo".into()), "Foo".into()),

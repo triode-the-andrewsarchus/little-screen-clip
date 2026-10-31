@@ -4,8 +4,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from search_quality_ranking import compare_storage_precision, summarize
-from search_backend_quality import mixed_inputs, compare_pair
+from search_backend_quality import mixed_inputs, compare_pair, evaluate_pair
+from search_model.quality_fixtures import validation_path
 from search_model_precision import compare_variants
 
 
@@ -84,6 +87,26 @@ class StoragePrecisionTests(unittest.TestCase):
         current = copy.deepcopy(reference)
         current['results'][0]['summary']['within_targets'] = False
         self.assertFalse(compare_pair(current, reference)['passed'])
+
+    def test_backend_pairs_preserve_declared_or_default_validation_cases(self):
+        for custom in (False, True):
+            with self.subTest(custom=custom), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary)
+                indexed = output / 'cuda'
+                (indexed / 'fixture').mkdir(parents=True)
+                for name in ('fixture-manifest.json', 'report.json'):
+                    (indexed / name).write_text('{}')
+                if custom:
+                    (indexed / 'validation-manifest.json').write_text('{"declared":"real-corpus"}')
+                expected = validation_path(indexed).read_bytes()
+                def rank(command, **kwargs):
+                    folder = Path(command[command.index('--folder') + 1])
+                    self.assertEqual((folder / 'validation-manifest.json').read_bytes(), expected)
+                    Path(command[command.index('--report') + 1]).write_text('{"checked":true}')
+                args = SimpleNamespace(output_dir=output, test_binary=output / 'test-binary')
+                with patch('search_backend_quality.mixed_inputs', return_value={'segments':[], 'queries':{}}), \
+                     patch('search_backend_quality.subprocess.run', side_effect=rank):
+                    self.assertEqual(evaluate_pair(args, 'cuda', 'cpu'), {'checked':True})
 
     def test_backend_inputs_reject_unmatched_requests_pipelines_and_segment_identity(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -59,6 +59,11 @@ impl FileManager {
         self.media_view_toolbar(ui, palette);
         ui.separator();
         self.docked_panels(ui, palette);
+        // A coalesced header click can also clear focus during the later list
+        // background interaction. Restore it only after that interaction ends.
+        if std::mem::take(&mut self.focus_list) {
+            ui.memory_mut(|memory| memory.request_focus(list_id()));
+        }
         ui.memory_mut(|memory| {
             for id in [
                 tree_id(),

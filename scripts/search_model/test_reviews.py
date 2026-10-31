@@ -25,6 +25,17 @@ class Reviews(unittest.TestCase):
         self.assertIn('body not examined', user['extraction_coverage'])
         self.assertLess(list(user).index('candidate'), list(user).index('question'))
 
+    def test_labelled_document_review_describes_supplied_document_and_rejects_unknown_layout(self):
+        library = Library({'scope':'literal', 'reason':'Direct field.', 'decision':'reuse'})
+        answers.review_reply(library, None, self.request(layout='labelled_document'))
+        system, user, _ = library.calls[0]
+        self.assertIn('entire bounded text document is supplied', system)
+        self.assertNotIn('document body is NOT supplied', system)
+        self.assertIn('applicability can differ between files with identical field labels', system)
+        self.assertIn('Complete bounded labelled text document', user['extraction_coverage'])
+        with self.assertRaises(ValueError):
+            answers.review_reply(Library({}), None, self.request(layout='shell'))
+
     def test_per_file_review_cannot_authorize_reuse_and_unknown_actions_fail(self):
         for decision in ['reuse', 'execute', 'not_applicable']:
             with self.assertRaises(ValueError):

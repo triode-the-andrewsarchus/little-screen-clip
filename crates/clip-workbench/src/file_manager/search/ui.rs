@@ -243,6 +243,14 @@ impl FileManager {
                 self.rebuild_visible();
             }
         }
+        if let Some(summary) = self
+            .search
+            .applied
+            .as_ref()
+            .and_then(super::query::Query::date_summary)
+        {
+            ui.add(egui::Label::new(egui::RichText::new(summary).small()).truncate(true));
+        }
     }
 
     pub(in crate::file_manager) fn index_ui(&mut self, ui: &mut Ui) {
@@ -383,14 +391,14 @@ fn index_menu(
             ui.close_menu();
         }
         if ui.button("Remove indexed folder").clicked() {
-            command = Some(Command::Remove(root.id));
+            command = Some(Command::Remove(root.path.clone()));
             ui.close_menu();
         }
     }
     if ui.button("Install embedding model and runtime").on_hover_text("Downloads checksum-verified model weights (about 865 MB) and builds the pinned local inference runtime.").clicked() {
                 command = Some(Command::Setup); ui.close_menu();
             }
-    if ui.button("Install answer model").on_hover_text("Downloads the pinned local Qwen3.5-9B Q8 model (about 9.8 GB) for temporary question/answer columns.").clicked() {
+    if ui.button("Install answer model").on_hover_text("Downloads the pinned local Qwen3.5-9B Q8 model and vision projector (about 10.7 GB) for temporary question/answer columns. Missing embedding weights add about 865 MB; the local runtime is also built if needed.").clicked() {
         command = Some(Command::SetupAnswer); ui.close_menu();
     }
     command

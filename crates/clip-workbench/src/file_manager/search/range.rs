@@ -8,6 +8,24 @@ pub(super) struct Interval {
     upper: Option<(i128, bool)>,
 }
 impl Interval {
+    // Render the captured instants, never reparse dates under a later timezone.
+    pub(super) fn date_bounds(&self) -> String {
+        [(">", ">=", self.lower), ("<", "<=", self.upper)]
+            .into_iter()
+            .filter_map(|(open, closed, bound)| {
+                bound.map(|(value, inclusive)| {
+                    let timestamp = i64::try_from(value)
+                        .ok()
+                        .map(DateTime::from_timestamp_nanos)
+                        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
+                        .unwrap_or_else(|| "out-of-range date".into());
+                    format!("{} {timestamp}", if inclusive { closed } else { open })
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(" and ")
+    }
+
     pub(super) fn contains(&self, value: i128) -> bool {
         self.lower
             .is_none_or(|(bound, inclusive)| value > bound || (inclusive && value == bound))
@@ -199,6 +217,70 @@ mod tests {
             assert!(size(bad).is_err(), "{bad}");
         }
     }
+    #[test]
+    fn local_calendar_days_follow_daylight_saving_boundaries() {
+        const CHILD: &str = "LITTLE_CLIP_SEARCH_DST_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "file_manager::search::range::tests::local_calendar_days_follow_daylight_saving_boundaries",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("TZ", "America/New_York")
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+            return;
+        }
+        for (day, hours, lower, upper) in [
+            (
+                "2026-03-08",
+                23,
+                "2026-03-08T05:00:00Z",
+                "2026-03-09T04:00:00Z",
+            ),
+            (
+                "2026-11-01",
+                25,
+                "2026-11-01T04:00:00Z",
+                "2026-11-02T05:00:00Z",
+            ),
+        ] {
+            let (start, Some(end)) = instant(day).unwrap() else {
+                panic!("Expected a whole local calendar day");
+            };
+            assert_eq!(start, instant(lower).unwrap().0);
+            assert_eq!(end, instant(upper).unwrap().0);
+            assert_eq!(end - start, hours * 3_600 * 1_000_000_000);
+            assert_eq!(
+                date(day).unwrap().date_bounds(),
+                format!(">= {lower} and < {upper}")
+            );
+            for expression in [day.to_owned(), format!("{day}..{day}"), format!("={day}")] {
+                let interval = date(&expression).unwrap();
+                assert!(!interval.contains(start - 1));
+                assert!(interval.contains(start));
+                assert!(interval.contains(end - 1));
+                assert!(!interval.contains(end));
+            }
+            assert!(!date(&format!("<{day}")).unwrap().contains(start));
+            assert!(date(&format!(">={day}")).unwrap().contains(start));
+            assert!(date(&format!("<={day}")).unwrap().contains(end - 1));
+            assert!(!date(&format!("<={day}")).unwrap().contains(end));
+            assert!(!date(&format!(">{day}")).unwrap().contains(end - 1));
+            assert!(date(&format!(">{day}")).unwrap().contains(end));
+        }
+    }
+
     #[test]
     fn date_ranges_preserve_iso_hyphens_and_cover_complete_days() {
         let (start, Some(end)) = instant("2026-01-01").unwrap() else {

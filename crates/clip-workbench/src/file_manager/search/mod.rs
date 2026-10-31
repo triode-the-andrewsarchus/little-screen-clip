@@ -3,6 +3,7 @@ mod actions;
 mod answer;
 mod columns;
 mod columns_ui;
+mod content;
 mod controls;
 mod explanation;
 mod explanation_ui;
@@ -474,7 +475,14 @@ impl FileManager {
         if changed {
             self.rebuild_visible();
         }
-        if self.pending.is_some() || self.search.pending {
+        if self.pending.is_some()
+            || self.search.pending
+            || self
+                .search
+                .service
+                .as_ref()
+                .is_some_and(service::Service::maintenance_busy)
+        {
             self.search.answers.cancel_pending();
             return;
         }
@@ -498,6 +506,83 @@ mod tests {
     use crate::file_manager::{Navigation, filesystem::read_directory};
     use std::sync::atomic::AtomicBool;
 
+    #[test]
+    fn partial_answer_sort_keeps_selection_counts_and_prior_ties_as_cells_complete() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+            std::fs::write(root.path().join(name), "Fixture text.").unwrap();
+        }
+        let directory = read_directory(root.path(), &AtomicBool::new(false)).unwrap();
+        let mut manager = FileManager::new(root.path().into());
+        manager.pending = None;
+        manager.commit(directory, Navigation::New);
+        let selected = root.path().join("c.txt");
+        manager.select(selected.clone());
+        manager.search.draft = ":q:\"Does this mention a fixture?\";type:boolean".into();
+        manager.apply_search();
+        assert!(manager.search.error.is_none());
+        let id = manager.search.answers.current().unwrap().columns[0].id;
+        manager.search.answers.current_mut().unwrap().sort = Some((id, false));
+        let directory = manager.directory.as_ref().unwrap();
+        manager.search.answers.priority = ["b.txt", "a.txt", "c.txt", "d.txt"]
+            .map(|name| {
+                directory
+                    .entries
+                    .iter()
+                    .position(|entry| entry.name == name)
+                    .unwrap()
+            })
+            .to_vec();
+        for (finished, state) in [
+            answer::State::Value(answer::Value::Boolean(false), "false".into()),
+            answer::State::Value(answer::Value::Boolean(true), "true".into()),
+            answer::State::NotApplicable,
+            answer::State::Value(answer::Value::Boolean(false), "false".into()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let job = manager
+                .search
+                .answers
+                .next(manager.directory.as_ref().unwrap())
+                .unwrap();
+            assert!(manager.search.answers.accept(service::AnswerResult {
+                id: job.id,
+                answer: answer::Answer::status(state, "Fixture"),
+            }));
+            manager.rebuild_visible();
+            let column = &manager.search.answers.current().unwrap().columns[0];
+            assert_eq!((column.finished, column.total), (finished + 1, 4));
+            assert_eq!(
+                manager.location().unwrap().selected.as_ref(),
+                Some(&selected)
+            );
+            assert!(manager.location().unwrap().selection.contains(&selected));
+            let names = crate::file_manager::tests::visible_names(&manager);
+            assert_eq!(
+                names,
+                if finished == 3 {
+                    vec!["b.txt", "d.txt", "a.txt", "c.txt"]
+                } else {
+                    vec!["b.txt", "a.txt", "c.txt", "d.txt"]
+                }
+            );
+        }
+        for (descending, expected) in [
+            (true, ["a.txt", "b.txt", "d.txt", "c.txt"]),
+            (false, ["b.txt", "d.txt", "a.txt", "c.txt"]),
+        ] {
+            manager.search.answers.current_mut().unwrap().sort = Some((id, descending));
+            manager.rebuild_visible();
+            let names = crate::file_manager::tests::visible_names(&manager);
+            assert_eq!(names, expected);
+            assert_eq!(
+                manager.location().unwrap().selected.as_ref(),
+                Some(&selected)
+            );
+        }
+    }
     #[test]
     fn refresh_repeats_accepted_remote_query_without_adopting_invalid_draft() {
         let folder = tempfile::tempdir().unwrap();
@@ -674,6 +759,29 @@ mod tests {
         }
         entry.directory = true;
         assert!(!Query::parse(":!>=1KB").unwrap().metadata_matches(entry));
+
+        // A broken target gives real unknown metadata. Its basename remains
+        // known, but neither a family nor its negation can classify it.
+        std::os::unix::fs::symlink("missing-target", folder.path().join("broken.jpg")).unwrap();
+        let directory = read_directory(folder.path(), &AtomicBool::new(false)).unwrap();
+        let broken = directory
+            .entries
+            .iter()
+            .find(|entry| entry.name == "broken.jpg")
+            .unwrap();
+        assert!(broken.warning.is_some());
+        for family in [
+            "image", "audio", "video", "document", "pdf", "folder", "file",
+        ] {
+            for prefix in ["", "!"] {
+                assert!(
+                    !Query::parse(&format!(":{prefix}{family}"))
+                        .unwrap()
+                        .metadata_matches(broken)
+                );
+            }
+        }
+        assert!(Query::parse(":*.jpg").unwrap().metadata_matches(broken));
     }
     #[test]
     fn semantic_pages_follow_whole_window_sort_and_other_searches_stay_unpaged() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synthetic retrieval-quality component: production readers and model inputs, no index enrollment.
+"""Frozen retrieval-quality component: production readers and model inputs, no index enrollment.
 
 This evaluates per-file maximum semantic scores, not the application's lexical/RRF
 fusion, coordinator lifecycle or UI. It does not replace end-to-end acceptance.
@@ -17,7 +17,7 @@ import struct
 import subprocess
 import sys
 import time
-from quality_fixtures import build
+from quality_fixtures import build, copy_frozen, validation_path
 from smoke import vectors
 
 HERE=Path(__file__).resolve().parent
@@ -106,7 +106,7 @@ def reader(binary,request):
 
 def prepared(binary,root):
     origin=reader(binary,{'Probe':str(root)})['Root']
-    listing=reader(binary,{'List':{'root':origin,'path':str(root),'hidden':False,'exclusions':[]}})['Directory']
+    listing=reader(binary,{'List':{'root':origin,'path':str(root),'hidden':False,'exclusions':[]}})['Directory']['directory']
     if listing['skipped']:
         raise RuntimeError('Fixture inventory is incomplete')
     for entry in listing['entries']:
@@ -203,6 +203,16 @@ def calibration_floors(cases,negatives,queries,segments):
     return {mod:round((min(positive[mod])+max(negative[mod]))/2,2) for mod in positive}
 
 
+def prepare_corpus(args, output):
+    frozen=(args.corpus/'fixture-manifest.json' if args.corpus else HERE/'retrieval_cases.json').read_bytes()
+    corpus=json.loads(frozen)
+    cases=copy_frozen(args.corpus/'fixture',output/'fixture',corpus) if args.corpus else build(corpus['positives'],output/'fixture')
+    (output/'fixture-manifest.json').write_text(json.dumps(corpus,indent=2))
+    validation_raw=validation_path(args.corpus).read_bytes()
+    (output/'validation-manifest.json').write_bytes(validation_raw)
+    return frozen, corpus, cases, validation_raw
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime',type=Path,required=True)
@@ -210,14 +220,11 @@ def main():
     parser.add_argument('--binary',type=Path,required=True)
     parser.add_argument('--device',default='cuda',choices=['cuda','vulkan','cpu'])
     parser.add_argument('--output-dir',type=Path,required=True)
+    parser.add_argument('--corpus',type=Path,help='Owned frozen corpus folder containing fixture, fixture-manifest.json and validation-manifest.json')
     args=parser.parse_args()
     output=args.output_dir.resolve()
-    output.mkdir(parents=True,exist_ok=False)
-    frozen=(HERE/'retrieval_cases.json').read_bytes()
-    corpus=json.loads(frozen)
-    cases=build(corpus['positives'],output/'fixture')
-    (output/'fixture-manifest.json').write_text(json.dumps(corpus,indent=2))
-    validation_raw=(HERE/'retrieval_validation.json').read_bytes()
+    output.mkdir(parents=True,exist_ok=False,mode=0o700)
+    frozen,corpus,cases,validation_raw=prepare_corpus(args,output)
     validation=json.loads(validation_raw)
     targets={case['id']:case for case in cases}
     validation_cases=[{**targets[row['target']],**row} for row in validation['positives']]
@@ -234,7 +241,7 @@ def main():
             queries[case['id']]=vectors(worker.request({'op':'text','inputs':['task: search result | query: '+case['query']],'token_limit':512}))[0]
         report={'scope':__doc__,'scoring':'common float64 dot accumulation for both storage comparisons; not bit-identical to Rust float32 accumulation','source_sha256':{name:hashlib.sha256((HERE/name).read_bytes()).hexdigest() for name in ['quality.py','quality_fixtures.py','quality_visuals.py','worker.py']},'fixture_sha256':hashlib.sha256(frozen).hexdigest(),'pipeline':worker.ready,'seconds':time.monotonic()-started,'segment_count':len(segments),'positive_count':len(cases),'negative_count':len(corpus['negatives']),'results':[evaluate(cases,corpus['negatives'],queries,segments,storage,{'text':0.25,'image':0.25,'audio':0.25}) for storage in ['f32','f16']],'full_phase6_acceptance_proven':False,'bf16_comparison_proven':False,'exact_filename_tier_proven':False}
         candidate=calibration_floors(cases,corpus['negatives'],queries,segments)
-        report['calibration_method']='Midpoint between weakest calibration positive and strongest calibration negative per modality, rounded to 0.01; exploratory initial hold-out was previously inspected; additional validation frozen before evaluating these candidates.'
+        report['calibration_method']='Midpoint between weakest declared calibration positive and strongest declared calibration negative per modality, rounded to 0.01; held-out/validation cases do not select these candidates. No application preferences are changed.'
         report['candidate_floors']=candidate
         report['calibrated_results']=[evaluate(cases,corpus['negatives'],queries,segments,storage,candidate) for storage in ['f32','f16']]
         report['validation_sha256']=hashlib.sha256(validation_raw).hexdigest()

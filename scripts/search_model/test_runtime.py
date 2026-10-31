@@ -2,6 +2,8 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -18,6 +20,23 @@ setup, worker = load("setup"), load("worker")
 
 
 class Provisioning(unittest.TestCase):
+    def test_provisioned_worker_starts_outside_checkout_without_model_or_download(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            with patch.object(sys, "argv", ["setup.py", "--runtime", str(runtime), "--models", str(root / "models")]), \
+                 patch.object(setup, "build"), patch.object(setup, "download") as download, \
+                 patch.object(setup, "emit"):
+                setup.main()
+            download.assert_called_once()
+            for name in ["MODEL_NOTICES.md", "LICENSE.models.apache-2.0", "LICENSE.models.qwen", "LICENSE.llama.cpp", "LICENSE.recall"]:
+                self.assertEqual((runtime / name).read_bytes(), (setup.HERE / name).read_bytes())
+            process = subprocess.run([sys.executable, "-I", str(runtime / "worker.py"), "--help"],
+                                     cwd=root, capture_output=True, text=True, timeout=10)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            self.assertIn("--role", process.stdout)
+            self.assertFalse((root / "models").exists())
+
     def test_backend_changes_rebuild_and_success_retires_old_runtime(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

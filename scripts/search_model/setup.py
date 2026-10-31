@@ -197,7 +197,7 @@ def main():
     with (args.runtime / "setup.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         build(args.runtime, args.llama_prefix)
-        for name in ["llama_shim.c", "answer_shim.c", "llama-no-logits.patch", "LICENSE.recall", "LICENSE.llama.cpp", "worker.py", "answers.py", "vision_answers.py", "answer_models.json", "documents.py"]:
+        for name in ["llama_shim.c", "answer_shim.c", "llama-no-logits.patch", "LICENSE.recall", "LICENSE.llama.cpp", "MODEL_NOTICES.md", "LICENSE.models.apache-2.0", "LICENSE.models.qwen", "worker.py", "inference_errors.py", "answers.py", "applicability.py", "vision_answers.py", "answer_models.json", "documents.py"]:
             shutil.copy2(HERE / name, args.runtime / name)
         download(args.models)
         if args.answers:

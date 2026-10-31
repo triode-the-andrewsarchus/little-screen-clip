@@ -2,6 +2,8 @@
 """Literal-name search and draft command controls in the private compositor."""
 from pathlib import Path
 import json
+import os
+from datetime import datetime, timezone
 import tomllib
 import subprocess
 
@@ -60,15 +62,40 @@ def exercise(session, root):
     session.observe('last-valid-result', ['landmark.txt', '1 matching entries'])
     assert not (Path(session.env['XDG_DATA_HOME']) / 'little-screen-clip/search/index.sqlite').exists()
 
+    # Show the applied instants, rather than only the input's offset/date text.
+    session.address(root)
+    for label, command, expected in [
+        ('date-offset', ':modified:>=2026-01-01T02:00:00+02:00 special', ['UTC', '00:00:00Z', '1 matching entries']),
+        ('date-negated', ':!modified:<2000-01-01T02:00:00+02:00 special', ['exclude UTC', '00:00:00Z', '1 matching entries']),
+        ('date-invalid-keeps-bounds', ':modified:2026-02-30', ['exclude UTC', 'special', 'timestamp']),
+    ]:
+        session.key('f', 'ctrl')
+        type_text(session, command)
+        session.key('Return')
+        session.observe(label, expected)
+
+    session.key('Escape')
+    for label, command, expected in [
+        ('unknown-family-positive', ':image,*.jpg', ['0 matching entries']),
+        ('unknown-family-negative', ':!image,*.jpg', ['0 matching entries']),
+        ('unknown-file-negative', ':!file,*.jpg', ['0 matching entries']),
+        ('unknown-name-known', ':*.jpg', ['broken.jpg', '1 matching entries']),
+    ]:
+        session.key('f', 'ctrl')
+        type_text(session, command)
+        session.key('Return')
+        session.observe(label, expected)
+    session.key('Escape')
+
     # Command controls must never make protected locations enrollable. Use only
     # owned private credential/repository fixtures and metadata navigation for
     # real kernel namespaces; clicking Index must create no database or roots.
-    for name in ('.ssh', '.git'):
+    for name in ('.ssh', '.git', '.mozilla', '.thunderbird'):
         (root / name).mkdir()
         (root / name / 'secret.txt').write_text('must never be indexed')
     alias = root / 'kernel-alias'
     alias.symlink_to('/proc', target_is_directory=True)
-    protected = [Path('/proc'), Path('/sys'), Path('/dev'), root / '.ssh', root / '.git', alias]
+    protected = [Path('/proc'), Path('/sys'), Path('/dev'), root / '.ssh', root / '.git', root / '.mozilla', root / '.thunderbird', alias]
     for number, folder in enumerate(protected):
         session.address(folder)
         expected_entry = 'Folders' if folder in (Path('/proc'), Path('/sys'), Path('/dev'), alias) else 'secret.txt'
@@ -100,11 +127,14 @@ def main():
     args = application_arguments(__doc__, repo / 'target/debug/clip-file-manager')
     output, root = media_fixture_directory(args)
     (root / ':special.txt').write_text('literal colon name')
+    (root / 'broken.jpg').symlink_to('missing-target')
+    stamp = datetime(2026, 6, 15, tzinfo=timezone.utc).timestamp()
+    os.utime(root / ':special.txt', (stamp, stamp))
     (root / 'Nested').mkdir()
     (root / 'Nested/landmark.txt').write_text('a nested document')
     (root / 'Nested/landmark.md').write_text('a same-name file that the extension filter must omit')
     return run_application_acceptance(args, output, root, exercise,
-        'Leading-colon literal filename, structured filter/scope controls editing only the visible draft, invalid options retain results, protected namespaces/private/repository paths and a kernel alias cannot enroll, no model or database')
+        'Leading-colon literal filename, structured filter/scope controls editing only the visible draft, invalid options retain results, resolved UTC date bounds/negation survive invalid drafts, protected namespaces/private/repository paths and a kernel alias cannot enroll, no model or database')
 
 
 if __name__ == '__main__':

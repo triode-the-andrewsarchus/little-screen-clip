@@ -25,6 +25,9 @@ impl SourceSession {
     pub fn unique(&self) -> bool {
         self.unique_mount.is_some()
     }
+    pub fn unique_on(&self, mount: Option<u64>) -> bool {
+        self.unique() && mount == Some(self.mount)
+    }
     /// Network/unknown filesystems may change server sessions without a new mount.
     pub fn persistent(&self) -> bool {
         self.unique()

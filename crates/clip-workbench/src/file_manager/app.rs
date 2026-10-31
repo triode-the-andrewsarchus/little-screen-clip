@@ -62,6 +62,7 @@ struct FileManagerApp {
     native: Option<super::native_drag::NativeDrag>,
     drop_destinations: std::collections::BTreeMap<u64, DropDestination>,
     pad_studio: Option<super::constellation::pad_interaction::StudioRequest>,
+    closing: bool,
 }
 
 impl FileManagerApp {
@@ -105,6 +106,7 @@ impl FileManagerApp {
             browser,
             viewers: super::viewers::Viewers::new(config),
             pad_studio: None,
+            closing: false,
             external: Default::default(),
             palette,
             native: super::native_drag::NativeDrag::new(cc),
@@ -471,7 +473,22 @@ impl FileManagerApp {
                 return;
             }
             self.browser.stop_previews();
+            self.closing = true;
+            self.finish_app_close(ctx);
+        }
+    }
+    fn finish_app_close(&mut self, ctx: &egui::Context) {
+        let ready = self
+            .browser
+            .search
+            .service
+            .as_mut()
+            .is_none_or(|service| service.allow_close());
+        if ready {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after(std::time::Duration::from_millis(10));
         }
     }
 }
@@ -483,6 +500,14 @@ impl eframe::App for FileManagerApp {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.closing {
+            central_panel(ctx, |ui| {
+                ui.spinner();
+                ui.label("Closing...");
+            });
+            self.finish_app_close(ctx);
+            return;
+        }
         self.tick_external(ctx);
         self.browser
             .search

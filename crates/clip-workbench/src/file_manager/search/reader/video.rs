@@ -30,15 +30,17 @@ pub(super) fn prepare(path: &Path, cursor: usize, bytes: u64) -> Result<Prepared
     if cursor < count {
         prepared.next = (cursor + 1 < count || audio.is_some()).then_some(cursor + 1);
     }
-    prepared.coverage = if prepared.coverage.starts_with("partial:") {
-        format!("sampled: visual frames; {}", prepared.coverage)
-    } else if audio.is_some_and(|track| track.duration > 7200.0) {
-        "sampled: visual frames; partial audio, first two hours".into()
-    } else if audio.is_some() {
-        "sampled: visual frames; selected audio track".into()
-    } else {
-        "sampled: visual frames; no audio track observed".into()
-    };
+    if visual.is_some() {
+        prepared.coverage = if prepared.coverage.starts_with("partial:") {
+            format!("sampled: visual frames; {}", prepared.coverage)
+        } else if audio.is_some_and(|track| track.duration > 7200.0) {
+            "sampled: visual frames; partial audio, first two hours".into()
+        } else if audio.is_some() {
+            "sampled: visual frames; selected audio track".into()
+        } else {
+            "sampled: visual frames; no audio track observed".into()
+        };
+    }
     Ok(prepared)
 }
 
@@ -79,21 +81,24 @@ fn frame(
     track: &media::Track,
     offset: f64,
 ) -> Result<Prepared, String> {
-    let decode = |offset: f64| {
-        media::command("ffmpeg", DEMUXERS)
-            .args([
-                "-v",
-                "info",
-                "-nostdin",
-                "-threads",
-                "2",
-                "-filter_threads",
-                "1",
-                "-max_alloc",
-                "268435456",
-                "-copyts",
-                "-ss",
-            ])
+    let decode = |accurate: bool| {
+        let mut command = media::command("ffmpeg", DEMUXERS).args([
+            "-v",
+            "info",
+            "-nostdin",
+            "-threads",
+            "2",
+            "-filter_threads",
+            "1",
+            "-max_alloc",
+            "268435456",
+            "-copyts",
+        ]);
+        if !accurate {
+            command = command.arg("-noaccurate_seek");
+        }
+        command
+            .arg("-ss")
             .arg((track.start + offset).to_string())
             .arg("-i")
             .arg_content_file(path)
@@ -120,16 +125,16 @@ fn frame(
             .run()
             .map_err(|e| e.to_string())
     };
-    let mut output = decode(offset)?;
-    // A successful seek can still land beyond the last available frame, e.g.
-    // halfway through a one-frame clip. Retry once within the sample interval;
-    // showinfo below records the frame we actually received, not the request.
+    let mut output = decode(true)?;
+    // A valid sparse/one-frame clip can have no frame after the requested
+    // instant. Retry once at its preceding demuxer seek point; showinfo keeps
+    // the observed frame's timestamp rather than inventing the requested one.
     if output.status.success()
         && !output.stdout_truncated
         && output.stdout.is_empty()
         && offset > 0.0
     {
-        output = decode((offset - 5.0).max(0.0))?;
+        output = decode(false)?;
     }
     if !output.status.success() || output.stdout_truncated || output.stdout.is_empty() {
         return Err("Video frame decode failed".into());
@@ -187,6 +192,54 @@ mod tests {
         );
         assert_eq!(frame_timestamp(b"other pts_time:5.0\n"), None);
         assert_eq!(frame_timestamp(b"[Parsed_showinfo_0] pts_time:nan\n"), None);
+    }
+    #[test]
+    fn capped_long_sparse_video_keeps_the_last_observed_frame() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("long.mkv");
+        let output = little_clip_core::process::CommandRequest::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=80x40:r=1/10:d=10000",
+                "-vf",
+                r"drawbox=color=blue:t=fill:enable=gte(t\,9980)",
+                "-c:v",
+                "ffv1",
+                "-g",
+                "1",
+            ])
+            .arg(&path)
+            .run()
+            .unwrap();
+        assert!(output.status.success(), "{}", output.stderr_lossy());
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        for (cursor, blue) in [(0, false), (512, false), (1023, true)] {
+            let prepared = prepare(&path, cursor, bytes).unwrap();
+            assert_eq!(prepared.vision_tokens, Some(140));
+            assert_eq!(prepared.next, (cursor < 1023).then_some(cursor + 1));
+            assert_eq!(
+                prepared.coverage,
+                "sampled: visual frames; no audio track observed"
+            );
+            let timestamp: f64 = prepared
+                .location
+                .rsplit(' ')
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap();
+            if blue {
+                assert_eq!(timestamp, 9990.0);
+            }
+            let image = image::load_from_memory(&STANDARD.decode(prepared.data.unwrap()).unwrap())
+                .unwrap()
+                .to_rgb8();
+            assert!(image.get_pixel(0, 0)[if blue { 2 } else { 0 }] > 200);
+        }
     }
     fn clip(path: &Path, offset: &str, length: &str) {
         assert!(
@@ -286,6 +339,65 @@ mod tests {
             let image =
                 image::load_from_memory(&STANDARD.decode(prepared.data.unwrap()).unwrap()).unwrap();
             assert!(image.to_rgb8().get_pixel(0, 0)[0] > 200);
+        }
+    }
+
+    #[test]
+    fn packet_timestamp_gaps_keep_later_audio_windows_on_the_source_clock() {
+        let folder = tempfile::tempdir().unwrap();
+        let original = folder.path().join("original.mkv");
+        clip(&original, "0", "60");
+        for visual in [false, true] {
+            let path = folder.path().join(if visual {
+                "gapped-video.mkv"
+            } else {
+                "gapped-audio.mkv"
+            });
+            let mut command = std::process::Command::new("ffmpeg");
+            command.args(["-v", "error", "-i"]).arg(&original).args([
+                "-af",
+                r"aselect=not(between(t\,10\,12))",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "pcm_s16le",
+            ]);
+            if !visual {
+                command.arg("-vn");
+            }
+            assert!(command.arg(&path).status().unwrap().success());
+            let frames = if visual { 12 } else { 0 };
+            for (offset, length, next) in [(0, 30, Some(25)), (25, 30, Some(50)), (50, 10, None)] {
+                let prepared = prepare(
+                    &path,
+                    frames + offset,
+                    std::fs::metadata(&path).unwrap().len(),
+                )
+                .unwrap();
+                let wav = STANDARD.decode(prepared.data.unwrap()).unwrap();
+                assert_eq!((wav.len() - 44) / 32000, length);
+                assert_eq!(
+                    prepared.location,
+                    format!("audio seconds {offset}..{}", offset + length)
+                );
+                assert_eq!(prepared.next, next.map(|offset| frames + offset));
+                if visual {
+                    assert_eq!(
+                        prepared.coverage,
+                        "sampled: visual frames; selected audio track"
+                    );
+                } else {
+                    assert_eq!(prepared.coverage, "complete");
+                }
+                assert!(wav[44..].iter().any(|byte| *byte != 0));
+                if offset == 0 {
+                    assert!(
+                        wav[44 + 10 * 32000 + 16000..44 + 11 * 32000 + 16000]
+                            .iter()
+                            .all(|byte| *byte == 0)
+                    );
+                }
+            }
         }
     }
 

@@ -33,7 +33,23 @@ def observations(root):
     return result
 
 
-def wait_index(session, index, timeout, started):
+def index_progress(index):
+    """Read diagnostic counts from one consistent catalog snapshot."""
+    with sqlite3.connect(index) as db:
+        db.execute('BEGIN')
+        root_rows = db.execute('SELECT generation,state,error FROM roots').fetchall()
+        return {
+            'roots': [(state, error) for _, state, error in root_rows],
+            'generations': [generation for generation, _, _ in root_rows],
+            'unverified_memberships': db.execute('SELECT count(*) FROM memberships WHERE verified=0').fetchone()[0],
+            'states': dict(db.execute('SELECT state,COUNT(*) FROM files GROUP BY state')),
+            'modalities': dict(db.execute('SELECT modality,COUNT(*) FROM segments WHERE vector IS NOT NULL GROUP BY modality')),
+            'coverage': dict(db.execute("SELECT coalesce(coverage,'pending'),COUNT(*) FROM files GROUP BY coverage")),
+            'failures': db.execute("SELECT error,COUNT(*) FROM files WHERE state='failed' GROUP BY error").fetchall(),
+        }
+
+
+def wait_index(session, index, timeout, started, *, after_generation=0):
     deadline = started + timeout
     previous = None
     while time.monotonic() < deadline:
@@ -41,18 +57,13 @@ def wait_index(session, index, timeout, started):
             raise RuntimeError('File manager exited during real corpus indexing')
         if index.exists():
             try:
-                with sqlite3.connect(index) as db:
-                    roots = db.execute('SELECT state,error FROM roots').fetchall()
-                    states = dict(db.execute('SELECT state,COUNT(*) FROM files GROUP BY state'))
-                    modalities = dict(db.execute('SELECT modality,COUNT(*) FROM segments WHERE vector IS NOT NULL GROUP BY modality'))
-                    coverage = dict(db.execute("SELECT coalesce(coverage,'pending'),COUNT(*) FROM files GROUP BY coverage"))
-                    failures = db.execute("SELECT error,COUNT(*) FROM files WHERE state='failed' GROUP BY error").fetchall()
-                current = {'roots': roots, 'states': states, 'modalities': modalities, 'coverage': coverage, 'failures': failures}
+                current = index_progress(index)
+                roots, states = current['roots'], current['states']
                 if current != previous:
-                    current['elapsed_seconds'] = round(time.monotonic() - started, 3)
-                    (session.output / 'index-progress.json').write_text(json.dumps(current, indent=2))
-                    previous = {key: value for key, value in current.items() if key != 'elapsed_seconds'}
-                if roots and roots[0][0] in ('ready', 'partial') and not states.get('pending'):
+                    progress = current | {'elapsed_seconds': round(time.monotonic() - started, 3)}
+                    (session.output / 'index-progress.json').write_text(json.dumps(progress, indent=2))
+                    previous = current
+                if roots and roots[0][0] in ('ready', 'partial') and not states.get('pending') and min(current['generations']) > after_generation:
                     return previous
                 if roots and roots[0][0] == 'error':
                     raise AssertionError(roots)

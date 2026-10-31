@@ -12,6 +12,15 @@ from file_manager_search_settings_acceptance import click_word
 import ui_acceptance_capture as private
 
 
+def enroll_folder(session, folder):
+    """Navigate, explicitly enroll and wait for a complete durable inventory."""
+    session.address(folder)
+    index = Path(session.env['XDG_DATA_HOME'])/'little-screen-clip/search/index.sqlite'
+    session.click(993, 118)
+    session.key('Escape')
+    return index, inventory(index)
+
+
 def word(session, shot, text):
     return session.word(shot, text, tree=True, required=False, last=True) or session.word(shot, text, last=True)
 
@@ -53,7 +62,7 @@ def exercise(session, root):
         assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert db.execute("SELECT COUNT(*) FROM segments").fetchone()[0] == 1
     backup_hash = hashlib.sha256(backup.read_bytes()).hexdigest()
-    session.observe("backup-completed", ["Index backup saved"])
+    session.scroll_to_visible("backup-completed", ["Index backup saved"], position=(500, 450))
     session.scroll_to_visible("clear-controls", ["Backup destination"], position=(500, 450))
     scroll(session, 100)
     session.observe("clear-controls-visible", ["Backup destination"])
@@ -85,7 +94,7 @@ def exercise(session, root):
     resumed, paths, vectors = inventory(index, cleared_generation - 1)
     assert resumed == cleared_generation and vectors == 1 and len(paths) == 2, (resumed, paths, vectors)
     assert source.read_bytes() == original
-    session.observe("reindexed-after-explicit-resume", ["1 vectors"])
+    session.scroll_to_visible("reindexed-after-explicit-resume", ["1 vectors"], position=(500, 450))
 
 
 def indexed_identity(session, root):

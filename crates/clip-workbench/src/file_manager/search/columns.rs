@@ -82,7 +82,7 @@ impl Column {
         if policy::secret_file(&entry.path) || policy::excluded(&entry.path).is_some() {
             return Some("Excluded by the content policy");
         }
-        if !entry.regular_file || entry.symlink || entry.is_playable_media() {
+        if !super::answer::supports(entry) {
             return Some("Unsupported by the current document/image answer path");
         }
         None
@@ -316,8 +316,18 @@ impl Columns {
         {
             return false;
         }
+        if self
+            .pending
+            .as_ref()
+            .unwrap()
+            .cancel
+            .load(Ordering::Relaxed)
+        {
+            self.cancel_pending();
+            return false;
+        }
         let pending = self.pending.take().unwrap();
-        if self.active.as_ref() != Some(&pending.folder) || pending.cancel.load(Ordering::Relaxed) {
+        if self.active.as_ref() != Some(&pending.folder) {
             return false;
         }
         let Some(folder) = self.folders.get_mut(&pending.folder) else {
@@ -502,7 +512,7 @@ mod tests {
         }));
     }
     #[test]
-    fn columns_retain_completed_results_on_return_and_cancel_late_jobs() {
+    fn columns_retain_completed_results_on_return_and_retry_interrupted_jobs() {
         let (_root, directory) = fixture();
         let visible: Vec<_> = (0..directory.entries.len()).collect();
         let mut columns = Columns::default();
@@ -525,10 +535,80 @@ mod tests {
         assert_eq!(folder.columns.len(), 1);
         assert_eq!(folder.columns[0].finished, 1);
         assert!(folder.columns[0].answer(&job.entry).is_some());
-        assert_eq!(
-            columns.next(&directory).unwrap().entry.path,
-            second.entry.path
-        );
+        // Service controls may interrupt a job without leaving this folder.
+        let interrupted = columns.next(&directory).unwrap();
+        assert_eq!(interrupted.entry.path, second.entry.path);
+        interrupted.cancel.store(true, Ordering::Relaxed);
+        assert!(!columns.accept(AnswerResult {
+            id: interrupted.id,
+            answer: Answer::status(State::Failed, "Search model request cancelled"),
+        }));
+        let column = &columns.current().unwrap().columns[0];
+        assert_eq!(column.finished, 1);
+        assert!(column.answer(&job.entry).is_some());
+        assert!(column.answer(&interrupted.entry).is_none());
+        let retried = columns.next(&directory).unwrap();
+        assert_eq!(retried.entry.path, interrupted.entry.path);
+        assert!(!retried.cancel.load(Ordering::Relaxed));
+        assert_ne!(retried.id, interrupted.id);
+        assert!(!columns.accept(AnswerResult {
+            id: interrupted.id,
+            answer: Answer::status(State::NotFound, "Obsolete completion"),
+        }));
+        assert!(columns.pending.as_ref().is_some_and(|p| p.id == retried.id));
+    }
+    #[test]
+    fn retry_preserves_completed_answers_while_refresh_retires_all_cells_and_old_work() {
+        let (_root, directory) = fixture();
+        let visible: Vec<_> = (0..directory.entries.len()).collect();
+        for state in [
+            State::Value(super::super::answer::Value::Boolean(false), "false".into()),
+            State::NotApplicable,
+            State::NotFound,
+            State::Ambiguous,
+            State::Unknown,
+            State::Failed,
+            State::Unavailable,
+        ] {
+            let preserved = !matches!(state, State::Unknown | State::Failed | State::Unavailable);
+            let mut columns = Columns::default();
+            columns.submit(&directory, &visible, query()).unwrap();
+            let first = columns.next(&directory).unwrap();
+            assert!(columns.accept(AnswerResult {
+                id: first.id,
+                answer: Answer::status(state, "Original answer"),
+            }));
+            let old = columns.next(&directory).unwrap();
+            let column = columns.current().unwrap().columns[0].id;
+            columns.retry(column, false);
+            columns.reconcile(&directory, &visible);
+            assert!(old.cancel.load(Ordering::Relaxed));
+            assert_eq!(
+                columns.current().unwrap().columns[0]
+                    .answer(&first.entry)
+                    .is_some(),
+                preserved
+            );
+            let replacement = columns.next(&directory).unwrap();
+            assert!(!columns.accept(AnswerResult {
+                id: old.id,
+                answer: Answer::status(State::NotFound, "Obsolete answer"),
+            }));
+            assert!(
+                columns
+                    .pending
+                    .as_ref()
+                    .is_some_and(|p| p.id == replacement.id)
+            );
+            columns.retry(column, true);
+            columns.reconcile(&directory, &visible);
+            assert!(replacement.cancel.load(Ordering::Relaxed));
+            let refreshed = &columns.current().unwrap().columns[0];
+            assert!(refreshed.cells.is_empty());
+            assert_eq!(refreshed.finished, 0);
+            assert_eq!(refreshed.total, 3);
+            assert!(columns.next(&directory).is_some());
+        }
     }
     #[test]
     fn replacement_invalidates_pending_and_completed_cells_and_folder_identity() {
@@ -554,6 +634,51 @@ mod tests {
             0,
             "A different directory cannot inherit session answers"
         );
+    }
+    #[test]
+    fn removed_columns_and_changed_pipelines_reject_old_results_after_requeue() {
+        for remove_column in [false, true] {
+            let (_root, directory) = fixture();
+            let visible: Vec<_> = (0..directory.entries.len()).collect();
+            let mut columns = Columns::default();
+            columns.submit(&directory, &visible, query()).unwrap();
+            columns.observe_pipeline(Some("version-one".into()));
+            let old = columns.next(&directory).unwrap();
+            if remove_column {
+                let id = columns.current().unwrap().columns[0].id;
+                columns.remove(id);
+                columns.submit(&directory, &visible, query()).unwrap();
+                assert_ne!(columns.current().unwrap().columns[0].id, id);
+            } else {
+                assert!(columns.observe_pipeline(Some("version-two".into())));
+            }
+            assert!(old.cancel.load(Ordering::Relaxed));
+            let current = columns.next(&directory).unwrap();
+            assert_ne!(current.id, old.id);
+            assert!(!columns.accept(AnswerResult {
+                id: old.id,
+                answer: Answer::status(State::NotFound, "Obsolete completion"),
+            }));
+            assert!(
+                columns
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.id == current.id)
+            );
+            assert_eq!(columns.current().unwrap().columns[0].finished, 0);
+            assert!(columns.accept(AnswerResult {
+                id: current.id,
+                answer: Answer::status(State::NotFound, "Current completion"),
+            }));
+            assert_eq!(columns.current().unwrap().columns[0].finished, 1);
+            assert_eq!(
+                columns.current().unwrap().columns[0]
+                    .answer(&current.entry)
+                    .unwrap()
+                    .reason,
+                "Current completion"
+            );
+        }
     }
     #[test]
     fn repeated_questions_focus_existing_column_and_visible_rows_precede_rest() {
@@ -585,6 +710,11 @@ mod tests {
                 )
                 .unwrap();
         }
+        let original_id = columns.current().unwrap().columns[0].id;
+        assert_ne!(columns.current().unwrap().focused, original_id);
+        columns.submit(&directory, &visible, query()).unwrap();
+        assert_eq!(columns.current().unwrap().focused, original_id);
+        assert_eq!(columns.count(), 4);
         assert!(
             columns
                 .submit(

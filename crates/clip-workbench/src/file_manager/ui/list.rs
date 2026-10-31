@@ -213,7 +213,7 @@ impl FileManager {
         .then_some(self.sort);
         if let Some(column) = columns.sort_header(ui, header, sort, colors) {
             self.sort_by(column);
-            ui.memory_mut(|memory| memory.request_focus(list_id()));
+            self.focus_list = true;
         }
         ui.separator();
         columns

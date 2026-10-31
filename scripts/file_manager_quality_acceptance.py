@@ -27,7 +27,7 @@ def search_timings(path):
 
 
 def measure_ui_queries(session, command, count, *, report_name='search-latency.json',
-                       fixture_query='image-01',
+                       fixture_query='image-01', timeout_seconds=20,
                        scope='Warm actual-model/coordinator/source-verification/UI acceptance and sorting on the 60-file frozen corpus; excludes GPU frame presentation, cold load and large-index acceptance'):
     log = session.output / 'files.log'
     seen = {row['request_id'] for row in search_timings(log) if row['complete']}
@@ -36,7 +36,7 @@ def measure_ui_queries(session, command, count, *, report_name='search-latency.j
         submit(session, command)
         def completed():
             return [row for row in search_timings(log) if row['complete'] and row['request_id'] not in seen]
-        wait_for(completed, 'new complete search timing')
+        wait_for(completed, 'new complete search timing', timeout_seconds)
         rows = completed()
         assert len(rows) == 1 and rows[0]['succeeded'], rows
         measurements.append(rows[0])

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from search_model import setup
+from search_model.quality_fixtures import validation_path
 from search_model_precision import evaluate_variant, evaluation_parser
 from search_quality_ranking import compare_rankings
 
@@ -41,6 +42,7 @@ def evaluate_pair(args, index, query):
     shutil.copytree(indexed / 'fixture', folder / 'fixture')
     for name in ('fixture-manifest.json', 'report.json'):
         shutil.copy2(indexed / name, folder / name)
+    shutil.copy2(validation_path(indexed), folder / 'validation-manifest.json')
     (folder / 'vectors.json').write_text(json.dumps(inputs))
     report = folder / 'ranking.json'
     with (folder / 'ranking.log').open('w') as log:
