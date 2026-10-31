@@ -1,13 +1,18 @@
 //! Bounded on-demand filename/content traversal; never enrolls or embeds files.
 use super::{
+    content::{self, Literal},
     query::{Operator, Query, Scope},
     reader::{self, Reply, Request, SourceRoot},
+    store::Store,
 };
 use crate::file_manager::filesystem::{Directory, Entry};
 use std::{
     collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -19,9 +24,11 @@ pub(super) enum ScopeRoot {
 struct Scan<'a> {
     query: &'a Query,
     cache: &'a Path,
+    store: Option<&'a Store>,
+    reused: usize,
     exclusions: &'a [PathBuf],
     hidden: bool,
-    cancel: &'a AtomicBool,
+    cancel: &'a Arc<AtomicBool>,
     entries: Vec<Entry>,
     explanations: super::explanation::Explanations,
     sources: Vec<SourceRoot>,
@@ -35,14 +42,17 @@ struct Scan<'a> {
 pub(super) fn run(
     roots: Vec<ScopeRoot>,
     cache: &Path,
+    store: Option<&Store>,
     exclusions: &[PathBuf],
     query: &Query,
     hidden: bool,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<super::Results, String> {
     let mut scan = Scan {
         query,
         cache,
+        store,
+        reused: 0,
         exclusions,
         hidden,
         cancel,
@@ -72,9 +82,10 @@ pub(super) fn run(
         }
     }
     scan.check_cancel()?;
+    let stale = scan.verify_content()?;
     scan.entries
         .sort_by_key(|entry| query.local_rank(entry).unwrap_or((u8::MAX, usize::MAX)));
-    let message = format!(
+    let mut message = format!(
         "{} · {} matches · {} unsupported/incomplete reads{}",
         if query.progressive {
             "Automatic subtree / configured locations"
@@ -85,6 +96,16 @@ pub(super) fn run(
         scan.incomplete,
         scan.limit
     );
+    if stale > 0 {
+        message.push_str(&format!(" · {stale} stale/unavailable omitted"));
+    }
+    if scan.reused > 0 {
+        message.push_str(&format!(
+            " · indexed text reused: {} file{}",
+            scan.reused,
+            if scan.reused == 1 { "" } else { "s" }
+        ));
+    }
     Ok(super::Results {
         entries: scan.entries,
         message,
@@ -100,6 +121,18 @@ impl Scan<'_> {
         } else {
             Ok(())
         }
+    }
+
+    fn verify_content(&mut self) -> Result<usize, String> {
+        if !matches!(self.query.operator, Operator::Content(_)) {
+            return Ok(0);
+        }
+        let verified = reader::verification::current(&self.entries, &self.sources, self.cancel)?;
+        let stale = self.entries.len() - verified.len();
+        self.entries.retain(|entry| verified.contains(&entry.path));
+        self.explanations.retain(|path, _| verified.contains(path));
+        self.incomplete += stale;
+        Ok(stale)
     }
 
     fn root(&mut self, root: SourceRoot) -> Result<(), String> {
@@ -129,8 +162,8 @@ impl Scan<'_> {
                 },
                 self.cancel,
             ) {
-                Ok(Reply::Directory(directory)) => {
-                    self.directory(&root, directory, &mut directories)?
+                Ok(Reply::Directory(inventory)) => {
+                    self.directory(&root, inventory.directory, &mut directories)?
                 }
                 _ => self.incomplete += 1,
             }
@@ -139,6 +172,23 @@ impl Scan<'_> {
             }
         }
         Ok(())
+    }
+
+    fn match_entry(&mut self, root: &SourceRoot, entry: &Entry) -> Result<content::Match, String> {
+        // Cache failure is a miss: ordinary literal search remains
+        // available even when its optional derived index is unreadable.
+        if let (Operator::Content(needle), Some(store)) = (&self.query.operator, self.store)
+            && self.query.local_rank(entry).is_some()
+            && reader::supports_text(entry)
+            && let Some(result) = store
+                .cached_content(root, entry, needle, self.cancel)
+                .ok()
+                .flatten()
+        {
+            self.reused += 1;
+            return Ok(result);
+        }
+        matches_query(root, entry, self.query, self.cancel)
     }
 
     fn directory(
@@ -170,7 +220,7 @@ impl Scan<'_> {
                     self.incomplete += 1;
                 }
             }
-            match matches_query(root, &entry, self.query, self.cancel) {
+            match self.match_entry(root, &entry) {
                 Ok((matched, partial, explanation)) => {
                     self.incomplete += usize::from(partial);
                     if matched {
@@ -192,7 +242,7 @@ fn matches_query(
     entry: &Entry,
     query: &Query,
     stop: &AtomicBool,
-) -> Result<(bool, bool, Option<super::explanation::Explanation>), String> {
+) -> Result<content::Match, String> {
     if query.local_rank(entry).is_none() {
         return Ok((false, false, None));
     }
@@ -208,10 +258,12 @@ fn content_match(
     entry: &Entry,
     needle: &str,
     stop: &AtomicBool,
-) -> Result<(bool, bool, Option<super::explanation::Explanation>), String> {
-    let needle = normalize(needle);
+) -> Result<content::Match, String> {
+    if !reader::supports_text(entry) {
+        return Ok((false, true, None));
+    }
+    let mut literal = Literal::new(needle);
     let mut cursor = 0;
-    let mut tail = String::new();
     let mut partial = false;
     loop {
         let Reply::Prepared(prepared) = reader::call(
@@ -219,6 +271,7 @@ fn content_match(
                 root: root.clone(),
                 entry: entry.clone(),
                 cursor,
+                text_only: true,
             },
             stop,
         )?
@@ -226,56 +279,44 @@ fn content_match(
             return Err("Invalid content extraction reply".into());
         };
         partial |= prepared.coverage != "complete" || prepared.data.is_some();
-        let preceding = tail.to_lowercase().len();
-        if !tail.is_empty() {
-            tail.push(' ');
-        }
-        tail.push_str(
-            &prepared
-                .text
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" "),
-        );
-        if let Some(position) = tail.to_lowercase().find(&needle) {
-            let location = if position < preceding {
-                format!("Across extraction chunks, ending at {}", prepared.location)
-            } else {
-                prepared.location.clone()
-            };
-            let coverage = if prepared.next.is_some() {
-                format!("{}; remaining content not scanned", prepared.coverage)
-            } else {
-                prepared.coverage
-            };
-            let explanation = super::explanation::Explanation {
-                unavailable: false,
-                coverage,
-                passages: vec![super::explanation::Passage {
-                    kind: "Content match".into(),
-                    location,
-                    text: super::explanation::excerpt(&tail, &needle),
-                }],
-            };
+        let coverage = if prepared.next.is_some() {
+            format!("{}; remaining content not scanned", prepared.coverage)
+        } else {
+            prepared.coverage
+        };
+        if let Some(explanation) = literal.push(&prepared.text, &prepared.location, coverage) {
             return Ok((true, partial, Some(explanation)));
         }
-        tail = tail
-            .chars()
-            .rev()
-            .take(needle.chars().count())
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
         match prepared.next {
             Some(next) => cursor = next,
             None => return Ok((false, partial, None)),
         }
     }
 }
-fn normalize(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn literal_search_does_not_spawn_extraction_for_unsupported_media() {
+        let folder = tempfile::tempdir().unwrap();
+        for name in ["image.png", "sound.wav", "movie.mp4"] {
+            std::fs::write(folder.path().join(name), b"not valid media").unwrap();
+        }
+        let origin = super::super::policy::Root::open(folder.path()).unwrap();
+        let mut root = SourceRoot::from_root(&origin);
+        // Any helper request would reject this missing mount observation. A
+        // supported no-work result proves media was skipped before dispatch.
+        root.mount = None;
+        let directory =
+            crate::file_manager::filesystem::read_directory(folder.path(), &AtomicBool::new(false))
+                .unwrap();
+        let query = Query::parse(":content:\"invoice number\"").unwrap();
+        for entry in directory.entries {
+            let (matched, partial, explanation) =
+                matches_query(&root, &entry, &query, &AtomicBool::new(false)).unwrap();
+            assert!(!matched && partial && explanation.is_none());
+        }
+    }
 }

@@ -104,23 +104,7 @@ impl Video {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        // Linux parent-death ownership also covers an abrupt Files crash.
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::unix::process::CommandExt;
-            let parent = unsafe { libc::getpid() };
-            unsafe {
-                command.pre_exec(move || {
-                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    if libc::getppid() != parent {
-                        return Err(std::io::Error::from_raw_os_error(libc::ECHILD));
-                    }
-                    Ok(())
-                });
-            }
-        }
+        little_clip_core::process::guard_parent(&mut command);
         command
             .spawn()
             .map_err(|e| format!("Cannot start video playback: {e}"))

@@ -27,7 +27,7 @@ struct Corpus {
     inputs: Inputs,
 }
 impl Corpus {
-    fn load(folder: &Path) -> Self {
+    fn load(folder: &Path, files: usize) -> Self {
         let source = folder.join("fixture");
         let origin = Root::open(&source).unwrap();
         let inputs: Inputs =
@@ -37,7 +37,8 @@ impl Corpus {
         let root = store.enroll(&origin).unwrap();
         let generation = store.begin_scan(root).unwrap();
         let directory = filesystem::read_directory(&source, &AtomicBool::new(false)).unwrap();
-        assert_eq!(directory.entries.len(), 60);
+        assert!((1..=500).contains(&files));
+        assert_eq!(directory.entries.len(), files);
         for entry in directory.entries {
             let (id, _) = store
                 .observe(
@@ -127,7 +128,7 @@ impl Corpus {
             .queries
             .get(id)
             .expect("quality query has no real model embedding");
-        let hits = Retrieval {
+        let mut retrieval = Retrieval {
             progress: None,
             store: &self.store,
             pipeline: PIPELINE,
@@ -141,9 +142,30 @@ impl Corpus {
             exclusions: &[],
             floors,
             cancel: &Arc::new(AtomicBool::new(false)),
-        }
-        .search()
-        .unwrap();
+        };
+        let hits = retrieval.search().unwrap();
+        let mut indexed = query.clone();
+        indexed.scope = Scope::Indexed;
+        retrieval.query = &indexed;
+        let indexed_hits = retrieval.search().unwrap();
+        let signature = |hits: &[Hit]| {
+            hits.iter()
+                .map(|hit| {
+                    (
+                        hit.entry.path.clone(),
+                        hit.segments
+                            .iter()
+                            .map(|segment| (segment.id, segment.score.to_bits(), segment.keyword))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            signature(&hits),
+            signature(&indexed_hits),
+            "Equivalent single-root scope changed ranks or evidence"
+        );
         let expected = case["file"].as_str();
         let rank = expected
             .and_then(|name| hits.iter().position(|hit| hit.entry.name == name))
@@ -174,11 +196,16 @@ fn production_quality_fixture() {
     let report_path = PathBuf::from(std::env::var_os("CLIP_SEARCH_QUALITY_REPORT").unwrap());
     let manifest = read_json(&folder.join("fixture-manifest.json"));
     let component = read_json(&folder.join("report.json"));
-    let validation = read_json(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../scripts/search_model/retrieval_validation.json"),
-    );
-    let corpus = Corpus::load(&folder);
+    let validation_path = folder.join("validation-manifest.json");
+    let validation_path = if validation_path.is_file() {
+        validation_path
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/search_model/retrieval_validation.json")
+    };
+    let validation = read_json(&validation_path);
+    let files = manifest["files"].as_array().map_or(60, Vec::len);
+    let corpus = Corpus::load(&folder, files);
     let mut cases = manifest["positives"].as_array().unwrap().clone();
     cases.extend(manifest["negatives"].as_array().unwrap().iter().cloned());
     for case in validation["positives"].as_array().unwrap() {
@@ -227,6 +254,6 @@ fn production_quality_fixture() {
         "cases":cases.iter().map(|case|corpus.rank(case,&BTreeMap::new())).collect::<Vec<_>>(),
         "exact":exact_cases.iter().map(|case|corpus.rank(case,&BTreeMap::new())).collect::<Vec<_>>()
     });
-    let report = json!({"scope":"production SQLite/f16 scoring/lexical/RRF component over frozen real-model inputs; excludes coordinator/UI freshness and BF16 reference","files":60,"segments":corpus.inputs.segments.len(),"model_pipeline":component["pipeline"],"results":results,"exact":exact,"float32_reference":reference,"fixture_sha256":component["fixture_sha256"],"full_phase6_acceptance_proven":false});
+    let report = json!({"scope":"production SQLite/f16 scoring/lexical/RRF component over frozen real-model inputs; excludes coordinator/UI freshness and BF16 reference","files":files,"segments":corpus.inputs.segments.len(),"model_pipeline":component["pipeline"],"results":results,"exact":exact,"float32_reference":reference,"fixture_sha256":component["fixture_sha256"],"full_phase6_acceptance_proven":false});
     std::fs::write(report_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
 }

@@ -34,6 +34,7 @@ pub struct CommandRequest {
     capture_stdout: bool,
     capture_stderr: bool,
     own_process_group: bool,
+    die_with_parent: bool,
 }
 
 impl CommandRequest {
@@ -49,6 +50,7 @@ impl CommandRequest {
             capture_stdout: true,
             capture_stderr: true,
             own_process_group: false,
+            die_with_parent: false,
         }
     }
 
@@ -58,6 +60,16 @@ impl CommandRequest {
     /// Persistent callers using `build_command` must manage the group themselves.
     pub fn own_process_group(mut self) -> Self {
         self.own_process_group = true;
+        self
+    }
+
+    /// Kills the child if its creating parent thread exits on Linux.
+    ///
+    /// This also covers abrupt application exit. The spawning thread must
+    /// outlive the child; ordinary cancellation and reaping remain the caller's
+    /// responsibility. Other platforms retain the ordinary child lifecycle.
+    pub fn die_with_parent(mut self) -> Self {
+        self.die_with_parent = true;
         self
     }
 
@@ -295,6 +307,9 @@ impl CommandRequest {
             command.process_group(0);
         }
         self.inherit_content_inputs(&mut command);
+        if self.die_with_parent {
+            guard_parent(&mut command);
+        }
         command
     }
 
@@ -482,6 +497,31 @@ pub enum CommandError {
     },
 }
 
+/// Arms Linux parent-death ownership before spawning a command.
+///
+/// The child receives `SIGKILL` when its creating parent thread exits. The
+/// spawning thread must outlive the child. This does not replace cancellation,
+/// process-group ownership or reaping. Setup errors are reported by
+/// [`Command::spawn`]; other platforms leave the command unchanged.
+pub fn guard_parent(command: &mut Command) {
+    #[cfg(target_os = "linux")]
+    {
+        let parent = std::process::id() as libc::pid_t;
+        // SAFETY: the child callback makes only async-signal-safe Linux syscalls.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() != parent {
+                    return Err(std::io::Error::from_raw_os_error(libc::ECHILD));
+                }
+                Ok(())
+            });
+        }
+    }
+}
+
 /// Resolves `program` through `PATH`, or accepts an executable path directly.
 pub fn command_available(program: impl AsRef<OsStr>) -> Option<PathBuf> {
     let program = program.as_ref();
@@ -533,6 +573,17 @@ fn drain_threads(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn parent_owned_command_arms_sigkill_before_exec() {
+        let output = CommandRequest::new("python3")
+            .args(["-c", "import ctypes; s=ctypes.c_int(); assert ctypes.CDLL(None).prctl(2,ctypes.byref(s),0,0,0)==0; print(s.value)"])
+            .die_with_parent()
+            .run().unwrap();
+        assert!(output.status.success(), "{}", output.stderr_lossy());
+        assert_eq!(output.stdout, b"9\n");
+    }
 
     #[test]
     fn captures_bounded_output_without_blocking_the_child() {

@@ -38,7 +38,7 @@ impl Checkpoint {
         self.cursor <= 64 * 1024 * 1024
             && self.text_cursor <= 8 * 1024 * 1024
             && self.coverage.len() <= 3072
-            && self.format.len() <= 256
+            && self.format.len() <= 512
             && (self.text_cursor > 0) == self.prepared_hash.is_some()
     }
 }
@@ -531,13 +531,36 @@ mod tests {
 
     #[test]
     fn incompatible_source_digest_or_dispatch_retires_the_cursor_and_hides_old_partial_results() {
-        for changed_format in [false, true] {
+        for (extension, saved_format, typescript, digest) in [
+            ("txt", b"txt".as_slice(), false, [8; 32]),
+            ("html", b"txt".as_slice(), false, [7; 32]),
+            ("ts", b"ts".as_slice(), true, [7; 32]),
+            ("ts", b"ts\0\x01\0".as_slice(), true, [7; 32]),
+        ] {
             let fixture = partial_fixture();
             let mut entry = fixture.entry.clone();
-            if changed_format {
-                entry.path.set_extension("html");
-            }
-            let digest = Some(if changed_format { [7; 32] } else { [8; 32] });
+            entry.path.set_extension(extension);
+            entry.typescript = typescript;
+            let json: String = fixture
+                .store
+                .connection
+                .query_row(
+                    "SELECT progress FROM file_checkpoints WHERE file_id=?1",
+                    [fixture.file],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let mut saved: Checkpoint = serde_json::from_str(&json).unwrap();
+            saved.format = saved_format.to_vec();
+            fixture
+                .store
+                .connection
+                .execute(
+                    "UPDATE file_checkpoints SET progress=?2 WHERE file_id=?1",
+                    params![fixture.file, saved.encode().unwrap()],
+                )
+                .unwrap();
+            let digest = Some(digest);
             assert!(
                 fixture
                     .store

@@ -132,10 +132,11 @@ def stl_fixture(out: Path) -> None:
     )
 
 
-def pdf_fixture(out: Path, page_count: int, filename: str) -> None:
+def pdf_fixture(out: Path, page_count: int, filename: str, *, page_streams: list[bytes] | None = None) -> None:
     # Small hand-built PDF keeps this generator dependency-free and byte-stable.
-    def text_stream(label: bytes) -> bytes:
-        content = b"BT /F1 18 Tf 40 140 Td (" + label + b") Tj ET"
+    if page_streams is not None and len(page_streams) != page_count:
+        raise ValueError("Each PDF page must have one content stream")
+    def text_stream(content: bytes) -> bytes:
         return b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream"
 
     kids = b" ".join(f"{3 + 2 * index} 0 R".encode("ascii") for index in range(page_count))
@@ -146,7 +147,9 @@ def pdf_fixture(out: Path, page_count: int, filename: str) -> None:
         objects.append(
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 {3 + page_count * 2} 0 R >> >> /Contents {4 + index * 2} 0 R >>".encode("ascii")
         )
-        objects.append(text_stream(f"Acceptance page {page_num:02}".encode("ascii")))
+        content = (page_streams[index] if page_streams is not None else
+                   b"BT /F1 18 Tf 40 140 Td (" + f"Acceptance page {page_num:02}".encode("ascii") + b") Tj ET")
+        objects.append(text_stream(content))
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
     data = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
     offsets = [0]

@@ -33,7 +33,7 @@ def exercise(session, root):
     session.observe("sorted-first-page", ["100 of 102 matching entries", "batchneedle_101.rs"])
     with sqlite3.connect(index) as db:
         assert db.execute("SELECT COUNT(*) FROM segment_fts WHERE segment_fts MATCH ?", ('"ZXQ" AND "9472"',)).fetchone()[0] == 1
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def main():

@@ -23,9 +23,7 @@ def exercise(session, root, children, binary):
     inventory(index)
     backup = backup_through_settings(session, root)
     backup_hash = hashlib.sha256(backup.read_bytes()).hexdigest()
-    session.key('q', 'ctrl')
-    session.process.wait(timeout=5)
-    assert session.process.returncode == 0
+    session.close()
     damaged = {'index.sqlite': b'corrupted active database', 'index.sqlite-wal': b'preserve old WAL bytes', 'index.sqlite-shm': b'preserve old shared memory'}
     for name, payload in damaged.items():
         (data / name).write_bytes(payload)
@@ -86,15 +84,9 @@ def main():
     args = application_arguments(__doc__, repository / 'target/debug/clip-file-manager')
     output, root = media_fixture_directory(args)
     (root / 'One.txt').write_text('Cats have whiskers and soft fur.')
-    state = {}
-
-    def environment(env, children):
-        state['children'] = children
-        search_environment(env, children)
-
     return run_application_acceptance(args, output, root,
-        lambda session, folder: exercise(session, folder, state['children'], args.binary),
-        'Explicit unreadable-cache recovery preserves DB/WAL/SHM, models, source and enrollment; persistent pause and subsequent backup restore', environment)
+        lambda session, folder: exercise(session, folder, session.children, args.binary),
+        'Explicit unreadable-cache recovery preserves DB/WAL/SHM, models, source and enrollment; persistent pause and subsequent backup restore', search_environment)
 
 
 if __name__ == '__main__':

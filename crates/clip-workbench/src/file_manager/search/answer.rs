@@ -9,7 +9,15 @@ pub(super) mod extraction;
 pub(super) use document::{answer_prepared, read_document};
 pub(super) mod visual;
 
-#[derive(Clone, Debug, Serialize)]
+pub(super) fn supports(entry: &crate::file_manager::filesystem::Entry) -> bool {
+    entry.regular_file
+        && !entry.symlink
+        && !entry.is_playable_media()
+        && (super::reader::supports_text(entry) || entry.is_photo())
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Source {
     pub id: usize,
     pub text: String,
@@ -379,6 +387,40 @@ mod tests {
                 Answer::compare(Some(&false_value), Some(&absent), descending),
                 Ordering::Less
             );
+        }
+    }
+    #[test]
+    fn every_non_value_and_pending_cell_sorts_after_values_in_both_directions() {
+        let sources = source();
+        for (raw, kind) in [("false", AnswerType::Boolean), ("0", AnswerType::Number)] {
+            let value =
+                Answer::decode(wire(Some(raw), "value", "applicable"), kind, &sources, true)
+                    .unwrap();
+            for state in [
+                State::NotApplicable,
+                State::NotFound,
+                State::Unknown,
+                State::Ambiguous,
+                State::Unsupported,
+                State::Unavailable,
+                State::Failed,
+                State::Excluded,
+            ] {
+                let missing = Answer::status(state, "Fixture");
+                for descending in [false, true] {
+                    for other in [None, Some(&missing)] {
+                        assert_eq!(
+                            Answer::compare(Some(&value), other, descending),
+                            Ordering::Less
+                        );
+                        assert_eq!(
+                            Answer::compare(other, Some(&value), descending),
+                            Ordering::Greater
+                        );
+                        assert_eq!(Answer::compare(other, None, descending), Ordering::Equal);
+                    }
+                }
+            }
         }
     }
     #[test]

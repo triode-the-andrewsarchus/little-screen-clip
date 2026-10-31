@@ -1,13 +1,22 @@
 //! Transactional index records. A scan's inventory is separate from content readiness.
+mod content;
+mod lexical;
 mod maintenance;
 mod recovery;
 use recovery::IndexOwner;
 mod fingerprints;
+mod pruning;
 mod publication;
+pub(super) use pruning::PruneCursor;
+mod retries;
+mod safety;
 pub(super) use fingerprints::format as source_format;
 pub(super) use publication::Checkpoint;
+pub(super) use retries::Retry;
 mod restore;
 mod session;
+#[cfg(test)]
+pub(super) use session::tests::Fixture as TestFixture;
 mod vectors;
 #[cfg(test)]
 use super::policy::Root;
@@ -29,14 +38,22 @@ use std::{
 #[cfg(test)]
 pub(super) use vectors::cosine_score;
 
+pub(in crate::file_manager::search) use lexical::Names as LexicalNames;
+// Both accelerators share a single allocation allowance and catalog epoch.
+const WORKING_CACHE_BUDGET: usize = 512 * 1024 * 1024;
+const LEXICAL_CACHE_BUDGET: usize = 16 * 1024 * 1024;
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::file_manager::search) struct CacheEpoch(u64, i64);
+
 pub(super) const DIMENSION: usize = 768;
-pub(super) const SCHEMA_VERSION: i64 = 5;
+pub(super) const SCHEMA_VERSION: i64 = 6;
 const FILE_COLUMNS: &str = r#"id INTEGER PRIMARY KEY, device INTEGER NOT NULL, inode INTEGER NOT NULL,
  revision INTEGER NOT NULL, pipeline TEXT NOT NULL, metadata TEXT NOT NULL,
  state TEXT NOT NULL DEFAULT 'pending', coverage TEXT, error TEXT, extraction_version INTEGER NOT NULL DEFAULT 0,
- scope TEXT NOT NULL DEFAULT '', UNIQUE(device,inode,scope)"#;
+ scope TEXT NOT NULL DEFAULT '', format BLOB NOT NULL DEFAULT X'', UNIQUE(device,inode,scope,format)"#;
 // v3 adds guarded SVG/source-code extraction and explicit name-only budget outcomes.
 pub(super) const EXTRACTION_VERSION: i64 = 4;
+const DIRECTORY_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS directories (\n root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,\n path BLOB NOT NULL, generation INTEGER NOT NULL, complete INTEGER NOT NULL,\n PRIMARY KEY(root_id,path)\n);\n";
 const SCHEMA: &str = r#"
 CREATE TABLE roots (
  id INTEGER PRIMARY KEY, path BLOB NOT NULL UNIQUE, device INTEGER NOT NULL,
@@ -52,11 +69,6 @@ CREATE TABLE memberships (
  generation INTEGER NOT NULL, verified INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(root_id,path)
 );
-CREATE TABLE directories (
- root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
- path BLOB NOT NULL, generation INTEGER NOT NULL, complete INTEGER NOT NULL,
- PRIMARY KEY(root_id,path)
-);
 CREATE TABLE segments (
  id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
  modality TEXT NOT NULL, location TEXT NOT NULL, text TEXT NOT NULL,
@@ -65,7 +77,7 @@ CREATE TABLE segments (
 CREATE INDEX membership_paths ON memberships(path);
 CREATE INDEX segment_file ON segments(file_id);
 CREATE INDEX segment_input ON segments(pipeline,modality,input_hash);
-PRAGMA user_version=5;
+PRAGMA user_version=6;
 "#;
 // Derived lookup indexes do not change the current record/backup format.
 const QUERY_INDEXES: &str = "CREATE INDEX IF NOT EXISTS path_file_lookup ON paths(file_id,path);
@@ -73,6 +85,7 @@ const QUERY_INDEXES: &str = "CREATE INDEX IF NOT EXISTS path_file_lookup ON path
     CREATE INDEX IF NOT EXISTS file_search ON files(id,pipeline,extraction_version,state,scope);
     CREATE INDEX IF NOT EXISTS segment_identity ON segments(id,file_id);
     CREATE INDEX IF NOT EXISTS segment_admission ON segments(file_id,modality);
+    CREATE INDEX IF NOT EXISTS segment_vector_file ON segments(file_id) WHERE vector IS NOT NULL;
     CREATE INDEX IF NOT EXISTS membership_search ON memberships(path,root_id,verified);
     DROP INDEX IF EXISTS path_file;";
 const FTS_SCHEMA: &str = r#"
@@ -86,6 +99,7 @@ CREATE TRIGGER segment_delete AFTER DELETE ON segments BEGIN
 pub(super) struct Store {
     pub connection: Connection,
     vectors: std::sync::Arc<std::sync::Mutex<vectors::VectorCache>>,
+    lexical: std::cell::RefCell<lexical::Cache>,
     owner: IndexOwner,
     vector_count: u64,
     storage_fault: Cell<bool>,
@@ -120,15 +134,18 @@ impl Store {
     }
     fn from_owner(owner: IndexOwner) -> Result<Self, String> {
         let connection = open_database(&owner.held().join("index.sqlite"))?;
-        let vector_count = count_vectors(&connection)?;
-        Ok(Self {
-            vector_count,
+        let mut store = Self {
+            vector_count: 0,
             storage_fault: Cell::new(false),
             process_scope: uuid::Uuid::new_v4(),
             connection,
             vectors: Default::default(),
+            lexical: Default::default(),
             owner,
-        })
+        };
+        store.vector_count =
+            safety::apply_content_policy(&mut store.connection, &store.storage_fault)?;
+        Ok(store)
     }
     pub fn capacity(
         &self,
@@ -264,16 +281,18 @@ impl Store {
             .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         Ok(id)
     }
-    pub fn unavailable(&self, path: &Path, error: &str) -> Result<Option<i64>, String> {
-        let id = self
-            .connection
+    pub fn root_id(&self, path: &Path) -> Result<Option<i64>, String> {
+        self.connection
             .query_row(
                 "SELECT id FROM roots WHERE path=?1",
                 [path.as_os_str().as_bytes()],
-                |row| row.get::<_, i64>(0),
+                |row| row.get(0),
             )
             .optional()
-            .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
+            .map_err(|error| record_storage_fault(&self.storage_fault, error))
+    }
+    pub fn unavailable(&self, path: &Path, error: &str) -> Result<Option<i64>, String> {
+        let id = self.root_id(path)?;
         if let Some(id) = id {
             self.break_source_continuity(id)?;
             self.connection
@@ -286,8 +305,32 @@ impl Store {
         Ok(id)
     }
 
+    pub(super) fn cache_epoch(&self) -> Result<CacheEpoch, String> {
+        let version = self
+            .connection
+            .pragma_query_value(None, "data_version", |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        Ok(CacheEpoch(self.connection.total_changes(), version))
+    }
+
     pub fn roots(&self) -> Result<Vec<RootState>, String> {
-        let mut query = self.connection.prepare("SELECT r.id,r.path,r.state,r.error,COUNT(DISTINCT m.path),(SELECT COUNT(*) FROM segments s JOIN files f ON f.id=s.file_id WHERE f.state='ready' AND s.vector IS NOT NULL AND EXISTS (SELECT 1 FROM paths p JOIN memberships m2 ON m2.path=p.path WHERE p.file_id=s.file_id AND m2.root_id=r.id AND m2.verified=1)) FROM roots r LEFT JOIN memberships m ON m.root_id=r.id WHERE r.state<>'disabled' GROUP BY r.id ORDER BY r.path").map_err(|error| record_storage_fault(&self.storage_fault, error))?;
+        // Memberships are unique per root/path. Deduplicate file IDs before
+        // counting vectors so multiple compatible hardlinks count only once.
+        // The partial vector index avoids reading canonical vector payloads.
+        let mut query = self
+            .connection
+            .prepare(
+                "SELECT r.id,r.path,r.state,r.error,
+              (SELECT count(*) FROM memberships m WHERE m.root_id=r.id),
+              (SELECT count(*) FROM
+                (SELECT DISTINCT p.file_id FROM memberships m JOIN paths p ON p.path=m.path
+                  JOIN files f INDEXED BY file_search ON f.id=p.file_id
+                  WHERE m.root_id=r.id AND m.verified=1 AND f.state='ready') eligible
+                JOIN segments s INDEXED BY segment_vector_file ON s.file_id=eligible.file_id
+                WHERE s.vector IS NOT NULL)
+              FROM roots r WHERE r.state<>'disabled' ORDER BY r.path",
+            )
+            .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         let rows = query
             .query_map([], |row| {
                 use std::os::unix::ffi::OsStringExt;
@@ -401,7 +444,7 @@ impl Store {
     pub fn invalidate_directory(&self, root: i64, path: Option<&Path>) -> Result<(), String> {
         self.connection.execute("UPDATE memberships SET verified=0 WHERE root_id=?1 AND (?2 IS NULL OR path IN (SELECT path FROM paths WHERE parent=?2))",
             params![root, path.map(|p| p.as_os_str().as_bytes())]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
-        self.connection.execute("UPDATE roots SET state=CASE WHEN available=0 THEN 'offline' ELSE 'checking' END WHERE id=?1", [root]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
+        self.connection.execute("UPDATE roots SET state=CASE WHEN state='disabled' THEN 'disabled' WHEN available=0 THEN 'offline' ELSE 'checking' END WHERE id=?1", [root]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         Ok(())
     }
     pub fn begin_delta(&mut self, root: i64) -> Result<i64, String> {
@@ -458,24 +501,30 @@ impl Store {
         pipeline: &str,
     ) -> Result<(i64, bool), String> {
         let scope = self.source_scope_for(root)?;
+        let format = source_format(entry);
+        // Retry the obsolete RTF name-only outcome without invalidating other
+        // formats or compatible canonical vectors.
+        let rtf = little_clip_core::document::is_rtf(&entry.path);
         let json = serde_json::to_string(entry).map_err(|error| error.to_string())?;
         let tx = self
             .connection
             .transaction()
             .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         let unchanged: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM files WHERE device=?1 AND inode=?2 AND revision=?3 AND pipeline=?4 AND extraction_version=?5 AND scope=?6 AND state IN ('ready','unsupported') AND NOT EXISTS(SELECT 1 FROM file_checkpoints c WHERE c.file_id=files.id))",
-            params![object.0 as i64, object.1 as i64, entry.revision as i64, pipeline, EXTRACTION_VERSION, scope],
+            "SELECT EXISTS(SELECT 1 FROM files WHERE device=?1 AND inode=?2 AND revision=?3 AND pipeline=?4 AND extraction_version=?5 AND scope=?6 AND format=?9 AND state IN ('ready','unsupported') AND coalesce(json_extract(metadata,'$.typescript'),0)=?7 AND NOT(state='unsupported' AND coverage='name-only: extractor unavailable' AND ?8) AND NOT EXISTS(SELECT 1 FROM file_checkpoints c WHERE c.file_id=files.id) AND NOT EXISTS(SELECT 1 FROM file_retries r WHERE r.file_id=files.id))",
+            params![object.0 as i64, object.1 as i64, entry.revision as i64, pipeline, EXTRACTION_VERSION, scope, entry.typescript, rtf, format],
             |row| row.get(0)).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
-        tx.execute("INSERT INTO files(device,inode,revision,pipeline,metadata,extraction_version,scope) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(device,inode,scope) DO UPDATE SET revision=excluded.revision,pipeline=excluded.pipeline,metadata=excluded.metadata,extraction_version=excluded.extraction_version,state=CASE WHEN files.revision=excluded.revision AND files.pipeline=excluded.pipeline AND files.extraction_version=excluded.extraction_version THEN files.state ELSE 'pending' END",
-            params![object.0 as i64,object.1 as i64,entry.revision as i64,pipeline,json,EXTRACTION_VERSION,scope]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
+        tx.execute("INSERT INTO files(device,inode,revision,pipeline,metadata,extraction_version,scope,format) VALUES (?1,?2,?3,?4,?5,?6,?7,?9) ON CONFLICT(device,inode,scope,format) DO UPDATE SET revision=excluded.revision,pipeline=excluded.pipeline,metadata=excluded.metadata,extraction_version=excluded.extraction_version,state=CASE WHEN files.revision=excluded.revision AND files.pipeline=excluded.pipeline AND files.extraction_version=excluded.extraction_version AND coalesce(json_extract(files.metadata,'$.typescript'),0)=coalesce(json_extract(excluded.metadata,'$.typescript'),0) AND NOT(files.state='unsupported' AND files.coverage='name-only: extractor unavailable' AND ?8) THEN files.state ELSE 'pending' END",
+            params![object.0 as i64,object.1 as i64,entry.revision as i64,pipeline,json,EXTRACTION_VERSION,scope,rtf,format]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         let id = tx
             .query_row(
-                "SELECT id FROM files WHERE device=?1 AND inode=?2 AND scope=?3",
-                params![object.0 as i64, object.1 as i64, scope],
+                "SELECT id FROM files WHERE device=?1 AND inode=?2 AND scope=?3 AND format=?4",
+                params![object.0 as i64, object.1 as i64, scope, format],
                 |r| r.get(0),
             )
             .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
+        tx.execute("DELETE FROM file_retries WHERE file_id=?1 AND (revision<>?2 OR pipeline<>?3 OR extraction_version<>?4)",
+            params![id,entry.revision as i64,pipeline,EXTRACTION_VERSION]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         tx.execute("DELETE FROM file_checkpoints WHERE file_id=?1 AND (revision<>?2 OR pipeline<>?3 OR extraction_version<>?4)",
             params![id,entry.revision as i64,pipeline,EXTRACTION_VERSION]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         tx.execute("INSERT INTO paths(path,parent,file_id) VALUES (?1,?2,?3) ON CONFLICT(path) DO UPDATE SET file_id=excluded.file_id,parent=excluded.parent",
@@ -528,7 +577,6 @@ impl Store {
         // Retirement is separate: the caller must first obtain a bounded final
         // absence observation, even after a successful directory enumeration.
         tx.execute("INSERT INTO directories(root_id,path,generation,complete) VALUES (?1,?2,?3,1) ON CONFLICT(root_id,path) DO UPDATE SET generation=excluded.generation,complete=1", params![root,parent.as_os_str().as_bytes(),generation]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
-        prune(&tx, false, &self.storage_fault)?;
         tx.commit()
             .map_err(|error| record_storage_fault(&self.storage_fault, error))
     }
@@ -574,17 +622,58 @@ impl Store {
             .transaction()
             .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         let bytes = path.as_os_str().as_bytes();
-        let mut prefix = bytes.to_vec();
-        prefix.push(b'/');
-        tx.execute("DELETE FROM memberships WHERE root_id=?1 AND (path=?2 OR substr(path,1,length(?3))=?3)", params![root,bytes,prefix]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
-        tx.execute("DELETE FROM directories WHERE root_id=?1 AND (path=?2 OR substr(path,1,length(?3))=?3)", params![root,bytes,prefix]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
-        prune(&tx, false, &self.storage_fault)?;
+        let mut lower = bytes.to_vec();
+        if lower.last() != Some(&b'/') {
+            lower.push(b'/');
+        }
+        let mut upper = lower.clone();
+        *upper.last_mut().unwrap() += 1;
+        // Use the same lossless slash-prefix range as recursive retrieval.
+        // Equality and descendant ranges each use the existing key indexes.
+        for table in ["memberships", "directories"] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE root_id=?1 AND path=?2"),
+                params![root, bytes],
+            )
+            .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE root_id=?1 AND path>=?2 AND path<?3"),
+                params![root, lower, upper],
+            )
+            .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
+        }
+        tx.execute("DELETE FROM paths WHERE path=?1 AND NOT EXISTS(SELECT 1 FROM memberships m WHERE m.path=paths.path)",[bytes])
+            .map_err(|error| record_storage_fault(&self.storage_fault,error))?;
+        tx.execute("DELETE FROM paths WHERE path>=?1 AND path<?2 AND NOT EXISTS(SELECT 1 FROM memberships m WHERE m.path=paths.path)",params![lower,upper])
+            .map_err(|error| record_storage_fault(&self.storage_fault,error))?;
         tx.commit()
             .map_err(|error| record_storage_fault(&self.storage_fault, error))
     }
-    pub fn finish_scan(&self, root: i64, error: Option<&str>) -> Result<(), String> {
-        self.connection.execute("UPDATE roots SET state=CASE WHEN ?2 IS NOT NULL THEN 'error' WHEN EXISTS(SELECT 1 FROM memberships m WHERE m.root_id=?1 AND m.verified=0) THEN 'partial' WHEN EXISTS(SELECT 1 FROM memberships m JOIN paths p ON p.path=m.path JOIN files f ON f.id=p.file_id WHERE m.root_id=?1 AND m.verified=1 AND (f.state='pending' OR (f.state='ready' AND EXISTS(SELECT 1 FROM file_checkpoints c WHERE c.file_id=f.id)))) THEN 'building' WHEN EXISTS(SELECT 1 FROM memberships m JOIN paths p ON p.path=m.path JOIN files f ON f.id=p.file_id WHERE m.root_id=?1 AND m.verified=1 AND f.state='failed') THEN 'partial' ELSE 'ready' END,error=?2 WHERE id=?1", params![root,error]).map_err(|error| record_storage_fault(&self.storage_fault, error))?;
+    pub fn scan_state(&self, root: i64) -> Result<String, String> {
+        self.connection.query_row("SELECT CASE WHEN EXISTS(SELECT 1 FROM memberships m WHERE m.root_id=?1 AND m.verified=0) THEN 'partial' WHEN EXISTS(SELECT 1 FROM memberships m JOIN paths p ON p.path=m.path JOIN files f ON f.id=p.file_id WHERE m.root_id=?1 AND m.verified=1 AND (f.state='pending' OR (f.state='ready' AND EXISTS(SELECT 1 FROM file_checkpoints c WHERE c.file_id=f.id)))) THEN 'building' WHEN EXISTS(SELECT 1 FROM memberships m JOIN paths p ON p.path=m.path JOIN files f ON f.id=p.file_id WHERE m.root_id=?1 AND m.verified=1 AND (f.state='failed' OR EXISTS(SELECT 1 FROM file_retries r WHERE r.file_id=f.id))) THEN 'partial' ELSE 'ready' END", [root], |row| row.get(0))
+            .map_err(|error| record_storage_fault(&self.storage_fault, error))
+    }
+    pub fn finish_scan_state(
+        &self,
+        root: i64,
+        state: &str,
+        error: Option<&str>,
+    ) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE roots SET state=?2,error=?3 WHERE id=?1",
+                params![root, state, error],
+            )
+            .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         Ok(())
+    }
+    pub fn finish_scan(&self, root: i64, error: Option<&str>) -> Result<(), String> {
+        let state = if error.is_some() {
+            "error".into()
+        } else {
+            self.scan_state(root)?
+        };
+        self.finish_scan_state(root, &state, error)
     }
     pub fn remove_root(&mut self, root: i64) -> Result<(), String> {
         let tx = self
@@ -650,9 +739,11 @@ fn open_database(path: &Path) -> Result<Connection, String> {
 /// Apply every required schema step together; failure retains the prior version.
 fn create_schema(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(&format!(
-        "CREATE TABLE files({FILE_COLUMNS}); {SCHEMA} {} {}",
+        "CREATE TABLE files({FILE_COLUMNS}); {SCHEMA} {DIRECTORY_SCHEMA} {} {} {} {}",
         session::SCHEMA,
-        publication::SCHEMA
+        publication::SCHEMA,
+        retries::SCHEMA,
+        fingerprints::SCHEMA
     ))
 }
 fn migrate(connection: &Connection, version: i64) -> rusqlite::Result<()> {
@@ -660,7 +751,7 @@ fn migrate(connection: &Connection, version: i64) -> rusqlite::Result<()> {
         connection.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
     // SQLite requires foreign keys disabled *before* rebuilding a referenced
     // table. IDs and references are checked inside the same rollbackable upgrade.
-    if matches!(version, 1..=4) {
+    if matches!(version, 1..=5) {
         connection.pragma_update(None, "foreign_keys", false)?;
     }
     let result = migrate_steps(connection, version);
@@ -696,21 +787,58 @@ fn migrate_steps(connection: &Connection, version: i64) -> rusqlite::Result<()> 
             PRAGMA user_version=4;"
         ))?;
     }
-    if matches!(version, 1..=4) {
-        migrate_file_identity(&tx)?;
+    if matches!(version, 1..=5) {
+        migrate_file_identity(&tx, version >= 5)?;
     }
-    tx.execute_batch(QUERY_INDEXES)?;
-    tx.execute_batch(&format!("{} {}", fingerprints::SCHEMA, publication::SCHEMA))?;
+    tx.execute_batch(&format!("{DIRECTORY_SCHEMA}{QUERY_INDEXES}"))?;
+    tx.execute_batch(&format!(
+        "{} {} {}",
+        fingerprints::SCHEMA,
+        publication::SCHEMA,
+        retries::SCHEMA
+    ))?;
     tx.commit()
 }
 
-fn migrate_file_identity(tx: &Connection) -> rusqlite::Result<()> {
-    tx.execute_batch(&format!("CREATE TABLE files_v5({FILE_COLUMNS});
-        INSERT INTO files_v5(id,device,inode,revision,pipeline,metadata,state,coverage,error,extraction_version)
-        SELECT id,device,inode,revision,pipeline,metadata,state,coverage,error,extraction_version FROM files;
+fn migrate_inventory_columns(tx: &Connection) -> rusqlite::Result<()> {
+    // Early catalogs may contain only root identity and membership visibility.
+    // Restore the current inventory shape without inventing source availability.
+    for (table, column, definition) in [
+        ("roots", "generation", "INTEGER NOT NULL DEFAULT 0"),
+        ("roots", "available", "INTEGER NOT NULL DEFAULT 0"),
+        ("roots", "state", "TEXT NOT NULL DEFAULT 'checking'"),
+        ("roots", "error", "TEXT"),
+        ("memberships", "generation", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+            params![table, column],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            tx.execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_file_identity(tx: &Connection, scoped: bool) -> rusqlite::Result<()> {
+    migrate_inventory_columns(tx)?;
+    let scope = if scoped { "scope" } else { "''" };
+    // Legacy rows can combine incompatible aliases. Keep IDs/vectors, but use
+    // an empty representation sentinel and hide their ambiguous state until
+    // each current path is observed under its actual decoder route.
+    tx.execute_batch(&format!("CREATE TABLE files_next({FILE_COLUMNS});
+        INSERT INTO files_next(id,device,inode,revision,pipeline,metadata,state,coverage,error,extraction_version,scope)
+        SELECT id,device,inode,revision,pipeline,metadata,'pending',coverage,error,extraction_version,{scope} FROM files;
         DROP TABLE files;
-        ALTER TABLE files_v5 RENAME TO files;
-        {} PRAGMA user_version=5;", session::SCHEMA))?;
+        ALTER TABLE files_next RENAME TO files;
+        PRAGMA user_version=6;"))?;
+    if !scoped {
+        tx.execute_batch(session::SCHEMA)?;
+    }
     if tx.prepare("PRAGMA foreign_key_check")?.exists([])? {
         return Err(rusqlite::Error::InvalidQuery);
     }
@@ -723,17 +851,30 @@ fn require_local_storage(directory: &File) -> Result<(), String> {
     if unsafe { libc::fstatfs(directory.as_raw_fd(), stats.as_mut_ptr()) } != 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
-    let magic = unsafe { stats.assume_init() }.f_type as u64;
-    if matches!(
-        magic,
-        0x6969 | 0xFF534D42 | 0xFE534D42 | 0x01021997 | 0x5346414F | 0x73757245
-    ) {
-        return Err(
-            "Place the SQLite search index on a local filesystem; indexed content may be remote"
-                .into(),
-        );
+    // SAFETY: successful fstatfs initialized the complete structure.
+    local_index_filesystem(unsafe { stats.assume_init() }.f_type as u64)
+}
+
+fn local_index_filesystem(magic: u64) -> Result<(), String> {
+    // Linux UAPI linux/magic.h; ZFS uses OpenZFS's ZFS_SUPER_MAGIC.
+    // A network denylist cannot establish locality: FUSE may be remote,
+    // and new/distributed filesystem types would silently bypass it.
+    match magic {
+        0x9123_683e  // Btrfs
+        | 0xef53    // ext2/ext3/ext4
+        | 0x5846_5342 // XFS
+        | 0x2fc1_2fc1 // ZFS
+        | 0xf2f5_2010 // F2FS
+        | 0xca45_1a4e // bcachefs
+        | 0x0102_1994 // tmpfs
+        | 0x794c_7630 // overlayfs
+        => Ok(()),
+        _ => Err(format!(
+            "The SQLite search index needs supported local storage (filesystem type {magic:#x}). \
+             FUSE, network and unknown filesystems are not supported for the index; \
+             choose a local XDG_DATA_HOME. Indexed source folders may still be remote."
+        )),
     }
-    Ok(())
 }
 
 fn record_storage_fault(fault: &Cell<bool>, error: rusqlite::Error) -> String {
@@ -1002,9 +1143,56 @@ mod tests {
     }
 
     #[test]
+    fn local_index_storage_rejects_network_fuse_and_unknown_filesystems() {
+        for magic in [
+            0x9123_683e,
+            0xef53,
+            0x5846_5342,
+            0x2fc1_2fc1,
+            0xf2f5_2010,
+            0xca45_1a4e,
+            0x0102_1994,
+            0x794c_7630,
+        ] {
+            assert!(local_index_filesystem(magic).is_ok(), "{magic:#x}");
+        }
+        for magic in [
+            0x6969,
+            0xff53_4d42,
+            0xfe53_4d42,
+            0x0102_1997,
+            0x5346_414f,
+            0x7373_7245,
+            0x6573_5546,
+            0x00c3_6400,
+            0x0bd0_0bd0,
+            0,
+            u64::MAX,
+        ] {
+            let error = local_index_filesystem(magic).unwrap_err();
+            assert!(error.contains("local XDG_DATA_HOME"), "{error}");
+            assert!(
+                error.contains("source folders may still be remote"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     fn no_default_enrollment_and_single_writer_ownership() {
         let folder = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
         let store = Store::open(folder.path()).unwrap();
+        for (path, mode) in [
+            (folder.path().to_path_buf(), 0o700),
+            (folder.path().join("index.sqlite"), 0o600),
+            (folder.path().join("index.lock"), 0o600),
+        ] {
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
         assert!(store.roots().unwrap().is_empty());
         assert!(Store::open(folder.path()).is_err());
         drop(store);
@@ -1235,6 +1423,7 @@ mod tests {
                 "CREATE TABLE roots(id INTEGER PRIMARY KEY,path BLOB,device INTEGER,inode INTEGER);
             CREATE TABLE files(id INTEGER PRIMARY KEY,device INTEGER,inode INTEGER,revision INTEGER DEFAULT 0,pipeline TEXT,metadata TEXT DEFAULT '{}',state TEXT,coverage TEXT,error TEXT);
             CREATE TABLE paths(path BLOB PRIMARY KEY,parent BLOB,file_id INTEGER); CREATE TABLE memberships(root_id INTEGER,path BLOB,verified INTEGER);
+            INSERT INTO roots(id,path,device,inode) VALUES(1,CAST('/ordinary/legacy' AS BLOB),1,1);
             CREATE TABLE segments(id INTEGER PRIMARY KEY,file_id INTEGER,modality TEXT,text TEXT DEFAULT '',input_hash BLOB,vector BLOB);
             INSERT INTO files(id,device,inode,pipeline,state) VALUES(1,1,1,'original','ready'),(2,1,2,'changed','pending');
             PRAGMA user_version=1;",
@@ -1254,6 +1443,19 @@ mod tests {
         }
         drop(connection);
         let store = Store::open(folder.path()).unwrap();
+        let root: (i64, i64, String) = store
+            .connection
+            .query_row(
+                "SELECT available,generation,state FROM roots WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(root, (0, 0, "checking".into()));
+        store
+            .connection
+            .prepare("SELECT generation FROM memberships")
+            .unwrap();
         assert_eq!(
             store
                 .connection
@@ -1323,6 +1525,76 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM files", [], |r| r.get::<_, usize>(0))
                 .unwrap(),
             1
+        );
+        // The same path can independently belong to an enclosing root too.
+        let parent = store.enroll(&Root::open(source.path()).unwrap()).unwrap();
+        let generation = store.begin_scan(parent).unwrap();
+        for directory in [&a, &b] {
+            let entry = observation(directory);
+            let (file, _) = store
+                .observe_object(
+                    parent,
+                    generation,
+                    &entry,
+                    entry.identity.unwrap().object(),
+                    "pipeline",
+                )
+                .unwrap();
+            store
+                .publish(file, entry.revision, "pipeline", &[segment()], "complete")
+                .unwrap();
+        }
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM memberships", [], |r| r
+                    .get::<_, usize>(0))
+                .unwrap(),
+            4
+        );
+        let summaries = store.roots().unwrap();
+        let enclosing = summaries.iter().find(|root| root.id == parent).unwrap();
+        assert_eq!((enclosing.files, enclosing.vectors), (2, 1));
+        assert!(summaries.iter().all(|root| root.vectors == 1));
+        store.begin_scan(parent).unwrap();
+        store
+            .finish_scan(parent, Some("cancelled or incomplete inventory"))
+            .unwrap();
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM paths", [], |r| r.get::<_, usize>(0))
+                .unwrap(),
+            2
+        );
+        store.retire_path(parent, &a).unwrap();
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM memberships", [], |r| r
+                    .get::<_, usize>(0))
+                .unwrap(),
+            3
+        );
+        store.remove_root(parent).unwrap();
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM memberships", [], |r| r
+                    .get::<_, usize>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM paths", [], |r| r.get::<_, usize>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            store.vector_count, 1,
+            "Retiring one owner cannot prune a shared vector"
         );
         store.begin_scan(roots[0]).unwrap();
         store
@@ -1481,20 +1753,255 @@ mod tests {
     fn reopening_current_schema_recreates_derived_indexes_without_rebuilding_records() {
         let folder = tempfile::tempdir().unwrap();
         let store = Store::open(folder.path()).unwrap();
-        store.connection.execute_batch("DROP INDEX path_file_lookup; DROP INDEX path_parent; DROP INDEX file_search; DROP INDEX segment_identity; DROP INDEX segment_admission; DROP INDEX membership_search;").unwrap();
+        store.connection.execute_batch("DROP INDEX path_file_lookup; DROP INDEX path_parent; DROP INDEX file_search; DROP INDEX segment_identity; DROP INDEX segment_admission; DROP INDEX segment_vector_file; DROP INDEX membership_search;").unwrap();
         drop(store);
         let reopened = Store::open(folder.path()).unwrap();
         let count: usize = reopened.connection.query_row(
-            "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name IN ('path_file_lookup','path_parent','file_search','segment_identity','segment_admission','membership_search')",
+            "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name IN ('path_file_lookup','path_parent','file_search','segment_identity','segment_admission','segment_vector_file','membership_search')",
             [], |row| row.get(0),
         ).unwrap();
-        assert_eq!(count, 6);
+        assert_eq!(count, 7);
         assert_eq!(
             reopened
                 .connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
             SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn rtf_extractor_retries_only_legacy_name_only_outcomes() {
+        for (suffix, coverage, retry) in [
+            ("rtf", "name-only: extractor unavailable", true),
+            ("RTF", "name-only: extractor unavailable", true),
+            ("unknown", "name-only: extractor unavailable", false),
+            ("rtf", "complete", false),
+            (
+                "rtf",
+                "name-only: document exceeds 64 MiB extraction budget",
+                false,
+            ),
+        ] {
+            let mut fixture = session::tests::Fixture::new();
+            let path = fixture.entry.path.with_extension(suffix);
+            std::fs::rename(&fixture.entry.path, &path).unwrap();
+            let entry = observation(path.parent().unwrap());
+            let root = fixture.store.roots().unwrap()[0].id;
+            let generation = fixture.store.begin_scan(root).unwrap();
+            let object = entry.identity.unwrap().object();
+            let (file, _) = fixture
+                .store
+                .observe_object(root, generation, &entry, object, "model")
+                .unwrap();
+            fixture
+                .store
+                .publish(file, entry.revision, "model", &[], coverage)
+                .unwrap();
+            let (same, changed) = fixture
+                .store
+                .observe_object(root, generation, &entry, object, "model")
+                .unwrap();
+            assert_eq!(same, file);
+            assert_eq!(changed, retry, "{suffix}: {coverage}");
+            if retry {
+                fixture
+                    .store
+                    .publish(file, entry.revision, "model", &[segment()], "complete")
+                    .unwrap();
+                assert!(
+                    !fixture
+                        .store
+                        .observe_object(root, generation, &entry, object, "model")
+                        .unwrap()
+                        .1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_format_hardlinks_keep_independent_publications_and_compatible_aliases_share() {
+        let mut fixture = session::tests::Fixture::new();
+        let directory = fixture.entry.path.parent().unwrap().to_path_buf();
+        for name in ["alias.TXT", "page.html", "unknown.data"] {
+            std::fs::hard_link(&fixture.entry.path, directory.join(name)).unwrap();
+        }
+        let entries =
+            crate::file_manager::filesystem::read_directory(&directory, &AtomicBool::new(false))
+                .unwrap()
+                .entries;
+        let root = fixture.store.roots().unwrap()[0].id;
+        let generation = fixture.store.begin_scan(root).unwrap();
+        let mut observed = Vec::new();
+        for entry in entries {
+            let (file, _) = fixture
+                .store
+                .observe_object(
+                    root,
+                    generation,
+                    &entry,
+                    entry.identity.unwrap().object(),
+                    "model",
+                )
+                .unwrap();
+            observed.push((entry, file));
+        }
+        let find = |name: &str| {
+            observed
+                .iter()
+                .find(|(entry, _)| entry.name == name)
+                .unwrap()
+        };
+        let (original, text) = find("note.txt");
+        let (_, compatible) = find("alias.TXT");
+        let (html, decoded) = find("page.html");
+        let (unknown, unsupported) = find("unknown.data");
+        assert_eq!(text, compatible);
+        assert_ne!(text, decoded);
+        assert_ne!(text, unsupported);
+        assert_ne!(decoded, unsupported);
+        fixture
+            .store
+            .publish(*text, original.revision, "model", &[segment()], "complete")
+            .unwrap();
+        fixture
+            .store
+            .publish(
+                *decoded,
+                html.revision,
+                "model",
+                &[
+                    segment(),
+                    Segment {
+                        vector: None,
+                        ..segment()
+                    },
+                ],
+                "complete",
+            )
+            .unwrap();
+        fixture
+            .store
+            .publish(
+                *unsupported,
+                unknown.revision,
+                "model",
+                &[],
+                super::super::reader::NAME_ONLY_UNSUPPORTED,
+            )
+            .unwrap();
+        let state = |file| {
+            fixture.store.connection.query_row(
+            "SELECT state,(SELECT count(*) FROM segments WHERE file_id=files.id AND vector IS NOT NULL) FROM files WHERE id=?1",
+            [file], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        ).unwrap()
+        };
+        assert_eq!(state(*text), ("ready".into(), 1));
+        assert_eq!(state(*decoded), ("ready".into(), 1));
+        assert_eq!(state(*unsupported), ("unsupported".into(), 0));
+        let summary = fixture.store.roots().unwrap().remove(0);
+        assert_eq!((summary.files, summary.vectors), (4, 2));
+        fixture
+            .store
+            .invalidate_directory(root, Some(&directory))
+            .unwrap();
+        let unverified = fixture.store.roots().unwrap().remove(0);
+        assert_eq!((unverified.files, unverified.vectors), (4, 0));
+        let alias = &find("alias.TXT").0;
+        fixture
+            .store
+            .observe_object(
+                root,
+                generation,
+                alias,
+                alias.identity.unwrap().object(),
+                "model",
+            )
+            .unwrap();
+        let reverified = fixture.store.roots().unwrap().remove(0);
+        assert_eq!((reverified.files, reverified.vectors), (4, 1));
+        // Removing an alias must not retire the remaining compatible pathname.
+        fixture.store.retire_path(root, &original.path).unwrap();
+        assert_eq!(
+            fixture
+                .store
+                .connection
+                .query_row(
+                    "SELECT file_id FROM paths WHERE path=?1",
+                    [find("alias.TXT").0.path.as_os_str().as_bytes()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            *text
+        );
+    }
+
+    #[test]
+    fn extensionless_content_routes_do_not_share_unknown_name_only_state() {
+        let mut entry = session::tests::Fixture::new().entry;
+        entry.path.set_file_name("README");
+        assert!(super::super::reader::supports_content(&entry));
+        let content = source_format(&entry);
+        entry.path.set_file_name("unknown");
+        assert!(!super::super::reader::supports_content(&entry));
+        assert_ne!(content, source_format(&entry));
+    }
+
+    #[test]
+    fn changed_subtype_reprepares_only_the_affected_file_without_losing_canonical_vectors() {
+        let mut fixture = session::tests::Fixture::new();
+        let path = fixture.entry.path.with_file_name("module.ts");
+        std::fs::rename(&fixture.entry.path, &path).unwrap();
+        let entry = observation(path.parent().unwrap());
+        assert!(entry.typescript);
+        let mut legacy = entry.clone();
+        legacy.typescript = false;
+        let root = fixture.store.roots().unwrap()[0].id;
+        let generation = fixture.store.begin_scan(root).unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        let (file, _) = fixture
+            .store
+            .observe(root, generation, &legacy, &metadata, "model")
+            .unwrap();
+        let prepared = segment();
+        let input = prepared.input_hash.clone();
+        fixture
+            .store
+            .publish(file, entry.revision, "model", &[prepared], "complete")
+            .unwrap();
+        assert!(
+            !fixture
+                .store
+                .observe(root, generation, &legacy, &metadata, "model")
+                .unwrap()
+                .1
+        );
+        let (decoded_file, changed) = fixture
+            .store
+            .observe(root, generation, &entry, &metadata, "model")
+            .unwrap();
+        assert_ne!(decoded_file, file);
+        assert!(
+            changed,
+            "same source revision but a different decoder must not reuse ready state"
+        );
+        let state: String = fixture
+            .store
+            .connection
+            .query_row(
+                "SELECT state FROM files WHERE id=?1",
+                [decoded_file],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "pending");
+        assert!(
+            fixture
+                .store
+                .reusable_vector("model", "text", &input)
+                .unwrap()
+                .is_some()
         );
     }
 
@@ -1551,6 +2058,28 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        let mut typed = entry.clone();
+        typed.path.set_extension("ts");
+        typed.typescript = false;
+        store
+            .remember_source(id, entry.revision, "model", &typed, &digest)
+            .unwrap();
+        assert!(
+            store
+                .reusable_source(&typed, "model", &digest)
+                .unwrap()
+                .is_some()
+        );
+        typed.typescript = true;
+        assert!(
+            store
+                .reusable_source(&typed, "model", &digest)
+                .unwrap()
+                .is_none()
+        );
+        store
+            .remember_source(id, entry.revision, "model", entry, &digest)
+            .unwrap();
         // A revision change keeps the old extraction eligible only by its full
         // digest; it is never an unchanged-metadata authorization.
         let mut changed = entry.clone();

@@ -68,7 +68,9 @@ def main():
     output = args.output_dir.resolve()
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     origin = reader(args.binary, {'Probe':str(args.source)})['Root']
-    listing = reader(args.binary, {'List':{'root':origin, 'path':str(args.source), 'hidden':False, 'exclusions':[]}})['Directory']
+    listing = reader(args.binary, {'List':{'root':origin, 'path':str(args.source), 'hidden':False, 'exclusions':[]}})['Directory']['directory']
+    if listing['skipped']:
+        raise RuntimeError('Source inventory is incomplete')
     worker = Worker(args, output, ('--role', 'answer', '--answer-provider', 'qwen3.5-9b'))
     started = time.monotonic()
     try:

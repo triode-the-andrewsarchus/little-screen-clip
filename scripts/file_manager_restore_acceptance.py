@@ -9,6 +9,7 @@ from file_manager_acceptance import application_arguments, media_fixture_directo
 from file_manager_reuse_acceptance import inventory
 from file_manager_maintenance_acceptance import word, scroll, backup_through_settings, search_environment
 from file_manager_search_settings_acceptance import click_word
+from file_manager_search_controls_acceptance import type_text
 import ui_acceptance_capture as private
 
 
@@ -19,8 +20,7 @@ def request_restore(session, path, label):
     session.observe(label + "-restore-address", ["Restore source"])
     anchor = word(session, label + "-restore-address", "source")
     session.click(260, anchor[1] + 28)
-    session.key("a", "ctrl")
-    private.run_checked(["wtype", str(path)], env=session.env)
+    type_text(session, str(path))
     session.click(190, anchor[1] + 64)
     session.scroll_to_visible(label + "-restore-confirmation", ["Configured folders will be kept"], position=(500, 450))
     scroll(session, 100)

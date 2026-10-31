@@ -8,6 +8,7 @@ from pathlib import Path
 import ui_acceptance_capture as private
 from file_manager_reuse_acceptance import inventory
 from file_manager_acceptance import click_search_settings_word as click_word
+from file_manager_search_controls_acceptance import type_text
 from file_manager_acceptance import (
     application_arguments, media_fixture_directory, run_application_acceptance,
 )
@@ -15,8 +16,7 @@ from file_manager_acceptance import (
 
 def submit(session, command):
     session.key("f", "ctrl")
-    session.key("a", "ctrl")
-    private.run_checked(["wtype", command], env=session.env)
+    type_text(session, command)
     session.key("Return")
 
 
@@ -29,7 +29,7 @@ def pause_indexing(session, paused, label):
     click_word(session, label + "-settings", "Save")
     config = session.output / "scratch/config.toml"
     from file_manager_acceptance import wait_for
-    wait_for(lambda: tomllib.loads(config.read_text())["file_manager"]["search"]["paused"] == paused, "persist pause/resume")
+    wait_for(lambda: tomllib.loads(config.read_text()).get("file_manager", {}).get("search", {}).get("paused") == paused, "persist pause/resume")
     click_word(session, label + "-settings", "Close")
 
 
@@ -66,8 +66,12 @@ def exercise(session, root):
     submit(session, ':emb:"small domesticated animals with whiskers"')
     session.observe("semantic-match", ["cats.txt", "Semantic candidates"])
     cats = session.word("semantic-match", "cats.txt", minimum_y=190)
-    bank = session.word("semantic-match", "bank.txt", minimum_y=190)
-    assert cats[1] < bank[1], (cats, bank)
+    # Unrelated fixtures may correctly fall below the product cosine floor.
+    # If admitted, neither may outrank the deliberately relevant document.
+    for name in ["bank.txt", "landmark.txt"]:
+        other = session.word("semantic-match", name, minimum_y=190, required=False)
+        if other:
+            assert cats[1] < other[1], (cats, other)
     pause_indexing(session, True, "pause-before-change")
     with sqlite3.connect(index) as db:
         generation = db.execute("SELECT generation FROM roots").fetchone()[0]

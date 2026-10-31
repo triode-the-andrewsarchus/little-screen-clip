@@ -187,7 +187,7 @@ def music(session, root):
 
 def video(session, root):
     session.observe("01-video-folder", ["movie.mp4", "notes.txt", "subfolder"])
-    x, y = session.word("01-video-folder", "movie.mp4", minimum_y=300)
+    x, y = session.word("01-video-folder", "movie.mp4", minimum_y=250)
     session.click(x, y)
     session.key("Return")
     def windows():
@@ -229,7 +229,7 @@ def video(session, root):
     click_word(session, "07-video-replayed", "Back")
     wait_for(lambda: not Path(f"/proc/{child_pid}").exists(), "returning to folder reaps FFplay")
     session.observe("08-return-folder", ["movie.mp4", "notes.txt", "subfolder"])
-    x, y = session.word("08-return-folder", "movie.mp4", minimum_y=300)
+    x, y = session.word("08-return-folder", "movie.mp4", minimum_y=250)
     session.click(x, y)
     session.key("Return")
     wait_for(player_window, "video session for application-close ownership check")

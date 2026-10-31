@@ -88,7 +88,7 @@ def main():
     else:
         env.pop('CLIP_RETRIEVAL_BENCH_SQLITE_CACHE_MIB', None)
     sources = {name: hashlib.sha256((repo / 'crates/clip-workbench/src/file_manager/search' / name).read_bytes()).hexdigest()
-               for name in ('retrieval.rs', 'retrieval/benchmark.rs', 'store.rs', 'store/vectors.rs', 'policy.rs', 'query.rs', '../filesystem.rs', '../type_navigation.rs')}
+               for name in ('retrieval.rs', 'retrieval/benchmark.rs', 'store.rs', 'store/vectors.rs', 'store/lexical.rs', 'policy.rs', 'query.rs', '../filesystem.rs', '../type_navigation.rs')}
     binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
     log = report.with_suffix(report.suffix + '.stdout.log')
     with tempfile.TemporaryDirectory(prefix='clip-retrieval-bench-') as workspace:

@@ -51,6 +51,8 @@ def exercise(session, root):
     assert generation == 1 and len(paths) == 2 and vectors == 2, (generation, paths, vectors)
     config = tomllib.loads((session.output / "scratch/config.toml").read_text())
     assert config["file_manager"]["search"]["limits"]["max_vectors"] == 2
+    click_word(session, "before-saving-limit", "Close")
+    session.click(993, 118)
     session.observe("resumed-in-place", ["2 files", "2 vectors"])
 
 

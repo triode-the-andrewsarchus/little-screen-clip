@@ -5,6 +5,7 @@ import tomllib
 
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
 from file_manager_search_acceptance import submit
+from file_manager_search_controls_acceptance import type_text
 from file_manager_acceptance import click_search_settings_word as click_word
 import ui_acceptance_capture as private
 
@@ -24,13 +25,12 @@ def exercise(session, root):
     location = session.word("settings", "Automatic", required=False) or session.word("settings", "Automatic", tree=True)
     field = (location[0] + 60, location[1] + 85)
     session.click(*field)
-    private.run_checked(["wtype", "/proc"], env=session.env)
+    type_text(session, "/proc")
     click_word(session, "settings", "Save")
     session.observe("protected-location-rejected", ["System folders cannot be indexed"])
     assert not index.exists()
     session.click(*field)
-    session.key("a", "ctrl")
-    private.run_checked(["wtype", str(session.output / "extra-search")], env=session.env)
+    type_text(session, str(session.output / "extra-search"))
     click_word(session, "protected-location-rejected", "Save")
     session.observe("saved", ["Search preferences saved", "Excluded search paths"])
     config = session.output / "scratch/config.toml"

@@ -97,6 +97,23 @@ impl Query {
             .collect::<Vec<_>>()
             .join(",")
     }
+    pub(super) fn date_summary(&self) -> Option<String> {
+        let dates = self
+            .selectors
+            .iter()
+            .filter_map(|selector| match &selector.constraint {
+                Constraint::Modified(range) | Constraint::Created(range) => Some(format!(
+                    "{} → {}UTC {}",
+                    selector.source,
+                    if selector.negated { "exclude " } else { "" },
+                    range.date_bounds()
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        (!dates.is_empty()).then(|| dates.join(" · "))
+    }
+
     pub fn navigation(name: String) -> Self {
         Self {
             name,
@@ -302,7 +319,7 @@ impl Selector {
                 .created_time
                 .map(|v| interval.contains(range::timestamp(v))),
             Constraint::Glob(glob) => Some(glob.is_match(&entry.name)),
-            Constraint::Family(family) => Some(family.matches(entry)),
+            Constraint::Family(family) => entry.warning.is_none().then(|| family.matches(entry)),
         };
         value.is_some_and(|value| value != self.negated)
     }
@@ -318,14 +335,7 @@ impl Family {
                 entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path)
             }
             Self::Pdf => entry.regular_file && extension(entry) == "pdf",
-            Self::Document => {
-                entry.regular_file
-                    && (crate::file_manager::text_strip::known_text(&entry.path)
-                        || matches!(
-                            extension(entry).as_str(),
-                            "pdf" | "rtf" | "docx" | "odt" | "pptx" | "xlsx"
-                        ))
-            }
+            Self::Document => entry.regular_file && super::reader::supports_text(entry),
         }
     }
 }
@@ -514,22 +524,64 @@ mod tests {
             "foo",
             "::foo",
             ":10kb..2MB foo",
+            ":10kb...2MB foo",
+            ":10kb-2MB foo",
+            ":10kb..2MB,*.jpg foo",
             ":10kb...2MB,*.jpg foo",
+            ":10kb..2MB,image foo",
             ":10kb-2MB,image foo",
+            ":image",
             ":image,!*.svg",
+            ":modified:2026-01-01..2026-03-31",
+            ":created:2026-01-01...2026-03-31",
+            ":image,created:>=2026-01-01;sort:created:desc",
             ":created:>=2026-01-01;sort:created:desc",
             ":modified:2026-01-01 - 2026-03-31 foo",
+            r#":content:"invoice number""#,
+            r#":*.pdf;content:"invoice number""#,
+            ":image;sort:size:desc",
+            ":image;sort:dhash:asc",
+            ":image;sort:similarity;ref:selected",
+            ":>=10MiB,video",
             ":regex:foo.*",
             r#":regex:"(?i)foo.*\.jpg$""#,
-            r#":content:"invoice number""#,
+            r#":emb:"2019 tax document""#,
+            r#":10kb..2MB,*.pdf;emb:"2019 tax document""#,
+            ":image foo;scope:recursive",
+            r#":emb:"2019 tax document";scope:indexed"#,
             r#":10kb..2MB,*.pdf;emb:"2019 tax document";scope:indexed"#,
-            r#":q:"End balance";type:number"#,
-            ":image;sort:similarity;ref:selected",
+            r#":q:"End balance on bank statement";type:number"#,
+            r#":*.pdf;q:"End balance on bank statement";type:number"#,
         ] {
             Query::parse(input).unwrap_or_else(|error| panic!("{input}: {error}"));
         }
         assert_eq!(Query::parse("::foo").unwrap().name, ":foo");
     }
+    #[test]
+    fn date_summaries_show_resolved_utc_bounds_and_negated_constraints() {
+        let query = Query::parse(
+            ":modified:>=2026-01-02T03:04:05.123456789+02:00,!created:<2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(
+            query.date_summary().unwrap(),
+            "modified:>=2026-01-02T03:04:05.123456789+02:00 → UTC >= 2026-01-02T01:04:05.123456789Z · !created:<2026-01-01T00:00:00Z → exclude UTC < 2026-01-01T00:00:00Z"
+        );
+        assert!(
+            Query::parse(":image,>=10KB")
+                .unwrap()
+                .date_summary()
+                .is_none()
+        );
+        assert_eq!(
+            Query::parse(":created:>=2026-01-01T00:00:00Z;q:\"Publication date\";type:date")
+                .unwrap()
+                .date_summary()
+                .unwrap(),
+            "created:>=2026-01-01T00:00:00Z → UTC >= 2026-01-01T00:00:00Z"
+        );
+    }
+
     #[test]
     fn invalid_options_and_ambiguous_modes_never_fall_back_to_names() {
         for input in [

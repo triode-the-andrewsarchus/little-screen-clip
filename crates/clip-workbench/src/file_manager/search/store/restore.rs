@@ -124,7 +124,9 @@ pub(in crate::file_manager::search) fn prepare_in_helper(
     snapshot_input(input, snapshot, max_bytes)?;
     let source = open_snapshot(snapshot)?;
     let mut target = create_staging(output, max_bytes, page_size)?;
-    let vectors = import_records(&source, &mut target, max_vectors)?;
+    import_records(&source, &mut target, max_vectors)?;
+    // Backups carry data, never authority to retain currently forbidden content.
+    let vectors = super::safety::apply_content_policy(&mut target, &std::cell::Cell::new(false))?;
     verify_staging(&target)?;
     target.close().map_err(|(_, e)| e.to_string())?;
     Ok(vectors)
@@ -137,17 +139,20 @@ fn import_records(
 ) -> Result<u64, String> {
     let tx = target.transaction().map_err(|e| e.to_string())?;
     let mut vectors = 0;
-    let legacy: bool = source
+    let version: i64 = source
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
-        .map_err(|e| e.to_string())?
-        == 4;
+        .map_err(|e| e.to_string())?;
     for table in TABLES {
-        let table = if legacy && table.name == "files" {
-            &LEGACY_FILES
-        } else {
-            table
+        let table = match (table.name, version) {
+            ("files", 4) => &LEGACY_FILES,
+            ("files", 5) => &SCOPED_FILES,
+            _ => table,
         };
         copy_table(source, &tx, table, max_vectors, &mut vectors)?;
+    }
+    if version < SCHEMA_VERSION {
+        tx.execute("UPDATE files SET state='pending'", [])
+            .map_err(|e| e.to_string())?;
     }
     tx.execute_batch("UPDATE roots SET available=0,state='disabled',error=NULL; UPDATE memberships SET verified=0; UPDATE directories SET complete=0;").map_err(|e| e.to_string())?;
     validate_relations(&tx)?;
@@ -228,8 +233,8 @@ fn open_snapshot(input: &File) -> Result<Connection, String> {
     let version: u32 = source
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
-    if version != 4 && i64::from(version) != SCHEMA_VERSION {
-        return Err("Choose a native version-4 or version-5 index backup".into());
+    if !(4..=SCHEMA_VERSION).contains(&i64::from(version)) {
+        return Err("Choose a native version-4, version-5 or version-6 index backup".into());
     }
     Ok(source)
 }
@@ -337,6 +342,12 @@ const LEGACY_FILES: Table = Table {
     types: "iiiitttnni",
     limit: 2000000,
 };
+const SCOPED_FILES: Table = Table {
+    name: "files",
+    columns: "id,device,inode,revision,pipeline,metadata,state,coverage,error,extraction_version,scope",
+    types: "iiiitttnnit",
+    limit: 2000000,
+};
 const TABLES: &[Table] = &[
     Table {
         name: "roots",
@@ -346,8 +357,8 @@ const TABLES: &[Table] = &[
     },
     Table {
         name: "files",
-        columns: "id,device,inode,revision,pipeline,metadata,state,coverage,error,extraction_version,scope",
-        types: "iiiitttnnit",
+        columns: "id,device,inode,revision,pipeline,metadata,state,coverage,error,extraction_version,scope,format",
+        types: "iiiitttnnitb",
         limit: 2000000,
     },
     Table {
@@ -564,7 +575,26 @@ fn validate_file(values: &mut [Value]) -> Result<(), String> {
         return Err("Backup file identity does not match its metadata".into());
     }
     path_value(&Value::Blob(entry.path.as_os_str().as_bytes().to_vec()))?;
-    if values.len() == 11 {
+    if let Some(Value::Blob(format)) = values.get(11)
+        && !format.is_empty()
+    {
+        let current = super::source_format(&entry);
+        if [
+            super::fingerprints::PDF_SPARSE_POLICY,
+            super::fingerprints::MEDIA_TIMELINE_POLICY,
+        ]
+        .into_iter()
+        .any(|policy| current.strip_suffix(policy) == Some(format.as_slice()))
+        {
+            // A recognized native representation from the prior policy is importable.
+            // Preserve vectors/IDs as reuse candidates, never its ready state.
+            values[6] = Value::Text("pending".into());
+            values[11] = Value::Blob(Vec::new());
+        } else if *format != current {
+            return Err("Backup decoder representation does not match its metadata".into());
+        }
+    }
+    if values.len() >= 11 {
         // Keep contexts distinct without accepting a backup's source authority.
         let Value::Text(scope) = &values[10] else {
             unreachable!()
@@ -762,6 +792,34 @@ mod tests {
     }
 
     #[test]
+    fn mismatched_decoder_representation_is_rejected_before_restore() {
+        let fixture = Fixture::new();
+        let backup = fixture.backup();
+        let connection = Connection::open(&backup).unwrap();
+        connection
+            .execute("UPDATE files SET format=X'01'", [])
+            .unwrap();
+        drop(connection);
+        let error = fixture
+            .prepare(&backup, 100)
+            .err()
+            .expect("Invalid representation was accepted");
+        assert!(error.contains("decoder representation"), "{error}");
+        assert_eq!(
+            fixture
+                .store
+                .connection
+                .query_row(
+                    "SELECT count(*) FROM segments WHERE vector IS NOT NULL",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
     fn restore_roundtrip_preserves_vectors_fts_and_current_root_authority() {
         let mut fixture = Fixture::new();
         let backup = fixture.backup();
@@ -826,7 +884,183 @@ mod tests {
         assert!(empty.roots().unwrap().is_empty());
         assert!(empty.source_roots().unwrap().is_empty());
         assert_eq!(empty.vector_count, 1);
+        assert_eq!(
+            empty
+                .connection
+                .query_row("SELECT count(*) FROM file_retries", [], |row| row
+                    .get::<_, usize>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            empty
+                .connection
+                .query_row("SELECT count(*) FROM source_digests", [], |row| row
+                    .get::<_, usize>(0))
+                .unwrap(),
+            0
+        );
     }
+
+    #[test]
+    fn restored_private_records_are_purged_before_installing_while_public_owners_survive() {
+        for (relative, public_owner) in [
+            (".mozilla/profile.txt", false),
+            (".env", false),
+            (".git/config", false),
+            (".mozilla/profile.txt", true),
+            (".env", true),
+            (".git/config", true),
+        ] {
+            let mut fixture = Fixture::new();
+            let backup = fixture.backup();
+            let original = fixture.root.join("sample.txt");
+            let forbidden = fixture.root.join(relative);
+            let db = Connection::open(&backup).unwrap();
+            db.execute("INSERT INTO paths(path,parent,file_id) SELECT ?1,?2,file_id FROM paths WHERE path=?3",
+                params![forbidden.as_os_str().as_bytes(),forbidden.parent().unwrap().as_os_str().as_bytes(),original.as_os_str().as_bytes()]).unwrap();
+            db.execute("INSERT INTO memberships(root_id,path,generation,verified) SELECT root_id,?1,generation,verified FROM memberships WHERE path=?2",
+                params![forbidden.as_os_str().as_bytes(),original.as_os_str().as_bytes()]).unwrap();
+            if !public_owner {
+                db.execute(
+                    "DELETE FROM memberships WHERE path=?1",
+                    [original.as_os_str().as_bytes()],
+                )
+                .unwrap();
+                db.execute(
+                    "DELETE FROM paths WHERE path=?1",
+                    [original.as_os_str().as_bytes()],
+                )
+                .unwrap();
+            }
+            drop(db);
+            let backup_bytes = std::fs::read(&backup).unwrap();
+            let prepared = fixture.prepare(&backup, 1).unwrap();
+            let staged = Connection::open(prepared.staging.path()).unwrap();
+            assert_eq!(
+                staged
+                    .query_row(
+                        "SELECT COUNT(*) FROM paths WHERE path=?1",
+                        [forbidden.as_os_str().as_bytes()],
+                        |row| row.get::<_, u64>(0)
+                    )
+                    .unwrap(),
+                0,
+                "{relative}"
+            );
+            assert_eq!(prepared.vectors, u64::from(public_owner));
+            drop(staged);
+            fixture
+                .store
+                .apply_restore(prepared, &[fixture.root.clone()], &AtomicBool::new(false))
+                .unwrap();
+            for table in ["files", "paths", "memberships", "segments", "segment_fts"] {
+                assert_eq!(
+                    fixture.count(&format!("SELECT COUNT(*) FROM {table}")),
+                    u64::from(public_owner),
+                    "{relative}, {table}"
+                );
+            }
+            assert_eq!(fixture.store.vector_count, u64::from(public_owner));
+            assert_eq!(std::fs::read(&backup).unwrap(), backup_bytes);
+            assert_eq!(std::fs::read(original).unwrap(), b"the cat sat");
+            assert!(
+                !forbidden.exists(),
+                "No protected source was needed for the cache-only policy check"
+            );
+        }
+    }
+    #[test]
+    fn legacy_decoder_policy_backups_preserve_vectors_but_require_repreparation() {
+        for (extension, policy) in [
+            ("pdf", super::super::fingerprints::PDF_SPARSE_POLICY),
+            ("wav", super::super::fingerprints::MEDIA_TIMELINE_POLICY),
+            ("mkv", super::super::fingerprints::MEDIA_TIMELINE_POLICY),
+        ] {
+            let fixture = Fixture::new();
+            let backup = fixture.backup();
+            let source_path = fixture.root.join(format!("sample.{extension}"));
+            std::fs::rename(fixture.root.join("sample.txt"), &source_path).unwrap();
+            let entry = filesystem::read_directory(&fixture.root, &AtomicBool::new(false))
+                .unwrap()
+                .entries
+                .remove(0);
+            let current = super::super::source_format(&entry);
+            let legacy = current.strip_suffix(policy).unwrap().to_vec();
+            let db = Connection::open(&backup).unwrap();
+            let transaction = db.unchecked_transaction().unwrap();
+            transaction
+                .pragma_update(None, "defer_foreign_keys", true)
+                .unwrap();
+            transaction
+                .execute(
+                    "UPDATE files SET metadata=?1,revision=?2",
+                    params![
+                        serde_json::to_string(&entry).unwrap(),
+                        entry.revision as i64
+                    ],
+                )
+                .unwrap();
+            transaction
+                .execute(
+                    "UPDATE paths SET path=?1",
+                    [source_path.as_os_str().as_bytes()],
+                )
+                .unwrap();
+            transaction
+                .execute(
+                    "UPDATE memberships SET path=?1",
+                    [source_path.as_os_str().as_bytes()],
+                )
+                .unwrap();
+            transaction.commit().unwrap();
+            let vector: Vec<u8> = db
+                .query_row("SELECT vector FROM segments", [], |row| row.get(0))
+                .unwrap();
+            drop(db);
+            for format in [&legacy, &current] {
+                let db = Connection::open(&backup).unwrap();
+                db.execute("UPDATE files SET format=?1", [format]).unwrap();
+                drop(db);
+                let before = std::fs::read(&backup).unwrap();
+                let prepared = fixture.prepare(&backup, 1).unwrap();
+                assert_eq!(prepared.vectors, 1);
+                let staged = Connection::open(prepared.staging.path()).unwrap();
+                let (state, representation): (String, Vec<u8>) = staged
+                    .query_row("SELECT state,format FROM files", [], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })
+                    .unwrap();
+                if format == &legacy {
+                    assert_eq!(state, "pending");
+                    assert!(representation.is_empty());
+                } else {
+                    assert_eq!(state, "ready");
+                    assert_eq!(representation, current);
+                }
+                assert_eq!(
+                    staged
+                        .query_row("SELECT vector FROM segments", [], |row| row
+                            .get::<_, Vec<u8>>(0))
+                        .unwrap(),
+                    vector
+                );
+                assert_eq!(std::fs::read(&backup).unwrap(), before);
+            }
+            let db = Connection::open(&backup).unwrap();
+            db.execute("UPDATE files SET format=X'ff'", []).unwrap();
+            drop(db);
+            assert!(
+                fixture
+                    .prepare(&backup, 1)
+                    .err()
+                    .unwrap()
+                    .contains("representation")
+            );
+            assert_eq!(std::fs::read_to_string(source_path).unwrap(), "the cat sat");
+        }
+    }
+
     #[test]
     fn failed_or_cancelled_restore_keeps_active_records() {
         let mut fixture = Fixture::new();

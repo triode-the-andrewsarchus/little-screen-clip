@@ -3,8 +3,7 @@
 from pathlib import Path
 
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance
-from file_manager_maintenance_acceptance import search_environment
-from file_manager_reuse_acceptance import inventory
+from file_manager_maintenance_acceptance import search_environment, enroll_folder
 from file_manager_search_acceptance import submit
 
 
@@ -13,9 +12,7 @@ def exercise(session, root):
     source = (root / 'diagram.svg').read_bytes()
     index = Path(session.env['XDG_DATA_HOME']) / 'little-screen-clip/search/index.sqlite'
     assert not index.exists()
-    session.click(993, 118)
-    session.key('Escape')
-    _, paths, vectors = inventory(index)
+    _, (_, paths, vectors) = enroll_folder(session, root)
     assert paths == [str(root / 'diagram.svg')] and vectors == 1
     submit(session, ':emb:"a blue circle on a white background"')
     session.observe('svg-visual-retrieval', ['diagram.svg', 'Semantic image match', 'static SVG image'])

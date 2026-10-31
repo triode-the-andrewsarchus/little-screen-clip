@@ -20,6 +20,8 @@ const PRIVATE_DIRECTORIES: &[&str] = &[
     ".pki",
     ".password-store",
     ".config",
+    ".mozilla",
+    ".thunderbird",
     "keyrings",
 ];
 const GENERATED_DIRECTORIES: &[&str] = &[
@@ -463,6 +465,8 @@ mod tests {
             "/home/a/.git/objects",
             "/home/a/node_modules/pkg",
             "/home/a/.config/app",
+            "/home/a/.mozilla/firefox/profile",
+            "/home/a/.thunderbird/profile",
             "/home/a/notes.noindex",
         ] {
             assert!(Root::open(Path::new(path)).is_err(), "{path}");
@@ -474,18 +478,26 @@ mod tests {
     #[test]
     fn aliases_cannot_bypass_credential_content_or_root_checks() {
         let dir = tempfile::tempdir().unwrap();
-        let private = dir.path().join(".ssh");
-        std::fs::create_dir(&private).unwrap();
-        std::fs::write(private.join("notes.txt"), "private").unwrap();
-        let alias = dir.path().join("ordinary");
-        std::os::unix::fs::symlink(&private, &alias).unwrap();
-        assert!(Root::open(&alias).is_err());
-        assert!(
-            Root::open(dir.path())
-                .unwrap()
-                .open_content(&alias.join("notes.txt"))
-                .is_err()
-        );
+        for name in [".ssh", ".mozilla", ".thunderbird"] {
+            let private = dir.path().join(name);
+            std::fs::create_dir(&private).unwrap();
+            std::fs::write(private.join("notes.txt"), "private").unwrap();
+            let alias = dir.path().join(format!("ordinary-{name}"));
+            std::os::unix::fs::symlink(&private, &alias).unwrap();
+            assert!(Root::open(&alias).is_err());
+            assert!(
+                Root::open(dir.path())
+                    .unwrap()
+                    .open_content(&alias.join("notes.txt"))
+                    .is_err()
+            );
+            assert!(excluded_from_root(
+                &private.join("notes.txt"),
+                dir.path(),
+                true
+            ));
+            assert!(excluded(&dir.path().join(format!("{name}-notes/notes.txt"))).is_none());
+        }
         for name in [
             ".env",
             ".env.production",

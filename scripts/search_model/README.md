@@ -26,6 +26,17 @@ The Rust reader prepares video as sparse PNG frames (140 tokens) plus the select
 
 Requests carry an opaque `id`; replies echo it. Successful embeddings contain `dimension: 768`, row `count`, and base64 little-endian float32 `vectors`. Outputs are checked for finiteness/nonzero norm and normalized. This wire precision is independent of persistent float16 vector storage. Individual requests are capped at 16 MiB and media payloads at 8 MiB. Text, source content and vectors are not logged.
 
+Failed replies distinguish `kind: "backend"` from ordinary request errors. The
+shared `inference_errors.py` adapter recognizes fixed failure statuses/templates
+from the pinned native shims; it never classifies user/model text as an OOM.
+Keep that module beside the worker and answer helpers when bundling them.
+The Rust owner kills/reaps a failed helper before replaying the same prepared
+request on the next backend (CUDA, Vulkan, CPU), at most once per backend and
+within the original request deadline. Unexpected helper exit also permits this
+bounded recovery; validation/protocol errors, cancellation and timeouts do not.
+Recovery rejects a changed model pipeline and retains a successful backend for
+later requests. The Index menu shows the selected backend and fallback history.
+
 Run a real model smoke check without enrolling or indexing any folder:
 
 ```sh
@@ -170,7 +181,7 @@ python3 scripts/search_backend_quality.py --runtime PATH --models Q8_MODEL_FOLDE
 
 It explicitly runs CUDA, Vulkan and CPU in sequence, verifies the selected backend and pinned model bytes, and evaluates all nine index/query backend combinations through the existing production ranking harness. A missing backend fails visibly. All comparisons require identical ordered request hashes, model/runtime pipeline, frozen cases and segment identities. Every pair retains a separate ordinary fixture directory and temporary SQLite index; application roots, settings and installed models are untouched. There are no downloads. Comparisons use unchanged product floors, require the product relevance/negative-query targets and exact-name tiers, and report any recall/ranking changes against CUDA/CUDA with both canonical f16 and matched f32 representations. The backend gate permits no positive Recall@10 loss on this fixed corpus; it does not claim general equivalence, end-to-end performance or complete Phase 6 acceptance. Raw per-pair inputs, output ranks and source/binary hashes remain in the output directory.
 
-For a copied/installed desktop executable, keep this complete helper directory as `search_model/` beside the executable, or under `../share/little-screen-clip/search_model/`. Include the Python helpers, model manifest, native C sources, patch and both license files. Discovery is relative to the executable, with the checkout path retained only as a development fallback; launching from another working directory is supported. This describes the search-helper layout, not an installer for the application's other optional helpers. Models and compiled inference libraries remain explicitly provisioned in the per-user search data directory; distributing these scripts does not enroll roots or download weights. A private native acceptance run using an executable-adjacent copied helper tree verifies the selected worker pathname and mixed-media retrieval without using the checkout's model worker.
+For a copied/installed desktop executable, keep this complete helper directory as `search_model/` beside the executable, or under `../share/little-screen-clip/search_model/`. Include the Python helpers, model manifest, native C sources, patch, `MODEL_NOTICES.md`, and all `LICENSE.*` files. Discovery is relative to the executable, with the checkout path retained only as a development fallback; launching from another working directory is supported. This describes the search-helper layout, not an installer for the application's other optional helpers. Models and compiled inference libraries remain explicitly provisioned in the per-user search data directory; distributing these scripts does not enroll roots or download weights. A private native acceptance run using an executable-adjacent copied helper tree verifies the selected worker pathname and mixed-media retrieval without using the checkout's model worker.
 
 
 ### Restricted metadata extraction
@@ -204,3 +215,21 @@ python3 scripts/search_model/review_smoke.py --runtime PATH --models PATH --outp
 ```
 
 This composed check includes wrong labels/negation, conflicting tags/content, actual versus stored properties, per-file plausibility, literal metadata, budget handling and embedded instructions. It does not make the same model an independent factual oracle. `../file_manager_answer_review_acceptance.py` tests real native columns: differing judgments for identical layouts, approved literal reuse, a reasonable first age followed by a corrupt age, escalation to corrected body evidence, and no source writes or implicit index. `frontmatter_probe.py` remains a narrower schema-mapping/execution probe; it does **not** exercise the production semantic review or full-document fallback.
+
+
+### Record selectors and direct-answer recovery
+
+`generic-qa-v9` distinguishes an explicit row/record/item identifier from a
+presupposed document type. Finding that entry is the answering task; a missing
+entry does not establish non-applicability. Question-only search plans locate
+explicit identifiers literally, without assuming where a value/unit appears.
+Every match still needs an exact typed answer and per-file sufficiency review.
+
+If a direct full-text response fails worker or Rust validation, the application
+tries its existing bounded search/window evidence path under the same 180-second
+deadline. It never accepts fuzzy quotations, and cancellation prevents recovery
+from starting another call. `file_manager_text_tools_acceptance.py` includes a
+240-record regression alongside late-window, table and conflicting-value checks.
+The runtime probe groups every applicability/answer generation by request rather
+than assuming a single native call; rejected responses remain failed cases in
+its report and give a nonzero exit status.

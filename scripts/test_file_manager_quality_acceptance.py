@@ -1,11 +1,40 @@
 """Native timing observations distinguish partial, final and failed requests."""
 from pathlib import Path
 import tempfile
+import sqlite3
+import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from file_manager_quality_acceptance import search_timings
+from file_manager_real_corpus_acceptance import wait_index
 
 
 class SearchTimingTests(unittest.TestCase):
+    def test_seeded_ready_catalog_waits_for_completed_startup_generation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            index = output / 'index.sqlite'
+            with sqlite3.connect(index) as db:
+                db.executescript('''CREATE TABLE roots(generation,state,error);
+                    INSERT INTO roots VALUES(1,'ready',NULL);
+                    CREATE TABLE memberships(verified); INSERT INTO memberships VALUES(1);
+                    CREATE TABLE files(state,coverage,error); INSERT INTO files VALUES('ready','complete',NULL);
+                    CREATE TABLE segments(modality,vector); INSERT INTO segments VALUES('text',X'00');''')
+            session = SimpleNamespace(output=output, process=SimpleNamespace(poll=lambda: None))
+            stages = []
+            def reconcile(_):
+                stages.append(len(stages))
+                with sqlite3.connect(index) as db:
+                    db.execute('UPDATE roots SET generation=2,state=?', ['building' if len(stages) == 1 else 'ready'])
+                    db.execute('UPDATE memberships SET verified=?', [len(stages) > 1])
+            with patch('file_manager_real_corpus_acceptance.time.sleep', side_effect=reconcile):
+                result = wait_index(session, index, 20, time.monotonic(), after_generation=1)
+            self.assertEqual(stages, [0, 1])
+            self.assertEqual(result['generations'], [2])
+            self.assertEqual(result['unverified_memberships'], 0)
+            self.assertEqual(result['roots'], [('ready', None)])
+
     def test_request_tags_completion_and_errors_survive_log_parsing(self):
         with tempfile.TemporaryDirectory() as temporary:
             log = Path(temporary) / 'files.log'

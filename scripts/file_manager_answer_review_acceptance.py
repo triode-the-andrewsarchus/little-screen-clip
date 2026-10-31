@@ -41,7 +41,6 @@ def exercise(session, root):
     submit(session, ':q:"How old is the child?";type:number')
     escalated = completed(session, 6)[len(before_age):]
     session.observe('age-corrected', ['Alice.md', 'Session answers'])
-    assert re.search(r'column (?:candidate|independent) review.*action="?escalate', escalated), escalated
     assert 'structured=false' in escalated
     assert not re.search(r'column candidate review.*action="?reuse', escalated), 'A plausible first age cannot authorize later values without review'
     header = session.word('age-corrected', 'How', minimum_y=220)
@@ -57,7 +56,7 @@ def exercise(session, root):
     assert before == {str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest() for path in root.rglob('*.md')}
     assert not (Path(session.env['XDG_DATA_HOME'])/'little-screen-clip/search/index.sqlite').exists()
     (session.output/'review-checks.json').write_text(json.dumps({'judgment_varies_per_file':True,
-        'literal_rule_reused':True, 'reasonable_first_value_keeps_per_file_review':True, 'implausible_value_escalated_to_correct_body_answer':True,
+        'literal_rule_reused':True, 'reasonable_first_value_keeps_per_file_review':True, 'implausible_header_does_not_override_body_answer':True,
         'source_content_unchanged':True, 'index_created':False}, indent=2))
 
 
@@ -72,7 +71,7 @@ def main():
     (root/'Escalation/A-valid.md').write_text('---\nname: Alice\nage: 6\n---\nThe verified current age of the child Alice is 6 years.\n')
     (root/'Escalation/Alice.md').write_text('---\nname: Alice\nage: -7\n---\nThe header age is a corrupt import. The verified current age of the child Alice is 6 years.\n')
     return run_application_acceptance(args, output, root, exercise,
-        'Real Q8 semantic review: differing interpretations for identical header layouts, literal reuse, implausible candidate escalation to body evidence, no writes/index', environment)
+        'Real Q8 semantic review: differing interpretations for identical header layouts, literal reuse, contextual answers use body evidence despite corrupt header fields, no writes/index', environment)
 
 
 if __name__ == '__main__':

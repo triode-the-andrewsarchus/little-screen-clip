@@ -16,7 +16,8 @@ struct Corpus {
     segments: usize,
 }
 impl Corpus {
-    fn create(files: usize) -> Self {
+    fn create(files: usize, extra_segments: usize) -> Self {
+        assert!(extra_segments <= 2);
         let workspace = std::env::var_os("CLIP_RETRIEVAL_BENCH_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
@@ -46,7 +47,7 @@ impl Corpus {
         let segments;
         {
             let tx = store.connection.transaction().unwrap();
-            let mut file = tx.prepare("INSERT INTO files(id,device,inode,revision,pipeline,metadata,state,coverage,extraction_version,scope) VALUES(?1,?2,?3,?4,'benchmark-v1',?5,'ready','complete',?6,?7)").unwrap();
+            let mut file = tx.prepare("INSERT INTO files(id,device,inode,revision,pipeline,metadata,state,coverage,extraction_version,scope,format) VALUES(?1,?2,?3,?4,'benchmark-v1',?5,'ready','complete',?6,?7,?8)").unwrap();
             let mut path = tx
                 .prepare("INSERT INTO paths(path,parent,file_id) VALUES(?1,?2,?3)")
                 .unwrap();
@@ -68,6 +69,7 @@ impl Corpus {
                     serde_json::to_string(entry).unwrap(),
                     EXTRACTION_VERSION,
                     scope,
+                    crate::file_manager::search::store::source_format(entry),
                 ])
                 .unwrap();
                 let bytes = entry.path.as_os_str().as_encoded_bytes();
@@ -85,7 +87,7 @@ impl Corpus {
                 } else {
                     1 + index * 37 % 1024
                 }];
-                for ordinal in 0..1 + index % 2 {
+                for ordinal in 0..1 + index % 2 + extra_segments {
                     segment
                         .execute(params![
                             id,
@@ -146,7 +148,7 @@ impl Corpus {
         for (name, select, expression) in [
             ("names", NAMES_SELECT, None),
             ("keywords_and", FTS_SELECT, Some(expression.as_str())),
-            ("meaning", SEMANTIC_SELECT, None),
+            ("meaning", retrieval.semantic_select(), None),
         ] {
             if (name == "keywords_and" && expression == Some(""))
                 || (name == "meaning" && retrieval.vector.is_empty())
@@ -187,6 +189,67 @@ impl Corpus {
         };
         json!({"scope":"independent single warm SQL scans and in-memory scoring probe after latency sampling; not an additive decomposition or end-to-end latency", "sql_scans":scans,"scoring_probe":scoring,"vector_cache_usage":self.store.vector_cache_usage()})
     }
+    fn verify_cancelled_stream(
+        &self,
+        retrieval: &Retrieval<'_>,
+        expected: &[Hit],
+    ) -> Option<serde_json::Value> {
+        let progress = retrieval.progress?;
+        if self.segments < 187_500 {
+            return None;
+        }
+        let (cached, reserved) = self.store.vector_cache_usage();
+        // Every fixture segment has one path and vector. Passing the total
+        // cache population proves some uncached vectors have been visited,
+        // without assuming which IDs the cache retained or the SQL row order.
+        let threshold = cached as u64 + 2048;
+        assert!(threshold + 2048 < self.segments as u64);
+        progress.store(0, AtomicOrdering::Relaxed);
+        let cancel = retrieval.cancel;
+        let done = AtomicBool::new(false);
+        let started = Instant::now();
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let deadline = Instant::now() + std::time::Duration::from_secs(30);
+                while progress.load(AtomicOrdering::Relaxed) < threshold
+                    && !done.load(AtomicOrdering::Acquire)
+                    && Instant::now() < deadline
+                {
+                    std::thread::park_timeout(std::time::Duration::from_millis(1));
+                }
+                if progress.load(AtomicOrdering::Relaxed) >= threshold {
+                    cancel.store(true, AtomicOrdering::Release);
+                }
+            });
+            let result = retrieval.search();
+            done.store(true, AtomicOrdering::Release);
+            result
+        });
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let checked = progress.load(AtomicOrdering::Relaxed);
+        let error = result.err().expect("An active streaming scan must cancel");
+        assert!(
+            error.contains("cancel") || error.contains("interrupt"),
+            "{error}"
+        );
+        assert!(checked >= threshold && checked < self.segments as u64);
+        assert_eq!(self.store.vector_cache_usage(), (cached, reserved));
+        retrieval.cancel.store(false, AtomicOrdering::Release);
+        let recovered = retrieval.search().unwrap();
+        assert_eq!(progress.load(AtomicOrdering::Relaxed), self.segments as u64);
+        assert!(
+            recovered
+                .iter()
+                .map(|hit| &hit.entry.path)
+                .eq(expected.iter().map(|hit| &hit.entry.path))
+        );
+        Some(
+            json!({"scope":"active component scan beyond cache population, not native UI cancellation",
+            "threshold_references":threshold,"cancelled_checked_references":checked,
+            "total_references":self.segments,"cached_vectors":cached,"reserved_bytes":reserved,
+            "scan_until_cancelled_ms":elapsed_ms,"error":error,"recovered_ordered_paths":true}),
+        )
+    }
     fn measure(
         &self,
         name: &str,
@@ -224,7 +287,7 @@ impl Corpus {
         for (label, select, expression) in [
             ("names", NAMES_SELECT, None),
             ("keywords", FTS_SELECT, Some("\"commonterm\"*")),
-            ("meaning", SEMANTIC_SELECT, None),
+            ("meaning", retrieval.semantic_select(), None),
         ] {
             let mut statement = retrieval
                 .statement(
@@ -298,8 +361,10 @@ impl Corpus {
             samples,
             timings[(samples * 95).div_ceil(100) - 1]
         );
+        // Run outside latency samples for above-cap semantic workloads.
+        let cancellation = self.verify_cancelled_stream(&retrieval, &first_hits);
         json!({"name":name,"diagnostics":self.diagnostics(&retrieval),"sqlite_query_plans":plans,"first_query_ms":first_ms,"samples":samples,"median_ms":timings[samples/2],
-            "cosine_floor":floor,"progress_checked_references":semantic.then(||progress.load(AtomicOrdering::Relaxed)),"p95_ms":timings[(samples*95).div_ceil(100)-1],"min_ms":timings[0],"max_ms":timings[samples-1],"hits":first_hits.len()})
+            "cosine_floor":floor,"progress_checked_references":semantic.then(||progress.load(AtomicOrdering::Relaxed)),"stream_cancellation":cancellation,"p95_ms":timings[(samples*95).div_ceil(100)-1],"min_ms":timings[0],"max_ms":timings[samples-1],"hits":first_hits.len()})
     }
 }
 fn body(index: usize, files: usize) -> &'static str {
@@ -332,10 +397,14 @@ fn export_native_scale_fixture() {
         .unwrap()
         .parse()
         .unwrap();
-    assert!((100..=200_000).contains(&files));
+    assert!((100..=100_000).contains(&files));
+    let extra_segments = std::env::var("CLIP_RETRIEVAL_UI_EXTRA_SEGMENTS")
+        .unwrap_or_else(|_| "0".into())
+        .parse()
+        .unwrap();
     let pipeline = std::env::var("CLIP_RETRIEVAL_UI_PIPELINE").unwrap();
     assert!(pipeline.starts_with("search-v2:") && pipeline.len() < 8192);
-    let corpus = Corpus::create(files);
+    let corpus = Corpus::create(files, extra_segments);
     // Reuse actual metadata, source sessions and the canonical Store schema.
     // Only the vectors are synthetic: this fixture is for latency, not quality.
     // Match the installed model revision so production admission can run intact.
@@ -382,7 +451,7 @@ fn retrieval_scale_benchmark() {
     assert!((100..=200_000).contains(&files) && (1..=100).contains(&samples));
     let started = Instant::now();
     eprintln!("Preparing {files} ordinary fixture files and their synthetic-vector index");
-    let corpus = Corpus::create(files);
+    let corpus = Corpus::create(files, 0);
     let preparation = started.elapsed().as_secs_f64();
     let default_floor = little_clip_core::config::FileSearchConfig::default_semantic_floor("text");
     let cases = vec![

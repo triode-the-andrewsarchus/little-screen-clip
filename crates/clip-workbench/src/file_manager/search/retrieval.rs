@@ -8,7 +8,7 @@ use super::store::cosine_score;
 use super::{
     explanation::{self, SegmentMatch},
     query::{Query, Scope},
-    store::{DIMENSION, Store},
+    store::{CacheEpoch, DIMENSION, LexicalNames, Store},
 };
 use crate::file_manager::{
     filesystem::{self, Entry},
@@ -25,9 +25,20 @@ use std::{
 };
 
 pub(super) const LIMIT: usize = 500;
-const NAMES_SELECT: &str = "SELECT p.path,f.id FROM paths p JOIN files f ON f.id=p.file_id WHERE clip_filename_matches(p.path,:folded) AND ";
-const FTS_SELECT: &str = "SELECT p.path,f.id,bm25(segment_fts),s.id FROM segment_fts JOIN segments s INDEXED BY segment_identity ON s.id=segment_fts.rowid JOIN files f INDEXED BY file_search ON f.id=s.file_id JOIN paths p ON p.file_id=f.id WHERE segment_fts MATCH :expression AND clip_lexical_might_rank(p.path,bm25(segment_fts)) AND ";
-const SEMANTIC_SELECT: &str = "SELECT p.path,f.id,s.modality,CASE WHEN clip_vector_cached(s.id) THEN 1 ELSE s.vector END,s.id FROM paths p JOIN files f ON f.id=p.file_id JOIN segments s INDEXED BY segment_admission ON s.file_id=f.id WHERE ";
+// Reject nonmatching names before file/session lookups. Starting at paths also
+// retains the planner's parent/range indexes for narrow directory scopes.
+const NAMES_SELECT: &str = "SELECT p.path,f.id FROM paths p CROSS JOIN files f INDEXED BY file_search ON f.id=p.file_id WHERE clip_filename_matches(p.path,:folded) AND ";
+// Keep paths before file admission so the exact ranking threshold can reject
+// dominated postings before a file-index lookup. CROSS JOIN fixes only join
+// order: every surviving row still passes current() and candidate() admission.
+const FTS_SELECT: &str = "SELECT p.path,f.id,bm25(segment_fts),s.id FROM segment_fts CROSS JOIN segments s INDEXED BY segment_identity ON s.id=segment_fts.rowid CROSS JOIN paths p ON p.file_id=s.file_id CROSS JOIN files f INDEXED BY file_search ON f.id=s.file_id WHERE segment_fts MATCH :expression AND clip_lexical_might_rank(p.path,bm25(segment_fts)) AND ";
+const SEMANTIC_SELECT: &str = "SELECT p.path,f.id,s.modality,CASE WHEN clip_vector_cached(s.id) THEN 1 ELSE s.vector END,s.id FROM paths p JOIN files f ON f.id=p.file_id JOIN segments s INDEXED BY segment_admission ON s.file_id=f.id WHERE f.state='ready' AND ";
+// Published unsupported files have no segments; skip their file admission.
+// Global indexed searches cannot use a directory/path-range restriction. Admit
+// each file/path membership before visiting its segments, rather than repeating
+// the same membership query for every segment. Scoped searches keep the planner's
+// ability to start at path_parent or the path range index.
+const INDEXED_SEMANTIC_SELECT: &str = "SELECT p.path,f.id,s.modality,CASE WHEN clip_vector_cached(s.id) THEN 1 ELSE s.vector END,s.id FROM files f INDEXED BY file_search CROSS JOIN paths p ON p.file_id=f.id CROSS JOIN segments s INDEXED BY segment_admission ON s.file_id=f.id WHERE f.state='ready' AND ";
 
 #[derive(Clone)]
 struct Ranked {
@@ -53,12 +64,13 @@ struct RankKey<'a> {
 }
 impl RankKey<'_> {
     fn compare(&self, other: &Self) -> Ordering {
-        other
-            .tier
-            .cmp(&self.tier)
-            .then(self.score.total_cmp(&other.score))
-            .then_with(|| natural_cmp(other.name, self.name))
+        self.compare_name(other.tier, other.score, other.name)
             .then_with(|| other.path.cmp(self.path))
+    }
+    fn compare_name(&self, tier: u8, score: f64, name: &str) -> Ordering {
+        tier.cmp(&self.tier)
+            .then(self.score.total_cmp(&score))
+            .then_with(|| natural_cmp(name, self.name))
     }
 }
 impl Ranked {
@@ -91,6 +103,7 @@ impl Eq for Ranked {}
 #[derive(Default)]
 struct Top {
     by_path: HashMap<PathBuf, Ranked>,
+    by_name: Option<HashMap<String, usize>>,
     ordered: BTreeSet<Ranked>,
 }
 impl Top {
@@ -106,6 +119,34 @@ impl Top {
             .compare(&self.ordered.first().unwrap().key())
             .is_gt()
     }
+    // Coarse hints cannot resolve equal basenames in different directories.
+    // Retain every such tie and every name with a currently retained path.
+    fn accepts_name(&self, name: &str, score: f64) -> bool {
+        self.by_name
+            .as_ref()
+            .is_none_or(|names| names.contains_key(name))
+            || self.ordered.len() < LIMIT
+            || self
+                .ordered
+                .first()
+                .unwrap()
+                .key()
+                .compare_name(3, score, name)
+                .is_le()
+    }
+    fn remove(&mut self, path: &Path) -> Option<Ranked> {
+        let old = self.by_path.remove(path)?;
+        self.ordered.remove(&old);
+        if let Some(names) = self.by_name.as_mut()
+            && let Some(count) = names.get_mut(&old.entry.name)
+        {
+            *count -= 1;
+            if *count == 0 {
+                names.remove(&old.entry.name);
+            }
+        }
+        Some(old)
+    }
     fn offer(&mut self, mut candidate: Ranked) {
         if !self.accepts(
             &candidate.entry.path,
@@ -115,8 +156,7 @@ impl Top {
         ) {
             return;
         }
-        if let Some(old) = self.by_path.remove(&candidate.entry.path) {
-            self.ordered.remove(&old);
+        if let Some(old) = self.remove(&candidate.entry.path) {
             let mut segments = candidate.segments.clone();
             explanation::merge(&mut segments, &old.segments);
             if candidate <= old {
@@ -124,12 +164,15 @@ impl Top {
             }
             candidate.segments = segments;
         }
+        if let Some(names) = self.by_name.as_mut() {
+            *names.entry(candidate.entry.name.clone()).or_default() += 1;
+        }
         self.by_path
             .insert(candidate.entry.path.clone(), candidate.clone());
         self.ordered.insert(candidate);
         if self.ordered.len() > LIMIT {
             let worst = self.ordered.pop_first().unwrap();
-            self.by_path.remove(&worst.entry.path);
+            self.remove(&worst.entry.path);
         }
     }
     fn best(&self) -> impl Iterator<Item = &Ranked> {
@@ -147,10 +190,27 @@ struct LexicalRankFilter<'a> {
     top: Arc<Mutex<Top>>,
 }
 impl<'a> LexicalRankFilter<'a> {
+    #[cfg(test)]
     fn new(connection: &'a rusqlite::Connection, output: &'a mut Top) -> Result<Self, String> {
+        Self::with_paths(connection, output, None)
+    }
+    fn with_paths(
+        connection: &'a rusqlite::Connection,
+        output: &'a mut Top,
+        paths: Option<LexicalNames>,
+    ) -> Result<Self, String> {
+        let mut initial = std::mem::take(output);
+        // Semantic Top sets and ordinary lexical scans need no name counters.
+        initial.by_name = paths.as_ref().map(|_| {
+            let mut names = HashMap::new();
+            for item in initial.by_path.values() {
+                *names.entry(item.entry.name.clone()).or_default() += 1;
+            }
+            names
+        });
         let filter = Self {
             connection,
-            top: Arc::new(Mutex::new(std::mem::take(output))),
+            top: Arc::new(Mutex::new(initial)),
             output,
         };
         let top = Arc::clone(&filter.top);
@@ -160,26 +220,49 @@ impl<'a> LexicalRankFilter<'a> {
                 2,
                 rusqlite::functions::FunctionFlags::SQLITE_UTF8
                     | rusqlite::functions::FunctionFlags::SQLITE_DIRECTONLY,
-                move |context| {
-                    let path = context_path(context)?;
-                    let name = filesystem::display_path_cow(Path::new(
-                        path.file_name().unwrap_or_default(),
-                    ));
-                    let score = -context.get::<f64>(1)?;
-                    let top = top.lock().map_err(|_| {
-                        rusqlite::Error::UserFunctionError(Box::new(std::io::Error::other(
-                            "Lexical ranking unavailable",
-                        )))
-                    })?;
-                    Ok(top.accepts(path, &name, 3, score))
-                },
+                move |context| Self::allows(&top, context_path(context)?, -context.get::<f64>(1)?),
             )
             .map_err(|error| error.to_string())?;
+        if let Some(paths) = paths {
+            let top = Arc::clone(&filter.top);
+            connection
+                .create_scalar_function(
+                    "clip_segment_might_rank",
+                    2,
+                    rusqlite::functions::FunctionFlags::SQLITE_UTF8
+                        | rusqlite::functions::FunctionFlags::SQLITE_DIRECTONLY,
+                    move |context| {
+                        let id: i64 = context.get(0)?;
+                        let Some(name) = paths.get(&id) else {
+                            return Ok(true);
+                        };
+                        let top = top.lock().map_err(|_| {
+                            rusqlite::Error::UserFunctionError(Box::new(std::io::Error::other(
+                                "Lexical ranking unavailable",
+                            )))
+                        })?;
+                        Ok(top.accepts_name(name, -context.get::<f64>(1)?))
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+        }
         Ok(filter)
+    }
+    fn allows(top: &Mutex<Top>, path: &Path, score: f64) -> rusqlite::Result<bool> {
+        let name = filesystem::display_path_cow(Path::new(path.file_name().unwrap_or_default()));
+        let top = top.lock().map_err(|_| {
+            rusqlite::Error::UserFunctionError(Box::new(std::io::Error::other(
+                "Lexical ranking unavailable",
+            )))
+        })?;
+        Ok(top.accepts(path, &name, 3, score))
     }
 }
 impl Drop for LexicalRankFilter<'_> {
     fn drop(&mut self) {
+        let _ = self
+            .connection
+            .remove_function("clip_segment_might_rank", 2);
         let _ = self
             .connection
             .remove_function("clip_lexical_might_rank", 2);
@@ -250,6 +333,7 @@ impl Retrieval<'_> {
             Some(self.store.prepare_vector_cache()?)
         };
         let mut lexical = Top::default();
+        let mut partial = false;
         self.lexical(None, &mut lexical)?;
         let terms = terms(self.text)?;
         if !terms.is_empty() {
@@ -259,6 +343,7 @@ impl Retrieval<'_> {
             // retain broad recall (e.g. "window invoice" or "2019 tax document").
             if lexical.by_path.is_empty() && (self.vector.is_empty() || terms.len() <= 3) {
                 self.lexical(Some(&terms.join(" OR ")), &mut lexical)?;
+                partial = true;
             }
         }
         let semantics = if self.vector.is_empty() {
@@ -269,7 +354,7 @@ impl Retrieval<'_> {
             }
             self.semantic()?
         };
-        let result = fuse(&lexical, &semantics, self.text);
+        let result = fuse(&lexical, &semantics, self.text, partial);
         if let Some(epoch) = cache_epoch {
             self.store.finish_vector_cache(epoch)?;
         }
@@ -472,10 +557,60 @@ impl Retrieval<'_> {
                 .map(|tier| (tier, if name == self.text { 1.0 } else { 0.0 })),
         )
     }
+    fn lexical_names(
+        &self,
+        expression: Option<&str>,
+    ) -> Result<Option<(CacheEpoch, LexicalNames)>, String> {
+        let Some(expression) = expression else {
+            return Ok(None);
+        };
+        // These bounded probes decide whether to invest in a hint cache. They
+        // never restrict candidates or substitute for source/scope admission.
+        let scope = match self.query.scope {
+            Scope::Here => " WHERE p.parent=:directory",
+            Scope::Recursive => " WHERE p.path>=:lower AND p.path<:upper",
+            Scope::Indexed => "",
+        };
+        for (sql, expression, minimum) in [
+            (
+                format!("SELECT 1 FROM paths p{scope} LIMIT {LIMIT}"),
+                None,
+                LIMIT,
+            ),
+            (
+                "SELECT 1 FROM segment_fts WHERE segment_fts MATCH :expression LIMIT 2048".into(),
+                Some(expression),
+                2048,
+            ),
+        ] {
+            let mut statement = self.statement(&sql, expression)?;
+            let mut rows = statement.raw_query();
+            let mut count = 0;
+            while rows.next().map_err(|error| error.to_string())?.is_some() {
+                check(self.cancel)?;
+                count += 1;
+            }
+            if count < minimum {
+                return Ok(None);
+            }
+        }
+        self.store.prepare_lexical_names(self.cancel).map(Some)
+    }
     fn lexical(&self, expression: Option<&str>, result: &mut Top) -> Result<(), String> {
         let keyword = expression.is_some();
-        let select = if keyword { FTS_SELECT } else { NAMES_SELECT };
-        let admission = LexicalRankFilter::new(&self.store.connection, result)?;
+        let hints = self.lexical_names(expression)?;
+        let select = if hints.is_some() {
+            FTS_SELECT.replace("WHERE segment_fts MATCH", "WHERE clip_segment_might_rank(segment_fts.rowid,bm25(segment_fts)) AND segment_fts MATCH")
+        } else if keyword {
+            FTS_SELECT.into()
+        } else {
+            NAMES_SELECT.into()
+        };
+        let admission = LexicalRankFilter::with_paths(
+            &self.store.connection,
+            result,
+            hints.as_ref().map(|(_, paths)| paths.clone()),
+        )?;
         let mut statement = self.statement(&format!("{select}{}", self.current()), expression)?;
         let mut rows = statement.raw_query();
         let folded = self.text.to_lowercase();
@@ -512,12 +647,20 @@ impl Retrieval<'_> {
                 });
             }
         }
+        drop(rows);
+        drop(statement);
+        drop(admission);
+        if let Some((epoch, _)) = hints {
+            self.store.finish_lexical_names(epoch)?;
+        }
         Ok(())
     }
     fn semantic(&self) -> Result<BTreeMap<String, Top>, String> {
         let mut lists = BTreeMap::<String, Top>::new();
-        let mut statement =
-            self.statement(&format!("{SEMANTIC_SELECT}{}", self.current()), None)?;
+        let mut statement = self.statement(
+            &format!("{}{}", self.semantic_select(), self.current()),
+            None,
+        )?;
         let mut rows = statement.raw_query();
         let mut checked = 0_u64;
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -537,6 +680,12 @@ impl Retrieval<'_> {
             progress.store(checked, AtomicOrdering::Relaxed);
         }
         Ok(lists)
+    }
+    fn semantic_select(&self) -> &'static str {
+        match self.query.scope {
+            Scope::Indexed => INDEXED_SEMANTIC_SELECT,
+            _ => SEMANTIC_SELECT,
+        }
     }
     fn semantic_floor(&self, modality: &str) -> Option<f32> {
         match modality {
@@ -647,10 +796,18 @@ fn row_text<'a>(row: &'a rusqlite::Row<'_>, column: usize) -> Result<&'a str, St
         .map_err(|e| e.to_string())
 }
 
-fn fuse(lexical: &Top, semantics: &BTreeMap<String, Top>, text: &str) -> Vec<Hit> {
+fn fuse(lexical: &Top, semantics: &BTreeMap<String, Top>, text: &str, partial: bool) -> Vec<Hit> {
     let mut fused = HashMap::<PathBuf, Ranked>::new();
     let folded = text.to_lowercase();
-    for (weight, list) in std::iter::once((2.0, lexical)).chain(
+    // Partial-keyword rescue is weaker evidence than a match in any semantic
+    // modality. Scale it with the per-modality weight so a mixed-media folder
+    // cannot promote incidental words merely by having more modalities.
+    let lexical_weight = if partial {
+        0.5 / semantics.len().max(1) as f64
+    } else {
+        2.0
+    };
+    for (weight, list) in std::iter::once((lexical_weight, lexical)).chain(
         semantics
             .values()
             .map(|list| (1.0 / semantics.len() as f64, list)),
@@ -809,6 +966,158 @@ mod tests {
         }
     }
     #[test]
+    fn coarse_names_count_distinct_paths_and_retire_the_last_owner() {
+        let mut fixture = Fixture::new();
+        let seed = fixture.add("same.txt", "ordinary words", Some(1.0), 1);
+        let mut top = Top {
+            by_name: Some(HashMap::new()),
+            ..Top::default()
+        };
+        for index in 0..LIMIT {
+            let mut entry = (*seed).clone();
+            entry.path = fixture.source.path().join(format!("dir_{index}/same.txt"));
+            top.offer(Ranked {
+                entry: Arc::new(entry),
+                tier: 3,
+                score: 1.0,
+                segments: Vec::new(),
+            });
+        }
+        assert_eq!(top.by_name.as_ref().unwrap()["same.txt"], LIMIT);
+        assert!(top.accepts_name("same.txt", -1.0));
+        assert!(!top.accepts_name("z.txt", -1.0));
+        let paths = top.by_path.keys().cloned().collect::<Vec<_>>();
+        for (index, path) in paths.iter().enumerate() {
+            top.remove(path).unwrap();
+            assert_eq!(
+                top.by_name
+                    .as_ref()
+                    .unwrap()
+                    .get("same.txt")
+                    .copied()
+                    .unwrap_or(0),
+                LIMIT - index - 1
+            );
+        }
+        assert!(top.by_name.as_ref().unwrap().is_empty());
+        let mut ordinary = Top::default();
+        ordinary.offer(Ranked {
+            entry: seed,
+            tier: 3,
+            score: 1.0,
+            segments: Vec::new(),
+        });
+        assert!(
+            ordinary.by_name.is_none(),
+            "semantic scoring must not allocate this lexical-only accelerator"
+        );
+    }
+
+    #[test]
+    fn broad_lexical_hints_match_alias_fallback_order_and_every_retained_location() {
+        let mut fixture = Fixture::new();
+        for index in 0..520 {
+            fixture.add(
+                format!("record_{index}.txt"),
+                "shared ordinary words",
+                Some(0.9),
+                4,
+            );
+        }
+        let query = Query::parse(":file").unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let floors = BTreeMap::new();
+        let retrieval = Retrieval {
+            store: &fixture.store,
+            pipeline: "model",
+            vector: &[],
+            path: fixture.source.path(),
+            query: &query,
+            text: "shared",
+            hidden: false,
+            index_hidden: true,
+            show_offline: false,
+            exclusions: &[],
+            floors: &floors,
+            cancel: &cancel,
+            progress: None,
+        };
+        let signature = |hits: Vec<Hit>| {
+            hits.into_iter()
+                .map(|hit| {
+                    (
+                        hit.entry.path,
+                        hit.segments
+                            .into_iter()
+                            .map(|segment| (segment.id, segment.score.to_bits(), segment.keyword))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = signature(retrieval.search().unwrap());
+        assert_eq!(expected.len(), LIMIT);
+        assert!(
+            expected
+                .iter()
+                .all(|(_, segments)| segments.len() == explanation::MAX_PASSAGES)
+        );
+        assert_eq!(
+            fixture
+                .store
+                .prepare_lexical_names(&cancel)
+                .unwrap()
+                .1
+                .len(),
+            2080
+        );
+        // All aliases are outside Here scope, but must disable singleton hints
+        // for their file. This exercises the real SQL fallback without a test
+        // switch or changing the candidate set/ranking.
+        use std::os::unix::ffi::OsStrExt;
+        let alias_parent = fixture.source.path().join("nested");
+        let aliases: Vec<(i64, Vec<u8>)> = {
+            let mut statement = fixture
+                .store
+                .connection
+                .prepare("SELECT file_id,path FROM paths")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        for (id, bytes) in aliases {
+            let name = Path::new(std::ffi::OsStr::from_bytes(&bytes))
+                .file_name()
+                .unwrap();
+            let alias = alias_parent.join(name);
+            fixture
+                .store
+                .connection
+                .execute(
+                    "INSERT INTO paths(path,parent,file_id) VALUES(?1,?2,?3)",
+                    rusqlite::params![
+                        alias.as_os_str().as_encoded_bytes(),
+                        alias_parent.as_os_str().as_encoded_bytes(),
+                        id
+                    ],
+                )
+                .unwrap();
+        }
+        assert_eq!(signature(retrieval.search().unwrap()), expected);
+        assert!(
+            fixture
+                .store
+                .prepare_lexical_names(&cancel)
+                .unwrap()
+                .1
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn warm_vectors_follow_local_external_and_policy_changes_and_idle_release() {
         let mut fixture = Fixture::new();
         fixture.add("a.txt", "ordinary text", Some(0.9), 1);
@@ -947,7 +1256,28 @@ mod tests {
                 .unwrap()
         };
         let result = (|| -> Result<(), String> {
-            let filter = LexicalRankFilter::new(connection, &mut top)?;
+            let paths = Arc::new(HashMap::from([
+                (1, Box::<str>::from("foo_2.txt")),
+                (2, Box::<str>::from("foo_2000.txt")),
+                (3, Box::<str>::from("foo_1499.txt")),
+            ]));
+            let filter = LexicalRankFilter::with_paths(connection, &mut top, Some(paths))?;
+            let segment_accepts = |id: i64, score: f64| {
+                connection
+                    .query_row(
+                        "SELECT clip_segment_might_rank(?1,?2)",
+                        rusqlite::params![id, -score],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .unwrap()
+            };
+            assert!(segment_accepts(1, 1.0));
+            assert!(!segment_accepts(2, 1.0));
+            assert!(segment_accepts(3, 0.1));
+            assert!(
+                segment_accepts(999, 0.0),
+                "uncached and aliased segments must fall through to ordinary SQL admission"
+            );
             assert!(accepts("foo_2.txt", 1.0));
             assert!(!accepts("foo_2000.txt", 1.0));
             assert!(
@@ -967,6 +1297,7 @@ mod tests {
                 !accepts("foo_1499.txt", 0.1),
                 "evicted paths must obey the current boundary"
             );
+            assert!(!segment_accepts(3, 0.1));
             connection
                 .query_row(
                     "SELECT clip_lexical_might_rank('invalid TEXT path',0)",
@@ -977,6 +1308,12 @@ mod tests {
             Ok(())
         })();
         assert!(result.is_err());
+        assert!(
+            connection
+                .query_row("SELECT clip_segment_might_rank(1,0)", [], |row| row
+                    .get::<_, bool>(0))
+                .is_err()
+        );
         assert_eq!(top.by_path.len(), LIMIT);
         assert!(
             top.by_path
@@ -1040,6 +1377,29 @@ mod tests {
                 false
             ),
             vec!["visual.png"]
+        );
+    }
+
+    #[test]
+    fn partial_words_in_short_queries_do_not_crowd_out_semantic_matches() {
+        let mut fixture = Fixture::new();
+        for index in 0..24 {
+            fixture.add(
+                format!("noise-{index}.txt"),
+                "A document with unrelated inventory notes.",
+                Some(0.1),
+                1,
+            );
+        }
+        fixture.add("recording.wav", "", Some(0.95), 1);
+        let names = fixture.find("A dog barking", fixture.source.path(), "", false);
+        assert_eq!(names[0], "recording.wav");
+        assert_eq!(names.len(), 25, "Partial keyword results remain available");
+        // Single-letter and non-English tokens keep literal FTS behavior.
+        fixture.add("language.txt", "C भाषा", Some(0.1), 1);
+        assert_eq!(
+            fixture.find("C भाषा", fixture.source.path(), "", false)[0],
+            "language.txt"
         );
     }
 
@@ -1309,9 +1669,27 @@ mod tests {
     #[test]
     fn semantic_progress_covers_all_admitted_references_and_partial_tail() {
         let mut fixture = Fixture::new();
-        fixture.add("a.txt", "ordinary content", Some(0.9), 1500);
+        let a = fixture.add("a.txt", "ordinary content", Some(0.9), 1500);
         fixture.add("b.txt", "ordinary content", Some(0.9), 1500);
-        fixture.add("c.txt", "ordinary content", Some(0.9), 1500);
+        let c = fixture.add("c.txt", "ordinary content", Some(0.9), 1500);
+        for (source, name) in [
+            (&a.path, "a-copy.txt"),
+            (&c.path, "c-stale.txt"),
+            (&c.path, ".c-hidden.txt"),
+        ] {
+            std::fs::hard_link(source, fixture.source.path().join(name)).unwrap();
+            fixture.add(name, "ordinary content", Some(0.9), 1500);
+        }
+        let stale = fixture.source.path().join("c-stale.txt");
+        fixture
+            .store
+            .connection
+            .execute(
+                "UPDATE memberships SET verified=0 WHERE path=?1",
+                [stale.as_os_str().as_encoded_bytes()],
+            )
+            .unwrap();
+        fixture.add("name-only.zip", "opaque inventory", None, 0);
         let query = Query::parse(":emb:\"abstract meaning\"").unwrap();
         let vector = std::iter::once(1.0)
             .chain(std::iter::repeat_n(0.0, DIMENSION - 1))
@@ -1334,8 +1712,15 @@ mod tests {
             cancel: &cancel,
             progress: Some(&progress),
         };
-        assert_eq!(retrieval.search().unwrap().len(), 3);
-        assert_eq!(progress.load(AtomicOrdering::Relaxed), 4500);
+        assert_eq!(retrieval.search().unwrap().len(), 4);
+        // One verified alias adds references, not unique vectors. A stale or
+        // hidden alias must not contribute references or leak shared metadata.
+        assert_eq!(progress.load(AtomicOrdering::Relaxed), 6000);
+        let indexed = Query::parse(":emb:\"abstract meaning\";scope:indexed").unwrap();
+        retrieval.query = &indexed;
+        assert_eq!(retrieval.search().unwrap().len(), 4);
+        assert_eq!(progress.load(AtomicOrdering::Relaxed), 6000);
+        retrieval.query = &query;
         // SQL scope filtering precedes the counter; neither the result window
         // nor a prior cache hit ends scanning early.
         let here = fixture.source.path().join("empty");
@@ -1818,6 +2203,44 @@ mod tests {
             ["large.txt"]
         );
     }
+
+    #[test]
+    fn keyword_window_preserves_natural_ties_after_exclusions_and_unverified_memberships() {
+        let mut fixture = Fixture::new();
+        // Reverse insertion order and repeated passages must not determine
+        // ties, displace eligible files, or reward files with more segments.
+        for index in (0..LIMIT + 32).rev() {
+            fixture.add(
+                format!("item{index}.txt"),
+                "needle",
+                Some(0.0),
+                1 + index % 3,
+            );
+        }
+        for index in 0..10 {
+            fixture
+                .exclusions
+                .push(fixture.source.path().join(format!("item{index}.txt")));
+        }
+        for index in 10..20 {
+            let path = fixture.source.path().join(format!("item{index}.txt"));
+            fixture
+                .store
+                .connection
+                .execute(
+                    "UPDATE memberships SET verified=0 WHERE path=?1",
+                    [path.as_os_str().as_encoded_bytes()],
+                )
+                .unwrap();
+        }
+        let expected = (20..20 + LIMIT)
+            .map(|index| format!("item{index}.txt"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fixture.find("needle", fixture.source.path(), "", false),
+            expected
+        );
+    }
     #[test]
     fn combining_marks_and_literals_use_safe_fts_tokens() {
         let mut fixture = Fixture::new();
@@ -1884,10 +2307,21 @@ mod tests {
             });
             modalities.insert(name.into(), list);
         }
-        let names = fuse(&lexical, &modalities, "different")
+        let names = fuse(&lexical, &modalities, "different", false)
             .into_iter()
             .map(|hit| hit.entry.name)
             .collect::<Vec<_>>();
         assert_eq!(names, ["keyword.txt", "meaning.txt"]);
+        // A partial match must remain weaker even when only one of several
+        // modalities supports the semantic candidate.
+        modalities.get_mut("text").unwrap().by_path.clear();
+        modalities.get_mut("text").unwrap().ordered.clear();
+        modalities.get_mut("image").unwrap().by_path.clear();
+        modalities.get_mut("image").unwrap().ordered.clear();
+        let names = fuse(&lexical, &modalities, "different", true)
+            .into_iter()
+            .map(|hit| hit.entry.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["meaning.txt", "keyword.txt"]);
     }
 }

@@ -32,12 +32,16 @@ pub(super) fn call(request: &Request, cancel: &AtomicBool) -> Result<Reply, Stri
     if cancel.load(Ordering::Acquire) {
         return Err("Search cancelled".into());
     }
-    Ok(Reply::Directory(directory))
+    let inventory = Inventory::new(directory)?;
+    if cancel.load(Ordering::Acquire) {
+        return Err("Search cancelled".into());
+    }
+    Ok(Reply::Directory(inventory))
 }
 
 pub(super) fn reply(directory: Directory, output: Option<i32>) -> Result<Reply, String> {
     let Some(fd) = output else {
-        return Ok(Reply::Directory(directory));
+        return Ok(Reply::Directory(Inventory::new(directory)?));
     };
     if fd < 3 {
         return Err("Invalid inventory output descriptor".into());
@@ -62,6 +66,33 @@ pub(super) fn reply(directory: Directory, output: Option<i32>) -> Result<Reply, 
     serde_json::to_writer(&mut writer, &directory).map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;
     Ok(Reply::DirectoryWritten)
+}
+
+impl Inventory {
+    // This calculation runs on the source worker, before its reply is accepted.
+    fn new(directory: Directory) -> Result<Self, String> {
+        let storage_bytes = directory.entries.iter().try_fold(0u64, |sum, entry| {
+            Self::entry_storage_bytes(entry).map(|bytes| sum.saturating_add(bytes))
+        })?;
+        Ok(Self {
+            directory,
+            storage_bytes,
+            permit: None,
+        })
+    }
+    pub(in crate::file_manager::search) fn entry_storage_bytes(
+        entry: &Entry,
+    ) -> Result<u64, String> {
+        serde_json::to_vec(entry)
+            .map(|json| {
+                (json.len() as u64)
+                    .saturating_add(
+                        (entry.path.as_os_str().as_encoded_bytes().len() as u64).saturating_mul(3),
+                    )
+                    .saturating_add(512)
+            })
+            .map_err(|error| error.to_string())
+    }
 }
 
 struct LimitedOutput<W> {
@@ -130,7 +161,8 @@ mod tests {
             reply(directory, Some(output.as_raw_fd())).unwrap(),
             Reply::DirectoryWritten
         ));
-        assert!(output.metadata().unwrap().len() > 24 * 1024 * 1024);
+        let serialized_bytes = output.metadata().unwrap().len();
+        assert!(serialized_bytes > 24 * 1024 * 1024);
         output.rewind().unwrap();
         let restored: Directory = serde_json::from_reader(BufReader::new(output)).unwrap();
         assert_eq!(restored.entries.len(), 100_000);
@@ -139,6 +171,10 @@ mod tests {
             "ordinary-file-099999.unknown"
         );
         assert_eq!(restored.skipped, 0);
+        assert!(
+            Inventory::new(restored).unwrap().storage_bytes > serialized_bytes,
+            "catalog reservation must include more than the serialized directory alone"
+        );
     }
 
     #[test]

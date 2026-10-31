@@ -34,10 +34,13 @@ def exercise(session, root):
             input=json.dumps(request), text=True, capture_output=True, env=session.env, timeout=30, check=True)
         return json.loads(result.stdout)["Ok"]
     origin = reader({"Probe": str(root)})["Root"]
-    entries = reader({"List": {"root": origin, "path": str(root), "hidden": False}})["Directory"]["entries"]
+    entries = reader({"List": {"root": origin, "path": str(root), "hidden": False, "exclusions": []}})["Directory"]["entries"]
     entry = next(entry for entry in entries if entry["name"] == "Opposite.png")
     assert reader({"ImageHash": {"entry": entry, "cached": None}})["ImageHash"] == 2**64 - 1
-    assert not (Path(session.env["XDG_DATA_HOME"]) / "little-screen-clip/search/index.sqlite").exists()
+    data = Path(session.env["XDG_DATA_HOME"]) / "little-screen-clip/search"
+    assert not data.joinpath("index.sqlite").exists()
+    assert not data.joinpath("models").exists()
+    assert not data.joinpath("runtime").exists()
     session.key("Escape")
     session.observe("restored", ["Alpha.png", "Copy.png"])
 

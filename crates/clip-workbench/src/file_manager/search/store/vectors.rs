@@ -1,5 +1,5 @@
 //! Bounded normalized vectors; database admission remains query-local.
-use super::{DIMENSION, Store, decode_vector_array};
+use super::{CacheEpoch, DIMENSION, Store, decode_vector_array};
 use rusqlite::functions::FunctionFlags;
 use std::{
     collections::HashMap,
@@ -7,23 +7,20 @@ use std::{
     time::{Duration, Instant},
 };
 
-const BUDGET: usize = 512 * 1024 * 1024;
+const BUDGET: usize = super::WORKING_CACHE_BUDGET - super::LEXICAL_CACHE_BUDGET;
 const OVERHEAD: usize = 64 * 1024;
 type Vector = [f32; DIMENSION];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::file_manager::search) struct Epoch(u64, i64);
-
 #[derive(Default)]
 pub(super) struct VectorCache {
-    epoch: Option<Epoch>,
+    epoch: Option<CacheEpoch>,
     positions: HashMap<i64, usize>,
     values: Vec<Vector>,
     limit: usize,
     last_used: Option<Instant>,
 }
 impl VectorCache {
-    fn prepare(&mut self, epoch: Epoch, count: u64, budget: usize) {
+    fn prepare(&mut self, epoch: CacheEpoch, count: u64, budget: usize) {
         self.last_used = Some(Instant::now());
         if self.epoch == Some(epoch) {
             return;
@@ -103,15 +100,10 @@ pub(in crate::file_manager::search) fn cosine_score(
 }
 
 impl Store {
-    fn vector_epoch(&self) -> Result<Epoch, String> {
-        let version = self
-            .connection
-            .pragma_query_value(None, "data_version", |row| row.get(0))
-            .map_err(|error| error.to_string())?;
-        Ok(Epoch(self.connection.total_changes(), version))
-    }
-    pub(in crate::file_manager::search) fn prepare_vector_cache(&self) -> Result<Epoch, String> {
-        let epoch = self.vector_epoch()?;
+    pub(in crate::file_manager::search) fn prepare_vector_cache(
+        &self,
+    ) -> Result<CacheEpoch, String> {
+        let epoch = self.cache_epoch()?;
         self.vectors
             .lock()
             .map_err(|_| "Vector cache unavailable")?
@@ -139,9 +131,9 @@ impl Store {
     }
     pub(in crate::file_manager::search) fn finish_vector_cache(
         &self,
-        epoch: Epoch,
+        epoch: CacheEpoch,
     ) -> Result<(), String> {
-        if self.vector_epoch()? != epoch {
+        if self.cache_epoch()? != epoch {
             self.invalidate_vectors()?;
             return Err("Search index changed during retrieval; retry the query".into());
         }
@@ -166,6 +158,10 @@ impl Store {
             .score(id, query, encoded)
     }
     pub(in crate::file_manager::search) fn release_idle_vectors(&self, idle: Duration) {
+        let mut lexical = self.lexical.borrow_mut();
+        if lexical.used.is_some_and(|used| used.elapsed() >= idle) {
+            lexical.release();
+        }
         if let Ok(mut cache) = self.vectors.lock()
             && cache.last_used.is_some_and(|used| used.elapsed() >= idle)
         {
@@ -316,7 +312,7 @@ mod tests {
         let encoded = encode_vector(&query).unwrap();
         let mut cache = VectorCache::default();
         let budget = OVERHEAD + size_of::<Vector>() + 128;
-        cache.prepare(Epoch(1, 1), 100, budget);
+        cache.prepare(CacheEpoch(1, 1), 100, budget);
         let expected = cosine_score(&query, &encoded).unwrap();
         for id in [1, 2, 3] {
             assert_eq!(
@@ -330,7 +326,7 @@ mod tests {
             expected.to_bits()
         );
         assert!(cache.reserved_bound() <= budget);
-        cache.prepare(Epoch(2, 1), 100, budget);
+        cache.prepare(CacheEpoch(2, 1), 100, budget);
         assert!(cache.positions.is_empty());
         assert!(cache.score(1, &query, None).is_err());
     }
@@ -338,14 +334,14 @@ mod tests {
     #[test]
     fn full_capacity_stays_bounded_and_reuses_one_matrix_across_generations() {
         let mut cache = VectorCache::default();
-        cache.prepare(Epoch(1, 1), u64::MAX, BUDGET);
+        cache.prepare(CacheEpoch(1, 1), u64::MAX, BUDGET);
         assert!(cache.reserved_bound() <= BUDGET);
         let pointer = cache.values.as_ptr();
         let mut query = vec![0.0; DIMENSION];
         query[0] = 1.0;
         let encoded = encode_vector(&query).unwrap();
         cache.score(1, &query, Some(&encoded)).unwrap();
-        cache.prepare(Epoch(2, 1), u64::MAX, BUDGET);
+        cache.prepare(CacheEpoch(2, 1), u64::MAX, BUDGET);
         assert!(cache.values.is_empty() && cache.positions.is_empty());
         assert_eq!(cache.values.as_ptr(), pointer);
         assert!(cache.reserved_bound() <= BUDGET);
@@ -354,7 +350,7 @@ mod tests {
     #[test]
     fn cache_rejects_corruption_and_releases_all_buffers() {
         let mut cache = VectorCache::default();
-        cache.prepare(Epoch(1, 1), 2, BUDGET);
+        cache.prepare(CacheEpoch(1, 1), 2, BUDGET);
         let query = vec![1.0; DIMENSION];
         for bytes in [
             vec![0; 3],

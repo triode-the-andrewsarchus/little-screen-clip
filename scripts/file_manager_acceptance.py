@@ -18,6 +18,9 @@ from PIL import Image
 
 import ui_acceptance_capture as private
 
+# OCR may share the workstation with builds/decoders; this is not app latency.
+_OCR_TIMEOUT = 15
+
 
 def click_search_settings_word(session, shot, word):
     # Verified buttons on the runner's fixed 1280x800 output; OCR can omit
@@ -46,12 +49,22 @@ def preserve_file_clipboard(env):
 
 
 class Session:
-    def __init__(self, output, env, niri, process):
+    def __init__(self, output, env, niri, process, children=None):
         self.output, self.env, self.niri, self.process = output, env, niri, process
+        self.children = children
         self.observations = []
         self.pointer = private.build_private_virtual_pointer(output)
         private.verify_private_wayland_target(env, output / "runtime")
         private.run_checked([str(self.pointer), "probe"], env=env)
+
+    def close(self, expected_exit_code=0):
+        """Close this private client, then verify its owned playback is retired."""
+        if self.process.poll() is None:
+            self.key('q', 'ctrl')
+        self.process.wait(timeout=5)
+        assert self.process.returncode == expected_exit_code
+        for pid in getattr(self, 'required_closed_processes', []):
+            assert not Path(f'/proc/{pid}').exists(), f'Files left playback process {pid} alive after closing'
 
     def key(self, key, modifier=None):
         command = ["wtype"]
@@ -62,6 +75,13 @@ class Session:
             command += ["-m", modifier]
         private.run_checked(command, env=self.env)
         time.sleep(0.15)
+
+    def restart(self, binary, root):
+        """Reopen a closed client with this run's private environment and ownership."""
+        assert self.process.poll() is not None, 'Close the previous Files client before restarting'
+        self.process = self.children.start('files-resumed', [str(binary.resolve()), str(root)],
+            env=self.env, cwd=self.output/'scratch', log_path=self.output/'files-resumed.log')
+        private.wait_for_app_window(self.niri, self.env, self.process, self.output)
 
     def address(self, path):
         self.key("l", "ctrl")
@@ -123,7 +143,7 @@ class Session:
         ocr_path = self.output / f"{name}-ocr.png"
         with Image.open(path) as screen:
             screen.resize((screen.width * 3, screen.height * 3)).save(ocr_path)
-        text = private.run_checked(["tesseract", str(ocr_path), "stdout", "--psm", "11"], env=self.env)
+        text = private.run_checked(["tesseract", str(ocr_path), "stdout", "--psm", "11"], env=self.env, timeout=_OCR_TIMEOUT)
         visible = "".join(text.lower().split())
         if all("".join(fragment.lower().split()) in visible for fragment in expected):
             return text
@@ -152,7 +172,7 @@ class Session:
             with Image.open(path) as screen:
                 crop = screen.crop(bounds)
                 crop.resize((crop.width * 3, crop.height * 3)).save(region)
-            text += private.run_checked(["tesseract", str(region), "stdout", "--psm", "6"], env=self.env)
+            text += private.run_checked(["tesseract", str(region), "stdout", "--psm", "6"], env=self.env, timeout=_OCR_TIMEOUT)
             visible = "".join(text.lower().split())
             if all("".join(fragment.lower().split()) in visible for fragment in expected):
                 break
@@ -162,7 +182,7 @@ class Session:
         for mode in ["11", "6"]:
             data = private.run_checked([
                 "tesseract", str(self.output / f"{name}-ocr.png"), "stdout", "--psm", mode, "-c", "tessedit_create_tsv=1", "-c", "tessedit_create_txt=0",
-            ], env=self.env)
+            ], env=self.env, timeout=_OCR_TIMEOUT)
             matches = []
             for word in csv.DictReader(io.StringIO(data), delimiter="\t", quoting=csv.QUOTE_NONE):
                 rendered = word["text"].strip().lower().strip("()[]{}|")
@@ -182,7 +202,7 @@ class Session:
         data = private.run_checked([
             "tesseract", str(self.output / f"{name}-ocr.png"), "stdout", "--psm", "11",
             "-c", "tessedit_create_tsv=1", "-c", "tessedit_create_txt=0",
-        ], env=self.env)
+        ], env=self.env, timeout=_OCR_TIMEOUT)
         words = [word for word in csv.DictReader(io.StringIO(data), delimiter="\t", quoting=csv.QUOTE_NONE)
                  if word['text'].strip() and 330 <= int(word['left']) // 3 < 960
                  and int(word['top']) // 3 >= 400]
@@ -427,7 +447,7 @@ def media_fixture_directory(args):
     return output, root
 
 
-def run_application_acceptance(args, output, root, exercise, scope, prepare_environment=None):
+def run_application_acceptance(args, output, root, exercise, scope, prepare_environment=None, *, expected_exit_code=0):
     """Run a Files scenario with private compositor ownership and evidence capture."""
     children = private.ChildProcesses()
     report = {"status": "running", "appearance": args.appearance, "scope": scope}
@@ -438,13 +458,9 @@ def run_application_acceptance(args, output, root, exercise, scope, prepare_envi
         process = children.start("files", [str(args.binary.resolve()), str(root)], env=env,
                                  cwd=config["scratch"], log_path=output / "files.log")
         _, mapped_ms = private.wait_for_app_window(config["niri_bin"], env, process, output)
-        session = Session(output, env, config["niri_bin"], process)
+        session = Session(output, env, config["niri_bin"], process, children)
         exercise(session, root)
-        session.key("q", "ctrl")
-        session.process.wait(timeout=5)
-        assert session.process.returncode == 0
-        for pid in getattr(session, "required_closed_processes", []):
-            assert not Path(f"/proc/{pid}").exists(), f"Files left playback process {pid} alive after closing"
+        session.close(expected_exit_code)
         report.update(status="passed", mapped_ms=mapped_ms, observations=session.observations,
                       private_runtime=str(config["runtime"]))
     except Exception as error:
@@ -477,7 +493,7 @@ def main():
         process = children.start("files", [str(args.binary.resolve()), str(root)],
             env=env | {"WAYLAND_DEBUG": "client"}, cwd=config["scratch"], log_path=output / "files.log")
         windows, mapped_ms = private.wait_for_app_window(config["niri_bin"], env, process, output)
-        session = Session(output, env, config["niri_bin"], process)
+        session = Session(output, env, config["niri_bin"], process, children)
         if not args.phase2_only:
             exercise(session, root)
         phase2(session, root)
