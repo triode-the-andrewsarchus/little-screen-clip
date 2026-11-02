@@ -132,7 +132,13 @@ impl FileManager {
         }
         let mut submit = false;
         let mut close = false;
-        ui.horizontal(|ui| {
+        self.search.completion.keys(
+            ui.ctx(),
+            input_id(),
+            &mut self.search.draft,
+            self.search.literal,
+        );
+        let edit_output = ui.horizontal(|ui| {
             ui.label(if self.search.automatic {
                 "Find · automatic scope"
             } else {
@@ -181,7 +187,14 @@ impl FileManager {
             self.search.controls.visible = options_visible;
             submit |= ui.button("Search").clicked();
             close = ui.button("Close").clicked();
-        });
+            output
+        }).inner;
+        self.search.completion.ui(
+            ui,
+            &mut self.search.draft,
+            self.search.literal,
+            &edit_output,
+        );
         let live = self.search.live_submission(ui.ctx()) && !submit;
         submit |= live;
         self.search_status(ui);

@@ -130,7 +130,7 @@ While running, use lightweight change notifications to mark affected records dir
 
 ## Search and UI behavior
 
-[Phase 6 — Search](docs/File%20Manager/plan.md#phase-6--search) is the authoritative specification for the shared command language, including `:10kb..2MB,image foo`, `:regex:foo.*`, `:emb:"2019 tax document"`, and temporary `:q:...;type:number` columns. This document owns the index and embedding execution behind those commands; do not duplicate the grammar or introduce a separate semantic-query parser.
+[Phase 6 — Search](docs/File%20Manager/plan.md#phase-6--search) is the authoritative specification for the shared command language, including `:10kb..2MB,image foo`, `:regex:foo.*`, `:emb:"2019 tax document"`, and temporary `:q:"question" as number` columns. This document owns the index and embedding execution behind those commands; do not duplicate the grammar or introduce a separate semantic-query parser.
 
 A leading command colon is intercepted before ordinary type-to-navigate. Commands run on explicit submission, and their metadata/scope constraints apply before candidate ranking and result limits. Only the parsed `emb` payload is sent as the semantic description; name/regex/date/content queries and image dHash sorts must not invoke the embedding model. Literal content search uses verified current extracted text under Phase 6 coverage rules; index tokenization must not silently alter its matching semantics. Bare browser typing retains its existing navigation behavior. Unindexed scope is reported rather than implicitly enrolled.
 

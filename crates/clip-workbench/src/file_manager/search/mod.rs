@@ -3,6 +3,7 @@ mod actions;
 mod answer;
 mod columns;
 mod columns_ui;
+mod completion;
 mod content;
 mod controls;
 mod explanation;
@@ -44,6 +45,7 @@ pub(super) struct Search {
     pub automatic: bool,
     pub literal: bool,
     controls: controls::Controls,
+    completion: completion::State,
     pub edit_at: Option<f64>,
     pub draft: String,
     pub focus: bool,

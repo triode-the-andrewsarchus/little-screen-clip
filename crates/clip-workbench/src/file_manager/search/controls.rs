@@ -87,11 +87,16 @@ impl Controls {
                 Mode::Name => unreachable!(),
             };
             format!(
-                "{}{operator}:{quoted}",
+                "{}{operator}:{quoted}{}",
                 if filters.is_empty() {
                     String::new()
                 } else {
                     format!("{filters};")
+                },
+                if self.mode == Mode::Question {
+                    format!(" as {}", self.answer_type.name())
+                } else {
+                    String::new()
                 }
             )
         }
@@ -111,17 +116,6 @@ impl Controls {
             if self.sort.starts_with("similarity:") {
                 command.push_str(";ref:selected");
             }
-        }
-        if self.mode == Mode::Question {
-            command.push_str(&format!(
-                ";type:{}",
-                match self.answer_type {
-                    AnswerType::Text => "text",
-                    AnswerType::Number => "number",
-                    AnswerType::Date => "date",
-                    AnswerType::Boolean => "boolean",
-                }
-            ));
         }
         Query::parse(&command)?;
         Ok(command)
@@ -187,15 +181,10 @@ impl Controls {
         if self.mode == Mode::Question {
             ui.label("Answer type (current folder only)");
             egui::ComboBox::from_id_source("search_control_answer_type")
-                .selected_text(format!("{:?}", self.answer_type))
+                .selected_text(self.answer_type.name())
                 .show_ui(ui, |ui| {
-                    for (kind, label) in [
-                        (AnswerType::Text, "Text"),
-                        (AnswerType::Number, "Number"),
-                        (AnswerType::Date, "Date"),
-                        (AnswerType::Boolean, "Boolean"),
-                    ] {
-                        ui.selectable_value(&mut self.answer_type, kind, label);
+                    for (label, kind) in AnswerType::OPTIONS {
+                        ui.selectable_value(&mut self.answer_type, *kind, *label);
                     }
                 });
         }

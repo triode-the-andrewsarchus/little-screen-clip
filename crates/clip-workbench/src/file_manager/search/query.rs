@@ -19,6 +19,28 @@ pub(crate) enum AnswerType {
     Date,
     Boolean,
 }
+impl AnswerType {
+    pub(super) const OPTIONS: &'static [(&'static str, Self)] = &[
+        ("text", Self::Text),
+        ("number", Self::Number),
+        ("date", Self::Date),
+        ("boolean", Self::Boolean),
+    ];
+    pub(super) fn name(self) -> &'static str {
+        Self::OPTIONS
+            .iter()
+            .find(|(_, value)| *value == self)
+            .unwrap()
+            .0
+    }
+    fn parse(text: &str) -> Result<Self, String> {
+        Self::OPTIONS
+            .iter()
+            .find(|(name, _)| *name == text)
+            .map(|(_, value)| *value)
+            .ok_or_else(|| "Answer type must be text, number, date, or boolean".into())
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SortField {
     Name,
@@ -158,21 +180,21 @@ impl Query {
     fn command(&mut self, command: &str) -> Result<(), String> {
         let parts = split(command, ';')?;
         let mut have_operator = false;
-        if is_operator(parts[0]) {
-            self.operator = operator(parts[0])?;
-            have_operator = true;
-        } else if !parts[0].trim().is_empty() {
-            self.head(parts[0])?;
-        }
         let mut options = std::collections::HashSet::new();
-        for part in parts.iter().skip(1) {
+        for (index, part) in parts.iter().enumerate() {
             let part = part.trim();
             if is_operator(part) {
                 if have_operator {
                     return Err("Use only one search operator".into());
                 }
-                self.operator = operator(part)?;
+                self.read_operator(part, &mut options)?;
                 have_operator = true;
+                continue;
+            }
+            if index == 0 {
+                if !part.is_empty() {
+                    self.head(part)?;
+                }
                 continue;
             }
             let (key, value) = part
@@ -184,6 +206,34 @@ impl Query {
             self.option(key, value)?;
         }
         self.validate(&options)
+    }
+
+    fn read_operator(
+        &mut self,
+        text: &str,
+        options: &mut std::collections::HashSet<&str>,
+    ) -> Result<(), String> {
+        if let Some(value) = text.strip_prefix("q:") {
+            let (question, tail) = quoted_payload(value.trim())?;
+            let tail = tail.trim();
+            if !tail.is_empty() {
+                let words: Vec<_> = tail.split_whitespace().collect();
+                if words.len() != 2 || words[0] != "as" {
+                    return Err("Follow the quoted question with as text, as number, as date, or as boolean".into());
+                }
+                if !options.insert("type") {
+                    return Err("Specify the answer type only once".into());
+                }
+                self.answer_type = AnswerType::parse(words[1])?;
+            }
+            if question.is_empty() {
+                return Err("Search operator payload cannot be empty".into());
+            }
+            self.operator = Operator::Answer(question);
+        } else {
+            self.operator = operator(text)?;
+        }
+        Ok(())
     }
 
     fn option(&mut self, key: &str, value: &str) -> Result<(), String> {
@@ -198,15 +248,7 @@ impl Query {
             }
             "sort" => self.sort = Some(parse_sort(value)?),
             "type" => {
-                self.answer_type = match value {
-                    "text" => AnswerType::Text,
-                    "number" => AnswerType::Number,
-                    "date" => AnswerType::Date,
-                    "boolean" => AnswerType::Boolean,
-                    _ => {
-                        return Err("Answer type must be text, number, date, or boolean".into());
-                    }
-                }
+                self.answer_type = AnswerType::parse(value)?;
             }
             "ref" if value == "selected" => self.selected_reference = true,
             _ => return Err(format!("Unknown search option: {key}:{value}")),
@@ -444,6 +486,15 @@ fn parse_sort(text: &str) -> Result<Sort, String> {
 
 /// Split only outside double quotes; preserve regex backslashes for payload decoding.
 fn split(text: &str, delimiter: char) -> Result<Vec<&str>, String> {
+    let (parts, quoted) = fragments(text, delimiter);
+    if quoted {
+        return Err("Unterminated quoted payload".into());
+    }
+    Ok(parts)
+}
+
+/// Tolerant counterpart used by draft help, sharing the parser's quote rules.
+pub(super) fn fragments(text: &str, delimiter: char) -> (Vec<&str>, bool) {
     let (mut quoted, mut escaped, mut start) = (false, false, 0);
     let mut parts = Vec::new();
     for (index, c) in text.char_indices() {
@@ -460,11 +511,8 @@ fn split(text: &str, delimiter: char) -> Result<Vec<&str>, String> {
             start = index + c.len_utf8();
         }
     }
-    if quoted {
-        return Err("Unterminated quoted payload".into());
-    }
     parts.push(&text[start..]);
-    Ok(parts)
+    (parts, quoted)
 }
 fn payload(text: &str, require_quotes: bool) -> Result<String, String> {
     let text = text.trim();
@@ -474,16 +522,23 @@ fn payload(text: &str, require_quotes: bool) -> Result<String, String> {
         }
         return Ok(text.into());
     }
+    let (value, tail) = quoted_payload(text)?;
+    if !tail.trim().is_empty() {
+        return Err("Unexpected text after quoted payload".into());
+    }
+    Ok(value)
+}
+
+pub(super) fn quoted_payload(text: &str) -> Result<(String, &str), String> {
+    let text = text
+        .strip_prefix('"')
+        .ok_or("Use a double-quoted payload")?;
     let mut output = String::new();
-    let mut chars = text[1..].chars();
+    let mut chars = text.chars();
     while let Some(c) = chars.next() {
         match c {
             '"' => {
-                return if chars.as_str().trim().is_empty() {
-                    Ok(output)
-                } else {
-                    Err("Unexpected text after quoted payload".into())
-                };
+                return Ok((output, chars.as_str()));
             }
             '\\' => match chars.next() {
                 Some(next @ ('"' | '\\')) => output.push(next),
@@ -518,6 +573,43 @@ fn selector_token(text: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn question_answer_format_follows_the_quoted_question() {
+        for (name, kind) in AnswerType::OPTIONS {
+            let command = format!(
+                r#":*.md;q:"Date: yyyy-mm-dd; say \"as date\"" as {name};sort:name:desc;scope:here"#
+            );
+            let query = Query::parse(&command).unwrap();
+            assert_eq!(query.answer_type, *kind);
+            assert_eq!(query.selector_text(), "*.md");
+            assert!(
+                matches!(query.operator, Operator::Answer(ref text) if text == "Date: yyyy-mm-dd; say \"as date\"")
+            );
+            assert!(query.sort.unwrap().descending);
+        }
+        assert_eq!(
+            Query::parse(r#":q:"as date""#).unwrap().answer_type,
+            AnswerType::Text
+        );
+        assert_eq!(
+            Query::parse(r#":q:"Date?";type:date"#).unwrap().answer_type,
+            AnswerType::Date
+        );
+        for bad in [
+            r#":q:"Date?" as"#,
+            r#":q:"Date?" as unknown"#,
+            r#":q:"Date?" as date extra"#,
+            r#":q:"Date?" as date;type:date"#,
+            r#":;type:date;q:"Date?" as date"#,
+            r#":emb:"Date?" as date"#,
+            r#":content:"Date?" as date"#,
+            r#":q:"Date?" as date as text"#,
+            r#":q:"Date?" as date;scope:indexed"#,
+            r#":q:"" as date"#,
+        ] {
+            assert!(Query::parse(bad).is_err(), "{bad}");
+        }
+    }
     #[test]
     fn planned_commands_share_one_unambiguous_parser() {
         for input in [

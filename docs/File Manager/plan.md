@@ -268,6 +268,12 @@ Local type-to-navigate is already implemented and accepted; [phase6.md](phase6.m
 - `::foo` escapes the command prefix and searches for the literal name text `:foo`. A leading doubled colon is an escape, not a second operator. Also offer a literal-name mode in the search UI, so colon-prefixed filenames remain accessible.
 - A leading colon is the primary command entry; Ctrl+F remains an optional discoverable entry to the same search bar from the file list, no focused control, or the existing search field. It only focuses the draft and never submits it. Other editors/controls and Constellation's own find handling retain their shortcuts. Controls for scope, filters, and semantic mode edit the same structured query used by commands; they do not create hidden overriding parameters. Show a compact syntax hint and completion for known selectors/operators.
 
+### Draft help and completion
+
+While the search field is focused, show context help directly below it for the current caret position. Suggest matching selectors, operators, scope values, sort fields/directions, reference options and answer formats. Open-ended question, regex, semantic-description, literal-content, filename, size and date input instead explains what is being written and the relevant syntax. Quotes, escaped quotes and separators inside payloads follow the actual parser's rules.
+
+Up/Down select a suggestion, Tab inserts it, and clicking a suggestion also inserts it. Shift+Tab selects the previous suggestion. Completion preserves later clauses and positions the caret after the inserted text, including with Unicode. Completed values stop offering themselves, so ordinary Tab focus traversal resumes when no completion is available. Help/completion edits only the draft: Enter or Search still applies it, and no directory reads, model work or enrollment are triggered by suggestions. Literal mode and the `::` filename escape do not offer command completions.
+
 ### Initial command language
 
 Use `:` as the command introducer, commas for ANDed metadata selectors, a space before an optional literal filename query, and semicolons for an operator or named options. Examples define the initial accepted forms:
@@ -296,8 +302,8 @@ Use `:` as the command introducer, commas for ANDed metadata selectors, a space 
 | `:10kb..2MB,*.pdf;emb:"2019 tax document"` | The semantic query with size and PDF constraints applied first |
 | `:image foo;scope:recursive` | Explicit recursive filename/metadata search below the current directory |
 | `:emb:"2019 tax document";scope:indexed` | Search all configured indexed folders |
-| `:q:"End balance on bank statement";type:number` | Add a temporary numeric answer column to the current folder view |
-| `:*.pdf;q:"End balance on bank statement";type:number` | Populate that column for PDF rows in the current folder view |
+| `:q:"End balance on bank statement" as number` | Add a temporary numeric answer column to the current folder view |
+| `:*.pdf;q:"End balance on bank statement" as number` | Populate that column for PDF rows in the current folder view |
 
 Rules:
 
@@ -311,7 +317,7 @@ Rules:
 - `;scope:here` means the current directory plus explicitly inline-expanded entries when that feature exists; `;scope:recursive` means its subtree; `;scope:indexed` means configured indexed roots. Default command scope is `here`, with no implicit recursive escalation. Embedding queries intersect the selected scope with indexed coverage; they never index or read arbitrary additional folders implicitly. Root exclusions, visibility policy, and protected-content routing continue to apply.
 - `;sort:<field>[:asc|desc]` accepts `name`, `type`, `size`, `modified`, `created`, `dhash`, and `similarity`. Default direction is ascending (oldest first for dates, closest first for similarity). Reuse existing natural-name ordering, content-family/extension grouping, and directory placement for ordinary column sorts. Missing values remain last in both directions; ties use natural basename then lossless path. Without an explicit sort, retain the query mode's relevance order. Explicit sorting replaces relevance as the primary order without changing which files match. Apply it before display pagination for complete metadata/name/content result sets; for semantic retrieval it orders the bounded retrieved candidate window, visibly labeled with its cap, rather than claiming a global order of every potentially relevant file. Header clicks update the same structured sort option. `q` may preserve/change the ordinary listing sort, while sorting its new answer column remains a header action.
 - `dhash` and `similarity` follow the image-specific rules below. `;ref:selected` belongs only to `sort:similarity`, which requires it; capture exactly one selected image's identity/revision on submission and show its name as the reference. Changing selection while browsing results must not change the reference. Reject missing, multiple, non-image, or unavailable references rather than silently switching metrics.
-- `;type:` belongs only to `q` and accepts `text` (default), `number`, `date`, or `boolean`. Unknown/duplicate options are errors. `q` is limited to the current folder view; reject recursive/indexed scopes for it in this version. Future operators must extend this grammar through named forms rather than changing ordinary filename text.
+- Follow the quoted question with `as text`, `as number`, `as date`, or `as boolean`; omitted format defaults to text. For example, `:*.md;q:"What is the date in the header?" as date`. This suffix belongs to that question in the same clause, before any later semicolon options. The older `;type:` spelling remains accepted for compatibility, but declaring the answer type twice is an error even when the values agree. `as` inside quotes is ordinary question text. Unknown/duplicate options are errors. `q` is limited to the current folder view; reject recursive/indexed scopes for it in this version. Future operators must extend this grammar through named forms rather than changing ordinary filename text.
 
 ### Progressive and content search
 
