@@ -1,4 +1,4 @@
-//! Bounded idle retirement after the admitted reconciliation batch has drained.
+//! Bounded background retirement; queued file owners protect their record IDs.
 use super::{Store, record_storage_fault};
 use rusqlite::params;
 
@@ -88,9 +88,18 @@ impl Store {
         })
     }
 
-    pub fn apply_prune_batch(&mut self, mut batch: PruneBatch) -> Result<PruneCursor, String> {
+    pub fn apply_prune_batch(
+        &mut self,
+        mut batch: PruneBatch,
+        retained: impl FnOnce(i64) -> bool,
+    ) -> Result<(PruneCursor, u64), String> {
+        // A queued file may still own this ID even after its path is replaced.
+        // Do not truncate its prefix or let SQLite reuse its ID underneath it.
+        if batch.file.is_some_and(retained) {
+            batch.file = None;
+        }
         if batch.paths.is_empty() && batch.file.is_none() {
-            return Ok(batch.next);
+            return Ok((batch.next, 0));
         }
         let fault = &self.storage_fault;
         let tx = self
@@ -110,7 +119,7 @@ impl Store {
         tx.commit()
             .map_err(|error| record_storage_fault(fault, error))?;
         self.vector_count = self.vector_count.saturating_sub(removed_vectors);
-        Ok(batch.next)
+        Ok((batch.next, removed_vectors))
     }
 }
 
@@ -210,12 +219,7 @@ mod tests {
                 &[9; 32],
             )
             .unwrap();
-        fixture
-            .store
-            .connection
-            .execute("DELETE FROM memberships", [])
-            .unwrap();
-        fixture
+        fixture.without_memberships()
     }
 
     #[test]
@@ -225,7 +229,7 @@ mod tests {
         for _ in 0..20 {
             let before = fixture.store.vector_count;
             let batch = fixture.store.prune_candidates(&cursor).unwrap();
-            cursor = fixture.store.apply_prune_batch(batch).unwrap();
+            cursor = fixture.store.apply_prune_batch(batch, |_| false).unwrap().0;
             assert!(before - fixture.store.vector_count <= PAGE as u64);
             if cursor.done {
                 break;
@@ -254,15 +258,55 @@ mod tests {
     }
 
     #[test]
+    fn queued_file_ownership_preserves_an_orphan_until_its_owner_releases_it() {
+        let mut fixture = orphan_fixture();
+        let vectors = |store: &Store| {
+            store
+                .connection
+                .prepare("SELECT id,vector FROM segments ORDER BY id")
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let before = vectors(&fixture.store);
+        for held in [true, false] {
+            let mut cursor = PruneCursor::default();
+            for _ in 0..10 {
+                let batch = fixture.store.prune_candidates(&cursor).unwrap();
+                cursor = fixture
+                    .store
+                    .apply_prune_batch(batch, |file| held && file == fixture.file)
+                    .unwrap()
+                    .0;
+                if cursor.done {
+                    break;
+                }
+            }
+            assert!(cursor.done);
+            if held {
+                assert_eq!(vectors(&fixture.store), before);
+                assert_eq!(fixture.store.vector_count, 197);
+            } else {
+                assert!(vectors(&fixture.store).is_empty());
+                assert_eq!(fixture.store.vector_count, 0);
+            }
+        }
+    }
+
+    #[test]
     fn partial_prune_reappearance_reprepares_instead_of_claiming_complete_source_reuse() {
         let mut fixture = orphan_fixture();
         let batch = fixture
             .store
             .prune_candidates(&PruneCursor::default())
             .unwrap();
-        let cursor = fixture.store.apply_prune_batch(batch).unwrap();
+        let cursor = fixture.store.apply_prune_batch(batch, |_| false).unwrap().0;
         let batch = fixture.store.prune_candidates(&cursor).unwrap();
-        let mut cursor = fixture.store.apply_prune_batch(batch).unwrap();
+        let mut cursor = fixture.store.apply_prune_batch(batch, |_| false).unwrap().0;
         assert_eq!(fixture.store.vector_count, 197 - PAGE as u64);
         let (file, pending) = fixture.observe(&SourceRoot::from_root(&fixture.root));
         assert_eq!(file, fixture.file);
@@ -279,7 +323,7 @@ mod tests {
         );
         for _ in 0..10 {
             let batch = fixture.store.prune_candidates(&cursor).unwrap();
-            cursor = fixture.store.apply_prune_batch(batch).unwrap();
+            cursor = fixture.store.apply_prune_batch(batch, |_| false).unwrap().0;
             if cursor.done {
                 break;
             }
@@ -301,11 +345,11 @@ mod tests {
                 .prune_candidates(&PruneCursor::default())
                 .unwrap();
             if file_phase {
-                let cursor = fixture.store.apply_prune_batch(batch).unwrap();
+                let cursor = fixture.store.apply_prune_batch(batch, |_| false).unwrap().0;
                 batch = fixture.store.prune_candidates(&cursor).unwrap();
             }
             fixture.observe(&SourceRoot::from_root(&fixture.root));
-            fixture.store.apply_prune_batch(batch).unwrap();
+            fixture.store.apply_prune_batch(batch, |_| false).unwrap().0;
             assert_eq!(fixture.store.vector_count, 197);
             assert!(
                 fixture

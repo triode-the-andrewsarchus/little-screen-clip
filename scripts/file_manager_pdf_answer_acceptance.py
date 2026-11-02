@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native typed answers from short, scanned and conflicting-page synthetic PDFs."""
 from pathlib import Path
+import hashlib
 import subprocess
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.pdfgen.canvas import Canvas
@@ -29,8 +30,9 @@ def scanned(path, texts):
 
 
 def exercise(session, root):
+    original = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*.pdf")}
     session.observe('initial', ['Conflict.pdf', 'Late.pdf'])
-    session.click(530, 160)
+    session.click(647, 160)
     index = Path(session.env['XDG_DATA_HOME']) / 'little-screen-clip/search/index.sqlite'
     submit(session, ':q:"What numeric rating is explicitly listed?";type:number')
     session.observe('reconciled', ['Ambiguous', '18 points', 'Conflict.pdf', 'Late.pdf'], timeout_seconds=120)
@@ -50,6 +52,8 @@ def exercise(session, root):
     _, mixed_y = session.word('mixed-answer', 'Mixed.pdf', minimum_y=300)
     hover_observation(session, 'mixed-page-evidence', 835, mixed_y, ['page 2', 'model observation'])
     assert not index.exists(), 'PDF Q/A must not enroll folders or create a semantic index'
+
+    assert original == {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*.pdf")}, "Q/A must not modify source files"
 
 
 def main():

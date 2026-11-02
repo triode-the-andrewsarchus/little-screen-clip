@@ -587,7 +587,55 @@ mod tests {
     }
 
     #[test]
-    fn changed_revision_pipeline_and_extractor_cannot_resume_or_publish_a_stale_cursor() {
+    fn stale_revision_or_pipeline_cannot_replace_a_committed_checkpoint() {
+        for changed_pipeline in [false, true] {
+            let mut fixture = partial_fixture();
+            let before = stored(&fixture);
+            let vectors = fixture.store.vector_count;
+            let revision = fixture.entry.revision + u64::from(!changed_pipeline);
+            let pipeline = if changed_pipeline {
+                "obsolete-model"
+            } else {
+                "model"
+            };
+            assert!(
+                !fixture
+                    .store
+                    .publish(fixture.file, revision, pipeline, &batch(9), "complete")
+                    .unwrap()
+            );
+            assert!(
+                !fixture
+                    .store
+                    .checkpoint(
+                        fixture.file,
+                        revision,
+                        pipeline,
+                        &batch(9),
+                        &progress(&fixture)
+                    )
+                    .unwrap()
+            );
+            assert_eq!(stored(&fixture), before);
+            assert_eq!(fixture.store.vector_count, vectors);
+            let (checkpoint, segments) = fixture
+                .store
+                .resume_file(
+                    fixture.file,
+                    fixture.entry.revision,
+                    "model",
+                    &fixture.entry,
+                    Some([7; 32]),
+                )
+                .unwrap()
+                .expect("stale writes must preserve the usable checkpoint");
+            assert_eq!(checkpoint.segments, 8);
+            assert_eq!(segments.len(), 8);
+        }
+    }
+
+    #[test]
+    fn changed_revision_pipeline_and_extractor_retire_saved_cursors() {
         for change in ["revision", "pipeline", "extractor"] {
             let mut fixture = partial_fixture();
             let pipeline = if change == "pipeline" {

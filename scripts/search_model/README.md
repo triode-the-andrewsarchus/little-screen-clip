@@ -12,6 +12,8 @@ python scripts/search_model/setup.py \
 
 An explicit `--llama-prefix` can reuse a developer's reviewed, already-built patched b11461 prefix. Normal setup builds from pinned source. This option is never discovered or selected implicitly.
 
+Files launches setup in a private process group with `--parent PID`. On Linux, setup validates that ownership before filesystem/network/build work, arms parent-death notification and kills its group on owner loss, including ordinary compiler descendants. Normal cancellation/deadlines still use the Rust process-group owner. Standalone CLI setup omits `--parent` and keeps its invoking shell lifetime. This does not cover descendants that deliberately detach or kernel-uninterruptible I/O.
+
 `worker.py --runtime PATH --models PATH` loads local files only, emits one readiness JSON object, then accepts JSON lines. `--device` selects `auto`, `cpu`, `cuda`, or `vulkan`; readiness reports the actual device. `--text-only` omits media encoder loading. Only one request runs at a time. A worker process owns one model; its parent must kill and reap it on timeout, cancellation or exit, and release it after the configured idle interval.
 
 The Rust coordinator tries CUDA, then Vulkan, then CPU, with a fresh process for each failed load. An explicit GPU request must report that backend; silent CPU substitution is rejected. Direct worker `auto` selects the first available device in that order; it does not retry a failed model load itself. Index status shows the actual selected device. Backend/toolchain changes rebuild the runtime cache; backend selection alone does not change embedding pipeline identity. Setup takes an exclusive installation lock and workers hold shared locks for their lifetime. Replacement libraries are staged before installation, with rollback on failure, so setup cannot overwrite mapped libraries in a running worker.
@@ -233,3 +235,12 @@ from starting another call. `file_manager_text_tools_acceptance.py` includes a
 The runtime probe groups every applicability/answer generation by request rather
 than assuming a single native call; rejected responses remain failed cases in
 its report and give a nonzero exit status.
+
+
+Single-page mixed PDF answers retain bounded extracted text with positive source IDs alongside image source 0. Exact quotations are checked against supplied text; pixel regions remain model observations. A question-only pass through the same answer model chooses an explicitly requested text layer or pixel channel, otherwise both remain in scope. The owned worker caches at most 32 source plans; an inference-budget limit keeps both channels. Explicit text-layer answers reuse ordinary text generation without loading vision. Generic conflicting text/pixel values remain ambiguous. Oversized mixed inputs use the existing bounded selection/reconciliation path; pure-image full-page questions remain supported.
+
+
+Prepared image/audio embedding inputs (at most 8 MiB each) use a mode-0600 anonymous Linux memfd. The helper writes/flushes bytes once, seals writes/growth/shrinkage, and keeps its descriptor open through the existing synchronous native encoder call via `/proc/self/fd/N`. Normal errors/exceptions close it, and abrupt helper death leaves no named input directory. Canonical bytes, budgets, native ABI and embedding pipeline identity remain unchanged. The seven-case matched CUDA check is byte-identical; no re-indexing is needed for this transport change. This does not claim that installer or other decoder staging has the same lifetime contract.
+
+
+Interrupted installs fail closed before native loading. If Files reports an interrupted runtime, explicitly choose **Install embedding model and runtime** from Index, then rebuild the enrolled folder. Publication retains an incomplete marker even after an ordinary handoff failure; compilation failures before publication leave the prior runtime usable. Install attempts reuse a single reserved scratch root, removing abandoned attempts under the exclusive installer lock. Model workers retain the shared lock. No repair or download happens automatically, and this does not change embedding pipeline identity.

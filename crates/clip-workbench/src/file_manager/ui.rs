@@ -94,10 +94,19 @@ impl FileManager {
             .into_iter()
             .any(|id| memory.has_focus(id))
         }) && !self.browser_modal();
+        let text_focus_shortcuts = if ui.memory(|memory| memory.has_focus(list_id())) {
+            vec![egui::KeyboardShortcut::new(Modifiers::CTRL, Key::F)]
+        } else {
+            Vec::new()
+        };
         ui.ctx().data_mut(|data| {
             data.insert_temp(
                 egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS),
                 file_clipboard,
+            );
+            data.insert_temp(
+                egui::Id::new(egui_winit::CLIPBOARD_TEXT_FOCUS_SHORTCUTS),
+                text_focus_shortcuts,
             );
         });
         self.schedule_repaints(ui.ctx());

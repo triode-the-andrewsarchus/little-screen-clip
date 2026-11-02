@@ -620,6 +620,59 @@ mod tests {
     }
 
     #[test]
+    fn find_paste_and_enter_in_one_frame_submit_new_and_replacement_queries() {
+        let folder = tempfile::tempdir().unwrap();
+        for name in ["Alpha.txt", "Beta.txt"] {
+            std::fs::write(folder.path().join(name), "Owned fixture.").unwrap();
+        }
+        let mut manager = FileManager::new(folder.path().into());
+        manager.pending = None;
+        manager.commit(
+            read_directory(folder.path(), &AtomicBool::new(false)).unwrap(),
+            Navigation::New,
+        );
+        let ctx = egui::Context::default();
+        let key = |key, mut modifiers: egui::Modifiers| {
+            modifiers.command = modifiers.ctrl; // Native Linux clipboard/select-all mapping.
+            egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }
+        };
+        for name in ["Alpha", "Beta"] {
+            let command = format!(":*.txt {name}");
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![
+                        key(egui::Key::F, egui::Modifiers::CTRL),
+                        key(egui::Key::A, egui::Modifiers::CTRL),
+                        egui::Event::Paste(command.clone()),
+                        key(egui::Key::Enter, egui::Modifiers::NONE),
+                    ],
+                    ..Default::default()
+                },
+                |ctx| {
+                    ctx.memory_mut(|memory| {
+                        memory.request_focus(crate::file_manager::ui::list_id())
+                    });
+                    assert!(manager.search_navigation_keys(ctx));
+                    egui::CentralPanel::default().show(ctx, |ui| manager.search_ui(ui));
+                },
+            );
+            assert_eq!(manager.search.draft, command);
+            assert_eq!(manager.search.applied.as_ref().unwrap().name, name);
+            assert_eq!(manager.visible.len(), 1);
+            assert!(
+                manager.search.service.is_none(),
+                "Name search must not create an index service"
+            );
+        }
+    }
+
+    #[test]
     fn explicit_find_reenters_command_mode_from_automatic_input_but_not_other_editors() {
         let folder = tempfile::tempdir().unwrap();
         let mut manager = FileManager::new(folder.path().into());

@@ -119,6 +119,14 @@ pub(crate) mod tests {
             fixture.publish(file);
             fixture
         }
+        pub(crate) fn without_memberships(self) -> Self {
+            self.store
+                .connection
+                .execute("DELETE FROM memberships", [])
+                .unwrap();
+            self
+        }
+
         pub(crate) fn observe(&mut self, source: &SourceRoot) -> (i64, bool) {
             let root = self.store.enroll_source(source).unwrap();
             let generation = self.store.begin_scan(root).unwrap();

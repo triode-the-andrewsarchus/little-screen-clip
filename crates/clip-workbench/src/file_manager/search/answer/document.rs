@@ -5,7 +5,7 @@ use crate::file_manager::{
     search::reader::{self, Prepared, Reply, Request, SourceRoot},
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     sync::atomic::AtomicBool,
     time::{Duration, Instant},
@@ -71,7 +71,9 @@ fn collect(mut load: impl FnMut(usize) -> Result<Prepared, String>) -> Result<Do
         if text_bytes > 512 * 1024 {
             break;
         }
-        if prepared.modality == "text" && !prepared.text.trim().is_empty() {
+        if matches!(prepared.modality.as_str(), "text" | "image")
+            && !prepared.text.trim().is_empty()
+        {
             document.text.push(Source {
                 id: document.text.len(),
                 text: std::mem::take(&mut prepared.text),
@@ -152,7 +154,24 @@ fn answer_images(
     mut infer: impl FnMut(Value, Duration) -> Result<Value, String>,
 ) -> Result<Answer, String> {
     let deadline = Instant::now() + Duration::from_secs(180);
-    let selection = document.pages > 1;
+    // Image source 0 and positive text IDs remain distinct on the wire.
+    let text_sources: Vec<_> = if document.pages == 1 {
+        document
+            .text
+            .iter()
+            .enumerate()
+            .map(|(id, source)| Source {
+                id: id + 1,
+                ..source.clone()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let selection = document.pages > 1
+        || !context::fits(&json!({
+            "question":question,"type":kind,"sources":text_sources,"complete":true
+        }));
     let mut selected_sources = Vec::new();
     for image in document.images {
         let Some(timeout) = context::remaining(deadline, cancel)? else {
@@ -161,15 +180,18 @@ fn answer_images(
                 "Document answering exceeded its inference time budget.",
             ));
         };
-        let request = visual::request(
+        let mut request = visual::request(
             question,
             kind,
             image.data.as_deref().ok_or("Missing visual source data")?,
             selection,
         );
+        if !selection && !text_sources.is_empty() {
+            request["sources"] = json!(text_sources);
+        }
         let response = infer(request, timeout)?;
         if !selection {
-            return visual::decode(response, kind, &image.location);
+            return visual::decode(response, kind, &image.location, &text_sources);
         }
         let selected: Selection =
             serde_json::from_value(response).map_err(|_| "Invalid visual selection reply")?;
@@ -239,10 +261,23 @@ mod tests {
     }
 
     #[test]
+    fn a_single_image_keeps_full_page_boolean_answers() {
+        let document = collect(|_| Ok(page("image", None))).unwrap();
+        let answer = answer_prepared(document, "Is the rectangle blue?", AnswerType::Boolean,
+            &AtomicBool::new(false), |request, _| {
+                assert_eq!(request["op"], "visual_answer");
+                assert!(request.get("sources").is_none());
+                Ok(json!({"applicability":"applicable","state":"value","value":"false","unit":null,
+                    "evidence":[visual_item("The rectangle is green.")],"reason":"Green contradicts blue."}))
+            }).unwrap();
+        assert_eq!(answer.label(), "false");
+    }
+
+    #[test]
     fn a_short_single_pdf_page_uses_full_visual_answering() {
         let document = collect(|_| {
             let mut page = page("page 1", None);
-            page.text = "Rating: 18 points.".into();
+            page.text = "Rating: 14 points.".into();
             Ok(page)
         })
         .unwrap();
@@ -250,11 +285,48 @@ mod tests {
         let answer = answer_prepared(document, "What rating?", AnswerType::Number,
             &AtomicBool::new(false), |request, _| {
                 assert_eq!(request["op"], "visual_answer");
-                Ok(json!({"applicability":"applicable","state":"value","value":"18","unit":"points",
-                    "evidence":[visual_item("Rating: 18 points.")],"reason":"The page shows a rating."}))
+                assert_eq!(request["sources"][0]["text"], "Rating: 14 points.");
+                Ok(json!({"applicability":"applicable","state":"ambiguous","value":null,"unit":null,
+                    "evidence":[visual_item("Rating: 18 points."),{"source":1,"quote":"Rating: 14 points."}],
+                    "reason":"The image and extracted text disagree."}))
             }).unwrap();
-        assert_eq!(answer.label(), "18 points");
+        assert!(matches!(answer.state, State::Ambiguous));
         assert!(answer.evidence[0].0.starts_with("page 1: region"));
+        assert_eq!(answer.evidence[1].0, "page 1");
+    }
+
+    #[test]
+    fn a_single_mixed_page_above_the_prompt_budget_keeps_both_sources() {
+        let document = collect(|_| {
+            let mut page = page("page 1", None);
+            page.text = format!("Rating: 14 points.{}", " ".repeat(33000));
+            Ok(page)
+        })
+        .unwrap();
+        let mut windows = 0;
+        let answer = answer_prepared(document, "What rating?", AnswerType::Number,
+            &AtomicBool::new(false), |request, _| {
+                assert!(context::fits(&request));
+                if request["op"] == "visual_evidence" {
+                    return Ok(json!({"limited":false,"evidence":[visual_item("Rating: 18 points.")]}));
+                }
+                if request["op"] == "evidence" {
+                    windows += 1;
+                    let source = &request["sources"][0];
+                    let evidence = if source["text"].as_str().unwrap().contains("Rating: 14 points.") {
+                        vec![json!({"source":source["id"],"quote":"Rating: 14 points."})]
+                    } else { Vec::new() };
+                    return Ok(json!({"limited":false,"evidence":evidence}));
+                }
+                assert_eq!(request["context"], "evidence");
+                Ok(json!({"basis":"direct","applicability":"applicable","state":"ambiguous","value":null,"unit":null,
+                    "evidence":[{"source":0,"quote":"Rating: 18 points."},{"source":1,"quote":"Rating: 14 points."}],
+                    "reason":"Both channels disagree."}))
+            }).unwrap();
+        assert!(windows > 1);
+        assert!(matches!(answer.state, State::Ambiguous));
+        assert!(answer.evidence[0].0.contains("model observation"));
+        assert_eq!(answer.evidence[1].0, "page 1");
     }
 
     #[test]

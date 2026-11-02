@@ -22,7 +22,7 @@ struct WindowReply {
 fn payload(question: &str, kind: AnswerType, sources: &[Source], complete: bool) -> Value {
     json!({"question":question,"type":kind,"sources":sources,"complete":complete})
 }
-fn fits(request: &Value) -> bool {
+pub(super) fn fits(request: &Value) -> bool {
     serde_json::to_vec(request).is_ok_and(|bytes| bytes.len() <= 30 * 1024)
 }
 fn unknown(reason: &str) -> Answer {

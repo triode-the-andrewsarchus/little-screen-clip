@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Explicitly provision the pinned local embedding runtime; never enroll folders."""
 import argparse
+import ctypes
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -19,6 +22,24 @@ FILES = (
     ("mmproj-embeddinggemma-2-Q8_0.gguf", 554821024, "c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f"),
 )
 HERE = Path(__file__).resolve().parent
+
+
+def attach_parent(parent):
+    """Retire this private setup group, including compilers, if Files disappears."""
+    if sys.platform != "linux" or parent <= 1 or os.getppid() != parent or os.getpgrp() != os.getpid():
+        raise RuntimeError("Managed setup requires a live parent and its own Linux process group")
+
+    def stop_group(_signal, _frame):
+        os.killpg(os.getpid(), signal.SIGKILL)
+
+    # A direct SIGKILL would leave compiler descendants running. Install the
+    # handler before arming parent death; recheck after prctl closes startup's race.
+    signal.signal(signal.SIGTERM, stop_group)
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "Cannot attach setup lifetime to Files")
+    if os.getppid() != parent:
+        stop_group(None, None)
 
 
 def emit(stage, **data):
@@ -127,13 +148,19 @@ def build_prefix(folder, backends):
 
 
 def build(folder, prebuilt):
+    # The caller holds setup.lock exclusively. Each compiler attempt still gets
+    # a unique child path, so an old dying compiler cannot write into a new one.
+    staging = folder / ".runtime-staging"
+    if os.path.lexists(staging):
+        shutil.rmtree(staging)
+    interrupted = any(os.path.lexists(folder / name) for name in (".runtime-incomplete", "lib.previous"))
     backends = build_backends(prebuilt)
     stamp = hashlib.sha256((HERE / "llama_shim.c").read_bytes() + (HERE / "llama-no-logits.patch").read_bytes()).hexdigest()
     manifest = folder / "runtime.json"
     data = {"llama_revision": LLAMA_REVISION, "shim_sha256": stamp, "model_revision": REVISION,
             "backends": backends, "prebuilt": str(prebuilt.resolve()) if prebuilt else None,
             "answer_shim_sha256": digest(HERE / "answer_shim.c")}
-    if manifest.is_file() and all((folder / "lib" / name).is_file() for name in ("libclip-search.so", "libclip-answer.so")):
+    if not interrupted and manifest.is_file() and all((folder / "lib" / name).is_file() for name in ("libclip-search.so", "libclip-answer.so")):
         installed = json.loads(manifest.read_text())
         if all(installed.get(key) == value for key, value in data.items()):
             return
@@ -143,19 +170,23 @@ def build(folder, prebuilt):
         prefix = prebuilt.resolve()
     else:
         prefix = build_prefix(folder, backends)
-    with tempfile.TemporaryDirectory(prefix=".runtime-", dir=folder) as temporary:
-        staged = Path(temporary)
-        lib = staged / "lib"
-        lib.mkdir()
-        for path in (prefix / "lib").glob("*.so*"):
-            backend = next((name for name in ("cuda", "vulkan") if path.name.startswith(f"libggml-{name}.")), None)
-            if backend is None or backend in backends:
-                shutil.copy2(path, lib / path.name)
-        for source, binary in [("llama_shim.c", "libclip-search.so"), ("answer_shim.c", "libclip-answer.so")]:
-            run(["cc", "-O2", "-fPIC", "-shared", "-std=c11", HERE / source,
-                 "-I", prefix / "include", "-L", lib, "-Wl,-rpath,$ORIGIN",
-                 "-lmtmd", "-lllama", "-lggml", "-lggml-base", "-lm", "-o", lib / binary])
-        install_runtime(folder, staged, data)
+    staging.mkdir(mode=0o700)
+    try:
+        with tempfile.TemporaryDirectory(prefix="attempt-", dir=staging) as temporary:
+            staged = Path(temporary)
+            lib = staged / "lib"
+            lib.mkdir()
+            for path in (prefix / "lib").glob("*.so*"):
+                backend = next((name for name in ("cuda", "vulkan") if path.name.startswith(f"libggml-{name}.")), None)
+                if backend is None or backend in backends:
+                    shutil.copy2(path, lib / path.name)
+            for source, binary in [("llama_shim.c", "libclip-search.so"), ("answer_shim.c", "libclip-answer.so")]:
+                run(["cc", "-O2", "-fPIC", "-shared", "-std=c11", HERE / source,
+                     "-I", prefix / "include", "-L", lib, "-Wl,-rpath,$ORIGIN",
+                     "-lmtmd", "-lllama", "-lggml", "-lggml-base", "-lm", "-o", lib / binary])
+            install_runtime(folder, staged, data)
+    finally:
+        shutil.rmtree(staging)
     # Retain source and licenses alongside installed binary artifacts.
     for name in ["llama_shim.c", "answer_shim.c", "llama-no-logits.patch", "LICENSE.recall"]:
         shutil.copy2(HERE / name, folder / name)
@@ -163,6 +194,11 @@ def build(folder, prebuilt):
 
 
 def install_runtime(folder, staged, data):
+    # Existence, including after an ordinary failed handoff, blocks native loads
+    # until an explicit retry has published a complete library/manifest pair.
+    incomplete = folder / ".runtime-incomplete"
+    with os.fdopen(os.open(incomplete, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600), "w") as marker:
+        marker.write("Runtime installation in progress; reinstall if interrupted.\n")
     lib, backup = folder / "lib", folder / "lib.previous"
     if backup.exists():
         if not lib.exists():
@@ -184,6 +220,7 @@ def install_runtime(folder, staged, data):
         raise
     if backup.exists():
         shutil.rmtree(backup)
+    incomplete.unlink()
 
 
 def main():
@@ -192,7 +229,10 @@ def main():
     parser.add_argument("--models", type=Path, required=True)
     parser.add_argument("--llama-prefix", type=Path)
     parser.add_argument("--answers", choices=("nuextract3", "qwen3.5", "qwen3.5-9b"))
+    parser.add_argument("--parent", type=int, help="Owning Files PID; requires a private process group")
     args = parser.parse_args()
+    if args.parent is not None:
+        attach_parent(args.parent)
     args.runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (args.runtime / "setup.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

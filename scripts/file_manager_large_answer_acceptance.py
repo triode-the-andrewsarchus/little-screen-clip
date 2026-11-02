@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native Q/A on a synthetic document with its answer beyond 24 KiB."""
 from pathlib import Path
+import hashlib
 
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance
 from file_manager_search_acceptance import submit
@@ -8,13 +9,16 @@ from file_manager_answer_acceptance import model_environment
 
 
 def exercise(session, root):
+    original = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*.txt")}
     session.observe("initial", ["Long.txt"])
-    session.click(530, 160)
+    session.click(647, 160)
     index = Path(session.env["XDG_DATA_HOME"]) / "little-screen-clip/search/index.sqlite"
     assert not index.exists()
     submit(session, ':q:"What numeric rating is explicitly listed?";type:number')
     session.observe("late-answer", ["Long.txt", "18 points", "Session answers"])
     assert not index.exists(), "A session question must not enroll the folder"
+
+    assert original == {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*.txt")}, "Q/A must not modify source files"
 
 
 def main():

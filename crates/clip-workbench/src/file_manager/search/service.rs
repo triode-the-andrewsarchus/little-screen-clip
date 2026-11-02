@@ -174,6 +174,7 @@ impl Service {
             roots_dirty: false,
             finishing: Default::default(),
             pruning: None,
+            pruning_dirty: false,
             answers_until: None,
             monitor: super::monitor::Monitor::default(),
             capacity_blocked: false,
@@ -312,8 +313,9 @@ struct FileWork {
     source_check: SourceCheck,
     published: usize,
     resume_hash: Option<[u8; 32]>,
+    resume_pending: bool,
     failed: bool,
-    staging: Option<Arc<()>>,
+    staging: Option<Arc<i64>>,
 }
 impl FileWork {
     fn new(root: SourceRoot, root_id: i64, generation: i64, entry: Entry, id: i64) -> Self {
@@ -343,6 +345,7 @@ impl FileWork {
             source_check,
             published: 0,
             resume_hash: None,
+            resume_pending: false,
             failed: false,
             staging: None,
         }
@@ -410,11 +413,12 @@ struct Worker {
     roots_dirty: bool,
     finishing: VecDeque<i64>,
     pruning: Option<super::store::PruneCursor>,
+    pruning_dirty: bool,
     answers_until: Option<Instant>,
     monitor: super::monitor::Monitor,
     capacity_blocked: bool,
     readers: readers::Readers,
-    staged_files: Vec<Weak<()>>,
+    staged_files: Vec<Weak<i64>>,
     // Fresh probes have temporary negative IDs; stored roots/imports use positive IDs.
     next_probe: i64,
 }
@@ -479,7 +483,7 @@ impl Worker {
             self.advance(work);
         }
         self.finish_root();
-        self.prune_idle();
+        self.prune_background();
         if self.roots_dirty {
             self.update_roots(false);
         }
@@ -558,7 +562,10 @@ impl Worker {
         } else {
             self.finishing.clear();
         }
-        self.pruning = None;
+        if root.is_none() {
+            self.pruning = None;
+            self.pruning_dirty = false;
+        }
         let watches = match root {
             Some(root) => self.readers.cancel_root(root).into_iter().collect(),
             None => self.readers.clear(),
@@ -639,6 +646,7 @@ impl Worker {
                 .is_none_or(|until| Instant::now() >= until);
         self.work.iter().position(|work| {
             (matches!(work, Work::Probe { .. }) || indexing)
+                && !matches!(work, Work::File(file) if file.staging.is_none() && self.staged_files.iter().filter_map(Weak::upgrade).any(|owner| *owner == file.id))
                 && (can_stage
                     || !matches!(work, Work::File(file) if !file.publishing && file.staging.is_none()))
                 && (!matches!(
@@ -667,9 +675,7 @@ impl Worker {
         Some(work)
     }
     fn background_ready(&self) -> bool {
-        self.ready_work().is_some()
-            || !self.finishing.is_empty()
-            || (self.pruning.is_some() && self.work.is_empty())
+        self.ready_work().is_some() || !self.finishing.is_empty() || self.pruning.is_some()
     }
     fn pause_capacity(&mut self, reason: String) {
         self.capacity_blocked = true;
@@ -727,6 +733,8 @@ impl Worker {
             return;
         }
         let root_id = work.root_id();
+        self.pruning.get_or_insert_with(Default::default);
+        self.pruning_dirty = true;
         let admitted = self.admit(
             match &work {
                 Work::File(file) => Some(file),
@@ -745,7 +753,6 @@ impl Worker {
             self.work.push_front(work);
             return;
         }
-        self.pruning = None;
         if let Err(error) = self.step(work) {
             if self.shutdown_cancelled(&error) {
                 return;
@@ -768,7 +775,6 @@ impl Worker {
             self.finishing.push_back(root_id);
         }
         if self.work.is_empty() {
-            self.pruning = Some(Default::default());
             let mut snapshot = self.snapshot.lock().unwrap();
             snapshot.message = format!(
                 "Embedding work: {} generated · {} reused",
@@ -817,15 +823,13 @@ impl Worker {
         let mut dispatch = self.dispatch.lock().unwrap();
         dispatch.begin_background().then(|| dispatch.cancel.clone())
     }
-    fn prune_idle(&mut self) {
-        if !self.work.is_empty() || !self.finishing.is_empty() {
-            return;
-        }
+    fn prune_background(&mut self) {
         let Some(cursor) = &self.pruning else {
             return;
         };
         let Some(store) = &self.store else {
             self.pruning = None;
+            self.pruning_dirty = false;
             return;
         };
         let Some(cancel) = self.read_admission() else {
@@ -840,10 +844,44 @@ impl Worker {
         }
         // Candidate selection is cancellable; each admitted write is atomic
         // and bounded to 64 paths or 64 segments of one unreferenced file.
-        match batch.and_then(|batch| self.store.as_mut().unwrap().apply_prune_batch(batch)) {
-            Ok(cursor) => self.pruning = (!cursor.done).then_some(cursor),
+        let work = &self.work;
+        // Preserve source-before-destination move reuse during ordinary scans.
+        // Pause/pressure may reclaim unowned inputs, but queued IDs stay pinned.
+        let awaiting_metadata = !self.config.paused
+            && !self.capacity_blocked
+            && work.iter().any(|work| {
+                matches!(
+                    work,
+                    Work::Probe { .. }
+                        | Work::Inventory(_)
+                        | Work::Directory {
+                            remaining: None,
+                            ..
+                        }
+                )
+            });
+        match batch.and_then(|batch| {
+            self.store.as_mut().unwrap().apply_prune_batch(batch, |id| {
+                awaiting_metadata
+                    || work
+                        .iter()
+                        .any(|work| matches!(work, Work::File(file) if file.id == id))
+            })
+        }) {
+            Ok((cursor, removed)) => {
+                if removed > 0 && self.capacity_blocked {
+                    self.retry_capacity();
+                }
+                if cursor.done {
+                    self.pruning = self.pruning_dirty.then(Default::default);
+                    self.pruning_dirty = false;
+                } else {
+                    self.pruning = Some(cursor);
+                }
+            }
             Err(error) => {
                 self.pruning = None;
+                self.pruning_dirty = false;
                 self.report(Err(error));
             }
         }
@@ -916,6 +954,8 @@ impl Worker {
                 .collect::<Vec<_>>();
             store.disable_unconfigured(&configured)?;
             self.store = Some(store);
+            self.pruning = Some(Default::default());
+            self.pruning_dirty = false;
             self.snapshot.lock().unwrap().has_index = true;
         }
         Ok(self.store.as_mut().unwrap())
@@ -939,7 +979,20 @@ impl Worker {
             }
             let model = Model::start_preferred(&self.paths, role, cancel)?;
             if role == Role::Embedding {
-                self.pipeline = format!("search-v2:{}", model.info["pipeline"]);
+                let pipeline = format!("search-v2:{}", model.info["pipeline"]);
+                let changed = !self.pipeline.is_empty() && self.pipeline != pipeline;
+                self.pipeline = pipeline;
+                if changed {
+                    // The caller may itself own a partial file outside the queue.
+                    // Retire queued work and abort this call before new vectors
+                    // can be appended to an old-model prefix or inventory.
+                    self.finish_maintenance(
+                        "Embedding pipeline changed; enrolled folders will be rechecked.".into(),
+                    );
+                    return Err(
+                        "Embedding pipeline changed; retry after folder revalidation".into(),
+                    );
+                }
             } else {
                 self.snapshot.lock().unwrap().answer_pipeline =
                     Some(model.info["pipeline"].to_string());
@@ -1181,6 +1234,8 @@ impl Worker {
         let mut request = little_clip_core::process::CommandRequest::new("python3")
             .arg("-I")
             .arg(self.paths.helpers.join("setup.py"))
+            .arg("--parent")
+            .arg(std::process::id().to_string())
             .arg("--runtime")
             .arg(self.paths.runtime())
             .arg("--models")
@@ -1829,6 +1884,20 @@ impl Worker {
         if file.publishing {
             return self.publish_file(file);
         }
+        let pipeline = self.pipeline.clone();
+        if file.segments.is_empty()
+            && self
+                .database()?
+                .file_complete(file.id, file.entry.revision, &pipeline)?
+        {
+            if !self.verify_index_file(&file)? {
+                self.work.push_back(Work::File(Box::new(file)));
+            }
+            return Ok(());
+        }
+        if std::mem::take(&mut file.resume_pending) {
+            self.resume_file(&mut file)?;
+        }
         let resume = matches!(file.source_check, SourceCheck::Pending);
         let ready = match self.check_file_content(&mut file) {
             Ok(ready) => ready,
@@ -1855,10 +1924,16 @@ impl Worker {
             return true;
         }
         self.staged_files.retain(|slot| slot.strong_count() != 0);
-        if self.staged_files.len() == MAX_STAGED_FILES {
+        if self.staged_files.len() == MAX_STAGED_FILES
+            || self
+                .staged_files
+                .iter()
+                .filter_map(Weak::upgrade)
+                .any(|owner| *owner == file.id)
+        {
             return false;
         }
-        let permit = Arc::new(());
+        let permit = Arc::new(file.id);
         self.staged_files.push(Arc::downgrade(&permit));
         file.staging = Some(permit);
         true
@@ -2280,7 +2355,43 @@ impl Worker {
             return Err("Index source changed before checkpoint publication".into());
         }
         file.published = file.segments.len();
-        Ok(true)
+        self.yield_file_quantum(file);
+        Ok(false)
+    }
+    fn yield_file_quantum(&mut self, file: &mut FileWork) {
+        // Move the next root ahead of this root's remaining jobs before the
+        // caller appends this yielded file. The deque then preserves the next
+        // root's turn rather than repeatedly favoring the first two roots.
+        if let Some(next) = self
+            .work
+            .iter()
+            .position(|work| work.root_id() != file.root_id)
+        {
+            self.work.rotate_left(next);
+        }
+        let waiting_for_staging = self.work.iter().any(
+            |work| matches!(work, Work::File(next) if next.id != file.id && !next.publishing && next.staging.is_none()),
+        );
+        if waiting_for_staging
+            && self
+                .staged_files
+                .iter()
+                .filter(|slot| slot.strong_count() != 0)
+                .count()
+                == MAX_STAGED_FILES
+        {
+            // The committed cursor/hash can rebuild this exact prefix. Keep
+            // the verified observation but release all prepared/cached bytes
+            // before allowing another file to consume its staging allowance.
+            file.prepared = None;
+            file.segments = Vec::new();
+            file.cursor = 0;
+            file.text_cursor = 0;
+            file.published = 0;
+            file.resume_hash = None;
+            file.resume_pending = true;
+            file.staging = None;
+        }
     }
     fn search(
         &mut self,
@@ -2601,6 +2712,7 @@ mod tests {
             roots_dirty: false,
             finishing: Default::default(),
             pruning: None,
+            pruning_dirty: false,
             answers_until: None,
             monitor: super::super::monitor::Monitor::default(),
             capacity_blocked: false,
@@ -2645,6 +2757,200 @@ mod tests {
             super::super::store::Retry::Ready
         );
         assert!(matches!(worker.work.front(), Some(Work::Probe { .. })));
+    }
+
+    #[test]
+    fn committed_quantum_releases_payload_and_admits_a_third_root_before_long_files_finish() {
+        let fixture = TestFixture::new();
+        let root = SourceRoot::from_root(&fixture.root);
+        let mut current = FileWork::new(root.clone(), 1, 1, fixture.entry.clone(), fixture.file);
+        current.source_check = SourceCheck::Extract(None);
+        current.cursor = 2;
+        current.text_cursor = 256;
+        current.prepared = Some(Prepared {
+            text: "ordinary source text ".repeat(128),
+            ..Default::default()
+        });
+        current.segments = (0..8)
+            .map(|i| Segment {
+                modality: "text".into(),
+                location: format!("passage {i}"),
+                text: format!("text {i}"),
+                input_hash: vec![i as u8; 32],
+                vector: Some(vec![1.0; super::super::store::DIMENSION]),
+            })
+            .collect();
+        let entry = fixture.entry.clone();
+        let mut worker = test_worker(&root.path, Some(fixture.store));
+        assert!(worker.reserve_file_staging(&mut current));
+        let mut second = FileWork::new(root.clone(), 2, 1, entry.clone(), 20);
+        assert!(worker.reserve_file_staging(&mut second));
+        worker.work.push_back(Work::File(Box::new(FileWork::new(
+            root.clone(),
+            1,
+            1,
+            entry.clone(),
+            10,
+        ))));
+        worker.work.push_back(Work::File(Box::new(FileWork::new(
+            root.clone(),
+            3,
+            1,
+            entry.clone(),
+            30,
+        ))));
+        worker.work.push_back(Work::File(Box::new(second)));
+        worker.readers.completed(
+            1,
+            1,
+            &entry.path,
+            Request::Verify {
+                root: root.clone(),
+                entry: entry.clone(),
+            },
+            Reply::Verified,
+        );
+        assert!(
+            !worker.checkpoint_file(&mut current).unwrap(),
+            "a committed eight-segment quantum must yield"
+        );
+        assert!(current.prepared.is_none() && current.segments.is_empty());
+        assert!(
+            !worker
+                .database()
+                .unwrap()
+                .file_complete(current.id, current.entry.revision, "model")
+                .unwrap()
+        );
+        assert!(
+            current.staging.is_none(),
+            "yield must release decoded-payload admission"
+        );
+        worker.work.push_back(Work::File(Box::new(current)));
+        let third = worker
+            .next_work()
+            .expect("the third root must become runnable");
+        assert_eq!(third.root_id(), 3);
+        assert!(matches!(&third, Work::File(file) if file.staging.is_some()));
+        // Release this admitted quantum, then reconstruct the parked original
+        // from the actual canonical checkpoint without re-encoding its prefix.
+        drop(third);
+        let Work::File(mut resumed) = worker.work.pop_back().unwrap() else {
+            panic!("parked file");
+        };
+        assert!(worker.reserve_file_staging(&mut resumed));
+        worker.resume_file(&mut resumed).unwrap();
+        assert_eq!(
+            (resumed.cursor, resumed.text_cursor, resumed.published),
+            (2, 256, 8)
+        );
+        assert_eq!(resumed.segments.len(), 8);
+        assert!(resumed.resume_hash.is_some());
+        assert!(
+            worker.checkpoint_file(&mut resumed).unwrap(),
+            "resuming a prefix must not yield it again without new segments"
+        );
+        assert!(resumed.staging.is_some());
+        assert_eq!(
+            worker
+                .database()
+                .unwrap()
+                .connection
+                .query_row("SELECT count(*) FROM segments", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            8
+        );
+    }
+
+    #[test]
+    fn overlapping_roots_share_one_active_canonical_file_owner() {
+        let fixture = TestFixture::new();
+        let root = SourceRoot::from_root(&fixture.root);
+        let mut worker = test_worker(&root.path, None);
+        let mut owner = FileWork::new(root.clone(), 1, 1, fixture.entry.clone(), fixture.file);
+        let mut follower = FileWork::new(root, 2, 1, fixture.entry, fixture.file);
+        assert!(worker.reserve_file_staging(&mut owner));
+        assert!(!worker.reserve_file_staging(&mut follower));
+        worker.work.push_back(Work::File(Box::new(follower)));
+        assert!(
+            worker.ready_work().is_none(),
+            "an alias cannot race the owner's checkpoint cursor"
+        );
+        drop(owner);
+        assert!(
+            matches!(worker.next_work(), Some(Work::File(file)) if file.root_id == 2 && file.staging.is_some())
+        );
+    }
+
+    #[test]
+    fn completed_alias_verifies_without_decoding_or_republishing_the_canonical_prefix() {
+        let fixture = TestFixture::new();
+        let root = SourceRoot::from_root(&fixture.root);
+        let entry = fixture.entry.clone();
+        let file = fixture.file;
+        let revision = entry.revision;
+        let before: Vec<u8> = fixture
+            .store
+            .connection
+            .query_row(
+                "SELECT vector FROM segments WHERE file_id=?1",
+                [file],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mut worker = test_worker(&root.path, Some(fixture.store));
+        assert!(
+            worker
+                .database()
+                .unwrap()
+                .file_complete(file, revision, "model")
+                .unwrap()
+        );
+        assert!(
+            !worker
+                .database()
+                .unwrap()
+                .file_complete(file, revision.wrapping_add(1), "model")
+                .unwrap()
+        );
+        assert!(
+            !worker
+                .database()
+                .unwrap()
+                .file_complete(file, revision, "other-model")
+                .unwrap()
+        );
+        let mut alias = FileWork::new(root.clone(), 2, 1, entry.clone(), file);
+        assert!(worker.reserve_file_staging(&mut alias));
+        worker.readers.completed(
+            2,
+            1,
+            &entry.path,
+            Request::Verify {
+                root,
+                entry: entry.clone(),
+            },
+            Reply::Verified,
+        );
+        worker.index_file(alias).unwrap();
+        assert!(worker.work.is_empty() && worker.readers.is_empty() && worker.model.is_none());
+        let after: Vec<u8> = worker
+            .database()
+            .unwrap()
+            .connection
+            .query_row(
+                "SELECT vector FROM segments WHERE file_id=?1",
+                [file],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(before, after);
+        assert!(
+            worker
+                .staged_files
+                .iter()
+                .all(|slot| slot.strong_count() == 0)
+        );
     }
 
     #[test]
@@ -3417,17 +3723,201 @@ mod tests {
     }
 
     #[test]
-    fn accepted_command_interrupts_prune_selection_and_writes_do_not_inherit_guard() {
-        let fixture = TestFixture::new();
+    fn orphan_cleanup_progresses_while_queued_indexing_is_paused_or_capacity_blocked() {
+        for capacity in [false, true] {
+            let fixture = TestFixture::new().without_memberships();
+            let root = SourceRoot::from_root(&fixture.root);
+            let mut worker = test_worker(&root.path, Some(fixture.store));
+            worker.config.paused = !capacity;
+            worker.capacity_blocked = capacity;
+            worker.work.push_back(Work::File(Box::new(FileWork::new(
+                root,
+                1,
+                1,
+                fixture.entry.clone(),
+                999,
+            ))));
+            worker.pruning = Some(Default::default());
+            for _ in 0..12 {
+                worker.background_tick();
+            }
+            assert_eq!(
+                worker
+                    .store
+                    .as_ref()
+                    .unwrap()
+                    .connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM segments WHERE vector IS NOT NULL",
+                        [],
+                        |row| row.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                0,
+                "reclaimable orphan vectors must not require the work queue to drain"
+            );
+            assert!(worker.pruning.is_none());
+            assert_eq!(worker.work.len(), 1, "cleanup must preserve queued jobs");
+            assert_eq!(
+                std::fs::read(&fixture.entry.path).unwrap(),
+                b"original content"
+            );
+        }
+    }
+
+    #[test]
+    fn busy_cleanup_keeps_its_cursor_and_revisits_new_orphans_behind_it() {
+        let fixture = TestFixture::new().without_memberships();
+        let root = SourceRoot::from_root(&fixture.root);
+        let mut worker = test_worker(&root.path, Some(fixture.store));
+        worker.work.push_back(Work::File(Box::new(FileWork::new(
+            root.clone(),
+            1,
+            1,
+            fixture.entry.clone(),
+            999,
+        ))));
+        for (phase, steps) in [2, 8].into_iter().enumerate() {
+            for _ in 0..steps {
+                worker.advance(Work::Directory {
+                    root: root.clone(),
+                    id: 1,
+                    generation: 1,
+                    path: root.path.clone(),
+                    recursive: false,
+                    remaining: Some(VecDeque::new()),
+                });
+                worker.prune_background();
+            }
+            assert_eq!(
+                worker
+                    .database()
+                    .unwrap()
+                    .connection
+                    .query_row("SELECT COUNT(*) FROM files", [], |row| row
+                        .get::<_, usize>(0))
+                    .unwrap(),
+                0,
+                "ongoing jobs must advance cleanup and revisit new orphans"
+            );
+            if phase == 0 {
+                // Reuse a low ID behind the active file seek position.
+                let (file, _) = worker
+                    .database()
+                    .unwrap()
+                    .observe_object(
+                        1,
+                        1,
+                        &fixture.entry,
+                        fixture.entry.identity.unwrap().object(),
+                        "model",
+                    )
+                    .unwrap();
+                assert!(
+                    worker
+                        .database()
+                        .unwrap()
+                        .publish(
+                            file,
+                            fixture.entry.revision,
+                            "model",
+                            &[Segment {
+                                modality: "text".into(),
+                                location: "part 1".into(),
+                                text: "original content".into(),
+                                input_hash: vec![1; 32],
+                                vector: Some(vec![1.0; super::super::store::DIMENSION]),
+                            }],
+                            "complete"
+                        )
+                        .unwrap()
+                );
+                worker
+                    .database()
+                    .unwrap()
+                    .connection
+                    .execute("DELETE FROM memberships", [])
+                    .unwrap();
+            }
+        }
+        assert_eq!(worker.work.len(), 1);
+        worker.work.clear();
+        for _ in 0..8 {
+            worker.prune_background();
+        }
+        assert!(
+            worker.pruning.is_none(),
+            "cleanup must stop after finite quiet passes"
+        );
+    }
+
+    #[test]
+    fn queued_metadata_preserves_move_reuse_until_pressure_requires_retirement() {
+        let mut fixture = TestFixture::new().without_memberships();
         fixture
             .store
-            .connection
-            .execute("DELETE FROM memberships", [])
+            .remember_source(
+                fixture.file,
+                fixture.entry.revision,
+                "model",
+                &fixture.entry,
+                &[9; 32],
+            )
             .unwrap();
+        let root = SourceRoot::from_root(&fixture.root);
+        let mut worker = test_worker(&root.path, Some(fixture.store));
+        worker.work.push_back(Work::Directory {
+            root: root.clone(),
+            id: 1,
+            generation: 1,
+            path: root.path.clone(),
+            recursive: true,
+            remaining: None,
+        });
+        worker.pruning = Some(Default::default());
+        for _ in 0..4 {
+            worker.prune_background();
+        }
+        assert!(
+            worker
+                .database()
+                .unwrap()
+                .reusable_source(&fixture.entry, "model", &[9; 32])
+                .unwrap()
+                .is_some(),
+            "source-before-destination scans must retain reusable canonical inputs"
+        );
+        worker.capacity_blocked = true;
+        worker.pruning = Some(Default::default());
+        for _ in 0..4 {
+            worker.prune_background();
+        }
+        assert!(
+            !worker.capacity_blocked,
+            "committed vector reclamation must permit an admission retry"
+        );
+        assert!(
+            worker
+                .database()
+                .unwrap()
+                .reusable_source(&fixture.entry, "model", &[9; 32])
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(worker.work.len(), 1);
+        assert_eq!(
+            std::fs::read(&fixture.entry.path).unwrap(),
+            b"original content"
+        );
+    }
+
+    #[test]
+    fn accepted_command_interrupts_prune_selection_and_writes_do_not_inherit_guard() {
+        let fixture = TestFixture::new().without_memberships();
         let mut worker = test_worker(&fixture.root.path, Some(fixture.store));
         let (receiver, completed) = interrupt_catalog(&mut worker, "paths");
         worker.pruning = Some(Default::default());
-        worker.prune_idle();
+        worker.prune_background();
         assert!(!completed.load(Ordering::Relaxed));
         assert!(worker.pruning.is_some());
         assert!(worker.snapshot.lock().unwrap().error.is_none());
@@ -3435,11 +3925,11 @@ mod tests {
         worker.store.as_ref().unwrap().connection.execute_batch("UPDATE clip_test_records SET parent=parent WHERE
             (WITH RECURSIVE cost(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM cost WHERE n<10000) SELECT sum(n) FROM cost)>0;
             DROP VIEW paths; ALTER TABLE clip_test_records RENAME TO paths;").unwrap();
-        worker.prune_idle();
+        worker.prune_background();
         assert!(worker.pruning.is_some());
         worker.dispatch.lock().unwrap().queued -= 1;
         for _ in 0..10 {
-            worker.prune_idle();
+            worker.prune_background();
         }
         assert!(worker.pruning.is_none());
         let rows: usize = worker
@@ -3506,6 +3996,7 @@ mod tests {
     }
 
     fn model_preemption_fixture(worker: &mut Worker, stage: &str) {
+        worker.pipeline = "search-v2:\"fixture\"".into();
         let paths = &mut worker.paths;
         paths.helpers = paths.data.join("helpers");
         std::fs::create_dir_all(&paths.helpers).unwrap();
@@ -3534,7 +4025,7 @@ def hold(name):
 hold('load')
 backend=sys.argv[sys.argv.index('--device')+1]
 role=sys.argv[sys.argv.index('--role')+1]
-pipeline={'provider':sys.argv[sys.argv.index('--answer-provider')+1]} if role=='answer' else 'fixture'
+pipeline={'provider':sys.argv[sys.argv.index('--answer-provider')+1]} if role=='answer' else ((root/'pipeline').read_text() if (root/'pipeline').exists() else 'fixture')
 print(json.dumps({'ready':True,'role':role,'dimension':768,'backend':backend,'device':'test','pipeline':pipeline,'pid':os.getpid()}),flush=True)
 for line in sys.stdin:
     request=json.loads(line)
@@ -3548,6 +4039,87 @@ for line in sys.stdin:
         result.update(dimension=768,count=1,vectors=base64.b64encode(vector).decode())
     print(json.dumps(result),flush=True)
 "#).unwrap();
+    }
+
+    #[test]
+    fn changed_embedding_pipeline_retires_work_and_aborts_before_new_inference() {
+        let (fixture, mut worker, mut inventory) = inventory_fixture(3);
+        let root = SourceRoot::from_root(&fixture.root);
+        worker.config.roots = vec![filesystem::display_path(&root.path)];
+        worker.store = Some(fixture.store);
+        model_preemption_fixture(&mut worker, "unused");
+        let cancel = AtomicBool::new(false);
+        worker.model(Role::Embedding, &cancel).unwrap();
+        inventory.pipeline = worker.pipeline.clone();
+        worker.work.push_back(Work::Inventory(Box::new(inventory)));
+        worker.work.push_back(Work::File(Box::new(FileWork::new(
+            root.clone(),
+            1,
+            1,
+            fixture.entry.clone(),
+            fixture.file,
+        ))));
+        // A real helper restart with the same pipeline must preserve all work.
+        worker.model = None;
+        worker.model(Role::Embedding, &cancel).unwrap();
+        assert_eq!(worker.work.len(), 2);
+        assert!(worker.snapshot.lock().unwrap().clear_results.is_none());
+
+        let mut owned_file = FileWork::new(root.clone(), 1, 1, fixture.entry, fixture.file);
+        owned_file.prepared = Some(Prepared {
+            modality: "text".into(),
+            text: "new passage".into(),
+            location: "part 2".into(),
+            ..Default::default()
+        });
+        owned_file.segments.push(Segment {
+            modality: "text".into(),
+            location: "part 1".into(),
+            text: "old prefix".into(),
+            input_hash: vec![1; 32],
+            vector: Some(vec![1.0; super::super::store::DIMENSION]),
+        });
+        std::fs::write(worker.paths.helpers.join("pipeline"), "updated").unwrap();
+        worker.model = None;
+        let error = worker.text_segment(&mut owned_file).err().unwrap();
+        assert!(error.contains("pipeline changed"));
+        assert_eq!(owned_file.text_cursor, 0);
+        assert_eq!(owned_file.segments.len(), 1);
+        assert_eq!(owned_file.segments[0].text, "old prefix");
+        assert!(
+            worker.model.is_none(),
+            "changed helper must be retired before returning"
+        );
+        assert_eq!(worker.pipeline, "search-v2:\"updated\"");
+        assert_eq!(worker.work.len(), 1);
+        assert!(
+            matches!(worker.work.front(), Some(Work::Probe { path, .. }) if *path == root.path)
+        );
+        assert!(matches!(
+            worker.snapshot.lock().unwrap().clear_results,
+            Some(ResultReset::Semantic)
+        ));
+        assert_eq!(worker.snapshot.lock().unwrap().generated_vectors, 0);
+        // The next load uses the new pipeline without repeatedly restarting it.
+        worker.model(Role::Embedding, &cancel).unwrap();
+        assert_eq!(worker.work.len(), 1);
+        assert_eq!(worker.snapshot.lock().unwrap().generated_vectors, 0);
+    }
+
+    #[test]
+    fn initial_pipeline_selection_and_answer_roles_preserve_queued_index_work() {
+        let (_fixture, mut worker, inventory) = inventory_fixture(1);
+        model_preemption_fixture(&mut worker, "unused");
+        worker.pipeline.clear();
+        worker.work.push_back(Work::Inventory(Box::new(inventory)));
+        let cancel = AtomicBool::new(false);
+        worker.model(Role::Embedding, &cancel).unwrap();
+        let pipeline = worker.pipeline.clone();
+        worker.model(Role::Answer, &cancel).unwrap();
+        assert_eq!(worker.pipeline, pipeline);
+        worker.model(Role::Embedding, &cancel).unwrap();
+        assert_eq!(worker.work.len(), 1);
+        assert!(worker.snapshot.lock().unwrap().clear_results.is_none());
     }
 
     #[test]

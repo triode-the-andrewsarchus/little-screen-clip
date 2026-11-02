@@ -138,20 +138,25 @@ impl FileManager {
             } else {
                 "Find"
             });
+            let focus_input = self.search.focus;
+            if focus_input {
+                self.search.focus = false;
+                // Apply pending focus before TextEdit consumes this frame's
+                // events, including paste/Enter queued with Ctrl+F.
+                ui.memory_mut(|memory| memory.request_focus(input_id()));
+            }
             let output = egui::TextEdit::singleline(&mut self.search.draft)
                 .id(input_id())
                 .hint_text(":image,10kb..2MB name  ·  :emb:\"description\"")
                 .desired_width((ui.available_width() - 300.0).max(80.0))
                 .show(ui);
-            if self.search.focus {
-                self.search.focus = false;
-                output.response.request_focus();
-            }
             if self.search.automatic && output.response.changed() {
                 self.search.edited(ui.input(|input| input.time));
             }
-            submit =
-                output.response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+            // lost_focus only recognizes a field focused in the previous
+            // frame, so also accept Enter with this frame's explicit Ctrl+F.
+            submit = (focus_input || output.response.lost_focus())
+                && ui.input(|input| input.key_pressed(Key::Enter));
             if ui.add(egui::Button::new("Literal").selected(self.search.literal))
                 .on_hover_text("Treat the whole input as a filename, including a leading colon. Changes apply when you press Search.")
                 .clicked() {

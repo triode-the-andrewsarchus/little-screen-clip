@@ -3,6 +3,7 @@
 from pathlib import Path
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -48,6 +49,8 @@ def exercise(session, root):
     submit(session, ':emb:"a blue image"')
     session.observe('video-visual-search', ['offset.mkv', 'Semantic image match', 'video frame at seconds', '00:01'])
     assert observations(root) == before, 'Video extraction changed source observations'
+    failures = [json.loads(line) for line in (session.output/'late-frame-failures.jsonl').read_text().splitlines()]
+    assert failures == [{'source':'partial.mkv','offset':12.5}], failures
 
 
 def main():
@@ -55,15 +58,36 @@ def main():
     args = application_arguments(__doc__, repo / 'target/debug/clip-file-manager')
     output, root = media_fixture_directory(args)
     clip(root / 'offset.mkv', 1, 5)
-    clip(root / 'partial.mkv', 10, 0)
-    # A plausible but overstated Matroska stream duration: early frames decode,
-    # then a later sample is absent. Source bytes remain untouched during indexing.
-    path = root / 'partial.mkv'
-    data = path.read_bytes()
-    assert b'00:00:10.000000000' in data
-    path.write_bytes(data.replace(b'00:00:10.000000000', b'00:00:20.000000000'))
+    clip(root / 'partial.mkv', 20, 0)
+    # A controlled decoder failure remains a failure with sparse-seek fallback;
+    # an overstated duration alone no longer guarantees that late frames fail.
+    wrappers = output/'tools'
+    wrappers.mkdir()
+    wrapper = wrappers/'ffmpeg'
+    wrapper.write_text(r'''#!/usr/bin/env python3
+import json,os,sys
+args=sys.argv[1:]
+if '-ss' in args and '-vf' in args and 'showinfo' in args[args.index('-vf')+1]:
+ source=os.path.basename(os.readlink(args[args.index('-i')+1]))
+ offset=float(args[args.index('-ss')+1])
+ if source=='partial.mkv' and offset > 10:
+  with open(os.environ['CLIP_TEST_VIDEO_FAILURE_MARKER'],'a') as marker:
+   marker.write(json.dumps({'source':source,'offset':offset})+'\n')
+  print('Controlled late frame failure',file=sys.stderr)
+  sys.exit(1)
+# exec preserves the guarded source descriptors inherited from CommandRequest.
+os.execv(os.environ['CLIP_TEST_REAL_FFMPEG'],['ffmpeg',*args])
+''')
+    wrapper.chmod(0o700)
+    real_ffmpeg = shutil.which('ffmpeg')
+    assert real_ffmpeg
+    def environment(env, children):
+        search_environment(env, children)
+        env.update(PATH=str(wrappers)+os.pathsep+env['PATH'],
+                   CLIP_TEST_REAL_FFMPEG=real_ffmpeg,
+                   CLIP_TEST_VIDEO_FAILURE_MARKER=str(output/'late-frame-failures.jsonl'))
     return run_application_acceptance(args, output, root, exercise,
-        'Explicit real-model video enrollment, visual/audio timestamps and vectors, late decode failure retaining earlier segments, unchanged sources', search_environment)
+        'Explicit real-model video enrollment, visual/audio timestamps and vectors, late decode failure retaining earlier segments, unchanged sources', environment)
 
 
 if __name__ == '__main__':

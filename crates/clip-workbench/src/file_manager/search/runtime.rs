@@ -94,6 +94,9 @@ pub(super) struct Model {
     pub role: Role,
     paths: Paths,
     fallback_from: Vec<String>,
+    // One exact query input, scoped to this model/pipeline's resident lifetime.
+    // Filters, source admission, ranking and results are never cached here.
+    query_vector: Option<(String, Vec<f32>)>,
 }
 const BACKENDS: [&str; 3] = ["cuda", "vulkan", "cpu"];
 
@@ -213,6 +216,7 @@ impl Model {
             role,
             paths: paths.clone(),
             fallback_from: Vec::new(),
+            query_vector: None,
         };
         let ready = model
             .receive(deadline, token)
@@ -412,12 +416,35 @@ impl Model {
         query: bool,
         token: &AtomicBool,
     ) -> Result<Vec<Vec<f32>>, String> {
+        let key = match (query, inputs) {
+            (true, [input]) => Some(input),
+            _ => None,
+        };
+        if let Some((text, vector)) = &self.query_vector
+            && key == Some(text)
+            && !self.failed
+            && self
+                .child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_none()
+        {
+            check_deadline(Instant::now() + Duration::from_secs(10), token)?;
+            self.last_used = Instant::now();
+            return Ok(vec![vector.clone()]);
+        }
         let response = self.exchange(
             json!({"op":"text", "inputs":inputs, "token_limit":if query {512} else {2048}}),
             Duration::from_secs(if query { 10 } else { 60 }),
             token,
         )?;
-        decode(&response, inputs.len())
+        let vectors = decode(&response, inputs.len())?;
+        if let Some(input) = key
+            && input.len() <= 32 * 1024
+        {
+            self.query_vector = Some((input.clone(), vectors[0].clone()));
+        }
+        Ok(vectors)
     }
     pub fn answer(
         &mut self,
@@ -542,7 +569,7 @@ mod tests {
     fn recovery_fixture(mode: &str) -> (tempfile::TempDir, Paths) {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("mode"), mode).unwrap();
-        std::fs::write(directory.path().join("worker.py"), r#"import json,os,sys,time
+        std::fs::write(directory.path().join("worker.py"), r#"import json,os,sys,time,base64,struct
 from pathlib import Path
 root=Path(__file__).parent
 mode=(root/'mode').read_text()
@@ -567,6 +594,10 @@ for line in sys.stdin:
     request=json.loads(line)
     with (root/'requests.jsonl').open('a') as out: out.write(json.dumps({'backend':backend,'request':request})+'\n')
     if mode=='request': emit({'id':request['id'],'ok':False,'kind':'request','error':'out of memory is literal invalid input'})
+    elif mode=='vectors':
+        count=len(request['inputs'])
+        vector=struct.pack('<768f',1,*([0]*767))
+        emit({'id':request['id'],'ok':True,'dimension':768,'count':count,'vectors':base64.b64encode(vector*count).decode()})
     elif backend=='cuda' or mode=='all':
         if mode=='crash': os._exit(23)
         emit({'id':request['id'],'ok':False,'kind':'backend','error':'fixture native compute failure'})
@@ -585,6 +616,46 @@ for line in sys.stdin:
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn exact_query_vector_reuse_keeps_passages_cancellation_and_model_lifetime_independent() {
+        let (_folder, paths) = recovery_fixture("vectors");
+        let requests = || {
+            std::fs::read_to_string(paths.helpers.join("requests.jsonl"))
+                .unwrap()
+                .lines()
+                .count()
+        };
+        let cancel = AtomicBool::new(false);
+        let mut model = Model::start_preferred(&paths, Role::Embedding, &cancel).unwrap();
+        let query = vec!["task: search result | query: brass telescope".into()];
+        let first = model.texts(&query, true, &cancel).unwrap();
+        let before = model.last_used;
+        assert_eq!(model.texts(&query, true, &cancel).unwrap(), first);
+        assert!(model.last_used >= before);
+        assert_eq!(requests(), 1);
+        model.texts(&query, false, &cancel).unwrap();
+        cancel.store(true, Ordering::Relaxed);
+        assert!(
+            model
+                .texts(&query, true, &cancel)
+                .unwrap_err()
+                .contains("cancelled")
+        );
+        cancel.store(false, Ordering::Relaxed);
+        model
+            .texts(&["another query".into()], true, &cancel)
+            .unwrap();
+        assert_eq!(model.texts(&query, true, &cancel).unwrap(), first);
+        assert_eq!(requests(), 4);
+        model.child.kill().unwrap();
+        model.child.wait().unwrap();
+        // A dead helper must enter ordinary fresh-backend recovery instead of
+        // letting a cached vector conceal loss of its resident model.
+        assert_eq!(model.texts(&query, true, &cancel).unwrap(), first);
+        assert_eq!(recovery_starts(&paths).len(), 2);
+        assert_eq!(requests(), 5);
     }
 
     #[test]

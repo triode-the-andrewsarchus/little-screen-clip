@@ -19,6 +19,13 @@ pub(in crate::file_manager::search) enum Retry {
 }
 
 impl Store {
+    /// A queued alias may finish after another root completed this representation.
+    pub fn file_complete(&self, file: i64, revision: u64, pipeline: &str) -> Result<bool, String> {
+        self.connection.query_row("SELECT EXISTS(SELECT 1 FROM files f WHERE f.id=?1 AND f.revision=?2 AND f.pipeline=?3 AND f.extraction_version=?4 AND f.state='ready' AND NOT EXISTS(SELECT 1 FROM file_checkpoints c WHERE c.file_id=f.id) AND NOT EXISTS(SELECT 1 FROM file_retries r WHERE r.file_id=f.id))",
+            params![file, revision as i64, pipeline, EXTRACTION_VERSION], |row| row.get(0))
+            .map_err(|error| record_storage_fault(&self.storage_fault, error))
+    }
+
     pub fn file_retry(&self, file: i64) -> Result<Retry, String> {
         let remaining: Option<Option<u64>> = self.connection.query_row(
             "SELECT CASE WHEN retry_after IS NULL THEN NULL ELSE max(0,retry_after-unixepoch()) END FROM file_retries WHERE file_id=?1",

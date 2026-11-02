@@ -1,8 +1,10 @@
 """Provisioning/fallback checks; no downloads or GPU are required."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
+import signal
 import sys
 import tempfile
 import unittest
@@ -20,6 +22,43 @@ setup, worker = load("setup"), load("worker")
 
 
 class Provisioning(unittest.TestCase):
+    def test_managed_setup_rejects_wrong_owner_or_shared_group_before_writes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            arguments = ['setup.py', '--runtime', str(root/'runtime'), '--models', str(root/'models'), '--parent', '42']
+            for parent, group in [(1, os.getpid()), (42, os.getpid()+1)]:
+                with self.subTest(parent=parent, group=group), patch.object(sys, 'argv', arguments), \
+                     patch.object(setup.os, 'getppid', return_value=parent), \
+                     patch.object(setup.os, 'getpgrp', return_value=group), \
+                     self.assertRaisesRegex(RuntimeError, 'private|own Linux process group'):
+                    setup.main()
+                self.assertFalse((root/'runtime').exists())
+                self.assertFalse((root/'models').exists())
+
+    def test_managed_setup_arms_group_cleanup_and_closes_parent_race(self):
+        for parents, errno in [([42, 42], 0), ([42, 1], 0), ([42], -1)]:
+            with self.subTest(parents=parents, prctl=errno), \
+                 patch.object(setup.os, 'getppid', side_effect=parents), \
+                 patch.object(setup.os, 'getpgrp', return_value=os.getpid()), \
+                 patch.object(setup.os, 'killpg') as kill, \
+                 patch.object(setup.signal, 'signal') as handler, \
+                 patch.object(setup.ctypes, 'CDLL') as library:
+                library.return_value.prctl.return_value = errno
+                if errno:
+                    with self.assertRaises(OSError):
+                        setup.attach_parent(42)
+                    kill.assert_not_called()
+                else:
+                    setup.attach_parent(42)
+                    if parents[-1] == 1:
+                        kill.assert_called_once_with(os.getpid(), signal.SIGKILL)
+                    else:
+                        kill.assert_not_called()
+                        handler.call_args.args[1](signal.SIGTERM, None)
+                        kill.assert_called_once_with(os.getpid(), signal.SIGKILL)
+                handler.assert_called_once()
+                library.return_value.prctl.assert_called_once_with(1, signal.SIGTERM, 0, 0, 0)
+
     def test_provisioned_worker_starts_outside_checkout_without_model_or_download(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -69,6 +108,8 @@ class Provisioning(unittest.TestCase):
                 with patch.object(setup, "run", side_effect=RuntimeError("compiler failed")):
                     with self.assertRaisesRegex(RuntimeError, "compiler failed"):
                         setup.build(runtime, None)
+                self.assertFalse((runtime / ".runtime-incomplete").exists())
+                self.assertFalse((runtime / ".runtime-staging").exists())
                 self.assertEqual((runtime / "runtime.json").read_bytes(), original)
                 self.assertEqual((runtime / "lib/libclip-search.so").read_bytes(), b"shim")
 
@@ -86,6 +127,7 @@ class Provisioning(unittest.TestCase):
             self.assertEqual((folder / "lib/old.so").read_bytes(), b"old library")
             self.assertEqual(json.loads((folder / "runtime.json").read_text()), {"old": True})
             self.assertFalse((folder / "lib.previous").exists())
+            self.assertTrue((folder / ".runtime-incomplete").exists(), "failed handoff requires explicit repair")
 
 
 class DeviceSelection(unittest.TestCase):

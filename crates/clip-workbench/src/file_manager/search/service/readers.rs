@@ -54,6 +54,30 @@ impl Default for Readers {
     }
 }
 impl Readers {
+    #[cfg(test)]
+    pub(super) fn completed(
+        &mut self,
+        root: i64,
+        generation: i64,
+        path: &Path,
+        request: Request,
+        reply: Reply,
+    ) {
+        let signature = Sha256::digest(serde_json::to_vec(&request).unwrap()).into();
+        let task = Task::start_unbounded(&self.jobs, |_| Ok(Reply::Verified));
+        self.pending.insert(
+            root,
+            Pending {
+                generation,
+                path: path.into(),
+                signature,
+                watch: None,
+                task,
+                ready: Some(Ok(reply)),
+            },
+        );
+    }
+
     pub fn inventory_available(&self, root: i64) -> bool {
         self.pending.contains_key(&root)
             || self

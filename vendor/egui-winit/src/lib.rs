@@ -108,6 +108,36 @@ pub struct State {
 /// clipboard read. Text editors should leave this false.
 pub const CLIPBOARD_SHORTCUTS_AS_KEYS: &str = "egui_winit_clipboard_shortcuts_as_keys";
 
+/// Optional `Vec<egui::KeyboardShortcut>` context data for shortcuts that move
+/// focus from a custom clipboard surface into a text editor. Matching a press
+/// restores text clipboard routing for subsequent events in the same batch.
+pub const CLIPBOARD_TEXT_FOCUS_SHORTCUTS: &str = "egui_winit_clipboard_text_focus_shortcuts";
+
+fn clipboard_shortcuts_as_keys(
+    ctx: &egui::Context,
+    modifiers: egui::Modifiers,
+    key: egui::Key,
+    pressed: bool,
+) -> bool {
+    ctx.data_mut(|data| {
+        let id = egui::Id::new(CLIPBOARD_SHORTCUTS_AS_KEYS);
+        let forward = data.get_temp::<bool>(id).unwrap_or(false);
+        let text_focus = data
+            .get_temp::<Vec<egui::KeyboardShortcut>>(egui::Id::new(CLIPBOARD_TEXT_FOCUS_SHORTCUTS))
+            .is_some_and(|shortcuts| {
+                shortcuts.iter().any(|shortcut| {
+                    shortcut.logical_key == key && modifiers.matches_logically(shortcut.modifiers)
+                })
+            });
+        if forward && pressed && text_focus {
+            data.insert_temp(id, false);
+            false
+        } else {
+            forward
+        }
+    })
+}
+
 /// One layout-aware printable key press before Shift/Caps Lock are applied.
 ///
 /// This preserves keys that egui's fixed `Key` enum cannot represent (e.g. an
@@ -720,10 +750,8 @@ impl State {
 
     // Clipboard commands are translated independently of ordinary key mapping.
     fn handle_clipboard_shortcut(&mut self, key: egui::Key, pressed: bool) -> bool {
-        let forward = self.egui_ctx.data(|data| {
-            data.get_temp::<bool>(egui::Id::new(CLIPBOARD_SHORTCUTS_AS_KEYS))
-                .unwrap_or(false)
-        });
+        let forward =
+            clipboard_shortcuts_as_keys(&self.egui_ctx, self.egui_input.modifiers, key, pressed);
         if !pressed || forward {
             return false;
         }
@@ -1913,6 +1941,50 @@ mod profiling_scopes {
 #[cfg(test)]
 mod logical_key_tests {
     use super::*;
+
+    #[test]
+    fn text_focus_shortcuts_change_clipboard_routing_within_the_event_batch() {
+        let ctx = egui::Context::default();
+        let enable = || {
+            ctx.data_mut(|data| {
+                data.insert_temp(egui::Id::new(CLIPBOARD_SHORTCUTS_AS_KEYS), true);
+                data.insert_temp(
+                    egui::Id::new(CLIPBOARD_TEXT_FOCUS_SHORTCUTS),
+                    vec![egui::KeyboardShortcut::new(
+                        egui::Modifiers::CTRL,
+                        egui::Key::F,
+                    )],
+                );
+            })
+        };
+        enable();
+        for (key, modifiers, pressed) in [
+            (egui::Key::C, egui::Modifiers::CTRL, true),
+            (egui::Key::F, egui::Modifiers::NONE, true),
+            (egui::Key::F, egui::Modifiers::CTRL, false),
+        ] {
+            assert!(clipboard_shortcuts_as_keys(&ctx, modifiers, key, pressed));
+        }
+        assert!(!clipboard_shortcuts_as_keys(
+            &ctx,
+            egui::Modifiers::CTRL,
+            egui::Key::F,
+            true
+        ));
+        assert!(!clipboard_shortcuts_as_keys(
+            &ctx,
+            egui::Modifiers::CTRL,
+            egui::Key::V,
+            true
+        ));
+        enable(); // The next rendered frame republishes the actual focus policy.
+        assert!(clipboard_shortcuts_as_keys(
+            &ctx,
+            egui::Modifiers::CTRL,
+            egui::Key::V,
+            true
+        ));
+    }
 
     #[test]
     fn logical_punctuation_is_preserved_and_hidden_consumers_drop_old_keys() {

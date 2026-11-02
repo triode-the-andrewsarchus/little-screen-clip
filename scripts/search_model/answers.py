@@ -781,7 +781,7 @@ def serve(args, backend, device, emit, validate_media):
                     if not visual_api:
                         raise ValueError("Vision runtime is not installed. Use Install answer model.")
                     field = "evidence_result" if request["op"] == "visual_evidence" else "answer"
-                    result = {field:visual_generate(library, model, request, args.models, spec, prepare, grammar, validate, validate_media)}
+                    result = {field:visual_generate(library, model, request, args.models, spec, prepare, grammar, validate, validate_media, SYSTEM)}
                 elif handler := handlers.get(request.get('op')):
                     result = handler(request)
                 else:

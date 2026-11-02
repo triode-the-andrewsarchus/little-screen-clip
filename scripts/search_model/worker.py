@@ -14,7 +14,6 @@ import struct
 import io
 import wave
 import sys
-import tempfile
 
 DIMENSION = 768
 REQUEST_LIMIT = 16 * 1024 * 1024
@@ -88,11 +87,17 @@ def media_embedding(library, model, request, error):
         raise ValueError("Unsupported visual token budget")
     validate_media(op, data)
     output = (c.c_float * DIMENSION)()
-    with tempfile.TemporaryDirectory(prefix="clip-search-media-") as folder:
-        path = Path(folder) / ("input.png" if op == "image" else "input.wav")
-        path.write_bytes(data)
-        os.chmod(path, 0o600)
-        result = library.clip_search_embed_media(model, os.fsencode(path), op == "image", budget, output, error, len(error))
+    # Anonymous input cannot leave a pathname behind when this owned helper is
+    # killed. Keep the descriptor alive through the synchronous native call.
+    flags = os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+    with os.fdopen(os.memfd_create("clip-search-media", flags), "wb") as prepared:
+        os.fchmod(prepared.fileno(), 0o600)
+        prepared.write(data)
+        prepared.flush()
+        seals = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+        fcntl.fcntl(prepared.fileno(), fcntl.F_ADD_SEALS, seals)
+        path = f"/proc/self/fd/{prepared.fileno()}".encode()
+        result = library.clip_search_embed_media(model, path, op == "image", budget, output, error, len(error))
     return output, result
 
 
@@ -195,6 +200,8 @@ def main():
     args.models = args.models.resolve()
     with (args.runtime / "setup.lock").open("a") as ownership:
         fcntl.flock(ownership, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        if any(os.path.lexists(args.runtime / name) for name in (".runtime-incomplete", "lib.previous")):
+            raise RuntimeError("Runtime installation was interrupted; explicitly reinstall the runtime from Index.")
         serve(args)
 
 

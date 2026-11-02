@@ -15,14 +15,40 @@ pub(in super::super) fn decode(
     mut reply: Value,
     kind: AnswerType,
     location: &str,
+    text_sources: &[Source],
 ) -> Result<Answer, String> {
-    let sources = sources(
+    let items: Vec<Value> = serde_json::from_value(
         reply
             .get("evidence")
             .cloned()
             .ok_or("Missing visual evidence")?,
-        location,
-    )?;
+    )
+    .map_err(|_| "Invalid mixed evidence")?;
+    if items.len() > 4 {
+        return Err("Excessive mixed evidence".into());
+    }
+    let mut sources = Vec::new();
+    for item in items {
+        if item.get("quote").is_some() {
+            let quote: super::Evidence =
+                serde_json::from_value(item).map_err(|_| "Invalid text evidence")?;
+            if quote.source == 0 {
+                return Err("Text evidence cannot reference image source 0".into());
+            }
+            for (location, text) in super::evidence(&[quote], text_sources)? {
+                sources.push(Source {
+                    id: 0,
+                    text,
+                    location,
+                });
+            }
+        } else {
+            sources.extend(self::sources(json!([item]), location)?);
+        }
+    }
+    for (id, source) in sources.iter_mut().enumerate() {
+        source.id = id;
+    }
     let evidence: Vec<_> = sources
         .iter()
         .map(|source| json!({"source":source.id,"quote":source.text}))
@@ -73,8 +99,34 @@ mod tests {
     }
 
     #[test]
+    fn mixed_text_quotations_are_exact_and_cannot_impersonate_image_regions() {
+        let text = [Source {
+            id: 1,
+            text: "Shape: rectangle.".into(),
+            location: "page 1".into(),
+        }];
+        let mut response = reply();
+        response["evidence"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"source":1,"quote":"Shape: rectangle."}));
+        let answer = decode(response.clone(), AnswerType::Boolean, "page 1", &text).unwrap();
+        assert!(answer.evidence[0].0.contains("model observation"));
+        assert_eq!(answer.evidence[1].0, "page 1");
+        for item in [
+            json!({"source":0,"quote":"Shape: rectangle."}),
+            json!({"source":2,"quote":"Shape: rectangle."}),
+            json!({"source":1,"quote":"Shape: circle."}),
+            json!({"source":1,"region":[0,0,1000,1000],"observation":"Text is not pixels."}),
+        ] {
+            response["evidence"] = json!([item]);
+            assert!(decode(response.clone(), AnswerType::Boolean, "page 1", &text).is_err());
+        }
+    }
+
+    #[test]
     fn false_keeps_its_value_and_explicit_observational_provenance() {
-        let answer = decode(reply(), AnswerType::Boolean, "image").unwrap();
+        let answer = decode(reply(), AnswerType::Boolean, "image", &[]).unwrap();
         assert_eq!(answer.label(), "false");
         assert!(answer.evidence[0].0.contains("model observation"));
         assert!(answer.evidence[0].0.contains("10,20..900,800/1000"));
@@ -90,10 +142,10 @@ mod tests {
         ] {
             let mut response = reply();
             response["evidence"] = json!([evidence]);
-            assert!(decode(response, AnswerType::Boolean, "image").is_err());
+            assert!(decode(response, AnswerType::Boolean, "image", &[]).is_err());
         }
         let mut response = reply();
         response["value"] = json!("yes");
-        assert!(decode(response, AnswerType::Boolean, "image").is_err());
+        assert!(decode(response, AnswerType::Boolean, "image", &[]).is_err());
     }
 }
