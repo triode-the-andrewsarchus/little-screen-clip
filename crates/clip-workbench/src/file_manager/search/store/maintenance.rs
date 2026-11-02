@@ -4,8 +4,15 @@ use rusqlite::{
     Connection, OpenFlags,
     backup::{Backup, StepResult},
 };
+use sha2::{Digest, Sha256};
 use std::{
-    os::fd::AsRawFd,
+    os::{
+        fd::AsRawFd,
+        unix::{
+            ffi::OsStrExt,
+            fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        },
+    },
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
@@ -15,45 +22,77 @@ impl Store {
     /// Export one self-contained snapshot, including committed WAL content.
     /// The destination must be unused; installation retains the ordinary parent.
     pub fn export(&self, destination: &Path, cancel: &AtomicBool) -> Result<(), String> {
-        let directory = little_clip_core::kernel_interface::pin_content_directory(
-            destination.parent().ok_or("Missing backup parent")?,
-        )
-        .map_err(|error| error.to_string())?;
+        let parent = destination.parent().ok_or("Missing backup parent")?;
+        let directory = little_clip_core::kernel_interface::pin_content_directory(parent)
+            .map_err(|error| error.to_string())?;
         let held = std::path::PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-        let target = held.join(destination.file_name().ok_or("Missing backup filename")?);
-        let temporary =
-            tempfile::NamedTempFile::new_in(&held).map_err(|error| error.to_string())?;
-        let staging = temporary.path().to_path_buf();
+        let filename = destination.file_name().ok_or("Missing backup filename")?;
+        let target = held.join(filename);
+        // One identified incomplete output per requested destination, rather
+        // than a new anonymous-looking sibling after every killed attempt.
+        let name = format!(
+            ".search-backup-{:x}.partial",
+            Sha256::digest(filename.as_bytes())
+        );
+        let partial = tempfile::Builder::new()
+            .prefix(&name)
+            .rand_bytes(0)
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in(&held)
+            .map_err(|error| if error.kind() == std::io::ErrorKind::AlreadyExists {
+                format!("Backup staging path already exists: {}. Inspect and remove it, or choose another backup filename.", parent.join(&name).display())
+            } else { error.to_string() })?
+            .keep();
         let result = (|| {
-            let mut output =
-                Connection::open_with_flags(&staging, OpenFlags::SQLITE_OPEN_READ_WRITE)
-                    .map_err(|error| error.to_string())?;
-            output
-                .busy_timeout(Duration::from_secs(2))
+            // SQLite sidecars must also be inside a private directory. Retain
+            // its handle, and never recursively remove a possibly replaced name.
+            let directory = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                .open(&partial)
                 .map_err(|error| error.to_string())?;
-            copy_database(&self.connection, &mut output, cancel, None)?;
-            output
-                .execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;")
-                .map_err(|error| error.to_string())?;
-            output.close().map_err(|(_, error)| error.to_string())?;
-            if cancel.load(Ordering::Relaxed) {
-                return Err("Index backup cancelled before installation".into());
+            let metadata = directory.metadata().map_err(|error| error.to_string())?;
+            // SAFETY: geteuid has no arguments or memory effects.
+            if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o777 != 0o700 {
+                return Err("Backup staging directory changed before preparation".into());
             }
-            temporary
-                .as_file()
-                .sync_all()
-                .map_err(|error| error.to_string())?;
-            temporary
-                .persist_noclobber(target)
-                .map_err(|error| format!("Choose an unused backup filename: {error}"))?;
-            // Installation is the commit point: report success after it happens.
-            Ok(())
+            let held = std::path::PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+            let temporary =
+                tempfile::NamedTempFile::new_in(&held).map_err(|error| error.to_string())?;
+            let staging = temporary.path().to_path_buf();
+            let result = (|| {
+                let mut output =
+                    Connection::open_with_flags(&staging, OpenFlags::SQLITE_OPEN_READ_WRITE)
+                        .map_err(|error| error.to_string())?;
+                output
+                    .busy_timeout(Duration::from_secs(2))
+                    .map_err(|error| error.to_string())?;
+                copy_database(&self.connection, &mut output, cancel, None)?;
+                output
+                    .execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;")
+                    .map_err(|error| error.to_string())?;
+                output.close().map_err(|(_, error)| error.to_string())?;
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("Index backup cancelled before installation".into());
+                }
+                temporary
+                    .as_file()
+                    .sync_all()
+                    .map_err(|error| error.to_string())?;
+                temporary
+                    .persist_noclobber(target)
+                    .map_err(|error| format!("Choose an unused backup filename: {error}"))?;
+                // Installation is the commit point: report success after it happens.
+                Ok(())
+            })();
+            for suffix in ["-wal", "-shm", "-journal"] {
+                let mut sidecar = staging.as_os_str().to_os_string();
+                sidecar.push(suffix);
+                let _ = std::fs::remove_file(std::path::PathBuf::from(sidecar));
+            }
+            result
         })();
-        for suffix in ["-wal", "-shm", "-journal"] {
-            let mut sidecar = staging.as_os_str().to_os_string();
-            sidecar.push(suffix);
-            let _ = std::fs::remove_file(std::path::PathBuf::from(sidecar));
-        }
+        let _ = std::fs::remove_dir(partial);
         result
     }
 
@@ -184,6 +223,149 @@ mod tests {
                 .is_err()
         );
         assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn backup_partial_collision_never_opens_or_removes_existing_objects() {
+        use std::os::unix::fs::symlink;
+        let cache = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let store = populated(cache.path());
+        let target = output.path().join("backup.sqlite");
+        let partial = output.path().join(format!(
+            ".search-backup-{:x}.partial",
+            Sha256::digest(target.file_name().unwrap().as_bytes())
+        ));
+        let sentinel = outside.path().join("untouched");
+        std::fs::write(&sentinel, b"not export scratch").unwrap();
+        symlink(outside.path(), &partial).unwrap();
+        for _ in 0..2 {
+            let error = store.export(&target, &AtomicBool::new(false)).unwrap_err();
+            assert!(error.contains("staging path already exists"), "{error}");
+            assert_eq!(std::fs::read(&sentinel).unwrap(), b"not export scratch");
+            assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 1);
+            assert!(partial.symlink_metadata().unwrap().file_type().is_symlink());
+        }
+        std::fs::remove_file(&partial).unwrap();
+        std::fs::write(&partial, b"keep existing regular file").unwrap();
+        assert!(store.export(&target, &AtomicBool::new(false)).is_err());
+        assert_eq!(
+            std::fs::read(&partial).unwrap(),
+            b"keep existing regular file"
+        );
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn killed_backup_retains_one_identified_partial_and_refuses_to_accumulate() {
+        const CHILD: &str = "LITTLE_CLIP_TEST_BACKUP_CRASH";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = std::path::PathBuf::from(root);
+            let store = populated(&root.join("cache"));
+            store
+                .connection
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")
+                .unwrap();
+            std::fs::write(root.join("ready"), b"ready").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while !root.join("go").exists() {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            store
+                .export(&root.join("output/backup.sqlite"), &AtomicBool::new(false))
+                .unwrap();
+            panic!("the parent must kill the blocked export");
+        }
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("output");
+        std::fs::create_dir(&output).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "file_manager::search::store::maintenance::tests::killed_backup_retains_one_identified_partial_and_refuses_to_accumulate", "--nocapture"])
+            .env(CHILD, root.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let observed = (|| -> Result<_, String> {
+            while !root.path().join("ready").exists() {
+                if Instant::now() >= deadline {
+                    return Err("export child did not initialize".into());
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            let source = Connection::open(root.path().join("cache/index.sqlite"))
+                .map_err(|e| e.to_string())?;
+            source
+                .execute_batch("BEGIN EXCLUSIVE;")
+                .map_err(|e| e.to_string())?;
+            std::fs::write(root.path().join("go"), b"go").map_err(|e| e.to_string())?;
+            loop {
+                if Instant::now() >= deadline {
+                    return Err("export did not create staging".into());
+                }
+                if let Some(entry) = std::fs::read_dir(&output)
+                    .map_err(|e| e.to_string())?
+                    .next()
+                {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    if entry.path().is_dir()
+                        && std::fs::read_dir(entry.path())
+                            .map_err(|e| e.to_string())?
+                            .next()
+                            .is_none()
+                    {
+                        std::thread::sleep(Duration::from_millis(2));
+                        continue;
+                    }
+                    // Keep the source lock until the blocked writer has died.
+                    return Ok((entry.path(), source));
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        })();
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+        let (partial, source) = observed.unwrap();
+        drop(source);
+        let expected = output.join(format!(
+            ".search-backup-{:x}.partial",
+            Sha256::digest(b"backup.sqlite")
+        ));
+        assert_eq!(
+            partial, expected,
+            "a killed export must identify its partial output"
+        );
+        assert!(!output.join("backup.sqlite").exists());
+        let staged = std::fs::read_dir(&partial)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let before = std::fs::read(&staged).unwrap();
+        let store = Store::open(&root.path().join("cache")).unwrap();
+        for _ in 0..2 {
+            let error = store
+                .export(&output.join("backup.sqlite"), &AtomicBool::new(false))
+                .unwrap_err();
+            assert!(error.contains("staging path already exists"), "{error}");
+            assert!(error.contains(&partial.display().to_string()), "{error}");
+            assert_eq!(std::fs::read(&staged).unwrap(), before);
+            assert_eq!(std::fs::read_dir(&output).unwrap().count(), 1);
+        }
+        std::fs::remove_dir_all(partial).unwrap();
+        store
+            .export(&output.join("backup.sqlite"), &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(std::fs::read_dir(&output).unwrap().count(), 1);
+        let copy = Connection::open(output.join("backup.sqlite")).unwrap();
+        assert_eq!(
+            copy.query_row("SELECT COUNT(*) FROM segments", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            1
+        );
     }
     #[test]
     fn committed_clear_with_a_busy_reader_reports_delayed_reclamation() {
