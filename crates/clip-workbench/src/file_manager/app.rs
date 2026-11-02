@@ -180,7 +180,7 @@ impl FileManagerApp {
                         self.drop_destinations.insert(token, destination);
                     }
                 }
-                Event::Files(token, paths, moving) => {
+                Event::Files(token, paths, moving, guards) => {
                     let accepted = match self.drop_destinations.remove(&token) {
                         Some(DropDestination::Pad(index, append)) if !moving && pads_visible => {
                             self.browser.constellation.drop_on_pad(
@@ -195,15 +195,15 @@ impl FileManagerApp {
                         }
                         Some(DropDestination::Directory(destination)) => self
                             .browser
-                            .queue_native_drop(token, paths, destination, moving),
+                            .queue_native_drop(token, paths, destination, moving, guards),
                         _ => false,
                     };
                     if !accepted {
                         native.finish(token, false);
                     }
                 }
-                Event::Remove(expected, snapshot) => {
-                    self.browser.native_move_cleanup(expected, snapshot)
+                Event::Remove(expected, snapshot, guards) => {
+                    self.browser.native_move_cleanup(expected, snapshot, guards)
                 }
                 Event::Failed(token, text) => {
                     self.drop_destinations.remove(&token);
@@ -247,22 +247,35 @@ impl FileManagerApp {
         let Some(payload) = egui::DragAndDrop::payload::<super::transfers::FileDrag>(ctx) else {
             return;
         };
+        let guards = match payload.context.guards_for(&payload.paths) {
+            Ok(guards) => guards,
+            Err(error) => {
+                self.browser.error = Some(error);
+                egui::DragAndDrop::clear_payload(ctx);
+                return;
+            }
+        };
         let identities = payload
             .paths
             .iter()
             .map(|path| {
-                let identity = self
-                    .browser
-                    .directory
-                    .as_ref()
-                    .and_then(|dir| dir.entries.iter().find(|e| &e.path == path))
-                    .and_then(|e| e.identity);
+                let identity = guards
+                    .get(path)
+                    .map(super::search::SourceGuard::expected_identity)
+                    .unwrap_or_else(|| {
+                        self.browser
+                            .directory
+                            .as_ref()
+                            .and_then(|dir| dir.entries.iter().find(|e| &e.path == path))
+                            .and_then(|e| e.identity)
+                    });
                 (path.clone(), identity)
             })
             .collect();
         match native.start(
             identities,
             payload.copy_only || ctx.input(|i| i.modifiers.ctrl),
+            guards,
         ) {
             Ok(true) => {
                 egui::DragAndDrop::clear_payload(ctx);

@@ -5,7 +5,7 @@ mod protocol;
 use super::filesystem::Identity;
 use little_clip_core::{BackgroundJobs, JobError};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
@@ -28,10 +28,16 @@ type ResultReceiver<T> = mpsc::Receiver<Result<Result<T, String>, JobError>>;
 
 pub(super) enum Event {
     Drop(u64, egui::Pos2),
-    Files(u64, Vec<PathBuf>, bool),
+    Files(
+        u64,
+        Vec<PathBuf>,
+        bool,
+        HashMap<PathBuf, super::search::SourceGuard>,
+    ),
     Remove(
         BTreeMap<PathBuf, Option<Identity>>,
         BTreeMap<PathBuf, Identity>,
+        HashMap<PathBuf, super::search::SourceGuard>,
     ),
     Failed(u64, String),
     Notice(String),
@@ -48,6 +54,10 @@ struct Reading {
     cancelled: Arc<AtomicBool>,
     offer: wl_data_offer::WlDataOffer,
     moving: bool,
+    origin: Option<(
+        BTreeSet<PathBuf>,
+        HashMap<PathBuf, super::search::SourceGuard>,
+    )>,
 }
 struct Source {
     proxy: wl_data_source::WlDataSource,
@@ -58,6 +68,7 @@ struct Source {
     written: Arc<AtomicBool>,
     action: Action,
     movable: bool,
+    search_guards: HashMap<PathBuf, super::search::SourceGuard>,
 }
 struct State {
     surface: wl_surface::WlSurface,
@@ -171,8 +182,17 @@ impl NativeDrag {
             let read = self.state.reading.remove(&id).expect("ready read");
             match result {
                 Ok(paths) => {
+                    let guards = read
+                        .origin
+                        .filter(|(expected, _)| {
+                            *expected == paths.iter().cloned().collect::<BTreeSet<_>>()
+                        })
+                        .map(|(_, guards)| guards)
+                        .unwrap_or_default();
                     self.state.awaiting.insert(id, read.offer);
-                    self.state.events.push(Event::Files(id, paths, read.moving));
+                    self.state
+                        .events
+                        .push(Event::Files(id, paths, read.moving, guards));
                 }
                 Err(error) => {
                     read.offer.destroy();
@@ -201,6 +221,7 @@ impl NativeDrag {
         &mut self,
         identities: BTreeMap<PathBuf, Option<Identity>>,
         copy: bool,
+        search_guards: HashMap<PathBuf, super::search::SourceGuard>,
     ) -> Result<bool, String> {
         if self.state.source.is_some() {
             return Ok(false);
@@ -241,6 +262,7 @@ impl NativeDrag {
             written: Arc::new(AtomicBool::new(false)),
             action: Action::Copy,
             movable,
+            search_guards,
         });
         self.state.release_pointer = true;
         let _ = self.connection.flush();

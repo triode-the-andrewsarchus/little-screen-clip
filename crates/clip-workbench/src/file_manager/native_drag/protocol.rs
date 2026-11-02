@@ -204,6 +204,12 @@ impl State {
                 cancelled,
                 offer,
                 moving: !reference && incoming.action == Action::Move,
+                origin: self.source.as_ref().map(|source| {
+                    (
+                        source.identities.keys().cloned().collect(),
+                        source.search_guards.clone(),
+                    )
+                }),
             },
         );
     }
@@ -258,6 +264,7 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
             wl_data_source::Event::Send { mime_type, fd } if mime_type == MIME => {
                 let bytes = Arc::clone(&source.payload);
                 let roots = source.identities.clone();
+                let guards = source.search_guards.clone();
                 let snapshot = Arc::clone(&source.snapshot);
                 let cancelled = Arc::clone(&source.cancelled);
                 let written = Arc::clone(&source.written);
@@ -265,7 +272,19 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
                 let deadline = Instant::now() + Duration::from_secs(10);
                 let (_, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
                     if movable {
+                        for guard in guards.values() {
+                            if Instant::now() >= deadline {
+                                return Err("Desktop source verification timed out".into());
+                            }
+                            guard.check(&cancelled)?;
+                        }
                         let entries = io::snapshot(&roots, deadline, &cancelled)?;
+                        for guard in guards.values() {
+                            if Instant::now() >= deadline {
+                                return Err("Desktop source verification timed out".into());
+                            }
+                            guard.check(&cancelled)?;
+                        }
                         *snapshot.lock().unwrap_or_else(|e| e.into_inner()) = entries;
                     }
                     io::write(fd, bytes, deadline, cancelled, written)
@@ -296,9 +315,11 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
                     // A later action change cannot turn a reference-only send
                     // into removal without a successful original-tree snapshot.
                     if !snapshot.is_empty() {
-                        state
-                            .events
-                            .push(Event::Remove(source.identities, snapshot));
+                        state.events.push(Event::Remove(
+                            source.identities,
+                            snapshot,
+                            source.search_guards,
+                        ));
                     }
                 }
                 source.proxy.destroy();

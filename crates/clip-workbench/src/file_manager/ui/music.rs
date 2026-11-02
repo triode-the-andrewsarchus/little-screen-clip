@@ -134,10 +134,7 @@ impl FileManager {
             return;
         };
         let selected = current_selection(&self.history, self.index);
-        let mut actions = ListActions {
-            search_results: self.search.has_result_sources(),
-            ..Default::default()
-        };
+        let mut actions = ListActions::for_browser(self);
         let can_edit = self.can_edit();
         let count = self.selection_count();
         let background = actions.background(ui, can_edit, count > 0);

@@ -230,9 +230,8 @@ impl FileManager {
         let can_edit = self.can_edit();
         let count = self.selection_count();
         let mut actions = ListActions {
-            search_results: self.search.has_result_sources(),
             additive: self.gallery_selecting,
-            ..Default::default()
+            ..ListActions::for_browser(self)
         };
         let check_color = crate::ui_ext::contrast_text_c32(colors.accent, None, palette);
         let background = actions.background(ui, can_edit, count > 0);
@@ -434,7 +433,7 @@ impl FileManager {
         let count = self.selection_count();
         let mut actions = ListActions {
             additive: self.gallery_selecting,
-            ..Default::default()
+            ..ListActions::for_browser(self)
         };
         let check_color = crate::ui_ext::contrast_text_c32(colors.accent, None, palette);
 

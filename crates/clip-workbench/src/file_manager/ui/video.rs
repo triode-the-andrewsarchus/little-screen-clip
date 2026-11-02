@@ -38,10 +38,7 @@ impl FileManager {
         let selected = current_selection(&self.history, self.index);
         let can_edit = self.can_edit();
         let count = self.selection_count();
-        let mut actions = ListActions {
-            search_results: self.search.has_result_sources(),
-            ..Default::default()
-        };
+        let mut actions = ListActions::for_browser(self);
         let background = actions.background(ui, can_edit, count > 0);
         let mut targets = Vec::new();
         let mut hovered = false;

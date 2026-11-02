@@ -137,6 +137,7 @@ struct Running {
 pub(super) struct FileDrag {
     pub paths: Vec<PathBuf>,
     pub copy_only: bool,
+    pub context: super::search::PreviewContext,
 }
 
 #[derive(Clone)]
@@ -541,15 +542,45 @@ impl FileManager {
         destination: PathBuf,
         move_files: bool,
     ) {
+        self.queue_drag_transfer(
+            FileDrag {
+                paths: sources,
+                copy_only: !move_files,
+                context: Default::default(),
+            },
+            destination,
+            move_files,
+        );
+    }
+
+    pub(super) fn queue_drag_transfer(
+        &mut self,
+        drag: FileDrag,
+        destination: PathBuf,
+        move_files: bool,
+    ) {
         if self.directory.is_none() {
             return;
         }
-        let kind = if move_files {
+        let guards = match drag.context.guards_for(&drag.paths) {
+            Ok(guards) => guards,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        let kind = if move_files && !drag.copy_only {
             Kind::Move(destination)
         } else {
             Kind::Copy(destination)
         };
-        self.transfers.enqueue(kind, sources);
+        if self.transfers.enqueue(kind, drag.paths) {
+            self.transfers
+                .queue
+                .back_mut()
+                .expect("enqueued drag")
+                .search_guards = guards;
+        }
     }
 
     pub(super) fn confirm_delete(&mut self, permanent: bool) {
@@ -661,9 +692,6 @@ impl Batch {
         if matches!(self.kind, Kind::Export(_) | Kind::ConsumeCut(_, _)) {
             return Ok(());
         }
-        for guard in self.search_guards.values() {
-            guard.check(&control.cancelled)?;
-        }
         let destination = match &self.kind {
             Kind::Copy(path) | Kind::Move(path) => Some(path.as_path()),
             _ => None,
@@ -678,6 +706,11 @@ impl Batch {
             })
             .cloned()
             .collect::<Vec<_>>();
+        for source in &sources {
+            if let Some(guard) = self.search_guards.get(source) {
+                guard.check(&control.cancelled)?;
+            }
+        }
         super::system_route::batch(&sources, destination, &control.cancelled)
     }
 
@@ -714,11 +747,11 @@ impl Batch {
         policy: &mut Option<Decision>,
         report: &mut Report,
     ) -> Result<bool, String> {
-        if let Some(guard) = self.search_guards.get(source) {
-            guard.check(&control.cancelled)?;
-        }
         if self.validate_removal(source)? {
             return Ok(true);
+        }
+        if let Some(guard) = self.search_guards.get(source) {
+            guard.check(&control.cancelled)?;
         }
         match &self.kind {
             Kind::Copy(destination) | Kind::Move(destination) => {
@@ -729,6 +762,11 @@ impl Batch {
                     matches!(self.kind, Kind::Move(_)),
                     control,
                     policy,
+                    &self
+                        .search_guards
+                        .get(source)
+                        .map(super::search::SourceGuard::read_check)
+                        .unwrap_or_default(),
                 )?;
                 if let Some(target) = target {
                     if matches!(self.kind, Kind::Move(_)) {
@@ -777,6 +815,7 @@ impl FileManager {
         paths: Vec<PathBuf>,
         destination: PathBuf,
         moving: bool,
+        guards: HashMap<PathBuf, super::search::SourceGuard>,
     ) -> bool {
         let kind = if moving {
             Kind::Move(destination)
@@ -786,27 +825,24 @@ impl FileManager {
         if !self.transfers.enqueue(kind, paths) {
             return false;
         }
-        self.transfers
-            .queue
-            .back_mut()
-            .expect("enqueued drop")
-            .native_drop = Some(token);
+        let batch = self.transfers.queue.back_mut().expect("enqueued drop");
+        batch.native_drop = Some(token);
+        batch.search_guards = guards;
         true
     }
     pub(super) fn native_move_cleanup(
         &mut self,
         expected: BTreeMap<PathBuf, Option<super::filesystem::Identity>>,
         snapshot: BTreeMap<PathBuf, super::filesystem::Identity>,
+        guards: HashMap<PathBuf, super::search::SourceGuard>,
     ) {
         if self.transfers.enqueue(
             Kind::NativeMoveCleanup(snapshot),
             expected.keys().cloned().collect(),
         ) {
-            self.transfers
-                .queue
-                .back_mut()
-                .expect("enqueued cleanup")
-                .expected = Some(expected);
+            let batch = self.transfers.queue.back_mut().expect("enqueued cleanup");
+            batch.expected = Some(expected);
+            batch.search_guards = guards;
         }
     }
 }

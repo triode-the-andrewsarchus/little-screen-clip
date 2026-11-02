@@ -591,6 +591,7 @@ impl ConstellationState {
                     response.dnd_set_drag_payload(crate::file_manager::transfers::FileDrag {
                         paths: vec![sample.file_path.clone()],
                         copy_only: true,
+                        context: Default::default(),
                     });
                     return Some(sample.file_path.clone());
                 }

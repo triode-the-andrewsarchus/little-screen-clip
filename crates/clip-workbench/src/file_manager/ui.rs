@@ -667,7 +667,7 @@ impl FileManager {
             self.type_navigation.clear();
         }
         if let Some((paths, destination, moving)) = actions.transfer {
-            self.queue_transfer(paths, destination, moving);
+            self.queue_drag_transfer(paths, destination, moving);
         }
         if let Some((path, additive, range)) = actions.selection {
             self.select_with(path, additive, range);
@@ -808,7 +808,7 @@ impl FileManager {
                 self.navigate(path, Navigation::New);
             }
             Some(TreeAction::Transfer(paths, destination, moving)) => {
-                self.queue_transfer(paths, destination, moving)
+                self.queue_drag_transfer(paths, destination, moving)
             }
             None => {}
         }
@@ -1352,7 +1352,7 @@ fn file_row(
 enum TreeAction {
     Toggle(std::path::PathBuf),
     Open(std::path::PathBuf),
-    Transfer(Vec<PathBuf>, PathBuf, bool),
+    Transfer(super::transfers::FileDrag, PathBuf, bool),
 }
 
 // Collect row events before mutating browser state, so virtual rendering borrows
@@ -1366,6 +1366,7 @@ struct ListActions {
     reveal: Option<PathBuf>,
     external: Option<PathBuf>,
     search_results: bool,
+    context: super::search::PreviewContext,
     metadata_only: bool,
     inspect: Option<PathBuf>,
     naming: Option<super::edits::NamingAction>,
@@ -1373,13 +1374,22 @@ struct ListActions {
     select_all: bool,
     open_trash: bool,
     clear: bool,
-    transfer: Option<(Vec<PathBuf>, PathBuf, bool)>,
+    transfer: Option<(super::transfers::FileDrag, PathBuf, bool)>,
     mount_binary: Option<(PathBuf, bool)>,
     unmount_binary: Option<PathBuf>,
     search_similar: Option<PathBuf>,
 }
 
 impl ListActions {
+    fn for_browser(browser: &FileManager) -> Self {
+        Self {
+            search_results: browser.search.has_result_sources(),
+            metadata_only: browser.search.has_offline_results(),
+            context: browser.search_preview_context(),
+            ..Self::default()
+        }
+    }
+
     fn background(&mut self, ui: &mut Ui, can_edit: bool, selected: bool) -> egui::Response {
         let focus = ui.interact(ui.available_rect_before_wrap(), list_id(), Sense::click());
         // Enter returning focus from a text field is not a background click.
@@ -1420,6 +1430,7 @@ impl ListActions {
         response.dnd_set_drag_payload(super::transfers::FileDrag {
             paths,
             copy_only: false,
+            context: self.context.clone(),
         });
         if !marked {
             self.selection = Some((path.clone(), false, false));
@@ -1639,7 +1650,7 @@ fn drop_files(
     ui: &Ui,
     response: &egui::Response,
     destination: &std::path::Path,
-) -> Option<(Vec<PathBuf>, PathBuf, bool)> {
+) -> Option<(super::transfers::FileDrag, PathBuf, bool)> {
     if !ui.is_enabled() {
         return None;
     }
@@ -1647,7 +1658,7 @@ fn drop_files(
         .dnd_release_payload::<super::transfers::FileDrag>()
         .map(|drag| {
             (
-                drag.paths.clone(),
+                drag.as_ref().clone(),
                 destination.into(),
                 !drag.copy_only && !ui.input(|i| i.modifiers.ctrl),
             )

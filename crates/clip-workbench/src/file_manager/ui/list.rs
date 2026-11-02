@@ -260,11 +260,7 @@ impl FileManager {
             .index
             .and_then(|index| self.history.get(index))
             .map(|location| &location.selection);
-        let mut actions = ListActions {
-            search_results: self.search.has_result_sources(),
-            metadata_only: self.search.has_offline_results(),
-            ..Default::default()
-        };
+        let mut actions = ListActions::for_browser(self);
         let can_edit = self.can_edit();
         let selection_count = self.selection_count();
         let background = actions.background(ui, can_edit, selection_count > 0);

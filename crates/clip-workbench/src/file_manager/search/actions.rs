@@ -46,6 +46,22 @@ impl PreviewContext {
     pub fn active(&self) -> bool {
         self.sources.is_some()
     }
+    /// Retain only the observations selected by an action, without re-enumeration.
+    pub fn guards_for(&self, paths: &[PathBuf]) -> Result<HashMap<PathBuf, SourceGuard>, String> {
+        if !self.active() {
+            return Ok(HashMap::new());
+        }
+        paths
+            .iter()
+            .map(|path| {
+                self.guards
+                    .get(path)
+                    .cloned()
+                    .map(|guard| (path.clone(), guard))
+                    .ok_or_else(|| "Action is outside the published search results".into())
+            })
+            .collect()
+    }
     pub fn read<T>(
         &self,
         path: &Path,
@@ -72,6 +88,9 @@ pub(in crate::file_manager) struct SourceGuard {
     unavailable: bool,
 }
 impl SourceGuard {
+    pub fn expected_identity(&self) -> Option<filesystem::Identity> {
+        self.entry.identity
+    }
     pub fn read_check(&self) -> crate::file_source::ReadCheck {
         let guard = self.clone();
         crate::file_source::ReadCheck::new(move |cancel| guard.check(cancel))
@@ -133,6 +152,9 @@ impl SourceGuard {
     }
 }
 impl FileManager {
+    pub(in crate::file_manager) fn search_preview_context(&self) -> PreviewContext {
+        self.search.preview_context.clone()
+    }
     pub(in crate::file_manager) fn sync_preview_context(&mut self) {
         if !self.search.preview_context.matches(&self.search.sources) {
             let paths = self
@@ -331,7 +353,24 @@ mod tests {
                 .is_err()
         );
         assert!(!read.get());
+        assert!(
+            context
+                .guards_for(&[PathBuf::from("/unpublished")])
+                .is_err()
+        );
+        let retained = context.clone();
         assert!(context.replace(&PreviewContext::default()));
+        assert!(
+            retained
+                .guards_for(&[PathBuf::from("/unpublished")])
+                .is_err()
+        );
+        assert!(
+            context
+                .guards_for(&[PathBuf::from("/ordinary")])
+                .unwrap()
+                .is_empty()
+        );
         context
             .read(Path::new("/ordinary"), &AtomicBool::new(false), || {
                 read.set(true);
@@ -370,5 +409,55 @@ mod tests {
         let mut changed = offline.clone();
         changed.unavailable = false;
         assert!(!offline.same_observation(&changed));
+        let path = offline.entry.path.clone();
+        let expected = offline.expected_identity().unwrap();
+        let mut manager = FileManager::new(directory.path().into());
+        manager.pending = None;
+        manager.commit(
+            filesystem::read_directory(directory.path(), &AtomicBool::new(false)).unwrap(),
+            crate::file_manager::Navigation::New,
+        );
+        for cut in [true, false] {
+            manager.shelf.add(
+                crate::file_manager::content::Payload::Files {
+                    paths: vec![path.clone()],
+                    cut,
+                },
+                "chosen reference".into(),
+            );
+        }
+        let jobs = little_clip_core::BackgroundJobs::new(2, 16);
+        // Completion belongs to the original drag, not the current browser
+        // query. A receiver that already removed it needs only a no-op ack.
+        for externally_completed in [false, true] {
+            if externally_completed {
+                std::fs::remove_file(&path).unwrap();
+            }
+            manager.native_move_cleanup(
+                std::collections::BTreeMap::from([(path.clone(), Some(expected))]),
+                std::collections::BTreeMap::from([(path.clone(), expected)]),
+                HashMap::from([(path.clone(), offline.clone())]),
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while manager.transfers.busy() {
+                manager.tick_transfers(&jobs);
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            if externally_completed {
+                assert_eq!(
+                    manager.shelf.len(),
+                    1,
+                    "completed moves consume only cut references"
+                );
+            } else {
+                assert_eq!(std::fs::read(&path).unwrap(), b"original content");
+                assert_eq!(
+                    manager.shelf.len(),
+                    2,
+                    "rejected moves cannot consume references"
+                );
+            }
+        }
     }
 }
