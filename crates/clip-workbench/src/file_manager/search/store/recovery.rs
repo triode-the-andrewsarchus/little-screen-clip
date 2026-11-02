@@ -75,6 +75,7 @@ impl IndexOwner {
         }
         let archive = tempfile::Builder::new()
             .prefix(".search-recovery-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in(&held)
             .map_err(|e| e.to_string())?;
         let name = archive
@@ -89,12 +90,16 @@ impl IndexOwner {
             archive: name.clone(),
             files,
         };
-        let mut marker = tempfile::NamedTempFile::new_in(&held).map_err(|e| e.to_string())?;
+        let mut marker = tempfile::Builder::new()
+            .prefix(".search-restore-")
+            .tempfile_in(&held)
+            .map_err(|e| e.to_string())?;
         serde_json::to_writer(marker.as_file_mut(), &journal).map_err(|e| e.to_string())?;
         marker.flush().map_err(|e| e.to_string())?;
         marker.as_file().sync_all().map_err(|e| e.to_string())?;
         // Keep the empty archive before publishing the durable recovery intent.
-        // A crash before marker publication can leave an empty private directory.
+        // A crash before marker publication leaves only reserved scratch, which
+        // the next sole owner removes after resuming any published intent.
         let _ = archive.keep();
         marker
             .persist_noclobber(held.join(MARKER))

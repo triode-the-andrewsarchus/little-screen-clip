@@ -2252,3 +2252,14 @@ One deliberate scheduling simplification replaces the plan's background current-
 
 
 Final fairness validation passes all 3,041 workspace tests (zero failures, 38 ignored, 26 suites), all 317 search tests (four ignored probes), release/fmt and targeted Clippy with unchanged 589/650/264 warning totals. Native fairness, restart and overlap/permission runs total 29 observations. Final raw logs and checks are retained in the fairness evidence directory.
+
+
+### Pre-journal recovery scratch (2026-11-01)
+
+An interrupted explicit cache recovery can retain an empty archive before publishing its durable intent. The extended storage regression fails against the previous implementation. New recovery archives explicitly request mode 0700, and pre-publication marker files now reuse the existing `.search-restore-*` namespace. After exclusive ownership and successful journal resume, the existing scratch cleanup may remove empty owned `.search-recovery-*` directories without group/other write permission. It never recursively removes an archive, follows a symlink, deletes a populated archive or sweeps generic legacy `.tmp*` names. The first correction assumed tempfile directories were 0700; the actual failing test exposed umask-derived 0755 directories, so cleanup also handles those existing private non-writable archives. Both failures are retained.
+
+All 83 storage tests pass, including sole-writer refusal, interrupted recovery, preserved archive/source bytes and symlink boundaries. Architecture adds 37 measured lines and no functions, clones or dependency cycles; `clean_staging` CCN increases from 10 to 18 for the additional namespace/type/ownership/permission/nonempty/error decisions. These decisions belong to one cleanup traversal; splitting them into forwarding helpers would not remove necessary policy. The report retains REGRESSION, including pre-existing clone matches touching the changed file and a cycle-member ordering difference in unchanged Python. Full logs and source hashes are retained under `.fitness/evidence/phase6-maintenance-scratch-20261101/`.
+
+S14 remains open: an explicitly selected backup destination still receives a named temporary SQLite file, which normal failure drops but SIGKILL can preserve. The private cleanup scan also visits at most 4096 entries. Neither boundary is treated as solved by the recovery fix, and no universal crash or power-loss cleanup claim is made.
+
+Final verification for this follow-up: all 3,041 workspace tests pass (38 ignored, zero failures), formatting/diff checks pass, and Clippy completes with no added warning messages. No new release/native UI claim is made for this storage-only correction.

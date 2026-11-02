@@ -266,18 +266,25 @@ pub(super) fn clean_staging(directory: &Path) -> Result<(), String> {
     let entries = std::fs::read_dir(directory).map_err(|e| e.to_string())?;
     for entry in entries.take(4096) {
         let entry = entry.map_err(|e| e.to_string())?;
-        if !entry
-            .file_name()
-            .as_bytes()
-            .starts_with(b".search-restore-")
-        {
+        let name = entry.file_name();
+        let restore = name.as_bytes().starts_with(b".search-restore-");
+        let recovery = name.as_bytes().starts_with(b".search-recovery-");
+        if !restore && !recovery {
             continue;
         }
         let metadata = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
         // SAFETY: geteuid takes no arguments and has no side effects.
         let owned = metadata.uid() == unsafe { libc::geteuid() };
-        if metadata.is_file() && owned && metadata.mode() & 0o777 == 0o600 {
+        if restore && metadata.is_file() && owned && metadata.mode() & 0o777 == 0o600 {
             std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+        } else if recovery && metadata.is_dir() && owned && metadata.mode() & 0o022 == 0 {
+            // Never recurse into preserved caches. Only a pre-journal empty
+            // directory is disposable; resume runs before this cleanup.
+            match std::fs::remove_dir(entry.path()) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+                Err(error) => return Err(error.to_string()),
+            }
         }
     }
     Ok(())
@@ -1107,6 +1114,19 @@ mod tests {
         let original = fixture._source.path().join("sample.txt");
         let link = fixture._cache.path().join(".search-restore-link");
         symlink(&original, &link).unwrap();
+        let abandoned = tempfile::Builder::new()
+            .prefix(".search-recovery-")
+            .tempdir_in(fixture._cache.path())
+            .unwrap()
+            .keep();
+        let preserved = tempfile::Builder::new()
+            .prefix(".search-recovery-")
+            .tempdir_in(fixture._cache.path())
+            .unwrap()
+            .keep();
+        std::fs::write(preserved.join("index.sqlite"), b"preserved cache").unwrap();
+        let archive_link = fixture._cache.path().join(".search-recovery-link");
+        symlink(fixture._source.path(), &archive_link).unwrap();
         assert!(Store::open(fixture._cache.path()).is_err());
         assert!(
             scratch.exists(),
@@ -1120,6 +1140,21 @@ mod tests {
         drop(store);
         let _reopened = Store::open(cache.path()).unwrap();
         assert!(!scratch.exists());
+        assert!(
+            !abandoned.exists(),
+            "pre-journal empty recovery scratch is retired"
+        );
+        assert_eq!(
+            std::fs::read(preserved.join("index.sqlite")).unwrap(),
+            b"preserved cache"
+        );
+        assert!(
+            archive_link
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read(original).unwrap(), b"the cat sat");
     }
