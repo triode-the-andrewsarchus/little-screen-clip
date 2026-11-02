@@ -264,7 +264,10 @@ fn create_staging(output: &File, max_bytes: u64, page_size: u32) -> Result<Conne
 pub(super) fn clean_staging(directory: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let entries = std::fs::read_dir(directory).map_err(|e| e.to_string())?;
-    for entry in entries.take(4096) {
+    // Stream the whole shallow, local application-owned inventory. A fixed
+    // prefix can leave trailing scratch permanently hidden behind archives;
+    // this never recurses into sources or retained recovery directories.
+    for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
         let restore = name.as_bytes().starts_with(b".search-restore-");
@@ -1104,13 +1107,17 @@ mod tests {
     fn abandoned_staging_is_pruned_only_after_ownership_and_never_follows_links() {
         use std::os::unix::fs::symlink;
         let fixture = Fixture::new();
-        let scratch = tempfile::Builder::new()
-            .prefix(".search-restore-")
-            .tempfile_in(fixture._cache.path())
-            .unwrap()
-            .keep()
-            .unwrap()
-            .1;
+        let scratch = (0..4100)
+            .map(|_| {
+                tempfile::Builder::new()
+                    .prefix(".search-restore-")
+                    .tempfile_in(fixture._cache.path())
+                    .unwrap()
+                    .keep()
+                    .unwrap()
+                    .1
+            })
+            .collect::<Vec<_>>();
         let original = fixture._source.path().join("sample.txt");
         let link = fixture._cache.path().join(".search-restore-link");
         symlink(&original, &link).unwrap();
@@ -1129,7 +1136,7 @@ mod tests {
         symlink(fixture._source.path(), &archive_link).unwrap();
         assert!(Store::open(fixture._cache.path()).is_err());
         assert!(
-            scratch.exists(),
+            scratch.iter().all(|path| path.exists()),
             "a second writer must not prune live preparation"
         );
         let Fixture {
@@ -1139,7 +1146,11 @@ mod tests {
         } = fixture;
         drop(store);
         let _reopened = Store::open(cache.path()).unwrap();
-        assert!(!scratch.exists());
+        assert_eq!(
+            scratch.iter().filter(|path| path.exists()).count(),
+            0,
+            "sole-writer cleanup must retire the complete scratch inventory"
+        );
         assert!(
             !abandoned.exists(),
             "pre-journal empty recovery scratch is retired"
