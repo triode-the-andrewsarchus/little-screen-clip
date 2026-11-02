@@ -2,6 +2,8 @@
 """Real backup/clear/resume through the private file-manager settings window."""
 from pathlib import Path
 import hashlib
+import json
+import time
 import sqlite3
 import tomllib
 
@@ -45,7 +47,38 @@ def backup_through_settings(session, root):
     return backup
 
 
-def exercise(session, root):
+def confirm_clear_before_close(session, index, config, position, close_method):
+    lock = sqlite3.connect(index)
+    started = time.monotonic()
+    try:
+        lock.execute('BEGIN IMMEDIATE')
+        assert lock.execute('SELECT COUNT(*) FROM segments').fetchone()[0] == 1
+        session.click(*position)
+        wait_for(lambda: tomllib.loads(config.read_text())['file_manager']['search']['paused'],
+                 'accepted clear reaches persisted pause before blocked transaction', 1)
+        if close_method == 'keyboard':
+            session.key('q', 'ctrl')
+        else:
+            private.run_checked([str(session.niri), 'msg', 'action', 'close-window'], env=session.env)
+        time.sleep(0.3)
+        assert session.process.poll() is None, 'Files exited before accepted clear could commit'
+        assert lock.execute('SELECT COUNT(*) FROM segments').fetchone()[0] == 1
+        held_seconds = time.monotonic() - started
+    finally:
+        lock.rollback()
+        lock.close()
+    session.process.wait(timeout=10)
+    assert session.process.returncode == 0
+    with sqlite3.connect(index) as db:
+        assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+        assert db.execute('SELECT COUNT(*) FROM segments').fetchone()[0] == 0
+    (session.output/'accepted-clear-close.json').write_text(json.dumps(dict(
+        paused_before_close=True, live_while_write_blocked=True,
+        held_seconds=held_seconds, exit_code=session.process.returncode,
+        committed_after_release=True, close_method=close_method, integrity='ok'), indent=2))
+
+
+def exercise(session, root, close_on_clear=None):
     source = root / "One.txt"
     original = source.read_bytes()
     session.observe("initial", ["One.txt"])
@@ -72,15 +105,19 @@ def exercise(session, root):
     scroll(session, 100)
     session.observe("clear-confirmation-visible", ["Source files are unchanged"])
     anchor = word(session, "clear-confirmation-visible", "Enrolled")
-    session.click(200, anchor[1] + 33)
     config_path = session.output / "scratch/config.toml"
+    if close_on_clear:
+        confirm_clear_before_close(session, index, config_path, (200, anchor[1] + 33), close_on_clear)
+    else:
+        session.click(200, anchor[1] + 33)
     def cleared():
         with sqlite3.connect(index) as db:
             count = db.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
         return count == 0 and tomllib.loads(config_path.read_text())["file_manager"]["search"]["paused"]
     wait_for(cleared, "clear commits and persists pause")
-    scroll(session, -800)
-    session.observe("cleared", ["Index cleared", "indexing paused"])
+    if not close_on_clear:
+        scroll(session, -800)
+        session.observe("cleared", ["Index cleared", "indexing paused"])
     assert source.read_bytes() == original
     assert hashlib.sha256(backup.read_bytes()).hexdigest() == backup_hash
     assert (index.parent / "models").exists()
@@ -89,6 +126,8 @@ def exercise(session, root):
         assert db.execute("SELECT COUNT(*) FROM roots").fetchone()[0] == 1
         cleared_generation = db.execute("SELECT generation FROM roots").fetchone()[0]
         assert cleared_generation > generation
+    if close_on_clear:
+        return
     click_word(session, "cleared", "Pause")
     click_word(session, "cleared", "Save")
     resumed, paths, vectors = inventory(index, cleared_generation - 1)
@@ -135,11 +174,15 @@ def search_environment(env, children):
 
 def main():
     repository = Path(__file__).resolve().parent.parent
-    args = application_arguments(__doc__, repository / "target/debug/clip-file-manager", lambda parser: parser.add_argument("--root-identity", action="store_true"))
+    def configure(parser):
+        mode = parser.add_mutually_exclusive_group()
+        mode.add_argument("--root-identity", action="store_true")
+        mode.add_argument("--close-during-clear", choices=["keyboard", "window-manager"])
+    args = application_arguments(__doc__, repository / "target/debug/clip-file-manager", configure)
     output, root = media_fixture_directory(args)
     (root / "One.txt").write_text("Cats have whiskers and soft fur.")
-    return run_application_acceptance(args, output, root, indexed_identity if args.root_identity else exercise,
-        "Indexed on-demand searches retain enrolled root identity while reconciliation is paused" if args.root_identity else "Self-contained backup, confirmed clear/persistent pause, retained source/models/roots, search retirement and explicit resume", search_environment)
+    return run_application_acceptance(args, output, root, indexed_identity if args.root_identity else lambda session, folder: exercise(session, folder, args.close_during_clear),
+        "Indexed on-demand searches retain enrolled root identity while reconciliation is paused" if args.root_identity else "Accepted clear survives window close while catalog write is blocked; durable completion, preserved backup/source and clean exit" if args.close_during_clear else "Self-contained backup, confirmed clear/persistent pause, retained source/models/roots, search retirement and explicit resume", search_environment)
 
 
 if __name__ == "__main__":

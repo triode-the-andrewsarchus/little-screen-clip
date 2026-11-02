@@ -466,7 +466,10 @@ impl FileManagerApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
-        if self.browser.filesystem_busy()
+        // Search maintenance defers through Service::allow_close below so an
+        // accepted close completes after its write, rather than being discarded.
+        if self.browser.edit_busy()
+            || self.browser.transfers.busy()
             || self.browser.constellation.writing_pack()
             || self.browser.bookmarks.busy()
             || self.browser.music.copying()
