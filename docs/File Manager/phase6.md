@@ -1,6 +1,8 @@
 # Phase 6 — Initial type-to-navigate checkpoint
 
-This checkpoint adds local filename navigation only. It does not complete Phase 6.
+This historical checkpoint adds local filename navigation only. Subsequent work
+completes the authorized Phase 6 scope; see [final acceptance](phase6_acceptance.md)
+for delivered search/indexing/answer behavior, verification and limits.
 
 With focus in the file listing (or no focused control), typing selects and scrolls
 to a matching visible entry in the current directory. Matching ignores case and
