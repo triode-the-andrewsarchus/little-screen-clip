@@ -39,7 +39,8 @@ def exercise(session, root):
     target = root / "Nested/report.txt"
     target.write_text("replacement content must not open from stale results")
     reveal_menu(session, "return-retains-search", "stale-reveal-menu")
-    session.observe("reject-stale-reveal", ["Cannot open", "Search result changed", "1 matching entries", "Retry"])
+    text = session.observe("reject-stale-reveal", ["Cannot open", "Search result changed", "1 matching entries"])
+    assert "retry" not in text.lower(), "guard failure must not offer an unguarded retry"
     open_result(session, "reject-stale-reveal")
     text = session.observe("reject-changed-file", ["Back to folder", "Search result changed"])
     assert "replacement content" not in text.lower()
