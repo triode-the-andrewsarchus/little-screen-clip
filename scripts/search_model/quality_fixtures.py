@@ -1,6 +1,8 @@
 """Owned synthetic source files for retrieval evaluation; no user content is used."""
 from pathlib import Path
 import hashlib
+import math
+import re
 import os
 import stat
 import subprocess
@@ -10,6 +12,37 @@ from reportlab.lib.pagesizes import A4
 
 
 BACKGROUND = 'The archive register records numbered storage bins. Each shelf has a location code, and staff check the quantities against the previous inventory. '
+
+
+def time_observation(location):
+    number = r'(-?\d+(?:\.\d+)?)'
+    patterns = {'video': 'video frame at seconds ' + number,
+                'audio': 'audio seconds ' + number + r'\.\.' + number}
+    for kind, pattern in patterns.items():
+        match = re.fullmatch(pattern, location)
+        if match:
+            values = tuple(map(float, match.groups()))
+            return (kind, values) if all(map(math.isfinite, values)) else None
+    return None
+
+
+def location_matches(case, location):
+    """Match frozen page/frame/window expectations against actual evidence labels."""
+    required = case.get('expected_location_contains')
+    if required and required not in location:
+        return False
+    window, event = case.get('expected_time_range'), case.get('expected_audio_overlap')
+    if window and event:
+        return False  # One observation cannot be both a frame and an audio window.
+    if not (window or event):
+        return True
+    observed = time_observation(location)
+    if observed is None:
+        return False
+    kind, values = observed
+    if window:
+        return kind == 'video' and window[0] <= values[0] <= window[1]
+    return kind == 'audio' and values[0] < values[1] and max(values[0], event[0]) < min(values[1], event[1])
 
 
 def validation_path(folder=None):

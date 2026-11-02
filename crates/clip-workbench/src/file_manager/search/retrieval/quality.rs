@@ -166,6 +166,16 @@ impl Corpus {
             signature(&indexed_hits),
             "Equivalent single-root scope changed ranks or evidence"
         );
+        let entries = hits.iter().map(|hit| hit.entry.clone()).collect::<Vec<_>>();
+        let explanations = crate::file_manager::search::explanation::read(
+            &self.store,
+            &hits,
+            &entries,
+            PIPELINE,
+            text,
+            retrieval.cancel,
+        )
+        .unwrap();
         let expected = case["file"].as_str();
         let rank = expected
             .and_then(|name| hits.iter().position(|hit| hit.entry.name == name))
@@ -181,7 +191,9 @@ impl Corpus {
         });
         json!({"id":case["id"],"kind":case["kind"],"split":case["split"],"query":text,
             "expected_file":expected,"rank":rank,"has_results":!hits.is_empty(),"semantic_only_result":semantic_only,
-            "top":hits.iter().take(10).map(|hit| json!({"file":hit.entry.name,"segments":hit.segments.iter().map(|segment| json!({"id":segment.id,"score":segment.score,"keyword":segment.keyword})).collect::<Vec<_>>()})).collect::<Vec<_>>()})
+            "location_expectation": {"expected_location_contains":case["expected_location_contains"],
+                "expected_time_range":case["expected_time_range"],"expected_audio_overlap":case["expected_audio_overlap"]},
+            "top":hits.iter().take(10).map(|hit| json!({"file":hit.entry.name,"locations":explanations.get(&hit.entry.path).map(|detail| detail.passages.iter().map(|passage| &passage.location).collect::<Vec<_>>()).unwrap_or_default(),"segments":hit.segments.iter().map(|segment| json!({"id":segment.id,"score":segment.score,"keyword":segment.keyword})).collect::<Vec<_>>()})).collect::<Vec<_>>()})
     }
 }
 fn read_json(path: &Path) -> Value {

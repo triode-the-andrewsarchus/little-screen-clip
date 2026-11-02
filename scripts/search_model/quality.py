@@ -17,7 +17,7 @@ import struct
 import subprocess
 import sys
 import time
-from quality_fixtures import build, copy_frozen, validation_path
+from quality_fixtures import build, copy_frozen, validation_path, location_matches
 from smoke import vectors
 
 HERE=Path(__file__).resolve().parent
@@ -170,12 +170,9 @@ def evaluate(cases,negatives,queries,segments,storage,floor):
     for case in cases:
         ranked=[row for row in scores(queries[case['id']],segments,storage) if row['score']>=floor.get(row['modality'],0.25)]
         rank=next((i+1 for i,row in enumerate(ranked) if row['file']==case['file']),None)
-        expected=case.get('expected_location_contains')
         target=next((row for row in ranked if row['file']==case['file']),None)
-        time_range=case.get('expected_time_range')
-        location_ok=not expected or bool(target and expected in target['location'])
-        if time_range:
-            location_ok=bool(target and time_range[0]<=float(target['location'].rsplit(' ',1)[-1])<=time_range[1])
+        required=any(case.get(key) for key in ['expected_location_contains','expected_time_range','expected_audio_overlap'])
+        location_ok=not required or bool(target and location_matches(case,target['location']))
         checks.append({'id':case['id'],'kind':case['kind'],'split':case['split'],'rank':rank,'recall_at_10':rank is not None and rank<=10,'location_passed':location_ok,'target':target,'top':ranked[:10]})
     noise=[]
     for case in negatives:

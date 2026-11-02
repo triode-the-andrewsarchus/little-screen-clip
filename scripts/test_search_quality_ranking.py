@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
-from search_quality_ranking import compare_storage_precision, summarize
+from search_quality_ranking import compare_storage_precision, summarize, annotate_locations
 from search_backend_quality import mixed_inputs, compare_pair, evaluate_pair
 from search_model.quality_fixtures import validation_path
 from search_model_precision import compare_variants
@@ -19,6 +19,27 @@ class StoragePrecisionTests(unittest.TestCase):
                  'semantic_only_result': False, 'has_results': index < 100,
                  'top': [{'file': 'target', 'segments': [{'id': 1, 'keyword': False, 'score': 0.8}]}] if index < 100 else []}
                 for index in range(102)]
+
+    def test_filename_recall_cannot_hide_wrong_or_missing_matching_locations(self):
+        rows = self.cases()
+        row = rows[0]
+        row['location_expectation'] = {'expected_time_range':[90,100]}
+        frozen = {item['id']: item.get('location_expectation', {}) for item in rows}
+        row.pop('location_expectation')  # An older probe cannot waive the manifest's gate.
+        row['top'] = [{'file':'other', 'locations':['video frame at seconds 92.5']},
+                      {'file':'target', 'locations':['video frame at seconds 2.5']}]
+        annotate_locations(rows, frozen)
+        self.assertFalse(row['location_passed'])
+        self.assertFalse(summarize(rows)['within_targets'])
+        self.assertEqual(summarize(rows)['recall_at_10'], 1)
+        row['top'][1]['locations'] = ['video frame at seconds 92.5']
+        annotate_locations(rows, frozen)
+        self.assertTrue(summarize(rows)['within_targets'])
+        row['top'][1]['locations'] = []
+        annotate_locations(rows, frozen)
+        self.assertFalse(summarize(rows)['locations_within_targets'])
+        with self.assertRaisesRegex(ValueError, 'query inventory'):
+            annotate_locations(rows[:-1], frozen)
 
     def test_one_percentage_point_boundary_and_top_ten_recall_are_enforced(self):
         reference = self.cases()

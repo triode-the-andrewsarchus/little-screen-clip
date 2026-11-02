@@ -9,10 +9,23 @@ import unittest
 import tempfile
 from unittest.mock import patch
 import quality
-from quality_fixtures import copy_frozen, frozen_bytes, validation_path
+from quality_fixtures import copy_frozen, frozen_bytes, validation_path, location_matches
 
 
 class QualityTests(unittest.TestCase):
+    def test_frozen_locations_require_the_right_page_frame_or_overlapping_audio_window(self):
+        self.assertTrue(location_matches({'expected_location_contains':'page 16'}, 'PDF page 16'))
+        self.assertFalse(location_matches({'expected_location_contains':'page 16'}, 'PDF page 1'))
+        video = {'expected_time_range':[90,100]}
+        for label in ['video frame at seconds 90.0', 'video frame at seconds 92.5', 'video frame at seconds 100']:
+            self.assertTrue(location_matches(video, label))
+        for label in ['video frame at seconds 89.9', 'video frame at seconds nan', 'audio seconds 90..100']:
+            self.assertFalse(location_matches(video, label))
+        audio = {'expected_audio_overlap':[65,75]}
+        self.assertTrue(location_matches(audio, 'audio seconds 50..80'))
+        for label in ['audio seconds 0..30', 'audio seconds 75..100', 'audio seconds 70..69', 'video frame at seconds 70']:
+            self.assertFalse(location_matches(audio, label))
+
     def test_preparation_unwraps_inventory_and_rejects_incomplete_or_missing_coverage(self):
         entry={'name':'owned.txt'}
         prepared={'text':'owned fixture','next':None}
