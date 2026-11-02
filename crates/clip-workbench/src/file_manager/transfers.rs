@@ -7,7 +7,7 @@ mod tests;
 mod trash_support;
 pub(super) mod ui;
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -48,6 +48,7 @@ struct Batch {
     sources: Vec<PathBuf>,
     expected: Option<BTreeMap<PathBuf, Option<super::filesystem::Identity>>>,
     native_drop: Option<u64>,
+    search_guards: HashMap<PathBuf, super::search::SourceGuard>,
 }
 
 #[derive(Clone, Debug)]
@@ -149,6 +150,7 @@ pub(super) struct DeleteConfirmation {
     paths: Vec<PathBuf>,
     permanent: bool,
     expected: BTreeMap<PathBuf, Option<super::filesystem::Identity>>,
+    search_guards: HashMap<PathBuf, super::search::SourceGuard>,
 }
 
 type ImportResult =
@@ -208,6 +210,7 @@ impl Transfers {
             sources,
             expected: None,
             native_drop: None,
+            search_guards: HashMap::new(),
         });
         true
     }
@@ -568,10 +571,12 @@ impl FileManager {
                         .collect()
                 })
                 .unwrap_or_default();
+            let search_guards = self.search_source_guards(&paths);
             self.transfers.confirmation = Some(DeleteConfirmation {
                 paths,
                 permanent,
                 expected,
+                search_guards,
             });
         }
     }
@@ -656,6 +661,9 @@ impl Batch {
         if matches!(self.kind, Kind::Export(_) | Kind::ConsumeCut(_, _)) {
             return Ok(());
         }
+        for guard in self.search_guards.values() {
+            guard.check(&control.cancelled)?;
+        }
         let destination = match &self.kind {
             Kind::Copy(path) | Kind::Move(path) => Some(path.as_path()),
             _ => None,
@@ -706,6 +714,9 @@ impl Batch {
         policy: &mut Option<Decision>,
         report: &mut Report,
     ) -> Result<bool, String> {
+        if let Some(guard) = self.search_guards.get(source) {
+            guard.check(&control.cancelled)?;
+        }
         if self.validate_removal(source)? {
             return Ok(true);
         }

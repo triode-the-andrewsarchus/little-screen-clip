@@ -35,6 +35,7 @@ impl Fixture {
             sources,
             expected: None,
             native_drop: None,
+            search_guards: HashMap::new(),
         }
         .execute(&Control::default())
     }
@@ -249,6 +250,7 @@ fn cancelled_batch_counts_unprocessed_entries() {
         sources: vec![source],
         expected: None,
         native_drop: None,
+        search_guards: HashMap::new(),
     }
     .execute(&control);
     assert!(report.cancelled);
@@ -329,6 +331,7 @@ fn desktop_move_cleanup_refuses_changed_descendants_and_accepts_already_moved_so
         sources: vec![folder.clone()],
         expected: Some(BTreeMap::from([(folder.clone(), Some(root_identity))])),
         native_drop: None,
+        search_guards: HashMap::new(),
     };
     fs::write(&file, b"new edits during drop").unwrap();
     let report = batch.execute(&Control::default());
@@ -349,6 +352,7 @@ fn desktop_receiver_receipt_records_partial_failure_without_authorizing_source_r
         sources: vec![source, fixture.source.join("missing")],
         expected: None,
         native_drop: Some(42),
+        search_guards: HashMap::new(),
     };
     let report = batch.execute(&Control::default());
     assert_eq!(report.native_drop, Some(42));
@@ -363,6 +367,7 @@ fn confirmed_deletion(source: &Path) -> Batch {
         sources: vec![source.into()],
         expected: Some(BTreeMap::from([(source.into(), Some(expected))])),
         native_drop: None,
+        search_guards: HashMap::new(),
     }
 }
 
@@ -421,6 +426,7 @@ fn unadmitted_copy(source: PathBuf, destination: PathBuf) -> Running {
             sources: vec![source],
             expected: None,
             native_drop: None,
+            search_guards: HashMap::new(),
         },
         control: Arc::new(Control::default()),
         receiver: None,

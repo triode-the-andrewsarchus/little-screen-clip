@@ -244,6 +244,78 @@ impl FileManager {
 mod tests {
     use super::*;
     #[test]
+    fn confirmed_search_deletion_keeps_original_root_even_if_leaf_identity_is_unchanged() {
+        use std::os::unix::fs::symlink;
+        use std::time::{Duration, Instant};
+        for searched in [false, true] {
+            let fixture = tempfile::tempdir().unwrap();
+            let root = fixture.path().join("source");
+            let original = fixture.path().join("original");
+            std::fs::create_dir(&root).unwrap();
+            let path = root.join("one.txt");
+            std::fs::write(&path, b"original bytes").unwrap();
+            let observed = super::super::policy::Root::open(&root).unwrap();
+            let directory = filesystem::read_directory(&root, &AtomicBool::new(false)).unwrap();
+            let expected = directory.entries[0].identity;
+            let mut manager = FileManager::new(root.clone());
+            manager.pending = None;
+            manager.commit(directory, crate::file_manager::Navigation::New);
+            if searched {
+                manager.search.sources = Some(Arc::new(vec![SourceRoot::from_root(&observed)]));
+            }
+            manager.select(path.clone());
+            manager.confirm_delete(true);
+            std::fs::rename(&root, &original).unwrap();
+            symlink(&original, &root).unwrap();
+            assert_eq!(
+                Some(filesystem::identity(
+                    &std::fs::symlink_metadata(&path).unwrap()
+                )),
+                expected
+            );
+            let ctx = egui::Context::default();
+            let colors = crate::ui_appearance::WorkbenchColors::from_palette(
+                &crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark),
+            );
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| manager.transfer_windows(ctx, colors),
+            );
+            assert!(
+                manager.transfers.busy(),
+                "confirmation must enqueue the batch"
+            );
+            let jobs = little_clip_core::BackgroundJobs::new(2, 16);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while manager.transfers.busy() {
+                manager.tick_transfers(&jobs);
+                assert!(Instant::now() < deadline, "delete batch did not finish");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert_eq!(
+                original.join("one.txt").exists(),
+                searched,
+                "search actions must reject an aliased root without changing ordinary alias handling"
+            );
+            if searched {
+                assert_eq!(
+                    std::fs::read(original.join("one.txt")).unwrap(),
+                    b"original bytes"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn preview_context_rejects_unpublished_paths_before_reading_and_tracks_generations() {
         let mut context = PreviewContext::default();
         let results = PreviewContext::empty_results();
