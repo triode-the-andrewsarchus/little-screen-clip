@@ -66,6 +66,7 @@ pub(super) struct Search {
     preview_context: PreviewContext,
     explanations: explanation::Explanations,
     explanation_id: Option<u64>,
+    source_check_started_at: Option<std::time::Instant>,
     matching_count: usize,
     pub images: image_order::ImageOrder,
     pub answers: columns::Columns,
@@ -395,6 +396,7 @@ impl FileManager {
             }) => {
                 self.search.explanations = explanations;
                 self.search.explanation_id = Some(result.id);
+                self.search.source_check_started_at = self.search.submitted_at;
                 self.search.sources = Some(std::sync::Arc::new(sources));
                 if self.search.has_offline_results() {
                     self.search.images.retire();

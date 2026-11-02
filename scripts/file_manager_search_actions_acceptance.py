@@ -30,7 +30,7 @@ def exercise(session, root):
     session.observe("initial", ["Nested", "ordinary.txt"])
     query = ":*.txt report;scope:recursive"
     submit(session, query)
-    session.observe("result", ["report.txt", "1 matching entries"])
+    session.observe("result", ["report.txt", "1 matching entries", "Checked within"])
     open_result(session, "result")
     session.observe("valid-open", ["Back to folder", "original content"])
     back(session, "valid-open")

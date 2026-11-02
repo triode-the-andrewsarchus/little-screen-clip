@@ -82,7 +82,7 @@ def exercise_live(session, root):
     pause_indexing(session, True, 'pause-before-file-replacement')
     session.address(browser)
     submit(session, ':emb:"tone.wav";scope:indexed')
-    session.observe('current-result', ['tone.wav', 'Semantic candidates'])
+    session.observe('current-result', ['tone.wav', 'Semantic candidates', 'Checked within'])
     x, y = session.word('current-result', 'tone.wav', minimum_y=250)
     target = source/'tone.wav'
     original_inode = target.stat().st_ino
@@ -154,7 +154,8 @@ def exercise(session, root):
     session.key('Escape')
     offline_option(session, True, 'enable-offline')
     submit(session, ':emb:"tone.wav";scope:indexed')
-    session.observe('last-known-metadata', ['tone.wav', 'Unavailable', 'last-known', 'metadata list'])
+    text = session.observe('last-known-metadata', ['tone.wav', 'Unavailable', 'last-known', 'metadata list', 'check time unknown'])
+    assert 'checked within' not in text.lower(), 'last-known rows must not inherit the current query check age'
     x, y = session.word('last-known-metadata', 'tone.wav', minimum_y=250)
     session.click(x + 10, y)
     session.key('c', 'ctrl')

@@ -7,6 +7,24 @@ use crate::{
 use egui::{Rect, Response, Ui};
 
 impl Search {
+    fn source_age(&self, entry: &Entry) -> String {
+        if self.is_offline(&entry.path) {
+            return "Last-known source check time unknown".into();
+        }
+        if self.explanation_id != Some(self.request_id) {
+            return "Previous search observation".into();
+        }
+        self.source_check_started_at.map_or_else(
+            || "Source check time unknown".into(),
+            |started| {
+                format!(
+                    "Checked within {} s",
+                    started.elapsed().as_secs().saturating_add(1)
+                )
+            },
+        )
+    }
+
     pub(in crate::file_manager) fn result_height(&self, entry: &Entry) -> f32 {
         if self.sources.is_none() {
             return 0.0;
@@ -58,7 +76,8 @@ impl Search {
         } else {
             ""
         };
-        let heading = [availability, label, location, coverage, &parent]
+        let age = self.source_age(entry);
+        let heading = [availability, label, location, coverage, &age, &parent]
             .into_iter()
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
@@ -101,6 +120,10 @@ impl Search {
                 ui.label("Previous search result. Await the current search or refresh it.");
                 return;
             }
+            ui.label(self.source_age(entry));
+            if !self.is_offline(&entry.path) && self.source_check_started_at.is_some() {
+                ui.small("Age is bounded from the start of the search, including queued work. Refresh to check the source again.");
+            }
             if self.is_offline(&entry.path) {
                 ui.strong("Unavailable · last-known match, not freshly verified");
                 ui.label("Reconnect and refresh before opening, copying or collecting this file. Preview reads are disabled.");
@@ -124,5 +147,57 @@ impl Search {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, atomic::AtomicBool};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn source_age_never_labels_offline_or_previous_observations_as_fresh() {
+        let fixture = tempfile::tempdir().unwrap();
+        std::fs::write(fixture.path().join("one.txt"), "content").unwrap();
+        let entry = filesystem::read_directory(fixture.path(), &AtomicBool::new(false))
+            .unwrap()
+            .entries
+            .remove(0);
+        let mut search = Search {
+            request_id: 7,
+            explanation_id: Some(7),
+            sources: Some(Arc::new(Vec::new())),
+            source_check_started_at: Some(Instant::now() - Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let age = search.source_age(&entry);
+        let seconds: u64 = age
+            .strip_prefix("Checked within ")
+            .unwrap()
+            .strip_suffix(" s")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(seconds >= 61);
+        search
+            .explanations
+            .entry(entry.path.clone())
+            .or_default()
+            .unavailable = true;
+        assert_eq!(
+            search.source_age(&entry),
+            "Last-known source check time unknown"
+        );
+        search.request_id += 1;
+        assert_eq!(
+            search.source_age(&entry),
+            "Last-known source check time unknown"
+        );
+        search.explanations.clear();
+        assert_eq!(search.source_age(&entry), "Previous search observation");
+        search.explanation_id = Some(search.request_id);
+        search.source_check_started_at = None;
+        assert_eq!(search.source_age(&entry), "Source check time unknown");
     }
 }
