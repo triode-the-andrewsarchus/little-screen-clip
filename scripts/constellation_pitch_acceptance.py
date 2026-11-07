@@ -7,7 +7,7 @@ import subprocess
 import wave
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 from file_manager_acceptance import (
     application_arguments, media_fixture_directory, run_application_acceptance, wait_for, private,
 )
@@ -19,11 +19,60 @@ def assert_sample_at(image, point):
     assert any(max(pixel) - min(pixel) > 90 for pixel in patch.get_flattened_data()), "the original set moved"
 
 
+def control(session, shot, text, bounds):
+    """Reuse Session's text locator with isolated controls and theme-neutral contrast."""
+    screen = Image.open(session.output / f"{shot}.png").convert("RGB")
+    crop = screen.crop(bounds).convert("L")
+    if screen.getpixel((350, 200))[0] < 128:
+        crop = ImageOps.invert(crop)
+    crop = crop.point(lambda value: 255 if value > 128 else 0)
+    isolated = Image.new("L", screen.size, 255)
+    isolated.paste(crop, bounds[:2])
+    name = f"{shot}-control"
+    isolated.resize((screen.width * 3, screen.height * 3)).save(session.output / f"{name}-ocr.png")
+    return session.word(name, text)
+
+
+def hover_sample(session, point, shot, expected):
+    pointer = subprocess.Popen([str(session.pointer), "move", "1280", "800", *map(str, point)],
+                               env=session.env, stdout=subprocess.DEVNULL)
+    try:
+        session.observe(shot, expected, preserve_pointer=True)
+    finally:
+        pointer.terminate()
+        pointer.wait(timeout=3)
+
+
+def ring_note_targets(image):
+    orange = [(x, y) for y in range(420, 730) for x in range(350, 1140)
+              if image.getpixel((x, y))[0] > 150
+              and image.getpixel((x, y))[0] > image.getpixel((x, y))[1] * 1.4
+              and image.getpixel((x, y))[0] > image.getpixel((x, y))[2] * 1.4]
+    pixels = set(orange)
+    centers = []
+    while pixels:
+        frontier = [pixels.pop()]
+        component = []
+        while frontier:
+            x, y = frontier.pop()
+            component.append((x, y))
+            for neighbor in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]:
+                if neighbor in pixels:
+                    pixels.remove(neighbor)
+                    frontier.append(neighbor)
+        # Ignore the note labels; locate the filled disks themselves.
+        if len(component) >= 80:
+            centers.append(tuple(sum(p[axis] for p in component) // len(component) for axis in (0, 1)))
+    assert len(centers) == 2, "C4 and C5 must remain visible above their rings"
+    centers.sort()
+    return centers[-1], centers[0]
+
+
 def exercise(session, root):
     session.observe("folder", ["Constellation"])
     session.click(*session.word("folder", "Constellation"))
     session.observe("empty-map", ["Index folder"])
-    session.click(*(session.word("empty-map", "Index", required=False) or session.word("empty-map", "Indexfolder", required=False) or (580, 558)))
+    session.click(*(control(session, "empty-map", "Index", (340, 420, 820, 710))))
     database = session.output / "data/little-screen-clip/constellation.sqlite"
 
     def indexed():
@@ -33,8 +82,8 @@ def exercise(session, root):
             return db.execute("SELECT count(*) FROM samples").fetchone()[0] == 3
 
     wait_for(indexed, "three recorded piano pitches")
-    session.observe("indexed", ["Index complete", "Pitch height", "All pitches", "Multisamples only"])
-    multisamples_button = session.word("indexed", "Multisamples")
+    session.observe("indexed", ["Index complete", "All pitches"])
+    multisamples_button = control(session, "indexed", "Multisamples", (908, 230, 1064, 272))
     session.click(*multisamples_button)
     session.observe("multisamples-only", ["3 / 3 samples"])
     session.click(*multisamples_button)
@@ -61,30 +110,34 @@ def exercise(session, root):
              and max(image.getpixel((x, y))) - min(image.getpixel((x, y))) > 90]
     assert stars, "the folded multisample family must be visible"
     point = tuple(sum(p[axis] for p in stars) // len(stars) for axis in (0, 1))
-    hover = subprocess.Popen([str(session.pointer), "move", "1280", "800", *map(str, point)],
-                             env=session.env, stdout=subprocess.DEVNULL)
-    try:
-        session.observe("middle-note-hover", ["old_piano_C4.wav", "3 recordings"], preserve_pointer=True)
-    finally:
-        hover.terminate()
-        hover.wait(timeout=3)
+    hover_sample(session, point, "middle-note-hover", ["old_piano_C4.wav", "3 recordings"])
     session.click(*point)
     session.observe("set-selected", ["Explore set", "3 notes"])
     # Selection must retain the folded set's disk at its original pixel position.
     selected = Image.open(session.output / "set-selected.png").convert("RGB")
     assert_sample_at(selected, point)
-    session.click(*(session.word("set-selected", "Explore", required=False) or (832, 292)))
+    session.click(*(control(session, "set-selected", "Explore", (340, 315, 455, 355))))
     session.observe("pitch-rings", ["3 notes", "Back to Map"])
     # Explore selects the lowest recording. Assign it, then capture detail and overview halos.
     session.key("z", "shift")
     session.observe("collected-pitch-rings", ["3 notes"])
-    session.click(*(session.word("collected-pitch-rings", "Back", required=False) or (400, 297)))
+    session.key("Escape")
     session.observe("collected-overview", ["Explore set"])
     restored = Image.open(session.output / "collected-overview.png").convert("RGB")
     assert_sample_at(restored, point)
+    session.click(*control(session, "collected-overview", "Explore", (340, 315, 455, 355)))
+    session.observe("second-explore", ["Back to Map", "3 notes"])
+    image = Image.open(session.output / "second-explore.png").convert("RGB")
+    high, middle = ring_note_targets(image)
+    session.click(*high)
+    hover_sample(session, middle, "hover-after-explicit-click", ["old_piano_C4.wav"])
+    session.key("Escape")
+    session.observe("escaped-to-clicked-note", ["Explore set"])
+    session.key("x", "shift")
     session.click(1164, 550)
-    session.observe("rack-and-glow", ["old_piano_C3.wav", "Packs"])
-    # Undo the assignment so the private app closes without a dirty-document prompt.
+    session.observe("rack-and-glow", ["C5.wav", "Packs"])
+    # Undo both assignments so the private app closes without a dirty-document prompt.
+    session.key("z", "ctrl")
     session.key("z", "ctrl")
     session.observe("assignment-undone", ["Packs"])
     # Reload the cached snapshot through folder navigation; families must survive without reindexing.

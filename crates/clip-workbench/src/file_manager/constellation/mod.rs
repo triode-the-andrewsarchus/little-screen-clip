@@ -111,6 +111,8 @@ pub struct ConstellationState {
     camera: space::MapCamera,
     orbit_mode: bool,
     expanded_set: Option<usize>,
+    explore_selection: Option<PathBuf>,
+    map_hover_suspended: bool,
     pub current_indexed_folder: Option<PathBuf>,
     pub(super) folder_has_audio: Option<bool>,
     folder_scan_cancelled: Arc<AtomicBool>,
@@ -195,6 +197,8 @@ impl Default for ConstellationState {
             camera: Default::default(),
             orbit_mode: false,
             expanded_set: None,
+            explore_selection: None,
+            map_hover_suspended: false,
             current_indexed_folder: None,
             folder_has_audio: None,
             folder_scan_cancelled: Arc::new(AtomicBool::new(false)),
@@ -376,6 +380,7 @@ impl ConstellationState {
         self.samples.clear();
         self.sample_sets = Default::default();
         self.expanded_set = None;
+        self.explore_selection = None;
         self.overview_camera = None;
         self.overlap_layout = Default::default();
         self.hover_cancelled.store(true, Ordering::Relaxed);
@@ -744,6 +749,7 @@ impl ConstellationState {
                             self.samples = samples;
                             self.sample_sets = sets;
                             self.expanded_set = None;
+                            self.explore_selection = None;
                             self.overview_camera = None;
                             self.pending_set_focus = None;
                             self.selected_path = None;

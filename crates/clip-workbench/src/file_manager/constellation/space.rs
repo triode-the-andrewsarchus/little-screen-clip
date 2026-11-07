@@ -30,6 +30,69 @@ impl MapCamera {
         )
     }
 
+    fn unproject_plane(self, point: Vec2) -> Pos2 {
+        let (sin_yaw, cos_yaw) = self.azimuth.to_radians().sin_cos();
+        let depth = -point.y / self.elevation.to_radians().sin().max(0.01);
+        Pos2::new(
+            point.x * cos_yaw + depth * sin_yaw,
+            -point.x * sin_yaw + depth * cos_yaw,
+        )
+    }
+
+    /// Subdivide the original bounded C4 plane, targeting about 64 visible cells.
+    /// Finer lines fade in between levels instead of jumping as a threshold is crossed.
+    fn reference_grid(self, clip: egui::Rect, center: Pos2, scale: f32) -> Vec<(Pos2, Pos2, f32)> {
+        if !clip.is_finite() || !clip.is_positive() || !scale.is_finite() || scale <= 0.0 {
+            return Vec::new();
+        }
+        let corners = [
+            clip.left_top(),
+            clip.right_top(),
+            clip.right_bottom(),
+            clip.left_bottom(),
+        ]
+        .map(|point| self.unproject_plane((point - center) / scale));
+        let bounds = egui::Rect::from_points(&corners);
+        if !bounds.is_finite() || !bounds.is_positive() {
+            return Vec::new();
+        }
+        let world_area = (clip.width() / scale) * (clip.height() / scale)
+            / self.elevation.to_radians().sin().max(0.01);
+        // Account for the empty corners of the world-axis bounding box when orbiting.
+        let coverage = (world_area / bounds.area()).sqrt();
+        let desired = (bounds.size() * (coverage / 8.0)).min(Vec2::splat(0.25));
+        let plane = egui::Rect::from_min_max(Pos2::new(-1.0, -1.0), Pos2::new(1.0, 1.0));
+        let bounds = bounds.intersect(plane);
+        if !bounds.is_positive() {
+            return Vec::new();
+        }
+        let mut lines = Vec::with_capacity(64);
+        for axis in 0..2 {
+            let coarse = 2.0_f32.powf(desired[axis].log2().ceil());
+            let step = coarse * 0.5;
+            let minor_opacity = (coarse / desired[axis] - 1.0).clamp(0.0, 1.0);
+            let first = (bounds.min[axis] / step).floor() as i32;
+            let last = (bounds.max[axis] / step).ceil() as i32;
+            // Bound painting even for an exceptionally thin canvas or extreme pan.
+            for index in first..=last.min(first.saturating_add(128)) {
+                let opacity = if index % 2 == 0 { 1.0 } else { minor_opacity };
+                if opacity < 0.01 {
+                    continue;
+                }
+                let mut from = plane.min;
+                let mut to = plane.max;
+                from[axis] = index as f32 * step;
+                to[axis] = from[axis];
+                lines.push((
+                    center + self.project(from, 0.0) * scale,
+                    center + self.project(to, 0.0) * scale,
+                    opacity,
+                ));
+            }
+        }
+        lines
+    }
+
     pub fn orbit(&mut self, delta: Vec2) {
         self.azimuth = (self.azimuth + delta.x * 0.35).rem_euclid(360.0);
         self.elevation = (self.elevation + delta.y * 0.25).clamp(5.0, 90.0);
@@ -66,7 +129,15 @@ impl ConstellationState {
             (viewport.width().min(viewport.height()) * 0.45).max(1.0) / extent * self.zoom;
         let mut points = self.map_points(view_scale, base_star_radius, query);
         if let Some(set) = self.pending_set_focus.take() {
-            let bounds = self.set_point_bounds(&points, set, view_scale);
+            let anchor = points
+                .iter()
+                .find(|point| point.index == self.sample_sets.sets[set].members[0])
+                .map(|point| point.position)
+                .unwrap_or_default();
+            let mut bounds = self.set_point_bounds(&points, set, view_scale);
+            // Fit symmetrically around the lowest sample, which remains the focus.
+            bounds.extend_with(anchor + (anchor - bounds.min));
+            bounds.extend_with(anchor + (anchor - bounds.max));
             if bounds.is_finite() {
                 let fit = ((visible.width() - 60.0).max(1.0) / bounds.width().max(1.0))
                     .min((visible.height() - 60.0).max(1.0) / bounds.height().max(1.0))
@@ -75,8 +146,8 @@ impl ConstellationState {
                 self.zoom = (self.zoom * fit).clamp(0.2, SET_MAX_ZOOM);
                 view_scale *= self.zoom / old_zoom;
                 points = self.map_points(view_scale, base_star_radius, query);
-                let bounds = self.set_point_bounds(&points, set, view_scale);
-                self.pan = visible.center() - viewport.center() - bounds.center().to_vec2();
+                let anchor = anchor.to_vec2() * (self.zoom / old_zoom);
+                self.pan = visible.center() - viewport.center() - anchor;
             }
         }
         let push_factor = super::ui::spacing_strength(self.zoom);
@@ -110,8 +181,7 @@ impl ConstellationState {
     fn set_point_bounds(&self, points: &[MapPoint], set: usize, scale: f32) -> egui::Rect {
         let family = &self.sample_sets.sets[set];
         let radius = ring_radius(family.members.len() - 1) * scale;
-        let origin = self.map_base(family.center) * scale
-            - Vec2::Y * self.note_height(family.members[0]) * scale;
+        let origin = self.map_base(family.center) * scale;
         let corner = Vec2::new(
             radius,
             radius
@@ -139,14 +209,26 @@ impl ConstellationState {
         let lowest = self.sample_sets.sets[set].members[0];
         self.selected_path = Some(self.samples[lowest].file_path.clone());
         self.expanded_set = Some(set);
+        self.explore_selection = None;
         self.last_hovered_path = None;
         self.zoom = 12.0;
         self.pending_set_focus = Some(set);
     }
 
+    pub(super) fn handle_explore_escape(&mut self, ctx: &egui::Context) {
+        if self.expanded_set.is_some()
+            && !self.browser_open
+            && !ctx.memory(|memory| memory.any_popup_open())
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.leave_set();
+        }
+    }
+
     pub(super) fn leave_set(&mut self) {
         self.expanded_set = None;
         self.last_hovered_path = None;
+        self.map_hover_suspended = true;
         self.pending_set_focus = None;
         self.pending_map_reveal = None;
         if let Some((camera, pan, zoom, selected_path)) = self.overview_camera.take() {
@@ -158,13 +240,16 @@ impl ConstellationState {
             self.zoom = 1.0;
             self.pan = Vec2::ZERO;
         }
+        if let Some(path) = self.explore_selection.take() {
+            self.selected_path = Some(path.clone());
+            self.pending_map_reveal = Some(path);
+        }
     }
 
     /// Hit the projected ring's entire circumference, independently of its dot angle.
     pub(super) fn ring_sample_at(&self, pointer: Pos2, center: Pos2, scale: f32) -> Option<usize> {
         let set = self.sample_sets.sets.get(self.expanded_set?)?;
-        let origin = center + self.map_base(set.center) * scale
-            - Vec2::Y * self.note_height(set.members[0]) * scale;
+        let origin = center + self.map_base(set.center) * scale;
         let delta = (pointer - origin) / scale;
         let tilt = if self.pitch_height_enabled {
             self.camera.elevation.to_radians().sin()
@@ -219,22 +304,12 @@ impl ConstellationState {
         for (set_index, set) in self.sample_sets.sets.iter().enumerate() {
             let base = self.map_base(set.center) * scale;
             if Some(set_index) == selected_set {
-                let height = self.note_height(set.members[0]) * scale;
                 for (ordinal, &index) in set.members.iter().enumerate() {
                     let angle = ordinal as f32 * 2.399_963_1;
-                    let offset = if ordinal == 0 {
-                        Vec2::ZERO
-                    } else {
-                        self.map_base(Pos2::new(angle.cos(), angle.sin()))
-                            * ring_radius(ordinal)
-                            * scale
-                    };
-                    let mut point = self.project_point(index, base + offset, scale, radius, None);
-                    // Ring detail is a single local plane anchored to the lowest note.
-                    // Pitch order is represented by radius, including duplicate recordings.
-                    point.position = (base + offset - Vec2::Y * height).to_pos2();
-                    point.base = point.position;
-                    points.push(point);
+                    let offset = self.map_base(Pos2::new(angle.cos(), angle.sin()))
+                        * ring_radius(ordinal)
+                        * scale;
+                    points.push(self.project_point(index, base + offset, scale, radius, None));
                 }
             } else {
                 let matching: Vec<_> = set
@@ -282,20 +357,14 @@ impl ConstellationState {
             .visuals
             .weak_text_color()
             .gamma_multiply(0.12);
-        for step in -2..=2 {
-            let coordinate = step as f32 * 0.5;
-            for (from, to) in [
-                (Pos2::new(-1.0, coordinate), Pos2::new(1.0, coordinate)),
-                (Pos2::new(coordinate, -1.0), Pos2::new(coordinate, 1.0)),
-            ] {
-                painter.line_segment(
-                    [
-                        center + self.map_base(from) * scale,
-                        center + self.map_base(to) * scale,
-                    ],
-                    Stroke::new(0.7_f32, color),
-                );
-            }
+        for (from, to, opacity) in self
+            .camera
+            .reference_grid(painter.clip_rect(), center, scale)
+        {
+            painter.line_segment(
+                [from, to],
+                Stroke::new(0.7_f32, color.gamma_multiply(opacity)),
+            );
         }
     }
 
@@ -312,8 +381,7 @@ impl ConstellationState {
         {
             return;
         }
-        let origin = center + self.map_base(set.center) * scale
-            - Vec2::Y * self.note_height(set.members[0]) * scale;
+        let origin = center + self.map_base(set.center) * scale;
         for (ordinal, &index) in set.members.iter().enumerate() {
             if !self.matches_filters(&self.samples[index], &query) {
                 continue;
@@ -388,6 +456,85 @@ pub(super) fn append_stem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reference_grid_keeps_about_eight_cells_per_axis_through_zoom() {
+        let camera = MapCamera {
+            azimuth: 0.0,
+            elevation: 90.0,
+        };
+        let clip = egui::Rect::from_min_size(Pos2::ZERO, Vec2::splat(800.0));
+        for scale in [0.2, 80.0, 113.0, 400.0, 763.0, 1600.0, 1_000_000.0] {
+            let lines = camera.reference_grid(clip, clip.center(), scale);
+            let mut density = [0.0_f32; 2];
+            for (from, to, opacity) in &lines {
+                let axis = usize::from((from.x - to.x).abs() > 0.01);
+                if (clip.min[axis]..=clip.max[axis]).contains(&from[axis]) {
+                    density[axis] += opacity;
+                }
+            }
+            assert!((7.0..=10.0).contains(&density[0]), "{scale}: {density:?}");
+            assert!((7.0..=10.0).contains(&density[1]), "{scale}: {density:?}");
+            assert!((49.0..=100.0).contains(&(density[0] * density[1])));
+        }
+    }
+
+    #[test]
+    fn reference_grid_is_world_anchored_and_bounded_when_panned_or_orbited() {
+        let clip = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        for azimuth in [0.0, 43.0, 137.0] {
+            for elevation in [5.0, 46.0, 90.0] {
+                let camera = MapCamera { azimuth, elevation };
+                let world = Pos2::new(0.37, -0.86);
+                assert!(
+                    (camera.unproject_plane(camera.project(world, 0.0)) - world).length() < 0.00001
+                );
+                for scale in [0.2, 400.0, 100_000.0] {
+                    let center = clip.center() + Vec2::new(600.0, -500.0);
+                    let lines = camera.reference_grid(clip, center, scale);
+                    assert!(lines.len() <= 258);
+                    for (from, to, opacity) in lines {
+                        assert!(from.is_finite() && to.is_finite());
+                        assert!((0.0..=1.0).contains(&opacity));
+                        for point in [from, to] {
+                            let world = camera.unproject_plane((point - center) / scale);
+                            assert!((-1.001..=1.001).contains(&world.x));
+                            assert!((-1.001..=1.001).contains(&world.y));
+                        }
+                    }
+                }
+            }
+        }
+        let top = MapCamera {
+            azimuth: 0.0,
+            elevation: 90.0,
+        };
+        let finite = top.reference_grid(clip, clip.center(), 100.0);
+        assert_eq!(finite.len(), 18, "the full bounded plane has 8 by 8 cells");
+        assert!(
+            top.reference_grid(clip, clip.center() + Vec2::splat(10_000.0), 400.0)
+                .is_empty(),
+            "panning away from the original plane must not tile new grid regions"
+        );
+        let camera = MapCamera::default();
+        let pan = Vec2::new(19.0, -23.0);
+        let before = camera.reference_grid(clip, clip.center(), 763.0);
+        let after = camera.reference_grid(clip, clip.center() + pan, 763.0);
+        for (from, to, opacity) in before {
+            let axis = usize::from((from.x - to.x).abs() > 0.01);
+            let shifted = from[axis] + pan[axis];
+            if (clip.min[axis]..=clip.max[axis]).contains(&shifted) {
+                assert!(
+                    after.iter().any(|(a, b, alpha)| {
+                        (a[axis] - b[axis]).abs() < 0.001
+                            && (a[axis] - shifted).abs() < 0.001
+                            && (alpha - opacity).abs() < 0.001
+                    }),
+                    "panning must translate existing world grid lines"
+                );
+            }
+        }
+    }
 
     #[test]
     fn orbit_rotates_plane_and_tilt_projects_pitch_height() {

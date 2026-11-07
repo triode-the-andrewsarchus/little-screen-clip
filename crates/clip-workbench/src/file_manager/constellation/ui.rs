@@ -93,12 +93,14 @@ impl ConstellationState {
         lowercase_query: &str,
     ) -> bool {
         let index = self.sample_sets.index_for_path(&sample.file_path);
-        self.expanded_set
-            .is_none_or(|set| index.and_then(|index| self.sample_sets.set_for(index)) == Some(set))
-            && (!self.multisamples_only
-                || index
-                    .and_then(|index| self.sample_sets.set_for(index))
-                    .is_some())
+        if let Some(set) = self.expanded_set {
+            // Explore is a complete family snapshot, independent of overview filters.
+            return index.and_then(|index| self.sample_sets.set_for(index)) == Some(set);
+        }
+        (!self.multisamples_only
+            || index
+                .and_then(|index| self.sample_sets.set_for(index))
+                .is_some())
             && self.pitch_range.is_none_or(|(low, high)| {
                 index
                     .and_then(|index| self.sample_sets.note(index))
@@ -132,6 +134,9 @@ impl ConstellationState {
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.close_pack_browser();
+        }
+        if ui.is_enabled() {
+            self.handle_explore_escape(ui.ctx());
         }
         self.handle_shelf_keyboard_shortcuts(ui.ctx());
         let text_focused = ui
@@ -427,6 +432,17 @@ impl ConstellationState {
                 }
                 return;
             }
+            if let Some(set) = self.selected_set() {
+                if ui
+                    .button("Explore set")
+                    .on_hover_text(
+                        "Open pitch rings; cross rings to audition from lowest to highest",
+                    )
+                    .clicked()
+                {
+                    self.explore_set(set);
+                }
+            }
             if outlined_toggle(
                 ui,
                 format!("All ({})", self.samples.len()),
@@ -437,7 +453,6 @@ impl ConstellationState {
             {
                 self.category_filter = None;
             }
-            ui.toggle_value(&mut self.multisamples_only, "Multisamples only");
             let mut counts = [0usize; 12];
             for sample in &self.samples {
                 counts[sample.category as usize] += 1;
@@ -458,17 +473,6 @@ impl ConstellationState {
                 .clicked()
                 {
                     self.category_filter = if active { None } else { Some(category) };
-                }
-            }
-            if let Some(set) = self.selected_set() {
-                if ui
-                    .button("Explore set")
-                    .on_hover_text(
-                        "Open pitch rings; cross rings to audition from lowest to highest",
-                    )
-                    .clicked()
-                {
-                    self.explore_set(set);
                 }
             }
         });
@@ -551,7 +555,7 @@ impl ConstellationState {
             duration_fraction(low, shortest, longest),
             duration_fraction(high, shortest, longest),
         ];
-        let response = range_handles(ui, &mut fractions);
+        let response = range_handles(ui, &mut fractions, self.expanded_set.is_none());
         if response.changed() {
             low = duration_at(fractions[0], shortest, longest);
             high = duration_at(fractions[1], shortest, longest);
@@ -588,7 +592,7 @@ impl ConstellationState {
         let span = (highest - lowest).max(1.0);
         let mut fractions = [(low - lowest) / span, (high - lowest) / span];
         ui.label("Pitch");
-        let response = range_handles(ui, &mut fractions);
+        let response = range_handles(ui, &mut fractions, self.expanded_set.is_none());
         if response.changed() || response.clicked() {
             low = (lowest + fractions[0] * span)
                 .round()
@@ -619,6 +623,16 @@ impl ConstellationState {
         .clicked()
         {
             self.channel_filter = if self.channel_filter == 1 { 0 } else { 1 };
+        }
+        if outlined_toggle(
+            ui,
+            "Multisamples only",
+            self.multisamples_only,
+            ui.visuals().hyperlink_color,
+        )
+        .clicked()
+        {
+            self.multisamples_only = !self.multisamples_only;
         }
     }
 
@@ -703,10 +717,6 @@ impl ConstellationState {
 
         // Panning never auditions a point on press/release. Resume hover only
         // after a fresh pointer movement, not because the map moved underneath it.
-        let pan_id = response.id.with("suppress_hover_after_pan");
-        let mut suppress_hover = ui
-            .data(|data| data.get_temp::<bool>(pan_id))
-            .unwrap_or(false);
         use egui::PointerButton::{Middle, Primary, Secondary};
         let camera_buttons: &[egui::PointerButton] = if self.orbit_mode {
             &[Middle, Secondary, Primary]
@@ -725,11 +735,10 @@ impl ConstellationState {
             )
         });
         if camera_down {
-            suppress_hover = true;
+            self.map_hover_suspended = true;
         } else if moved && !camera_released {
-            suppress_hover = false;
+            self.map_hover_suspended = false;
         }
-        ui.data_mut(|data| data.insert_temp(pan_id, suppress_hover));
         if response.dragged_by(egui::PointerButton::Secondary)
             || (self.orbit_mode && response.dragged_by(egui::PointerButton::Primary))
         {
@@ -747,7 +756,7 @@ impl ConstellationState {
 
         response
             .hover_pos()
-            .filter(|_| !response.dragged() && !suppress_hover)
+            .filter(|_| !response.dragged() && !self.map_hover_suspended)
     }
 
     fn render_starfield(
@@ -807,7 +816,7 @@ impl ConstellationState {
             rect.left_top() + Vec2::splat(12.0),
             egui::Align2::LEFT_TOP,
             if self.expanded_set.is_some() {
-                "Pitch rings: lowest at center · cross rings to audition · Right-drag: orbit"
+                "Pitch rings: inner to outer, low to high · cross rings to audition · Esc: Back to Map"
             } else if self.pitch_height_enabled {
                 "Height: pitch · C4 reference (unknown stays on plane) / Size: duration · Right-drag: orbit"
             } else {
@@ -914,8 +923,13 @@ impl ConstellationState {
             );
         }
 
-        if let Some(index) =
-            mouse_pos.and_then(|pointer| self.ring_sample_at(pointer, center, view_scale))
+        // An elevated dot takes precedence over any flat ring behind it.
+        let over_dot = hovered_sample
+            .as_ref()
+            .is_some_and(|_| closest_hover_dist_sq <= (hovered_radius + 4.0_f32).powi(2));
+        if let Some(index) = mouse_pos
+            .filter(|_| !over_dot)
+            .and_then(|pointer| self.ring_sample_at(pointer, center, view_scale))
         {
             let sample = &self.samples[index];
             if self.matches_filters(sample, &query_lower) {
@@ -991,6 +1005,7 @@ impl ConstellationState {
             if response.clicked() {
                 self.visited_samples.clear();
                 self.selected_path = Some(hovered.file_path.clone());
+                self.explore_selection = self.expanded_set.map(|_| hovered.file_path.clone());
                 self.record_played_sample(&hovered);
                 on_select_sample(&hovered.file_path);
                 on_play_sample(&hovered.file_path);
@@ -1540,9 +1555,18 @@ pub(super) fn short_label(value: &str, limit: usize) -> String {
 }
 
 /// Two normalized endpoints shared by the duration and semitone pitch ranges.
-fn range_handles(ui: &mut egui::Ui, fractions: &mut [f32; 2]) -> egui::Response {
-    let (rect, mut response) =
-        ui.allocate_exact_size(Vec2::new(160.0, 24.0), Sense::click_and_drag());
+fn range_handles(ui: &mut egui::Ui, fractions: &mut [f32; 2], interactive: bool) -> egui::Response {
+    let sense = if interactive {
+        Sense::click_and_drag()
+    } else {
+        Sense::hover()
+    };
+    let (rect, mut response) = ui.allocate_exact_size(Vec2::new(160.0, 24.0), sense);
+    let range_color = if interactive {
+        ui.visuals().selection.bg_fill
+    } else {
+        ui.visuals().weak_text_color()
+    };
     let track = rect.shrink2(Vec2::new(8.0, 0.0));
     let x_at = |fraction: f32| track.left() + fraction * track.width();
     let handle_id = response.id.with("range_endpoint");
@@ -1583,7 +1607,7 @@ fn range_handles(ui: &mut egui::Ui, fractions: &mut [f32; 2]) -> egui::Response 
             egui::pos2(x_at(fractions[0]), y),
             egui::pos2(x_at(fractions[1]), y),
         ],
-        Stroke::new(3.0_f32, ui.visuals().selection.bg_fill),
+        Stroke::new(3.0_f32, range_color),
     );
     for fraction in *fractions {
         painter.circle(
@@ -1924,11 +1948,20 @@ mod tests {
         assert_eq!(detail.len(), 4);
         let low = detail.iter().find(|point| point.index == 0).unwrap();
         let high = detail.iter().find(|point| point.index == 2).unwrap();
-        assert_eq!(
-            low.position, low.base,
-            "detail rings use the lowest note's local plane"
+        assert!(
+            low.position.y > low.base.y,
+            "low notes descend from their flat ring"
         );
-        assert_eq!(high.position, high.base);
+        assert!(
+            high.position.y < high.base.y,
+            "high notes rise from their flat ring"
+        );
+        for point in detail.iter().filter(|point| point.index < 3) {
+            assert!(
+                (point.position.y - point.base.y + state.note_height(point.index) * 100.0).abs()
+                    < 0.0001
+            );
+        }
         assert!(low.radius < high.radius);
         assert!(detail.iter().all(|point| point.collapsed_set.is_none()));
         let visible = Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 240.0));
@@ -2065,13 +2098,10 @@ mod tests {
             (origin - viewport.center()).length() < 0.01,
             "Explore must center the lowest note"
         );
+        let origin = center + state.map_base(state.sample_sets.sets[set].center) * scale;
         let mut played = Vec::new();
         for (ordinal, index) in members.iter().enumerate() {
-            let radius = if ordinal == 0 {
-                0.0
-            } else {
-                (ordinal + 1) as f32 * 0.025
-            };
+            let radius = (ordinal + 1) as f32 * 0.025;
             // Pick a circumference far from the dot, to test ring rather than dot hit testing.
             let pointer = origin + state.map_base(Pos2::new(0.0, 1.0)) * radius * scale;
             assert_eq!(state.ring_sample_at(pointer, center, scale), Some(*index));
@@ -2103,6 +2133,128 @@ mod tests {
             ),
             before
         );
+    }
+
+    #[test]
+    fn explore_overrides_ranges_and_escape_distinguishes_clicked_notes_from_hover() {
+        let ctx = egui::Context::default();
+        let mut state = ConstellationState::default();
+        state.samples = [
+            "/a/piano_C3.wav",
+            "/a/piano_C4.wav",
+            "/a/piano_C5.wav",
+            "/a/noise.wav",
+        ]
+        .into_iter()
+        .map(note_sample)
+        .collect();
+        state.samples[0].duration_seconds = 0.1;
+        state.samples[1].duration_seconds = 0.7;
+        state.samples[2].duration_seconds = 2.0;
+        state.sample_sets = super::super::multisample::SampleSets::build(&state.samples);
+        state.min_duration = 0.5;
+        state.max_duration = 1.0;
+        state.pitch_range = Some((60.0, 60.0));
+        state.selected_path = Some(state.samples[1].file_path.clone());
+        state.zoom = 2.4;
+        state.pan = Vec2::new(30.0, -40.0);
+        assert_eq!(
+            state.sample_count_label(),
+            "1 / 4 samples · piano · 3 notes"
+        );
+        let escape = |state: &mut ConstellationState| {
+            let _ = egui::Context::default().run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    state.handle_explore_escape(ctx);
+                    assert!(!ctx.input(|input| input.key_pressed(egui::Key::Escape)));
+                },
+            );
+        };
+        state.explore_set(0);
+        assert_eq!(
+            state.sample_count_label(),
+            "3 / 4 samples · piano · 3 notes"
+        );
+        assert!(state.matches_filters(&state.samples[0], "unmatched search"));
+        assert!(!state.matches_filters(&state.samples[3], ""));
+        state.last_hovered_path = Some(state.samples[2].file_path.clone());
+        escape(&mut state);
+        assert_eq!(
+            state.selected_path.as_ref(),
+            Some(&state.samples[1].file_path)
+        );
+        assert_eq!(state.zoom, 2.4);
+        assert_eq!(state.pan, Vec2::new(30.0, -40.0));
+        assert_eq!(
+            state.sample_count_label(),
+            "1 / 4 samples · piano · 3 notes"
+        );
+        assert!(state.map_hover_suspended);
+        state.explore_set(0);
+        let _ = render_map_frame(&ctx, &mut state, vec![], &mut |_| {});
+        let viewport = Rect::from_min_max(Pos2::new(8.0, 8.0), Pos2::new(792.0, 592.0));
+        let (_, center, points) = state.layout_map_points(viewport, viewport, 4.0, "");
+        let point = points
+            .iter()
+            .find(|point| point.index == 2)
+            .unwrap()
+            .position
+            + center.to_vec2();
+        let mut auditions = Vec::new();
+        let _ = render_map_frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(point + Vec2::new(30.0, 0.0))],
+            &mut |_| {},
+        );
+        for pressed in [true, false] {
+            let _ = render_map_frame(
+                &ctx,
+                &mut state,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                &mut |path| auditions.push(path.to_owned()),
+            );
+        }
+        assert_eq!(
+            state.explore_selection.as_ref(),
+            Some(&state.samples[2].file_path),
+            "click the elevated dot even when a different flat ring lies behind it"
+        );
+        assert_eq!(auditions.last(), Some(&state.samples[2].file_path));
+        state.last_hovered_path = Some(state.samples[0].file_path.clone());
+        escape(&mut state);
+        assert_eq!(
+            state.selected_path.as_ref(),
+            Some(&state.samples[2].file_path)
+        );
+        assert_eq!(
+            state.pending_map_reveal.as_ref(),
+            Some(&state.samples[2].file_path)
+        );
+        assert_eq!(
+            (state.min_duration, state.max_duration, state.pitch_range),
+            (0.5, 1.0, Some((60.0, 60.0)))
+        );
+        assert_eq!(state.zoom, 2.4);
+        assert!(state.expanded_set.is_none());
     }
 
     #[test]
