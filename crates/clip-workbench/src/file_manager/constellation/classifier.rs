@@ -8,6 +8,9 @@ use std::f32::consts::PI;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
+/// Appended to source identity keys so acoustic-analysis changes invalidate cached observations.
+pub const PITCH_ANALYSIS_REVISION: &[u8] = b"constellation-pitch-difference-v1";
+
 pub struct SampleClassification {
     pub category: SampleCategory,
     pub confidence: f32,
@@ -373,47 +376,57 @@ pub fn extract_features(samples: &[f32], sample_rate: f32) -> Option<SampleFeatu
     })
 }
 
-/// Estimates fundamental frequency and normalized autocorrelation over the first 100 ms.
+/// Bounded normalized-difference pitch analysis. Only an interior periodic valley
+/// can supply pitch; a monotone short-lag correlation cannot select a range boundary.
 fn estimate_pitch(samples: &[f32], sample_rate: f32) -> (f32, f32) {
-    let first_100ms = (0.10 * sample_rate) as usize;
-    let ac_slice = &samples[..samples.len().min(first_100ms)];
-    let mut pitch_hz = 0.0f32;
-    let mut pitch_clarity = 0.0f32;
-
-    if ac_slice.len() > 128 {
-        let min_lag = ((sample_rate / 1000.0) as usize).max(1);
-        let max_lag = (sample_rate / 40.0) as usize;
-        let end_lag = max_lag.min(ac_slice.len() / 2);
-
-        let mut r0 = 0.0f32;
-        for &s in ac_slice {
-            r0 += s * s;
-        }
-
-        if r0 > 1e-6 && min_lag < end_lag {
-            let mut best_lag = min_lag;
-            let mut best_r = 0.0f32;
-
-            for lag in min_lag..end_lag {
-                let mut sum = 0.0f32;
-                let lim = ac_slice.len() - lag;
-                for i in 0..lim {
-                    sum += ac_slice[i] * ac_slice[i + lag];
-                }
-                if sum > best_r {
-                    best_r = sum;
-                    best_lag = lag;
-                }
-            }
-
-            pitch_clarity = (best_r / r0).clamp(0.0, 1.0);
-            if pitch_clarity > 0.25 {
-                pitch_hz = sample_rate / best_lag as f32;
-            }
+    let stride = (sample_rate / 24_000.0).ceil().max(1.0) as usize;
+    let rate = sample_rate / stride as f32;
+    let limit = samples.len().min((sample_rate * 0.2) as usize);
+    let signal: Vec<f32> = samples[..limit]
+        .chunks(stride)
+        .map(|chunk| chunk.iter().sum::<f32>() / chunk.len() as f32)
+        .collect();
+    let min_lag = ((rate / 3000.0) as usize).max(2);
+    let max_lag = ((rate / 30.0) as usize).min(signal.len() / 2);
+    if max_lag <= min_lag + 2 {
+        return (0.0, 0.0);
+    }
+    let mean = signal.iter().sum::<f32>() / signal.len() as f32;
+    let variance = signal
+        .iter()
+        .map(|sample| (sample - mean).powi(2))
+        .sum::<f32>()
+        / signal.len() as f32;
+    if variance < 1e-8 {
+        return (0.0, 0.0);
+    }
+    let window = signal.len() - max_lag;
+    let mut difference = vec![1.0_f32; max_lag + 1];
+    let mut cumulative = 0.0;
+    for lag in 1..=max_lag {
+        let sum = (0..window)
+            .map(|i| (signal[i] - signal[i + lag]).powi(2))
+            .sum::<f32>();
+        cumulative += sum;
+        difference[lag] = if cumulative > 1e-12 {
+            sum * lag as f32 / cumulative
+        } else {
+            1.0
+        };
+    }
+    for lag in (min_lag + 1)..max_lag {
+        let [left, value, right] = [difference[lag - 1], difference[lag], difference[lag + 1]];
+        if value < 0.15 && value < left && value <= right {
+            let curvature = left - 2.0 * value + right;
+            let offset = if curvature.abs() > 1e-8 {
+                (0.5 * (left - right) / curvature).clamp(-0.5, 0.5)
+            } else {
+                0.0
+            };
+            return (rate / (lag as f32 + offset), (1.0 - value).clamp(0.0, 1.0));
         }
     }
-
-    (pitch_hz, pitch_clarity)
+    (0.0, 0.0)
 }
 
 /// Returns an ordered filename or directory prior for a sample.
@@ -668,6 +681,42 @@ pub fn calculate_organic_coordinates(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pitch_tracker_follows_tonal_periods_without_clamping_to_one_kilohertz() {
+        for rate in [16_000.0, 44_100.0, 48_000.0] {
+            for frequency in [55.0, 110.0, 261.6256, 440.0, 1000.0, 1760.0] {
+                let signal: Vec<_> = (0..(rate * 0.2) as usize)
+                    .map(|i| {
+                        let time = i as f32 / rate;
+                        let phase = time * frequency * std::f32::consts::TAU;
+                        (phase.sin() + 0.2 * (phase * 2.0).sin()) * (-time * 4.0).exp() + 0.1
+                    })
+                    .collect();
+                let (pitch, clarity) = estimate_pitch(&signal, rate);
+                assert!(
+                    (pitch / frequency - 1.0).abs() < 0.01,
+                    "{frequency} Hz at {rate}: {pitch} ({clarity})"
+                );
+                assert!(clarity > 0.85);
+            }
+        }
+    }
+
+    #[test]
+    fn pitch_tracker_rejects_noise_dc_and_nonperiodic_decays() {
+        let mut seed = 123456789_u32;
+        let noise: Vec<_> = (0..9600)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                seed as f32 / u32::MAX as f32 - 0.5
+            })
+            .collect();
+        let decay: Vec<_> = (0..9600).map(|i| (-i as f32 / 1000.0).exp()).collect();
+        for signal in [noise, decay, vec![0.5; 9600]] {
+            assert_eq!(estimate_pitch(&signal, 48_000.0), (0.0, 0.0));
+        }
+    }
 
     #[test]
     fn non_finite_audio_is_not_classified() {

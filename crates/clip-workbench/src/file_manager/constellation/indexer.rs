@@ -39,6 +39,7 @@ pub enum IndexProgress {
     },
     Complete {
         samples: Vec<ConstellationSample>,
+        sets: super::multisample::SampleSets,
         reused: usize,
         analyzed: usize,
     },
@@ -79,6 +80,7 @@ pub fn run_indexing(
     }
     let event = match result {
         Ok((samples, reused, analyzed)) => IndexProgress::Complete {
+            sets: super::multisample::SampleSets::build(&samples),
             samples,
             reused,
             analyzed,
@@ -253,6 +255,12 @@ fn analyze_audio_paths(
     })
 }
 
+fn analysis_revision(source: &crate::file_source::FileSource) -> Vec<u8> {
+    let mut revision = source.revision_key();
+    revision.extend_from_slice(super::classifier::PITCH_ANALYSIS_REVISION);
+    revision
+}
+
 fn analyze_or_reuse(
     path: &Path,
     filename: String,
@@ -263,7 +271,7 @@ fn analyze_or_reuse(
     let source = crate::file_source::FileSource::capture(path)?;
     if let Some(sample) = cached
         .get(path)
-        .filter(|sample| sample.source_revision.as_ref() == Some(&source.revision_key()))
+        .filter(|sample| sample.source_revision.as_ref() == Some(&analysis_revision(&source)))
     {
         source.check()?;
         reused.fetch_add(1, Ordering::Relaxed);
@@ -361,7 +369,7 @@ fn process_single_audio_file(
             sample_rate: sample_rate_u32,
             channels: channels_u16,
             bit_depth: bit_depth_u16,
-            source_revision: Some(source.revision_key()),
+            source_revision: Some(analysis_revision(&source)),
         }))
     })();
     source.check()?;
@@ -401,6 +409,24 @@ mod tests {
             index_snapshot(&db, &library, &cancelled, &sender).unwrap();
         assert_eq!((reused, analyzed), (1, 0));
         assert_eq!(first[0].source_revision, second[0].source_revision);
+        // An algorithm upgrade must re-measure even when the source identity is unchanged.
+        let mut legacy = second.clone();
+        legacy[0].source_revision = Some(
+            crate::file_source::FileSource::capture(&path)
+                .unwrap()
+                .revision_key(),
+        );
+        db.save_samples(&library, &legacy).unwrap();
+        let (upgraded, reused, analyzed) =
+            index_snapshot(&db, &library, &cancelled, &sender).unwrap();
+        assert_eq!((reused, analyzed), (0, 1));
+        assert!(
+            upgraded[0]
+                .source_revision
+                .as_ref()
+                .unwrap()
+                .ends_with(super::super::classifier::PITCH_ANALYSIS_REVISION)
+        );
         // A same-size replacement with the original mtime must still invalidate.
         let original = std::fs::metadata(&path).unwrap();
         let replacement = library.join("replacement.tmp");

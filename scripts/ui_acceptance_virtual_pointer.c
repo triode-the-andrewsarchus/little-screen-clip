@@ -51,7 +51,7 @@ static void usage(const char *program) {
     fprintf(stderr,
             "usage: %s probe | move <width> <height> <x> <y> | "
             "click|right-click <width> <height> <x> <y> | "
-            "drag <width> <height> <start-x> <start-y> <end-x> <end-y> | "
+            "drag|right-drag <width> <height> <start-x> <start-y> <end-x> <end-y> | "
             "scroll <width> <height> <x> <y> <logical-units>\n"
             "Connects only to WAYLAND_DISPLAY in XDG_RUNTIME_DIR.\n",
             program);
@@ -113,7 +113,9 @@ int main(int argc, char **argv) {
     uint32_t button = argc == 6 ? click_button(argv[1]) : 0;
     int click = button != 0;
     int move = argc == 6 && strcmp(argv[1], "move") == 0;
-    int drag = argc == 8 && strcmp(argv[1], "drag") == 0;
+    int right_drag = argc == 8 && strcmp(argv[1], "right-drag") == 0;
+    int drag = right_drag || (argc == 8 && strcmp(argv[1], "drag") == 0);
+    uint32_t drag_button = right_drag ? BTN_RIGHT : BTN_LEFT;
     int scroll = argc == 7 && strcmp(argv[1], "scroll") == 0;
     int scroll_amount = 0;
     if (!probe && !click && !move && !drag && !scroll) {
@@ -217,7 +219,7 @@ int main(int argc, char **argv) {
                 while (wl_display_dispatch(display) >= 0) {
                 }
             } else if (drag) {
-                zwlr_virtual_pointer_v1_button(pointer, time_ms + 1, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+                zwlr_virtual_pointer_v1_button(pointer, time_ms + 1, drag_button, WL_POINTER_BUTTON_STATE_PRESSED);
                 zwlr_virtual_pointer_v1_frame(pointer);
                 if (wl_display_roundtrip(display) < 0) {
                     fprintf(stderr, "private drag press failed\n");
@@ -237,7 +239,7 @@ int main(int argc, char **argv) {
                     }
                     nanosleep(&pause, NULL);
                 }
-                zwlr_virtual_pointer_v1_button(pointer, time_ms + 251, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+                zwlr_virtual_pointer_v1_button(pointer, time_ms + 251, drag_button, WL_POINTER_BUTTON_STATE_RELEASED);
                 zwlr_virtual_pointer_v1_frame(pointer);
                 if (wl_display_roundtrip(display) < 0) {
                     fprintf(stderr, "private drag release failed\n");

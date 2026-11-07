@@ -15,7 +15,11 @@ pub(super) enum Task {
     Delete,
 }
 pub(super) enum Output {
-    Samples(Vec<ConstellationSample>, Option<bool>),
+    Samples(
+        Vec<ConstellationSample>,
+        Option<bool>,
+        multisample::SampleSets,
+    ),
     Packs(Vec<sample_pack::SamplePackSummary>),
     Bank(SamplePackBank),
     Audio(sample_pack::SlotSample),
@@ -281,8 +285,9 @@ impl ConstellationState {
             (Task::Drop(_, _, token), Output::Dropped(drop)) => {
                 self.accept_pad_layers(drop, token);
             }
-            (Task::Folder(..), Output::Samples(samples, has_audio)) => {
+            (Task::Folder(..), Output::Samples(samples, has_audio, sets)) => {
                 self.samples = samples;
+                self.sample_sets = sets;
                 self.folder_has_audio = has_audio;
             }
             (Task::List(..), Output::Packs(packs)) => {
@@ -519,7 +524,7 @@ mod tests {
             state.current_indexed_folder = Some(PathBuf::from("/samples"));
             state.folder_generation = generation;
             state.submit_background(Task::Folder(PathBuf::from("/samples"), generation), || {
-                Ok(Output::Samples(vec![], None))
+                Ok(Output::Samples(vec![], None, Default::default()))
             });
         }
         assert_eq!(state.background.len(), 1);

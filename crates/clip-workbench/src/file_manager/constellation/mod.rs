@@ -14,6 +14,13 @@
 //! Accepted save/export/delete jobs
 //! have no timeout and keep application close deferred until their results arrive.
 //!
+//! Map height uses filename notes or confident acoustic pitch relative to C4;
+//! unknown pitches remain on the plane. Duration controls a bounded power-curve
+//! radius. Snapshot workers derive multisample families from explicit note tokens
+//! and exact parent directories, preserving articulation/velocity suffixes. Folded
+//! families audition their middle recorded note; selected families expose pitch
+//! rings and deeper zoom. Rack membership decorates both folded and individual stars.
+//!
 //! [`generated_model`] contains a fixed heuristic ensemble. Its scores and naming
 //! priors group similar samples; they are not a calibrated instrument classifier.
 
@@ -29,6 +36,7 @@ mod layer_source;
 mod meter_history;
 mod midi;
 mod mixer_controls;
+pub mod multisample;
 mod output;
 mod pack_export;
 pub mod pack_shelf_ui;
@@ -37,6 +45,7 @@ pub(crate) mod pad_interaction;
 mod pad_waveform;
 mod pitch;
 pub mod sample_pack;
+mod space;
 pub mod ui;
 
 use db::{ConstellationDb, ConstellationSample};
@@ -97,12 +106,20 @@ pub struct HoverPreviewRequest {
 /// UI entry points only submit work; decoded PCM and SQLite reads stay on workers.
 pub struct ConstellationState {
     pub samples: Vec<ConstellationSample>,
+    sample_sets: multisample::SampleSets,
+    pitch_height_enabled: bool,
+    camera: space::MapCamera,
+    orbit_mode: bool,
+    expanded_set: Option<usize>,
     pub current_indexed_folder: Option<PathBuf>,
     pub(super) folder_has_audio: Option<bool>,
     folder_scan_cancelled: Arc<AtomicBool>,
     pub category_filter: Option<SampleCategory>,
     min_duration: f32,
     max_duration: f32,
+    pitch_range: Option<(f32, f32)>,
+    overview_camera: Option<(space::MapCamera, egui::Vec2, f32, Option<PathBuf>)>,
+    multisamples_only: bool,
     channel_filter: u16,
     output_editor_open: bool,
     pub search_query: String,
@@ -145,6 +162,7 @@ pub struct ConstellationState {
     selected_layers: [usize; sample_pack::NUM_SLOTS],
     pad_click_layers: [usize; sample_pack::NUM_SLOTS],
     pending_map_reveal: Option<PathBuf>,
+    pending_set_focus: Option<usize>,
     choke_anchor: Option<(u64, usize)>,
     pub(crate) studio_request: Option<pad_interaction::StudioRequest>,
     pad_editor_open: bool,
@@ -172,12 +190,20 @@ impl Default for ConstellationState {
         let history = history::BankHistory::new(&pack_bank);
         Self {
             samples: Vec::new(),
+            sample_sets: Default::default(),
+            pitch_height_enabled: true,
+            camera: Default::default(),
+            orbit_mode: false,
+            expanded_set: None,
             current_indexed_folder: None,
             folder_has_audio: None,
             folder_scan_cancelled: Arc::new(AtomicBool::new(false)),
             category_filter: None,
             min_duration: 0.0,
             max_duration: 0.0,
+            pitch_range: None,
+            overview_camera: None,
+            multisamples_only: false,
             channel_filter: 0,
             output_editor_open: false,
             search_query: String::new(),
@@ -218,6 +244,7 @@ impl Default for ConstellationState {
             selected_layers: [0; sample_pack::NUM_SLOTS],
             pad_click_layers: [0; sample_pack::NUM_SLOTS],
             pending_map_reveal: None,
+            pending_set_focus: None,
             choke_anchor: None,
             studio_request: None,
             pad_editor_open: true,
@@ -341,11 +368,15 @@ impl ConstellationState {
         let cancelled = self.folder_scan_cancelled.clone();
         self.selected_path = None;
         self.pending_map_reveal = None;
+        self.pending_set_focus = None;
         self.last_hovered_path = None;
         self.history_trail.clear();
         self.visited_samples.clear();
 
         self.samples.clear();
+        self.sample_sets = Default::default();
+        self.expanded_set = None;
+        self.overview_camera = None;
         self.overlap_layout = Default::default();
         self.hover_cancelled.store(true, Ordering::Relaxed);
         self.hover_previews.clear();
@@ -360,7 +391,8 @@ impl ConstellationState {
                 let samples = ConstellationDb::new()?.load_samples(&path)?;
                 let has_audio =
                     !samples.is_empty() || indexer::folder_has_audio(&path, &cancelled)?;
-                Ok(background::Output::Samples(samples, Some(has_audio)))
+                let sets = multisample::SampleSets::build(&samples);
+                Ok(background::Output::Samples(samples, Some(has_audio), sets))
             },
         );
     }
@@ -703,12 +735,17 @@ impl ConstellationState {
                     }
                     IndexProgress::Complete {
                         samples,
+                        sets,
                         reused,
                         analyzed,
                     } => {
                         if self.current_indexed_folder.as_ref() == Some(&job.folder) {
                             self.folder_generation = self.folder_generation.wrapping_add(1);
                             self.samples = samples;
+                            self.sample_sets = sets;
+                            self.expanded_set = None;
+                            self.overview_camera = None;
+                            self.pending_set_focus = None;
                             self.selected_path = None;
                             self.last_hovered_path = None;
                             self.history_trail.clear();
@@ -951,6 +988,7 @@ mod tests {
         sender
             .send(IndexProgress::Complete {
                 samples: vec![],
+                sets: Default::default(),
                 reused: 0,
                 analyzed: 0,
             })
