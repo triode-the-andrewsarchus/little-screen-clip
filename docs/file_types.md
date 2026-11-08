@@ -184,7 +184,7 @@
     - [ ] Chapter markers, bookmark metadata, and audiobook tags
   - [ ] `.mka` — Matroska audio
     - [ ] Matroska audio tags, track headers, and chapter markers
-  - [ ] `.mp2` — MPEG-1 Audio Layer II
+  - [x] `.mp2` — MPEG Audio Layer II; Audio Studio, playback, waveform strips and region export
 - [ ] Documents and text
   - [x] `.pdf`
     - [ ] Document information dictionary (`/Info`: Title, Author, Subject, Keywords, Creator)

@@ -9,8 +9,8 @@ from file_manager_acceptance import application_arguments, media_fixture_directo
 from file_manager_phase4_acceptance import open_file
 
 
-def exercise(session, root):
-    audio = "music.m4b" if (root / "music.m4b").exists() else "music.wav"
+def exercise(session, root, audio_extension):
+    audio = f"music.{audio_extension}"
     cases = [
         ("notes.txt", "renamed.txt", []),
         (audio, "renamed" + Path(audio).suffix, ["Selection info"]),
@@ -48,12 +48,13 @@ def exercise(session, root):
 
 def main():
     args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager",
-        lambda parser: parser.add_argument("--audio-extension", choices=["wav", "m4b"], default="wav"))
+        lambda parser: parser.add_argument("--audio-extension", choices=["wav", "m4b", "mp2"], default="wav"))
     output, root = media_fixture_directory(args)
     (root / "notes.txt").write_text("A plain text fixture\n")
     fixture.wav_fixture(root / "music.wav", 2, "tone")
-    if args.audio_extension == "m4b":
-        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(root / "music.wav"), "-c:a", "aac", "-f", "ipod", str(root / "music.m4b")], check=True, timeout=15)
+    if args.audio_extension != "wav":
+        codec, container = {"m4b": ("aac", "ipod"), "mp2": ("mp2", "mp2")}[args.audio_extension]
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(root / "music.wav"), "-c:a", codec, "-f", container, str(root / f"music.{args.audio_extension}")], check=True, timeout=15)
         (root / "music.wav").unlink()
     fixture.pdf_fixture(root, 2, "document.pdf")
     (root / "table.csv").write_text("name,value\nalpha,1\nbeta,2\n")
@@ -64,7 +65,7 @@ def main():
     (root / "scene.splat").write_bytes(struct.pack("<6f8B", 0, 0, 0, .1, .1, .1, 220, 80, 40, 255, 255, 128, 128, 128))
     (root / "letter.rtf").write_text(r"{\rtf1\ansi A document fixture\par}")
     subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=160x120:d=2", "-c:v", "mpeg4", str(root / "clip.mp4")], check=True, timeout=15)
-    return run_application_acceptance(args, output, root, exercise, "shared Files chrome and guarded rename across all built-in editors")
+    return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.audio_extension), "shared Files chrome and guarded rename across all built-in editors")
 
 
 if __name__ == "__main__":

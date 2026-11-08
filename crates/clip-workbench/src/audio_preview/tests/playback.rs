@@ -873,68 +873,76 @@ fn search_source_validation_rejects_audio_exports_before_outputs_and_keeps_compl
 }
 
 #[test]
-fn m4b_audiobooks_decode_waveforms_and_export_without_overwriting() {
-    let (directory, wav) = generate_fixture_wav("audiobook", 1.0);
-    let path = directory.path().join("chapter.M4B");
-    let generated = little_clip_core::process::CommandRequest::new("ffmpeg")
-        .args(["-nostdin", "-v", "error", "-i"])
-        .arg_content_file(&wav)
-        .unwrap()
-        .args(["-c:a", "aac", "-f", "ipod"])
-        .arg(path.as_os_str())
-        .timeout(Duration::from_secs(10))
-        .run()
+fn compressed_audio_decodes_waveforms_and_exports_without_overwriting() {
+    for (extension, codec, container) in [("m4b", "aac", "ipod"), ("mp2", "mp2", "mp2")] {
+        let (directory, wav) = generate_fixture_wav("compressed_audio", 1.0);
+        let path = directory
+            .path()
+            .join(format!("track.{}", extension.to_ascii_uppercase()));
+        let generated = little_clip_core::process::CommandRequest::new("ffmpeg")
+            .args(["-nostdin", "-v", "error", "-i"])
+            .arg_content_file(&wav)
+            .unwrap()
+            .args(["-c:a", codec, "-b:a", "192k", "-f", container])
+            .arg(path.as_os_str())
+            .timeout(Duration::from_secs(10))
+            .run()
+            .unwrap();
+        assert!(generated.status.success(), "{}", generated.stderr_lossy());
+        assert!(little_clip_core::audio::is_audio_path(&path));
+        let source_bytes = std::fs::read(&path).unwrap();
+        let source = crate::file_source::FileSource::capture(&path).unwrap();
+        let metadata = little_clip_core::audio::read_audio_metadata(&path).unwrap();
+        assert!(metadata.duration_ms.abs_diff(1000) < 100);
+        let audio = crate::file_source::open_regular_file(&path, true).unwrap();
+        let (peaks, colors) = little_clip_core::audio::compute_preview_waveform(
+            audio,
+            &path,
+            metadata.duration_ms as f32 / 1000.0,
+            128,
+            None,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
         .unwrap();
-    assert!(generated.status.success(), "{}", generated.stderr_lossy());
-    assert!(little_clip_core::audio::is_audio_path(&path));
-    let source_bytes = std::fs::read(&path).unwrap();
-    let source = crate::file_source::FileSource::capture(&path).unwrap();
-    let metadata = little_clip_core::audio::read_audio_metadata(&path).unwrap();
-    assert!(metadata.duration_ms >= 900);
-    let audio = crate::file_source::open_regular_file(&path, true).unwrap();
-    let (peaks, colors) = little_clip_core::audio::compute_preview_waveform(
-        audio,
-        &path,
-        metadata.duration_ms as f32 / 1000.0,
-        128,
-        None,
-        &std::sync::atomic::AtomicBool::new(false),
-    )
-    .unwrap();
-    assert_eq!(peaks.len(), colors.len());
-    assert!(peaks.iter().any(|peak| *peak > 0.01));
-    let audio = crate::file_source::open_regular_file(&path, true).unwrap();
-    let mut decoder = rodio::Decoder::try_from(audio).unwrap();
-    assert!(decoder.next().is_some());
-    let analysis = compute_full_audio_analysis(&path, 128).unwrap();
-    assert!(!analysis.ch1_samples.is_empty());
-    let existing = directory.path().join("existing.m4b");
-    std::fs::write(&existing, b"preserved audiobook").unwrap();
-    let saved = run_audio_save(AudioSavePlan {
-        read_check: Default::default(),
-        source: path.clone(),
-        file_source: Some(source),
-        destination: directory.path().into(),
-        versioned: false,
-        open_folder: false,
-        regions: ["existing.m4b", "edited.m4b", "edited.wav"]
+        assert_eq!(peaks.len(), colors.len());
+        assert!(peaks.iter().any(|peak| *peak > 0.01));
+        let audio = crate::file_source::open_regular_file(&path, true).unwrap();
+        let mut decoder = rodio::Decoder::try_from(audio).unwrap();
+        assert!(decoder.next().is_some());
+        let analysis = compute_full_audio_analysis(&path, 128).unwrap();
+        assert!(!analysis.ch1_samples.is_empty());
+        let existing = directory.path().join(format!("existing.{extension}"));
+        std::fs::write(&existing, b"preserved audio").unwrap();
+        let saved = run_audio_save(AudioSavePlan {
+            read_check: Default::default(),
+            source: path.clone(),
+            file_source: Some(source),
+            destination: directory.path().into(),
+            versioned: false,
+            open_folder: false,
+            regions: [
+                format!("existing.{extension}"),
+                format!("edited.{extension}"),
+                "edited.wav".into(),
+            ]
             .into_iter()
             .map(|filename| AudioSaveRegion {
                 start: 0.1,
                 end: 0.7,
-                filename: filename.into(),
+                filename,
                 filter: Some("volume=0.5".into()),
             })
             .collect(),
-    })
-    .unwrap();
-    assert_eq!(saved.saved_count, 2);
-    assert_eq!(saved.failures.len(), 1);
-    assert_eq!(std::fs::read(existing).unwrap(), b"preserved audiobook");
-    assert_eq!(std::fs::read(path).unwrap(), source_bytes);
-    for name in ["edited.m4b", "edited.wav"] {
-        let output =
-            little_clip_core::audio::read_audio_metadata(&directory.path().join(name)).unwrap();
-        assert!(output.duration_ms > 400 && output.duration_ms < 900);
+        })
+        .unwrap();
+        assert_eq!(saved.saved_count, 2);
+        assert_eq!(saved.failures.len(), 1);
+        assert_eq!(std::fs::read(existing).unwrap(), b"preserved audio");
+        assert_eq!(std::fs::read(path).unwrap(), source_bytes);
+        for name in [format!("edited.{extension}"), "edited.wav".into()] {
+            let output =
+                little_clip_core::audio::read_audio_metadata(&directory.path().join(name)).unwrap();
+            assert!(output.duration_ms > 400 && output.duration_ms < 900);
+        }
     }
 }

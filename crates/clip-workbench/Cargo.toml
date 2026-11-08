@@ -29,7 +29,7 @@ tokio = { workspace = true, features = ["net", "io-util", "sync"] }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-rodio = "0.22.2"
+rodio = { version = "0.22.2", features = ["symphonia-mp2"] }
 hound = "3.5.1"
 image = { workspace = true }
 imagesize = "0.12"

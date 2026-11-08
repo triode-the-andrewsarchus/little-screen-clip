@@ -152,6 +152,7 @@ class Session:
         regions = [
             ("hidden-toggle-ocr.png", (1084, 106, 1170, 130)),
             ("settings-ocr.png", (100, 145, 660, 690)),
+            ("menu-ocr.png", (90, 50, 1180, 95)),
             ("listing-ocr.png", (340, 280, 1180, 710)),
             ("toolbar-ocr.png", (90, 90, 1180, 280)),
             ("player-ocr.png", (90, 610, 1180, 775)),

@@ -25,8 +25,8 @@ pub fn is_audio_path(path: &Path) -> bool {
 
     match ext.as_deref() {
         Some(
-            "mp3" | "wav" | "wave" | "flac" | "ogg" | "oga" | "m4a" | "m4b" | "aac" | "alac"
-            | "aiff" | "aif" | "opus" | "wma",
+            "mp2" | "mp3" | "wav" | "wave" | "flac" | "ogg" | "oga" | "m4a" | "m4b" | "aac"
+            | "alac" | "aiff" | "aif" | "opus" | "wma",
         ) => true,
         _ => false,
     }
