@@ -1268,7 +1268,7 @@ pub(super) fn audio_export_command(
         "m4a" | "m4b" => "ipod",
         "aac" => "adts",
         "oga" => "ogg",
-        "aif" => "aiff",
+        "aif" | "aifc" => "aiff",
         "wma" => "asf",
         "mka" | "mkv" => "matroska",
         value => value,
@@ -1303,6 +1303,7 @@ pub(super) fn audio_export_command(
         }
         ("wav", _) => request.args(["-c:a", "pcm_s16le"]),
         ("flac", _) => request.args(["-c:a", "flac"]),
+        ("aiff", _) if extension == "aifc" => request.args(["-c:a", "pcm_f32be"]),
         _ => request,
     };
     // stdout is the owned regular staging file, so FFmpeg can seek to finalize

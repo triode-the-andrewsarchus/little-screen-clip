@@ -14,7 +14,7 @@ def exercise(session, root, audio_extension, audio_only=False):
     audio_source = (root / audio).read_bytes()
     cases = [
         ("notes.txt", "renamed.txt", []),
-        (audio, "renamed" + Path(audio).suffix, ["Selection info"]),
+        (audio, "renamed" + Path(audio).suffix, ["Selection info", "00:00:02."]),
         ("document.pdf", "renamed.pdf", ["Pages"]),
         ("table.csv", "renamed.csv", ["Copy Table"]),
         ("score.mid", "renamed.mid", ["BPM"]),
@@ -52,7 +52,7 @@ def exercise(session, root, audio_extension, audio_only=False):
 
 def main():
     def configure(parser):
-        parser.add_argument("--audio-extension", choices=["wav", "m4b", "mp2", "adts", "caf", "mka"], default="wav")
+        parser.add_argument("--audio-extension", choices=["wav", "m4b", "mp2", "adts", "caf", "mka", "aif", "aiff", "aifc"], default="wav")
         parser.add_argument("--audio-only", action="store_true", help="Check the chosen audio format without the other editor fixtures")
 
     args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager",
@@ -61,7 +61,7 @@ def main():
     (root / "notes.txt").write_text("A plain text fixture\n")
     fixture.wav_fixture(root / "music.wav", 2, "tone")
     if args.audio_extension != "wav":
-        codec, container = {"m4b": ("aac", "ipod"), "mp2": ("mp2", "mp2"), "adts": ("aac", "adts"), "caf": ("alac", "caf"), "mka": ("flac", "matroska")}[args.audio_extension]
+        codec, container = {"m4b": ("aac", "ipod"), "mp2": ("mp2", "mp2"), "adts": ("aac", "adts"), "caf": ("alac", "caf"), "mka": ("flac", "matroska"), "aif": ("pcm_s16be", "aiff"), "aiff": ("pcm_f32be", "aiff"), "aifc": ("pcm_f32be", "aiff")}[args.audio_extension]
         subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(root / "music.wav"), "-c:a", codec, "-f", container, str(root / f"music.{args.audio_extension}")], check=True, timeout=15)
         (root / "music.wav").unlink()
     fixture.pdf_fixture(root, 2, "document.pdf")

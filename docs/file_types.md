@@ -158,7 +158,7 @@
     - [x] `.vtt` — WebVTT; UTF-8 cue timeline and list strip, cue/source navigation and guarded text editing; preserves header, comments, styles, regions, identifiers and cue settings in source (styles/markup are passive; timeline uses local cue times, not external clock mappings)
     - [ ] `.ttml` — Timed Text Markup Language
 - [ ] Audio
-  - [x] `.aif`, `.aiff`
+  - [x] `.aif`, `.aiff`, `.aifc` — AIFF/AIFC PCM and floating-point audio; Audio Studio, playback, waveform strips and region export
     - [ ] AIFF annotation (`ANNO`), comment (`COMT`), and embedded ID3 chunks
   - [x] `.aac`, `.m4a`
   - [x] `.flac`

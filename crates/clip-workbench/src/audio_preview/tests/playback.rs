@@ -875,6 +875,10 @@ fn search_source_validation_rejects_audio_exports_before_outputs_and_keeps_compl
 #[test]
 fn audio_containers_decode_waveforms_and_export_without_overwriting() {
     for (extension, codec, container) in [
+        ("aif", "pcm_s16be", "aiff"),
+        ("aiff", "pcm_s16be", "aiff"),
+        ("aiff", "pcm_f32be", "aiff"),
+        ("aifc", "pcm_f32be", "aiff"),
         ("m4b", "aac", "ipod"),
         ("mp2", "mp2", "mp2"),
         ("adts", "aac", "adts"),
@@ -987,6 +991,9 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
         for name in [format!("edited.{extension}"), "edited.wav".into()] {
             let output_path = directory.path().join(name);
             let output = little_clip_core::audio::read_audio_metadata(&output_path).unwrap();
+            if output_path.extension().and_then(|name| name.to_str()) == Some("aifc") {
+                assert_eq!(&std::fs::read(&output_path).unwrap()[8..12], b"AIFC");
+            }
             assert!(output.duration_ms > 400 && output.duration_ms < 900);
             let audio = crate::file_source::open_regular_file(&output_path, true).unwrap();
             let mut decoder = rodio::Decoder::try_from(audio).unwrap();

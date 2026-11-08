@@ -32,7 +32,7 @@ url = { version = "2.5", features = ["serde"] }
 uuid = { version = "1.9", features = ["v4", "serde"] }
 percent-encoding = "2.3"
 toml = "0.8"
-symphonia = { version = "0.5.4", default-features = false, features = ["mp2", "mp3", "wav", "flac", "ogg", "vorbis", "isomp4", "alac", "aac", "pcm", "caf", "mkv"] }
+symphonia = { version = "0.5.4", default-features = false, features = ["mp2", "mp3", "wav", "flac", "ogg", "vorbis", "isomp4", "alac", "aac", "pcm", "caf", "mkv", "aiff"] }
 serde_yaml = "0.9"
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 rayon = "1.10"
