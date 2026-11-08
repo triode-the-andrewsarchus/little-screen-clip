@@ -1,5 +1,6 @@
 //! Passive font specimens; outline rasterization stays on the visible-preview workers.
 mod raster;
+pub(super) mod viewer;
 mod web_font;
 use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
 use crate::{icons::Icon, ui_appearance::WorkbenchColors};

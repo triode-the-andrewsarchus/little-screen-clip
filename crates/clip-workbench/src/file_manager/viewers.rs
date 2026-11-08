@@ -24,6 +24,7 @@ mod video;
 
 enum Loaded {
     System(super::system::Document),
+    Font(super::font_strip::viewer::Viewer),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
     Text(super::text_editor::TextSession),
@@ -40,6 +41,7 @@ enum Loaded {
 }
 enum ViewerSession {
     System(super::system::Inspector),
+    Font(super::font_strip::viewer::Viewer),
     Image(ImagePreviewState),
     Text(super::text_editor::TextSession),
     Audio(AudioPreviewState),
@@ -441,6 +443,7 @@ impl Viewers {
 }
 #[derive(Clone, Copy)]
 enum Kind {
+    Font,
     Image,
     Audio,
     Pdf,
@@ -456,6 +459,10 @@ enum Kind {
 fn kind(path: &Path) -> Kind {
     if super::text_strip::is_typescript_source(path) {
         Kind::Text
+    } else if path.extension().is_some_and(|ext| {
+        ["ttf", "ttc"].contains(&ext.to_string_lossy().to_ascii_lowercase().as_str())
+    }) {
+        Kind::Font
     } else if little_clip_core::item::is_image_path(path) {
         Kind::Image
     } else if little_clip_core::audio::is_audio_path(path) {
@@ -511,6 +518,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         ));
     }
     match kind {
+        Kind::Font => super::font_strip::viewer::Viewer::load(path).map(Loaded::Font),
         Kind::Image => {
             let source = FileSource::capture(path)?;
             let decoded = DecodedImageData::from_path_bounded(path, 64 * 1024 * 1024)?;
@@ -587,6 +595,7 @@ fn session(
     check: crate::file_source::ReadCheck,
 ) -> ViewerSession {
     match loaded {
+        Loaded::Font(viewer) => ViewerSession::Font(viewer),
         Loaded::System(document) => ViewerSession::System(super::system::Inspector::new(document)),
         Loaded::Image(data, source) => ViewerSession::Image(
             ImagePreviewState::from_decoded(
@@ -643,6 +652,7 @@ fn session(
 fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
     let ctx = ui.ctx().clone();
     match viewer {
+        ViewerSession::Font(state) => state.ui(ui, close, palette),
         ViewerSession::System(state) => state.ui(ui, close, palette),
         ViewerSession::Image(state) => state.render_ui(ui, &ctx, palette, close),
         ViewerSession::Text(state) => state.ui(ui, palette, close),
@@ -659,6 +669,22 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn true_type_fonts_open_in_the_interactive_specimen_viewer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("specimen.TTF");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../little-clip-render/assets/fonts/NotoEmoji-Regular.ttf"),
+            &path,
+        )
+        .unwrap();
+        assert!(matches!(
+            load(&path, &AppConfig::default()).unwrap(),
+            Loaded::Font(_)
+        ));
+    }
 
     #[test]
     fn cancelled_open_cannot_replace_a_new_session() {

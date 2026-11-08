@@ -98,7 +98,7 @@
     - [ ] `.svgz` — compressed SVG
     - [ ] `.xpm`, `.xbm` — X11 pixmap / bitmap
 - [ ] Fonts
-  - [ ] `.ttf`, `.ttc` — TrueType font / collection
+  - [x] `.ttf`, `.ttc` — TrueType font / collection; interactive specimens, character coverage, collection faces, and list strips
     - [ ] Naming table metadata (`name` table: family, subfamily, designer, license, version)
     - [ ] OpenType layout feature tables (`GSUB`, `GPOS`)
   - [ ] `.otf`, `.otc` — OpenType font / collection

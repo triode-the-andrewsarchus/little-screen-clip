@@ -21,7 +21,7 @@ impl ttf_parser::OutlineBuilder for Outline {
         self.0.close();
     }
 }
-fn draw(
+pub(super) fn draw(
     pixmap: &mut Pixmap,
     face: &ttf_parser::Face<'_>,
     text: &str,
