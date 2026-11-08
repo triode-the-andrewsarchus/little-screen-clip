@@ -460,7 +460,7 @@ fn kind(path: &Path) -> Kind {
     if super::text_strip::is_typescript_source(path) {
         Kind::Text
     } else if path.extension().is_some_and(|ext| {
-        ["ttf", "ttc"].contains(&ext.to_string_lossy().to_ascii_lowercase().as_str())
+        ["ttf", "ttc", "otf", "otc"].contains(&ext.to_string_lossy().to_ascii_lowercase().as_str())
     }) {
         Kind::Font
     } else if little_clip_core::item::is_image_path(path) {
@@ -680,6 +680,23 @@ mod tests {
             &path,
         )
         .unwrap();
+        assert!(matches!(
+            load(&path, &AppConfig::default()).unwrap(),
+            Loaded::Font(_)
+        ));
+    }
+
+    #[test]
+    fn open_type_cff_outlines_open_in_the_interactive_specimen_viewer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("specimen.OTF");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../little-clip-render/assets/fonts/NotoSansCJK-JP-Regular.ttf"),
+            &path,
+        )
+        .unwrap();
+        assert_eq!(&std::fs::read(&path).unwrap()[..4], b"OTTO");
         assert!(matches!(
             load(&path, &AppConfig::default()).unwrap(),
             Loaded::Font(_)

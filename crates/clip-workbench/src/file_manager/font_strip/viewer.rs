@@ -277,6 +277,7 @@ fn render(document: &Document, request: &Request, token: &AtomicBool) -> Result<
     let (_, description) = describe(
         &face,
         ttf_parser::fonts_in_collection(&document.bytes).unwrap_or(1),
+        request.face,
     );
     let mut sample =
         tiny_skia::Pixmap::new(request.width, request.height).ok_or("Cannot allocate specimen")?;
@@ -301,7 +302,10 @@ fn render(document: &Document, request: &Request, token: &AtomicBool) -> Result<
         if token.load(Ordering::Relaxed) {
             return Err("Rendering cancelled".into());
         }
-        let ch = char::from_u32(request.start + index as u32).unwrap_or('\u{fffd}');
+        let Some(ch) = char::from_u32(request.start + index as u32) else {
+            present.push(false);
+            continue;
+        };
         present.push(face.glyph_index(ch).is_some());
         let mut cell = tiny_skia::Pixmap::new(CELL, CELL).ok_or("Cannot allocate character")?;
         raster::draw(
@@ -340,12 +344,13 @@ fn render(document: &Document, request: &Request, token: &AtomicBool) -> Result<
 mod tests {
     use super::*;
 
-    fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
+    fn fixture(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("specimen.ttf");
         std::fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../little-clip-render/assets/fonts/NotoEmoji-Regular.ttf"),
+                .join("../little-clip-render/assets/fonts")
+                .join(name),
             &path,
         )
         .unwrap();
@@ -354,7 +359,7 @@ mod tests {
 
     #[test]
     fn true_type_specimens_share_strip_reader_and_render_requested_coverage() {
-        let (_folder, path) = fixture();
+        let (_folder, path) = fixture("NotoEmoji-Regular.ttf");
         let mut viewer = Viewer::load(&path).unwrap();
         viewer.request.text = "0123".into();
         viewer.request.start = 0x2600;
@@ -377,39 +382,47 @@ mod tests {
         viewer.request.start = 0x10FF80;
         let missing = render(&viewer.document, &viewer.request, &token).unwrap();
         assert!(missing.present.iter().all(|present| !present));
+        viewer.request.start = 0xD800;
+        let surrogates = render(&viewer.document, &viewer.request, &token).unwrap();
+        assert!(surrogates.present.iter().all(|present| !present));
         source.check().unwrap();
         assert!(render(&viewer.document, &viewer.request, &AtomicBool::new(true)).is_err());
     }
 
     #[test]
     fn collection_faces_share_data_and_can_be_selected() {
-        let (folder, path) = fixture();
-        let mut font = std::fs::read(path).unwrap();
-        let tables = u16::from_be_bytes(font[4..6].try_into().unwrap()) as usize;
-        for table in 0..tables {
-            let offset = 12 + table * 16 + 8;
-            let value = u32::from_be_bytes(font[offset..offset + 4].try_into().unwrap());
-            font[offset..offset + 4].copy_from_slice(&(value + 20).to_be_bytes());
+        for (name, extension) in [
+            ("NotoEmoji-Regular.ttf", "ttc"),
+            ("NotoSansCJK-JP-Regular.ttf", "otc"),
+        ] {
+            let (folder, path) = fixture(name);
+            let mut font = std::fs::read(path).unwrap();
+            let tables = u16::from_be_bytes(font[4..6].try_into().unwrap()) as usize;
+            for table in 0..tables {
+                let offset = 12 + table * 16 + 8;
+                let value = u32::from_be_bytes(font[offset..offset + 4].try_into().unwrap());
+                font[offset..offset + 4].copy_from_slice(&(value + 20).to_be_bytes());
+            }
+            let mut collection = b"ttcf".to_vec();
+            for value in [0x00010000_u32, 2, 20, 20] {
+                collection.extend_from_slice(&value.to_be_bytes());
+            }
+            collection.extend(font);
+            let path = folder.path().join(format!("collection.{extension}"));
+            std::fs::write(&path, collection).unwrap();
+            let mut viewer = Viewer::load(&path).unwrap();
+            assert!(viewer.description.contains("2 faces"));
+            viewer.request.face = 1;
+            viewer.request.text = "0123".into();
+            assert!(render(&viewer.document, &viewer.request, &AtomicBool::new(false)).is_ok());
+            viewer.request.face = 2;
+            assert!(render(&viewer.document, &viewer.request, &AtomicBool::new(false)).is_err());
         }
-        let mut collection = b"ttcf".to_vec();
-        for value in [0x00010000_u32, 2, 20, 20] {
-            collection.extend_from_slice(&value.to_be_bytes());
-        }
-        collection.extend(font);
-        let path = folder.path().join("collection.ttc");
-        std::fs::write(&path, collection).unwrap();
-        let mut viewer = Viewer::load(&path).unwrap();
-        assert!(viewer.description.contains("2 faces"));
-        viewer.request.face = 1;
-        viewer.request.text = "0123".into();
-        assert!(render(&viewer.document, &viewer.request, &AtomicBool::new(false)).is_ok());
-        viewer.request.face = 2;
-        assert!(render(&viewer.document, &viewer.request, &AtomicBool::new(false)).is_err());
     }
 
     #[test]
     fn corrupt_font_and_invalid_collection_face_report_errors() {
-        let (folder, path) = fixture();
+        let (folder, path) = fixture("NotoEmoji-Regular.ttf");
         let mut viewer = Viewer::load(&path).unwrap();
         viewer.request.face = u32::MAX;
         assert!(render(&viewer.document, &viewer.request, &AtomicBool::new(false)).is_err());

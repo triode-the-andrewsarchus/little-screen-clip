@@ -9,9 +9,11 @@ from file_manager_phase4_acceptance import open_file
 
 
 def exercise(session, root):
-    original_hash = hashlib.sha256((root / "specimen.ttf").read_bytes()).digest()
-    open_file(session, root, "specimen.ttf", "01-font-strip")
-    session.observe("02-font-viewer", ["specimen.ttf", "Back to folder", "Specimen size", "Character coverage"])
+    original = next(root.glob("specimen.*")).name
+    renamed = "renamed" + Path(original).suffix
+    original_hash = hashlib.sha256((root / original).read_bytes()).digest()
+    open_file(session, root, original, "01-font-strip")
+    session.observe("02-font-viewer", [original, "Back to folder", "Specimen size", "Character coverage"])
     x, y = session.word("02-font-viewer", "Specimen", tree=True)
     session.click(x + 120, y + 50)
     session.key("a", "ctrl")
@@ -26,24 +28,25 @@ def exercise(session, root):
     copied = subprocess.run(["wl-paste", "--no-newline"], env=session.env, capture_output=True, check=True).stdout
     assert copied == b"!", copied
     # Filename editing uses the same shared chrome as every other Files editor.
-    x, y = session.word("02-font-viewer", "specimen.ttf", tree=True, minimum_y=90)
+    x, y = session.word("02-font-viewer", original, tree=True, minimum_y=90)
     session.click(x + 10, y)
     session.observe("05-rename", ["Filename"])
     session.key("a", "ctrl")
-    private.run_checked(["wtype", "renamed.ttf"], env=session.env)
+    private.run_checked(["wtype", renamed], env=session.env)
     session.key("Return")
-    wait_for(lambda: (root / "renamed.ttf").exists(), "font rename")
-    assert hashlib.sha256((root / "renamed.ttf").read_bytes()).digest() == original_hash
-    session.observe("06-renamed", ["renamed.ttf"])
+    wait_for(lambda: (root / renamed).exists(), "font rename")
+    assert hashlib.sha256((root / renamed).read_bytes()).digest() == original_hash
+    session.observe("06-renamed", [renamed])
     session.click(1110, 70)
     session.observe("07-returned", ["Ctrl+L"])
 
 
 def main():
     repo = Path(__file__).resolve().parent.parent
-    args = application_arguments(__doc__, repo / "target/release/clip-file-manager")
+    args = application_arguments(__doc__, repo / "target/release/clip-file-manager",
+        lambda parser: parser.add_argument("--extension", choices=["ttf", "otf"], default="ttf"))
     output, root = media_fixture_directory(args)
-    shutil.copyfile(repo / "crates/little-clip-render/assets/fonts/NotoSansCJK-JP-Regular.ttf", root / "specimen.ttf")
+    shutil.copyfile(repo / "crates/little-clip-render/assets/fonts/NotoSansCJK-JP-Regular.ttf", root / f"specimen.{args.extension}")
     return run_application_acceptance(args, output, root, exercise, "font strip, live specimen, glyph selection/copy and guarded rename")
 
 

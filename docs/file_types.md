@@ -101,7 +101,7 @@
   - [x] `.ttf`, `.ttc` — TrueType font / collection; interactive specimens, character coverage, collection faces, and list strips
     - [ ] Naming table metadata (`name` table: family, subfamily, designer, license, version)
     - [ ] OpenType layout feature tables (`GSUB`, `GPOS`)
-  - [ ] `.otf`, `.otc` — OpenType font / collection
+  - [x] `.otf`, `.otc` — OpenType font / collection; interactive specimens, character coverage, collection faces, and list strips
     - [ ] Naming table metadata (`name` table: family, subfamily, designer, license, version)
     - [ ] OpenType layout feature tables (`GSUB`, `GPOS`)
   - [ ] `.woff`, `.woff2` — Web Open Font Format

@@ -56,7 +56,7 @@ fn inspect(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     let face = ttf_parser::Face::parse(&bytes, 0)
         .map_err(|e| format!("Unsupported or invalid font: {e:?}"))?;
     let faces = ttf_parser::fonts_in_collection(&bytes).unwrap_or(1);
-    let (detail, description) = describe(&face, faces);
+    let (detail, description) = describe(&face, faces, 0);
     source.check()?;
     Ok(Document {
         bytes,
@@ -64,7 +64,7 @@ fn inspect(path: &Path, token: &AtomicBool) -> Result<Document, String> {
         description,
     })
 }
-fn describe(face: &ttf_parser::Face<'_>, faces: u32) -> (String, String) {
+fn describe(face: &ttf_parser::Face<'_>, faces: u32, selected: u32) -> (String, String) {
     let family = name(face, ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
         .or_else(|| name(face, ttf_parser::name_id::FAMILY))
         .unwrap_or_else(|| "Unnamed font".into());
@@ -84,7 +84,7 @@ fn describe(face: &ttf_parser::Face<'_>, faces: u32) -> (String, String) {
         parts.push("Variable".into());
     }
     if faces > 1 {
-        parts.push(format!("{faces} faces (first shown)"));
+        parts.push(format!("{faces} faces (showing {})", selected + 1));
     }
     parts.retain(|s| !s.is_empty());
     let detail = parts.join(" · ");
