@@ -799,6 +799,50 @@ mod tests {
     }
 
     #[test]
+    fn jfif_files_use_the_native_photo_decoder_and_bounded_previews() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.JFIF");
+        image::RgbImage::from_pixel(64, 32, image::Rgb([40, 80, 120]))
+            .save_with_format(&path, image::ImageFormat::Jpeg)
+            .unwrap();
+        assert!(
+            std::fs::read(&path)
+                .unwrap()
+                .windows(5)
+                .any(|bytes| bytes == b"JFIF\0")
+        );
+        let directory = super::super::filesystem::read_directory(
+            dir.path(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        let entry = directory
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .unwrap();
+        assert!(entry.is_photo());
+        assert_eq!(
+            little_clip_core::item::guess_image_mime(&path),
+            "image/jpeg"
+        );
+        let metadata = super::super::gallery::metadata::probe(&path, entry.revision).unwrap();
+        assert_eq!((metadata.width, metadata.height), (64, 32));
+        let thumbnail = super::super::gallery::thumbnail::load(
+            &path,
+            16,
+            1,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(thumbnail.width <= 16 && thumbnail.height <= 16);
+        assert!(matches!(
+            load(&path, &AppConfig::default()).unwrap(),
+            Loaded::Image(..)
+        ));
+    }
+
+    #[test]
     fn unsaved_image_close_requires_discard_and_preserves_source_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("source.png");

@@ -7,7 +7,11 @@ import ui_acceptance_capture as private
 
 
 def click_word(session, name, word, **kwargs):
-    x, y = session.word(name, word, **kwargs)
+    position = session.word(name, word, required=False, **kwargs)
+    if position is None:
+        # Sparse OCR sometimes reads the filename separator as a comma.
+        position = session.word(name, word.replace(".JFIF", ",JFIF"), **kwargs)
+    x, y = position
     session.click(x + 8, y)
 
 
@@ -44,14 +48,22 @@ def include_strip_ocr(session):
         text += private.run_checked(["tesseract", str(header), "stdout", "--psm", "6"], env=session.env)
         footer = session.output / f"{name}-image-footer.png"
         Image.open(path).crop((90, 720, 1180, 775)).resize((4360, 220)).save(footer)
-        return text + private.run_checked(["tesseract", str(footer), "stdout", "--psm", "6"], env=session.env)
+        text += private.run_checked(["tesseract", str(footer), "stdout", "--psm", "6"], env=session.env)
+        return text.replace(",JFIF", ".JFIF")
     session.capture_text = capture
 
 
-def exercise(session, root):
+def exercise(session, root, extension="png"):
+    extension = "JFIF" if extension == "jfif" else extension
+    first, second, renamed = (f"{stem}.{extension}" for stem in ["FIRST", "SECOND", "RENAMED"])
+    originals = {first: (root / first).read_bytes(), second: (root / second).read_bytes()}
     include_strip_ocr(session)
-    session.observe("01-browser", ["FIRST.png", "SECOND.png"])
-    click_word(session, "01-browser", "FIRST.png")
+    session.observe("01-browser", [first, second])
+    with Image.open(session.output / "01-browser.png") as shot:
+        pixels = list(shot.convert("RGB").getdata())
+        assert sum(r - g > 60 and r - b > 60 for r, g, b in pixels) > 100, "Red photo preview missing"
+        assert sum(b - r > 60 and b - g > 40 for r, g, b in pixels) > 100, "Blue photo preview missing"
+    click_word(session, "01-browser", first)
     session.key("Return")
     session.observe("02-studio", ["Back to folder", "Reset", "1:1", "1 / 2"])
     session.key("5")
@@ -59,55 +71,59 @@ def exercise(session, root):
     flip_photo(session, "03-transform")
     observe_badge(session, "04-edited", ["Export"])
     session.key("Right")
-    observe_badge(session, "05-next", ["2 / 2", "SECOND.png"])
+    observe_badge(session, "05-next", ["2 / 2", second])
     flip_photo(session, "05-transform")
     session.key("Left")
-    observe_badge(session, "06-restored", ["1 / 2", "FIRST.png"])
+    observe_badge(session, "06-restored", ["1 / 2", first])
     session.click(220, 230)
     session.observe("07-rename", ["Filename"])
     # The rename dialog focuses and selects the current filename.
     session.key("a", "ctrl")
-    private.run_checked(["wtype", "RENAMED.png"], env=session.env)
-    session.observe("07-typed", ["RENAMED.png"])
+    private.run_checked(["wtype", renamed], env=session.env)
+    session.observe("07-typed", [renamed])
     # Choose the dialog's Rename, below the strip.
     session.key("Return")
-    wait_for(lambda: (root / "RENAMED.png").exists(), "rename completed")
-    rename_text = observe_badge(session, "08-renamed", ["RENAMED.png"])
+    wait_for(lambda: (root / renamed).exists(), "rename completed")
+    rename_text = observe_badge(session, "08-renamed", [renamed])
     assert "photo renamed" not in rename_text.lower()
-    assert not (root / "FIRST.png").exists()
-    assert (root / "RENAMED.png").exists()
+    assert not (root / first).exists()
+    assert (root / renamed).exists()
     click_control(session, "08-renamed", "Export")
     session.observe("09-export", ["Output folder", "Export PNG copies"])
     session.click(540, 525)
     wait_for(lambda: (root / "Edited" / "RENAMED_edit.png").exists() and (root / "Edited" / "SECOND_edit.png").exists(), "both exports completed")
-    text = session.observe("10-exported", ["Export all edits", "RENAMED.png"])
+    text = session.observe("10-exported", ["Export all edits", renamed])
     for redundant in ["Photo renamed", "Exported 2", "Open externally", "IMAGE STUDIO"]:
         assert redundant.lower() not in text.lower(), redundant
     assert (root / "Edited" / "RENAMED_edit.png").exists()
     assert (root / "Edited" / "SECOND_edit.png").exists()
     # Export preserves both the source image and its editor history.
-    assert Image.open(root / "RENAMED.png").getpixel((0, 0)) != Image.open(root / "Edited" / "RENAMED_edit.png").getpixel((0, 0))
+    assert Image.open(root / renamed).getpixel((0, 0)) != Image.open(root / "Edited" / "RENAMED_edit.png").getpixel((0, 0))
     session.observe("11-before-return", ["Back to folder"])
     click_control(session, "11-before-return", "Back")
-    session.observe("12-browser-return", ["RENAMED.png", "SECOND.png"])
-    click_word(session, "12-browser-return", "RENAMED.png")
+    session.observe("12-browser-return", [renamed, second])
+    click_word(session, "12-browser-return", renamed)
     session.key("Return")
-    session.observe("13-reopened", ["1 / 2", "RENAMED.png"])
+    session.observe("13-reopened", ["1 / 2", renamed])
+    assert (root / renamed).read_bytes() == originals[first]
+    assert (root / second).read_bytes() == originals[second]
     # Ratings survive returning to the browser and reopening the collection.
     ratings = list(Path(session.env["XDG_DATA_HOME"]).glob("little-screen-clip/photo-ratings-v1/*.json"))
     assert any(path.read_text() == "5" for path in ratings)
 
 
 def main():
-    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/debug/clip-file-manager")
+    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager",
+        lambda parser: parser.add_argument("--format", choices=["png", "jfif"], default="png"))
     output, root = media_fixture_directory(args)
     image = Image.new("RGB", (640, 400), (180, 60, 40))
     for x in range(320):
         for y in range(400):
             image.putpixel((x, y), (30, 120, 210))
-    image.save(root / "FIRST.png")
-    Image.new("RGB", (400, 500), (90, 170, 70)).save(root / "SECOND.png")
-    return run_application_acceptance(args, output, root, exercise, "Image Studio photo strip, ratings, retained edits, rename and export")
+    extension = "JFIF" if args.format == "jfif" else args.format
+    image.save(root / f"FIRST.{extension}", format="JPEG" if args.format == "jfif" else "PNG")
+    Image.new("RGB", (400, 500), (90, 170, 70)).save(root / f"SECOND.{extension}", format="JPEG" if args.format == "jfif" else "PNG")
+    return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.format), "Image Studio photo strip, ratings, retained edits, rename and export")
 
 
 if __name__ == "__main__":

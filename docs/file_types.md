@@ -88,7 +88,7 @@
     - [ ] `.drm` — Procreate Dreams animation project
     - [ ] `.heics`, `.heifs` — HEIC / HEIF image sequence
     - [ ] `.icc`, `.icm` — ICC color profile / Image Color Matching profile
-    - [ ] `.jfif` — JPEG File Interchange Format
+    - [x] `.jfif` — JPEG File Interchange Format; photo/list previews, Image Studio editing and quality-controlled JPEG export
     - [ ] `.jxr`, `.wdp` — JPEG XR / Windows Media Photo
     - [ ] `.ktx`, `.ktx2` — Khronos Texture format (ASTC/BCn and Basis Universal)
     - [ ] `.lottie` — dotLottie vector animation

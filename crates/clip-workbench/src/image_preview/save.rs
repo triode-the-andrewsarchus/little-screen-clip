@@ -438,8 +438,10 @@ fn write_save(
         SaveSnapshot::Pixels(canvas) => {
             let img = compose_display_image(canvas, &options.stamp);
             check_cancelled(phase, started)?;
-            match ext.as_str() {
-                "jpg" | "jpeg" => encode_jpeg_with_quality(
+            let format = image::ImageFormat::from_extension(&ext)
+                .ok_or_else(|| format!("Unsupported image extension: {ext}"))?;
+            match format {
+                image::ImageFormat::Jpeg => encode_jpeg_with_quality(
                     &img,
                     if options.conversion_format.is_some() {
                         options.quality
@@ -448,10 +450,8 @@ fn write_save(
                     },
                 )
                 .map_err(|e| e.to_string())?,
-                "webp" => encode_webp(&img, options.lossless, options.quality)?,
+                image::ImageFormat::WebP => encode_webp(&img, options.lossless, options.quality)?,
                 _ => {
-                    let format = image::ImageFormat::from_extension(&ext)
-                        .ok_or_else(|| format!("Unsupported image extension: {ext}"))?;
                     let mut bytes = std::io::Cursor::new(Vec::new());
                     img.write_to(&mut bytes, format)
                         .map_err(|e| e.to_string())?;
@@ -688,7 +688,7 @@ impl ImagePreviewState {
         let conversion_format = (self.active_mode == ImageToolMode::Convert
             && (ext.eq_ignore_ascii_case(self.convert_state.target_format.extension())
                 || (self.convert_state.target_format == ConvertTargetFormat::Jpeg
-                    && ext.eq_ignore_ascii_case("jpeg"))))
+                    && image::ImageFormat::from_extension(ext) == Some(image::ImageFormat::Jpeg))))
         .then_some(self.convert_state.target_format);
         let converted = conversion_format.is_some()
             && !self.convert_state.encoded_bytes.is_empty()
@@ -1538,43 +1538,50 @@ mod tests {
     }
     #[test]
     fn current_conversion_bytes_and_live_buffers_survive_save() {
-        let mut state = state();
-        state.active_mode = ImageToolMode::Convert;
-        state.convert_state.target_format = ConvertTargetFormat::Webp;
-        state.convert_state.quality = 37;
-        state.update_conversion();
-        let expected = state.convert_state.encoded_bytes.clone();
-        let canvas_pointer = state.current_rgba.as_raw().as_ptr();
-        let bytes_pointer = state.convert_state.encoded_bytes.as_ptr();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("converted.webp");
-        state.save_image_to_path(&path);
-        wait_for_save(&mut state);
-        assert_eq!(std::fs::read(path).unwrap(), expected);
-        assert_eq!(state.current_rgba.as_raw().as_ptr(), canvas_pointer);
-        assert_eq!(state.convert_state.encoded_bytes.as_ptr(), bytes_pointer);
+        for (format, extension) in [
+            (ConvertTargetFormat::Webp, "webp"),
+            (ConvertTargetFormat::Jpeg, "JFIF"),
+        ] {
+            let mut state = state();
+            state.active_mode = ImageToolMode::Convert;
+            state.convert_state.target_format = format;
+            state.convert_state.quality = 37;
+            state.update_conversion();
+            let expected = state.convert_state.encoded_bytes.clone();
+            let canvas_pointer = state.current_rgba.as_raw().as_ptr();
+            let bytes_pointer = state.convert_state.encoded_bytes.as_ptr();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(format!("converted.{extension}"));
+            state.save_image_to_path(&path);
+            wait_for_save(&mut state);
+            assert_eq!(std::fs::read(path).unwrap(), expected);
+            assert_eq!(state.current_rgba.as_raw().as_ptr(), canvas_pointer);
+            assert_eq!(state.convert_state.encoded_bytes.as_ptr(), bytes_pointer);
+        }
     }
 
     #[test]
     fn stale_jpeg_conversion_uses_selected_quality_and_current_composition() {
-        let mut state = state();
-        state.active_mode = ImageToolMode::Convert;
-        state.convert_state.target_format = ConvertTargetFormat::Jpeg;
-        state.convert_state.quality = 21;
-        state.update_conversion();
-        state.markup_state.items.push(MarkupShape::Rectangle {
-            rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 1.0)),
-            color: Color32::RED,
-            width: 1.0,
-            filled: true,
-            rounding: 0.0,
-        });
-        let expected = encode_jpeg_with_quality(&state.current_display_image(), 21).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("current.jpeg");
-        state.save_image_to_path(&path);
-        wait_for_save(&mut state);
-        assert_eq!(std::fs::read(path).unwrap(), expected);
+        for extension in ["jpeg", "JFIF"] {
+            let mut state = state();
+            state.active_mode = ImageToolMode::Convert;
+            state.convert_state.target_format = ConvertTargetFormat::Jpeg;
+            state.convert_state.quality = 21;
+            state.update_conversion();
+            state.markup_state.items.push(MarkupShape::Rectangle {
+                rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 1.0)),
+                color: Color32::RED,
+                width: 1.0,
+                filled: true,
+                rounding: 0.0,
+            });
+            let expected = encode_jpeg_with_quality(&state.current_display_image(), 21).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(format!("current.{extension}"));
+            state.save_image_to_path(&path);
+            wait_for_save(&mut state);
+            assert_eq!(std::fs::read(path).unwrap(), expected);
+        }
     }
 
     #[cfg(unix)]
