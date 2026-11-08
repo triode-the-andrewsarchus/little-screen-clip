@@ -286,8 +286,7 @@ impl ConstellationState {
                 self.accept_pad_layers(drop, token);
             }
             (Task::Folder(..), Output::Samples(samples, has_audio, sets)) => {
-                self.samples = samples;
-                self.sample_sets = sets;
+                self.install_samples(samples, sets);
                 self.folder_has_audio = has_audio;
             }
             (Task::List(..), Output::Packs(packs)) => {

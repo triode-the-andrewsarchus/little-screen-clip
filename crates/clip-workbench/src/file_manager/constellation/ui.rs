@@ -25,6 +25,43 @@ impl OverlapLayout {
     }
 }
 
+/// Keep selection and audition highlights in their dot's depth layer.
+fn append_point_highlight(
+    mesh: &mut egui::Mesh,
+    offset: usize,
+    bounds: Rect,
+    pos: Pos2,
+    color: Color32,
+    radius: f32,
+    selected: bool,
+) {
+    let r = radius + if selected { 2.0 } else { 1.0 };
+    let halo = if selected { 8.0 } else { 7.0 };
+    let opacity = circle_edge_opacity(bounds, pos, r + halo);
+    let start = mesh.indices.len();
+    for (radius, color) in [
+        (
+            r + halo,
+            Color32::from_rgba_unmultiplied(
+                color.r(),
+                color.g(),
+                color.b(),
+                if selected { 80 } else { 60 },
+            ),
+        ),
+        (r, color),
+        (r * 0.45, Color32::WHITE),
+    ] {
+        mesh.add_rect_with_uv(
+            Rect::from_center_size(pos, Vec2::splat(radius * 2.0)),
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 1.0)),
+            color.gamma_multiply(opacity),
+        );
+    }
+    let indices: Vec<_> = mesh.indices.drain(start..).collect();
+    mesh.indices.splice(offset..offset, indices);
+}
+
 /// Fades a complete circle uniformly before its extent reaches a visible canvas edge.
 fn circle_edge_opacity(bounds: Rect, position: Pos2, radius: f32) -> f32 {
     let clearance = (position.x - bounds.left())
@@ -87,38 +124,36 @@ fn render_rack_rail(ui: &mut egui::Ui, rect: Rect, expanded: bool) -> bool {
 }
 
 impl ConstellationState {
-    pub(super) fn matches_filters(
-        &self,
-        sample: &ConstellationSample,
-        lowercase_query: &str,
-    ) -> bool {
-        let index = self.sample_sets.index_for_path(&sample.file_path);
+    pub(super) fn matches_filters(&self, index: usize, lowercase_query: &str) -> bool {
+        let sample = &self.samples[index];
         if let Some(set) = self.expanded_set {
             // Explore is a complete family snapshot, independent of overview filters.
-            return index.and_then(|index| self.sample_sets.set_for(index)) == Some(set);
+            return self.sample_sets.set_for(index) == Some(set);
         }
-        (!self.multisamples_only
-            || index
-                .and_then(|index| self.sample_sets.set_for(index))
-                .is_some())
-            && self.pitch_range.is_none_or(|(low, high)| {
-                index
-                    .and_then(|index| self.sample_sets.note(index))
-                    .is_some_and(|note| note >= low - 0.5 && note <= high + 0.5)
-            })
+        (!self.multisamples_only || self.sample_sets.set_for(index).is_some())
+            && self.matches_ranges(index)
             && self
                 .category_filter
                 .is_none_or(|category| sample.category == category)
             && (lowercase_query.is_empty()
                 || sample.filename.to_lowercase().contains(lowercase_query))
-            && sample.duration_seconds >= self.min_duration
-            && (self.max_duration == 0.0 || sample.duration_seconds <= self.max_duration)
             && match self.channel_filter {
                 1 => sample.channels == 1,
                 2 => sample.channels == 2,
                 3 => sample.channels > 2,
                 _ => true,
             }
+    }
+
+    pub(super) fn matches_ranges(&self, index: usize) -> bool {
+        let sample = &self.samples[index];
+        sample.duration_seconds >= self.min_duration
+            && (self.max_duration == 0.0 || sample.duration_seconds <= self.max_duration)
+            && self.pitch_range.is_none_or(|(low, high)| {
+                self.sample_sets
+                    .note(index)
+                    .is_some_and(|note| note >= low - 0.5 && note <= high + 0.5)
+            })
     }
 
     pub fn render_ui(
@@ -398,7 +433,9 @@ impl ConstellationState {
                 let eligible: Vec<_> = self
                     .samples
                     .iter()
-                    .filter(|sample| self.matches_filters(sample, &query))
+                    .enumerate()
+                    .filter(|(index, _)| self.matches_filters(*index, &query))
+                    .map(|(_, sample)| sample)
                     .collect();
                 let nanos = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -512,10 +549,8 @@ impl ConstellationState {
 
     pub(crate) fn sample_count_label(&self) -> String {
         let query = self.search_query.to_lowercase();
-        let active = self
-            .samples
-            .iter()
-            .filter(|sample| self.matches_filters(sample, &query))
+        let active = (0..self.samples.len())
+            .filter(|index| self.matches_filters(*index, &query))
             .count();
         let mut label = format!("{active} / {} samples", self.samples.len());
         if let Some(set) = self.selected_set() {
@@ -624,13 +659,14 @@ impl ConstellationState {
         {
             self.channel_filter = if self.channel_filter == 1 { 0 } else { 1 };
         }
-        if outlined_toggle(
-            ui,
-            "Multisamples only",
-            self.multisamples_only,
-            ui.visuals().hyperlink_color,
-        )
-        .clicked()
+        if !self.sample_sets.sets.is_empty()
+            && outlined_toggle(
+                ui,
+                "Multisamples only",
+                self.multisamples_only,
+                ui.visuals().hyperlink_color,
+            )
+            .clicked()
         {
             self.multisamples_only = !self.multisamples_only;
         }
@@ -671,7 +707,7 @@ impl ConstellationState {
                         let sample = &self.samples[point.index];
                         let pos = point.position + center.to_vec2();
                         let distance = pos.distance_sq(origin);
-                        (self.matches_filters(sample, query_lower)
+                        (self.matches_filters(point.index, query_lower)
                             && distance <= (point.radius + 7.0).max(12.0).powi(2))
                         .then_some((sample, distance))
                     })
@@ -759,6 +795,36 @@ impl ConstellationState {
             .filter(|_| !response.dragged() && !self.map_hover_suspended)
     }
 
+    /// Pick the nearest visible dot, with frontmost surfaces winning in 3D.
+    fn pick_map_point<'a>(
+        &self,
+        points: &'a [super::space::MapPoint],
+        pointer: Pos2,
+        center: Pos2,
+        bounds: Rect,
+        query: &str,
+        mut cutoff: f32,
+    ) -> Option<&'a super::space::MapPoint> {
+        let mut picked = None;
+        let mut over_surface = false;
+        for point in points {
+            let position = point.position + center.to_vec2();
+            if !self.matches_filters(point.index, query)
+                || circle_edge_opacity(bounds, position, point.radius) <= 0.0
+            {
+                continue;
+            }
+            let distance = position.distance_sq(pointer);
+            let inside = self.pitch_height_enabled && distance <= point.radius * point.radius;
+            if inside || (!over_surface && distance <= cutoff) {
+                picked = Some(point);
+                cutoff = distance;
+                over_surface = inside;
+            }
+        }
+        picked
+    }
+
     fn render_starfield(
         &mut self,
         ui: &mut egui::Ui,
@@ -776,34 +842,24 @@ impl ConstellationState {
         // extent, leaving a margin, while preserving every relative position.
         let query_lower = self.search_query.to_lowercase();
 
-        let mut hovered_sample: Option<ConstellationSample> = None;
-        let mut hovered_pos = Pos2::ZERO;
-        let mut hovered_radius = 0.0;
-
         let mouse_pos = self.handle_camera_pointer(ui, &response, viewport);
 
         // Allocate a single batched GPU mesh
         let dot = dot_texture(ui.ctx());
         let mut star_mesh = egui::Mesh::with_texture(dot.id());
         let mut context_mesh = egui::Mesh::with_texture(dot.id());
-        let mut stem_mesh = egui::Mesh::with_texture(dot.id());
+        let stem = super::space::stem_texture(ui.ctx());
+        let mut stem_mesh = egui::Mesh::with_texture(stem.id());
         let base_star_radius = map_point_radius(viewport, self.samples.len(), self.zoom);
         let (view_scale, center, points) =
             self.layout_map_points(viewport, rect, base_star_radius, &query_lower);
-        // Every interaction uses the exact same projected positions as painting.
-        let mut position_map = std::collections::HashMap::with_capacity(self.samples.len());
-        for point in &points {
-            if !self.matches_filters(&self.samples[point.index], &query_lower) {
-                continue;
-            }
-            let pos = point.position + center.to_vec2();
-            position_map.insert(self.samples[point.index].file_path.as_path(), pos);
-            if let Some(set) = point.collapsed_set {
-                for &index in &self.sample_sets.sets[set].members {
-                    position_map.insert(self.samples[index].file_path.as_path(), pos);
-                }
-            }
-        }
+        // Only the bounded audition trail needs a position lookup. Dense integer
+        // slots avoid hashing every sample's full path on every animation frame.
+        let mut trail_positions = if self.history_trail.len() >= 2 {
+            vec![None; self.samples.len() + self.sample_sets.sets.len()]
+        } else {
+            Vec::new()
+        };
         let collected: std::collections::HashSet<_> = self
             .pack_bank
             .slots
@@ -827,18 +883,36 @@ impl ConstellationState {
         );
         let edge_bounds = rect.intersect(ui.clip_rect());
 
-        let mut selected_sample_overlay: Option<(Pos2, Color32, f32)> = None;
-
-        // When hover-to-play is OFF: the highlighted sample is ALWAYS the closest one on canvas,
-        // making click targets effortless and forgiving even if the cursor is far from any point.
-        // When hover-to-play is ON: apply a sane screen cutoff based on zoom so traversing the empty void
-        // between sample clumps does not continuously trigger auditory playback.
-        let mut closest_hover_dist_sq = if self.hover_to_play {
-            let screen_cutoff = (base_star_radius * 2.8 + 8.0).clamp(14.0, 26.0);
-            screen_cutoff * screen_cutoff
+        // Choose once from the same projected geometry that will be painted.
+        let cutoff = if self.hover_to_play {
+            (base_star_radius * 2.8 + 8.0).clamp(14.0, 26.0).powi(2)
         } else {
             f32::MAX
         };
+        let mut hovered_point = mouse_pos.and_then(|pointer| {
+            self.pick_map_point(&points, pointer, center, edge_bounds, &query_lower, cutoff)
+        });
+        let over_dot = hovered_point.is_some_and(|point| {
+            mouse_pos.is_some_and(|pointer| {
+                pointer.distance_sq(point.position + center.to_vec2())
+                    <= (point.radius + 4.0).powi(2)
+            })
+        });
+        if !over_dot
+            && let Some(index) =
+                mouse_pos.and_then(|pointer| self.ring_sample_at(pointer, center, view_scale))
+        {
+            hovered_point = points
+                .iter()
+                .find(|point| point.index == index && self.matches_filters(index, &query_lower));
+        }
+        let hovered_sample = hovered_point.map(|point| self.samples[point.index].clone());
+        let hovered_pos =
+            hovered_point.map_or(Pos2::ZERO, |point| point.position + center.to_vec2());
+        let hovered_radius = hovered_point.map_or(0.0, |point| point.radius);
+        let hovered_set = hovered_point.and_then(|point| point.collapsed_set);
+        let mut highlights = Vec::with_capacity(2);
+        let mut hovered_star_offset = None;
 
         // One rendering and hit-testing path at every zoom level.
         let rect_min_x = rect.left() - 12.0;
@@ -847,15 +921,20 @@ impl ConstellationState {
         let rect_max_y = rect.bottom() + 12.0;
 
         let selected_set = self.selected_set();
-        let mut hovered_set = None;
         for point in &points {
             let sample = &self.samples[point.index];
             let pos = point.position + center.to_vec2();
             let base = point.base + center.to_vec2();
             let (sx, sy) = (pos.x, pos.y);
             let radius = point.radius;
-            let matches = self.matches_filters(sample, &query_lower);
+            let matches = self.matches_filters(point.index, &query_lower);
             let base_color = sample.category.color();
+            if matches && !trail_positions.is_empty() {
+                let key = point
+                    .collapsed_set
+                    .map_or(point.index, |set| self.samples.len() + set);
+                trail_positions[key] = Some(pos);
+            }
             // Draw stems only for visible/matching stars, keeping filtered context quiet.
             if matches && rect.contains(pos) {
                 super::space::append_stem(
@@ -884,25 +963,12 @@ impl ConstellationState {
                     .is_some_and(|set| Some(set) == selected_set);
 
             if is_selected && matches {
-                selected_sample_overlay = Some((Pos2::new(sx, sy), base_color, radius));
+                highlights.push((star_mesh.indices.len() + 6, pos, base_color, radius, true));
             }
 
-            // Check hover directly against screen position (only non-dimmed samples participate in hover)
-            if opacity > 0.0 && self.matches_filters(sample, &query_lower) {
-                if let Some(mp) = mouse_pos {
-                    let dx = sx - mp.x;
-                    let dy = sy - mp.y;
-                    let d2 = dx * dx + dy * dy;
-                    if d2 < closest_hover_dist_sq {
-                        closest_hover_dist_sq = d2;
-                        hovered_sample = Some(sample.clone());
-                        hovered_pos = Pos2::new(sx, sy);
-                        hovered_set = point.collapsed_set;
-                        hovered_radius = radius;
-                    }
-                }
+            if hovered_point.is_some_and(|hovered| hovered.index == point.index) {
+                hovered_star_offset = Some(star_mesh.indices.len() + 6);
             }
-
             let color = filtered_star_color(base_color, !matches).gamma_multiply(opacity);
             let (mesh, uv) = if matches {
                 self.paint_point_decoration(&painter, point, pos, color, &collected);
@@ -923,27 +989,6 @@ impl ConstellationState {
             );
         }
 
-        // An elevated dot takes precedence over any flat ring behind it.
-        let over_dot = hovered_sample
-            .as_ref()
-            .is_some_and(|_| closest_hover_dist_sq <= (hovered_radius + 4.0_f32).powi(2));
-        if let Some(index) = mouse_pos
-            .filter(|_| !over_dot)
-            .and_then(|pointer| self.ring_sample_at(pointer, center, view_scale))
-        {
-            let sample = &self.samples[index];
-            if self.matches_filters(sample, &query_lower) {
-                hovered_sample = Some(sample.clone());
-                hovered_set = None;
-                if let Some(point) = points.iter().find(|point| point.index == index) {
-                    hovered_pos = point.position + center.to_vec2();
-                    hovered_radius = point.radius;
-                }
-            } else {
-                hovered_sample = None;
-            }
-        }
-
         let dragged_path = self.handle_map_drag(ui, &response, center, &query_lower, &points);
 
         if let Some(path) = dragged_path {
@@ -958,45 +1003,35 @@ impl ConstellationState {
             painter.add(egui::Shape::mesh(stem_mesh));
         }
 
-        // Render playback history trail (fades over steps and distance)
-        self.render_playback_trail(&painter, center, view_scale, Some(&position_map));
+        self.render_playback_trail(&painter, &trail_positions);
 
-        // Upload and render all stars to the GPU in a single draw call!
+        if let Some(ref hovered) = hovered_sample
+            && let Some(offset) = hovered_star_offset
+        {
+            highlights.push((
+                offset,
+                hovered_pos,
+                hovered.category.color(),
+                hovered_radius,
+                false,
+            ));
+        }
+        // Insert highlights directly after their dot's triangles, so nearer dots
+        // occlude them too. Vertex storage can stay appended; only indices move.
+        highlights.sort_by_key(|highlight| highlight.0);
+        for (offset, pos, color, radius, selected) in highlights.into_iter().rev() {
+            append_point_highlight(
+                &mut star_mesh,
+                offset,
+                edge_bounds,
+                pos,
+                color,
+                radius,
+                selected,
+            );
+        }
         if !star_mesh.is_empty() {
             painter.add(egui::Shape::mesh(star_mesh));
-        }
-
-        // Render selected sample prominent overlay
-        if let Some((pos, color, radius)) = selected_sample_overlay {
-            let r = radius + 2.0;
-            let opacity = circle_edge_opacity(edge_bounds, pos, r + 8.0);
-            painter.circle_filled(
-                pos,
-                r + 8.0,
-                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 80)
-                    .gamma_multiply(opacity),
-            );
-            painter.circle_filled(pos, r, color.gamma_multiply(opacity));
-            painter.circle_filled(pos, r * 0.45, Color32::WHITE.gamma_multiply(opacity));
-        }
-
-        // Render hovered sample prominent overlay
-        if let Some(ref hovered) = hovered_sample {
-            let r = hovered_radius + 1.0;
-            let color = hovered.category.color();
-            let opacity = circle_edge_opacity(edge_bounds, hovered_pos, r + 7.0);
-            painter.circle_filled(
-                hovered_pos,
-                r + 7.0,
-                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 60)
-                    .gamma_multiply(opacity),
-            );
-            painter.circle_filled(hovered_pos, r, color.gamma_multiply(opacity));
-            painter.circle_filled(
-                hovered_pos,
-                r * 0.45,
-                Color32::WHITE.gamma_multiply(opacity),
-            );
         }
 
         // 3. Hover and Click Interactions
@@ -1410,10 +1445,10 @@ impl ConstellationState {
         let mut min_dist = f32::MAX;
 
         let query = self.search_query.to_lowercase();
-        for s in &self.samples {
+        for (index, s) in self.samples.iter().enumerate() {
             if &s.file_path == selected
                 || self.visited_samples.contains(&s.file_path)
-                || !self.matches_filters(s, &query)
+                || !self.matches_filters(index, &query)
             {
                 continue;
             }
@@ -1433,13 +1468,7 @@ impl ConstellationState {
         }
     }
 
-    fn render_playback_trail(
-        &self,
-        painter: &egui::Painter,
-        center: Pos2,
-        view_scale: f32,
-        relaxed_positions: Option<&std::collections::HashMap<&std::path::Path, Pos2>>,
-    ) {
+    fn render_playback_trail(&self, painter: &egui::Painter, positions: &[Option<Pos2>]) {
         let trail_len = self.history_trail.len();
         if trail_len < 2 {
             return;
@@ -1453,12 +1482,29 @@ impl ConstellationState {
         // Take the most recent `display_count` points in chronological order:
         // older points first, newest point last
         let start_idx = trail_len.saturating_sub(display_count);
-        let active_slice: Vec<&super::HistoryTrailPoint> = self
+        let active_slice: Vec<(&super::HistoryTrailPoint, Pos2)> = self
             .history_trail
             .iter()
             .skip(start_idx)
-            .filter(|point| {
-                relaxed_positions.is_none_or(|map| map.contains_key(point.file_path.as_path()))
+            .filter_map(|point| {
+                let index = self
+                    .sample_sets
+                    .index_for_path(&point.file_path)
+                    .or_else(|| {
+                        self.samples
+                            .iter()
+                            .position(|sample| sample.file_path == point.file_path)
+                    })?;
+                let key = self
+                    .sample_sets
+                    .set_for(index)
+                    .filter(|set| Some(*set) != self.expanded_set)
+                    .map_or(index, |set| self.samples.len() + set);
+                positions
+                    .get(key)
+                    .copied()
+                    .flatten()
+                    .map(|pos| (point, pos))
             })
             .collect();
         let n = active_slice.len();
@@ -1466,23 +1512,10 @@ impl ConstellationState {
             return;
         }
 
-        // Project each waypoint to screen coordinates (using relaxed position when available)
-        let screen_positions: Vec<Pos2> = active_slice
-            .iter()
-            .map(|pt| {
-                if let Some(map) = relaxed_positions {
-                    if let Some(&p) = map.get(pt.file_path.as_path()) {
-                        return p;
-                    }
-                }
-                Pos2::new(center.x + pt.x * view_scale, center.y - pt.y * view_scale)
-            })
-            .collect();
-
         // Draw fading trajectory segments
         for i in 1..n {
-            let p_prev = screen_positions[i - 1];
-            let p_curr = screen_positions[i];
+            let p_prev = active_slice[i - 1].1;
+            let p_curr = active_slice[i].1;
 
             // How many steps ago was this segment from the newest point?
             let step_from_new = (n - 1) - i;
@@ -1492,8 +1525,8 @@ impl ConstellationState {
             let alpha = (fade * 210.0).clamp(12.0, 210.0) as u8;
             let width = 1.2 + fade * 1.5;
 
-            let c1 = active_slice[i - 1].category.color();
-            let c2 = active_slice[i].category.color();
+            let c1 = active_slice[i - 1].0.category.color();
+            let c2 = active_slice[i].0.category.color();
 
             // Blend colors with alpha
             let blended_r = (((c1.r() as u16 + c2.r() as u16) / 2) * alpha as u16 / 255) as u8;
@@ -1525,8 +1558,8 @@ impl ConstellationState {
         }
 
         // Draw prominent glowing node at newest waypoint
-        if let Some(&last_pos) = screen_positions.last() {
-            let last_color = active_slice.last().unwrap().category.color();
+        if let Some(&(last, last_pos)) = active_slice.last() {
+            let last_color = last.category.color();
             let glow = Color32::from_rgba_unmultiplied(
                 last_color.r(),
                 last_color.g(),
@@ -1746,6 +1779,10 @@ fn dot_texture(ctx: &egui::Context) -> egui::TextureHandle {
 }
 
 #[cfg(test)]
+#[path = "frame_benchmark.rs"]
+mod frame_benchmark;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1786,7 +1823,7 @@ mod tests {
             .collect()
     }
 
-    fn sample_fixture(index: usize) -> ConstellationSample {
+    pub(super) fn sample_fixture(index: usize) -> ConstellationSample {
         ConstellationSample {
             file_path: std::path::PathBuf::from(format!("/samples/{index}.wav")),
             folder_path: "/samples".into(),
@@ -1830,6 +1867,16 @@ mod tests {
         sample
     }
 
+    fn piano_family_fixture() -> ConstellationState {
+        let mut state = ConstellationState::default();
+        state.samples = ["/a/piano_C3.wav", "/a/piano_C4.wav", "/a/piano_C5.wav"]
+            .into_iter()
+            .map(note_sample)
+            .collect();
+        state.sample_sets = super::super::multisample::SampleSets::build(&state.samples);
+        state
+    }
+
     #[test]
     fn multisample_families_stay_in_actual_folders_and_preserve_variants() {
         let samples: Vec<_> = [
@@ -1862,6 +1909,182 @@ mod tests {
         }
         assert_eq!(sets.note(1), Some(60.0));
         assert_eq!(sets.note(7), None, "sequence numbers do not become pitches");
+    }
+
+    #[test]
+    fn close_pitch_views_keep_exact_projection_and_cover_all_stem_bases() {
+        let mut state = piano_family_fixture();
+        state.samples.extend((3..200).map(sample_fixture));
+        for (index, sample) in state.samples.iter_mut().enumerate() {
+            sample.x = 2.3 + index as f32 * 0.00001;
+            sample.y = -1.5;
+        }
+        state.sample_sets = super::super::multisample::SampleSets::build(&state.samples);
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 500.0));
+        for expanded in [None, Some(0)] {
+            state.expanded_set = expanded;
+            for zoom in [40.0, 40.0001, 50.0, 160.0, 40.0] {
+                state.zoom = zoom;
+                let radius = map_point_radius(viewport, state.samples.len(), zoom);
+                let (scale, _, points) = state.layout_map_points(viewport, viewport, radius, "");
+                let raw_points = state.map_points(scale, radius, "");
+                for point in &points {
+                    let raw = raw_points
+                        .iter()
+                        .find(|raw| raw.index == point.index)
+                        .unwrap();
+                    assert_eq!(
+                        point.position, raw.position,
+                        "3D dots must never use collision cells"
+                    );
+                    assert_eq!(point.base, raw.base);
+                }
+                assert!(points.windows(2).all(|pair| pair[0].depth <= pair[1].depth));
+            }
+        }
+        let ctx = egui::Context::default();
+        state.zoom = 1.0;
+        let (scale, center, points) = state.layout_map_points(viewport, viewport, 4.0, "");
+        let output = ctx.run(Default::default(), |ctx| {
+            let painter = ctx
+                .layer_painter(egui::LayerId::new(
+                    egui::Order::Background,
+                    egui::Id::new("plane"),
+                ))
+                .with_clip_rect(viewport);
+            state.paint_reference_plane(&painter, center, scale);
+        });
+        let endpoints: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match shape.shape {
+                egui::Shape::LineSegment { points, .. } => Some(points),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let plane_bounds = Rect::from_points(&endpoints);
+        assert!(plane_bounds.is_finite() && plane_bounds.is_positive());
+        assert!(
+            points
+                .iter()
+                .all(|point| plane_bounds.contains(point.base + center.to_vec2())),
+            "every outlying sample and expanded ring must have its stem base inside the finite plane"
+        );
+    }
+
+    #[test]
+    fn front_dots_occlude_rear_selection_and_win_overlapping_hover() {
+        let ctx = egui::Context::default();
+        let mut state = ConstellationState::default();
+        let mut far = note_sample("/a/far_C4.wav");
+        let mut near = note_sample("/a/near_C5.wav");
+        far.category = SampleCategory::Kick;
+        near.category = SampleCategory::Snare;
+        state.camera.elevation = 45.0;
+        near.y = -super::super::multisample::pitch_height(Some(72.0));
+        state.samples = vec![near, far]; // Opposite of the required painter's order.
+        state.sample_sets = super::super::multisample::SampleSets::build(&state.samples);
+        state.selected_path = Some(state.samples[1].file_path.clone());
+        let output = render_map_frame(&ctx, &mut state, vec![], &mut |_| {});
+        let texture = dot_texture(&ctx).id();
+        let mesh = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            mesh.indices[mesh.indices.len() - 6..]
+                .iter()
+                .all(|index| mesh.vertices[*index as usize].color == SampleCategory::Snare.color())
+        );
+        let center = (mesh.vertices[0].pos.to_vec2() + mesh.vertices[2].pos.to_vec2()) / 2.0;
+        render_map_frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(center.to_pos2())],
+            &mut |_| {},
+        );
+        assert_eq!(
+            state.last_hovered_path.as_ref(),
+            Some(&state.samples[0].file_path)
+        );
+        state.camera.azimuth = 180.0;
+        // Equal-height samples swap depth order when looking from the opposite side.
+        state.samples[0].y = -0.4;
+        state.samples[1].y = 0.4;
+        state.samples[0].file_path = "/a/near_C4.wav".into();
+        state.sample_sets = super::super::multisample::SampleSets::build(&state.samples);
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::splat(800.0));
+        let (_, _, points) = state.layout_map_points(viewport, viewport, 4.0, "");
+        assert_eq!(points[0].index, 0);
+        state.camera.azimuth = 0.0;
+        let (_, _, points) = state.layout_map_points(viewport, viewport, 4.0, "");
+        assert_eq!(points[0].index, 1);
+    }
+
+    #[test]
+    fn folder_snapshots_reset_empty_ranges_but_preserve_useful_ranges_and_hide_missing_sets() {
+        let mut state = ConstellationState::default();
+        let mut samples = vec![
+            note_sample("/a/short_C3.wav"),
+            note_sample("/a/long_C5.wav"),
+        ];
+        samples[0].duration_seconds = 0.25;
+        samples[1].duration_seconds = 2.0;
+        let sets = super::super::multisample::SampleSets::build(&samples);
+        for (pitch, duration) in [
+            (Some((90.0, 100.0)), (0.1, 4.0)),
+            (Some((48.0, 72.0)), (3.0, 4.0)),
+            (Some((72.0, 72.0)), (0.1, 1.0)),
+        ] {
+            state.pitch_range = pitch;
+            (state.min_duration, state.max_duration) = duration;
+            state.install_samples(samples.clone(), sets.clone());
+            assert_eq!(
+                (state.pitch_range, state.min_duration, state.max_duration),
+                (None, 0.0, 0.0)
+            );
+        }
+        state.pitch_range = Some((48.0, 60.0));
+        state.max_duration = 1.0;
+        state.search_query = "does not match".into();
+        state.category_filter = Some(SampleCategory::Vocal);
+        state.multisamples_only = true;
+        state.install_samples(samples, sets);
+        assert_eq!(
+            (state.pitch_range, state.max_duration),
+            (Some((48.0, 60.0)), 1.0)
+        );
+        assert!(
+            !state.multisamples_only,
+            "a hidden filter must not exclude singleton folders"
+        );
+        let ctx = egui::Context::default();
+        let palette = Default::default();
+        let has_toggle = |output: egui::FullOutput| {
+            output.shapes.iter().any(|shape| {
+                matches!(
+            &shape.shape, egui::Shape::Text(text) if text.galley.text() == "Multisamples only")
+            })
+        };
+        assert!(!has_toggle(render_frame(
+            &ctx,
+            &mut state,
+            &palette,
+            Vec2::new(1600.0, 1000.0)
+        )));
+        state = piano_family_fixture();
+        state.category_filter = Some(SampleCategory::Vocal);
+        assert!(has_toggle(render_frame(
+            &ctx,
+            &mut state,
+            &palette,
+            Vec2::new(1600.0, 1000.0)
+        )));
     }
 
     #[test]
@@ -1901,7 +2124,7 @@ mod tests {
             .samples
             .iter()
             .enumerate()
-            .filter_map(|(index, sample)| state.matches_filters(sample, "").then_some(index))
+            .filter_map(|(index, _)| state.matches_filters(index, "").then_some(index))
             .collect();
         assert_eq!(active, [2, 3, 5, 6, 7, 8]);
         state.selected_path = Some(state.samples[9].file_path.clone());
@@ -1912,6 +2135,43 @@ mod tests {
             state.sample_count_label(),
             "6 / 11 samples · piano_vel80 · 2 notes"
         );
+    }
+
+    #[test]
+    fn audition_trail_uses_the_same_folded_and_raised_positions_as_the_map() {
+        let ctx = egui::Context::default();
+        let mut state = piano_family_fixture();
+        for index in [0, 2] {
+            state.record_played_sample(&state.samples[index].clone());
+        }
+        let viewport = Rect::from_min_max(Pos2::new(8.0, 8.0), Pos2::new(792.0, 592.0));
+        for expanded in [None, Some(0)] {
+            state.expanded_set = expanded;
+            let radius = map_point_radius(viewport, state.samples.len(), state.zoom);
+            let (_, center, points) = state.layout_map_points(viewport, viewport, radius, "");
+            let positions: Vec<_> = [0, 2]
+                .into_iter()
+                .map(|index| {
+                    points
+                        .iter()
+                        .find(|point| point.index == index || point.collapsed_set == Some(0))
+                        .unwrap()
+                        .position
+                        + center.to_vec2()
+                })
+                .collect();
+            let output = render_map_frame(&ctx, &mut state, vec![], &mut |_| {});
+            assert!(
+                output.shapes.iter().any(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, stroke } =>
+                        stroke.width >= 1.2
+                            && points[0].distance(positions[0]) < 0.01
+                            && points[1].distance(positions[1]) < 0.01,
+                    _ => false,
+                }),
+                "audition history must follow folded groups and actual pitch heights"
+            );
+        }
     }
 
     #[test]
@@ -2000,12 +2260,7 @@ mod tests {
     #[test]
     fn collapsed_hover_auditions_middle_note_and_expanded_hover_picks_individuals() {
         let ctx = egui::Context::default();
-        let mut state = ConstellationState::default();
-        state.samples = ["/a/piano_C3.wav", "/a/piano_C4.wav", "/a/piano_C5.wav"]
-            .into_iter()
-            .map(note_sample)
-            .collect();
-        state.sample_sets = super::super::multisample::SampleSets::build(&state.samples);
+        let mut state = piano_family_fixture();
         let mut auditions = Vec::new();
         let mut frame = |state: &mut ConstellationState, pointer: Option<Pos2>| {
             render_map_frame(
@@ -2185,8 +2440,8 @@ mod tests {
             state.sample_count_label(),
             "3 / 4 samples · piano · 3 notes"
         );
-        assert!(state.matches_filters(&state.samples[0], "unmatched search"));
-        assert!(!state.matches_filters(&state.samples[3], ""));
+        assert!(state.matches_filters(0, "unmatched search"));
+        assert!(!state.matches_filters(3, ""));
         state.last_hovered_path = Some(state.samples[2].file_path.clone());
         escape(&mut state);
         assert_eq!(
@@ -2288,19 +2543,12 @@ mod tests {
             "a newly measured real 1 kHz tone is valid"
         );
         state.pitch_range = Some((60.0, 72.0));
-        let matches: Vec<_> = state
-            .samples
-            .iter()
-            .map(|sample| state.matches_filters(sample, ""))
+        let matches: Vec<_> = (0..state.samples.len())
+            .map(|index| state.matches_filters(index, ""))
             .collect();
         assert_eq!(matches, vec![false, true, true, false, false, false]);
         state.pitch_range = None;
-        assert!(
-            state
-                .samples
-                .iter()
-                .all(|sample| state.matches_filters(sample, ""))
-        );
+        assert!((0..state.samples.len()).all(|index| state.matches_filters(index, "")));
     }
 
     #[test]
@@ -2790,8 +3038,8 @@ mod tests {
         let (_, _, colors) = inspect(render_frame(&ctx, &mut state, &palette, size));
         assert_eq!(
             colors.len(),
-            4,
-            "Selection must retain its ordinary dot beneath the highlight"
+            16,
+            "Selection retains its ordinary dot plus three depth-ordered highlight quads"
         );
         assert!(colors.iter().all(|color| color.a() == 0));
     }
@@ -3072,17 +3320,16 @@ mod tests {
                 .iter()
                 .any(|vertex| vertex.color == SampleCategory::Snare.color())
         );
-        let sample = state.samples[999].clone();
         state.min_duration = 0.6;
-        assert!(!state.matches_filters(&sample, "target"));
+        assert!(!state.matches_filters(999, "target"));
         state.min_duration = 0.0;
         state.max_duration = 0.25;
-        assert!(!state.matches_filters(&sample, "target"));
+        assert!(!state.matches_filters(999, "target"));
         state.max_duration = 0.0;
         state.channel_filter = 2;
-        assert!(!state.matches_filters(&sample, "target"));
+        assert!(!state.matches_filters(999, "target"));
         state.channel_filter = 1;
-        assert!(state.matches_filters(&sample, "target"));
+        assert!(state.matches_filters(999, "target"));
         state.channel_filter = 0;
         state.samples.truncate(1);
         state.samples[0].x = -2.3;
@@ -3102,7 +3349,7 @@ mod tests {
         );
     }
 
-    fn render_frame(
+    pub(super) fn render_frame(
         ctx: &egui::Context,
         state: &mut ConstellationState,
         palette: &little_clip_core::palette::AppPalette,

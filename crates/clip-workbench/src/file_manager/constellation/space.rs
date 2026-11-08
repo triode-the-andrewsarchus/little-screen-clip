@@ -41,7 +41,13 @@ impl MapCamera {
 
     /// Subdivide the original bounded C4 plane, targeting about 64 visible cells.
     /// Finer lines fade in between levels instead of jumping as a threshold is crossed.
-    fn reference_grid(self, clip: egui::Rect, center: Pos2, scale: f32) -> Vec<(Pos2, Pos2, f32)> {
+    fn reference_grid(
+        self,
+        clip: egui::Rect,
+        center: Pos2,
+        scale: f32,
+        extent: f32,
+    ) -> Vec<(Pos2, Pos2, f32)> {
         if !clip.is_finite() || !clip.is_positive() || !scale.is_finite() || scale <= 0.0 {
             return Vec::new();
         }
@@ -58,19 +64,18 @@ impl MapCamera {
         }
         let world_area = (clip.width() / scale) * (clip.height() / scale)
             / self.elevation.to_radians().sin().max(0.01);
-        // Account for the empty corners of the world-axis bounding box when orbiting.
-        let coverage = (world_area / bounds.area()).sqrt();
-        let desired = (bounds.size() * (coverage / 8.0)).min(Vec2::splat(0.25));
-        let plane = egui::Rect::from_min_max(Pos2::new(-1.0, -1.0), Pos2::new(1.0, 1.0));
+        // One world-space spacing for both axes, independent of viewport aspect or yaw.
+        let desired = (world_area.sqrt() / 8.0).min(extent / 4.0);
+        let plane = egui::Rect::from_center_size(Pos2::ZERO, Vec2::splat(extent * 2.0));
         let bounds = bounds.intersect(plane);
         if !bounds.is_positive() {
             return Vec::new();
         }
         let mut lines = Vec::with_capacity(64);
         for axis in 0..2 {
-            let coarse = 2.0_f32.powf(desired[axis].log2().ceil());
+            let coarse = 2.0_f32.powf(desired.log2().ceil());
             let step = coarse * 0.5;
-            let minor_opacity = (coarse / desired[axis] - 1.0).clamp(0.0, 1.0);
+            let minor_opacity = (coarse / desired - 1.0).clamp(0.0, 1.0);
             let first = (bounds.min[axis] / step).floor() as i32;
             let last = (bounds.max[axis] / step).ceil() as i32;
             // Bound painting even for an exceptionally thin canvas or extreme pan.
@@ -105,6 +110,7 @@ pub(super) struct MapPoint {
     pub position: Pos2,
     pub radius: f32,
     pub collapsed_set: Option<usize>,
+    pub depth: f32,
 }
 
 impl ConstellationState {
@@ -151,7 +157,7 @@ impl ConstellationState {
             }
         }
         let push_factor = super::ui::spacing_strength(self.zoom);
-        if push_factor > 0.0 && self.expanded_set.is_none() {
+        if push_factor > 0.0 && self.expanded_set.is_none() && !self.pitch_height_enabled {
             let positions = self.overlap_layout.positions(
                 points.iter().map(|point| point.position).collect(),
                 (base_star_radius * 3.6).max(7.5) * push_factor,
@@ -175,6 +181,10 @@ impl ConstellationState {
             }
         }
         let center = viewport.center() + self.pan;
+        if self.pitch_height_enabled {
+            // Painter's order: far samples first, including deterministic ties.
+            points.sort_unstable_by(|a, b| a.depth.total_cmp(&b.depth).then(a.index.cmp(&b.index)));
+        }
         (view_scale, center, points)
     }
 
@@ -268,10 +278,7 @@ impl ConstellationState {
 
     pub(super) fn selected_set(&self) -> Option<usize> {
         let path = self.selected_path.as_ref()?;
-        let index = self
-            .samples
-            .iter()
-            .position(|sample| sample.file_path == *path)?;
+        let index = self.sample_sets.index_for_path(path)?;
         self.sample_sets.set_for(index)
     }
 
@@ -316,7 +323,7 @@ impl ConstellationState {
                     .members
                     .iter()
                     .copied()
-                    .filter(|index| self.matches_filters(&self.samples[*index], query))
+                    .filter(|index| self.matches_filters(*index, query))
                     .collect();
                 let index = if matching.len() == set.members.len() || matching.is_empty() {
                     set.representative
@@ -344,7 +351,26 @@ impl ConstellationState {
             radius: (radius * multisample::duration_radius(self.samples[index].duration_seconds))
                 .clamp(0.35, 12.0),
             collapsed_set,
+            depth: base.y / scale / self.camera.elevation.to_radians().tan()
+                + multisample::pitch_height(self.sample_sets.note(index))
+                    * self.camera.elevation.to_radians().sin(),
         }
+    }
+
+    fn reference_plane_extent(&self) -> f32 {
+        let extent = self.samples.iter().fold(1.0_f32, |extent, sample| {
+            extent.max(sample.x.abs()).max(sample.y.abs())
+        });
+        let extent = self.expanded_set.map_or(extent, |index| {
+            let set = &self.sample_sets.sets[index];
+            extent.max(
+                set.center.x.abs().max(set.center.y.abs())
+                    + ring_radius(set.members.len() - 1)
+                    + 0.025,
+            )
+        });
+        // A fixed binary boundary aligns with every subdivision level.
+        2.0_f32.powf(extent.log2().ceil())
     }
 
     pub(super) fn paint_reference_plane(&self, painter: &egui::Painter, center: Pos2, scale: f32) {
@@ -357,10 +383,12 @@ impl ConstellationState {
             .visuals
             .weak_text_color()
             .gamma_multiply(0.12);
-        for (from, to, opacity) in self
-            .camera
-            .reference_grid(painter.clip_rect(), center, scale)
-        {
+        for (from, to, opacity) in self.camera.reference_grid(
+            painter.clip_rect(),
+            center,
+            scale,
+            self.reference_plane_extent(),
+        ) {
             painter.line_segment(
                 [from, to],
                 Stroke::new(0.7_f32, color.gamma_multiply(opacity)),
@@ -377,13 +405,13 @@ impl ConstellationState {
         if !set
             .members
             .iter()
-            .any(|index| self.matches_filters(&self.samples[*index], &query))
+            .any(|index| self.matches_filters(*index, &query))
         {
             return;
         }
         let origin = center + self.map_base(set.center) * scale;
         for (ordinal, &index) in set.members.iter().enumerate() {
-            if !self.matches_filters(&self.samples[index], &query) {
+            if !self.matches_filters(index, &query) {
                 continue;
             }
             let radius = ring_radius(ordinal) * scale;
@@ -420,7 +448,32 @@ fn ring_radius(ordinal: usize) -> f32 {
     (ordinal + 1) as f32 * 0.025
 }
 
-/// Batch dotted stems with the shared disk texture; clip before emitting vertices.
+/// A small repeating dot texture keeps each pitch stem to one strip, regardless of height.
+pub(super) fn stem_texture(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::new("constellation_stem_texture");
+    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
+        return texture;
+    }
+    // Five texels per logical pixel: a 1.6 px dot repeats every six pixels.
+    let mut image = egui::ColorImage::new([12, 30], Color32::TRANSPARENT);
+    for y in 0..30 {
+        for x in 0..12 {
+            let dx = x as f32 + 0.5 - 6.0;
+            let dy = (y as f32 + 0.5).min(30.0 - (y as f32 + 0.5));
+            let alpha = ((4.0 - dx.hypot(dy)).clamp(0.0, 1.0) * 255.0) as u8;
+            image[(x, y)] = Color32::from_white_alpha(alpha);
+        }
+    }
+    let texture = ctx.load_texture(
+        "constellation pitch stems",
+        image,
+        egui::TextureOptions::LINEAR_REPEAT,
+    );
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    texture
+}
+
+/// Batch dotted stems as repeating strips; clip before emitting vertices.
 pub(super) fn append_stem(
     mesh: &mut egui::Mesh,
     clip: egui::Rect,
@@ -434,20 +487,27 @@ pub(super) fn append_stem(
     }
     let top = base.y.min(point.y).max(clip.top());
     let bottom = base.y.max(point.y).min(clip.bottom());
-    let uv = egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 1.0));
-    let mut y = top + (base.y - top).rem_euclid(6.0);
-    while y <= bottom {
-        mesh.add_rect_with_uv(
-            egui::Rect::from_center_size(Pos2::new(base.x, y), Vec2::splat(1.6)),
-            uv,
-            color,
-        );
-        y += 6.0;
+    if bottom <= top {
+        return;
     }
+    mesh.add_rect_with_uv(
+        egui::Rect::from_min_max(
+            Pos2::new(base.x - 1.2, top),
+            Pos2::new(base.x + 1.2, bottom),
+        ),
+        egui::Rect::from_min_max(
+            Pos2::new(0.0, (top - base.y) / 6.0),
+            Pos2::new(1.0, (bottom - base.y) / 6.0),
+        ),
+        color,
+    );
     if clip.contains(base) {
         mesh.add_rect_with_uv(
             egui::Rect::from_center_size(base, Vec2::splat(3.0)),
-            uv,
+            egui::Rect::from_min_max(
+                Pos2::new(2.0 / 12.0, -4.0 / 30.0),
+                Pos2::new(10.0 / 12.0, 4.0 / 30.0),
+            ),
             color,
         );
     }
@@ -458,6 +518,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pitch_stems_have_constant_geometry_and_stable_dots_when_clipped() {
+        let base = Pos2::new(50.0, 400.0);
+        for top in [0.0, 200.0] {
+            let clip = egui::Rect::from_min_max(Pos2::new(0.0, top), Pos2::new(100.0, 500.0));
+            for height in [12.0, 120.0, 12_000.0] {
+                let mut mesh = egui::Mesh::default();
+                append_stem(
+                    &mut mesh,
+                    clip,
+                    base,
+                    base - Vec2::Y * height,
+                    Color32::WHITE,
+                );
+                assert_eq!(
+                    mesh.vertices.len(),
+                    8,
+                    "stem length must not grow vertex count"
+                );
+                assert_eq!(mesh.indices.len(), 12);
+                for vertex in &mesh.vertices[..4] {
+                    assert!(
+                        (vertex.uv.y - (vertex.pos.y - base.y) / 6.0).abs() < 0.00001,
+                        "clipping keeps the original six-pixel dot phase"
+                    );
+                }
+            }
+        }
+        let ctx = egui::Context::default();
+        let output = ctx.run(Default::default(), |ctx| {
+            assert_eq!(stem_texture(ctx).id(), stem_texture(ctx).id());
+        });
+        let (_, delta) = output.textures_delta.set.iter().find(|(_, delta)| {
+            matches!(&delta.image, egui::ImageData::Color(image) if image.size == [12, 30])
+        }).unwrap();
+        assert_eq!(delta.options.wrap_mode, egui::TextureWrapMode::Repeat);
+        let egui::ImageData::Color(image) = &delta.image else {
+            unreachable!()
+        };
+        assert!(image[(6, 0)].a() > 240 && image[(6, 29)].a() > 240);
+        assert_eq!(
+            image[(6, 15)].a(),
+            0,
+            "the repeating strip must retain gaps between dots"
+        );
+    }
+
+    #[test]
+    fn reference_cells_are_world_squares_in_wide_tall_and_orbited_views() {
+        for size in [Vec2::new(1400.0, 500.0), Vec2::new(500.0, 1400.0)] {
+            let clip = egui::Rect::from_min_size(Pos2::ZERO, size);
+            for azimuth in [0.0, 37.0, 125.0] {
+                let camera = MapCamera {
+                    azimuth,
+                    elevation: 46.0,
+                };
+                let mut coordinates = [Vec::new(), Vec::new()];
+                for (from, to, opacity) in camera.reference_grid(clip, clip.center(), 763.0, 2.0) {
+                    if opacity < 0.99 {
+                        continue;
+                    }
+                    let a = camera.unproject_plane((from - clip.center()) / 763.0);
+                    let b = camera.unproject_plane((to - clip.center()) / 763.0);
+                    let axis = usize::from((a.x - b.x).abs() > 0.001);
+                    coordinates[axis].push(a[axis]);
+                }
+                let steps = coordinates.map(|mut values| {
+                    values.sort_by(f32::total_cmp);
+                    values
+                        .windows(2)
+                        .map(|pair| pair[1] - pair[0])
+                        .min_by(f32::total_cmp)
+                        .unwrap()
+                });
+                assert!(
+                    (steps[0] - steps[1]).abs() < 0.001,
+                    "{size:?} {azimuth}: {steps:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn reference_grid_keeps_about_eight_cells_per_axis_through_zoom() {
         let camera = MapCamera {
             azimuth: 0.0,
@@ -465,7 +607,7 @@ mod tests {
         };
         let clip = egui::Rect::from_min_size(Pos2::ZERO, Vec2::splat(800.0));
         for scale in [0.2, 80.0, 113.0, 400.0, 763.0, 1600.0, 1_000_000.0] {
-            let lines = camera.reference_grid(clip, clip.center(), scale);
+            let lines = camera.reference_grid(clip, clip.center(), scale, 1.0);
             let mut density = [0.0_f32; 2];
             for (from, to, opacity) in &lines {
                 let axis = usize::from((from.x - to.x).abs() > 0.01);
@@ -491,7 +633,7 @@ mod tests {
                 );
                 for scale in [0.2, 400.0, 100_000.0] {
                     let center = clip.center() + Vec2::new(600.0, -500.0);
-                    let lines = camera.reference_grid(clip, center, scale);
+                    let lines = camera.reference_grid(clip, center, scale, 1.0);
                     assert!(lines.len() <= 258);
                     for (from, to, opacity) in lines {
                         assert!(from.is_finite() && to.is_finite());
@@ -509,17 +651,17 @@ mod tests {
             azimuth: 0.0,
             elevation: 90.0,
         };
-        let finite = top.reference_grid(clip, clip.center(), 100.0);
+        let finite = top.reference_grid(clip, clip.center(), 100.0, 1.0);
         assert_eq!(finite.len(), 18, "the full bounded plane has 8 by 8 cells");
         assert!(
-            top.reference_grid(clip, clip.center() + Vec2::splat(10_000.0), 400.0)
+            top.reference_grid(clip, clip.center() + Vec2::splat(10_000.0), 400.0, 1.0)
                 .is_empty(),
             "panning away from the original plane must not tile new grid regions"
         );
         let camera = MapCamera::default();
         let pan = Vec2::new(19.0, -23.0);
-        let before = camera.reference_grid(clip, clip.center(), 763.0);
-        let after = camera.reference_grid(clip, clip.center() + pan, 763.0);
+        let before = camera.reference_grid(clip, clip.center(), 763.0, 1.0);
+        let after = camera.reference_grid(clip, clip.center() + pan, 763.0, 1.0);
         for (from, to, opacity) in before {
             let axis = usize::from((from.x - to.x).abs() > 0.01);
             let shifted = from[axis] + pan[axis];

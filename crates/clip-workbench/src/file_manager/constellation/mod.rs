@@ -402,6 +402,26 @@ impl ConstellationState {
         );
     }
 
+    /// Install one accepted folder snapshot, keeping range filters only when useful.
+    fn install_samples(
+        &mut self,
+        samples: Vec<ConstellationSample>,
+        sets: multisample::SampleSets,
+    ) {
+        self.samples = samples;
+        self.sample_sets = sets;
+        if !self.samples.is_empty()
+            && !(0..self.samples.len()).any(|index| self.matches_ranges(index))
+        {
+            self.min_duration = 0.0;
+            self.max_duration = 0.0;
+            self.pitch_range = None;
+        }
+        if self.sample_sets.sets.is_empty() {
+            self.multisamples_only = false;
+        }
+    }
+
     /// Installs validated logical character rows, ordered from the bottom of the rack.
     pub fn configure_pad_keys(&mut self, rows: &[String; 4]) {
         if let Ok(keys) = rows
@@ -746,8 +766,7 @@ impl ConstellationState {
                     } => {
                         if self.current_indexed_folder.as_ref() == Some(&job.folder) {
                             self.folder_generation = self.folder_generation.wrapping_add(1);
-                            self.samples = samples;
-                            self.sample_sets = sets;
+                            self.install_samples(samples, sets);
                             self.expanded_set = None;
                             self.explore_selection = None;
                             self.overview_camera = None;
