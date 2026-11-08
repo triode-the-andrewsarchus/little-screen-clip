@@ -139,7 +139,7 @@
     - [x] `.3g2` — 3GPP2 multimedia; playback and timeline strips via FFmpeg
     - [x] `.asf` — Advanced Systems Format; playback and timeline strips via FFmpeg
     - [ ] `.asx` — Advanced Stream Redirector playlist
-    - [ ] `.f4v` — Flash MP4 video
+    - [x] `.f4v` — Flash MP4 video; playback and timeline strips via FFmpeg
     - [ ] `.m1v`, `.m2v` — MPEG-1 / MPEG-2 elementary video stream
     - [ ] `.mxf` — Material eXchange Format (SMPTE broadcast and digital cinema container)
       - [ ] Material Package metadata, track timecodes, and descriptive metadata tracks
