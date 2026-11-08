@@ -165,7 +165,7 @@
     - [ ] Vorbis comments, embedded cover art (`METADATA_BLOCK_PICTURE`), and cue sheets
   - [x] `.mp3`
     - [ ] ID3v1, ID3v2.3, ID3v2.4 tags (title, artist, album, track, cover art, replaygain) and APEv2 tags
-  - [x] `.oga`, `.ogg`, `.opus`
+  - [x] `.oga`, `.ogg`, `.opus` — Vorbis and mono/stereo Opus; Audio Studio, waveform strips, playback and region export
     - [ ] Vorbis comments and Opus identification / comment headers
   - [x] `.wav`, `.wave`
     - [ ] RIFF `INFO` list chunk, Broadcast Wave Format (`bext`) timecodes/metadata, and embedded ID3 chunks
@@ -182,7 +182,7 @@
   - [ ] `.m3u` — audio playlist
   - [x] `.m4b` — MPEG-4 audiobook; Audio Studio, playback, waveform strips, and region export
     - [ ] Chapter markers, bookmark metadata, and audiobook tags
-  - [x] `.mka` — Matroska audio; Audio Studio, playback, waveform strips and region export for FLAC, PCM, AAC-LC, Vorbis and MP3 tracks
+  - [x] `.mka` — Matroska audio; Audio Studio, playback, waveform strips and region export for FLAC, PCM, AAC-LC, Vorbis, MP3 and mono/stereo Opus tracks
     - [ ] Matroska audio tags, track headers, and chapter markers
   - [x] `.mp2` — MPEG Audio Layer II; Audio Studio, playback, waveform strips and region export
 - [ ] Documents and text

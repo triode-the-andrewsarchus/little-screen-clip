@@ -875,6 +875,10 @@ fn search_source_validation_rejects_audio_exports_before_outputs_and_keeps_compl
 #[test]
 fn audio_containers_decode_waveforms_and_export_without_overwriting() {
     for (extension, codec, container) in [
+        ("opus", "libopus", "opus"),
+        ("ogg", "libopus", "ogg"),
+        ("oga", "libopus", "ogg"),
+        ("mka", "libopus", "matroska"),
         ("aif", "pcm_s16be", "aiff"),
         ("aiff", "pcm_s16be", "aiff"),
         ("aiff", "pcm_f32be", "aiff"),
@@ -896,10 +900,13 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
         let path = directory
             .path()
             .join(format!("track.{}", extension.to_ascii_uppercase()));
+        // Exercise mono Opus under .oga; the other source fixtures are stereo.
+        let channels = if extension == "oga" { "1" } else { "2" };
         let generated = little_clip_core::process::CommandRequest::new("ffmpeg")
             .args(["-nostdin", "-v", "error", "-i"])
             .arg_content_file(&wav)
             .unwrap()
+            .args(["-ac", channels])
             .args([
                 "-af",
                 "afade=t=in:st=0:d=1",
@@ -919,6 +926,7 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
         let source_bytes = std::fs::read(&path).unwrap();
         let source = crate::file_source::FileSource::capture(&path).unwrap();
         let metadata = little_clip_core::audio::read_audio_metadata(&path).unwrap();
+        assert_eq!(metadata.channels.to_string(), channels);
         assert!(
             metadata.duration_ms.abs_diff(1000) < 100,
             "{extension}/{codec}: {} ms",
@@ -948,6 +956,23 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
             "{extension}/{codec}: truncated or mistimed waveform ({early}, {late})"
         );
         let audio = crate::file_source::open_regular_file(&path, true).unwrap();
+        if extension == "opus" {
+            let gapless_file = crate::file_source::open_regular_file(&path, true).unwrap();
+            let byte_len = gapless_file.metadata().unwrap().len();
+            let mut gapless = rodio::Decoder::builder()
+                .with_data(gapless_file)
+                .with_byte_len(byte_len)
+                .with_seekable(true)
+                .with_gapless(true)
+                .build()
+                .unwrap();
+            assert_eq!(
+                gapless.by_ref().count() / metadata.channels as usize,
+                48_000
+            );
+            gapless.try_seek(Duration::ZERO).unwrap();
+            assert_eq!(gapless.count() / metadata.channels as usize, 48_000);
+        }
         let mut decoder = rodio::Decoder::try_from(audio).unwrap();
         assert!(decoder.next().is_some());
         for position in [
