@@ -143,7 +143,7 @@
     - [ ] `.asx` — Advanced Stream Redirector playlist
     - [x] `.f4v` — Flash MP4 video; playback and timeline strips via FFmpeg
     - [ ] `.m1v`, `.m2v` — MPEG-1 / MPEG-2 elementary video stream
-    - [ ] `.mxf` — Material eXchange Format (SMPTE broadcast and digital cinema container)
+    - [x] `.mxf` — Material eXchange Format; video playback, frame thumbnails, timeline strips and hover scrubbing through the shared bounded FFmpeg/Timelens paths (available codecs depend on installed helpers)
       - [ ] Material Package metadata, track timecodes, and descriptive metadata tracks
     - [x] `.qt` — QuickTime movie; playback and timeline strips via FFmpeg
   - [ ] Streaming media playlists and segments

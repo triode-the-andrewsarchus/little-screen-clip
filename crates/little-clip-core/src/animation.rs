@@ -83,6 +83,7 @@ pub fn is_video_path(path: &Path) -> bool {
                 | "asf"
                 | "vob"
                 | "3g2"
+                | "mxf"
         )
     )
 }
@@ -502,6 +503,7 @@ mod tests {
         assert!(is_video_path(Path::new("movie.mpeg")));
         assert!(is_video_path(Path::new("movie.MPG")));
         assert!(is_video_path(Path::new("phone.3GP")));
+        assert!(is_video_path(Path::new("broadcast.MXF")));
         assert!(!is_video_path(Path::new("song.mp3")));
         assert!(!is_video_path(Path::new("photo.png")));
     }

@@ -83,9 +83,9 @@ fn cache_path(source: &FileSource, stream: usize, width: u32) -> Option<PathBuf>
     width.hash(&mut hash);
     // Sparse experimental previews must not replace full-frame cached strips.
     let namespace = match std::env::var("VIDEO_STRIP_GPU_SLICES").as_deref() {
-        Ok("5") => "video-timelines-five-slices-v1",
-        Ok("1") => "video-timelines-center-column-v1",
-        _ => "video-timelines-v3",
+        Ok("5") => "video-timelines-five-slices-v2",
+        Ok("1") => "video-timelines-center-column-v2",
+        _ => "video-timelines-v4",
     };
     Some(
         ArtifactStore::new()
@@ -400,26 +400,37 @@ mod format_tests {
             ("3g2", "3g2", "mpeg4", &[]),
             ("m2ts", "mpegts", "mpeg2video", &["-mpegts_m2ts_mode", "1"]),
             ("mts", "mpegts", "mpeg2video", &[]),
+            ("MXF", "mxf", "mpeg2video", &[]),
         ];
         for &(extension, muxer, codec, options) in formats {
             let path = temporary.path().join(format!("fixture.{extension}"));
-            let generated = CommandRequest::new("ffmpeg")
-                .args([
-                    "-nostdin",
-                    "-v",
-                    "error",
+            let dimensions = if muxer == "mxf" {
+                (1280, 720)
+            } else {
+                (160, 120)
+            };
+            let source = format!(
+                "testsrc2=size={}x{}:rate=25:duration=1",
+                dimensions.0, dimensions.1
+            );
+            let mut generation = CommandRequest::new("ffmpeg")
+                .args(["-nostdin", "-v", "error", "-f", "lavfi", "-i", &source]);
+            generation = if muxer == "mxf" {
+                generation.args([
                     "-f",
                     "lavfi",
                     "-i",
-                    "testsrc2=size=160x120:rate=25:duration=1",
-                    "-an",
-                    "-c:v",
-                    codec,
-                    "-threads",
-                    "1",
-                    "-f",
-                    muxer,
+                    "sine=sample_rate=48000:duration=1",
+                    "-c:a",
+                    "pcm_s16le",
+                    "-timecode",
+                    "01:02:03:04",
                 ])
+            } else {
+                generation.arg("-an")
+            };
+            let generated = generation
+                .args(["-c:v", codec, "-threads", "1", "-f", muxer])
                 .args(options.iter().copied())
                 .arg(path.as_os_str())
                 .timeout(Duration::from_secs(15))
@@ -440,8 +451,26 @@ mod format_tests {
                 .unwrap();
             assert!(entry.is_video(), "{extension}");
             let metadata = media::inspect_video(&path).unwrap();
-            assert_eq!(metadata.dimensions, (160, 120));
+            assert_eq!(metadata.dimensions, dimensions);
             assert!(metadata.duration_ms > 0);
+            if muxer == "mxf" {
+                assert_eq!(metadata.duration_ms, 1000);
+                assert_eq!(metadata.codec, "mpeg2video");
+                assert!(metadata.audio_description.contains("PCM S16LE"));
+                assert_eq!(metadata.frame_interval_ms, 40);
+                let mut decoder =
+                    super::super::decoder::Decoder::open(&path, &metadata, 96).unwrap();
+                let frame = decoder.frame(500, &AtomicBool::new(false)).unwrap();
+                assert!(frame.time_ms < metadata.duration_ms);
+                assert!(frame.image.width <= 96 && frame.image.height <= 64);
+                assert!(
+                    frame
+                        .image
+                        .premultiplied_rgba
+                        .chunks_exact(4)
+                        .any(|p| p[0] != p[1])
+                );
+            }
             assert!(media::video_preview(&path).is_some());
             let (inspected, _) = mpsc::sync_channel(1);
             let (progress, _) = mpsc::sync_channel(1);

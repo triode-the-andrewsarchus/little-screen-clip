@@ -243,7 +243,7 @@ def video(session, root):
 
 def video_arguments(parser):
     parser.add_argument("--scenario", choices=["gallery", "music", "video", "video-unavailable"], default="gallery")
-    parser.add_argument("--video-extension", choices=["mp4", "mpeg", "mpg", "3gp", "3g2", "m2ts", "mts", "vob", "asf", "f4v", "qt"], default="mp4")
+    parser.add_argument("--video-extension", choices=["mp4", "mpeg", "mpg", "3gp", "3g2", "m2ts", "mts", "vob", "asf", "f4v", "qt", "mxf"], default="mp4")
 
 
 def main():
@@ -266,9 +266,11 @@ def main():
                 "m2ts": ("mpegts", "mpeg2video"), "mts": ("mpegts", "mpeg2video"),
                 "vob": ("vob", "mpeg2video"), "asf": ("asf", "wmv2"),
                 "f4v": ("f4v", "libx264"), "qt": ("mov", "mpeg4"),
+                "mxf": ("mxf", "mpeg2video"),
             }[extension]
             options = ["-mpegts_m2ts_mode", "1"] if extension == "m2ts" else []
-            private.run_checked(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=60", "-an", "-c:v", codec, "-threads", "2", "-f", muxer, *options, str(root / f"movie.{extension}")], env=os.environ, timeout=30)
+            audio = ["-f", "lavfi", "-i", "sine=sample_rate=48000:duration=60", "-c:a", "pcm_s16le", "-timecode", "01:02:03:04"] if extension == "mxf" else ["-an"]
+            private.run_checked(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=60", *audio, "-c:v", codec, "-threads", "2", "-f", muxer, *options, str(root / f"movie.{extension}")], env=os.environ, timeout=30)
         if args.scenario == "video-unavailable":
             return run_application_acceptance(args, output, root, unavailable_video, "video-unavailable", lambda env, children: unavailable_environment(output, env, children))
         return run_application_acceptance(args, output, root, video, "video", lambda env, children: start_private_audio(output, env, children))

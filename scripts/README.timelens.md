@@ -30,3 +30,9 @@ worker chunk; the indexed FFmpeg helper normally handles long files and starts
 with evenly distributed anchors. These extensions remain part of the GPL patch
 and corresponding source archive. The FFmpeg AV1 streaming fallback has no
 intermediate snapshot protocol.
+
+Completed ordinary-frame timelines fill unsampled positions from their nearest
+decoded column, including the final frame's remaining display duration. Empty
+decodes fail instead of publishing an uninitialized strip. The same bounded
+nearest-column map is shared with progressive snapshots; actual sampled columns
+are preserved.
