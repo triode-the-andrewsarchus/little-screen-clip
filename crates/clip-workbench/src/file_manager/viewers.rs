@@ -733,7 +733,7 @@ mod tests {
 
     #[test]
     fn clicked_subtitle_cue_survives_background_loading() {
-        for extension in ["srt", "vtt"] {
+        for extension in ["srt", "vtt", "ass"] {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join(format!("tests/fixtures/subtitles/sample.{extension}"));
             let mut viewers = Viewers::default();

@@ -284,6 +284,11 @@ mod tests {
                 "WEBVTT\n\nNOTE preserve me\n\n00:01.000 --> 00:02.000\nOriginal\n",
                 "WEBVTT\n\nNOTE preserve me\n\nSTYLE\n::cue { color: red; }\n\nedited\n00:03.000 --> 00:05.000 align:start\nEdited\n",
             ),
+            (
+                "ass",
+                "[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Start,End,Text\nDialogue: 0:00:01.00,0:00:02.00,Original\n",
+                "[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Start,End,Text\nComment: 0:00:00.00,0:00:30.00,Keep metadata\nDialogue: 0:00:03.00,0:00:05.00,{\\i1}Edited\n",
+            ),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(format!("captions.{extension}"));

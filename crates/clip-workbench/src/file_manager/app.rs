@@ -552,6 +552,13 @@ impl eframe::App for FileManagerApp {
         }
         self.browser.midi.tick(ctx);
         if self.viewers.active() {
+            // Browser file-reference shortcuts must not suppress studio text clipboard events.
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS),
+                    false,
+                )
+            });
             self.browser.drop_targets.clear();
             self.browser.bookmark_drop_rect = None;
         }

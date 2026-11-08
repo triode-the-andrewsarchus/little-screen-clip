@@ -278,16 +278,22 @@ fn subtitle_preview_targets_raw_source_and_invalid_timing_falls_back_without_los
 }
 
 #[test]
-fn webvtt_subtitle_preview_preserves_metadata_and_targets_the_selected_cue_source() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/subtitles/sample.vtt");
-    let original = std::fs::read_to_string(&path).unwrap();
-    let mut state = TextPreviewState::from_file(path, &Default::default()).unwrap();
-    assert_eq!(state.view_mode, TextViewMode::SubtitleTimeline);
-    state.select_subtitle(1);
-    state.show_subtitle_source();
-    assert_eq!(state.center_source_line, Some(19));
-    assert_eq!(state.content.as_str(), original);
-    assert!(state.content.contains("STYLE\n::cue { color: lime; }"));
+fn rich_subtitle_previews_preserve_metadata_and_target_the_selected_cue_source() {
+    for (extension, line, metadata) in [
+        ("vtt", 19, "STYLE\n::cue { color: lime; }"),
+        ("ass", 15, "Style: Default,Sans,24"),
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/fixtures/subtitles/sample.{extension}"));
+        let original = std::fs::read_to_string(&path).unwrap();
+        let mut state = TextPreviewState::from_file(path, &Default::default()).unwrap();
+        assert_eq!(state.view_mode, TextViewMode::SubtitleTimeline);
+        state.select_subtitle(1);
+        state.show_subtitle_source();
+        assert_eq!(state.center_source_line, Some(line));
+        assert_eq!(state.content.as_str(), original);
+        assert!(state.content.contains(metadata));
+    }
     let data = TextPreviewData::from_source(Arc::new("WEBVTTbroken".into()), Some("VTT"));
     assert!(data.subtitles.is_none());
     assert!(data.subtitle_error.is_some());

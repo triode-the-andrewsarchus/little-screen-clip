@@ -11,7 +11,7 @@ def exercise(session, root, extension):
     filename, renamed = f"sample.{extension}", f"renamed.{extension}"
     original = (root / filename).read_text()
     identifier = "7" if extension == "srt" else "overlap"
-    source_time = "00:00:03,000" if extension == "srt" else "00:03.000"
+    source_time = "00:00:03,000" if extension == "srt" else "00:03.000" if extension == "vtt" else "0:00:03.00"
     session.observe("01-timeline-strip", [filename, "4 cues", "peak 2"])
     _, y = session.word("01-timeline-strip", filename, minimum_y=240)
     # The second cue alone covers 4.5 seconds on the ten-second full-file strip.
@@ -26,15 +26,25 @@ def exercise(session, root, extension):
     session.click(600, 180)  # Raw / Code tab in the verified shared header.
     session.observe("03-source", [source_time, "Two voices overlap", "Edit text"])
     click_word(session, "03-source", "Edit", minimum_y=90, maximum_y=140)
-    session.observe("04-editor", ["Save", "Welcome to the garden"])
-    x, y = session.word("04-editor", "Welcome", tree=True, minimum_y=200)
-    session.click(x + 5, y)
+    if extension == "ass":
+        session.observe("04-editor", ["Save", "Script Info"])
+        session.click(240,300)  # Verified multiline source field below Save.
+    else:
+        session.observe("04-editor", ["Save", "Welcome to the garden"])
+        x, y = session.word("04-editor", "Welcome", tree=True, minimum_y=200)
+        session.click(x + 5, y)
     session.key("a", "ctrl")
     replacement = "1\n00:00:02,000 --> 00:00:06,000\nAn edited subtitle.\n"
     if extension == "vtt":
         # Keep the header, notes, style and region source verbatim while changing cues.
         replacement = original.split("opening\n", 1)[0] + "edited\n00:02.000 --> 00:06.000 align:start\nAn edited subtitle.\n"
-    private.run_checked(["wtype", replacement], env=session.env)
+    if extension == "ass":
+        prefix = original.split("Dialogue:", 1)[0]
+        comment = next(line for line in original.splitlines() if line.startswith("Comment:"))
+        replacement = prefix + comment + "\nDialogue: 0,0:00:02.00,0:00:06.00,Default,edited,0,0,0,,An edited subtitle.\n"
+    subprocess.run(["wl-copy", "--type", "text/plain;charset=utf-8"], input=replacement.encode(),
+        env=session.env, check=True, timeout=5)
+    session.key("v", "ctrl")
     session.key("s", "ctrl")
     wait_for(lambda: (root / filename).read_text() == replacement, "exact subtitle save")
     session.observe("05-saved", ["An edited subtitle"])
@@ -58,7 +68,7 @@ def exercise(session, root, extension):
 def main():
     repo = Path(__file__).resolve().parent.parent
     args = application_arguments(__doc__, repo / "target/release/clip-file-manager",
-        lambda parser: parser.add_argument("--format", choices=["srt", "vtt"], default="srt"))
+        lambda parser: parser.add_argument("--format", choices=["srt", "vtt", "ass"], default="srt"))
     output, root = media_fixture_directory(args)
     filename = f"sample.{args.format}"
     shutil.copyfile(repo / "crates/clip-workbench/tests/fixtures/subtitles" / filename, root / filename)

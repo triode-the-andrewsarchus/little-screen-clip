@@ -1,4 +1,5 @@
 //! Passive subtitle cue parsing and bounded timeline summaries.
+mod substation;
 mod timeline;
 #[cfg(test)]
 mod webvtt_tests;
@@ -20,6 +21,8 @@ pub enum Format {
     SubRip,
     /// WebVTT headers, identifiers and dot-separated milliseconds.
     WebVtt,
+    /// ASS v4+ event rows with centisecond timestamps.
+    AdvancedSubStationAlpha,
 }
 impl Format {
     /// Recognizes a supported filename extension without a leading dot.
@@ -27,6 +30,7 @@ impl Format {
         match extension.to_ascii_lowercase().as_str() {
             "srt" => Some(Self::SubRip),
             "vtt" => Some(Self::WebVtt),
+            "ass" => Some(Self::AdvancedSubStationAlpha),
             _ => None,
         }
     }
@@ -39,7 +43,7 @@ impl Format {
 /// One subtitle cue, in source-file order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cue {
-    /// Original counter or identifier, when present.
+    /// Original counter, identifier or dialogue speaker name, when present.
     pub identifier: String,
     /// Inclusive start time, in milliseconds from the media origin.
     pub start_ms: u64,
@@ -47,7 +51,7 @@ pub struct Cue {
     pub end_ms: u64,
     /// Caption lines joined with line feeds, with formatting text preserved.
     pub text: String,
-    /// Positioning metadata following the end timestamp.
+    /// Positioning or event metadata for passive inspection.
     pub settings: String,
     /// One-based source line containing the timestamp.
     pub source_line: usize,
@@ -89,9 +93,12 @@ impl Document {
     /// retain the original source for viewing and editing those blocks. Styles
     /// are never applied. Accepts LF, CRLF and CR line endings and an optional BOM.
     /// The timeline uses cue timestamps without applying external clock mappings.
+    /// ASS uses dialogue events only; comments, styles, fonts and attachments remain
+    /// in the caller's original source. Event metadata summaries are bounded and
+    /// override tags remain literal text. UTF-8 source editing preserves them.
     ///
     /// # Errors
-    /// Returns an error for an invalid WebVTT header, invalid cue timings,
+    /// Returns an error for invalid headers/event layouts, invalid cue timings,
     /// identifiers over 4096 bytes, resource limits or cancellation.
     ///
     /// # Examples
@@ -117,29 +124,34 @@ impl Document {
         } else {
             Cow::Borrowed(source)
         };
-        let mut lines = normalized
-            .trim_start_matches('\u{feff}')
-            .lines()
-            .enumerate();
-        if format == Format::WebVtt {
-            read_vtt_header(&mut lines)?;
-        }
-        let mut cues = Vec::new();
-        let mut block = Vec::new();
-        for (line, text) in lines {
-            if cancelled.load(Ordering::Relaxed) {
-                return Err("Subtitle loading cancelled".into());
-            }
-            if text.trim().is_empty() {
-                append_block(&mut cues, &mut block, format)?;
-            } else {
-                block.push((line + 1, text));
-            }
-        }
-        append_block(&mut cues, &mut block, format)?;
+        let source = normalized.trim_start_matches('\u{feff}');
+        let cues = match format {
+            Format::AdvancedSubStationAlpha => substation::parse(source, cancelled)?,
+            _ => parse_blocks(source, format, cancelled)?,
+        };
         let timeline = Timeline::build(&cues, cancelled)?;
         Ok(Self { cues, timeline })
     }
+}
+fn parse_blocks(source: &str, format: Format, cancelled: &AtomicBool) -> Result<Vec<Cue>, String> {
+    let mut lines = source.lines().enumerate();
+    if format == Format::WebVtt {
+        read_vtt_header(&mut lines)?;
+    }
+    let mut cues = Vec::new();
+    let mut block = Vec::new();
+    for (line, text) in lines {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err("Subtitle loading cancelled".into());
+        }
+        if text.trim().is_empty() {
+            append_block(&mut cues, &mut block, format)?;
+        } else {
+            block.push((line + 1, text));
+        }
+    }
+    append_block(&mut cues, &mut block, format)?;
+    Ok(cues)
 }
 fn read_vtt_header<'a>(lines: &mut impl Iterator<Item = (usize, &'a str)>) -> Result<(), String> {
     let (_, header) = lines.next().ok_or("Missing WEBVTT header")?;
@@ -245,10 +257,7 @@ fn timestamp(text: &str, format: Format) -> Result<u64, String> {
     let (clock, fraction) = text
         .split_once(separator)
         .ok_or("Missing timestamp milliseconds")?;
-    if fraction.len() != 3 {
-        return Err("Milliseconds require three digits".into());
-    }
-    let fraction = decimal(fraction)?;
+    let fraction = milliseconds(fraction, format)?;
     let fields = clock_fields(clock, format)?;
     let hours = decimal(fields[0])?;
     let minutes = decimal(fields[1])?;
@@ -260,6 +269,16 @@ fn timestamp(text: &str, format: Format) -> Result<u64, String> {
         .checked_mul(3_600_000)
         .and_then(|value| value.checked_add(minutes * 60_000 + seconds * 1000 + fraction))
         .ok_or_else(|| "Timestamp is too large".into())
+}
+fn milliseconds(text: &str, format: Format) -> Result<u64, String> {
+    let (digits, scale) = match format {
+        Format::AdvancedSubStationAlpha => (2, 10),
+        _ => (3, 1),
+    };
+    if text.len() != digits {
+        return Err(format!("Timestamp fraction requires {digits} digits"));
+    }
+    Ok(decimal(text)? * scale)
 }
 fn clock_fields(clock: &str, format: Format) -> Result<[&str; 3], String> {
     let mut fields = clock.split(':').collect::<Vec<_>>();

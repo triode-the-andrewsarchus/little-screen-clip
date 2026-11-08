@@ -155,7 +155,7 @@ impl Viewer {
             let display = prefix.lines().take(20).collect::<Vec<_>>().join("\n");
             ui.add(egui::Label::new(egui::RichText::new(&display).size(24.0)).wrap(true).selectable(true));
             if display.len() < cue.text.len() { ui.label("Caption display limited to 800 characters / 20 lines; Raw / Code shows the full cue."); }
-            if !cue.settings.is_empty() { ui.label(format!("Positioning: {}", cue.settings.chars().take(256).collect::<String>())); }
+            if !cue.settings.is_empty() { ui.label(format!("Cue settings: {}", cue.settings.chars().take(256).collect::<String>())); }
         });
     }
 }

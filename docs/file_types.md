@@ -153,7 +153,8 @@
     - [ ] `.insp` — Insta360 photo
   - [ ] Subtitle and caption files
     - [x] `.srt` — SubRip; UTF-8 cue timeline and list strip with gaps/overlaps, cue/source navigation, and guarded text editing (2 MiB edit / 8 MiB preview limits; formatting retained as literal text)
-    - [ ] `.ass`, `.ssa` — Advanced SubStation Alpha / SubStation Alpha
+    - [x] `.ass` — Advanced SubStation Alpha v4+; UTF-8 cue timeline/list strip, speaker and style metadata, cue/source navigation and guarded source editing; styles, override tags, comments and attachments remain passive and preserved in source
+    - [ ] `.ssa` — SubStation Alpha
     - [x] `.vtt` — WebVTT; UTF-8 cue timeline and list strip, cue/source navigation and guarded text editing; preserves header, comments, styles, regions, identifiers and cue settings in source (styles/markup are passive; timeline uses local cue times, not external clock mappings)
     - [ ] `.ttml` — Timed Text Markup Language
 - [ ] Audio
