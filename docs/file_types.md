@@ -137,7 +137,8 @@
     - [x] `.mpeg`, `.mpg` — MPEG program stream; video playback and timeline strips via FFmpeg
     - [x] `.vob` — DVD video objects; playback and timeline strips via FFmpeg
     - [x] `.3g2` — 3GPP2 multimedia; playback and timeline strips via FFmpeg
-    - [ ] `.asf`, `.asx` — Advanced Systems Format / Stream Redirector
+    - [x] `.asf` — Advanced Systems Format; playback and timeline strips via FFmpeg
+    - [ ] `.asx` — Advanced Stream Redirector playlist
     - [ ] `.f4v` — Flash MP4 video
     - [ ] `.m1v`, `.m2v` — MPEG-1 / MPEG-2 elementary video stream
     - [ ] `.mxf` — Material eXchange Format (SMPTE broadcast and digital cinema container)

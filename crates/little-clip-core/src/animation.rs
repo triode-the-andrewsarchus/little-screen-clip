@@ -76,6 +76,7 @@ pub fn is_video_path(path: &Path) -> bool {
                 | "mpeg"
                 | "mpg"
                 | "3gp"
+                | "asf"
                 | "vob"
                 | "3g2"
         )
