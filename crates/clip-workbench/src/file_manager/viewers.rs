@@ -460,7 +460,8 @@ fn kind(path: &Path) -> Kind {
     if super::text_strip::is_typescript_source(path) {
         Kind::Text
     } else if path.extension().is_some_and(|ext| {
-        ["ttf", "ttc", "otf", "otc"].contains(&ext.to_string_lossy().to_ascii_lowercase().as_str())
+        ["ttf", "ttc", "otf", "otc", "woff"]
+            .contains(&ext.to_string_lossy().to_ascii_lowercase().as_str())
     }) {
         Kind::Font
     } else if little_clip_core::item::is_image_path(path) {
@@ -697,6 +698,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(&std::fs::read(&path).unwrap()[..4], b"OTTO");
+        assert!(matches!(
+            load(&path, &AppConfig::default()).unwrap(),
+            Loaded::Font(_)
+        ));
+    }
+
+    #[test]
+    fn compressed_web_fonts_open_in_the_specimen_viewer() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/latin.woff");
         assert!(matches!(
             load(&path, &AppConfig::default()).unwrap(),
             Loaded::Font(_)

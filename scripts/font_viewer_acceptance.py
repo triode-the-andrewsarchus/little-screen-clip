@@ -44,9 +44,12 @@ def exercise(session, root):
 def main():
     repo = Path(__file__).resolve().parent.parent
     args = application_arguments(__doc__, repo / "target/release/clip-file-manager",
-        lambda parser: parser.add_argument("--extension", choices=["ttf", "otf"], default="ttf"))
+        lambda parser: parser.add_argument("--extension", choices=["ttf", "otf", "woff"], default="ttf"))
     output, root = media_fixture_directory(args)
-    shutil.copyfile(repo / "crates/little-clip-render/assets/fonts/NotoSansCJK-JP-Regular.ttf", root / f"specimen.{args.extension}")
+    source = repo / "crates/little-clip-render/assets/fonts/NotoSansCJK-JP-Regular.ttf"
+    if args.extension == "woff":
+        source = repo / "crates/clip-workbench/tests/fixtures/fonts/latin.woff"
+    shutil.copyfile(source, root / f"specimen.{args.extension}")
     return run_application_acceptance(args, output, root, exercise, "font strip, live specimen, glyph selection/copy and guarded rename")
 
 
