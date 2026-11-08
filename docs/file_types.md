@@ -133,7 +133,7 @@
     - [x] `.wmv`
     - [ ] `.3gp`
     - [ ] `.m2ts`, `.mts`
-    - [ ] `.mpeg`, `.mpg`
+    - [x] `.mpeg`, `.mpg` — MPEG program stream; video playback and timeline strips via FFmpeg
     - [ ] `.vob`
     - [ ] `.3g2` — 3GPP2 multimedia
     - [ ] `.asf`, `.asx` — Advanced Systems Format / Stream Redirector

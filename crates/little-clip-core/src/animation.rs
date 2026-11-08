@@ -62,7 +62,20 @@ pub fn is_video_path(path: &Path) -> bool {
 
     matches!(
         ext.as_deref(),
-        Some("mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "flv" | "wmv" | "ogv" | "ts")
+        Some(
+            "mp4"
+                | "mkv"
+                | "webm"
+                | "mov"
+                | "avi"
+                | "m4v"
+                | "flv"
+                | "wmv"
+                | "ogv"
+                | "ts"
+                | "mpeg"
+                | "mpg"
+        )
     )
 }
 
@@ -478,6 +491,8 @@ mod tests {
         assert!(is_video_path(Path::new("movie.mp4")));
         assert!(is_video_path(Path::new("/path/to/clip.mkv")));
         assert!(is_video_path(Path::new("web.webm")));
+        assert!(is_video_path(Path::new("movie.mpeg")));
+        assert!(is_video_path(Path::new("movie.MPG")));
         assert!(!is_video_path(Path::new("song.mp3")));
         assert!(!is_video_path(Path::new("photo.png")));
     }

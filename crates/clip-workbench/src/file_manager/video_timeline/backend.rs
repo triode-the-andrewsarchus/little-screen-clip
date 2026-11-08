@@ -380,3 +380,80 @@ mod context_tests {
         assert_eq!(frames.try_recv().unwrap().width, 1);
     }
 }
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    // These exercise the real bounded media path, not just extension recognition.
+    #[test]
+    fn added_video_formats_decode_and_produce_list_timeline_strips() {
+        let temporary = tempfile::tempdir().unwrap();
+        for (extension, muxer, codec) in [
+            ("mpg", "mpeg", "mpeg2video"),
+            ("mpeg", "mpeg", "mpeg1video"),
+        ] {
+            let path = temporary.path().join(format!("fixture.{extension}"));
+            let generated = CommandRequest::new("ffmpeg")
+                .args([
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=160x120:rate=25:duration=1",
+                    "-an",
+                    "-c:v",
+                    codec,
+                    "-threads",
+                    "1",
+                    "-f",
+                    muxer,
+                ])
+                .arg(path.as_os_str())
+                .timeout(Duration::from_secs(15))
+                .run()
+                .unwrap();
+            assert!(generated.status.success(), "{}", generated.stderr_lossy());
+            let directory =
+                filesystem::read_directory(temporary.path(), &AtomicBool::new(false)).unwrap();
+            let entry = directory
+                .entries
+                .iter()
+                .find(|entry| entry.path == path)
+                .unwrap();
+            assert!(entry.is_video(), "{extension}");
+            let metadata = media::inspect_video(&path).unwrap();
+            assert_eq!(metadata.dimensions, (160, 120));
+            assert!(metadata.duration_ms > 0);
+            assert!(media::video_preview(&path).is_some());
+            let (inspected, _) = mpsc::sync_channel(1);
+            let (progress, _) = mpsc::sync_channel(1);
+            let rendered = load(
+                &path,
+                entry.revision,
+                48,
+                1,
+                &AtomicBool::new(false),
+                inspected,
+                Progress {
+                    sender: progress,
+                    context: &super::super::super::search::PreviewContext::default(),
+                    path: &path,
+                    cancel: &AtomicBool::new(false),
+                },
+            )
+            .unwrap();
+            let strip = rendered.timeline.unwrap();
+            assert_eq!((strip.width, strip.height), (48, 64));
+            assert!(
+                strip
+                    .premultiplied_rgba
+                    .chunks_exact(4)
+                    .any(|pixel| pixel[0] != pixel[1])
+            );
+            metadata.source.check().unwrap();
+        }
+    }
+}
