@@ -125,6 +125,13 @@ impl Video {
             .spawn()
             .map_err(|e| format!("Cannot start video playback: {e}"))
     }
+    pub(super) fn file_source(&self) -> FileSource {
+        self.prepared.source.clone()
+    }
+    pub(super) fn relocate_file(&mut self, path: PathBuf, source: FileSource) {
+        self.path = path;
+        self.prepared.source = source;
+    }
     pub(super) fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
@@ -132,7 +139,12 @@ impl Video {
         }
         self.status = "Video stopped".into();
     }
-    pub fn ui(&mut self, ui: &mut Ui, close: &mut bool) {
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        close: &mut bool,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
         if let Some(child) = &mut self.child {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -152,7 +164,13 @@ impl Video {
                 Ok(None) => ui.ctx().request_repaint_after(Duration::from_millis(100)),
             }
         }
-        ui.heading("Video playback");
+        let mut shell = crate::shell::StudioShell::new(
+            "Video playback",
+            crate::icons::Icon::Film,
+            palette,
+            close,
+        );
+        shell.render_header(ui, |_| {});
         ui.label(format!(
             "{}×{} · {:.1} seconds",
             self.prepared.dimensions.0,

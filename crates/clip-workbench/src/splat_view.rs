@@ -74,6 +74,20 @@ pub struct SplatViewerState {
 }
 
 impl SplatViewerState {
+    pub(crate) fn file_load_pending(&self) -> bool {
+        self.job.is_some() && self.renderer.is_none() && self.mesh.is_none()
+    }
+    pub(crate) fn relocate_file(&mut self, path: PathBuf) {
+        self.title = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        if let Some(mesh) = &mut self.mesh {
+            mesh.path = Some(path);
+            mesh.title = self.title.clone();
+        }
+    }
     pub fn from_file(path: PathBuf) -> Self {
         let title = path
             .file_name()

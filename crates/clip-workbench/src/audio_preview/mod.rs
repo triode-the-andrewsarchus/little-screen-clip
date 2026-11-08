@@ -1031,6 +1031,18 @@ impl AudioPreviewState {
         self.file_source = Some(source);
         self
     }
+    pub(crate) fn file_source(&self) -> Option<crate::file_source::FileSource> {
+        self.file_source.clone()
+    }
+    pub(crate) fn relocate_file(&mut self, path: PathBuf, source: crate::file_source::FileSource) {
+        self.title = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        self.path = path;
+        self.file_source = Some(source);
+    }
     /// Takes paths published by completed exports, never speculative output names.
     pub(crate) fn take_saved_files(&mut self) -> Vec<PathBuf> {
         std::mem::take(&mut self.completed_saves)

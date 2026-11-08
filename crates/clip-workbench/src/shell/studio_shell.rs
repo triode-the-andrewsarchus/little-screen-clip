@@ -545,6 +545,11 @@ impl<'a> StudioShell<'a> {
         title_actions: impl FnOnce(&mut egui::Ui),
         right_actions: impl FnOnce(&mut egui::Ui),
     ) -> Option<usize> {
+        let file_editor = super::file_editor::FileEditor::current(ui.ctx());
+        if let Some(chrome) = &file_editor {
+            self.title = chrome.title();
+            self.compact_title = None;
+        }
         let palette = self.palette;
         let colors = WorkbenchColors::from_palette(palette);
         let header_accent = match self.icon {
@@ -628,19 +633,21 @@ impl<'a> StudioShell<'a> {
 
                     right_actions(ui);
 
-                    let close_bg = colors.panel;
-                    let close_fg = contrast_text_c32(close_bg, Some(colors.danger), palette);
-                    let close_btn = egui::Button::image_and_text(
-                        Icon::Close.image_tinted(CONTROL_ICON_SIZE, close_fg),
-                        egui::RichText::new("Close (Esc)").strong().color(close_fg),
-                    )
-                    .fill(close_bg)
-                    .stroke(Stroke::new(1.0_f32, colors.recessed))
-                    .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-                    .min_size(Vec2::new(0.0, CONTROL_HEIGHT));
+                    if file_editor.is_none() {
+                        let close_bg = colors.panel;
+                        let close_fg = contrast_text_c32(close_bg, Some(colors.danger), palette);
+                        let close_btn = egui::Button::image_and_text(
+                            Icon::Close.image_tinted(CONTROL_ICON_SIZE, close_fg),
+                            egui::RichText::new("Close (Esc)").strong().color(close_fg),
+                        )
+                        .fill(close_bg)
+                        .stroke(Stroke::new(1.0_f32, colors.recessed))
+                        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
+                        .min_size(Vec2::new(0.0, CONTROL_HEIGHT));
 
-                    if ui.add(close_btn).clicked() {
-                        *self.close = true;
+                        if ui.add(close_btn).clicked() {
+                            *self.close = true;
+                        }
                     }
                 }
 
@@ -682,7 +689,7 @@ impl<'a> StudioShell<'a> {
                 let badges_left = badges_right - badges_width;
                 let badges_min_left = readout_rect
                     .map(|rect| rect.right() + SPACE_SM)
-                    .unwrap_or(row_rect.left() + 80.0);
+                    .unwrap_or(row_rect.left() + file_editor.as_ref().map_or(80.0, |_| 220.0));
                 let show_badges = badges_left >= badges_min_left;
                 if show_badges {
                     let mut badge_x = badges_left;
@@ -766,17 +773,12 @@ impl<'a> StudioShell<'a> {
                             .join(" · ")
                     )
                 };
-                name_ui
-                    .add(
-                        egui::Label::new(
-                            egui::RichText::new(visible_title)
-                                .strong()
-                                .size(22.0)
-                                .color(colors.text_primary),
-                        )
-                        .truncate(true),
-                    )
-                    .on_hover_text(title_tooltip);
+                super::file_editor::FileEditor::title_label(
+                    &mut name_ui,
+                    visible_title,
+                    title_tooltip,
+                    colors.text_primary,
+                );
             });
 
         clicked_hatch
@@ -802,6 +804,13 @@ impl<'a> StudioShell<'a> {
     ) {
         let palette = self.palette;
         let colors = WorkbenchColors::from_palette(palette);
+        let has_photo_controls = super::file_editor::FileEditor::current(ui.ctx())
+            .is_some_and(|chrome| chrome.photo.is_some());
+        let center_width = if has_photo_controls {
+            (center_width + 196.0).min((ui.available_width() - PANEL_INSET * 2.0).max(0.0))
+        } else {
+            center_width
+        };
 
         egui::Frame::none()
             .fill(colors.recessed)
@@ -856,6 +865,9 @@ impl<'a> StudioShell<'a> {
                             |ui| {
                                 ui.set_min_width(center_width);
                                 render_center(ui);
+                                if has_photo_controls {
+                                    super::file_editor::FileEditor::photo_controls(ui);
+                                }
                             },
                         );
                     } else {

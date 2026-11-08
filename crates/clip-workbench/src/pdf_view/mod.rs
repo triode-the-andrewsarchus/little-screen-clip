@@ -610,6 +610,21 @@ impl PdfEditorState {
         self
     }
     /// Reports an accepted page edit or OCR write that must finish before closing.
+    pub(crate) fn relocate_file(&mut self, path: PathBuf) {
+        self.path = path;
+        if self.info_job.is_some() {
+            self.start_info_worker();
+        } else {
+            // Preserve the selected page and viewport while retiring old-path reads.
+            if let Some(job) = &mut self.decode_job {
+                job.cancel();
+            }
+            self.decode_job = None;
+            self.decode_requests.clear();
+            self.document_tools.invalidate_layout();
+            self.start_preview_worker();
+        }
+    }
     pub fn file_write_pending(&self) -> bool {
         self.edit_in_progress || self.document_tools.ocr_busy()
     }

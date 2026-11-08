@@ -289,7 +289,7 @@ impl AudioPreviewState {
             .with_icon(crate::icons::Icon::Volume);
 
         let mut shell = StudioShell::new(
-            format!("AUDIO STUDIO — {}", self.title),
+            self.title.clone(),
             crate::icons::Icon::Audio,
             palette,
             close_requested,

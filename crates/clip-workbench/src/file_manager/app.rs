@@ -258,13 +258,20 @@ impl FileManagerApp {
 }
 
 impl FileManagerApp {
+    fn follow_file_renames(&mut self) {
+        for (source, destination) in self.viewers.take_file_renames() {
+            self.browser.follow_rename(&source, &destination);
+        }
+    }
     fn main_content(&mut self, ctx: &egui::Context) {
         central_panel(ctx, |ui| {
             if self.viewers.active() {
                 self.browser.video_previews.clear();
                 self.browser.previews.retire();
                 self.browser.music_previews.retire();
-                if self.viewers.ui(ui, &self.palette) {
+                let closed = self.viewers.ui(ui, &self.palette);
+                self.follow_file_renames();
+                if closed {
                     if let Some(request) = self.pad_studio.take()
                         && let Some(path) = self.viewers.take_audio_result()
                     {
@@ -555,14 +562,13 @@ impl eframe::App for FileManagerApp {
                     });
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(
-                        egui::Label::new(if self.viewers.active() {
-                            "Back to folder: browse  ·  Ctrl+Q: close"
-                        } else {
-                            "Ctrl+L: address  ·  Ctrl+Q: close"
-                        })
-                        .truncate(true),
-                    );
+                    if self.viewers.active() {
+                        self.viewers.menu_controls(ui);
+                    } else {
+                        ui.add(
+                            egui::Label::new("Ctrl+L: address  ·  Ctrl+Q: close").truncate(true),
+                        );
+                    }
                 });
             });
         });

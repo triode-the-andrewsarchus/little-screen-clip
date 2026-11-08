@@ -20,6 +20,7 @@ pub(crate) mod mounts;
 mod music;
 mod native_drag;
 mod pdf_strip;
+mod photo_ratings;
 mod preview_job;
 mod previews;
 mod scene_strip;

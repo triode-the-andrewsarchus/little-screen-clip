@@ -93,7 +93,12 @@ impl FileSource {
         let destination = parent.join(destination.file_name().ok_or("Missing filename")?);
         self.write_in(&destination, bytes, &directory)
     }
-    fn write_in(&self, destination: &Path, bytes: &[u8], directory: &File) -> Result<Self, String> {
+    pub(crate) fn write_in(
+        &self,
+        destination: &Path,
+        bytes: &[u8],
+        directory: &File,
+    ) -> Result<Self, String> {
         let parent = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
         let target = parent.join(destination.file_name().ok_or("Missing filename")?);
         let mut temporary = tempfile::NamedTempFile::new_in(&parent).map_err(|e| e.to_string())?;

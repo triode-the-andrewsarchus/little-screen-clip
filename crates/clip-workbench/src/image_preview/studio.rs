@@ -141,7 +141,8 @@ impl ImagePreviewState {
             self.fallback_save_needs_focus = false;
             ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         }
-        let image_shortcuts_enabled = !save_modal_active && !ctx.wants_keyboard_input();
+        let image_shortcuts_enabled =
+            ui.is_enabled() && !save_modal_active && !ctx.wants_keyboard_input();
 
         // Global hotkey handling
         if image_shortcuts_enabled && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -197,7 +198,8 @@ impl ImagePreviewState {
         {
             self.redo();
         }
-        let enter_pressed = !save_modal_active && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let enter_pressed =
+            ui.is_enabled() && !save_modal_active && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let enter_from_field = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
         if enter_pressed && (image_shortcuts_enabled || enter_from_field) {
             match self.active_mode {
@@ -662,33 +664,39 @@ impl ImagePreviewState {
         let is_primary_svg = self.is_svg && self.undo_stack.is_empty();
         let is_primary_raster = !is_primary_svg;
 
-        crate::shell::StudioShell::new(
-            format!("IMAGE STUDIO — {}", self.title),
-            Icon::Image,
-            palette,
-            close,
-        )
-        .with_compact_title(self.title.clone())
-        .with_badge(dim_text, Some(hex_to_c32(&palette.harmonies.split_comp_1)))
-        .with_badge(fmt_str, Some(hex_to_c32(&palette.diff_add)))
-        .with_badge(size_str, Some(hex_to_c32(&palette.diff_mod)))
-        .with_escape_hatch(
-            image_editor_hatch("Krita", "krita", &self.external_editor)
-                .with_primary(is_primary_raster)
-                .with_icon(Icon::Palette),
-        )
-        .with_escape_hatch(
-            image_editor_hatch("Inkscape", "inkscape", &self.svg_editor)
-                .with_primary(is_primary_svg)
-                .with_icon(Icon::Pencil),
-        )
-        .with_escape_hatch(
-            image_editor_hatch("Nomacs", "nomacs", &self.viewer)
-                .with_primary(false)
-                .with_icon(Icon::Eye),
-        )
-        .with_footer_hint_icon(crate::icons::Icon::Mouse)
-        .with_footer_hints(image_studio_footer_hint(self.active_mode))
+        let filename = self
+            .path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.title.clone());
+        let title = self
+            .path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(|parent| format!("{filename} — {}", parent.display()))
+            .unwrap_or_else(|| filename.clone());
+        crate::shell::StudioShell::new(title, Icon::Image, palette, close)
+            .with_badge(dim_text, Some(hex_to_c32(&palette.harmonies.split_comp_1)))
+            .with_badge(fmt_str, Some(hex_to_c32(&palette.diff_add)))
+            .with_badge(size_str, Some(hex_to_c32(&palette.diff_mod)))
+            .with_escape_hatch(
+                image_editor_hatch("Krita", "krita", &self.external_editor)
+                    .with_primary(is_primary_raster)
+                    .with_icon(Icon::Palette),
+            )
+            .with_escape_hatch(
+                image_editor_hatch("Inkscape", "inkscape", &self.svg_editor)
+                    .with_primary(is_primary_svg)
+                    .with_icon(Icon::Pencil),
+            )
+            .with_escape_hatch(
+                image_editor_hatch("Nomacs", "nomacs", &self.viewer)
+                    .with_primary(false)
+                    .with_icon(Icon::Eye),
+            )
+            .with_footer_hint_icon(crate::icons::Icon::Mouse)
+            .with_footer_hints(image_studio_footer_hint(self.active_mode))
     }
 
     pub(super) fn render_header(

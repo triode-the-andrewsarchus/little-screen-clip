@@ -92,6 +92,21 @@ impl TextSession {
             |editor| editor.path.as_path(),
         )
     }
+    pub fn file_source(&self) -> Option<FileSource> {
+        self.editor.as_ref().map(|editor| editor.source.clone())
+    }
+    pub fn relocate_file(&mut self, path: PathBuf, source: FileSource) {
+        self.preview.title = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        self.preview.path = Some(path.clone());
+        if let Some(editor) = &mut self.editor {
+            editor.path = path;
+            editor.source = source;
+        }
+    }
     pub fn dirty(&self) -> bool {
         self.editor
             .as_ref()
@@ -116,6 +131,17 @@ impl TextSession {
                 self.mode = mode;
             }
             if self.mode == Mode::Edit {
+                let mut shell = crate::shell::StudioShell::new(
+                    editor
+                        .path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy(),
+                    crate::icons::Icon::Text,
+                    palette,
+                    close,
+                );
+                shell.render_header(ui, |_| {});
                 editor.ui(ui);
                 return;
             }

@@ -1,6 +1,7 @@
 //! Unified StudioShell UI system module.
 
 pub mod escape_hatch;
+pub(crate) mod file_editor;
 pub mod panel;
 pub mod screen_mirror;
 pub mod shortcuts;

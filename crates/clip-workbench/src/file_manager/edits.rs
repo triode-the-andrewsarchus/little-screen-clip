@@ -387,11 +387,15 @@ impl NamingOperation {
     }
 
     fn execute(&self) -> Result<PathBuf, String> {
-        self.preflight()?;
         let directory = little_clip_core::kernel_interface::pin_content_directory(&self.parent)
             .map_err(|e| e.to_string())?;
+        self.execute_in(&directory)
+    }
+
+    fn execute_in(&self, directory: &std::fs::File) -> Result<PathBuf, String> {
+        self.preflight()?;
         if let NamingAction::Content(content) = &self.action {
-            return self.stage_content(content, &directory);
+            return self.stage_content(content, directory);
         }
         let name = CString::new(self.name.as_bytes()).map_err(|error| error.to_string())?;
         let fd = directory.as_raw_fd();
@@ -440,8 +444,51 @@ impl NamingOperation {
         if result < 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        Ok(self.parent.join(&self.name))
+        let destination = self.parent.join(&self.name);
+        if let NamingAction::Rename(source) = &self.action {
+            if let Err(error) = super::photo_ratings::relocate(source, &destination) {
+                tracing::warn!(%error, "File renamed; photo rating could not be relocated");
+            }
+        }
+        Ok(destination)
     }
+}
+
+/// File-backed studios use the same naming validation and no-overwrite installation as Files.
+pub(super) fn rename_file(
+    path: &Path,
+    name: &str,
+    expected: &crate::file_source::FileSource,
+) -> Result<(PathBuf, crate::file_source::FileSource), String> {
+    let operation = NamingOperation {
+        action: NamingAction::Rename(path.into()),
+        parent: path.parent().ok_or("Missing parent")?.into(),
+        name: parse_name(name)?,
+        selection_revision: 0,
+    };
+    operation.preflight()?;
+    let directory = little_clip_core::kernel_interface::pin_content_directory(&operation.parent)
+        .map_err(|e| e.to_string())?;
+    let anchored = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()))
+        .join(path.file_name().ok_or("Missing filename")?);
+    let file =
+        crate::file_source::open_regular_file(&anchored, false).map_err(|e| e.to_string())?;
+    if crate::file_source::FileSource::capture_file(&file)? != *expected {
+        return Err("Source changed outside Files; reload before renaming".into());
+    }
+    if path.file_name() == Some(operation.name.as_os_str()) {
+        return Ok((path.into(), expected.clone()));
+    }
+    let destination = operation.execute_in(&directory)?;
+    let source = crate::file_source::FileSource::capture_file(&file)
+        .map_err(|e| format!("Rename completed, but its new identity is unavailable: {e}"))?;
+    if crate::file_source::FileSource::capture(&destination)
+        .map_err(|e| format!("Rename completed, but its destination is unavailable: {e}"))?
+        != source
+    {
+        return Err("Rename completed but the destination changed; inspect the folder".into());
+    }
+    Ok((destination, source))
 }
 
 // Path::strip_prefix compares components, so renaming "a" never rewrites "ab".

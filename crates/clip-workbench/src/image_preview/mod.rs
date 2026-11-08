@@ -167,6 +167,7 @@ pub struct ImagePreviewState {
     save_job: Option<save::ImageSaveJob>,
     file_source: Option<crate::file_source::FileSource>,
     saved_stamp: Option<ImageInputStamp>,
+    opened_stamp: Option<ImageInputStamp>,
     copy_job: Option<save::ImageCopyJob>,
     copy_requested: Option<HandSide>,
     rendering_frame: bool,
@@ -594,6 +595,7 @@ impl ImagePreviewState {
             save_job: None,
             file_source: None,
             saved_stamp: None,
+            opened_stamp: None,
             copy_job: None,
             copy_requested: None,
             rendering_frame: false,
@@ -766,10 +768,38 @@ impl ImagePreviewState {
     pub fn with_file_source(mut self, source: crate::file_source::FileSource) -> Self {
         self.file_source = Some(source);
         self.saved_stamp = Some(self.input_stamp());
+        self.opened_stamp = self.saved_stamp.clone();
         self
     }
 
     /// Reports edits made since this file-backed session's last successful save.
+    pub(crate) fn has_collection_edits(&self) -> bool {
+        self.opened_stamp
+            .as_ref()
+            .is_some_and(|opened| *opened != self.input_stamp())
+    }
+
+    pub(crate) fn file_write_pending(&self) -> bool {
+        self.save_job.is_some() || self.copy_job.is_some()
+    }
+    pub(crate) fn file_source(&self) -> Option<crate::file_source::FileSource> {
+        self.file_source.clone()
+    }
+
+    pub(crate) fn mark_collection_exported(&mut self, stamp: ImageInputStamp) {
+        self.saved_stamp = Some(stamp);
+    }
+
+    pub(crate) fn relocate_file(&mut self, path: PathBuf, source: crate::file_source::FileSource) {
+        self.title = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into();
+        self.path = Some(path);
+        self.file_source = Some(source);
+    }
+
     pub fn has_unsaved_changes(&self) -> bool {
         self.saved_stamp
             .as_ref()

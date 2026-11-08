@@ -627,6 +627,17 @@ impl EntryPreviews {
     }
     pub fn show_gallery(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
         self.show_inner(ui, rect, entry, true);
+        let id = self.identity(entry);
+        if let Some(ready) = self.cache.get(id) {
+            let rating = ready.data.photo_rating;
+            if rating > 0 {
+                let badge = egui::Rect::from_min_size(
+                    rect.left_bottom() + egui::vec2(4.0, -20.0),
+                    egui::vec2(rating as f32 * 13.0 + 8.0, 16.0),
+                );
+                super::photo_ratings::paint_badge(ui, badge, rating);
+            }
+        }
     }
     fn show_inner(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry, gallery: bool) {
         let id = self.identity(entry);

@@ -26,6 +26,10 @@ pub(in crate::file_manager) enum Source {
         edge: u32,
         orientation: u8,
     },
+    StudioPhoto {
+        path: PathBuf,
+        snapshot: Option<crate::image_preview::DisplayImageSnapshotRequest>,
+    },
     Photo {
         path: PathBuf,
         revision: u64,
@@ -73,9 +77,11 @@ impl Source {
         match self {
             Self::System(_) => (super::super::system::jobs(), 2, 3),
             Self::Music(..) => (music_preview_jobs(), music_preview_workers(), 30),
-            Self::Gallery { .. } | Self::PdfPage { .. } | Self::Photo { .. } | Self::Blend(_) => {
-                (gallery_preview_jobs(), 4, 15)
-            }
+            Self::Gallery { .. }
+            | Self::PdfPage { .. }
+            | Self::Photo { .. }
+            | Self::StudioPhoto { .. }
+            | Self::Blend(_) => (gallery_preview_jobs(), 4, 15),
             Self::Text(_)
             | Self::Font(_)
             | Self::FontRaster { .. }
@@ -90,6 +96,18 @@ impl Source {
     }
     fn load(self, token: &AtomicBool) -> Data {
         match self {
+            Source::StudioPhoto { path, snapshot } => {
+                let mut data = Data::new(display_path(&path), "Photo".into(), Icon::Image);
+                data.image = if let Some(snapshot) = snapshot {
+                    let image = image::DynamicImage::ImageRgba8(snapshot.compose())
+                        .thumbnail(160, 100)
+                        .to_rgba8();
+                    Some(ImageThumbnail::from_rgba(image))
+                } else {
+                    super::super::gallery::thumbnail::load(&path, 160, 1, token)
+                };
+                data
+            }
             Source::Payload(payload) => payload_preview(&payload),
             Source::Slot(slot, expected) => slot_preview(slot, expected),
             Source::Gallery {
@@ -719,6 +737,7 @@ fn gallery_preview(
     cancelled: &AtomicBool,
 ) -> Data {
     let mut data = Data::new(display_path(path), "Photo".into(), Icon::Image);
+    data.photo_rating = super::super::photo_ratings::load(path).unwrap_or(0);
     if cancelled.load(Ordering::Relaxed) {
         return data;
     }

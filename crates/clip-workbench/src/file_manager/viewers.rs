@@ -17,7 +17,9 @@ use std::{
     time::Duration,
 };
 
+mod chrome;
 mod gallery;
+mod rename;
 mod video;
 
 enum Loaded {
@@ -51,7 +53,7 @@ struct Loading {
     response_deadline: Option<std::time::Instant>,
     ticket: JobTicket,
     path: PathBuf,
-    receiver: mpsc::Receiver<Result<Result<Loaded, String>, JobError>>,
+    receiver: mpsc::Receiver<Result<Result<(Loaded, Option<FileSource>), String>, JobError>>,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl Drop for Loading {
@@ -63,6 +65,16 @@ impl Drop for Loading {
 }
 #[derive(Default)]
 pub(super) struct Viewers {
+    source: Option<FileSource>,
+    source_path: Option<PathBuf>,
+    source_request: Option<(
+        PathBuf,
+        mpsc::Receiver<Result<Result<FileSource, String>, JobError>>,
+    )>,
+    rename: rename::Rename,
+    renamed: Vec<(PathBuf, PathBuf)>,
+    close_requested: bool,
+    office_preview: bool,
     loading: Option<Loading>,
     session: Option<ViewerSession>,
     path: Option<PathBuf>,
@@ -131,9 +143,19 @@ impl Viewers {
         let worker = cancelled.clone();
         let (ticket, receiver) = executor.submit(Duration::from_secs(120), move || {
             if system {
-                super::system::collect(&source, &worker).map(Loaded::System)
+                super::system::collect(&source, &worker)
+                    .map(|document| (Loaded::System(document), None))
             } else {
-                load(&source, &config)
+                let identity = FileSource::capture(&source);
+                let loaded = load(&source, &config)?;
+                let identity = if matches!(&loaded, Loaded::System(_)) {
+                    None
+                } else {
+                    let identity = identity?;
+                    identity.check()?;
+                    Some(identity)
+                };
+                Ok((loaded, identity))
             }
         });
         self.loading = Some(Loading {
@@ -180,6 +202,12 @@ impl Viewers {
         };
         let path = self.loading.take().unwrap().path.clone();
         self.path = Some(path.clone());
+        let result = result.map(|(loaded, source)| {
+            self.source = source;
+            self.source_path = Some(path.clone());
+            self.office_preview = matches!(&loaded, Loaded::OfficePdf { .. });
+            loaded
+        });
         match result {
             Ok(Loaded::External) => {
                 self.open_external();
@@ -216,24 +244,14 @@ impl Viewers {
     }
     pub fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) -> bool {
         self.poll(ui.ctx());
+        self.poll_file_source(ui.ctx());
+        let mut close = std::mem::take(&mut self.close_requested);
         self.gallery_controls(ui);
-        ui.set_enabled(!self.confirm_close && !self.audio_return_saving);
-        let mut close = false;
-        ui.horizontal(|ui| {
-            close = ui.button("Back to folder").clicked();
-            let ordinary = !matches!(self.session, Some(ViewerSession::System(_)));
-            if self.path.is_some() && ordinary && ui.button("Open externally").clicked() {
-                self.open_external();
-            }
-            let path = self
-                .path
-                .as_ref()
-                .or_else(|| self.loading.as_ref().map(|job| &job.path))
-                .map_or_else(String::new, |path| super::display_path(path));
-            ui.add(egui::Label::new(&path).truncate(true))
-                .on_hover_text(path);
-        });
-        ui.separator();
+        let blocked = self.collection_pending()
+            || self.collection_modal()
+            || self.rename.open
+            || self.rename.busy();
+        let editor_enabled = !self.confirm_close && !self.audio_return_saving && !blocked;
         if self.loading.is_some() {
             ui.spinner();
             ui.label("Opening file…");
@@ -241,7 +259,11 @@ impl Viewers {
         if let Some(error) = &self.error {
             ui.label(error);
         }
-        self.render_session(ui, palette, &mut close);
+        ui.add_enabled_ui(editor_enabled, |ui| {
+            self.render_file_session(ui, palette, &mut close)
+        });
+        // Dialogs paint after the disabled editor, whose focus registrations must not steal typing.
+        self.rename_ui(ui);
         self.poll_audio_return();
         if self.session.is_none() {
             close |=
@@ -326,7 +348,13 @@ impl Viewers {
                 ViewerSession::System(state) => self.path = Some(state.document.path.clone()),
                 ViewerSession::Image(state) => self.path = state.path.clone(),
                 ViewerSession::Text(state) => self.path = Some(state.path().to_path_buf()),
-                ViewerSession::Pdf(state) => self.path = Some(state.path.clone()),
+                ViewerSession::Pdf(state) if !self.office_preview => {
+                    self.path = Some(state.path.clone())
+                }
+                ViewerSession::Audio(state) => self.path = Some(state.path.clone()),
+                ViewerSession::Sheet(state) => self.path = state.path.clone(),
+                ViewerSession::Midi(state) => self.path = state.path.clone(),
+                ViewerSession::Model(state) => self.path = state.path.clone(),
                 _ => {}
             }
         }
@@ -335,42 +363,20 @@ impl Viewers {
         self.system_navigation.take()
     }
     pub fn request_close(&mut self) -> bool {
-        self.pause_slideshow();
-        if let Some(ViewerSession::Pdf(state)) = &self.session
-            && state.file_write_pending()
-        {
-            self.error = Some("Wait for PDF editing to finish.".into());
+        if self.rename.open {
+            self.rename.open = false;
             return false;
         }
-        if let Some(ViewerSession::Audio(state)) = &self.session {
-            if state.file_write_pending() {
-                self.error = Some("Wait for audio export to finish.".into());
-                return false;
-            }
-            if self.pad_audio || state.has_session_edits() {
-                self.confirm_close = true;
-                return false;
-            }
-        }
-        if let Some(ViewerSession::Text(state)) = &self.session {
-            if state.busy() {
-                self.error = Some("Wait for text save to finish.".into());
-                return false;
-            }
-            if state.dirty() {
-                self.confirm_close = true;
-                return false;
-            }
-        }
         if let Some(ViewerSession::Image(state)) = &mut self.session {
-            if state.poll_cached_jobs() {
-                self.error = Some("Wait for image save/copy to finish before closing.".into());
-                return false;
-            }
-            if state.has_unsaved_changes() {
-                self.confirm_close = true;
-                return false;
-            }
+            state.poll_cached_jobs();
+        }
+        if self.rename.busy() || self.collection_pending() || self.writes_pending() {
+            self.error = Some("Wait for file save, export or copy to finish.".into());
+            return false;
+        }
+        if self.session_dirty() || self.collection_dirty() {
+            self.confirm_close = true;
+            return false;
         }
         self.clear();
         self.gallery = None;
@@ -384,6 +390,10 @@ impl Viewers {
             state.stop();
         }
         self.session = None;
+        self.source = None;
+        self.source_path = None;
+        self.source_request = None;
+        self.office_preview = false;
         self.loading = None;
         self.path = None;
         self.error = None;
@@ -602,7 +612,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
         ViewerSession::Midi(state) => state.render_ui(ui, palette, close),
         ViewerSession::Model(state) => state.render_ui(ui, palette, close),
         ViewerSession::Scene(state) => state.render_ui(ui, palette, close),
-        ViewerSession::Video(state) => state.ui(ui, close),
+        ViewerSession::Video(state) => state.ui(ui, close, palette),
     }
 }
 pub(super) fn external(path: PathBuf) -> Result<(), String> {
