@@ -890,6 +890,46 @@ mod tests {
     use image::GenericImageView;
 
     #[test]
+    fn jpeg_xl_edits_export_to_png_without_changing_original_or_existing_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.jxl");
+        let original = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../little-clip-core/tests/fixtures/panels-alpha16.jxl"
+        ));
+        std::fs::write(&path, original).unwrap();
+        let mut state = ImagePreviewState::from_path(path.clone(), &AppConfig::default())
+            .unwrap()
+            .with_file_source(crate::file_source::FileSource::capture(&path).unwrap());
+        Arc::make_mut(&mut state.current_rgba).put_pixel(0, 0, image::Rgba([255, 0, 0, 128]));
+        state.mark_pixels_changed();
+        state.open_save_dialog();
+        assert!(state.fallback_save_path.ends_with("source.png"));
+        state.save_image_to_path(&path);
+        wait_for_save(&mut state);
+        assert!(state.has_unsaved_changes());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let exported = dir.path().join("edited.png");
+        state.save_image_to_path(&exported);
+        wait_for_save(&mut state);
+        assert!(!state.has_unsaved_changes());
+        assert_eq!(
+            image::open(&exported).unwrap().to_rgba8().get_pixel(0, 0).0,
+            [255, 0, 0, 128]
+        );
+        let bytes = std::fs::read(&exported).unwrap();
+        state.mark_pixels_changed();
+        // Save As must not replace an unrelated existing file.
+        let collision = dir.path().join("existing.png");
+        std::fs::write(&collision, &bytes).unwrap();
+        state.save_image_to_path(&collision);
+        wait_for_save(&mut state);
+        assert!(state.has_unsaved_changes());
+        assert_eq!(std::fs::read(collision).unwrap(), bytes);
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+
+    #[test]
     fn file_backed_save_tracks_revision_and_refuses_external_changes_and_collisions() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("source.png");

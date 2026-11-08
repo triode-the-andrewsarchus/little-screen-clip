@@ -63,7 +63,7 @@
     - [x] `.webp` — still and animated
       - [ ] EXIF, XMP, and ICC profile chunks
       - [ ] Animation frame timing and canvas size metadata
-    - [ ] `.jxl` — JPEG XL
+    - [x] `.jxl` — JPEG XL still images (codestream and container, RGB/grayscale/alpha, 8/16-bit and float); shared photo previews and Image Studio edits with raster export; original JPEG XL bytes preserved (no JPEG XL encoder or animation playback)
     - [ ] `.jp2`, `.j2k`, `.jpf` — JPEG 2000
     - [ ] `.psd` — Photoshop
       - [ ] Layer hierarchy, blend modes, layer masks, and image resource blocks (slices, guides, IPTC/XMP)

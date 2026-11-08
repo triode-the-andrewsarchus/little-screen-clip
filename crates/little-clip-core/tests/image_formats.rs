@@ -17,10 +17,129 @@ fn all_enabled_formats_are_classified_case_insensitively() {
             }
         }
     }
-    for ext in ["svg", "HEIC", "HeIf"] {
+    for ext in ["svg", "HEIC", "HeIf", "JxL"] {
         assert!(is_image_path(Path::new(&format!("image.{ext}"))));
     }
     assert!(!is_image_path(Path::new("file.txt")));
+}
+
+#[test]
+fn jpeg_xl_codestream_and_container_decode_with_limits_and_preserve_alpha() {
+    use image::ImageDecoder;
+    for (bytes, alpha) in [
+        (include_bytes!("fixtures/panels.jxl").as_slice(), false),
+        (
+            include_bytes!("fixtures/panels-alpha16.jxl").as_slice(),
+            true,
+        ),
+    ] {
+        assert_eq!(guess_image_mime(Path::new("photo.JXL")), "image/jxl");
+        assert_eq!(image_extension_for_mime("image/jxl"), Some("jxl"));
+        assert_eq!(read_image_dimensions(bytes), Some((64, 32)));
+        let decoder = image_reader(bytes, Some("image/png"))
+            .unwrap()
+            .into_decoder()
+            .unwrap();
+        assert_eq!(
+            decoder.color_type(),
+            if alpha {
+                image::ColorType::Rgba16
+            } else {
+                image::ColorType::Rgb8
+            }
+        );
+        let decoded = DynamicImage::from_decoder(decoder).unwrap().to_rgba8();
+        assert_eq!(
+            decoded.get_pixel(0, 0).0,
+            [30, 120, 210, if alpha { 128 } else { 255 }]
+        );
+        assert_eq!(decoded.get_pixel(63, 31).0, [180, 60, 40, 255]);
+        let thumbnail = ImageThumbnail::generate(bytes, 16, 16).unwrap();
+        assert_eq!((thumbnail.width, thumbnail.height), (16, 8));
+        assert_eq!(
+            &thumbnail.premultiplied_rgba[..4],
+            if alpha {
+                &[15, 60, 105, 128]
+            } else {
+                &[30, 120, 210, 255]
+            }
+        );
+        let item = ClipItem::from_image_bytes(bytes.to_vec(), "image/jxl").unwrap();
+        let ClipPayload::Image {
+            path,
+            width,
+            height,
+            mime,
+            ..
+        } = item.payload
+        else {
+            panic!("JPEG XL payload")
+        };
+        assert_eq!((width, height), (64, 32));
+        assert_eq!(mime, "image/jxl");
+        assert_eq!(path.unwrap().extension().unwrap(), "jxl");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.JXL");
+        std::fs::write(&path, bytes).unwrap();
+        assert!(matches!(
+            ClipItem::from_text(path.to_str().unwrap()).payload,
+            ClipPayload::Image {
+                width: 64,
+                height: 32,
+                ..
+            }
+        ));
+        for allocation_limit in [false, true] {
+            let mut reader = image_reader(bytes, None).unwrap();
+            let mut limits = little_clip_core::item::raster_preview_limits();
+            if allocation_limit {
+                limits.max_alloc = Some(8);
+            } else {
+                limits.max_image_width = Some(63);
+            }
+            reader.limits(limits);
+            assert!(reader.decode().is_err());
+        }
+    }
+    for bytes in [b"\xff\x0a".as_slice(), b"\0\0\0\x0cJXL \r\n\x87\n"] {
+        assert!(ClipItem::from_image_bytes(bytes.to_vec(), "image/jxl").is_none());
+    }
+    assert!(
+        ClipItem::from_image_bytes(
+            include_bytes!("fixtures/gradient.avif").to_vec(),
+            "image/jxl"
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn jpeg_xl_grayscale_and_float_keep_native_sample_depths() {
+    use image::ImageDecoder;
+    for (bytes, color) in [
+        (
+            include_bytes!("fixtures/gray16.jxl").as_slice(),
+            image::ColorType::L16,
+        ),
+        (
+            include_bytes!("fixtures/float.jxl").as_slice(),
+            image::ColorType::Rgb32F,
+        ),
+    ] {
+        let decoder = image_reader(bytes, None).unwrap().into_decoder().unwrap();
+        assert_eq!(decoder.color_type(), color);
+        assert_eq!(decoder.dimensions(), (8, 6));
+        let decoded = DynamicImage::from_decoder(decoder).unwrap();
+        if color == image::ColorType::L16 {
+            assert_eq!(decoded.as_luma16().unwrap().get_pixel(0, 0).0, [16384]);
+        } else {
+            let sample = decoded.as_rgb32f().unwrap().get_pixel(0, 0).0;
+            for (actual, expected) in sample.into_iter().zip([0.25, 0.5, 0.75]) {
+                assert!((actual - expected).abs() < 0.001, "{sample:?}");
+            }
+        }
+        assert!(ImageThumbnail::generate(bytes, 4, 4).is_some());
+    }
 }
 
 #[test]

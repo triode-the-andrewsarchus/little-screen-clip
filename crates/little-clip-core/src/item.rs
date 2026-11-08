@@ -126,6 +126,7 @@ pub fn image_extension_for_mime(mime: &str) -> Option<&'static str> {
         "image/svg+xml" => Some("svg"),
         "image/heif" => Some("heif"),
         "image/heic" => Some("heic"),
+        "image/jxl" => Some("jxl"),
         "image/x-farbfeld" => Some("ff"),
         "image/jpg" => Some("jpg"),
         _ => image::ImageFormat::from_mime_type(mime)
@@ -143,7 +144,7 @@ pub fn raster_preview_limits() -> image::Limits {
     limits
 }
 
-/// Creates a raster reader with HEIF/HEIC/AVIF decoding and an optional format hint.
+/// Creates a raster reader with HEIF/HEIC/AVIF and JPEG XL decoding and a format hint.
 ///
 /// Byte signatures take precedence over the hint. TGA has no reliable signature,
 /// so callers reading files should supply their MIME type.
@@ -157,7 +158,10 @@ pub fn image_reader<'a>(
     mime: Option<&str>,
 ) -> image::ImageResult<image::ImageReader<std::io::Cursor<&'a [u8]>>> {
     static CODECS: std::sync::Once = std::sync::Once::new();
-    CODECS.call_once(libheif_rs::integration::image::register_all_decoding_hooks);
+    CODECS.call_once(|| {
+        libheif_rs::integration::image::register_all_decoding_hooks();
+        jxl_oxide::integration::register_image_decoding_hook();
+    });
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
     let mime = match mime {
         Some("image/jpg") => Some("image/jpeg"),
@@ -193,6 +197,12 @@ fn image_mime_matches_bytes(mime: &str, bytes: &[u8]) -> bool {
 
     if matches!(mime, "image/heif" | "image/heic") {
         return bytes.get(4..8) == Some(b"ftyp")
+            && image_reader(bytes, None)
+                .and_then(|reader| reader.into_dimensions())
+                .is_ok();
+    }
+    if mime == "image/jxl" {
+        return (bytes.starts_with(b"\xff\x0a") || bytes.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n"))
             && image_reader(bytes, None)
                 .and_then(|reader| reader.into_dimensions())
                 .is_ok();
@@ -1313,7 +1323,7 @@ pub fn is_image_path(p: &Path) -> bool {
     if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
         matches!(
             ext.to_lowercase().as_str(),
-            "svg" | "svgz" | "heif" | "heic"
+            "svg" | "svgz" | "heif" | "heic" | "jxl"
         ) || image::ImageFormat::from_extension(ext)
             .is_some_and(|format| format.reading_enabled() || format == image::ImageFormat::Avif)
     } else {
@@ -1332,6 +1342,7 @@ pub fn guess_image_mime(p: &Path) -> String {
         "svg" | "svgz" => "image/svg+xml".to_string(),
         "heif" => "image/heif".to_string(),
         "heic" => "image/heic".to_string(),
+        "jxl" => "image/jxl".to_string(),
         "ff" => "image/x-farbfeld".to_string(),
         _ => image::ImageFormat::from_extension(&ext)
             .map(|format| format.to_mime_type())

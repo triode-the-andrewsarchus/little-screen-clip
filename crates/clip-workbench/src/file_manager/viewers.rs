@@ -799,8 +799,12 @@ mod tests {
     }
 
     #[test]
-    fn native_jfif_and_svgz_keep_sources_and_use_bounded_photo_previews() {
-        for (extension, mime) in [("JFIF", "image/jpeg"), ("SVGZ", "image/svg+xml")] {
+    fn native_image_formats_keep_sources_and_use_bounded_photo_previews() {
+        for (extension, mime) in [
+            ("JFIF", "image/jpeg"),
+            ("SVGZ", "image/svg+xml"),
+            ("JXL", "image/jxl"),
+        ] {
             let vector = extension == "SVGZ";
             if vector
                 && std::process::Command::new("rsvg-convert")
@@ -821,13 +825,22 @@ mod tests {
                     )),
                 )
                 .unwrap();
+            } else if extension == "JXL" {
+                std::fs::write(
+                    &path,
+                    include_bytes!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../little-clip-core/tests/fixtures/panels.jxl"
+                    )),
+                )
+                .unwrap();
             } else {
                 image::RgbImage::from_pixel(64, 32, image::Rgb([40, 80, 120]))
                     .save_with_format(&path, image::ImageFormat::Jpeg)
                     .unwrap();
             }
             let original = std::fs::read(&path).unwrap();
-            if !vector {
+            if extension == "JFIF" {
                 assert!(original.windows(5).any(|bytes| bytes == b"JFIF\0"));
             }
             let directory = super::super::filesystem::read_directory(
