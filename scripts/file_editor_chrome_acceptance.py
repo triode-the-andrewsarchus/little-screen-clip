@@ -9,8 +9,9 @@ from file_manager_acceptance import application_arguments, media_fixture_directo
 from file_manager_phase4_acceptance import open_file
 
 
-def exercise(session, root, audio_extension):
+def exercise(session, root, audio_extension, audio_only=False):
     audio = f"music.{audio_extension}"
+    audio_source = (root / audio).read_bytes()
     cases = [
         ("notes.txt", "renamed.txt", []),
         (audio, "renamed" + Path(audio).suffix, ["Selection info"]),
@@ -22,6 +23,8 @@ def exercise(session, root, audio_extension):
         ("letter.rtf", "renamed.rtf", []),
         ("clip.mp4", "renamed.mp4", ["Replay video"]),
     ]
+    if audio_only:
+        cases = cases[1:2]
     for index, (original, renamed, evidence) in enumerate(cases):
         open_file(session, root, original, f"{index:02d}-browser")
         name = f"{index:02d}-studio"
@@ -40,6 +43,7 @@ def exercise(session, root, audio_extension):
         assert "Photo renamed" not in text
         if original == audio:
             assert "Track gain" not in text
+            assert (root / renamed).read_bytes() == audio_source
         # Back is in the same top menu for every studio, regardless of its internal docks.
         session.click(1110, 70)
         session.observe(f"{index:02d}-returned", ["Ctrl+L"])
@@ -47,13 +51,17 @@ def exercise(session, root, audio_extension):
 
 
 def main():
+    def configure(parser):
+        parser.add_argument("--audio-extension", choices=["wav", "m4b", "mp2", "adts"], default="wav")
+        parser.add_argument("--audio-only", action="store_true", help="Check the chosen audio format without the other editor fixtures")
+
     args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager",
-        lambda parser: parser.add_argument("--audio-extension", choices=["wav", "m4b", "mp2"], default="wav"))
+        configure)
     output, root = media_fixture_directory(args)
     (root / "notes.txt").write_text("A plain text fixture\n")
     fixture.wav_fixture(root / "music.wav", 2, "tone")
     if args.audio_extension != "wav":
-        codec, container = {"m4b": ("aac", "ipod"), "mp2": ("mp2", "mp2")}[args.audio_extension]
+        codec, container = {"m4b": ("aac", "ipod"), "mp2": ("mp2", "mp2"), "adts": ("aac", "adts")}[args.audio_extension]
         subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(root / "music.wav"), "-c:a", codec, "-f", container, str(root / f"music.{args.audio_extension}")], check=True, timeout=15)
         (root / "music.wav").unlink()
     fixture.pdf_fixture(root, 2, "document.pdf")
@@ -65,7 +73,8 @@ def main():
     (root / "scene.splat").write_bytes(struct.pack("<6f8B", 0, 0, 0, .1, .1, .1, 220, 80, 40, 255, 255, 128, 128, 128))
     (root / "letter.rtf").write_text(r"{\rtf1\ansi A document fixture\par}")
     subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=160x120:d=2", "-c:v", "mpeg4", str(root / "clip.mp4")], check=True, timeout=15)
-    return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.audio_extension), "shared Files chrome and guarded rename across all built-in editors")
+    scope = "Files audio editor, source-preserving rename and folder return" if args.audio_only else "shared Files chrome and guarded rename across all built-in editors"
+    return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.audio_extension, args.audio_only), scope)
 
 
 if __name__ == "__main__":

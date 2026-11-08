@@ -874,7 +874,11 @@ fn search_source_validation_rejects_audio_exports_before_outputs_and_keeps_compl
 
 #[test]
 fn compressed_audio_decodes_waveforms_and_exports_without_overwriting() {
-    for (extension, codec, container) in [("m4b", "aac", "ipod"), ("mp2", "mp2", "mp2")] {
+    for (extension, codec, container) in [
+        ("m4b", "aac", "ipod"),
+        ("mp2", "mp2", "mp2"),
+        ("adts", "aac", "adts"),
+    ] {
         let (directory, wav) = generate_fixture_wav("compressed_audio", 1.0);
         let path = directory
             .path()
@@ -909,6 +913,10 @@ fn compressed_audio_decodes_waveforms_and_exports_without_overwriting() {
         let audio = crate::file_source::open_regular_file(&path, true).unwrap();
         let mut decoder = rodio::Decoder::try_from(audio).unwrap();
         assert!(decoder.next().is_some());
+        for position in [Duration::from_millis(500), Duration::ZERO] {
+            decoder.try_seek(position).unwrap();
+            assert!(decoder.next().is_some());
+        }
         let analysis = compute_full_audio_analysis(&path, 128).unwrap();
         assert!(!analysis.ch1_samples.is_empty());
         let existing = directory.path().join(format!("existing.{extension}"));

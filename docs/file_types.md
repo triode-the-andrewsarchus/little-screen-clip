@@ -175,7 +175,7 @@
   - [ ] `.tta`
   - [ ] `.wv`
   - [ ] `.wma`
-  - [ ] `.adts` — Audio Data Transport Stream (raw AAC)
+  - [x] `.adts` — Audio Data Transport Stream (AAC-LC); Audio Studio, playback, waveform strips and region export
   - [ ] `.au`, `.snd` — Sun/NeXT audio (May need disambiguation with Akai MPC sound samples on `.snd`)
   - [ ] `.caf` — Apple Core Audio Format
   - [ ] `.dts`, `.dtshd` — DTS / DTS-HD audio (May need disambiguation with Device Tree Source files on `.dts`)
