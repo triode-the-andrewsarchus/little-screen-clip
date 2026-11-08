@@ -135,7 +135,7 @@
     - [x] `.3gp` — 3GPP video; playback and timeline strips via FFmpeg
     - [ ] `.m2ts`, `.mts`
     - [x] `.mpeg`, `.mpg` — MPEG program stream; video playback and timeline strips via FFmpeg
-    - [ ] `.vob`
+    - [x] `.vob` — DVD video objects; playback and timeline strips via FFmpeg
     - [x] `.3g2` — 3GPP2 multimedia; playback and timeline strips via FFmpeg
     - [ ] `.asf`, `.asx` — Advanced Systems Format / Stream Redirector
     - [ ] `.f4v` — Flash MP4 video
