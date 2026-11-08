@@ -4,82 +4,7 @@ use std::io::Read;
 
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 
-/// One source layer or group, in display order.
-#[derive(Clone, Debug)]
-pub struct Layer {
-    /// Original Unicode name.
-    pub name: String,
-    /// Top, left, bottom and right in original document coordinates.
-    pub bounds: [i32; 4],
-    /// Layer opacity, from zero to 255.
-    pub opacity: u8,
-    /// Source visibility flag.
-    pub visible: bool,
-    /// Photoshop's four-character blend key.
-    pub blend_mode: String,
-    /// Nesting level within groups.
-    pub depth: usize,
-    /// Whether this entry begins a group.
-    pub group: bool,
-    /// Presence of a raster mask.
-    pub mask: bool,
-    /// Presence of a vector mask.
-    pub vector_mask: bool,
-}
-
-impl Layer {
-    /// Returns the standard blend-mode name, retaining unknown source keys.
-    pub fn blend_name(&self) -> &str {
-        [
-            ("pass", "Pass through"),
-            ("norm", "Normal"),
-            ("diss", "Dissolve"),
-            ("dark", "Darken"),
-            ("mul ", "Multiply"),
-            ("idiv", "Color burn"),
-            ("lbrn", "Linear burn"),
-            ("dkCl", "Darker color"),
-            ("lite", "Lighten"),
-            ("scrn", "Screen"),
-            ("div ", "Color dodge"),
-            ("lddg", "Linear dodge"),
-            ("lgCl", "Lighter color"),
-            ("over", "Overlay"),
-            ("sLit", "Soft light"),
-            ("hLit", "Hard light"),
-            ("vLit", "Vivid light"),
-            ("lLit", "Linear light"),
-            ("pLit", "Pin light"),
-            ("hMix", "Hard mix"),
-            ("diff", "Difference"),
-            ("smud", "Exclusion"),
-            ("fsub", "Subtract"),
-            ("fdiv", "Divide"),
-            ("hue ", "Hue"),
-            ("sat ", "Saturation"),
-            ("colr", "Color"),
-            ("lum ", "Luminosity"),
-        ]
-        .into_iter()
-        .find_map(|(key, name)| (key == self.blend_mode).then_some(name))
-        .unwrap_or(self.blend_mode.trim())
-    }
-}
-
-/// Original document information; contains no layer pixel buffers.
-#[derive(Clone, Debug)]
-pub struct Summary {
-    /// Width and height in pixels.
-    pub dimensions: (u32, u32),
-    /// Original bits per channel.
-    pub depth: i32,
-    /// Original color mode.
-    pub color_mode: String,
-    /// Layers and groups, with group-end markers omitted.
-    pub layers: Vec<Layer>,
-    /// Number of saved paths.
-    pub paths: usize,
-}
+pub use crate::image_document::{Layer, Summary};
 
 /// Reads layer and path metadata without loading composite or layer pixels.
 ///
@@ -88,7 +13,7 @@ pub struct Summary {
 pub fn inspect(bytes: &[u8]) -> Result<Summary, String> {
     let header = Header::read(bytes).map_err(|e| e.to_string())?;
     let mut doc = tinypsd::load(bytes, &header.options(false)).map_err(|e| e.to_string())?;
-    use tinypsd::SectionDivider::*;
+    use tinypsd::SectionDivider::{BoundingSectionDivider, ClosedFolder, OpenFolder};
     if doc
         .layers
         .iter()
@@ -113,14 +38,16 @@ pub fn inspect(bytes: &[u8]) -> Result<Summary, String> {
         layers.push(Layer {
             blend_mode: layer.blend_mode_str(),
             name: layer.name,
-            bounds: [
+            bounds: Some([
                 layer.bounds.top,
                 layer.bounds.left,
                 layer.bounds.bottom,
                 layer.bounds.right,
-            ],
-            opacity: layer.opacity,
-            visible: layer.visible,
+            ]),
+            offset: None,
+            kind: None,
+            opacity: Some(layer.opacity),
+            visible: Some(layer.visible),
             depth,
             group,
             mask: layer.mask.is_some(),
@@ -130,7 +57,8 @@ pub fn inspect(bytes: &[u8]) -> Result<Summary, String> {
     }
     Ok(Summary {
         dimensions: (header.width, header.height),
-        depth: doc.header.depth,
+        depth: Some(doc.header.depth),
+        profile: None,
         color_mode: format!("{:?}", doc.header.color_mode),
         layers,
         paths: doc.paths.len(),

@@ -143,7 +143,7 @@ fn raster(
     cancelled: &AtomicBool,
 ) -> Option<ImageThumbnail> {
     let limits = super::super::media::raster_preview_limits();
-    if mime == "image/vnd.adobe.photoshop" {
+    if matches!(mime, "image/vnd.adobe.photoshop" | "application/x-krita") {
         if cancelled.load(Ordering::Relaxed) {
             return None;
         }

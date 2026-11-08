@@ -79,6 +79,12 @@ impl ImageThumbnail {
         max_h: u32,
         limits: image::Limits,
     ) -> Option<Self> {
+        if let Some(png) = crate::kra_image::thumbnail(bytes)
+            && let Some(thumb) =
+                Self::generate_with_limits(&png, Some("image/png"), max_w, max_h, limits.clone())
+        {
+            return Some(thumb);
+        }
         if let Some(jpeg) = crate::psd_image::embedded_thumbnail(bytes)
             && let Some(thumb) =
                 Self::generate_with_limits(jpeg, Some("image/jpeg"), max_w, max_h, limits.clone())
@@ -133,6 +139,7 @@ pub fn image_extension_for_mime(mime: &str) -> Option<&'static str> {
         "image/heif" => Some("heif"),
         "image/heic" => Some("heic"),
         "image/jxl" => Some("jxl"),
+        "application/x-krita" => Some("kra"),
         "image/vnd.adobe.photoshop" | "image/x-photoshop" => Some("psd"),
         "image/jp2" => Some("jp2"),
         "image/jpx" => Some("jpf"),
@@ -166,7 +173,7 @@ pub fn raster_preview_limits() -> image::Limits {
 pub fn image_reader<'a>(
     bytes: &'a [u8],
     mime: Option<&str>,
-) -> image::ImageResult<image::ImageReader<std::io::Cursor<&'a [u8]>>> {
+) -> image::ImageResult<image::ImageReader<std::io::Cursor<std::borrow::Cow<'a, [u8]>>>> {
     static CODECS: std::sync::Once = std::sync::Once::new();
     CODECS.call_once(|| {
         libheif_rs::integration::image::register_all_decoding_hooks();
@@ -175,7 +182,17 @@ pub fn image_reader<'a>(
         crate::psd_image::register_decoding_hook();
     });
     check_jpeg2000_composition(bytes)?;
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
+    let source = if bytes.starts_with(b"PK\x03\x04") {
+        std::borrow::Cow::Owned(crate::kra_image::composite(bytes).map_err(|error| {
+            image::ImageError::Decoding(image::error::DecodingError::new(
+                image::error::ImageFormatHint::Name("Krita document".into()),
+                error,
+            ))
+        })?)
+    } else {
+        std::borrow::Cow::Borrowed(bytes)
+    };
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(source));
     let mime = match mime {
         Some("image/jpg") => Some("image/jpeg"),
         Some("image/x-farbfeld") => {
@@ -255,6 +272,7 @@ fn image_mime_matches_bytes(mime: &str, bytes: &[u8]) -> bool {
                 .is_ok();
     }
     let signature = match mime {
+        "application/x-krita" => Some(bytes.starts_with(b"PK\x03\x04")),
         "image/vnd.adobe.photoshop" | "image/x-photoshop" => Some(bytes.starts_with(b"8BPS\0\x01")),
         "image/jxl" => {
             Some(bytes.starts_with(b"\xff\x0a") || bytes.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n"))
@@ -425,7 +443,7 @@ impl ClipItem {
         if !image_mime_matches_bytes(&mime, &bytes) {
             return None;
         }
-        // Fast header-only dimension extraction in ~0.05ms (does NOT decode pixels)
+        // Read saved canvas dimensions without decoding pixels.
         let (width, height) =
             read_image_dimensions_with_mime(&bytes, Some(&mime)).unwrap_or((0, 0));
         let size_kb = bytes.len() as f64 / 1024.0;
@@ -1393,6 +1411,7 @@ pub fn is_image_path(p: &Path) -> bool {
                 | "jp2"
                 | "jpg2"
                 | "psd"
+                | "kra"
                 | "jpf"
                 | "j2k"
                 | "j2c"
@@ -1417,6 +1436,7 @@ pub fn guess_image_mime(p: &Path) -> String {
         "heic" => "image/heic".to_string(),
         "jxl" => "image/jxl".to_string(),
         "psd" => "image/vnd.adobe.photoshop".to_string(),
+        "kra" => "application/x-krita".to_string(),
         "jp2" | "jpg2" => "image/jp2".to_string(),
         "jpf" => "image/jpx".to_string(),
         "j2k" | "j2c" | "jpc" => "image/x-jp2-codestream".to_string(),

@@ -808,6 +808,7 @@ mod tests {
             ("JPF", "image/jpx"),
             ("J2K", "image/x-jp2-codestream"),
             ("PSD", "image/vnd.adobe.photoshop"),
+            ("KRA", "application/x-krita"),
         ] {
             let vector = extension == "SVGZ";
             if vector
@@ -844,6 +845,10 @@ mod tests {
                 "PSD" => Some(include_bytes!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
                     "/../little-clip-core/tests/fixtures/layers.psd"
+                ))),
+                "KRA" => Some(include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/layered.kra"
                 ))),
                 _ => None,
             };

@@ -81,23 +81,23 @@ fn source_layer_metadata_keeps_groups_unicode_masks_and_off_canvas_bounds() {
     let summary =
         little_clip_core::psd_image::inspect(include_bytes!("fixtures/layers.psd")).unwrap();
     assert_eq!(summary.dimensions, (64, 32));
-    assert_eq!(summary.depth, 8);
+    assert_eq!(summary.depth, Some(8));
     assert_eq!(summary.layers.len(), 4);
     assert!(summary.layers[0].group);
     assert_eq!(summary.layers[0].name, "Artwork");
     let top = &summary.layers[1];
     assert_eq!(top.name, "Top patch");
     assert_eq!(top.depth, 1);
-    assert_eq!(top.bounds, [0, 32, 32, 64]);
+    assert_eq!(top.bounds, Some([0, 32, 32, 64]));
     assert!(top.mask);
     assert_eq!(top.blend_name(), "Normal");
     let hidden = &summary.layers[2];
     assert_eq!(hidden.name, "Hidden tint α");
-    assert!(!hidden.visible);
-    assert_eq!(hidden.opacity, 128);
+    assert_eq!(hidden.visible, Some(false));
+    assert_eq!(hidden.opacity, Some(128));
     assert_eq!(hidden.blend_mode, "mul ");
     assert_eq!(hidden.blend_name(), "Multiply");
-    assert_eq!(hidden.bounds, [-4, -8, 36, 72]);
+    assert_eq!(hidden.bounds, Some([-4, -8, 36, 72]));
 }
 
 #[test]

@@ -2,7 +2,7 @@
 use super::*;
 
 pub(super) struct Document {
-    summary: little_clip_core::psd_image::Summary,
+    summary: little_clip_core::image_document::Summary,
     preview: little_clip_core::ImageThumbnail,
 }
 
@@ -32,61 +32,83 @@ mod tests {
 
     #[test]
     fn selecting_source_layers_highlights_bounds_without_editing_pixels_or_history() {
-        let bytes = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../little-clip-core/tests/fixtures/layers.psd"
-        ));
-        let mut state = ImagePreviewState::from_bytes_with_meta(
-            bytes.to_vec(),
-            "image/vnd.adobe.photoshop".into(),
-            None,
-            "layers.psd".into(),
-            &AppConfig::default(),
-        )
-        .unwrap();
-        assert!(state.has_view_metadata());
-        let preview = &state.layer_inspector.document.as_ref().unwrap().preview;
-        assert_eq!((preview.width, preview.height), (64, 32));
-        let pixels = state.current_rgba.clone();
-        let stamp = state.input_stamp();
-        let ctx = egui::Context::default();
-        frame(&ctx, &mut state, Vec::new());
-        let output = frame(&ctx, &mut state, Vec::new());
-        let position = output
-            .shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == "Top patch" => {
-                    Some(text.pos + text.galley.size() * 0.5)
-                }
-                _ => None,
-            })
-            .expect("source layer list");
-        for pressed in [true, false] {
-            let event = egui::Event::PointerButton {
-                pos: position,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: egui::Modifiers::NONE,
+        for (bytes, has_bounds) in [
+            (
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/layers.psd"
+                ))
+                .as_slice(),
+                true,
+            ),
+            (
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/layered.kra"
+                ))
+                .as_slice(),
+                false,
+            ),
+        ] {
+            let mut state = ImagePreviewState::from_bytes_with_meta(
+                bytes.to_vec(),
+                "image/vnd.adobe.photoshop".into(),
+                None,
+                "layers.psd".into(),
+                &AppConfig::default(),
+            )
+            .unwrap();
+            assert!(state.has_view_metadata());
+            let preview = &state.layer_inspector.document.as_ref().unwrap().preview;
+            assert_eq!((preview.width, preview.height), (64, 32));
+            let pixels = state.current_rgba.clone();
+            let stamp = state.input_stamp();
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut state, Vec::new());
+            let output = frame(&ctx, &mut state, Vec::new());
+            let position = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Top patch" => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .expect("source layer list");
+            for pressed in [true, false] {
+                let event = egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                frame(
+                    &ctx,
+                    &mut state,
+                    vec![egui::Event::PointerMoved(position), event],
+                );
+            }
+            assert_eq!(state.layer_inspector.selected, Some(1));
+            let output = frame(&ctx, &mut state, Vec::new());
+            let detail = if has_bounds {
+                "Raster mask"
+            } else {
+                "Source offset (32, 0)"
             };
-            frame(
-                &ctx,
-                &mut state,
-                vec![egui::Event::PointerMoved(position), event],
-            );
-        }
-        assert_eq!(state.layer_inspector.selected, Some(1));
-        let output = frame(&ctx, &mut state, Vec::new());
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Raster mask"))));
-        assert!(output.shapes.iter().any(
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains(detail))));
+            if has_bounds {
+                assert!(output.shapes.iter().any(
             |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.width == 2.0)
         ));
-        state.layer_inspector.selected = Some(0);
-        let output = frame(&ctx, &mut state, Vec::new());
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Layer group")));
-        assert_eq!(state.input_stamp(), stamp);
-        assert!(Arc::ptr_eq(&pixels, &state.current_rgba));
-        assert!(state.undo_stack.is_empty());
+            }
+            state.layer_inspector.selected = Some(0);
+            let output = frame(&ctx, &mut state, Vec::new());
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Layer group")));
+            assert_eq!(state.input_stamp(), stamp);
+            assert!(Arc::ptr_eq(&pixels, &state.current_rgba));
+            assert!(state.undo_stack.is_empty());
+        }
     }
 
     #[test]
@@ -105,13 +127,19 @@ mod tests {
 }
 impl Document {
     pub(super) fn from_bytes(bytes: &[u8], image: &RgbaImage) -> Result<Option<Arc<Self>>, String> {
-        if !bytes.starts_with(b"8BPS") {
+        let summary = if bytes.starts_with(b"8BPS") {
+            little_clip_core::psd_image::inspect(bytes)?
+        } else if bytes.starts_with(b"PK\x03\x04") {
+            little_clip_core::kra_image::inspect(bytes)?
+        } else {
             return Ok(None);
-        }
-        let summary = little_clip_core::psd_image::inspect(bytes)?;
+        };
         let scale = (240.0 / image.width() as f32)
             .min(160.0 / image.height() as f32)
             .min(1.0);
+        if summary.dimensions != image.dimensions() {
+            return Err("Saved composite dimensions differ from the source canvas".into());
+        }
         let width = (image.width() as f32 * scale).round().max(1.0) as u32;
         let height = (image.height() as f32 * scale).round().max(1.0) as u32;
         let preview = little_clip_core::ImageThumbnail::from_rgba(image::imageops::thumbnail(
@@ -144,13 +172,20 @@ impl Inspector {
         let summary = &document.summary;
         ui.label(egui::RichText::new("Saved composite").strong());
         ui.label(format!(
-            "{} × {} · {} bit · {}",
+            "{} × {} · {}{}",
             summary.dimensions.0,
             summary.dimensions.1,
-            summary.depth,
+            summary
+                .depth
+                .map(|bits| format!("{bits} bit · "))
+                .unwrap_or_default(),
             summary.color_mode.to_uppercase()
         ))
-        .on_hover_text("Original PSD precision. Editing and raster export use 8-bit RGBA.");
+        .on_hover_text("Original source color space. Editing and raster export use 8-bit RGBA.");
+        if let Some(profile) = &summary.profile {
+            ui.add(egui::Label::new(profile).truncate(true))
+                .on_hover_text(profile);
+        }
         self.overview(ui, ctx, palette, &document);
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), 64.0),
@@ -187,7 +222,7 @@ impl Inspector {
                             if layer.group {
                                 label = label.strong();
                             }
-                            if !layer.visible {
+                            if layer.visible == Some(false) {
                                 label = label.weak();
                             }
                             if ui
@@ -207,31 +242,44 @@ impl Inspector {
         ui.separator();
     }
 
-    fn properties(&self, ui: &mut egui::Ui, summary: &little_clip_core::psd_image::Summary) {
+    fn properties(&self, ui: &mut egui::Ui, summary: &little_clip_core::image_document::Summary) {
         if summary.layers.is_empty() {
             ui.label("No stored layers");
             return;
         }
         let Some(layer) = self.selected.and_then(|i| summary.layers.get(i)) else {
-            ui.label("Select a layer for source bounds and properties.");
+            ui.label("Select a layer for source properties.");
             return;
         };
         ui.label(format!(
-            "{} · {:.0}% · {}",
-            if layer.visible { "Visible" } else { "Hidden" },
-            f32::from(layer.opacity) * 100.0 / 255.0,
+            "{} · {} · {}",
+            match layer.visible {
+                Some(true) => "Visible",
+                Some(false) => "Hidden",
+                None => "Visibility unknown",
+            },
+            layer
+                .opacity
+                .map(|opacity| format!("{:.0}%", f32::from(opacity) * 100.0 / 255.0))
+                .unwrap_or_else(|| "Opacity unknown".into()),
             layer.blend_name()
         ));
-        let [top, left, bottom, right] = layer.bounds;
         if layer.group {
             ui.label("Layer group");
-        } else {
+        } else if let Some([top, left, bottom, right]) = layer.bounds {
             ui.label(format!(
                 "{} × {} at ({left}, {top})",
                 i64::from(right) - i64::from(left),
                 i64::from(bottom) - i64::from(top)
             ))
             .on_hover_text("Bounds in pixels in the original document");
+        } else if let Some((x, y)) = layer.offset {
+            ui.label(format!("Source offset ({x}, {y})"));
+        }
+        if !layer.group
+            && let Some(kind) = &layer.kind
+        {
+            ui.label(kind);
         }
         let masks = [
             (layer.mask, "Raster mask"),
@@ -264,9 +312,14 @@ impl Inspector {
             )
         });
         let native = texture.size_vec2();
+        let preview_height = if document.summary.profile.is_some() {
+            40.0
+        } else {
+            64.0
+        };
         let size = native
             * (ui.available_width() / native.x)
-                .min(64.0 / native.y)
+                .min(preview_height / native.y)
                 .min(1.0);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
         draw_checkerboard(
@@ -282,8 +335,11 @@ impl Inspector {
             Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
             Color32::WHITE,
         );
-        if let Some(layer) = self.selected.and_then(|i| document.summary.layers.get(i)) {
-            let [top, left, bottom, right] = layer.bounds;
+        if let Some([top, left, bottom, right]) = self
+            .selected
+            .and_then(|i| document.summary.layers.get(i))
+            .and_then(|layer| layer.bounds)
+        {
             let (width, height) = document.summary.dimensions;
             let point = |x: i32, y: i32| {
                 rect.min
@@ -301,6 +357,7 @@ impl Inspector {
                 );
             }
         }
-        response.on_hover_text("Original layer bounds over the saved composite");
+        response
+            .on_hover_text("Original saved composite; source offsets do not imply layer extents");
     }
 }

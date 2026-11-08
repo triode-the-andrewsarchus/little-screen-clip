@@ -933,6 +933,14 @@ mod tests {
                 ))
                 .as_slice(),
             ),
+            (
+                "kra",
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/layered.kra"
+                ))
+                .as_slice(),
+            ),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(format!("source.{extension}"));

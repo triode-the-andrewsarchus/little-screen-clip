@@ -37,3 +37,11 @@ cover 8/16/32-bit samples and raw, PackBits, ZIP and ZIP-prediction compression
 layered fixture and its source bounds. These fixtures share the repository license.
 `thumbnail.psd` adds a resource-1036 RGB JPEG of the same composite, generated
 by Pillow, to test previewing with a budget smaller than a full canvas decode.
+
+`layered.kra` and `flat.kra` were saved by Krita 6.0.4.1 from owned RGB panels,
+using an isolated offscreen command-line conversion. `scripts/kra_fixture.py`
+recreates their source artwork (native UUIDs and archive metadata may vary). The
+layered archive contains a group, visible right patch, hidden Unicode-named
+multiply layer at a negative offset, profile and background. Native layer tiles
+are present but this reader uses only the saved composite and source outline.
+These generated fixtures share the repository license.

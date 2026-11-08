@@ -78,9 +78,9 @@
     - [ ] `.clip` — Clip Studio Paint / Manga Studio illustration
       - [ ] SQLite 3 database header, canvas dimensions, resolution (DPI), and layer names
       - [ ] Embedded canvas preview thumbnail (`CanvasPreview` record)
-    - [ ] `.kra` — Krita document
-      - [ ] Document properties (`maindoc.xml`: canvas dimensions, color profile, layer tree)
-      - [ ] Embedded composite image preview (`preview.png`)
+    - [x] `.kra` — Krita saved composites in shared photo/color previews and Image Studio, with raster edits/export and original archive preservation (no native layer editing, KRA writer or KRZ support)
+      - [x] Document properties (`maindoc.xml`: canvas dimensions, color space/profile, selectable layer/group tree, visibility, opacity, blend identifiers and source offsets)
+      - [x] Embedded thumbnail (`preview.png`) and full-resolution saved canvas (`mergedimage.png`); bounded ZIP/XML/PNG reading without following layer references
     - [ ] `.afphoto`, `.afdesign`, `.afpub` — Serif Affinity suite (Photo, Designer, Publisher)
       - [ ] Compound document properties and embedded thumbnail preview
     - [ ] `.pxd`, `.pxm` — Pixelmator / Pixelmator Pro document

@@ -79,11 +79,27 @@ def inspect_source_layers(session):
     assert "raster mask" not in text.lower()
 
 
+def inspect_krita_layers(session):
+    text = session.observe("02-source", ["Saved composite", "Source layers", "Top patch", "Hidden tint", "Background", "sRGB"])
+    assert "unsaved" not in text.lower()
+    x, y = session.word("02-source", "patch", tree=True, minimum_y=350)
+    session.click(x, y)
+    text = session.observe("02-layer", ["Source offset", "(320, 0)", "Paint layer", "Normal"])
+    assert "unsaved" not in text.lower()
+    x, y = session.word("02-layer", "Hidden", tree=True, minimum_y=350)
+    session.click(x + 8, y)
+    text = session.observe("02-hidden", ["Hidden", "50%", "Multiply", "(-8, -4)"])
+    assert "unsaved" not in text.lower()
+    x, y = session.word("02-hidden", "overview", tree=True, minimum_y=350)
+    session.click(x, y)
+    session.observe("02-overview", ["Select a layer"])
+
+
 def exercise(session, root, extension="png"):
     extension = extension.upper() if extension != "png" else extension
     first, second, renamed = (f"{stem}.{extension}" for stem in ["FIRST", "SECOND", "RENAMED"])
     originals = {first: (root / first).read_bytes(), second: (root / second).read_bytes()}
-    include_strip_ocr(session, source_layers=extension == "PSD")
+    include_strip_ocr(session, source_layers=extension in {"PSD", "KRA"})
     session.observe("01-browser", [first, second])
     with Image.open(session.output / "01-browser.png") as shot:
         pixels = list(shot.convert("RGB").getdata())
@@ -94,6 +110,8 @@ def exercise(session, root, extension="png"):
     session.observe("02-studio", ["Back to folder", "Reset", "1:1", "1 / 2"])
     if extension == "PSD":
         inspect_source_layers(session)
+    elif extension == "KRA":
+        inspect_krita_layers(session)
     session.key("5")
     # A committed flip creates a visible change and an undo step.
     flip_photo(session, "03-transform")
@@ -130,7 +148,7 @@ def exercise(session, root, extension="png"):
     assert (root / "Edited" / "SECOND_edit.png").exists()
     # Export preserves both the source image and its editor history.
     with Image.open(root / "Edited" / "RENAMED_edit.png") as edited:
-        if extension in {"SVGZ", "JXL", "JP2", "J2K", "JPF", "PSD"}:
+        if extension in {"SVGZ", "JXL", "JP2", "J2K", "JPF", "PSD", "KRA"}:
             assert edited.size == (640, 400)
             assert edited.getpixel((0, 0))[:3] == (180, 60, 40)
         else:
@@ -173,7 +191,7 @@ def encode_fixture(pixels, destination, format, index):
 
 def main():
     args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager",
-        lambda parser: parser.add_argument("--format", choices=["png", "jfif", "svgz", "jxl", "jp2", "j2k", "jpf", "psd"], default="png"))
+        lambda parser: parser.add_argument("--format", choices=["png", "jfif", "svgz", "jxl", "jp2", "j2k", "jpf", "psd", "kra"], default="png"))
     output, root = media_fixture_directory(args)
     image = Image.new("RGB", (640, 400), (180, 60, 40))
     for x in range(320):
@@ -185,6 +203,10 @@ def main():
         second = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="500"><rect width="400" height="500" fill="#5aaa46"/></svg>'
         for name, markup in [("FIRST",first),("SECOND",second)]:
             (root / f"{name}.{extension}").write_bytes(gzip.compress(markup.encode(), mtime=0))
+    elif args.format == "kra":
+        from kra_fixture import write
+        write(root / "FIRST.KRA", 640, 400)
+        write(root / "SECOND.KRA", 400, 500, layered=False)
     elif args.format == "psd":
         from psd_fixture import write
         write(root / "FIRST.PSD", 640, 400, layered=True, thumbnail=True)
