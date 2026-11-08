@@ -18,8 +18,9 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{RwLock, mpsc};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
+mod display_worker;
 mod lock_monitor;
 mod rolling_capture;
 
@@ -287,9 +288,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (display_tx, display_rx) = mpsc::channel::<Vec<u8>>(16);
 
-    // Spawn display worker with 800ms keepalive loop for volatile LY panel
+    // Keep the volatile LY panel refreshed and retry failed USB sessions.
     tokio::spawn(async move {
-        run_display_worker(driver, display_rx).await;
+        display_worker::run(driver, display_rx, TrofeoDriver::open, |driver, frame| {
+            driver.check_alive()?;
+            driver.send_frame(frame)
+        })
+        .await;
     });
 
     let rolling_audio = Arc::new(std::sync::RwLock::new(RollingAudioBuffer::new(
@@ -376,115 +381,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => {
                 error!("Socket accept error: {}", e);
-            }
-        }
-    }
-}
-
-async fn run_display_worker(mut driver: Option<TrofeoDriver>, mut rx: mpsc::Receiver<Vec<u8>>) {
-    let mut last_frame: Option<Vec<u8>> = None;
-    let mut last_send = tokio::time::Instant::now();
-    // Hardware watchdog on Trofeo Vision MCU trips after ~1.0-1.5s of silence.
-    // Ticking every 400ms ensures we refresh the display well before the hardware screensaver kicks in.
-    let keepalive_interval = Duration::from_millis(400);
-    // Lower bound between USB writes to prevent overwhelming the embedded JPEG decoder:
-    let min_usb_gap = Duration::from_millis(80);
-    let mut keepalive_ticker = tokio::time::interval(keepalive_interval);
-    keepalive_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    loop {
-        tokio::select! {
-            maybe_frame = rx.recv() => {
-                match maybe_frame {
-                    Some(mut new_frame) => {
-                        // Drain any queued stale frames to avoid burst flooding the USB bus
-                        while let Ok(freshest) = rx.try_recv() {
-                            new_frame = freshest;
-                        }
-
-                        // If driver handle is not open, attempt initial open or reconnect
-                        if driver.is_none() {
-                            match TrofeoDriver::open() {
-                                Ok(new_drv) => {
-                                    info!("Connected to Trofeo USB display");
-                                    driver = Some(new_drv);
-                                }
-                                Err(e) => {
-                                    debug!("Trofeo display not ready: {}", e);
-                                }
-                            }
-                        }
-
-                        if let Some(drv) = driver.as_mut() {
-                            let elapsed = last_send.elapsed();
-                            if elapsed < min_usb_gap {
-                                tokio::time::sleep(min_usb_gap - elapsed).await;
-                            }
-
-                            if let Err(e) = drv.send_frame(&new_frame) {
-                                warn!("USB send_frame error: {}. Reconnecting...", e);
-                                // Drop the dead driver handle first so the kernel releases interface 0!
-                                driver = None;
-                                tokio::time::sleep(Duration::from_millis(500)).await;
-                                match TrofeoDriver::open() {
-                                    Ok(mut new_drv) => {
-                                        info!("Successfully reconnected to Trofeo USB display");
-                                        let _ = new_drv.send_frame(&new_frame);
-                                        last_send = tokio::time::Instant::now();
-                                        driver = Some(new_drv);
-                                    }
-                                    Err(re_err) => {
-                                        warn!("USB Reconnect failed: {}", re_err);
-                                    }
-                                }
-                            } else {
-                                last_send = tokio::time::Instant::now();
-                            }
-                        }
-                        last_frame = Some(new_frame);
-                    }
-                    None => break,
-                }
-            }
-            _ = keepalive_ticker.tick() => {
-                if driver.is_none() {
-                    // Background poll to reconnect if screen was disconnected
-                    match TrofeoDriver::open() {
-                        Ok(mut new_drv) => {
-                            info!("Successfully (re)connected to Trofeo USB display");
-                            if let Some(ref frame) = last_frame {
-                                let _ = new_drv.send_frame(frame);
-                                last_send = tokio::time::Instant::now();
-                            }
-                            driver = Some(new_drv);
-                        }
-                        Err(_) => {}
-                    }
-                } else if last_send.elapsed() >= Duration::from_millis(400) {
-                    if let Some(ref frame) = last_frame {
-                        if let Some(drv) = driver.as_mut() {
-                            if let Err(e) = drv.send_frame(frame) {
-                                warn!("USB keepalive error: {}. Reconnecting...", e);
-                                // Drop dead driver first so interface 0 is freed
-                                driver = None;
-                                tokio::time::sleep(Duration::from_millis(500)).await;
-                                match TrofeoDriver::open() {
-                                    Ok(mut new_drv) => {
-                                        info!("Successfully reconnected to Trofeo USB display (keepalive)");
-                                        let _ = new_drv.send_frame(frame);
-                                        last_send = tokio::time::Instant::now();
-                                        driver = Some(new_drv);
-                                    }
-                                    Err(re_err) => {
-                                        warn!("USB Reconnect failed (keepalive): {}", re_err);
-                                    }
-                                }
-                            } else {
-                                last_send = tokio::time::Instant::now();
-                            }
-                        }
-                    }
-                }
             }
         }
     }

@@ -155,6 +155,12 @@ impl TrofeoDriver {
 
         // Write handshake packet to EP_OUT
         let written = self.handle.write_bulk(EP_OUT, &query, TIMEOUT_HANDSHAKE)?;
+        if written != query.len() {
+            return Err(DriverError::HandshakeFailed(format!(
+                "short USB handshake write: expected {} bytes, wrote {written}",
+                query.len()
+            )));
+        }
         debug!("Wrote {} handshake bytes", written);
 
         // Read 512-byte response from EP_IN
@@ -301,9 +307,13 @@ impl TrofeoDriver {
         // Read ACK packet and propagate errors — a failure here means
         // the device is gone/stale and the caller should trigger a reconnect.
         let mut ack = vec![0u8; USB_ACK_SIZE];
-        self.handle
+        let read = self
+            .handle
             .read_bulk(EP_IN, &mut ack, TIMEOUT_READ)
             .map_err(|e| DriverError::WriteFailed(format!("ACK read failed: {e}")))?;
+        if read == 0 {
+            return Err(DriverError::WriteFailed("empty ACK response".to_owned()));
+        }
 
         debug!(
             "Frame sent successfully ({} bytes, {} chunks)",
