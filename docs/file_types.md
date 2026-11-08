@@ -105,7 +105,7 @@
     - [ ] Naming table metadata (`name` table: family, subfamily, designer, license, version)
     - [ ] OpenType layout feature tables (`GSUB`, `GPOS`)
   - [x] `.woff` — Web Open Font Format; interactive specimens, character coverage, and list strips
-  - [ ] `.woff2` — Web Open Font Format 2
+  - [x] `.woff2` — Web Open Font Format 2; interactive specimens, character coverage, and list strips
     - [ ] WOFF / WOFF2 XML metadata block and private data
   - [ ] `.eot` — Embedded OpenType
   - [ ] `.pfa`, `.pfb` — PostScript Type 1

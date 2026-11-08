@@ -460,7 +460,7 @@ fn kind(path: &Path) -> Kind {
     if super::text_strip::is_typescript_source(path) {
         Kind::Text
     } else if path.extension().is_some_and(|ext| {
-        ["ttf", "ttc", "otf", "otc", "woff"]
+        ["ttf", "ttc", "otf", "otc", "woff", "woff2"]
             .contains(&ext.to_string_lossy().to_ascii_lowercase().as_str())
     }) {
         Kind::Font
@@ -706,11 +706,14 @@ mod tests {
 
     #[test]
     fn compressed_web_fonts_open_in_the_specimen_viewer() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/latin.woff");
-        assert!(matches!(
-            load(&path, &AppConfig::default()).unwrap(),
-            Loaded::Font(_)
-        ));
+        for extension in ["woff", "woff2"] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/fonts/latin.{extension}"));
+            assert!(matches!(
+                load(&path, &AppConfig::default()).unwrap(),
+                Loaded::Font(_)
+            ));
+        }
     }
 
     #[test]

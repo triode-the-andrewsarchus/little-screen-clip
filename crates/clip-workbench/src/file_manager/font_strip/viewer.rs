@@ -422,28 +422,31 @@ mod tests {
 
     #[test]
     fn compressed_web_font_specimens_reuse_bounded_decode_and_strip_rendering() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/latin.woff");
-        let viewer = Viewer::load(&path).unwrap();
-        assert!(viewer.description.contains("LittleClipFixture"));
-        let token = AtomicBool::new(false);
-        let rendered = render(&viewer.document, &viewer.request, &token).unwrap();
-        assert!(rendered.present[33]); // Latin A
-        assert!(
-            rendered
-                .sample
-                .premultiplied_rgba
-                .iter()
-                .any(|byte| *byte > 0)
-        );
-        let preview = super::super::load(&path, &token);
-        assert!(preview.font.is_some());
-        assert!(preview.image.is_some());
-        let folder = tempfile::tempdir().unwrap();
-        let invalid = folder.path().join("oversized.woff");
-        let mut bytes = std::fs::read(path).unwrap();
-        bytes[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
-        std::fs::write(&invalid, bytes).unwrap();
-        assert!(Viewer::load(&invalid).is_err());
+        for extension in ["woff", "woff2"] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/fonts/latin.{extension}"));
+            let viewer = Viewer::load(&path).unwrap();
+            assert!(viewer.description.contains("LittleClipFixture"));
+            let token = AtomicBool::new(false);
+            let rendered = render(&viewer.document, &viewer.request, &token).unwrap();
+            assert!(rendered.present[33]); // Latin A
+            assert!(
+                rendered
+                    .sample
+                    .premultiplied_rgba
+                    .iter()
+                    .any(|byte| *byte > 0)
+            );
+            let preview = super::super::load(&path, &token);
+            assert!(preview.font.is_some());
+            assert!(preview.image.is_some());
+            let folder = tempfile::tempdir().unwrap();
+            let invalid = folder.path().join(format!("oversized.{extension}"));
+            let mut bytes = std::fs::read(path).unwrap();
+            bytes[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
+            std::fs::write(&invalid, bytes).unwrap();
+            assert!(Viewer::load(&invalid).is_err());
+        }
     }
 
     #[test]
