@@ -4,14 +4,7 @@ pub(super) fn encode_jpeg_with_quality(
     img: &RgbaImage,
     quality: u8,
 ) -> Result<Vec<u8>, image::ImageError> {
-    let mut rgb = image::RgbImage::new(img.width(), img.height());
-    for (x, y, pixel) in img.enumerate_pixels() {
-        let alpha = pixel[3] as f32 / 255.0;
-        let r = ((pixel[0] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
-        let g = ((pixel[1] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
-        let b = ((pixel[2] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
-        rgb.put_pixel(x, y, image::Rgb([r, g, b]));
-    }
+    let rgb = opaque_rgb(img);
     let mut buf = std::io::Cursor::new(Vec::new());
     let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
     encoder.encode(
@@ -21,6 +14,23 @@ pub(super) fn encode_jpeg_with_quality(
         image::ExtendedColorType::Rgb8,
     )?;
     Ok(buf.into_inner())
+}
+
+fn opaque_rgb(img: &RgbaImage) -> image::RgbImage {
+    let mut rgb = image::RgbImage::new(img.width(), img.height());
+    for (x, y, pixel) in img.enumerate_pixels() {
+        let alpha = pixel[3] as f32 / 255.0;
+        let r = ((pixel[0] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
+        let g = ((pixel[1] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
+        let b = ((pixel[2] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
+        rgb.put_pixel(x, y, image::Rgb([r, g, b]));
+    }
+    rgb
+}
+
+pub(super) fn encode_pcx(img: &RgbaImage) -> Result<Vec<u8>, String> {
+    let rgb = opaque_rgb(img);
+    little_clip_core::pcx_image::encode_rgb(rgb.width(), rgb.height(), rgb.as_raw())
 }
 
 pub(super) fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, image::ImageError> {

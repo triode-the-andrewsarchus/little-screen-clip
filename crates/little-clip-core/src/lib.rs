@@ -33,6 +33,7 @@ pub mod presentation {
     pub mod units;
 }
 pub mod palette;
+pub mod pcx_image;
 pub mod pdf;
 pub mod process;
 pub mod psd_image;

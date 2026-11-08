@@ -140,6 +140,7 @@ pub fn image_extension_for_mime(mime: &str) -> Option<&'static str> {
         "image/heic" => Some("heic"),
         "image/jxl" => Some("jxl"),
         "application/x-krita" => Some("kra"),
+        "image/x-pcx" | "image/pcx" => Some("pcx"),
         "image/vnd.adobe.photoshop" | "image/x-photoshop" => Some("psd"),
         "image/jp2" => Some("jp2"),
         "image/jpx" => Some("jpf"),
@@ -180,6 +181,7 @@ pub fn image_reader<'a>(
         jxl_oxide::integration::register_image_decoding_hook();
         hayro_jpeg2000::integration::register_decoding_hook();
         crate::psd_image::register_decoding_hook();
+        crate::pcx_image::register_decoding_hook();
     });
     check_jpeg2000_composition(bytes)?;
     let source = if bytes.starts_with(b"PK\x03\x04") {
@@ -272,6 +274,7 @@ fn image_mime_matches_bytes(mime: &str, bytes: &[u8]) -> bool {
                 .is_ok();
     }
     let signature = match mime {
+        "image/x-pcx" | "image/pcx" => Some(bytes.first() == Some(&0x0a)),
         "application/x-krita" => Some(bytes.starts_with(b"PK\x03\x04")),
         "image/vnd.adobe.photoshop" | "image/x-photoshop" => Some(bytes.starts_with(b"8BPS\0\x01")),
         "image/jxl" => {
@@ -1412,6 +1415,7 @@ pub fn is_image_path(p: &Path) -> bool {
                 | "jpg2"
                 | "psd"
                 | "kra"
+                | "pcx"
                 | "jpf"
                 | "j2k"
                 | "j2c"
@@ -1437,6 +1441,7 @@ pub fn guess_image_mime(p: &Path) -> String {
         "jxl" => "image/jxl".to_string(),
         "psd" => "image/vnd.adobe.photoshop".to_string(),
         "kra" => "application/x-krita".to_string(),
+        "pcx" => "image/x-pcx".to_string(),
         "jp2" | "jpg2" => "image/jp2".to_string(),
         "jpf" => "image/jpx".to_string(),
         "j2k" | "j2c" | "jpc" => "image/x-jp2-codestream".to_string(),

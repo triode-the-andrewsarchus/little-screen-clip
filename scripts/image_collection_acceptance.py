@@ -58,7 +58,7 @@ def include_strip_ocr(session, source_layers=False):
             sidebar = session.output / f"{name}-source-layers.png"
             Image.open(path).crop((95, 355, 340, 720)).resize((980, 1460)).save(sidebar)
             text += private.run_checked(["tesseract", str(sidebar), "stdout", "--psm", "6"], env=session.env)
-        return re.sub(r"\b(FIRST|SECOND|RENAMED)[,.]?(JFIF|SVGZ|JXL|JP2|J2K|JPF|PSD)\b", r"\1.\2", text)
+        return re.sub(r"\b(FIRST|SECOND|RENAMED)[,.]?(JFIF|SVGZ|JXL|JP2|J2K|JPF|PSD|KRA|PCX)\b", r"\1.\2", text)
     session.capture_text = capture
 
 
@@ -148,7 +148,7 @@ def exercise(session, root, extension="png"):
     assert (root / "Edited" / "SECOND_edit.png").exists()
     # Export preserves both the source image and its editor history.
     with Image.open(root / "Edited" / "RENAMED_edit.png") as edited:
-        if extension in {"SVGZ", "JXL", "JP2", "J2K", "JPF", "PSD", "KRA"}:
+        if extension in {"SVGZ", "JXL", "JP2", "J2K", "JPF", "PSD", "KRA", "PCX"}:
             assert edited.size == (640, 400)
             assert edited.getpixel((0, 0))[:3] == (180, 60, 40)
         else:
@@ -164,6 +164,29 @@ def exercise(session, root, extension="png"):
     # Ratings survive returning to the browser and reopening the collection.
     ratings = list(Path(session.env["XDG_DATA_HOME"]).glob("little-screen-clip/photo-ratings-v1/*.json"))
     assert any(path.read_text() == "5" for path in ratings)
+    if extension == "PCX":
+        native_pcx_save(session, root, renamed)
+
+
+def native_pcx_save(session, root, source_name):
+    source = root / source_name
+    original = source.read_bytes()
+    destination = root / "Edited" / "native-edit.pcx"
+    flip_photo(session, "14-native-transform")
+    session.key("s", "ctrl")
+    session.observe("15-native-save-dialog", ["Save Image As", "PCX", "transparency"])
+    session.key("a", "ctrl")
+    private.run_checked(["wtype", str(destination)], env=session.env)
+    session.observe("16-native-destination", ["PCX", "Save", "Cancel"])
+    # Observed center in the fixed private viewport; sparse OCR skips this green button.
+    session.click(510, 520)
+    wait_for(destination.exists, "native PCX save")
+    with Image.open(destination) as saved:
+        assert saved.format == "PCX" and saved.size == (640, 400)
+        assert saved.convert("RGB").getpixel((0, 0)) == (180, 60, 40)
+    assert source.read_bytes() == original
+    text = session.observe("17-native-saved", ["native-edit.pcx", "Export all edits"])
+    assert "saved image" not in text.lower()
 
 
 def encode_fixture(pixels, destination, format, index):
@@ -191,7 +214,7 @@ def encode_fixture(pixels, destination, format, index):
 
 def main():
     args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager",
-        lambda parser: parser.add_argument("--format", choices=["png", "jfif", "svgz", "jxl", "jp2", "j2k", "jpf", "psd", "kra"], default="png"))
+        lambda parser: parser.add_argument("--format", choices=["png", "jfif", "svgz", "jxl", "jp2", "j2k", "jpf", "psd", "kra", "pcx"], default="png"))
     output, root = media_fixture_directory(args)
     image = Image.new("RGB", (640, 400), (180, 60, 40))
     for x in range(320):
@@ -203,6 +226,10 @@ def main():
         second = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="500"><rect width="400" height="500" fill="#5aaa46"/></svg>'
         for name, markup in [("FIRST",first),("SECOND",second)]:
             (root / f"{name}.{extension}").write_bytes(gzip.compress(markup.encode(), mtime=0))
+    elif args.format == "pcx":
+        from pcx_fixture import write_rgb
+        write_rgb(root / "FIRST.PCX", 640, 400)
+        write_rgb(root / "SECOND.PCX", 400, 500, colors=((90, 170, 70), (90, 170, 70)), indexed=True)
     elif args.format == "kra":
         from kra_fixture import write
         write(root / "FIRST.KRA", 640, 400)

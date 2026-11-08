@@ -815,8 +815,9 @@ impl ImagePreviewState {
         let default_target = if let Some(p) = &self.path {
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
             let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("png");
-            let ext = if image::ImageFormat::from_extension(ext)
-                .is_some_and(|format| format.writing_enabled())
+            let ext = if ext.eq_ignore_ascii_case("pcx")
+                || image::ImageFormat::from_extension(ext)
+                    .is_some_and(|format| format.writing_enabled())
             {
                 ext
             } else {

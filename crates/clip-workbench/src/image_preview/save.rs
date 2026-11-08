@@ -420,6 +420,32 @@ fn begin_write(phase: &AtomicU8, started: Instant) -> Result<(), String> {
         .map_err(|_| "Image save cancelled".into())
 }
 
+fn encode_pixels(img: &RgbaImage, ext: &str, options: &SaveOptions) -> Result<Vec<u8>, String> {
+    if ext == "pcx" {
+        return encode_pcx(img);
+    }
+    let format = image::ImageFormat::from_extension(ext)
+        .ok_or_else(|| format!("Unsupported image extension: {ext}"))?;
+    Ok(match format {
+        image::ImageFormat::Jpeg => encode_jpeg_with_quality(
+            img,
+            if options.conversion_format.is_some() {
+                options.quality
+            } else {
+                75
+            },
+        )
+        .map_err(|e| e.to_string())?,
+        image::ImageFormat::WebP => encode_webp(img, options.lossless, options.quality)?,
+        _ => {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut bytes, format)
+                .map_err(|e| e.to_string())?;
+            bytes.into_inner()
+        }
+    })
+}
+
 fn write_save(
     snapshot: SaveSnapshot,
     options: SaveOptions,
@@ -438,26 +464,7 @@ fn write_save(
         SaveSnapshot::Pixels(canvas) => {
             let img = compose_display_image(canvas, &options.stamp);
             check_cancelled(phase, started)?;
-            let format = image::ImageFormat::from_extension(&ext)
-                .ok_or_else(|| format!("Unsupported image extension: {ext}"))?;
-            match format {
-                image::ImageFormat::Jpeg => encode_jpeg_with_quality(
-                    &img,
-                    if options.conversion_format.is_some() {
-                        options.quality
-                    } else {
-                        75
-                    },
-                )
-                .map_err(|e| e.to_string())?,
-                image::ImageFormat::WebP => encode_webp(&img, options.lossless, options.quality)?,
-                _ => {
-                    let mut bytes = std::io::Cursor::new(Vec::new());
-                    img.write_to(&mut bytes, format)
-                        .map_err(|e| e.to_string())?;
-                    bytes.into_inner()
-                }
-            }
+            encode_pixels(&img, &ext, &options)?
         }
     };
     check_cancelled(phase, started)?;
@@ -761,10 +768,7 @@ impl ImagePreviewState {
                         self.title = name.clone();
                         self.file_size_bytes = result.file_size;
                         self.mime = little_clip_core::item::guess_image_mime(&result.path);
-                        self.show_toast(crate::ui_ext::StatusMessage::new(
-                            crate::icons::Icon::Save,
-                            format!("Saved image to {name}"),
-                        ));
+                        self.status_toast = None;
                     } else {
                         self.show_toast(crate::ui_ext::StatusMessage::new(
                             crate::icons::Icon::Save,
@@ -889,6 +893,57 @@ mod tests {
     use super::*;
     use image::GenericImageView;
 
+    fn edited_file_state(path: &Path, bytes: &[u8]) -> ImagePreviewState {
+        std::fs::write(path, bytes).unwrap();
+        let mut state = ImagePreviewState::from_path(path.to_path_buf(), &AppConfig::default())
+            .unwrap()
+            .with_file_source(crate::file_source::FileSource::capture(path).unwrap());
+        Arc::make_mut(&mut state.current_rgba).put_pixel(0, 0, image::Rgba([255, 0, 0, 128]));
+        state.mark_pixels_changed();
+        state
+    }
+
+    #[test]
+    fn native_pcx_save_flattens_alpha_and_retains_file_identity_guards() {
+        let jobs = BackgroundJobs::new(1, 4);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.PCX");
+        let original = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../little-clip-core/tests/fixtures/panels.pcx"
+        ));
+        let mut state = edited_file_state(&path, original);
+        state.open_save_dialog();
+        assert!(state.fallback_save_path.ends_with("source.PCX"));
+        state.start_save(&path, &jobs);
+        wait_for_save(&mut state);
+        assert!(!state.has_unsaved_changes());
+        assert!(state.status_toast.is_none());
+        let saved = std::fs::read(&path).unwrap();
+        assert_ne!(saved.as_slice(), original);
+        let rgb = little_clip_core::item::image_reader(&saved, None)
+            .unwrap()
+            .decode()
+            .unwrap()
+            .to_rgb8();
+        assert_eq!(rgb.get_pixel(0, 0).0, [255, 127, 127]);
+        assert_eq!(rgb.get_pixel(63, 31).0, [180, 60, 40]);
+        assert_eq!(state.current_rgba.get_pixel(0, 0).0, [255, 0, 0, 128]);
+        let collision = dir.path().join("existing.pcx");
+        for (destination, contents) in [
+            (&collision, b"existing destination".as_slice()),
+            (&path, b"changed outside editor".as_slice()),
+        ] {
+            std::fs::write(destination, contents).unwrap();
+            state.mark_pixels_changed();
+            state.start_save(destination, &jobs);
+            wait_for_save(&mut state);
+            assert_eq!(std::fs::read(destination).unwrap(), contents);
+            assert!(state.has_unsaved_changes());
+            assert!(state.status_toast.is_some());
+        }
+    }
+
     #[test]
     fn decode_only_formats_export_to_png_without_changing_original_or_existing_siblings() {
         let jobs = BackgroundJobs::new(1, 4);
@@ -944,12 +999,7 @@ mod tests {
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(format!("source.{extension}"));
-            std::fs::write(&path, original).unwrap();
-            let mut state = ImagePreviewState::from_path(path.clone(), &AppConfig::default())
-                .unwrap()
-                .with_file_source(crate::file_source::FileSource::capture(&path).unwrap());
-            Arc::make_mut(&mut state.current_rgba).put_pixel(0, 0, image::Rgba([255, 0, 0, 128]));
-            state.mark_pixels_changed();
+            let mut state = edited_file_state(&path, original);
             state.open_save_dialog();
             assert!(state.fallback_save_path.ends_with("source.png"));
             state.start_save(&path, &jobs);

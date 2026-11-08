@@ -44,93 +44,7 @@ impl ImagePreviewState {
             self.dirty_texture = false;
         }
 
-        // Keep ownership for this whole frame, even if Save or Cancel closes the dialog.
-        let save_modal_active = self.show_fallback_save_modal;
-        if save_modal_active {
-            egui::Area::new(egui::Id::new("image_save_backdrop"))
-                .order(egui::Order::Middle)
-                .fixed_pos(ctx.screen_rect().min)
-                .show(ctx, |ui| {
-                    let rect = ctx.screen_rect();
-                    ui.allocate_rect(rect, egui::Sense::click());
-                    ui.painter().rect_filled(
-                        rect,
-                        0.0,
-                        hex_to_c32_alpha(&palette.colors.canvas, 180),
-                    );
-                });
-            egui::Window::new("Save Image As")
-                .collapsible(false)
-                .resizable(false)
-                .movable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.add_space(crate::ui_ext::SPACE_XS);
-                    ui.label(egui::RichText::new("Enter destination file path:").strong());
-                    ui.add_space(crate::ui_ext::SPACE_XS);
-                    let path_field = ui.add_sized(
-                        [
-                            ui.available_width().clamp(260.0, 440.0),
-                            crate::ui_ext::CONTROL_HEIGHT,
-                        ],
-                        egui::TextEdit::singleline(&mut self.fallback_save_path),
-                    );
-                    if self.fallback_save_needs_focus {
-                        path_field.request_focus();
-                        self.fallback_save_needs_focus = false;
-                    }
-                    if self.fallback_save_confirm_overwrite {
-                        ui.label(
-                            egui::RichText::new("A file at this path already exists. Replace it?")
-                                .color(hex_to_c32(&palette.harmonies.warm_attention)),
-                        );
-                    }
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-                    ui.horizontal(|ui| {
-                        let save_label = if self.fallback_save_confirm_overwrite {
-                            "Replace"
-                        } else {
-                            "Save"
-                        };
-                        let save_color = if self.fallback_save_confirm_overwrite {
-                            hex_to_c32(&palette.harmonies.warm_attention)
-                        } else {
-                            hex_to_c32(&palette.diff_add)
-                        };
-                        if ui
-                            .add(crate::ui_ext::action_button_icon(
-                                Some(Icon::Save),
-                                save_label,
-                                save_color,
-                                palette,
-                            ))
-                            .clicked()
-                        {
-                            let p = PathBuf::from(&self.fallback_save_path);
-                            if self.fallback_save_confirm_overwrite {
-                                self.save_image_to_path(&p);
-                                self.show_fallback_save_modal = false;
-                                self.fallback_save_needs_focus = false;
-                                self.fallback_save_confirm_overwrite = false;
-                            } else if p.exists() {
-                                self.fallback_save_confirm_overwrite = true;
-                            } else {
-                                self.save_image_to_path(&p);
-                                self.show_fallback_save_modal = false;
-                                self.fallback_save_needs_focus = false;
-                            }
-                        }
-                        if ui.button("Cancel").clicked() {
-                            if self.fallback_save_confirm_overwrite {
-                                self.fallback_save_confirm_overwrite = false;
-                            } else {
-                                self.show_fallback_save_modal = false;
-                                self.fallback_save_needs_focus = false;
-                            }
-                        }
-                    });
-                });
-        }
+        let save_modal_active = self.render_save_dialog(ctx, palette);
 
         if self.render_save_progress(ui, ctx, close) {
             return;
@@ -939,5 +853,99 @@ impl ImagePreviewState {
                     }
                 }
             });
+    }
+    fn render_save_dialog(&mut self, ctx: &egui::Context, palette: &AppPalette) -> bool {
+        // Keep ownership for this whole frame, even if Save or Cancel closes the dialog.
+        let save_modal_active = self.show_fallback_save_modal;
+        if save_modal_active {
+            egui::Area::new(egui::Id::new("image_save_backdrop"))
+                .order(egui::Order::Middle)
+                .fixed_pos(ctx.screen_rect().min)
+                .show(ctx, |ui| {
+                    let rect = ctx.screen_rect();
+                    ui.allocate_rect(rect, egui::Sense::click());
+                    ui.painter().rect_filled(
+                        rect,
+                        0.0,
+                        hex_to_c32_alpha(&palette.colors.canvas, 180),
+                    );
+                });
+            egui::Window::new("Save Image As")
+                .collapsible(false)
+                .resizable(false)
+                .movable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.add_space(crate::ui_ext::SPACE_XS);
+                    ui.label(egui::RichText::new("Enter destination file path:").strong());
+                    ui.add_space(crate::ui_ext::SPACE_XS);
+                    let path_field = ui.add_sized(
+                        [
+                            ui.available_width().clamp(260.0, 440.0),
+                            crate::ui_ext::CONTROL_HEIGHT,
+                        ],
+                        egui::TextEdit::singleline(&mut self.fallback_save_path),
+                    );
+                    if Path::new(&self.fallback_save_path)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| e.eq_ignore_ascii_case("pcx"))
+                    {
+                        ui.label("PCX is lossless; transparency is composited on white.");
+                    }
+                    if self.fallback_save_needs_focus {
+                        path_field.request_focus();
+                        self.fallback_save_needs_focus = false;
+                    }
+                    if self.fallback_save_confirm_overwrite {
+                        ui.label(
+                            egui::RichText::new("A file at this path already exists. Replace it?")
+                                .color(hex_to_c32(&palette.harmonies.warm_attention)),
+                        );
+                    }
+                    ui.add_space(crate::ui_ext::SPACE_SM);
+                    ui.horizontal(|ui| {
+                        let save_label = if self.fallback_save_confirm_overwrite {
+                            "Replace"
+                        } else {
+                            "Save"
+                        };
+                        let save_color = if self.fallback_save_confirm_overwrite {
+                            hex_to_c32(&palette.harmonies.warm_attention)
+                        } else {
+                            hex_to_c32(&palette.diff_add)
+                        };
+                        if ui
+                            .add(crate::ui_ext::action_button_icon(
+                                Some(Icon::Save),
+                                save_label,
+                                save_color,
+                                palette,
+                            ))
+                            .clicked()
+                        {
+                            let p = PathBuf::from(&self.fallback_save_path);
+                            if p.exists() && !self.fallback_save_confirm_overwrite {
+                                self.fallback_save_confirm_overwrite = true;
+                            } else {
+                                self.save_image_to_path(&p);
+                                self.show_fallback_save_modal = false;
+                                self.fallback_save_needs_focus = false;
+                                self.fallback_save_confirm_overwrite = false;
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            if self.fallback_save_confirm_overwrite {
+                                self.fallback_save_confirm_overwrite = false;
+                            } else {
+                                self.show_fallback_save_modal = false;
+                                self.fallback_save_needs_focus = false;
+                            }
+                        }
+                    });
+                });
+        }
+
+        save_modal_active
     }
 }

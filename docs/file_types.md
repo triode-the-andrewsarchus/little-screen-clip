@@ -95,7 +95,7 @@
     - [ ] `.ktx`, `.ktx2` — Khronos Texture format (ASTC/BCn and Basis Universal)
     - [ ] `.lottie` — dotLottie vector animation
     - [ ] `.pct`, `.pic` — Apple QuickDraw PICT (May need disambiguation with PIC microcontroller files and Bio-Rad microscopy on `.pic`)
-    - [ ] `.pcx` — PC Paintbrush / ZBrush alpha brush
+    - [x] `.pcx` — PC Paintbrush RLE images (monochrome, CGA/EGA bit planes, indexed 16/256-color, grayscale and 24-bit RGB); shared photo/color previews and Image Studio, with lossless 24-bit PCX saving and raster export (transparency composited on white for PCX output)
     - [ ] `.sgi`, `.rgb` — Silicon Graphics Image
     - [x] `.svgz` — gzip-compressed SVG; bounded photo/list previews and Image Studio editing with raster export (requires `rsvg-convert`; preserves compressed originals, limits expanded XML to 64 MiB)
     - [ ] `.xpm`, `.xbm` — X11 pixmap / bitmap
