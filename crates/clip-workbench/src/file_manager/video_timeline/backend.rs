@@ -389,16 +389,19 @@ mod format_tests {
     #[test]
     fn added_video_formats_decode_and_produce_list_timeline_strips() {
         let temporary = tempfile::tempdir().unwrap();
-        for (extension, muxer, codec) in [
-            ("mpg", "mpeg", "mpeg2video"),
-            ("mpeg", "mpeg", "mpeg1video"),
-            ("3gp", "3gp", "mpeg4"),
-            ("qt", "mov", "mpeg4"),
-            ("f4v", "f4v", "libx264"),
-            ("asf", "asf", "wmv2"),
-            ("vob", "vob", "mpeg2video"),
-            ("3g2", "3g2", "mpeg4"),
-        ] {
+        let formats: &[(&str, &str, &str, &[&str])] = &[
+            ("mpg", "mpeg", "mpeg2video", &[]),
+            ("mpeg", "mpeg", "mpeg1video", &[]),
+            ("3gp", "3gp", "mpeg4", &[]),
+            ("qt", "mov", "mpeg4", &[]),
+            ("f4v", "f4v", "libx264", &[]),
+            ("asf", "asf", "wmv2", &[]),
+            ("vob", "vob", "mpeg2video", &[]),
+            ("3g2", "3g2", "mpeg4", &[]),
+            ("m2ts", "mpegts", "mpeg2video", &["-mpegts_m2ts_mode", "1"]),
+            ("mts", "mpegts", "mpeg2video", &[]),
+        ];
+        for &(extension, muxer, codec, options) in formats {
             let path = temporary.path().join(format!("fixture.{extension}"));
             let generated = CommandRequest::new("ffmpeg")
                 .args([
@@ -417,11 +420,17 @@ mod format_tests {
                     "-f",
                     muxer,
                 ])
+                .args(options.iter().copied())
                 .arg(path.as_os_str())
                 .timeout(Duration::from_secs(15))
                 .run()
                 .unwrap();
             assert!(generated.status.success(), "{}", generated.stderr_lossy());
+            if extension == "m2ts" {
+                let bytes = std::fs::read(&path).unwrap();
+                assert_eq!(bytes.len() % 192, 0);
+                assert_eq!(bytes[4], 0x47); // Four-byte M2TS timestamp precedes each TS packet.
+            }
             let directory =
                 filesystem::read_directory(temporary.path(), &AtomicBool::new(false)).unwrap();
             let entry = directory

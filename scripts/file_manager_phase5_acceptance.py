@@ -28,15 +28,16 @@ def audio_tail(session):
 
 
 def unavailable_video(session, root):
-    session.observe("01-video-tools", ["movie.mp4"])
-    x, y = session.word("01-video-tools", "movie.mp4", minimum_y=300)
+    filename = next(root.glob("movie.*")).name
+    session.observe("01-video-tools", [filename])
+    x, y = session.word("01-video-tools", filename, minimum_y=300)
     session.click(x, y)
     session.key("Return")
     session.observe("02-unavailable-player", ["install the FFmpeg player package", "Open externally", "Back to folder"])
     windows = json.loads(private.run_checked([str(session.niri), "msg", "--json", "windows"], env=session.env))
     assert not any(window["title"] == "Files video" for window in windows)
-    back(session, "02-unavailable-player")
-    session.observe("03-tools-return", ["movie.mp4", "notes.txt"])
+    click_word(session, "02-unavailable-player", "Back", minimum_y=50, maximum_y=95)
+    session.observe("03-tools-return", [filename, "notes.txt"])
 
 
 def unavailable_environment(output, env, children):
@@ -186,8 +187,9 @@ def music(session, root):
 
 
 def video(session, root):
-    session.observe("01-video-folder", ["movie.mp4", "notes.txt", "subfolder"])
-    x, y = session.word("01-video-folder", "movie.mp4", minimum_y=250)
+    filename = next(root.glob("movie.*")).name
+    session.observe("01-video-folder", [filename, "notes.txt", "subfolder"])
+    x, y = session.word("01-video-folder", filename, minimum_y=250)
     session.click(x, y)
     session.key("Return")
     def windows():
@@ -201,6 +203,7 @@ def video(session, root):
         private.run_checked([str(session.niri), "msg", "action", "toggle-window-floating"], env=session.env)
     def capture(name):
         path = session.output / f"{name}.png"
+        path.unlink(missing_ok=True)
         private.screenshot(session.niri, session.env, path)
         return Image.open(path).convert("RGB")
     def changed(a, b):
@@ -220,16 +223,16 @@ def video(session, root):
     wait_for(lambda: player_window() is None, "closed video window")
     files = next(window for window in windows() if window["app_id"] == "little-clip-file-manager")
     private.run_checked([str(session.niri), "msg", "action", "focus-window", "--id", str(files["id"])], env=session.env)
-    session.observe("06-video-closed", ["Video playback", "Video finished or closed", "Replay video"])
+    session.observe("06-video-closed", [filename, "Video finished or closed", "Replay video"])
     click_word(session, "06-video-closed", "Replay")
     wait_for(player_window, "replayed video window")
     child_pid = int(subprocess.check_output(["pgrep", "-P", str(session.process.pid), "ffplay"]).strip())
     private.run_checked([str(session.niri), "msg", "action", "focus-window", "--id", str(files["id"])], env=session.env)
     session.observe("07-video-replayed", ["Playing in the Files video window", "Back to folder"])
-    click_word(session, "07-video-replayed", "Back")
+    click_word(session, "07-video-replayed", "Back", minimum_y=50, maximum_y=95)
     wait_for(lambda: not Path(f"/proc/{child_pid}").exists(), "returning to folder reaps FFplay")
-    session.observe("08-return-folder", ["movie.mp4", "notes.txt", "subfolder"])
-    x, y = session.word("08-return-folder", "movie.mp4", minimum_y=250)
+    session.observe("08-return-folder", [filename, "notes.txt", "subfolder"])
+    x, y = session.word("08-return-folder", filename, minimum_y=250)
     session.click(x, y)
     session.key("Return")
     wait_for(player_window, "video session for application-close ownership check")
@@ -238,8 +241,13 @@ def video(session, root):
     private.run_checked([str(session.niri), "msg", "action", "focus-window", "--id", str(files["id"])], env=session.env)
 
 
+def video_arguments(parser):
+    parser.add_argument("--scenario", choices=["gallery", "music", "video", "video-unavailable"], default="gallery")
+    parser.add_argument("--video-extension", choices=["mp4", "mpeg", "mpg", "3gp", "3g2", "m2ts", "mts", "vob", "asf", "f4v", "qt"], default="mp4")
+
+
 def main():
-    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager", lambda p: p.add_argument("--scenario", choices=["gallery", "music", "video", "video-unavailable"], default="gallery"))
+    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager", video_arguments)
     output, root = media_fixture_directory(args)
     if args.scenario == "music":
         folder = music_fixture(output, root)
@@ -248,7 +256,19 @@ def main():
     if args.scenario in ("video", "video-unavailable"):
         (root / "notes.txt").write_text("VIDEONOTE")
         (root / "subfolder").mkdir()
-        private.run_checked(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=60", "-f", "lavfi", "-i", "sine=frequency=440:duration=60", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(root / "movie.mp4")], env=os.environ, timeout=30)
+        extension = args.video_extension
+        if extension == "mp4":
+            private.run_checked(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=60", "-f", "lavfi", "-i", "sine=frequency=440:duration=60", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(root / "movie.mp4")], env=os.environ, timeout=30)
+        else:
+            muxer, codec = {
+                "mpeg": ("mpeg", "mpeg1video"), "mpg": ("mpeg", "mpeg2video"),
+                "3gp": ("3gp", "mpeg4"), "3g2": ("3g2", "mpeg4"),
+                "m2ts": ("mpegts", "mpeg2video"), "mts": ("mpegts", "mpeg2video"),
+                "vob": ("vob", "mpeg2video"), "asf": ("asf", "wmv2"),
+                "f4v": ("f4v", "libx264"), "qt": ("mov", "mpeg4"),
+            }[extension]
+            options = ["-mpegts_m2ts_mode", "1"] if extension == "m2ts" else []
+            private.run_checked(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=60", "-an", "-c:v", codec, "-threads", "2", "-f", muxer, *options, str(root / f"movie.{extension}")], env=os.environ, timeout=30)
         if args.scenario == "video-unavailable":
             return run_application_acceptance(args, output, root, unavailable_video, "video-unavailable", lambda env, children: unavailable_environment(output, env, children))
         return run_application_acceptance(args, output, root, video, "video", lambda env, children: start_private_audio(output, env, children))
