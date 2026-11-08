@@ -132,7 +132,7 @@
     - [x] `.ts`
     - [x] `.webm`
     - [x] `.wmv`
-    - [ ] `.3gp`
+    - [x] `.3gp` — 3GPP video; playback and timeline strips via FFmpeg
     - [ ] `.m2ts`, `.mts`
     - [x] `.mpeg`, `.mpg` — MPEG program stream; video playback and timeline strips via FFmpeg
     - [ ] `.vob`

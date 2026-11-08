@@ -392,6 +392,7 @@ mod format_tests {
         for (extension, muxer, codec) in [
             ("mpg", "mpeg", "mpeg2video"),
             ("mpeg", "mpeg", "mpeg1video"),
+            ("3gp", "3gp", "mpeg4"),
         ] {
             let path = temporary.path().join(format!("fixture.{extension}"));
             let generated = CommandRequest::new("ffmpeg")
