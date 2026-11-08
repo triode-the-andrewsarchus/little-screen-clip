@@ -45,6 +45,7 @@ pub(in crate::file_manager) enum Source {
     Binary(PathBuf),
     Font(PathBuf),
     Notebook(PathBuf),
+    Subtitle(PathBuf),
     FontRaster {
         document: Arc<super::super::font_strip::Document>,
         width: u32,
@@ -102,6 +103,7 @@ impl Source {
             | Self::Blend(_) => (gallery_preview_jobs(), 4, 15),
             Self::Text(_)
             | Self::Font(_)
+            | Self::Subtitle(_)
             | Self::Notebook(_)
             | Self::FontRaster { .. }
             | Self::Binary(_)
@@ -181,6 +183,7 @@ impl Source {
                 data
             }
             Source::System(path) => super::super::system::load(&path, token),
+            Source::Subtitle(path) => super::super::subtitle_strip::load(&path, token),
             Source::Notebook(path) => super::super::notebook::load(&path, token),
             Source::Font(path) => super::super::font_strip::load(&path, token),
             Source::FontRaster {

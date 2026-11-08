@@ -138,6 +138,9 @@ impl TextPreviewState {
 
                 // Zone 2b: Find Toolbar (if open)
                 if self.show_find {
+                    if self.view_mode == TextViewMode::SubtitleTimeline {
+                        self.show_subtitle_source();
+                    }
                     self.render_search_toolbar(ui, palette);
                 }
 
@@ -155,7 +158,15 @@ impl TextPreviewState {
                         TextViewMode::RenderedMarkdown => {
                             self.render_markdown_view(ui, palette);
                         }
+                        TextViewMode::SubtitleTimeline => {
+                            if let Some(viewer) = &mut self.subtitle_view {
+                                viewer.show(ui, palette);
+                            }
+                        }
                         TextViewMode::Raw => {
+                            if let Some(error) = &self.subtitle_error {
+                                ui.label(format!("Cue timeline unavailable: {error}"));
+                            }
                             self.render_raw_code_view(ui, palette);
                         }
                     },
@@ -217,6 +228,26 @@ impl TextPreviewState {
     }
 
     pub(super) fn render_header_toggle_buttons(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        if self.subtitle_view.is_some() {
+            let tabs = [
+                crate::ui_tabs::Tab::new(TextViewMode::SubtitleTimeline, "Cue timeline"),
+                crate::ui_tabs::Tab::new(TextViewMode::Raw, "Raw / Code"),
+            ];
+            if let Some(mode) =
+                crate::ui_tabs::TabBar::new("subtitle_views", self.view_mode, &tabs, palette)
+                    .show(ui)
+            {
+                if mode == TextViewMode::Raw {
+                    self.show_subtitle_source();
+                } else {
+                    self.view_mode = mode;
+                }
+            }
+            if self.view_mode == TextViewMode::SubtitleTimeline {
+                return;
+            }
+        }
+
         let wrap_label = if self.wrap_lines {
             "Wrap: ON"
         } else {

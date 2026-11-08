@@ -94,9 +94,7 @@ pub(super) struct Viewers {
     config: AppConfig,
     gallery: Option<gallery::Collection>,
     video_start_seconds: f64,
-    text_start_line: Option<usize>,
-    pdf_start_page: Option<usize>,
-    notebook_start_cell: Option<usize>,
+    document_start: Option<super::DocumentPosition>,
     system_navigation: Option<super::system::BrowserTarget>,
 }
 impl Viewers {
@@ -141,9 +139,7 @@ impl Viewers {
             return;
         }
         self.video_start_seconds = 0.0;
-        self.text_start_line = None;
-        self.pdf_start_page = None;
-        self.notebook_start_cell = None;
+        self.document_start = None;
         let source = path.clone();
         let config = self.config.clone();
         let executor = if system {
@@ -189,33 +185,12 @@ impl Viewers {
         self.open(path);
         self.video_start_seconds = seconds;
     }
-    pub fn open_text_at(&mut self, path: PathBuf, line: usize) {
-        if self.active() {
-            return;
-        }
-        self.open(path);
-        self.text_start_line = Some(line);
-    }
     pub fn open_document_at(&mut self, path: PathBuf, position: super::DocumentPosition) {
-        match position {
-            super::DocumentPosition::PdfPage(page) => self.open_pdf_at(path, page),
-            super::DocumentPosition::TextLine(line) => self.open_text_at(path, line),
-            super::DocumentPosition::NotebookCell(cell) => self.open_notebook_at(path, cell),
-        }
-    }
-    pub fn open_notebook_at(&mut self, path: PathBuf, cell: usize) {
         if self.active() {
             return;
         }
         self.open(path);
-        self.notebook_start_cell = Some(cell);
-    }
-    pub fn open_pdf_at(&mut self, path: PathBuf, page: usize) {
-        if self.active() {
-            return;
-        }
-        self.open(path);
-        self.pdf_start_page = Some(page.max(1));
+        self.document_start = Some(position);
     }
     fn poll(&mut self, ctx: &Context) {
         let Some(loading) = &self.loading else { return };
@@ -258,28 +233,30 @@ impl Viewers {
             }
             Err(error) => self.error = Some(error),
         }
-        if let Some(ViewerSession::Notebook(state)) = &mut self.session
-            && let Some(cell) = self.notebook_start_cell.take()
-        {
-            state.select(cell);
+        match (&mut self.session, self.document_start.take()) {
+            (
+                Some(ViewerSession::Notebook(state)),
+                Some(super::DocumentPosition::NotebookCell(cell)),
+            ) => state.select(cell),
+            (Some(ViewerSession::Pdf(state)), Some(super::DocumentPosition::PdfPage(page))) => {
+                state.selected_page = Some(page.max(1))
+            }
+            (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::TextLine(line))) => {
+                state.preview.view_mode = crate::text_preview::TextViewMode::Raw;
+                state.preview.center_source_line = Some(line);
+            }
+            (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::SubtitleCue(cue))) => {
+                state.preview.select_subtitle(cue)
+            }
+            _ => {}
         }
         if let Some(ViewerSession::Audio(state)) = &mut self.session
             && let Some((start, end)) = self.pad_trim.take()
         {
             state.selection = Some((start.min(state.duration_sec), end.min(state.duration_sec)));
         }
-        if let Some(ViewerSession::Pdf(state)) = &mut self.session
-            && let Some(page) = self.pdf_start_page.take()
-        {
-            state.selected_page = Some(page);
-        }
-        if let Some(ViewerSession::Text(state)) = &mut self.session
-            && let Some(line) = self.text_start_line.take()
-        {
-            state.preview.view_mode = crate::text_preview::TextViewMode::Raw;
-            state.preview.center_source_line = Some(line);
-        }
     }
+
     pub fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) -> bool {
         self.poll(ui.ctx());
         self.poll_file_source(ui.ctx());
@@ -481,7 +458,9 @@ enum Kind {
     External,
 }
 fn kind(path: &Path) -> Kind {
-    if super::text_strip::is_typescript_source(path) {
+    if super::text_strip::is_typescript_source(path)
+        || little_clip_core::subtitles::is_subtitle_path(path)
+    {
         Kind::Text
     } else if let Some(kind) = extension_kind(path) {
         kind
@@ -750,6 +729,31 @@ mod tests {
                 Loaded::Font(_)
             ));
         }
+    }
+
+    #[test]
+    fn clicked_subtitle_cue_survives_background_loading() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/subtitles/sample.srt");
+        let mut viewers = Viewers::default();
+        let ctx = Context::default();
+        viewers.open_document_at(path, super::super::DocumentPosition::SubtitleCue(1));
+        finish_loading(&mut viewers, &ctx);
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                viewers.render_session(
+                    ui,
+                    &crate::ui_appearance::palette(
+                        little_clip_core::config::WorkbenchAppearance::Dark,
+                    ),
+                    &mut false,
+                )
+            });
+        });
+        assert!(output.shapes.iter().any(
+            |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Cue 2")
+        ));
+        assert!(viewers.request_close());
     }
 
     #[test]

@@ -276,6 +276,25 @@ pub(crate) fn read_file_bytes(
     Ok(bytes)
 }
 
+/// Reads a complete bounded snapshot through one guarded handle and checks its identity.
+pub(crate) fn read_file_snapshot(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+    let mut file = open_regular_file(path, true).map_err(|e| e.to_string())?;
+    let source = FileSource::capture_file(&file)?;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > limit {
+        return Err("Preview source exceeds its read limit".into());
+    }
+    if FileSource::capture_file(&file)? != source {
+        return Err("Source changed while reading".into());
+    }
+    source.check()?;
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

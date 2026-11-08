@@ -255,3 +255,24 @@ fn inline_text_source_seeds_independent_full_studios_without_loading_again() {
     assert_eq!(second.scroll_to_line, None);
     assert_eq!(second.code_selection, None);
 }
+
+#[test]
+fn subtitle_preview_targets_raw_source_and_invalid_timing_falls_back_without_losing_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("captions.SRT");
+    let source =
+        "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n2\n00:00:03,000 --> 00:00:04,000\nWorld";
+    std::fs::write(&path, source).unwrap();
+    let mut state = TextPreviewState::from_file(&path, &Default::default()).unwrap();
+    assert_eq!(state.view_mode, TextViewMode::SubtitleTimeline);
+    state.select_subtitle(1);
+    state.show_subtitle_source();
+    assert_eq!(state.center_source_line, Some(6));
+    assert_eq!(state.content.as_str(), source);
+    let invalid = source.replace("00:00:04,000", "00:00:02,000");
+    std::fs::write(&path, &invalid).unwrap();
+    let state = TextPreviewState::from_file(&path, &Default::default()).unwrap();
+    assert_eq!(state.view_mode, TextViewMode::Raw);
+    assert!(state.subtitle_error.as_deref().unwrap().contains("before"));
+    assert_eq!(state.content.as_str(), invalid);
+}

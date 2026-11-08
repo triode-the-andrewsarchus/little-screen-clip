@@ -29,6 +29,9 @@ pub(super) struct Entry {
 }
 
 impl Entry {
+    pub(super) fn is_subtitles(&self) -> bool {
+        self.regular_file && little_clip_core::subtitles::is_subtitle_path(&self.path)
+    }
     pub(super) fn is_notebook(&self) -> bool {
         self.regular_file && super::notebook::known(&self.path)
     }

@@ -247,6 +247,8 @@ impl EntryPreviews {
                         path: entry.path.clone(),
                         revision: entry.revision,
                     }
+                } else if entry.is_subtitles() {
+                    Source::Subtitle(entry.path.clone())
                 } else if entry.is_notebook() {
                     Source::Notebook(entry.path.clone())
                 } else if entry.regular_file && super::font_strip::known(&entry.path) {
@@ -294,7 +296,10 @@ impl EntryPreviews {
         colors: crate::ui_appearance::WorkbenchColors,
         palette: &little_clip_core::palette::AppPalette,
     ) -> Option<super::DocumentPosition> {
-        if entry.is_notebook() {
+        if entry.is_subtitles() {
+            super::subtitle_strip::show_list(ui, row, entry, columns, self.listing(entry), colors)
+                .map(super::DocumentPosition::SubtitleCue)
+        } else if entry.is_notebook() {
             super::notebook::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::NotebookCell)
         } else if entry.is_paged_document() {
@@ -796,6 +801,7 @@ fn raster_dimensions(ui: &egui::Ui, rect: egui::Rect) -> (u32, u32) {
 
 fn text_candidate(entry: &Entry) -> bool {
     entry.regular_file
+        && !entry.is_subtitles()
         && !super::notebook::known(&entry.path)
         && !super::font_strip::known(&entry.path)
         && !super::midi_strip::is_midi(&entry.path)

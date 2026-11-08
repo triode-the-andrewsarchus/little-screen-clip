@@ -152,7 +152,7 @@
     - [ ] `.insv` — Insta360 video
     - [ ] `.insp` — Insta360 photo
   - [ ] Subtitle and caption files
-    - [ ] `.srt` — SubRip
+    - [x] `.srt` — SubRip; UTF-8 cue timeline and list strip with gaps/overlaps, cue/source navigation, and guarded text editing (2 MiB edit / 8 MiB preview limits; formatting retained as literal text)
     - [ ] `.ass`, `.ssa` — Advanced SubStation Alpha / SubStation Alpha
     - [ ] `.vtt` — WebVTT
     - [ ] `.ttml` — Timed Text Markup Language

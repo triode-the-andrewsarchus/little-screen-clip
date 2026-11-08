@@ -115,6 +115,8 @@ mod state_sync;
 #[cfg(not(test))]
 pub use clip_workbench::text_preview;
 #[cfg(test)]
+mod subtitle_view;
+#[cfg(test)]
 mod text_preview;
 use clip_workbench::ui_appearance;
 pub use clip_workbench::{ui_ext, ui_tabs};

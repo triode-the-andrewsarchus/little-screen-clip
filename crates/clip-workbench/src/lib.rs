@@ -29,6 +29,7 @@ pub mod pdf_view;
 pub mod shell;
 pub mod splat_view;
 pub mod spreadsheet_view;
+mod subtitle_view;
 pub mod text_preview;
 
 pub use model3d_view::Model3dViewerState;

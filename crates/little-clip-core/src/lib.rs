@@ -37,6 +37,7 @@ pub mod raw_image;
 pub mod rolling_audio;
 pub mod slot;
 pub mod staging;
+pub mod subtitles;
 pub mod syntax;
 pub use color::parse_hex_color;
 pub use palette::{AppPalette, BaseColors, DerivedHarmonies, Oklab, Oklch};

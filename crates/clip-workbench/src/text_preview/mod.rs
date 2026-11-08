@@ -90,6 +90,8 @@ pub struct TextPreviewData {
     content: Arc<String>,
     language: &'static str,
     is_markdown: bool,
+    subtitles: Option<Arc<little_clip_core::subtitles::Document>>,
+    subtitle_error: Option<String>,
     code_fragments: Arc<Vec<CodeFragment>>,
     line_first_fragment: Arc<Vec<usize>>,
 }
@@ -222,6 +224,8 @@ impl TextPreviewData {
             content,
             language,
             is_markdown,
+            subtitles: None,
+            subtitle_error: None,
             code_fragments: Arc::new(code_fragments),
             line_first_fragment: Arc::new(line_first_fragment),
         })
@@ -230,7 +234,23 @@ impl TextPreviewData {
     pub(crate) fn from_source(content: Arc<String>, extension: Option<&str>) -> Arc<Self> {
         let line_starts = line_start_offsets(&content);
         let (code_fragments, line_first_fragment) = code_fragments(&content, &line_starts);
-        let language = detect_language(&content, extension);
+        let subtitle = extension.is_some_and(|extension| extension.eq_ignore_ascii_case("srt"));
+        let (subtitles, subtitle_error) = if subtitle {
+            match little_clip_core::subtitles::Document::parse_srt(
+                &content,
+                &AtomicBool::new(false),
+            ) {
+                Ok(document) => (Some(Arc::new(document)), None),
+                Err(error) => (None, Some(error)),
+            }
+        } else {
+            (None, None)
+        };
+        let language = if subtitle {
+            "txt"
+        } else {
+            detect_language(&content, extension)
+        };
         let is_markdown = extension
             .map(|extension| {
                 extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
@@ -241,6 +261,8 @@ impl TextPreviewData {
             content,
             language,
             is_markdown,
+            subtitles,
+            subtitle_error,
             code_fragments: Arc::new(code_fragments),
             line_first_fragment: Arc::new(line_first_fragment),
         })
@@ -422,6 +444,8 @@ pub enum TextViewMode {
     Raw,
     /// Rendered Markdown with rich formatting.
     RenderedMarkdown,
+    /// Subtitle cue timeline and selected caption.
+    SubtitleTimeline,
 }
 
 /// A matched range in the text for Find navigation.
@@ -440,6 +464,8 @@ pub struct TextPreviewState {
     pub language: &'static str,
     pub is_markdown: bool,
     pub view_mode: TextViewMode,
+    subtitle_view: Option<crate::subtitle_view::Viewer>,
+    subtitle_error: Option<String>,
     pub wrap_lines: bool,
     pub show_line_numbers: bool,
     pub editor_cmd: String,
@@ -509,6 +535,20 @@ pub(super) fn update_search_matches_and_wait(state: &mut TextPreviewState) {
 }
 
 impl TextPreviewState {
+    pub(crate) fn select_subtitle(&mut self, cue: usize) {
+        if let Some(viewer) = &mut self.subtitle_view {
+            viewer.select(cue);
+            self.view_mode = TextViewMode::SubtitleTimeline;
+        }
+    }
+    fn show_subtitle_source(&mut self) {
+        self.center_source_line = self
+            .subtitle_view
+            .as_ref()
+            .and_then(|viewer| viewer.source_line());
+        self.view_mode = TextViewMode::Raw;
+    }
+
     /// Creates a new text preview from in-memory text.
     pub fn from_text(text: String, title: Option<String>, config: &AppConfig) -> Self {
         Self::from_data(TextPreviewData::from_text(Arc::new(text)), title, config)
@@ -530,7 +570,9 @@ impl TextPreviewState {
             }
         });
         let show_line_numbers = data.language != "txt" && !data.is_markdown;
-        let view_mode = if data.is_markdown {
+        let view_mode = if data.subtitles.is_some() {
+            TextViewMode::SubtitleTimeline
+        } else if data.is_markdown {
             TextViewMode::RenderedMarkdown
         } else {
             TextViewMode::Raw
@@ -554,6 +596,11 @@ impl TextPreviewState {
             language: data.language,
             is_markdown: data.is_markdown,
             view_mode,
+            subtitle_view: data
+                .subtitles
+                .clone()
+                .map(crate::subtitle_view::Viewer::new),
+            subtitle_error: data.subtitle_error.clone(),
             wrap_lines: true,
             show_line_numbers,
             editor_cmd: config.text.resolve_editor(),
@@ -594,7 +641,18 @@ impl TextPreviewState {
     /// Creates a new text preview from a file on disk.
     pub fn from_file<P: AsRef<Path>>(path: P, config: &AppConfig) -> Option<Self> {
         let path_ref = path.as_ref();
-        let content = little_clip_ops::read_text_file_preview(path_ref, 2 * 1024 * 1024)?;
+        let content = if little_clip_core::subtitles::is_subtitle_path(path_ref) {
+            String::from_utf8(
+                crate::file_source::read_file_snapshot(
+                    path_ref,
+                    little_clip_core::subtitles::MAX_BYTES,
+                )
+                .ok()?,
+            )
+            .ok()?
+        } else {
+            little_clip_ops::read_text_file_preview(path_ref, 2 * 1024 * 1024)?
+        };
         let ext = path_ref.extension().and_then(|e| e.to_str());
         let data = TextPreviewData::from_source(Arc::new(content), ext);
         let title = path_ref
@@ -602,7 +660,9 @@ impl TextPreviewState {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "Text file".to_string());
         let show_line_numbers = data.language != "txt" && !data.is_markdown;
-        let view_mode = if data.is_markdown {
+        let view_mode = if data.subtitles.is_some() {
+            TextViewMode::SubtitleTimeline
+        } else if data.is_markdown {
             TextViewMode::RenderedMarkdown
         } else {
             TextViewMode::Raw

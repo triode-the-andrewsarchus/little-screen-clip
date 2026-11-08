@@ -1,8 +1,6 @@
 //! Passive nbformat 4 content. No kernel, HTML execution, or external resource loading.
-use crate::file_source::FileSource;
 use serde_json::Value;
 use std::{
-    io::Read,
     path::Path,
     sync::{
         Arc,
@@ -65,19 +63,8 @@ pub(super) struct Document {
 }
 
 pub(super) fn load(path: &Path, token: &AtomicBool) -> Result<Document, String> {
-    let mut file = crate::file_source::open_regular_file(path, true).map_err(|e| e.to_string())?;
-    let source = FileSource::capture_file(&file)?;
-    let mut bytes = Vec::new();
-    file.by_ref()
-        .take(MAX_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    let document = parse(&bytes, token)?;
-    if FileSource::capture_file(&file)? != source {
-        return Err("Notebook changed while reading".into());
-    }
-    source.check()?;
-    Ok(document)
+    let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;
+    parse(&bytes, token)
 }
 fn parse(bytes: &[u8], token: &AtomicBool) -> Result<Document, String> {
     if token.load(Ordering::Relaxed) {

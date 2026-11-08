@@ -31,6 +31,7 @@ pub(crate) mod search;
 mod selection;
 mod shelf;
 mod sorting;
+mod subtitle_strip;
 pub(crate) mod system;
 mod system_route;
 mod text_editor;
@@ -87,6 +88,7 @@ pub(super) enum DocumentPosition {
     TextLine(usize),
     PdfPage(usize),
     NotebookCell(usize),
+    SubtitleCue(usize),
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -795,6 +797,7 @@ impl FileManager {
                     || entry.is_blend()
                     || entry.is_material()
                     || entry.is_photo()
+                    || entry.is_subtitles()
                     || entry.is_notebook()
                     || entry.is_paged_document()
                 {

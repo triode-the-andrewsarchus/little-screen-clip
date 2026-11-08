@@ -193,20 +193,9 @@ impl Viewer {
             for index in rows {
                 let cell = &self.document.cells[index];
                 let caption = format!("{} · {} · {}", index + 1, cell.kind.label(), cell.title);
-                let mut layout = egui::text::LayoutJob::simple(
-                    caption,
-                    egui::TextStyle::Button.resolve(ui.style()),
-                    egui::Color32::PLACEHOLDER,
-                    (ui.available_width() - 12.0).max(1.0),
-                );
-                layout.wrap.max_rows = 1;
-                let galley = ui.fonts(|fonts| fonts.layout_job(layout));
-                let response = ui
-                    .add_sized(
-                        vec2(ui.available_width(), 26.0),
-                        egui::SelectableLabel::new(self.selected == index, galley),
-                    )
-                    .on_hover_text(&cell.title);
+                let response =
+                    crate::ui_ext::selectable_text_row(ui, caption, self.selected == index, 26.0)
+                        .on_hover_text(&cell.title);
                 if response.clicked() {
                     self.select(index);
                 }

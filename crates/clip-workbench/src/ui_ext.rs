@@ -1769,3 +1769,24 @@ mod tests {
         assert_eq!(oversized.max.y, bounds.max.y);
     }
 }
+
+/// Draws one clipped, single-line selection row without expanding its host panel.
+pub fn selectable_text_row(
+    ui: &mut Ui,
+    text: impl Into<String>,
+    selected: bool,
+    height: f32,
+) -> Response {
+    let mut layout = egui::text::LayoutJob::simple(
+        text.into(),
+        TextStyle::Button.resolve(ui.style()),
+        Color32::PLACEHOLDER,
+        (ui.available_width() - 12.0).max(1.0),
+    );
+    layout.wrap.max_rows = 1;
+    let galley = ui.fonts(|fonts| fonts.layout_job(layout));
+    ui.add_sized(
+        Vec2::new(ui.available_width(), height),
+        egui::SelectableLabel::new(selected, galley),
+    )
+}

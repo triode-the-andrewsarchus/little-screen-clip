@@ -1,0 +1,16 @@
+1
+00:00:01,000 --> 00:00:04,000
+Welcome to the garden.
+A second caption line.
+
+7
+00:00:03,000 --> 00:00:05,000
+Two voices overlap.
+
+8
+00:00:08,000 --> 00:00:09,500
+A quiet gap precedes this cue.
+
+10
+00:00:10,000 --> 00:00:10,000
+An instant marker.

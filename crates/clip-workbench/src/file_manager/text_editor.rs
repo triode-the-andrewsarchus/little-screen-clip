@@ -272,6 +272,35 @@ mod tests {
     }
 
     #[test]
+    fn subtitle_save_rebuilds_the_cue_timeline_and_preserves_the_draft() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("captions.srt");
+        std::fs::write(&path, "1\n00:00:01,000 --> 00:00:02,000\nOriginal\n").unwrap();
+        let mut session = TextSession::load(&path, &Default::default()).unwrap();
+        let editor = session.editor.as_mut().unwrap();
+        let replacement = "1\n00:00:03,000 --> 00:00:05,000\nEdited\n";
+        editor.text = replacement.into();
+        editor.save(path.clone());
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let refreshed = loop {
+            if let Some(refreshed) = editor.poll(&ctx) {
+                break refreshed;
+            }
+            assert!(editor.pending.is_some(), "{:?}", editor.error);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(
+            refreshed.view_mode,
+            crate::text_preview::TextViewMode::SubtitleTimeline
+        );
+        assert_eq!(refreshed.content.as_str(), replacement);
+        assert_eq!(std::fs::read_to_string(path).unwrap(), replacement);
+        assert_eq!(editor.text, editor.saved);
+    }
+
+    #[test]
     fn non_utf8_and_large_text_are_inspection_only() {
         let dir = tempfile::tempdir().unwrap();
         for (name, bytes) in [
