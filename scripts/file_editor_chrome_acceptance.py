@@ -10,9 +10,10 @@ from file_manager_phase4_acceptance import open_file
 
 
 def exercise(session, root):
+    audio = "music.m4b" if (root / "music.m4b").exists() else "music.wav"
     cases = [
         ("notes.txt", "renamed.txt", []),
-        ("music.wav", "renamed.wav", ["Selection info"]),
+        (audio, "renamed" + Path(audio).suffix, ["Selection info"]),
         ("document.pdf", "renamed.pdf", ["Pages"]),
         ("table.csv", "renamed.csv", ["Copy Table"]),
         ("score.mid", "renamed.mid", ["BPM"]),
@@ -37,7 +38,7 @@ def exercise(session, root):
         wait_for(lambda: (root / renamed).exists() and not (root / original).exists(), f"rename {original}")
         text = session.observe(f"{index:02d}-renamed", [renamed, "Back to folder"])
         assert "Photo renamed" not in text
-        if original == "music.wav":
+        if original == audio:
             assert "Track gain" not in text
         # Back is in the same top menu for every studio, regardless of its internal docks.
         session.click(1110, 70)
@@ -46,10 +47,14 @@ def exercise(session, root):
 
 
 def main():
-    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager")
+    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager",
+        lambda parser: parser.add_argument("--audio-extension", choices=["wav", "m4b"], default="wav"))
     output, root = media_fixture_directory(args)
     (root / "notes.txt").write_text("A plain text fixture\n")
     fixture.wav_fixture(root / "music.wav", 2, "tone")
+    if args.audio_extension == "m4b":
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(root / "music.wav"), "-c:a", "aac", "-f", "ipod", str(root / "music.m4b")], check=True, timeout=15)
+        (root / "music.wav").unlink()
     fixture.pdf_fixture(root, 2, "document.pdf")
     (root / "table.csv").write_text("name,value\nalpha,1\nbeta,2\n")
     fixture.midi_fixture(root)

@@ -179,7 +179,7 @@
   - [ ] `.caf` — Apple Core Audio Format
   - [ ] `.dts`, `.dtshd` — DTS / DTS-HD audio (May need disambiguation with Device Tree Source files on `.dts`)
   - [ ] `.m3u` — audio playlist
-  - [ ] `.m4b` — MPEG-4 audiobook
+  - [x] `.m4b` — MPEG-4 audiobook; Audio Studio, playback, waveform strips, and region export
     - [ ] Chapter markers, bookmark metadata, and audiobook tags
   - [ ] `.mka` — Matroska audio
     - [ ] Matroska audio tags, track headers, and chapter markers
