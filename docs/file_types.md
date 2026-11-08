@@ -136,7 +136,7 @@
     - [ ] `.m2ts`, `.mts`
     - [x] `.mpeg`, `.mpg` — MPEG program stream; video playback and timeline strips via FFmpeg
     - [ ] `.vob`
-    - [ ] `.3g2` — 3GPP2 multimedia
+    - [x] `.3g2` — 3GPP2 multimedia; playback and timeline strips via FFmpeg
     - [ ] `.asf`, `.asx` — Advanced Systems Format / Stream Redirector
     - [ ] `.f4v` — Flash MP4 video
     - [ ] `.m1v`, `.m2v` — MPEG-1 / MPEG-2 elementary video stream
