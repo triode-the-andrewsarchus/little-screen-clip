@@ -393,6 +393,7 @@ mod format_tests {
             ("mpg", "mpeg", "mpeg2video"),
             ("mpeg", "mpeg", "mpeg1video"),
             ("3gp", "3gp", "mpeg4"),
+            ("qt", "mov", "mpeg4"),
             ("f4v", "f4v", "libx264"),
             ("asf", "asf", "wmv2"),
             ("vob", "vob", "mpeg2video"),

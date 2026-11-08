@@ -143,7 +143,7 @@
     - [ ] `.m1v`, `.m2v` — MPEG-1 / MPEG-2 elementary video stream
     - [ ] `.mxf` — Material eXchange Format (SMPTE broadcast and digital cinema container)
       - [ ] Material Package metadata, track timecodes, and descriptive metadata tracks
-    - [ ] `.qt` — QuickTime movie (alternative extension to `.mov`)
+    - [x] `.qt` — QuickTime movie; playback and timeline strips via FFmpeg
   - [ ] Streaming media playlists and segments
     - [ ] `.m3u8` — HLS playlist
     - [ ] `.mpd` — MPEG-DASH media presentation description
