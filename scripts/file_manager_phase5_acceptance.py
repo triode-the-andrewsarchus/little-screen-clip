@@ -30,7 +30,7 @@ def audio_tail(session):
 def unavailable_video(session, root):
     filename = next(root.glob("movie.*")).name
     session.observe("01-video-tools", [filename])
-    x, y = session.word("01-video-tools", filename, minimum_y=300)
+    x, y = session.word("01-video-tools", filename, minimum_y=240)
     session.click(x, y)
     session.key("Return")
     session.observe("02-unavailable-player", ["install the FFmpeg player package", "Open externally", "Back to folder"])
@@ -189,7 +189,7 @@ def music(session, root):
 def video(session, root):
     filename = next(root.glob("movie.*")).name
     session.observe("01-video-folder", [filename, "notes.txt", "subfolder"])
-    x, y = session.word("01-video-folder", filename, minimum_y=250)
+    x, y = session.word("01-video-folder", filename, minimum_y=240)
     session.click(x, y)
     session.key("Return")
     def windows():
@@ -232,7 +232,7 @@ def video(session, root):
     click_word(session, "07-video-replayed", "Back", minimum_y=50, maximum_y=95)
     wait_for(lambda: not Path(f"/proc/{child_pid}").exists(), "returning to folder reaps FFplay")
     session.observe("08-return-folder", [filename, "notes.txt", "subfolder"])
-    x, y = session.word("08-return-folder", filename, minimum_y=250)
+    x, y = session.word("08-return-folder", filename, minimum_y=240)
     session.click(x, y)
     session.key("Return")
     wait_for(player_window, "video session for application-close ownership check")
