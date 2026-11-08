@@ -392,30 +392,42 @@ fn disconnected_current_edit_worker_reports_error_without_resubmitting() {
 
 #[test]
 fn disconnected_initial_analysis_progress_reports_visible_error() {
-    let (_dir, path) = generate_fixture_wav("analysis_disconnect", 0.1);
-    let jobs = BackgroundJobs::new(1, 1);
-    let mut state = AudioPreviewState::new_with_metadata_on_jobs(
-        path,
-        "analysis_disconnect.wav".into(),
-        None,
-        &jobs,
-    );
-    state.cancel_session_analysis();
-    state.is_loading_analysis = true;
-    let (tx, rx) = channel::<AudioAnalysisProgress>();
-    drop(tx);
-    state.analysis_rx = Some(rx);
-    let (job_tx, job_rx) = channel::<Result<(), JobError>>();
-    drop(job_tx);
-    state.analysis_job_rx = Some(job_rx);
-
-    state.poll_audio_analysis_on(&egui::Context::default(), 1.0, &jobs);
-
-    assert!(!state.is_loading_analysis);
-    assert!(state.status_toast.as_ref().is_some_and(|(message, _)| {
-        message.contains("stopped before completing")
-            || message.contains("disconnected unexpectedly")
-    }));
+    for completion_first in [false, true] {
+        let (_dir, path) = generate_fixture_wav("analysis_disconnect", 0.1);
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = AudioPreviewState::new_with_metadata_on_jobs(
+            path,
+            "analysis_disconnect.wav".into(),
+            None,
+            &jobs,
+        );
+        state.cancel_session_analysis();
+        state.is_loading_analysis = true;
+        let (progress_tx, progress_rx) = channel::<AudioAnalysisProgress>();
+        state.analysis_rx = Some(progress_rx);
+        let (job_tx, job_rx) = channel::<Result<(), JobError>>();
+        state.analysis_job_rx = Some(job_rx);
+        let ctx = egui::Context::default();
+        if completion_first {
+            job_tx.send(Ok(())).unwrap();
+            state.poll_audio_analysis_on(&ctx, 1.0, &jobs);
+            assert!(state.is_loading_analysis);
+            assert!(state.analysis_job_rx.is_none());
+        } else {
+            drop(job_tx);
+        }
+        drop(progress_tx);
+        state.poll_audio_analysis_on(&ctx, 2.0, &jobs);
+        assert!(!state.is_loading_analysis);
+        assert!(state.analysis.is_none());
+        assert!(state.analysis_rx.is_none());
+        if !completion_first {
+            assert!(state.status_toast.as_ref().is_some_and(|(message, _)| {
+                message.contains("stopped before completing")
+                    || message.contains("disconnected unexpectedly")
+            }));
+        }
+    }
 }
 
 #[test]

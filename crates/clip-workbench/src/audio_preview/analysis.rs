@@ -93,6 +93,7 @@ impl AudioPreviewState {
                     Err(TryRecvError::Disconnected) => {
                         finished = true;
                         self.analysis_progress_disconnected = true;
+                        self.is_loading_analysis = false;
                         break;
                     }
                 };
