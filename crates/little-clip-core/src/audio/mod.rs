@@ -182,6 +182,47 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[test]
+    fn audio_conversion_keeps_tail_samples_when_packet_capacity_changes() {
+        use symphonia::core::audio::{AsAudioBufferRef, AudioBuffer, Channels, Signal, SignalSpec};
+        let spec = SignalSpec::new(48000, Channels::FRONT_LEFT | Channels::FRONT_RIGHT);
+        let mut slot = None;
+        for frames in [2usize, 16, 1] {
+            let mut source = AudioBuffer::<i16>::new(frames as u64, spec);
+            source.render_silence(None);
+            source.chan_mut(0).fill(16384);
+            source.chan_mut(1).fill(-16384);
+            let buffer = decode::conversion_buffer(&mut slot, source.capacity(), spec);
+            buffer.copy_interleaved_ref(source.as_audio_buffer_ref());
+            assert_eq!(buffer.samples().len(), frames * 2);
+            assert_eq!(&buffer.samples()[frames * 2 - 2..], &[0.5, -0.5]);
+        }
+    }
+
+    #[test]
+    fn codec_duration_respects_container_clocks_and_sample_rate_fallback() {
+        use symphonia::core::{codecs::CodecParameters, units::TimeBase};
+        let mut params = CodecParameters::new();
+        params.with_sample_rate(48_000).with_n_frames(60_000);
+        assert_eq!(decode::codec_duration_seconds(&params), Some(1.25));
+        params
+            .with_time_base(TimeBase::new(1, 1000))
+            .with_n_frames(1250);
+        assert_eq!(decode::codec_duration_seconds(&params), Some(1.25));
+        params
+            .with_time_base(TimeBase::new(1, 48_000))
+            .with_n_frames(60_000);
+        assert_eq!(decode::codec_duration_seconds(&params), Some(1.25));
+        params.time_base = Some(TimeBase { numer: 0, denom: 1 });
+        assert_eq!(decode::codec_duration_seconds(&params), None);
+        params.time_base = None;
+        params.sample_rate = Some(0);
+        assert_eq!(decode::codec_duration_seconds(&params), None);
+        params.with_sample_rate(48_000);
+        params.n_frames = None;
+        assert_eq!(decode::codec_duration_seconds(&params), None);
+    }
+
     fn generate_test_wav() -> std::path::PathBuf {
         let temp_dir = std::env::temp_dir();
         let path = temp_dir.join(format!("test_clip_{}.wav", uuid::Uuid::new_v4()));

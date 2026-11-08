@@ -182,7 +182,7 @@
   - [ ] `.m3u` — audio playlist
   - [x] `.m4b` — MPEG-4 audiobook; Audio Studio, playback, waveform strips, and region export
     - [ ] Chapter markers, bookmark metadata, and audiobook tags
-  - [ ] `.mka` — Matroska audio
+  - [x] `.mka` — Matroska audio; Audio Studio, playback, waveform strips and region export for FLAC, PCM, AAC-LC, Vorbis and MP3 tracks
     - [ ] Matroska audio tags, track headers, and chapter markers
   - [x] `.mp2` — MPEG Audio Layer II; Audio Studio, playback, waveform strips and region export
 - [ ] Documents and text

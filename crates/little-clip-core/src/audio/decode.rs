@@ -9,13 +9,13 @@ use realfft::RealFftPlanner;
 use rustchord::cc_to_rgb;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::audio::{SampleBuffer, SignalSpec};
+use symphonia::core::codecs::{CodecParameters, DecoderOptions};
 use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use symphonia::core::units::Time;
+use symphonia::core::units::{Time, TimeBase};
 
 pub fn is_audio_path(path: &Path) -> bool {
     let ext = path
@@ -26,7 +26,7 @@ pub fn is_audio_path(path: &Path) -> bool {
     match ext.as_deref() {
         Some(
             "mp2" | "mp3" | "wav" | "wave" | "flac" | "ogg" | "oga" | "m4a" | "m4b" | "aac"
-            | "adts" | "caf" | "alac" | "aiff" | "aif" | "opus" | "wma",
+            | "adts" | "caf" | "mka" | "alac" | "aiff" | "aif" | "opus" | "wma",
         ) => true,
         _ => false,
     }
@@ -67,14 +67,10 @@ pub fn read_audio_metadata(path: &Path) -> Option<AudioMetadata> {
         .unwrap_or("AUDIO")
         .to_uppercase();
 
-    // Estimate duration
-    let duration_ms = if let Some(n_frames) = track.codec_params.n_frames {
-        (n_frames as f64 / sample_rate as f64 * 1000.0) as u64
-    } else {
-        // Fallback: estimate from file size (assuming ~192kbps average if unknown)
-        let est_sec = (file_len as f64 * 8.0) / (192.0 * 1000.0);
-        (est_sec * 1000.0) as u64
-    };
+    // Container ticks need not be PCM samples (Matroska commonly uses milliseconds).
+    let duration_sec =
+        codec_duration_seconds(&track.codec_params).unwrap_or(file_len as f64 * 8.0 / 192_000.0);
+    let duration_ms = (duration_sec * 1000.0) as u64;
 
     Some(AudioMetadata {
         duration_ms,
@@ -82,6 +78,35 @@ pub fn read_audio_metadata(path: &Path) -> Option<AudioMetadata> {
         channels,
         format: format_name,
     })
+}
+
+// Prefer the declared container clock; older readers may expose only a sample rate.
+pub(super) fn codec_duration_seconds(params: &CodecParameters) -> Option<f64> {
+    let ticks = params.n_frames?;
+    let base = params.time_base.or_else(|| {
+        params
+            .sample_rate
+            .filter(|rate| *rate > 0)
+            .map(|rate| TimeBase::new(1, rate))
+    })?;
+    if base.numer == 0 || base.denom == 0 {
+        return None;
+    }
+    let time = base.calc_time(ticks);
+    Some(time.seconds as f64 + time.frac)
+}
+
+// Reuse conversion storage while accepting codecs with variable packet capacity.
+pub(super) fn conversion_buffer(
+    slot: &mut Option<SampleBuffer<f32>>,
+    frames: usize,
+    spec: SignalSpec,
+) -> &mut SampleBuffer<f32> {
+    let buffer = slot.get_or_insert_with(|| SampleBuffer::new(frames as u64, spec));
+    if buffer.capacity() < frames * spec.channels.count() {
+        *buffer = SampleBuffer::new(frames as u64, spec);
+    }
+    buffer
 }
 
 /// Decodes audio and computes downsampled peak waveform.
@@ -370,34 +395,27 @@ where
         }
 
         if let Ok(decoded) = decoder.decode(&packet) {
-            if sample_buf.is_none() {
-                let spec = *decoded.spec();
-                let duration = decoded.capacity() as u64;
-                sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
+            let sb = conversion_buffer(&mut sample_buf, decoded.capacity(), *decoded.spec());
+            sb.copy_interleaved_ref(decoded);
+            let samples = sb.samples();
+            let n_ch = channels as usize;
+            if n_ch == 0 {
+                continue;
             }
+            let frames = samples.len() / n_ch;
 
-            if let Some(ref mut sb) = sample_buf {
-                sb.copy_interleaved_ref(decoded);
-                let samples = sb.samples();
-                let n_ch = channels as usize;
-                if n_ch == 0 {
-                    continue;
+            for f in 0..frames {
+                if f.is_multiple_of(4096) && is_cancelled() {
+                    return None;
                 }
-                let frames = samples.len() / n_ch;
-
-                for f in 0..frames {
-                    if f.is_multiple_of(4096) && is_cancelled() {
-                        return None;
-                    }
-                    if ch1_samples.len() >= max_frames {
-                        break;
-                    }
-                    let s1 = samples[f * n_ch];
-                    ch1_samples.push(s1);
-                    if is_stereo {
-                        let s2 = if n_ch > 1 { samples[f * n_ch + 1] } else { s1 };
-                        ch2_samples.as_mut().unwrap().push(s2);
-                    }
+                if ch1_samples.len() >= max_frames {
+                    break;
+                }
+                let s1 = samples[f * n_ch];
+                ch1_samples.push(s1);
+                if is_stereo {
+                    let s2 = if n_ch > 1 { samples[f * n_ch + 1] } else { s1 };
+                    ch2_samples.as_mut().unwrap().push(s2);
                 }
             }
         }

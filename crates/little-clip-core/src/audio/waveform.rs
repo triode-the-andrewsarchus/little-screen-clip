@@ -700,7 +700,7 @@ pub fn compute_preview_waveform(
     let mut format = preview_audio_format(file, path)?;
     let track = format.default_track().ok_or("No audio track")?;
     let id = track.id;
-    let n_frames = track.codec_params.n_frames;
+    let duration_seconds = codec_duration_seconds(&track.codec_params);
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| e.to_string())?;
@@ -723,7 +723,7 @@ pub fn compute_preview_waveform(
         let summary = match &mut summary {
             Some(summary) => summary,
             None => summary.insert(PreviewWaveform::from_stream(
-                n_frames,
+                duration_seconds,
                 *decoded.spec(),
                 fallback_duration,
                 max_duration,
@@ -790,7 +790,7 @@ struct PreviewWaveform {
 }
 impl PreviewWaveform {
     fn from_stream(
-        n_frames: Option<u64>,
+        duration_seconds: Option<f64>,
         spec: symphonia::core::audio::SignalSpec,
         fallback_duration: f32,
         max_duration: Option<f32>,
@@ -798,9 +798,7 @@ impl PreviewWaveform {
     ) -> Result<Self, String> {
         let rate = spec.rate;
         let channels = spec.channels.count();
-        let duration = n_frames.map_or(fallback_duration as f64, |frames| {
-            frames as f64 / rate as f64
-        });
+        let duration = duration_seconds.unwrap_or(fallback_duration as f64);
         let duration = max_duration.map_or(duration, |maximum| duration.min(maximum as f64));
         if !duration.is_finite() || duration <= 0.0 || rate == 0 || channels == 0 {
             return Err("Unknown track duration or channel layout".into());
@@ -843,13 +841,7 @@ impl PreviewWaveform {
         if let AudioBufferRef::F32(buffer) = decoded {
             self.push_block(frames, |channel| buffer.chan(channel));
         } else {
-            let buffer = converted.get_or_insert_with(|| {
-                SampleBuffer::new(decoded.capacity() as u64, *decoded.spec())
-            });
-            // Formats can vary packet capacity while retaining their channel layout.
-            if buffer.capacity() < decoded.capacity() * self.filters.len() {
-                *buffer = SampleBuffer::new(decoded.capacity() as u64, *decoded.spec());
-            }
+            let buffer = conversion_buffer(converted, decoded.capacity(), *decoded.spec());
             buffer.copy_planar_ref(decoded);
             self.push_block(frames, |channel| {
                 &buffer.samples()[channel * frames..(channel + 1) * frames]

@@ -881,6 +881,12 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
         ("caf", "pcm_s16le", "caf"),
         ("caf", "pcm_f32le", "caf"),
         ("caf", "alac", "caf"),
+        ("mka", "flac", "matroska"),
+        ("mka", "pcm_s16le", "matroska"),
+        ("mka", "pcm_f32le", "matroska"),
+        ("mka", "aac", "matroska"),
+        ("mka", "libvorbis", "matroska"),
+        ("mka", "libmp3lame", "matroska"),
     ] {
         let (directory, wav) = generate_fixture_wav("compressed_audio", 1.0);
         let path = directory
@@ -890,7 +896,16 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
             .args(["-nostdin", "-v", "error", "-i"])
             .arg_content_file(&wav)
             .unwrap()
-            .args(["-c:a", codec, "-b:a", "192k", "-f", container])
+            .args([
+                "-af",
+                "afade=t=in:st=0:d=1",
+                "-c:a",
+                codec,
+                "-b:a",
+                "192k",
+                "-f",
+                container,
+            ])
             .arg(path.as_os_str())
             .timeout(Duration::from_secs(10))
             .run()
@@ -900,7 +915,11 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
         let source_bytes = std::fs::read(&path).unwrap();
         let source = crate::file_source::FileSource::capture(&path).unwrap();
         let metadata = little_clip_core::audio::read_audio_metadata(&path).unwrap();
-        assert!(metadata.duration_ms.abs_diff(1000) < 100);
+        assert!(
+            metadata.duration_ms.abs_diff(1000) < 100,
+            "{extension}/{codec}: {} ms",
+            metadata.duration_ms
+        );
         let audio = crate::file_source::open_regular_file(&path, true).unwrap();
         let (peaks, colors) = little_clip_core::audio::compute_preview_waveform(
             audio,
@@ -912,7 +931,18 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
         )
         .unwrap();
         assert_eq!(peaks.len(), colors.len());
-        assert!(peaks.iter().any(|peak| *peak > 0.01));
+        let early = peaks[..peaks.len() / 4]
+            .iter()
+            .copied()
+            .fold(0.0_f32, f32::max);
+        let late = peaks[peaks.len() * 3 / 4..]
+            .iter()
+            .copied()
+            .fold(0.0_f32, f32::max);
+        assert!(
+            late > 0.1 && early < late * 0.5,
+            "{extension}/{codec}: truncated or mistimed waveform ({early}, {late})"
+        );
         let audio = crate::file_source::open_regular_file(&path, true).unwrap();
         let mut decoder = rodio::Decoder::try_from(audio).unwrap();
         assert!(decoder.next().is_some());
@@ -955,9 +985,12 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
         assert_eq!(std::fs::read(existing).unwrap(), b"preserved audio");
         assert_eq!(std::fs::read(path).unwrap(), source_bytes);
         for name in [format!("edited.{extension}"), "edited.wav".into()] {
-            let output =
-                little_clip_core::audio::read_audio_metadata(&directory.path().join(name)).unwrap();
+            let output_path = directory.path().join(name);
+            let output = little_clip_core::audio::read_audio_metadata(&output_path).unwrap();
             assert!(output.duration_ms > 400 && output.duration_ms < 900);
+            let audio = crate::file_source::open_regular_file(&output_path, true).unwrap();
+            let mut decoder = rodio::Decoder::try_from(audio).unwrap();
+            assert!(decoder.next().is_some());
         }
     }
 }

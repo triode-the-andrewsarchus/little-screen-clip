@@ -52,7 +52,7 @@ def exercise(session, root, audio_extension, audio_only=False):
 
 def main():
     def configure(parser):
-        parser.add_argument("--audio-extension", choices=["wav", "m4b", "mp2", "adts", "caf"], default="wav")
+        parser.add_argument("--audio-extension", choices=["wav", "m4b", "mp2", "adts", "caf", "mka"], default="wav")
         parser.add_argument("--audio-only", action="store_true", help="Check the chosen audio format without the other editor fixtures")
 
     args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager",
@@ -61,7 +61,7 @@ def main():
     (root / "notes.txt").write_text("A plain text fixture\n")
     fixture.wav_fixture(root / "music.wav", 2, "tone")
     if args.audio_extension != "wav":
-        codec, container = {"m4b": ("aac", "ipod"), "mp2": ("mp2", "mp2"), "adts": ("aac", "adts"), "caf": ("alac", "caf")}[args.audio_extension]
+        codec, container = {"m4b": ("aac", "ipod"), "mp2": ("mp2", "mp2"), "adts": ("aac", "adts"), "caf": ("alac", "caf"), "mka": ("flac", "matroska")}[args.audio_extension]
         subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(root / "music.wav"), "-c:a", codec, "-f", container, str(root / f"music.{args.audio_extension}")], check=True, timeout=15)
         (root / "music.wav").unlink()
     fixture.pdf_fixture(root, 2, "document.pdf")
