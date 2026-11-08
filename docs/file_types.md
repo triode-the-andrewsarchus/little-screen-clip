@@ -154,7 +154,7 @@
   - [ ] Subtitle and caption files
     - [x] `.srt` — SubRip; UTF-8 cue timeline and list strip with gaps/overlaps, cue/source navigation, and guarded text editing (2 MiB edit / 8 MiB preview limits; formatting retained as literal text)
     - [ ] `.ass`, `.ssa` — Advanced SubStation Alpha / SubStation Alpha
-    - [ ] `.vtt` — WebVTT
+    - [x] `.vtt` — WebVTT; UTF-8 cue timeline and list strip, cue/source navigation and guarded text editing; preserves header, comments, styles, regions, identifiers and cue settings in source (styles/markup are passive; timeline uses local cue times, not external clock mappings)
     - [ ] `.ttml` — Timed Text Markup Language
 - [ ] Audio
   - [x] `.aif`, `.aiff`

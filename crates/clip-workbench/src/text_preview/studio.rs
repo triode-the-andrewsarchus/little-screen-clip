@@ -92,7 +92,12 @@ impl TextPreviewState {
         self.handle_shortcuts(ctx, close);
         self.service_search_jobs(ctx, BackgroundJobs::global(), Instant::now());
 
-        let total_lines = self.content.lines().count().max(1);
+        let trailing = usize::from(self.content.ends_with(['\n', '\r']));
+        let total_lines = self
+            .line_first_fragment
+            .len()
+            .saturating_sub(trailing)
+            .max(1);
         let total_chars = self.content.chars().count();
         let icon = if self.is_markdown {
             Icon::Book

@@ -276,3 +276,44 @@ fn subtitle_preview_targets_raw_source_and_invalid_timing_falls_back_without_los
     assert!(state.subtitle_error.as_deref().unwrap().contains("before"));
     assert_eq!(state.content.as_str(), invalid);
 }
+
+#[test]
+fn webvtt_subtitle_preview_preserves_metadata_and_targets_the_selected_cue_source() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/subtitles/sample.vtt");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let mut state = TextPreviewState::from_file(path, &Default::default()).unwrap();
+    assert_eq!(state.view_mode, TextViewMode::SubtitleTimeline);
+    state.select_subtitle(1);
+    state.show_subtitle_source();
+    assert_eq!(state.center_source_line, Some(19));
+    assert_eq!(state.content.as_str(), original);
+    assert!(state.content.contains("STYLE\n::cue { color: lime; }"));
+    let data = TextPreviewData::from_source(Arc::new("WEBVTTbroken".into()), Some("VTT"));
+    assert!(data.subtitles.is_none());
+    assert!(data.subtitle_error.is_some());
+    assert_eq!(data.content.as_str(), "WEBVTTbroken");
+}
+
+#[test]
+fn subtitle_raw_source_handles_cr_without_normalizing_the_file_bytes() {
+    for separator in ["\n", "\r\n", "\r"] {
+        let original = format!(
+            "WEBVTT{separator}{separator}00:01.000 --> 00:02.000{separator}café{separator}"
+        );
+        let data = TextPreviewData::from_source(Arc::new(original.clone()), Some("vtt"));
+        assert_eq!(data.line_first_fragment.len(), 5);
+        assert_eq!(data.content.as_str(), original);
+        let fragments: Vec<_> = data
+            .code_fragments
+            .iter()
+            .map(|fragment| &data.content[fragment.start_byte..fragment.end_byte])
+            .collect();
+        assert_eq!(
+            fragments,
+            ["WEBVTT", "", "00:01.000 --> 00:02.000", "café", ""]
+        );
+        let mut state = TextPreviewState::from_data(data, None, &Default::default());
+        state.show_subtitle_source();
+        assert_eq!(state.center_source_line, Some(3));
+    }
+}

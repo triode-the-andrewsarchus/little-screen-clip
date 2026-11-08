@@ -733,27 +733,29 @@ mod tests {
 
     #[test]
     fn clicked_subtitle_cue_survives_background_loading() {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/subtitles/sample.srt");
-        let mut viewers = Viewers::default();
-        let ctx = Context::default();
-        viewers.open_document_at(path, super::super::DocumentPosition::SubtitleCue(1));
-        finish_loading(&mut viewers, &ctx);
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                viewers.render_session(
-                    ui,
-                    &crate::ui_appearance::palette(
-                        little_clip_core::config::WorkbenchAppearance::Dark,
-                    ),
-                    &mut false,
-                )
+        for extension in ["srt", "vtt"] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/subtitles/sample.{extension}"));
+            let mut viewers = Viewers::default();
+            let ctx = Context::default();
+            viewers.open_document_at(path, super::super::DocumentPosition::SubtitleCue(1));
+            finish_loading(&mut viewers, &ctx);
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    viewers.render_session(
+                        ui,
+                        &crate::ui_appearance::palette(
+                            little_clip_core::config::WorkbenchAppearance::Dark,
+                        ),
+                        &mut false,
+                    )
+                });
             });
-        });
-        assert!(output.shapes.iter().any(
+            assert!(output.shapes.iter().any(
             |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Cue 2")
         ));
-        assert!(viewers.request_close());
+            assert!(viewers.request_close());
+        }
     }
 
     #[test]

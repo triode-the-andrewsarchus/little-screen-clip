@@ -1,0 +1,28 @@
+WEBVTT Garden observations
+
+NOTE A hand-authored subtitle fixture.
+Keep these editorial notes when editing.
+
+STYLE
+::cue { color: lime; }
+
+REGION
+id:lower
+width:80%
+
+opening
+00:01.000 --> 00:04.000 region:lower
+Welcome to the garden.
+A second caption line.
+
+overlap
+00:03.000 --> 00:05.000 line:80% align:start
+Two voices overlap.
+
+quiet
+00:00:08.000 --> 00:00:09.500
+A quiet gap precedes this cue.
+
+closing
+00:09.800 --> 00:10.000
+A brief closing cue.

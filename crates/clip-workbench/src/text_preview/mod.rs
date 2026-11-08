@@ -234,10 +234,11 @@ impl TextPreviewData {
     pub(crate) fn from_source(content: Arc<String>, extension: Option<&str>) -> Arc<Self> {
         let line_starts = line_start_offsets(&content);
         let (code_fragments, line_first_fragment) = code_fragments(&content, &line_starts);
-        let subtitle = extension.is_some_and(|extension| extension.eq_ignore_ascii_case("srt"));
-        let (subtitles, subtitle_error) = if subtitle {
-            match little_clip_core::subtitles::Document::parse_srt(
+        let format = extension.and_then(little_clip_core::subtitles::Format::from_extension);
+        let (subtitles, subtitle_error) = if let Some(format) = format {
+            match little_clip_core::subtitles::Document::parse(
                 &content,
+                format,
                 &AtomicBool::new(false),
             ) {
                 Ok(document) => (Some(Arc::new(document)), None),
@@ -246,7 +247,7 @@ impl TextPreviewData {
         } else {
             (None, None)
         };
-        let language = if subtitle {
+        let language = if format.is_some() {
             "txt"
         } else {
             detect_language(&content, extension)
@@ -279,11 +280,7 @@ fn code_fragments(text: &str, line_starts: &[usize]) -> (Vec<CodeFragment>, Vec<
             .copied()
             .unwrap_or(text.len())
             .min(text.len());
-        let end = if end > start && text.as_bytes()[end - 1] == b'\n' {
-            end - 1
-        } else {
-            end
-        };
+        let end = start + text[start..end].trim_end_matches(['\r', '\n']).len();
         if end <= start {
             fragments.push(CodeFragment {
                 start_byte: start,
@@ -512,7 +509,11 @@ pub struct TextPreviewState {
 
 fn line_start_offsets(text: &str) -> Vec<usize> {
     let mut starts = vec![0];
-    starts.extend(text.match_indices('\n').map(|(index, _)| index + 1));
+    starts.extend(text.bytes().enumerate().filter_map(|(index, byte)| {
+        let ends_line =
+            byte == b'\n' || (byte == b'\r' && text.as_bytes().get(index + 1) != Some(&b'\n'));
+        ends_line.then_some(index + 1)
+    }));
     starts
 }
 

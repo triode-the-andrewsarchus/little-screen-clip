@@ -1,7 +1,7 @@
 //! Full-duration subtitle coverage without retaining caption documents in list rows.
 use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
 use crate::{icons::Icon, ui_appearance::WorkbenchColors};
-use little_clip_core::subtitles::{Document, MAX_BYTES, Timeline};
+use little_clip_core::subtitles::{Document, Format, MAX_BYTES, Timeline};
 use std::{
     path::Path,
     sync::{Arc, atomic::AtomicBool},
@@ -26,7 +26,11 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;
     let source = std::str::from_utf8(&bytes).map_err(|_| "Subtitle preview requires UTF-8 text")?;
-    Document::parse_srt(source, token)
+    Document::parse(
+        source,
+        Format::from_path(path).ok_or("Unknown subtitle format")?,
+        token,
+    )
 }
 pub(super) fn show_list(
     ui: &mut egui::Ui,

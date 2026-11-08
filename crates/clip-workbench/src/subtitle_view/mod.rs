@@ -139,11 +139,11 @@ impl Viewer {
             (cue.end_ms - cue.start_ms) as f64 / 1000.0
         ));
         ui.label(format!(
-            "Counter: {} · source line {}",
+            "Identifier: {} · source line {}",
             if cue.identifier.is_empty() {
-                "not provided"
+                "not provided".to_owned()
             } else {
-                &cue.identifier
+                cue.identifier.chars().take(256).collect::<String>()
             },
             cue.source_line
         ));
