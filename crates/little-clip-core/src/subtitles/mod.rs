@@ -23,6 +23,8 @@ pub enum Format {
     WebVtt,
     /// ASS v4+ event rows with centisecond timestamps.
     AdvancedSubStationAlpha,
+    /// SSA v4 event rows with editing marks and centisecond timestamps.
+    SubStationAlpha,
 }
 impl Format {
     /// Recognizes a supported filename extension without a leading dot.
@@ -31,6 +33,7 @@ impl Format {
             "srt" => Some(Self::SubRip),
             "vtt" => Some(Self::WebVtt),
             "ass" => Some(Self::AdvancedSubStationAlpha),
+            "ssa" => Some(Self::SubStationAlpha),
             _ => None,
         }
     }
@@ -93,7 +96,7 @@ impl Document {
     /// retain the original source for viewing and editing those blocks. Styles
     /// are never applied. Accepts LF, CRLF and CR line endings and an optional BOM.
     /// The timeline uses cue timestamps without applying external clock mappings.
-    /// ASS uses dialogue events only; comments, styles, fonts and attachments remain
+    /// ASS v4+ and SSA v4 use dialogue events only; comments, styles, fonts and attachments remain
     /// in the caller's original source. Event metadata summaries are bounded and
     /// override tags remain literal text. UTF-8 source editing preserves them.
     ///
@@ -126,7 +129,9 @@ impl Document {
         };
         let source = normalized.trim_start_matches('\u{feff}');
         let cues = match format {
-            Format::AdvancedSubStationAlpha => substation::parse(source, cancelled)?,
+            Format::AdvancedSubStationAlpha | Format::SubStationAlpha => {
+                substation::parse(source, format, cancelled)?
+            }
             _ => parse_blocks(source, format, cancelled)?,
         };
         let timeline = Timeline::build(&cues, cancelled)?;
@@ -272,7 +277,7 @@ fn timestamp(text: &str, format: Format) -> Result<u64, String> {
 }
 fn milliseconds(text: &str, format: Format) -> Result<u64, String> {
     let (digits, scale) = match format {
-        Format::AdvancedSubStationAlpha => (2, 10),
+        Format::AdvancedSubStationAlpha | Format::SubStationAlpha => (2, 10),
         _ => (3, 1),
     };
     if text.len() != digits {

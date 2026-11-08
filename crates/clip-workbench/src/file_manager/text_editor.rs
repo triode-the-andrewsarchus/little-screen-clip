@@ -289,6 +289,11 @@ mod tests {
                 "[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Start,End,Text\nDialogue: 0:00:01.00,0:00:02.00,Original\n",
                 "[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Start,End,Text\nComment: 0:00:00.00,0:00:30.00,Keep metadata\nDialogue: 0:00:03.00,0:00:05.00,{\\i1}Edited\n",
             ),
+            (
+                "ssa",
+                "[Script Info]\nScriptType: v4.00\n[Events]\nDialogue: Marked=0,0:00:01.00,0:00:02.00,Default,Guide,0,0,0,,Original\n",
+                "[Script Info]\nScriptType: v4.00\n[Events]\nComment: Marked=0,0:00:00.00,0:00:30.00,Default,Guide,0,0,0,,Keep metadata\nDialogue: Marked=0,0:00:03.00,0:00:05.00,Default,Guide,0,0,0,,{\\b1}Edited\n",
+            ),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(format!("captions.{extension}"));

@@ -282,6 +282,7 @@ fn rich_subtitle_previews_preserve_metadata_and_target_the_selected_cue_source()
     for (extension, line, metadata) in [
         ("vtt", 19, "STYLE\n::cue { color: lime; }"),
         ("ass", 15, "Style: Default,Sans,24"),
+        ("ssa", 15, "Style: Default,Sans,24"),
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("tests/fixtures/subtitles/sample.{extension}"));

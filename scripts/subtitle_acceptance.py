@@ -26,7 +26,7 @@ def exercise(session, root, extension):
     session.click(600, 180)  # Raw / Code tab in the verified shared header.
     session.observe("03-source", [source_time, "Two voices overlap", "Edit text"])
     click_word(session, "03-source", "Edit", minimum_y=90, maximum_y=140)
-    if extension == "ass":
+    if extension in {"ass", "ssa"}:
         session.observe("04-editor", ["Save", "Script Info"])
         session.click(240,300)  # Verified multiline source field below Save.
     else:
@@ -38,10 +38,11 @@ def exercise(session, root, extension):
     if extension == "vtt":
         # Keep the header, notes, style and region source verbatim while changing cues.
         replacement = original.split("opening\n", 1)[0] + "edited\n00:02.000 --> 00:06.000 align:start\nAn edited subtitle.\n"
-    if extension == "ass":
+    if extension in {"ass", "ssa"}:
         prefix = original.split("Dialogue:", 1)[0]
         comment = next(line for line in original.splitlines() if line.startswith("Comment:"))
-        replacement = prefix + comment + "\nDialogue: 0,0:00:02.00,0:00:06.00,Default,edited,0,0,0,,An edited subtitle.\n"
+        first_field = "Marked=0" if extension == "ssa" else "0"
+        replacement = prefix + comment + f"\nDialogue: {first_field},0:00:02.00,0:00:06.00,Default,edited,0,0,0,,An edited subtitle.\n"
     subprocess.run(["wl-copy", "--type", "text/plain;charset=utf-8"], input=replacement.encode(),
         env=session.env, check=True, timeout=5)
     session.key("v", "ctrl")
@@ -68,7 +69,7 @@ def exercise(session, root, extension):
 def main():
     repo = Path(__file__).resolve().parent.parent
     args = application_arguments(__doc__, repo / "target/release/clip-file-manager",
-        lambda parser: parser.add_argument("--format", choices=["srt", "vtt", "ass"], default="srt"))
+        lambda parser: parser.add_argument("--format", choices=["srt", "vtt", "ass", "ssa"], default="srt"))
     output, root = media_fixture_directory(args)
     filename = f"sample.{args.format}"
     shutil.copyfile(repo / "crates/clip-workbench/tests/fixtures/subtitles" / filename, root / filename)
