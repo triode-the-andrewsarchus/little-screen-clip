@@ -11,8 +11,7 @@ struct ListPreviews<'a> {
     midi: &'a mut super::super::midi_strip::Preview,
     selection: &'a mut Option<music::MusicRange>,
     playback: &'a super::super::music::Music,
-    pdf_start: &'a mut Option<(PathBuf, usize)>,
-    text_start: &'a mut Option<(PathBuf, usize)>,
+    document_start: &'a mut Option<(PathBuf, super::super::DocumentPosition)>,
     video_start: &'a mut Option<(PathBuf, f64)>,
     decimation: u8,
     can_request: bool,
@@ -37,7 +36,8 @@ impl<'a> ListPreviews<'a> {
             || entry.is_blend()
             || entry.is_photo()
             || entry.is_material()
-            || (entry.regular_file && super::super::font_strip::known(&entry.path))
+            || (entry.regular_file
+                && (super::super::font_strip::known(&entry.path) || entry.is_notebook()))
             || self.files.is_binary(entry)
         {
             media_row(ui, rect, marked, colors)
@@ -159,22 +159,13 @@ impl<'a> ListPreviews<'a> {
             self.paths.insert(entry.path.clone());
             self.files
                 .show_visual(ui, rect, entry, Some(self.columns), colors, palette);
-        } else if entry.regular_file
-            && (little_clip_core::pdf::is_pdf_path(&entry.path)
-                || little_clip_core::document::is_office_document(&entry.path))
-        {
-            self.paths.insert(entry.path.clone());
-            let page = self.files.show_pdf(ui, rect, entry, colors);
-            if response.double_clicked() {
-                *self.pdf_start = Some((entry.path.clone(), page.unwrap_or(1)));
-            }
         } else if !entry.directory && self.paths.len() < 128 {
             self.paths.insert(entry.path.clone());
-            let line =
-                self.files
-                    .show_listing(ui, rect, entry, Some(self.columns), colors, palette);
+            let position = self
+                .files
+                .show_document(ui, rect, entry, self.columns, colors, palette);
             if response.double_clicked() {
-                *self.text_start = line.map(|line| (entry.path.clone(), line));
+                *self.document_start = position.map(|position| (entry.path.clone(), position));
             }
         }
     }
@@ -275,8 +266,7 @@ impl FileManager {
             videos: &mut self.video_previews,
             selection: &mut self.music_selection,
             playback: &self.music,
-            pdf_start: &mut self.pdf_start,
-            text_start: &mut self.text_start,
+            document_start: &mut self.document_start,
             video_start: &mut self.video_start,
             decimation: self.video_timeline_decimation,
             can_request: self.pending.is_none(),

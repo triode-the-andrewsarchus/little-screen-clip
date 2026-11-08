@@ -347,14 +347,9 @@ impl FileManagerApp {
                 }
                 if let Some(path) = self.browser.take_available_open_file() {
                     self.viewers.source_guard = self.browser.search_source_guard(&path);
-                    let pdf_start = self
+                    let document_start = self
                         .browser
-                        .pdf_start
-                        .take()
-                        .filter(|(source, _)| source == &path);
-                    let text_start = self
-                        .browser
-                        .text_start
+                        .document_start
                         .take()
                         .filter(|(source, _)| source == &path);
                     if little_clip_core::audio::is_audio_path(&path)
@@ -381,10 +376,8 @@ impl FileManagerApp {
                         });
                     if system {
                         self.viewers.open_system(path);
-                    } else if let Some((_, page)) = pdf_start {
-                        self.viewers.open_pdf_at(path, page);
-                    } else if let Some((_, line)) = text_start {
-                        self.viewers.open_text_at(path, line);
+                    } else if let Some((_, position)) = document_start {
+                        self.viewers.open_document_at(path, position);
                     } else if let Some((_, seconds)) = start {
                         self.viewers.open_video_at(path, seconds);
                     } else {

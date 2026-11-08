@@ -235,7 +235,7 @@ fn summarize(
     Ok(())
 }
 
-fn expand_tabs(line: &str) -> String {
+pub(in crate::file_manager) fn expand_tabs(line: &str) -> String {
     let mut result = String::with_capacity(line.len());
     let mut column = 0;
     for character in line.trim_start_matches('\u{feff}').chars() {

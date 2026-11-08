@@ -239,8 +239,8 @@
     - [ ] `.dtd` — XML Document Type Definition
     - [ ] `.hbs` — Handlebars template
     - [ ] `.hjson` — Human JSON
-    - [ ] `.ipynb` — Jupyter Notebook
-      - [ ] Notebook metadata (`kernelspec`, language info, authors) and cell execution counts / metadata
+    - [x] `.ipynb` — Jupyter Notebook v4; interactive cell map, source/Markdown viewer, saved text and PNG/JPEG results, and list-preview cell strips
+      - [x] Notebook metadata (`kernelspec`, language info, authors) and cell execution counts / metadata
     - [ ] `.json5` — JSON5 data interchange
     - [ ] `.jsonld` — JSON-LD linked data
     - [ ] `.map` — JavaScript / CSS source map (May need disambiguation with game engine level / GIS map files)

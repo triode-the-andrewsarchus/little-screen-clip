@@ -247,6 +247,8 @@ impl EntryPreviews {
                         path: entry.path.clone(),
                         revision: entry.revision,
                     }
+                } else if entry.is_notebook() {
+                    Source::Notebook(entry.path.clone())
                 } else if entry.regular_file && super::font_strip::known(&entry.path) {
                     Source::Font(entry.path.clone())
                 } else if entry.is_blend() {
@@ -282,6 +284,27 @@ impl EntryPreviews {
         palette: &little_clip_core::palette::AppPalette,
     ) {
         self.scenes.show(ui, row, entry, columns, colors, palette);
+    }
+    pub fn show_document(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: egui::Rect,
+        entry: &Entry,
+        columns: super::ui::ListColumns,
+        colors: crate::ui_appearance::WorkbenchColors,
+        palette: &little_clip_core::palette::AppPalette,
+    ) -> Option<super::DocumentPosition> {
+        if entry.is_notebook() {
+            super::notebook::show_list(ui, row, entry, columns, self.listing(entry), colors)
+                .map(super::DocumentPosition::NotebookCell)
+        } else if entry.is_paged_document() {
+            Some(super::DocumentPosition::PdfPage(
+                self.show_pdf(ui, row, entry, colors).unwrap_or(1),
+            ))
+        } else {
+            self.show_listing(ui, row, entry, Some(columns), colors, palette)
+                .map(super::DocumentPosition::TextLine)
+        }
     }
     pub fn show_visual(
         &mut self,
@@ -773,6 +796,7 @@ fn raster_dimensions(ui: &egui::Ui, rect: egui::Rect) -> (u32, u32) {
 
 fn text_candidate(entry: &Entry) -> bool {
     entry.regular_file
+        && !super::notebook::known(&entry.path)
         && !super::font_strip::known(&entry.path)
         && !super::midi_strip::is_midi(&entry.path)
         && !entry.is_scene()

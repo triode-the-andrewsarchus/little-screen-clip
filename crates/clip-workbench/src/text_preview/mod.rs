@@ -4,6 +4,7 @@
 //! toggleable line-wrapping, line numbers gutter, regex find toolbar, and external editor escape hatches.
 
 mod markdown;
+pub(crate) use markdown::render_lines as render_markdown_lines;
 mod minimap;
 mod raw_code;
 mod search;
@@ -125,6 +126,16 @@ impl InlineTextPreview {
         }
     }
 
+    pub(crate) fn preferred_height(&self, ui: &egui::Ui, min_rows: usize, max_rows: usize) -> f32 {
+        let row_height = ui.fonts(|fonts| fonts.row_height(&FontId::monospace(MONO_FONT_SIZE)));
+        let rows = self.data.code_fragments.len().clamp(min_rows, max_rows);
+        rows as f32 * (row_height + ui.spacing().item_spacing.y) + 2.0 * crate::ui_ext::SPACE_SM
+    }
+
+    pub(crate) fn resize(&mut self, size: Vec2) {
+        self.host_size = size.max(Vec2::splat(1.0)).min(Vec2::splat(16384.0));
+    }
+
     /// Renders only visible bounded source fragments inside the allocated host.
     pub fn show(&mut self, ui: &mut egui::Ui, palette: &AppPalette) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(self.host_size, egui::Sense::hover());
@@ -216,8 +227,7 @@ impl TextPreviewData {
         })
     }
 
-    fn from_file(content: String, extension: Option<&str>) -> Arc<Self> {
-        let content = Arc::new(content);
+    pub(crate) fn from_source(content: Arc<String>, extension: Option<&str>) -> Arc<Self> {
         let line_starts = line_start_offsets(&content);
         let (code_fragments, line_first_fragment) = code_fragments(&content, &line_starts);
         let language = detect_language(&content, extension);
@@ -586,7 +596,7 @@ impl TextPreviewState {
         let path_ref = path.as_ref();
         let content = little_clip_ops::read_text_file_preview(path_ref, 2 * 1024 * 1024)?;
         let ext = path_ref.extension().and_then(|e| e.to_str());
-        let data = TextPreviewData::from_file(content, ext);
+        let data = TextPreviewData::from_source(Arc::new(content), ext);
         let title = path_ref
             .file_name()
             .map(|n| n.to_string_lossy().to_string())

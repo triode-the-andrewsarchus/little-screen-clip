@@ -21,6 +21,7 @@ pub(crate) mod mounts;
 mod music;
 mod native_drag;
 mod path_serde;
+mod notebook;
 mod pdf_strip;
 mod photo_ratings;
 mod preview_job;
@@ -79,6 +80,13 @@ impl LastStatus {
     pub fn is_active(&self, duration: Duration) -> bool {
         self.timestamp.elapsed() < duration
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DocumentPosition {
+    TextLine(usize),
+    PdfPage(usize),
+    NotebookCell(usize),
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -215,8 +223,7 @@ pub(crate) struct FileManager {
     open_file: Option<PathBuf>,
     external_file: Option<PathBuf>,
     inspect_file: Option<PathBuf>,
-    text_start: Option<(PathBuf, usize)>,
-    pdf_start: Option<(PathBuf, usize)>,
+    document_start: Option<(PathBuf, DocumentPosition)>,
     video_start: Option<(PathBuf, f64)>,
     previews: previews::EntryPreviews,
     gallery_previews: previews::EntryPreviews,
@@ -300,8 +307,7 @@ impl FileManager {
             open_file: None,
             external_file: None,
             inspect_file: None,
-            text_start: None,
-            pdf_start: None,
+            document_start: None,
             video_start: None,
             previews: previews::EntryPreviews::default(),
             gallery_previews: previews::EntryPreviews::default(),
@@ -789,9 +795,8 @@ impl FileManager {
                     || entry.is_blend()
                     || entry.is_material()
                     || entry.is_photo()
-                    || (entry.regular_file && little_clip_core::pdf::is_pdf_path(&entry.path))
-                    || (entry.regular_file
-                        && little_clip_core::document::is_office_document(&entry.path))
+                    || entry.is_notebook()
+                    || entry.is_paged_document()
                 {
                     VIDEO_ROW_HEIGHT
                 } else {

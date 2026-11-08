@@ -8,32 +8,40 @@ impl TextPreviewState {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(0.0, 6.0);
-
-                let mut in_code_block = false;
-                let mut code_block_buf = String::new();
-                let mut code_block_lang = String::new();
-
-                for line in parsed {
-                    render_markdown_element(
-                        ui,
-                        line,
-                        &mut in_code_block,
-                        &mut code_block_buf,
-                        &mut code_block_lang,
-                        palette,
-                    );
-                }
-
-                flush_code_block(
-                    ui,
-                    &mut in_code_block,
-                    &mut code_block_buf,
-                    &mut code_block_lang,
-                    palette,
-                );
+                render_lines(ui, parsed, palette);
             });
     }
+}
+
+pub(crate) fn render_lines(
+    ui: &mut egui::Ui,
+    parsed: impl IntoIterator<Item = little_clip_render::markdown::MarkdownLine>,
+    palette: &AppPalette,
+) {
+    ui.spacing_mut().item_spacing = Vec2::new(0.0, 6.0);
+
+    let mut in_code_block = false;
+    let mut code_block_buf = String::new();
+    let mut code_block_lang = String::new();
+
+    for line in parsed {
+        render_markdown_element(
+            ui,
+            line,
+            &mut in_code_block,
+            &mut code_block_buf,
+            &mut code_block_lang,
+            palette,
+        );
+    }
+
+    flush_code_block(
+        ui,
+        &mut in_code_block,
+        &mut code_block_buf,
+        &mut code_block_lang,
+        palette,
+    );
 }
 
 pub(super) fn flush_code_block(

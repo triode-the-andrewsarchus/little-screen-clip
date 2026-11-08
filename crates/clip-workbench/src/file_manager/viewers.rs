@@ -25,6 +25,7 @@ mod video;
 enum Loaded {
     System(super::system::Document),
     Font(super::font_strip::viewer::Viewer),
+    Notebook(super::notebook::viewer::Viewer),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
     Text(super::text_editor::TextSession),
@@ -42,6 +43,7 @@ enum Loaded {
 enum ViewerSession {
     System(super::system::Inspector),
     Font(super::font_strip::viewer::Viewer),
+    Notebook(super::notebook::viewer::Viewer),
     Image(ImagePreviewState),
     Text(super::text_editor::TextSession),
     Audio(AudioPreviewState),
@@ -94,6 +96,7 @@ pub(super) struct Viewers {
     video_start_seconds: f64,
     text_start_line: Option<usize>,
     pdf_start_page: Option<usize>,
+    notebook_start_cell: Option<usize>,
     system_navigation: Option<super::system::BrowserTarget>,
 }
 impl Viewers {
@@ -140,6 +143,7 @@ impl Viewers {
         self.video_start_seconds = 0.0;
         self.text_start_line = None;
         self.pdf_start_page = None;
+        self.notebook_start_cell = None;
         let source = path.clone();
         let config = self.config.clone();
         let executor = if system {
@@ -192,6 +196,20 @@ impl Viewers {
         self.open(path);
         self.text_start_line = Some(line);
     }
+    pub fn open_document_at(&mut self, path: PathBuf, position: super::DocumentPosition) {
+        match position {
+            super::DocumentPosition::PdfPage(page) => self.open_pdf_at(path, page),
+            super::DocumentPosition::TextLine(line) => self.open_text_at(path, line),
+            super::DocumentPosition::NotebookCell(cell) => self.open_notebook_at(path, cell),
+        }
+    }
+    pub fn open_notebook_at(&mut self, path: PathBuf, cell: usize) {
+        if self.active() {
+            return;
+        }
+        self.open(path);
+        self.notebook_start_cell = Some(cell);
+    }
     pub fn open_pdf_at(&mut self, path: PathBuf, page: usize) {
         if self.active() {
             return;
@@ -239,6 +257,11 @@ impl Viewers {
                 ))
             }
             Err(error) => self.error = Some(error),
+        }
+        if let Some(ViewerSession::Notebook(state)) = &mut self.session
+            && let Some(cell) = self.notebook_start_cell.take()
+        {
+            state.select(cell);
         }
         if let Some(ViewerSession::Audio(state)) = &mut self.session
             && let Some((start, end)) = self.pad_trim.take()
@@ -443,6 +466,7 @@ impl Viewers {
 }
 #[derive(Clone, Copy)]
 enum Kind {
+    Notebook,
     Font,
     Image,
     Audio,
@@ -459,11 +483,8 @@ enum Kind {
 fn kind(path: &Path) -> Kind {
     if super::text_strip::is_typescript_source(path) {
         Kind::Text
-    } else if path.extension().is_some_and(|ext| {
-        ["ttf", "ttc", "otf", "otc", "woff", "woff2"]
-            .contains(&ext.to_string_lossy().to_ascii_lowercase().as_str())
-    }) {
-        Kind::Font
+    } else if let Some(kind) = extension_kind(path) {
+        kind
     } else if little_clip_core::item::is_image_path(path) {
         Kind::Image
     } else if little_clip_core::audio::is_audio_path(path) {
@@ -476,11 +497,6 @@ fn kind(path: &Path) -> Kind {
         Kind::OfficeDoc
     } else if little_clip_core::presentation::spreadsheet::is_spreadsheet_file(path) {
         Kind::Sheet
-    } else if path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi"))
-    {
-        Kind::Midi
     } else if little_clip_scene::is_splat_file(path) {
         Kind::Scene
     } else if little_clip_core::presentation::model3d::is_3d_model_file(path) {
@@ -491,6 +507,14 @@ fn kind(path: &Path) -> Kind {
         Kind::Text
     } else {
         Kind::External
+    }
+}
+fn extension_kind(path: &Path) -> Option<Kind> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "ttf" | "ttc" | "otf" | "otc" | "woff" | "woff2" => Some(Kind::Font),
+        "mid" | "midi" => Some(Kind::Midi),
+        "ipynb" => Some(Kind::Notebook),
+        _ => None,
     }
 }
 fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
@@ -509,7 +533,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
     let kind = kind(path);
     let limit = match kind {
         Kind::Image => 64 * 1024 * 1024,
-        Kind::Sheet | Kind::Midi => 32 * 1024 * 1024,
+        Kind::Sheet | Kind::Midi | Kind::Notebook => 32 * 1024 * 1024,
         _ => u64::MAX,
     };
     if metadata.len() > limit {
@@ -519,6 +543,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         ));
     }
     match kind {
+        Kind::Notebook => super::notebook::viewer::Viewer::load(path).map(Loaded::Notebook),
         Kind::Font => super::font_strip::viewer::Viewer::load(path).map(Loaded::Font),
         Kind::Image => {
             let source = FileSource::capture(path)?;
@@ -596,6 +621,7 @@ fn session(
     check: crate::file_source::ReadCheck,
 ) -> ViewerSession {
     match loaded {
+        Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
         Loaded::Font(viewer) => ViewerSession::Font(viewer),
         Loaded::System(document) => ViewerSession::System(super::system::Inspector::new(document)),
         Loaded::Image(data, source) => ViewerSession::Image(
@@ -653,6 +679,7 @@ fn session(
 fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: &mut bool) {
     let ctx = ui.ctx().clone();
     match viewer {
+        ViewerSession::Notebook(state) => state.ui(ui, close, palette),
         ViewerSession::Font(state) => state.ui(ui, close, palette),
         ViewerSession::System(state) => state.ui(ui, close, palette),
         ViewerSession::Image(state) => state.render_ui(ui, &ctx, palette, close),
@@ -670,6 +697,15 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn finish_loading(viewers: &mut Viewers, ctx: &Context) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while viewers.loading.is_some() {
+            viewers.poll(ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn true_type_fonts_open_in_the_interactive_specimen_viewer() {
@@ -717,6 +753,29 @@ mod tests {
     }
 
     #[test]
+    fn clicked_notebook_cell_survives_background_loading() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/notebooks/sample.ipynb");
+        let mut viewers = Viewers::default();
+        let ctx = Context::default();
+        viewers.open_document_at(path, super::super::DocumentPosition::NotebookCell(2));
+        finish_loading(&mut viewers, &ctx);
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                viewers.render_session(
+                    ui,
+                    &crate::ui_appearance::palette(
+                        little_clip_core::config::WorkbenchAppearance::Dark,
+                    ),
+                    &mut false,
+                )
+            });
+        });
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Code cell 3")));
+        assert!(viewers.request_close());
+    }
+
+    #[test]
     fn cancelled_open_cannot_replace_a_new_session() {
         let dir = tempfile::tempdir().unwrap();
         let first = dir.path().join("first.txt");
@@ -728,12 +787,7 @@ mod tests {
         viewers.open(first);
         assert!(viewers.request_close());
         viewers.open(second.clone());
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while viewers.loading.is_some() {
-            viewers.poll(&ctx);
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        finish_loading(&mut viewers, &ctx);
         assert_eq!(viewers.path.as_ref(), Some(&second));
         assert!(matches!(viewers.session, Some(ViewerSession::Text(_))));
     }

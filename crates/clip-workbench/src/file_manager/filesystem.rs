@@ -29,6 +29,14 @@ pub(super) struct Entry {
 }
 
 impl Entry {
+    pub(super) fn is_notebook(&self) -> bool {
+        self.regular_file && super::notebook::known(&self.path)
+    }
+    pub(super) fn is_paged_document(&self) -> bool {
+        self.regular_file
+            && (little_clip_core::pdf::is_pdf_path(&self.path)
+                || little_clip_core::document::is_office_document(&self.path))
+    }
     pub(super) fn is_blend(&self) -> bool {
         self.regular_file
             && self
