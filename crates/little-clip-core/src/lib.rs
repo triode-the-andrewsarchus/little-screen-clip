@@ -33,6 +33,7 @@ pub mod presentation {
 pub mod palette;
 pub mod pdf;
 pub mod process;
+pub mod psd_image;
 pub mod raw_image;
 pub mod rolling_audio;
 pub mod slot;

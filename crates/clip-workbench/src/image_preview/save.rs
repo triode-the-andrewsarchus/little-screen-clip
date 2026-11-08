@@ -925,6 +925,14 @@ mod tests {
                 ))
                 .as_slice(),
             ),
+            (
+                "psd",
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/layers.psd"
+                ))
+                .as_slice(),
+            ),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(format!("source.{extension}"));

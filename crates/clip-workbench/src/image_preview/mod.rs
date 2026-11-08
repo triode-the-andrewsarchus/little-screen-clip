@@ -7,6 +7,7 @@ mod encoding;
 mod graphics;
 mod handoff;
 mod history;
+mod layers;
 mod studio;
 mod viewport;
 
@@ -256,6 +257,7 @@ pub struct ImagePreviewState {
 
     // EXIF & Image Metadata Inspector
     pub metadata: Option<ImageMetadataSummary>,
+    layer_inspector: layers::Inspector,
 
     // 4-Point Perspective Deskew
     pub deskew_state: DeskewState,
@@ -270,6 +272,7 @@ pub struct DecodedImageData {
     original_rgba: Arc<RgbaImage>,
     is_svg: bool,
     metadata: Option<ImageMetadataSummary>,
+    layer_document: Option<Arc<layers::Document>>,
 }
 
 impl DecodedImageData {
@@ -318,12 +321,14 @@ impl DecodedImageData {
 
         drop(svg);
         let metadata = extract_image_metadata(&bytes);
+        let layer_document = layers::Document::from_bytes(&bytes, &rgba)?;
         Ok(Self {
             mime,
             encoded_bytes: Arc::new(bytes),
             original_rgba: Arc::new(rgba),
             is_svg,
             metadata: metadata.has_any_metadata().then_some(metadata),
+            layer_document,
         })
     }
 }
@@ -545,6 +550,7 @@ impl ImagePreviewState {
             original_rgba,
             is_svg,
             metadata,
+            layer_document,
         } = source;
         let file_size_bytes = encoded_bytes.len();
         let mut resize_state = ResizeState::default();
@@ -663,6 +669,7 @@ impl ImagePreviewState {
             film_sim_state: FilmSimState::default(),
             creative_fx_state: CreativeFxState::default(),
             metadata,
+            layer_inspector: layers::Inspector::new(layer_document),
             deskew_state: DeskewState::default(),
         }
     }

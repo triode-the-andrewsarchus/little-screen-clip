@@ -66,8 +66,9 @@
     - [x] `.jxl` — JPEG XL still images (codestream and container, RGB/grayscale/alpha, 8/16-bit and float); shared photo previews and Image Studio edits with raster export; original JPEG XL bytes preserved (no JPEG XL encoder or animation playback)
     - [x] `.jp2`, `.j2k`, `.jpf` — JPEG 2000 still images: JP2-compatible containers and raw codestreams (also `.jpg2`, `.j2c`, `.jpc`); shared photo/color strips and Image Studio with 8-bit display and raster export, preserving originals
       - [ ] Advanced JPX multi-codestream/layer composition, animation, and JPEG 2000 encoding
-    - [ ] `.psd` — Photoshop
-      - [ ] Layer hierarchy, blend modes, layer masks, and image resource blocks (slices, guides, IPTC/XMP)
+    - [x] `.psd` — Photoshop saved-composite previews and raster edits; 8/16/32-bit sources displayed as RGBA8, with original PSD bytes preserved and PNG/raster export (no PSD writer or PSB support)
+      - [x] Source layer/group outline, names, opacity, visibility, blend modes, mask presence and interactive bounds overview; embedded RGB JPEG thumbnails
+      - [ ] Layer compositing/editing, mask pixels, and image resource blocks (slices, guides, IPTC/XMP/ICC)
     - [ ] `.xcf` — GIMP
     - [ ] `.ai` — Adobe Illustrator
     - [ ] `.cdr` — CorelDRAW

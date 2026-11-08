@@ -143,6 +143,13 @@ fn raster(
     cancelled: &AtomicBool,
 ) -> Option<ImageThumbnail> {
     let limits = super::super::media::raster_preview_limits();
+    if mime == "image/vnd.adobe.photoshop" {
+        if cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        return ImageThumbnail::generate_with_limits(bytes, Some(mime), edge, edge, limits)
+            .filter(|_| !cancelled.load(Ordering::Relaxed));
+    }
     if mime == "image/svg+xml" {
         let png =
             little_clip_core::svg_image::render_png(bytes, Some((edge, edge)), cancelled).ok()?;

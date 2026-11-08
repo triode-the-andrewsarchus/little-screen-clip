@@ -2,23 +2,24 @@ use super::super::*;
 
 impl ImagePreviewState {
     pub(crate) fn has_view_metadata(&self) -> bool {
-        self.metadata.as_ref().is_some_and(|meta| {
-            [
-                &meta.make,
-                &meta.model,
-                &meta.lens_model,
-                &meta.date_time,
-                &meta.exposure_time,
-                &meta.software,
-            ]
-            .iter()
-            .any(|value| value.as_ref().is_some_and(|value| !value.trim().is_empty()))
-                || meta.iso.is_some()
-                || meta.f_number.is_some()
-                || meta.focal_length.is_some()
-                || meta.has_gps()
-                || meta.gps_altitude.is_some()
-        })
+        self.layer_inspector.has_document()
+            || self.metadata.as_ref().is_some_and(|meta| {
+                [
+                    &meta.make,
+                    &meta.model,
+                    &meta.lens_model,
+                    &meta.date_time,
+                    &meta.exposure_time,
+                    &meta.software,
+                ]
+                .iter()
+                .any(|value| value.as_ref().is_some_and(|value| !value.trim().is_empty()))
+                    || meta.iso.is_some()
+                    || meta.f_number.is_some()
+                    || meta.focal_length.is_some()
+                    || meta.has_gps()
+                    || meta.gps_altitude.is_some()
+            })
     }
 
     pub(crate) fn render_view_toolbar(
@@ -30,6 +31,7 @@ impl ImagePreviewState {
         if !self.has_view_metadata() {
             return;
         }
+        self.layer_inspector.ui(ui, ctx, palette);
         let Some(meta) = &self.metadata else {
             return;
         };

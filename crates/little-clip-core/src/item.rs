@@ -79,6 +79,12 @@ impl ImageThumbnail {
         max_h: u32,
         limits: image::Limits,
     ) -> Option<Self> {
+        if let Some(jpeg) = crate::psd_image::embedded_thumbnail(bytes)
+            && let Some(thumb) =
+                Self::generate_with_limits(jpeg, Some("image/jpeg"), max_w, max_h, limits.clone())
+        {
+            return Some(thumb);
+        }
         if let Ok(dyn_img) = image_reader(bytes, mime).and_then(|mut reader| {
             reader.limits(limits);
             reader.decode()
@@ -127,6 +133,7 @@ pub fn image_extension_for_mime(mime: &str) -> Option<&'static str> {
         "image/heif" => Some("heif"),
         "image/heic" => Some("heic"),
         "image/jxl" => Some("jxl"),
+        "image/vnd.adobe.photoshop" | "image/x-photoshop" => Some("psd"),
         "image/jp2" => Some("jp2"),
         "image/jpx" => Some("jpf"),
         "image/x-jp2-codestream" => Some("j2k"),
@@ -165,6 +172,7 @@ pub fn image_reader<'a>(
         libheif_rs::integration::image::register_all_decoding_hooks();
         jxl_oxide::integration::register_image_decoding_hook();
         hayro_jpeg2000::integration::register_decoding_hook();
+        crate::psd_image::register_decoding_hook();
     });
     check_jpeg2000_composition(bytes)?;
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
@@ -247,6 +255,7 @@ fn image_mime_matches_bytes(mime: &str, bytes: &[u8]) -> bool {
                 .is_ok();
     }
     let signature = match mime {
+        "image/vnd.adobe.photoshop" | "image/x-photoshop" => Some(bytes.starts_with(b"8BPS\0\x01")),
         "image/jxl" => {
             Some(bytes.starts_with(b"\xff\x0a") || bytes.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n"))
         }
@@ -1383,6 +1392,7 @@ pub fn is_image_path(p: &Path) -> bool {
                 | "jxl"
                 | "jp2"
                 | "jpg2"
+                | "psd"
                 | "jpf"
                 | "j2k"
                 | "j2c"
@@ -1406,6 +1416,7 @@ pub fn guess_image_mime(p: &Path) -> String {
         "heif" => "image/heif".to_string(),
         "heic" => "image/heic".to_string(),
         "jxl" => "image/jxl".to_string(),
+        "psd" => "image/vnd.adobe.photoshop".to_string(),
         "jp2" | "jpg2" => "image/jp2".to_string(),
         "jpf" => "image/jpx".to_string(),
         "j2k" | "j2c" | "jpc" => "image/x-jp2-codestream".to_string(),
