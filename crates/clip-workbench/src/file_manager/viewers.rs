@@ -799,47 +799,72 @@ mod tests {
     }
 
     #[test]
-    fn jfif_files_use_the_native_photo_decoder_and_bounded_previews() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("photo.JFIF");
-        image::RgbImage::from_pixel(64, 32, image::Rgb([40, 80, 120]))
-            .save_with_format(&path, image::ImageFormat::Jpeg)
+    fn native_jfif_and_svgz_keep_sources_and_use_bounded_photo_previews() {
+        for (extension, mime) in [("JFIF", "image/jpeg"), ("SVGZ", "image/svg+xml")] {
+            let vector = extension == "SVGZ";
+            if vector
+                && std::process::Command::new("rsvg-convert")
+                    .arg("--version")
+                    .output()
+                    .is_err()
+            {
+                continue;
+            }
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(format!("photo.{extension}"));
+            if vector {
+                std::fs::write(
+                    &path,
+                    include_bytes!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../little-clip-core/tests/fixtures/panels.svgz"
+                    )),
+                )
+                .unwrap();
+            } else {
+                image::RgbImage::from_pixel(64, 32, image::Rgb([40, 80, 120]))
+                    .save_with_format(&path, image::ImageFormat::Jpeg)
+                    .unwrap();
+            }
+            let original = std::fs::read(&path).unwrap();
+            if !vector {
+                assert!(original.windows(5).any(|bytes| bytes == b"JFIF\0"));
+            }
+            let directory = super::super::filesystem::read_directory(
+                dir.path(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
             .unwrap();
-        assert!(
-            std::fs::read(&path)
-                .unwrap()
-                .windows(5)
-                .any(|bytes| bytes == b"JFIF\0")
-        );
-        let directory = super::super::filesystem::read_directory(
-            dir.path(),
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap();
-        let entry = directory
-            .entries
-            .iter()
-            .find(|entry| entry.path == path)
+            let entry = directory
+                .entries
+                .iter()
+                .find(|entry| entry.path == path)
+                .unwrap();
+            assert!(entry.is_photo());
+            assert_eq!(little_clip_core::item::guess_image_mime(&path), mime);
+            let metadata = super::super::gallery::metadata::probe(&path, entry.revision).unwrap();
+            assert_eq!((metadata.width, metadata.height), (64, 32));
+            let thumbnail = super::super::gallery::thumbnail::load(
+                &path,
+                16,
+                1,
+                &std::sync::atomic::AtomicBool::new(false),
+            )
             .unwrap();
-        assert!(entry.is_photo());
-        assert_eq!(
-            little_clip_core::item::guess_image_mime(&path),
-            "image/jpeg"
-        );
-        let metadata = super::super::gallery::metadata::probe(&path, entry.revision).unwrap();
-        assert_eq!((metadata.width, metadata.height), (64, 32));
-        let thumbnail = super::super::gallery::thumbnail::load(
-            &path,
-            16,
-            1,
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap();
-        assert!(thumbnail.width <= 16 && thumbnail.height <= 16);
-        assert!(matches!(
-            load(&path, &AppConfig::default()).unwrap(),
-            Loaded::Image(..)
-        ));
+            assert_eq!((thumbnail.width, thumbnail.height), (16, 8));
+            let Loaded::Image(data, _) = load(&path, &AppConfig::default()).unwrap() else {
+                panic!("Expected native image session")
+            };
+            let state = ImagePreviewState::from_decoded(
+                data,
+                Some(path.clone()),
+                "Format fixture".into(),
+                &Default::default(),
+            );
+            assert_eq!(state.is_svg, vector);
+            assert_eq!(state.current_rgba.dimensions(), (64, 32));
+            assert_eq!(std::fs::read(path).unwrap(), original);
+        }
     }
 
     #[test]

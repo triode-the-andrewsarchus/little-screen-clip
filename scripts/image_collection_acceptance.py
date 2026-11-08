@@ -4,13 +4,14 @@ from pathlib import Path
 from PIL import Image
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
 import ui_acceptance_capture as private
+import gzip
 
 
 def click_word(session, name, word, **kwargs):
     position = session.word(name, word, required=False, **kwargs)
     if position is None:
         # Sparse OCR sometimes reads the filename separator as a comma.
-        position = session.word(name, word.replace(".JFIF", ",JFIF"), **kwargs)
+        position = session.word(name, word.replace(".JFIF", ",JFIF").replace(".SVGZ", ",SVGZ"), **kwargs)
     x, y = position
     session.click(x + 8, y)
 
@@ -49,12 +50,12 @@ def include_strip_ocr(session):
         footer = session.output / f"{name}-image-footer.png"
         Image.open(path).crop((90, 720, 1180, 775)).resize((4360, 220)).save(footer)
         text += private.run_checked(["tesseract", str(footer), "stdout", "--psm", "6"], env=session.env)
-        return text.replace(",JFIF", ".JFIF")
+        return text.replace(",JFIF", ".JFIF").replace(",SVGZ", ".SVGZ")
     session.capture_text = capture
 
 
 def exercise(session, root, extension="png"):
-    extension = "JFIF" if extension == "jfif" else extension
+    extension = extension.upper() if extension in {"jfif", "svgz"} else extension
     first, second, renamed = (f"{stem}.{extension}" for stem in ["FIRST", "SECOND", "RENAMED"])
     originals = {first: (root / first).read_bytes(), second: (root / second).read_bytes()}
     include_strip_ocr(session)
@@ -98,7 +99,12 @@ def exercise(session, root, extension="png"):
     assert (root / "Edited" / "RENAMED_edit.png").exists()
     assert (root / "Edited" / "SECOND_edit.png").exists()
     # Export preserves both the source image and its editor history.
-    assert Image.open(root / renamed).getpixel((0, 0)) != Image.open(root / "Edited" / "RENAMED_edit.png").getpixel((0, 0))
+    with Image.open(root / "Edited" / "RENAMED_edit.png") as edited:
+        if extension == "SVGZ":
+            assert edited.size == (640, 400)
+            assert edited.getpixel((0, 0))[:3] == (180, 60, 40)
+        else:
+            assert Image.open(root / renamed).getpixel((0, 0)) != edited.getpixel((0, 0))
     session.observe("11-before-return", ["Back to folder"])
     click_control(session, "11-before-return", "Back")
     session.observe("12-browser-return", [renamed, second])
@@ -114,15 +120,21 @@ def exercise(session, root, extension="png"):
 
 def main():
     args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager",
-        lambda parser: parser.add_argument("--format", choices=["png", "jfif"], default="png"))
+        lambda parser: parser.add_argument("--format", choices=["png", "jfif", "svgz"], default="png"))
     output, root = media_fixture_directory(args)
     image = Image.new("RGB", (640, 400), (180, 60, 40))
     for x in range(320):
         for y in range(400):
             image.putpixel((x, y), (30, 120, 210))
-    extension = "JFIF" if args.format == "jfif" else args.format
-    image.save(root / f"FIRST.{extension}", format="JPEG" if args.format == "jfif" else "PNG")
-    Image.new("RGB", (400, 500), (90, 170, 70)).save(root / f"SECOND.{extension}", format="JPEG" if args.format == "jfif" else "PNG")
+    extension = args.format.upper() if args.format in {"jfif", "svgz"} else args.format
+    if args.format == "svgz":
+        first = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="320" height="400" fill="#1e78d2"/><rect x="320" width="320" height="400" fill="#b43c28"/></svg>'
+        second = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="500"><rect width="400" height="500" fill="#5aaa46"/></svg>'
+        for name, markup in [("FIRST",first),("SECOND",second)]:
+            (root / f"{name}.{extension}").write_bytes(gzip.compress(markup.encode(), mtime=0))
+    else:
+        image.save(root / f"FIRST.{extension}", format="JPEG" if args.format == "jfif" else "PNG")
+        Image.new("RGB", (400, 500), (90, 170, 70)).save(root / f"SECOND.{extension}", format="JPEG" if args.format == "jfif" else "PNG")
     return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.format), "Image Studio photo strip, ratings, retained edits, rename and export")
 
 

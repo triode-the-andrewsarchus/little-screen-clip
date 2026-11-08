@@ -179,15 +179,3 @@ pub(super) fn encode_webp_cancellable_with_progress(
     drop(writer);
     result
 }
-
-pub(super) fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
-    let output = CommandRequest::new("rsvg-convert")
-        .stdin_bytes(bytes)
-        .run()
-        .ok()?;
-    if output.status.success() && !output.stdout.is_empty() {
-        Some(output.stdout)
-    } else {
-        None
-    }
-}

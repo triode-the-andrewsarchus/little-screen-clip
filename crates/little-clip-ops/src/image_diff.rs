@@ -4,7 +4,6 @@
 //! producing difference masks, dimmed overlays with highlighted diff pixels, and diff percentage metrics.
 
 use image::{ImageBuffer, RgbaImage};
-use little_clip_core::CommandRequest;
 use std::path::Path;
 
 /// Errors that can occur during image diff decoding and comparison.
@@ -452,16 +451,13 @@ fn load_rgba_with_mime(bytes: &[u8], mime: Option<&str>) -> Result<RgbaImage, Im
         return Ok(dyn_img.to_rgba8());
     }
 
-    // Try SVG conversion
-    if is_svg(bytes) {
-        match render_svg_to_png(bytes) {
-            Ok(png_bytes) => {
-                if let Ok(dyn_img) = image::load_from_memory(&png_bytes) {
-                    return Ok(dyn_img.to_rgba8());
-                }
-            }
-            Err(e) => return Err(ImageDiffError::SvgRenderError(e)),
-        }
+    if let Ok(source) = little_clip_core::svg_image::document(bytes) {
+        return little_clip_core::svg_image::render_rgba(
+            &source,
+            None,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .map_err(ImageDiffError::SvgRenderError);
     }
 
     Err(ImageDiffError::DecodeError(image::ImageError::Decoding(
@@ -474,8 +470,8 @@ fn load_rgba_with_mime(bytes: &[u8], mime: Option<&str>) -> Result<RgbaImage, Im
 
 /// Loads an `RgbaImage` from a filesystem path.
 pub fn load_rgba_from_path(path: &Path) -> Result<RgbaImage, ImageDiffError> {
-    let bytes =
-        std::fs::read(path).map_err(|e| ImageDiffError::IoError(path.display().to_string(), e))?;
+    let bytes = little_clip_core::kernel_interface::read_content(path)
+        .map_err(|e| ImageDiffError::IoError(path.display().to_string(), e))?;
     let mime = little_clip_core::item::guess_image_mime(path);
     load_rgba_with_mime(&bytes, Some(&mime))
 }
@@ -545,38 +541,6 @@ pub fn downsample_rgba(width: u32, height: u32, rgba: &[u8], max_dim: u32) -> (u
     }
 
     (new_w, new_h, out)
-}
-
-/// Sniffs SVG XML headers from the start of image bytes.
-fn is_svg(bytes: &[u8]) -> bool {
-    let header = std::str::from_utf8(bytes.get(..1024).unwrap_or(bytes)).unwrap_or("");
-    let trimmed = header.trim_start();
-    trimmed.starts_with("<svg")
-        || (trimmed.starts_with("<?xml") && header.contains("<svg"))
-        || header.contains("<svg")
-}
-
-/// Invokes `rsvg-convert` CLI to render SVG bytes to PNG format.
-fn render_svg_to_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
-    let output = CommandRequest::new("rsvg-convert")
-        .arg("-a")
-        .stdin_bytes(bytes)
-        .run()
-        .map_err(|error| format!("Failed to execute 'rsvg-convert': {error}"))?;
-
-    if output.status.success() && !output.stdout.is_empty() {
-        Ok(output.stdout)
-    } else {
-        let err_msg = output.stderr_lossy().trim().to_string();
-        Err(if err_msg.is_empty() {
-            format!(
-                "'rsvg-convert' exited with status {:?}",
-                output.status.code()
-            )
-        } else {
-            err_msg
-        })
-    }
 }
 
 #[cfg(test)]
@@ -683,5 +647,36 @@ mod tests {
         assert!(!mask_png.is_empty());
         assert!(!overlay_png.is_empty());
         assert_eq!(&mask_png[1..4], b"PNG");
+    }
+}
+
+#[cfg(test)]
+mod svgz_tests {
+    use super::*;
+    #[test]
+    fn compressed_and_plain_svg_use_the_same_comparison_pixels_and_guarded_paths() {
+        if std::process::Command::new("rsvg-convert")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let compressed = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../little-clip-core/tests/fixtures/panels.svgz"
+        ));
+        let source = little_clip_core::svg_image::document(compressed).unwrap();
+        let plain = load_rgba_from_bytes(&source).unwrap();
+        let decoded = load_rgba_from_bytes(compressed).unwrap();
+        assert_eq!(plain, decoded);
+        assert_eq!(decoded.dimensions(), (64, 32));
+        assert_eq!(decoded.get_pixel(0, 0).0, [30, 120, 210, 255]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vector.svgz");
+        std::fs::write(&path, compressed).unwrap();
+        assert_eq!(load_rgba_from_path(&path).unwrap(), decoded);
+        #[cfg(target_os = "linux")]
+        assert!(load_rgba_from_path(Path::new("/proc/self/status")).is_err());
     }
 }

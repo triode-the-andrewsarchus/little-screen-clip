@@ -87,12 +87,7 @@ impl ImageThumbnail {
             return Some(Self::from_rgba(thumb.to_rgba8()));
         }
 
-        // If raster loading fails, try rendering as SVG
-        if is_svg_bytes(bytes) {
-            return Self::generate_from_svg(bytes, max_w, max_h);
-        }
-
-        None
+        Self::generate_from_svg(bytes, max_w, max_h)
     }
 
     /// Converts straight-alpha pixels into the shared premultiplied preview format.
@@ -113,94 +108,17 @@ impl ImageThumbnail {
 
     /// Renders vector SVG bytes to raster pixels using the `rsvg-convert` command-line tool.
     pub fn generate_from_svg(bytes: &[u8], max_w: u32, max_h: u32) -> Option<Self> {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        let mut child = Command::new("rsvg-convert")
-            .arg("-w")
-            .arg(max_w.to_string())
-            .arg("-h")
-            .arg(max_h.to_string())
-            .arg("-a")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(bytes);
-        }
-
-        let output = child.wait_with_output().ok()?;
-        if !output.status.success() || output.stdout.is_empty() {
-            return None;
-        }
-
-        Self::generate(&output.stdout, max_w, max_h)
+        let image = crate::svg_image::render_rgba(
+            bytes,
+            Some((max_w, max_h)),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .ok()?;
+        Some(Self::from_rgba(image))
     }
 }
 
-/// Returns `true` if the byte slice starts with an SVG XML declaration or `<svg` tag.
-pub fn is_svg_bytes(bytes: &[u8]) -> bool {
-    let header = std::str::from_utf8(bytes.get(..1024).unwrap_or(bytes)).unwrap_or("");
-    let trimmed = header.trim_start();
-    trimmed.starts_with("<svg")
-        || (trimmed.starts_with("<?xml") && header.contains("<svg"))
-        || header.contains("<svg")
-}
-
-/// Parses width and height attributes or `viewBox` bounds from raw SVG bytes without full XML parsing.
-pub fn read_svg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    let text = std::str::from_utf8(bytes.get(..4096).unwrap_or(bytes)).ok()?;
-
-    // 1. Try viewBox="min-x min-y width height"
-    if let Some(pos) = text.find("viewBox=") {
-        let after = &text[pos + 8..];
-        let quote = after.chars().next()?;
-        if quote == '"' || quote == '\'' {
-            let end_quote = after[1..].find(quote)?;
-            let parts: Vec<&str> = after[1..=end_quote]
-                .split(|c: char| c.is_whitespace() || c == ',')
-                .filter(|s| !s.is_empty())
-                .collect();
-            if parts.len() == 4 {
-                if let (Ok(w), Ok(h)) = (parts[2].parse::<f32>(), parts[3].parse::<f32>()) {
-                    if w > 0.0 && h > 0.0 {
-                        return Some((w.round() as u32, h.round() as u32));
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Try width="..." height="..."
-    let extract_attr = |attr: &str| -> Option<u32> {
-        let pos = text.find(attr)?;
-        let after = &text[pos + attr.len()..];
-        let quote = after.chars().next()?;
-        if quote == '"' || quote == '\'' {
-            let end = after[1..].find(quote)?;
-            let val = &after[1..=end];
-            let num: String = val
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '.')
-                .collect();
-            let f: f32 = num.parse().ok()?;
-            Some(f.round() as u32)
-        } else {
-            None
-        }
-    };
-
-    if let (Some(w), Some(h)) = (extract_attr("width="), extract_attr("height=")) {
-        if w > 0 && h > 0 {
-            return Some((w, h));
-        }
-    }
-
-    None
-}
+pub use crate::svg_image::{dimensions as read_svg_dimensions, is_markup as is_svg_bytes};
 
 /// Returns a supported image file extension for a MIME type.
 pub fn image_extension_for_mime(mime: &str) -> Option<&'static str> {
@@ -214,6 +132,15 @@ pub fn image_extension_for_mime(mime: &str) -> Option<&'static str> {
             .filter(|format| format.reading_enabled() || *format == image::ImageFormat::Avif)
             .map(|format| format.extensions_str()[0]),
     }
+}
+
+/// Returns the shared allocation and dimension limits for raster previews.
+pub fn raster_preview_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits
 }
 
 /// Creates a raster reader with HEIF/HEIC/AVIF decoding and an optional format hint.
@@ -256,15 +183,12 @@ pub fn read_image_dimensions_with_mime(bytes: &[u8], mime: Option<&str>) -> Opti
     if let Ok(dims) = image_reader(bytes, mime).and_then(|reader| reader.into_dimensions()) {
         return Some(dims);
     }
-    if is_svg_bytes(bytes) {
-        return read_svg_dimensions(bytes);
-    }
-    None
+    read_svg_dimensions(bytes)
 }
 
 fn image_mime_matches_bytes(mime: &str, bytes: &[u8]) -> bool {
     if mime == "image/svg+xml" {
-        return is_svg_bytes(bytes);
+        return crate::svg_image::document(bytes).is_ok();
     }
 
     if matches!(mime, "image/heif" | "image/heic") {
@@ -595,11 +519,11 @@ impl ClipItem {
             .map(|e| e.to_string_lossy().to_uppercase())
             .unwrap_or_else(|| "IMG".to_string());
 
-        let subtitle = if ext == "SVG" {
+        let subtitle = if mime == "image/svg+xml" {
             if w > 0 && h > 0 {
-                format!("Vector ({}×{}) • {:.1} KB • SVG", w, h, size_kb)
+                format!("Vector ({}×{}) • {:.1} KB • {}", w, h, size_kb, ext)
             } else {
-                format!("Vector • {:.1} KB • SVG", size_kb)
+                format!("Vector • {:.1} KB • {}", size_kb, ext)
             }
         } else if w > 0 && h > 0 {
             format!("{}×{} • {:.1} KB • {}", w, h, size_kb, ext)
@@ -608,7 +532,7 @@ impl ClipItem {
         };
 
         let thumbnail = ImageThumbnail::generate_with_mime(&bytes, Some(&mime), 320, 220);
-        let handler_tag = if ext == "SVG" {
+        let handler_tag = if mime == "image/svg+xml" {
             "SVG (VECTOR)".to_string()
         } else {
             "IMAGE (FILE)".to_string()
@@ -1387,10 +1311,11 @@ impl ClipItem {
 /// Returns `true` if the path has a standard raster or vector image extension.
 pub fn is_image_path(p: &Path) -> bool {
     if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-        matches!(ext.to_lowercase().as_str(), "svg" | "heif" | "heic")
-            || image::ImageFormat::from_extension(ext).is_some_and(|format| {
-                format.reading_enabled() || format == image::ImageFormat::Avif
-            })
+        matches!(
+            ext.to_lowercase().as_str(),
+            "svg" | "svgz" | "heif" | "heic"
+        ) || image::ImageFormat::from_extension(ext)
+            .is_some_and(|format| format.reading_enabled() || format == image::ImageFormat::Avif)
     } else {
         false
     }
@@ -1404,7 +1329,7 @@ pub fn guess_image_mime(p: &Path) -> String {
         .unwrap_or("")
         .to_ascii_lowercase();
     match ext.as_str() {
-        "svg" => "image/svg+xml".to_string(),
+        "svg" | "svgz" => "image/svg+xml".to_string(),
         "heif" => "image/heif".to_string(),
         "heic" => "image/heic".to_string(),
         "ff" => "image/x-farbfeld".to_string(),

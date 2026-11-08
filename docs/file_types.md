@@ -95,7 +95,7 @@
     - [ ] `.pct`, `.pic` — Apple QuickDraw PICT (May need disambiguation with PIC microcontroller files and Bio-Rad microscopy on `.pic`)
     - [ ] `.pcx` — PC Paintbrush / ZBrush alpha brush
     - [ ] `.sgi`, `.rgb` — Silicon Graphics Image
-    - [ ] `.svgz` — compressed SVG
+    - [x] `.svgz` — gzip-compressed SVG; bounded photo/list previews and Image Studio editing with raster export (requires `rsvg-convert`; preserves compressed originals, limits expanded XML to 64 MiB)
     - [ ] `.xpm`, `.xbm` — X11 pixmap / bitmap
 - [ ] Fonts
   - [x] `.ttf`, `.ttc` — TrueType font / collection; interactive specimens, character coverage, collection faces, and list strips

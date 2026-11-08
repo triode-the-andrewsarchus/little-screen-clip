@@ -171,6 +171,9 @@ fn cache_path(path: &Path, revision: u64) -> Option<PathBuf> {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut hash);
     revision.hash(&mut hash);
+    if little_clip_core::item::guess_image_mime(path) == "image/svg+xml" {
+        "svg-xml-dimensions-v2".hash(&mut hash);
+    }
     Some(
         root.join("little-screen-clip/gallery-metadata-v1")
             .join(format!("{:016x}.json", hash.finish())),

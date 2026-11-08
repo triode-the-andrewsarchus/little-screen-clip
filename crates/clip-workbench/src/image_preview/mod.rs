@@ -28,9 +28,7 @@ use image::RgbaImage;
 #[cfg(test)]
 use little_clip_core::ClipItem;
 use little_clip_core::palette::AppPalette;
-use little_clip_core::{
-    AppConfig, BackgroundJobs, CommandRequest, HandSide, IpcRequest, JobError, JobTicket,
-};
+use little_clip_core::{AppConfig, BackgroundJobs, HandSide, IpcRequest, JobError, JobTicket};
 use little_clip_ops::barcode::BarcodeDetection;
 use little_clip_ops::creative_fx::{
     BasicControlsParams, CmykHalftoneParams, CreativeFxMaskSource, CreativeFxParams,
@@ -298,20 +296,19 @@ impl DecodedImageData {
     }
 
     pub fn from_bytes(bytes: Vec<u8>, mime: String, path: Option<PathBuf>) -> Result<Self, String> {
-        let is_svg = mime.contains("svg")
-            || little_clip_core::item::is_svg_bytes(&bytes)
-            || path
-                .as_ref()
-                .and_then(|path| path.extension())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"));
+        let svg = little_clip_core::svg_image::document(&bytes);
+        let is_svg = svg.is_ok()
+            || mime.contains("svg")
+            || path.as_ref().is_some_and(|path| {
+                little_clip_core::item::guess_image_mime(path) == "image/svg+xml"
+            });
         let rgba = if is_svg {
-            if let Some(png_bytes) = render_svg_to_png(&bytes) {
-                image::load_from_memory(&png_bytes)
-                    .map_err(|error| format!("Failed to decode rendered SVG PNG: {error}"))?
-                    .to_rgba8()
-            } else {
-                return Err("Failed to rasterize SVG via rsvg-convert. Ensure librsvg / rsvg-convert is installed.".to_string());
-            }
+            let source = svg.as_deref().map_err(|error| error.to_string())?;
+            little_clip_core::svg_image::render_rgba(
+                source,
+                None,
+                &std::sync::atomic::AtomicBool::new(false),
+            )?
         } else {
             little_clip_core::item::image_reader(&bytes, Some(&mime))
                 .and_then(|reader| reader.decode())
@@ -319,6 +316,7 @@ impl DecodedImageData {
                 .to_rgba8()
         };
 
+        drop(svg);
         let metadata = extract_image_metadata(&bytes);
         Ok(Self {
             mime,

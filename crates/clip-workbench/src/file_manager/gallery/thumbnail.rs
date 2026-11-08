@@ -143,6 +143,11 @@ fn raster(
     cancelled: &AtomicBool,
 ) -> Option<ImageThumbnail> {
     let limits = super::super::media::raster_preview_limits();
+    if mime == "image/svg+xml" {
+        let png =
+            little_clip_core::svg_image::render_png(bytes, Some((edge, edge)), cancelled).ok()?;
+        return ImageThumbnail::generate_with_limits(&png, Some("image/png"), edge, edge, limits);
+    }
     let mut reader = little_clip_core::item::image_reader(bytes, Some(mime)).ok()?;
     reader.limits(limits.clone());
     let mut decoder = match reader.into_decoder() {
