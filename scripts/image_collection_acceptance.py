@@ -54,12 +54,12 @@ def include_strip_ocr(session):
         footer = session.output / f"{name}-image-footer.png"
         Image.open(path).crop((90, 720, 1180, 775)).resize((4360, 220)).save(footer)
         text += private.run_checked(["tesseract", str(footer), "stdout", "--psm", "6"], env=session.env)
-        return re.sub(r"\b(FIRST|SECOND|RENAMED)[,.]?(JFIF|SVGZ|JXL)\b", r"\1.\2", text)
+        return re.sub(r"\b(FIRST|SECOND|RENAMED)[,.]?(JFIF|SVGZ|JXL|JP2|J2K|JPF)\b", r"\1.\2", text)
     session.capture_text = capture
 
 
 def exercise(session, root, extension="png"):
-    extension = extension.upper() if extension in {"jfif", "svgz", "jxl"} else extension
+    extension = extension.upper() if extension != "png" else extension
     first, second, renamed = (f"{stem}.{extension}" for stem in ["FIRST", "SECOND", "RENAMED"])
     originals = {first: (root / first).read_bytes(), second: (root / second).read_bytes()}
     include_strip_ocr(session)
@@ -105,7 +105,7 @@ def exercise(session, root, extension="png"):
     assert (root / "Edited" / "SECOND_edit.png").exists()
     # Export preserves both the source image and its editor history.
     with Image.open(root / "Edited" / "RENAMED_edit.png") as edited:
-        if extension in {"SVGZ", "JXL"}:
+        if extension in {"SVGZ", "JXL", "JP2", "J2K", "JPF"}:
             assert edited.size == (640, 400)
             assert edited.getpixel((0, 0))[:3] == (180, 60, 40)
         else:
@@ -125,23 +125,40 @@ def exercise(session, root, extension="png"):
 
 def main():
     args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager",
-        lambda parser: parser.add_argument("--format", choices=["png", "jfif", "svgz", "jxl"], default="png"))
+        lambda parser: parser.add_argument("--format", choices=["png", "jfif", "svgz", "jxl", "jp2", "j2k", "jpf"], default="png"))
     output, root = media_fixture_directory(args)
     image = Image.new("RGB", (640, 400), (180, 60, 40))
     for x in range(320):
         for y in range(400):
             image.putpixel((x, y), (30, 120, 210))
-    extension = args.format.upper() if args.format in {"jfif", "svgz", "jxl"} else args.format
+    extension = args.format.upper() if args.format != "png" else args.format
     if args.format == "svgz":
         first = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="320" height="400" fill="#1e78d2"/><rect x="320" width="320" height="400" fill="#b43c28"/></svg>'
         second = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="500"><rect width="400" height="500" fill="#5aaa46"/></svg>'
         for name, markup in [("FIRST",first),("SECOND",second)]:
             (root / f"{name}.{extension}").write_bytes(gzip.compress(markup.encode(), mtime=0))
-    elif args.format == "jxl":
+    elif args.format in {"jxl", "jp2", "j2k", "jpf"}:
         for index, (name, pixels) in enumerate([("FIRST", image), ("SECOND", Image.new("RGB", (400, 500), (90, 170, 70)))]):
             source = root / f"{name}.png"
             pixels.save(source)
-            subprocess.run(["cjxl", str(source), str(root / f"{name}.{extension}"), "-d", "0", "-e", "1", f"--container={index}", "--num_threads=1"], check=True, timeout=30)
+            destination = root / f"{name}.{extension}"
+            if args.format == "jxl":
+                subprocess.run(["cjxl", str(source), str(destination), "-d", "0", "-e", "1", f"--container={index}", "--num_threads=1"], check=True, timeout=30)
+            else:
+                encoded = destination.with_suffix(".j2k" if args.format == "j2k" else ".jp2")
+                subprocess.run(["opj_compress", "-i", str(source), "-o", str(encoded)], check=True, timeout=30)
+                if encoded != destination:
+                    if args.format == "jpf":
+                        # JPX branding with JP2 compatibility and one still image.
+                        data = bytearray(encoded.read_bytes())
+                        assert data[16:20] == b"ftyp"
+                        data[20:24] = b"jpx "
+                        destination.write_bytes(data)
+                        encoded.unlink()
+                    else:
+                        encoded.rename(destination)
+                signature = b"\xff\x4f\xff\x51" if args.format == "j2k" else b"\0\0\0\x0cjP  \r\n\x87\n"
+                assert destination.read_bytes().startswith(signature)
             source.unlink()
     else:
         image.save(root / f"FIRST.{extension}", format="JPEG" if args.format == "jfif" else "PNG")

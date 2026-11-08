@@ -127,6 +127,9 @@ pub fn image_extension_for_mime(mime: &str) -> Option<&'static str> {
         "image/heif" => Some("heif"),
         "image/heic" => Some("heic"),
         "image/jxl" => Some("jxl"),
+        "image/jp2" => Some("jp2"),
+        "image/jpx" => Some("jpf"),
+        "image/x-jp2-codestream" => Some("j2k"),
         "image/x-farbfeld" => Some("ff"),
         "image/jpg" => Some("jpg"),
         _ => image::ImageFormat::from_mime_type(mime)
@@ -144,15 +147,15 @@ pub fn raster_preview_limits() -> image::Limits {
     limits
 }
 
-/// Creates a raster reader with HEIF/HEIC/AVIF and JPEG XL decoding and a format hint.
+/// Creates a raster reader with shared decoder hooks and an optional format hint.
 ///
 /// Byte signatures take precedence over the hint. TGA has no reliable signature,
 /// so callers reading files should supply their MIME type.
 ///
 /// # Errors
 ///
-/// Returns an error if reading the format signature fails. Unsupported formats
-/// and invalid image data are reported when decoding or inspecting dimensions.
+/// Returns an error for an unreadable signature or unsupported JPX composition.
+/// Other unsupported formats and invalid data are reported during decoding or inspection.
 pub fn image_reader<'a>(
     bytes: &'a [u8],
     mime: Option<&str>,
@@ -161,7 +164,9 @@ pub fn image_reader<'a>(
     CODECS.call_once(|| {
         libheif_rs::integration::image::register_all_decoding_hooks();
         jxl_oxide::integration::register_image_decoding_hook();
+        hayro_jpeg2000::integration::register_decoding_hook();
     });
+    check_jpeg2000_composition(bytes)?;
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
     let mime = match mime {
         Some("image/jpg") => Some("image/jpeg"),
@@ -175,6 +180,46 @@ pub fn image_reader<'a>(
         reader.set_format(format);
     }
     Ok(reader.with_guessed_format()?)
+}
+
+fn check_jpeg2000_composition(mut bytes: &[u8]) -> image::ImageResult<()> {
+    if !bytes.starts_with(b"\0\0\0\x0cjP  \r\n\x87\n") {
+        return Ok(());
+    }
+    // The decoder handles single JP2-compatible images. JPX composition and
+    // per-layer headers need their own renderer; ignoring them can show the
+    // wrong codestream or omit layers. Leave malformed sizes to the decoder.
+    let mut codestreams = 0;
+    while bytes.len() >= 8 {
+        let kind = &bytes[4..8];
+        codestreams += usize::from(kind == b"jp2c");
+        if codestreams > 1 || matches!(kind, b"comp" | b"jplh" | b"jpch") {
+            return Err(image::ImageError::Unsupported(
+                image::error::UnsupportedError::from_format_and_kind(
+                    image::error::ImageFormatHint::Name("JPEG 2000".into()),
+                    image::error::UnsupportedErrorKind::GenericFeature(
+                        "JPX layer/frame composition".into(),
+                    ),
+                ),
+            ));
+        }
+        let size = u32::from_be_bytes(bytes[..4].try_into().unwrap());
+        let (size, header) = match size {
+            0 => break,
+            1 if bytes.len() >= 16 => (u64::from_be_bytes(bytes[8..16].try_into().unwrap()), 16),
+            1..=7 => break,
+            size => (u64::from(size), 8),
+        };
+        let Ok(size) = usize::try_from(size) else {
+            break;
+        };
+        if size < header {
+            break;
+        }
+        let Some(tail) = bytes.get(size..) else { break };
+        bytes = tail;
+    }
+    Ok(())
 }
 
 /// Fast header-only image dimension reader for raster and vector formats (~0.05ms, skips pixel decode).
@@ -201,8 +246,16 @@ fn image_mime_matches_bytes(mime: &str, bytes: &[u8]) -> bool {
                 .and_then(|reader| reader.into_dimensions())
                 .is_ok();
     }
-    if mime == "image/jxl" {
-        return (bytes.starts_with(b"\xff\x0a") || bytes.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n"))
+    let signature = match mime {
+        "image/jxl" => {
+            Some(bytes.starts_with(b"\xff\x0a") || bytes.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n"))
+        }
+        "image/jp2" | "image/jpx" => Some(bytes.starts_with(b"\0\0\0\x0cjP  \r\n\x87\n")),
+        "image/x-jp2-codestream" => Some(bytes.starts_with(b"\xff\x4f\xff\x51")),
+        _ => None,
+    };
+    if let Some(matches) = signature {
+        return matches
             && image_reader(bytes, None)
                 .and_then(|reader| reader.into_dimensions())
                 .is_ok();
@@ -1323,7 +1376,17 @@ pub fn is_image_path(p: &Path) -> bool {
     if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
         matches!(
             ext.to_lowercase().as_str(),
-            "svg" | "svgz" | "heif" | "heic" | "jxl"
+            "svg"
+                | "svgz"
+                | "heif"
+                | "heic"
+                | "jxl"
+                | "jp2"
+                | "jpg2"
+                | "jpf"
+                | "j2k"
+                | "j2c"
+                | "jpc"
         ) || image::ImageFormat::from_extension(ext)
             .is_some_and(|format| format.reading_enabled() || format == image::ImageFormat::Avif)
     } else {
@@ -1343,6 +1406,9 @@ pub fn guess_image_mime(p: &Path) -> String {
         "heif" => "image/heif".to_string(),
         "heic" => "image/heic".to_string(),
         "jxl" => "image/jxl".to_string(),
+        "jp2" | "jpg2" => "image/jp2".to_string(),
+        "jpf" => "image/jpx".to_string(),
+        "j2k" | "j2c" | "jpc" => "image/x-jp2-codestream".to_string(),
         "ff" => "image/x-farbfeld".to_string(),
         _ => image::ImageFormat::from_extension(&ext)
             .map(|format| format.to_mime_type())

@@ -64,7 +64,8 @@
       - [ ] EXIF, XMP, and ICC profile chunks
       - [ ] Animation frame timing and canvas size metadata
     - [x] `.jxl` — JPEG XL still images (codestream and container, RGB/grayscale/alpha, 8/16-bit and float); shared photo previews and Image Studio edits with raster export; original JPEG XL bytes preserved (no JPEG XL encoder or animation playback)
-    - [ ] `.jp2`, `.j2k`, `.jpf` — JPEG 2000
+    - [x] `.jp2`, `.j2k`, `.jpf` — JPEG 2000 still images: JP2-compatible containers and raw codestreams (also `.jpg2`, `.j2c`, `.jpc`); shared photo/color strips and Image Studio with 8-bit display and raster export, preserving originals
+      - [ ] Advanced JPX multi-codestream/layer composition, animation, and JPEG 2000 encoding
     - [ ] `.psd` — Photoshop
       - [ ] Layer hierarchy, blend modes, layer masks, and image resource blocks (slices, guides, IPTC/XMP)
     - [ ] `.xcf` — GIMP

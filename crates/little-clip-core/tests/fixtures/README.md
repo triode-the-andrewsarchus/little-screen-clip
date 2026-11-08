@@ -14,3 +14,16 @@ without requiring an encoder at test runtime. They share the repository's licens
 `gray16.jxl` (8×6, luminance 16384) and `float.jxl` (8×6, RGB 0.25/0.5/0.75)
 use the same lossless encoder flags with 16-bit PGM and little-endian float PFM
 inputs, respectively, to verify native sample depths.
+
+`panels.jp2` and `panels.j2k` encode the same 64×32 RGB panels with OpenJPEG
+2.5.4 (`opj_compress -n 3`, default lossless settings), using JP2 and raw
+codestream output, respectively. `panels-alpha.jp2` adds alpha 128 on the left,
+255 on the right. `gray16.jp2` uses the 8×6, 16-bit luminance 16384 input with
+`-n 2`. These generated fixtures share the repository's license and require
+no external encoder or decoder at test runtime.
+`panels.jpf` changes only the file-type box's major brand to `jpx `, retaining
+the `jp2 ` compatibility brand and the single JP2-compatible image.
+`gradient-lossy.jp2` uses a 64×32 RGB gradient, `(4x, 8y, 2(x+y))`, with
+`-n 3 -t 32,16 -r 8,4,1 -p RLCP -I` to exercise irreversible wavelets, four
+tiles and three progressive quality layers. Its decoded pixels are checked
+against the generated input within the lossy tolerance.

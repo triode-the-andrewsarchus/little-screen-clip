@@ -143,6 +143,114 @@ fn jpeg_xl_grayscale_and_float_keep_native_sample_depths() {
 }
 
 #[test]
+fn jpeg2000_containers_and_codestreams_share_image_previews_and_limits() {
+    let container = include_bytes!("fixtures/panels.jp2").as_slice();
+    let codestream = include_bytes!("fixtures/panels.j2k").as_slice();
+    for (ext, mime, bytes) in [
+        ("JP2", "image/jp2", container),
+        ("JPG2", "image/jp2", container),
+        (
+            "JPF",
+            "image/jpx",
+            include_bytes!("fixtures/panels.jpf").as_slice(),
+        ),
+        ("J2K", "image/x-jp2-codestream", codestream),
+        ("J2C", "image/x-jp2-codestream", codestream),
+        ("JPC", "image/x-jp2-codestream", codestream),
+    ] {
+        let path = format!("photo.{ext}");
+        assert!(is_image_path(Path::new(&path)));
+        assert_eq!(guess_image_mime(Path::new(&path)), mime);
+        assert_eq!(read_image_dimensions(bytes), Some((64, 32)));
+        let decoded = image_reader(bytes, Some("image/png"))
+            .unwrap()
+            .decode()
+            .unwrap()
+            .to_rgb8();
+        assert_eq!(decoded.get_pixel(0, 0).0, [30, 120, 210]);
+        assert_eq!(decoded.get_pixel(63, 31).0, [180, 60, 40]);
+        let thumbnail = ImageThumbnail::generate(bytes, 16, 16).unwrap();
+        assert_eq!((thumbnail.width, thumbnail.height), (16, 8));
+        let ClipPayload::Image {
+            path,
+            width,
+            height,
+            ..
+        } = ClipItem::from_image_bytes(bytes.to_vec(), mime)
+            .unwrap()
+            .payload
+        else {
+            panic!("JPEG 2000 payload")
+        };
+        assert_eq!((width, height), (64, 32));
+        assert_eq!(
+            path.unwrap().extension().unwrap(),
+            image_extension_for_mime(mime).unwrap()
+        );
+        for max_alloc in [None, Some(8)] {
+            let mut reader = image_reader(bytes, None).unwrap();
+            let mut limits = little_clip_core::item::raster_preview_limits();
+            limits.max_alloc = max_alloc;
+            if max_alloc.is_none() {
+                limits.max_image_width = Some(63);
+            }
+            reader.limits(limits);
+            assert!(reader.decode().is_err());
+        }
+    }
+    assert!(ClipItem::from_image_bytes(container.to_vec(), "image/x-jp2-codestream").is_none());
+    assert!(ClipItem::from_image_bytes(codestream.to_vec(), "image/jp2").is_none());
+    assert!(
+        ClipItem::from_image_bytes(b"\xff\x4f\xff\x51".to_vec(), "image/x-jp2-codestream")
+            .is_none()
+    );
+    let codestream_box = container
+        .windows(4)
+        .position(|bytes| bytes == b"jp2c")
+        .unwrap()
+        - 4;
+    for extra in [
+        b"\0\0\0\x08comp".as_slice(),
+        b"\0\0\0\x08jplh",
+        b"\0\0\0\x08jpch",
+        &container[codestream_box..],
+    ] {
+        let mut layered = container.to_vec();
+        layered.extend_from_slice(extra);
+        assert!(
+            image_reader(&layered, None)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("JPX")
+        );
+    }
+    let alpha = include_bytes!("fixtures/panels-alpha.jp2");
+    let thumbnail = ImageThumbnail::generate(alpha, 16, 16).unwrap();
+    assert_eq!(&thumbnail.premultiplied_rgba[..4], &[15, 60, 105, 128]);
+    let gray = image_reader(include_bytes!("fixtures/gray16.jp2"), None)
+        .unwrap()
+        .decode()
+        .unwrap()
+        .to_luma8();
+    assert_eq!(gray.dimensions(), (8, 6));
+    assert_eq!(gray.get_pixel(0, 0).0, [64]);
+    // Irreversible wavelets, multiple tiles and progressive quality layers.
+    let lossy = image_reader(include_bytes!("fixtures/gradient-lossy.jp2"), None)
+        .unwrap()
+        .decode()
+        .unwrap()
+        .to_rgb8();
+    assert_eq!(lossy.dimensions(), (64, 32));
+    for (x, y, pixel) in lossy.enumerate_pixels() {
+        let expected = [(x * 4) as u8, (y * 8) as u8, ((x + y) * 2) as u8];
+        for (actual, expected) in pixel.0.into_iter().zip(expected) {
+            assert!(actual.abs_diff(expected) <= 8);
+        }
+    }
+}
+
+#[test]
 fn additional_raster_formats_decode_and_produce_clipboard_thumbnails() {
     let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(8, 6, Rgb([128, 64, 32])));
     for (format, ext) in [

@@ -804,6 +804,9 @@ mod tests {
             ("JFIF", "image/jpeg"),
             ("SVGZ", "image/svg+xml"),
             ("JXL", "image/jxl"),
+            ("JP2", "image/jp2"),
+            ("JPF", "image/jpx"),
+            ("J2K", "image/x-jp2-codestream"),
         ] {
             let vector = extension == "SVGZ";
             if vector
@@ -816,24 +819,31 @@ mod tests {
             }
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join(format!("photo.{extension}"));
-            if vector {
-                std::fs::write(
-                    &path,
-                    include_bytes!(concat!(
-                        env!("CARGO_MANIFEST_DIR"),
-                        "/../little-clip-core/tests/fixtures/panels.svgz"
-                    )),
-                )
-                .unwrap();
-            } else if extension == "JXL" {
-                std::fs::write(
-                    &path,
-                    include_bytes!(concat!(
-                        env!("CARGO_MANIFEST_DIR"),
-                        "/../little-clip-core/tests/fixtures/panels.jxl"
-                    )),
-                )
-                .unwrap();
+            let fixture: Option<&[u8]> = match extension {
+                "SVGZ" => Some(include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/panels.svgz"
+                ))),
+                "JXL" => Some(include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/panels.jxl"
+                ))),
+                "JP2" => Some(include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/panels.jp2"
+                ))),
+                "JPF" => Some(include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/panels.jpf"
+                ))),
+                "J2K" => Some(include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/panels.j2k"
+                ))),
+                _ => None,
+            };
+            if let Some(bytes) = fixture {
+                std::fs::write(&path, bytes).unwrap();
             } else {
                 image::RgbImage::from_pixel(64, 32, image::Rgb([40, 80, 120]))
                     .save_with_format(&path, image::ImageFormat::Jpeg)

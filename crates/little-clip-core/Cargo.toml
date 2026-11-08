@@ -41,6 +41,7 @@ quick-xml = "0.41"
 wait-timeout = "0.2"
 libheif-rs = { version = "3.0", default-features = false, features = ["v1_17", "image"] }
 jxl-oxide = { version = "0.12.6", default-features = false, features = ["image", "lcms2"] }
+hayro-jpeg2000 = "0.5.0"
 anydoc = "0.2"
 rdocx = "0.16"
 
