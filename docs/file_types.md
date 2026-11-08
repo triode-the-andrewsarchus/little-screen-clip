@@ -177,7 +177,7 @@
   - [ ] `.wma`
   - [x] `.adts` — Audio Data Transport Stream (AAC-LC); Audio Studio, playback, waveform strips and region export
   - [ ] `.au`, `.snd` — Sun/NeXT audio (May need disambiguation with Akai MPC sound samples on `.snd`)
-  - [ ] `.caf` — Apple Core Audio Format
+  - [x] `.caf` — Apple Core Audio Format; PCM and Apple Lossless in Audio Studio, playback, waveform strips and region export
   - [ ] `.dts`, `.dtshd` — DTS / DTS-HD audio (May need disambiguation with Device Tree Source files on `.dts`)
   - [ ] `.m3u` — audio playlist
   - [x] `.m4b` — MPEG-4 audiobook; Audio Studio, playback, waveform strips, and region export

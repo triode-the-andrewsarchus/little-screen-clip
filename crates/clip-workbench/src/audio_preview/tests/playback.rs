@@ -873,11 +873,14 @@ fn search_source_validation_rejects_audio_exports_before_outputs_and_keeps_compl
 }
 
 #[test]
-fn compressed_audio_decodes_waveforms_and_exports_without_overwriting() {
+fn audio_containers_decode_waveforms_and_export_without_overwriting() {
     for (extension, codec, container) in [
         ("m4b", "aac", "ipod"),
         ("mp2", "mp2", "mp2"),
         ("adts", "aac", "adts"),
+        ("caf", "pcm_s16le", "caf"),
+        ("caf", "pcm_f32le", "caf"),
+        ("caf", "alac", "caf"),
     ] {
         let (directory, wav) = generate_fixture_wav("compressed_audio", 1.0);
         let path = directory
@@ -913,7 +916,11 @@ fn compressed_audio_decodes_waveforms_and_exports_without_overwriting() {
         let audio = crate::file_source::open_regular_file(&path, true).unwrap();
         let mut decoder = rodio::Decoder::try_from(audio).unwrap();
         assert!(decoder.next().is_some());
-        for position in [Duration::from_millis(500), Duration::ZERO] {
+        for position in [
+            Duration::from_millis(500),
+            Duration::from_millis(800),
+            Duration::ZERO,
+        ] {
             decoder.try_seek(position).unwrap();
             assert!(decoder.next().is_some());
         }
