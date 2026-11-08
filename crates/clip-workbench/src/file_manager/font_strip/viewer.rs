@@ -170,7 +170,9 @@ impl Viewer {
             let faces = ttf_parser::fonts_in_collection(&self.document.bytes).unwrap_or(1);
             if faces > 1 {
                 ui.label("Collection face");
-                ui.add(egui::DragValue::new(&mut self.request.face).clamp_range(0..=faces - 1));
+                let mut selected = self.request.face + 1;
+                ui.add(egui::DragValue::new(&mut selected).clamp_range(1..=faces));
+                self.request.face = selected - 1;
             }
         });
         ui.add(
