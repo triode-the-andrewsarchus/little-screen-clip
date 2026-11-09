@@ -328,6 +328,7 @@ Supported file and content types currently suffer from asymmetric implementation
 2. **Duplicated Presentation Logic**: The same visual representations are re-calculated and re-rendered in multiple crates:
    - *Audio Waveforms*: Peak extraction, RMS computation, frequency crossover coloring, downsampling, bar layout, and zero-crossing snapping are duplicated across `little-clip-render` (little screen), `file_manager/music` (music view), `rolling_audio_strip.rs` (workbench rolling capture), and `audio_preview/tools/inspect/waveform.rs` (studio canvas).
    - *Thumbnail & Grid Tiles*: As the file manager prepares to add an **Icon Grid Preview View**, having isolated row renderers risks writing thumbnailing, aspect-ratio letterboxing, and badge painting a third time.
+3. **Fuzzy Scaled Raster Mirror in Workbench**: In `workbench/background.rs` and `shell/screen_mirror.rs`, the little screen preview in the workbench is literally an off-screen 1920×462 tiny-skia pixmap rendered by a background worker, converted to an `egui::ColorImage`, and drawn as a bilinearly-scaled static GPU texture. It does not use native vector rendering or HiDPI fonts, looks blurry on non-native display resolutions, and lags behind compositor refresh rates (60/120/144Hz) with worker thread round-trip latency.
 
 #### Architectural Solution
 1. **Canonical `ContentType` & Capability Registry in `little-clip-core`**:
@@ -350,12 +351,19 @@ Supported file and content types currently suffer from asymmetric implementation
    - Extract `GridTileWidget`: Standardized thumbnail/icon grid card with aspect-ratio letterboxing, format badges, and selection outlines. Shared between the upcoming File Manager Icon Grid View, workbench shelf, and search result tiles.
    - Extract `VideoTimelineStripWidget`: Shared video keyframe timeline scrubber used in both list view rows and video inspection.
    - Extract `PdfPageStripWidget`: Shared page thumbnail strip used in list view rows and the PDF studio.
+4. **Native egui Screen Mirror & Slot Strip (Replacing Scaled Texture Mirror)**:
+   - Replace the off-screen tiny-skia raster texture mirror with a native egui vector slot strip widget.
+   - Uses `clip-ui` and shared `ContentType` presentation components to render cards directly onto the UI painter.
+   - Renders crisp vector text with subpixel font smoothing at the exact Wayland HiDPI scale factor.
+   - Runs at native compositor refresh rates (60Hz / 120Hz / 144Hz) with zero background worker latency and smooth drag-and-drop slot animations.
+   - Preserves `little-clip-render` exclusively for its true domain: the headless software rasterizer for the physical Trofeo USB hardware display.
 
 #### Dynamic Expansion Checklist (To be expanded during implementation)
 - [ ] Implement `ContentType` enum and migrate all existing `is_*_path` calls to it.
 - [ ] Add unit tests verifying exhaustive card coverage for every `ContentType` variant.
 - [ ] Benchmark `WaveformGeometryBuilder` reuse across list view, rolling capture, and studio canvas.
 - [ ] Validate that the new `GridTileWidget` meets File Manager Icon Grid View requirements.
+- [ ] Implement native egui slot strip and retire the off-screen tiny-skia `ambient-mirror` texture upload loop.
 
 ---
 
@@ -519,7 +527,8 @@ Phase 2: Universal Multi-Tier Content Presentation & Code Reuse
 ├── Task 2.2: Universal Little-Screen Card coverage in `little-clip-render` (video, PDF, archives, spreadsheets)
 ├── Task 2.3: Extract shared `WaveformGeometryBuilder` & visual widgets into `clip-studio`
 ├── Task 2.4: Implement reusable `GridTileWidget` for File Manager Icon Grid View, shelf, and search
-└── Task 2.5: Consolidate shared `VideoTimelineStripWidget` and `PdfPageStripWidget`
+├── Task 2.5: Consolidate shared `VideoTimelineStripWidget` and `PdfPageStripWidget`
+└── Task 2.6: Native egui Screen Mirror & Slot Strip (replacing bilinear scaled texture mirror)
 
 Phase 3: Concurrency, Threading Boundaries & Non-Blocking I/O
 ├── Task 3.1: Move USB driver hardware I/O in `little-clipd` to dedicated `std::thread`
