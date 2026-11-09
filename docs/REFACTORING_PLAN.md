@@ -48,5 +48,5 @@ This document tracks the step-by-step refactoring plan for the `little-screen-cl
   - Make `crates/clip-workbench/src/main.rs` a thin binary entrypoint that calls into `clip_workbench` instead of re-declaring `mod` for all studio modules (eliminating double compilation and false-positive dead-code warnings).
   - Extract `file_manager` and `src/bin/clip-file-manager.rs` into a dedicated `crates/clip-file-manager` workspace crate depending on `clip-workbench` and `little-clip-*`.
 
-- [ ] **Task 8: Decompose oversized monolithic modules**
+- [x] **Task 8: Decompose oversized monolithic modules**
   - Split `file_manager/constellation/ui.rs` (~3,950 lines), `file_manager/search/service.rs` (~4,530 lines), and `image_preview/tools/redact.rs` (~2,270 lines) into focused implementation and test submodules.
