@@ -2,8 +2,6 @@
 //! multi-slot history management, audio/video analysis, configuration definitions, and IPC contracts
 //! for the Little Screen Clip ecosystem.
 
-extern crate self as little_clip_core;
-
 pub mod animation;
 pub mod audio;
 pub mod clipboard;
@@ -17,17 +15,11 @@ pub mod jobs;
 pub mod kernel_interface;
 /// Presentation-ready classifiers and decoded models shared by renderers and operations.
 pub mod presentation {
-    #[path = "../../../little-clip-ops/src/midi.rs"]
     pub mod midi;
-    #[path = "../../../little-clip-ops/src/model3d.rs"]
     pub mod model3d;
-    #[path = "../../../little-clip-ops/src/network_preview.rs"]
     pub mod network_preview;
-    #[path = "../../../little-clip-ops/src/spreadsheet.rs"]
     pub mod spreadsheet;
-    #[path = "../../../little-clip-ops/src/timestamps.rs"]
     pub mod timestamps;
-    #[path = "../../../little-clip-ops/src/units.rs"]
     pub mod units;
 }
 pub mod palette;

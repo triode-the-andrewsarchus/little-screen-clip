@@ -6,7 +6,7 @@ const MAX_TRIANGLES: usize = 2_000_000;
 const IMPORT_MEMORY: usize = 256 * 1024 * 1024;
 
 pub(super) fn load(path: &Path) -> Result<Vec<Triangle>, String> {
-    let file = little_clip_core::kernel_interface::open_content(path, true)
+    let file = crate::kernel_interface::open_content(path, true)
         .map_err(|error| format!("Failed to open FBX: {error}"))?;
     let opts = ufbx::LoadOpts {
         file_format: ufbx::FileFormat::Fbx,
