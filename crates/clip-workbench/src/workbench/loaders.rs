@@ -199,52 +199,26 @@ impl WorkbenchApp {
         }
         let (ticket, receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(60), move || {
-                let store =
-                    little_clip_core::staging::ArtifactStore::new().map_err(|e| e.to_string())?;
-                let workspace = store
-                    .create_workspace("office_preview", "pdf_render")
-                    .map_err(|e| e.to_string())?;
-                let stem = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("document");
-                let pdf_path = workspace.path().join(format!("{stem}.pdf"));
                 let title = path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "document".to_string());
-                if let Ok(cached_pdf) = little_clip_core::document::ensure_rendered_pdf(&path) {
-                    if std::fs::copy(&cached_pdf, &pdf_path).is_ok()
-                        && std::fs::metadata(&pdf_path)
-                            .map(|m| m.len() > 0)
-                            .unwrap_or(false)
-                    {
-                        let workspace_dir = workspace.retain();
-                        return Ok(OfficeLoadResult::Pdf {
-                            pdf_path,
-                            workspace_dir,
-                            title,
-                        });
-                    }
-                }
-                if little_clip_core::document::render_to_pdf(&path, &pdf_path).is_ok()
-                    && std::fs::metadata(&pdf_path)
-                        .map(|m| m.len() > 0)
-                        .unwrap_or(false)
-                {
-                    let workspace_dir = workspace.retain();
-                    Ok(OfficeLoadResult::Pdf {
+                match little_clip_core::document::prepare_office_preview(&path)? {
+                    little_clip_core::document::PreparedOfficePreview::Pdf {
+                        pdf_path,
+                        workspace_dir,
+                    } => Ok(OfficeLoadResult::Pdf {
                         pdf_path,
                         workspace_dir,
                         title,
-                    })
-                } else {
-                    let md = little_clip_core::document::render_to_markdown(&path)?;
-                    Ok(OfficeLoadResult::Markdown {
-                        content: md,
-                        title,
-                        path,
-                    })
+                    }),
+                    little_clip_core::document::PreparedOfficePreview::Markdown(content) => {
+                        Ok(OfficeLoadResult::Markdown {
+                            content,
+                            title,
+                            path,
+                        })
+                    }
                 }
             });
         self.office_load_job = Some((ticket, receiver));
