@@ -108,11 +108,11 @@ impl MidiData {
         let smf = Smf::parse(bytes).map_err(|e| format!("Failed to parse MIDI: {}", e))?;
 
         let ticks_per_beat = match smf.header.timing {
-            Timing::Metrical(tpb) => tpb.as_int() as f64,
-            Timing::Timecode(fps, sub) => (fps.as_f32() * sub as f32) as f64,
+            Timing::Metrical(tpb) => (tpb.as_int() as f64).max(1.0),
+            Timing::Timecode(fps, sub) => ((fps.as_f32() * sub as f32) as f64).max(1.0),
         };
 
-        let mut initial_tempo_us_per_beat: f64 = 500_000.0; // 120 BPM default
+        let mut tempo_events: Vec<(u64, f64)> = Vec::new();
         let mut title = default_title;
 
         let mut track_names: Vec<String> = Vec::with_capacity(smf.tracks.len());
@@ -120,11 +120,16 @@ impl MidiData {
         // First pass: look for tempo & track names in meta events
         for (t_idx, track) in smf.tracks.iter().enumerate() {
             let mut t_name = String::new();
+            let mut current_tick: u64 = 0;
             for event in track {
+                current_tick += event.delta.as_int() as u64;
                 if let TrackEventKind::Meta(meta) = event.kind {
                     match meta {
                         MetaMessage::Tempo(us) => {
-                            initial_tempo_us_per_beat = us.as_int() as f64;
+                            let us_val = us.as_int();
+                            if us_val > 0 {
+                                tempo_events.push((current_tick, us_val as f64));
+                            }
                         }
                         MetaMessage::TrackName(name_bytes) => {
                             if let Ok(name_str) = std::str::from_utf8(name_bytes) {
@@ -149,8 +154,32 @@ impl MidiData {
             track_names.push(t_name);
         }
 
+        tempo_events.sort_by_key(|&(tick, _)| tick);
+        let initial_tempo_us_per_beat =
+            tempo_events.first().map(|&(_, us)| us).unwrap_or(500_000.0); // 120 BPM default
         let bpm = (60_000_000.0 / initial_tempo_us_per_beat) as f32;
-        let sec_per_tick = (initial_tempo_us_per_beat / 1_000_000.0) / ticks_per_beat;
+
+        // Piecewise-linear tempo map: (start_tick, start_sec, sec_per_tick)
+        let mut tempo_segments: Vec<(u64, f64, f64)> =
+            vec![(0, 0.0, (500_000.0 / 1_000_000.0) / ticks_per_beat)];
+        for (tick, us_per_beat) in tempo_events {
+            let sec_per_tick = (us_per_beat / 1_000_000.0) / ticks_per_beat;
+            let &(last_tick, last_sec, last_spt) =
+                tempo_segments.last().expect("tempo map is non-empty");
+            if tick == last_tick {
+                tempo_segments.last_mut().expect("tempo map is non-empty").2 = sec_per_tick;
+            } else {
+                let next_sec = last_sec + (tick - last_tick) as f64 * last_spt;
+                tempo_segments.push((tick, next_sec, sec_per_tick));
+            }
+        }
+        let tick_to_sec = |tick: u64| -> f32 {
+            let idx = tempo_segments
+                .partition_point(|&(seg_tick, _, _)| seg_tick <= tick)
+                .saturating_sub(1);
+            let (seg_tick, seg_sec, seg_spt) = tempo_segments[idx];
+            (seg_sec + (tick - seg_tick) as f64 * seg_spt) as f32
+        };
 
         let mut all_notes: Vec<MidiNote> = Vec::new();
         let mut max_end_sec: f32 = 0.0;
@@ -165,7 +194,7 @@ impl MidiData {
 
             for event in track {
                 current_tick += event.delta.as_int() as u64;
-                let current_sec = (current_tick as f64 * sec_per_tick) as f32;
+                let current_sec = tick_to_sec(current_tick);
 
                 if let TrackEventKind::Midi { channel, message } = event.kind {
                     let ch = channel.as_int();
@@ -237,7 +266,7 @@ impl MidiData {
             }
 
             // Flush remaining active notes
-            let end_sec = (current_tick as f64 * sec_per_tick) as f32;
+            let end_sec = tick_to_sec(current_tick);
             for ((ch, k), (start_sec, v, note_prog)) in active_notes {
                 let dur = (end_sec - start_sec).max(0.1);
                 if k < min_k {
@@ -1131,5 +1160,122 @@ mod tests {
         assert!(wav_solo1.len() > 44);
         assert!(wav_full.len() > 44);
         assert_ne!(wav_solo0, wav_solo1);
+    }
+
+    #[test]
+    fn test_parse_bytes_multi_track_tempo_map_and_spanning_notes() {
+        use midly::num::{u4, u7, u15, u24, u28};
+        use midly::{Format, Header, TrackEvent};
+
+        // 480 ticks per beat:
+        // Tick 0..480 at 500,000 us/beat (120 BPM => 0.5s per beat)
+        // Tick 480.. at 1,000,000 us/beat (60 BPM => 1.0s per beat)
+        let smf = Smf {
+            header: Header::new(Format::Parallel, Timing::Metrical(u15::new(480))),
+            tracks: vec![
+                vec![
+                    TrackEvent {
+                        delta: u28::new(0),
+                        kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::new(500_000))),
+                    },
+                    TrackEvent {
+                        delta: u28::new(480),
+                        kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::new(1_000_000))),
+                    },
+                    TrackEvent {
+                        delta: u28::new(0),
+                        kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+                    },
+                ],
+                vec![
+                    // Note 60: tick 0..480 -> start 0.0s, dur 0.5s
+                    TrackEvent {
+                        delta: u28::new(0),
+                        kind: TrackEventKind::Midi {
+                            channel: u4::new(0),
+                            message: MidiMessage::NoteOn {
+                                key: u7::new(60),
+                                vel: u7::new(100),
+                            },
+                        },
+                    },
+                    // Note 64: tick 240..720 (spans tempo change at 480) -> start 0.25s, end 1.0s, dur 0.75s
+                    TrackEvent {
+                        delta: u28::new(240),
+                        kind: TrackEventKind::Midi {
+                            channel: u4::new(0),
+                            message: MidiMessage::NoteOn {
+                                key: u7::new(64),
+                                vel: u7::new(100),
+                            },
+                        },
+                    },
+                    TrackEvent {
+                        delta: u28::new(240),
+                        kind: TrackEventKind::Midi {
+                            channel: u4::new(0),
+                            message: MidiMessage::NoteOff {
+                                key: u7::new(60),
+                                vel: u7::new(0),
+                            },
+                        },
+                    },
+                    // Note 67: tick 480..960 -> start 0.5s, end 1.5s, dur 1.0s
+                    TrackEvent {
+                        delta: u28::new(0),
+                        kind: TrackEventKind::Midi {
+                            channel: u4::new(0),
+                            message: MidiMessage::NoteOn {
+                                key: u7::new(67),
+                                vel: u7::new(100),
+                            },
+                        },
+                    },
+                    TrackEvent {
+                        delta: u28::new(240),
+                        kind: TrackEventKind::Midi {
+                            channel: u4::new(0),
+                            message: MidiMessage::NoteOff {
+                                key: u7::new(64),
+                                vel: u7::new(0),
+                            },
+                        },
+                    },
+                    TrackEvent {
+                        delta: u28::new(240),
+                        kind: TrackEventKind::Midi {
+                            channel: u4::new(0),
+                            message: MidiMessage::NoteOff {
+                                key: u7::new(67),
+                                vel: u7::new(0),
+                            },
+                        },
+                    },
+                    TrackEvent {
+                        delta: u28::new(0),
+                        kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+                    },
+                ],
+            ],
+        };
+
+        let mut bytes = Vec::new();
+        smf.write(&mut bytes).unwrap();
+        let parsed = MidiData::parse_bytes(&bytes, "TempoMapTest".to_string()).unwrap();
+
+        assert!((parsed.bpm - 120.0).abs() < 0.01);
+        assert_eq!(parsed.notes.len(), 3);
+        assert_eq!(parsed.notes[0].key, 60);
+        assert!((parsed.notes[0].start_sec - 0.0).abs() < 1e-4);
+        assert!((parsed.notes[0].duration_sec - 0.5).abs() < 1e-4);
+
+        assert_eq!(parsed.notes[1].key, 64);
+        assert!((parsed.notes[1].start_sec - 0.25).abs() < 1e-4);
+        assert!((parsed.notes[1].duration_sec - 0.75).abs() < 1e-4);
+
+        assert_eq!(parsed.notes[2].key, 67);
+        assert!((parsed.notes[2].start_sec - 0.5).abs() < 1e-4);
+        assert!((parsed.notes[2].duration_sec - 1.0).abs() < 1e-4);
+        assert!((parsed.duration_sec - 1.5).abs() < 1e-4);
     }
 }
