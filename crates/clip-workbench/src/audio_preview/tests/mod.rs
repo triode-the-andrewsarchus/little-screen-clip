@@ -244,6 +244,7 @@ pub(crate) fn generate_fixture_wav(name: &str, duration_secs: f32) -> (tempfile:
 
 pub(super) fn empty_audio_analysis() -> FullAudioAnalysis {
     FullAudioAnalysis {
+        decoded_source: None,
         channels: 2,
         sample_rate: 44100,
         duration_ms: 0,

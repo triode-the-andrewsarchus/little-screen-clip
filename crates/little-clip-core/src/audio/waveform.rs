@@ -402,8 +402,10 @@ pub fn compute_plain_waveform(
         (false, 0, meta.duration_ms)
     };
 
-    let file = std::fs::File::open(path).ok()?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let file = super::source::open_audio_input(path, &AtomicBool::new(false))
+        .ok()?
+        .stream;
+    let mss = MediaSourceStream::new(file, Default::default());
 
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -559,8 +561,10 @@ pub fn compute_full_waveform(path: &Path, num_bars: usize) -> Option<AudioWavefo
         return None;
     }
 
-    let file = std::fs::File::open(path).ok()?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let file = super::source::open_audio_input(path, &AtomicBool::new(false))
+        .ok()?
+        .stream;
+    let mss = MediaSourceStream::new(file, Default::default());
 
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -697,7 +701,7 @@ pub fn compute_preview_waveform(
     cancelled: &AtomicBool,
 ) -> Result<(Vec<f32>, Vec<[u8; 3]>), String> {
     use symphonia::core::errors::Error;
-    let mut format = preview_audio_format(file, path)?;
+    let mut format = preview_audio_format(file, path, cancelled)?;
     let track = format.default_track().ok_or("No audio track")?;
     let id = track.id;
     let duration_seconds = codec_duration_seconds(&track.codec_params);
@@ -745,6 +749,7 @@ pub fn compute_preview_waveform(
 fn preview_audio_format(
     file: std::fs::File,
     path: &Path,
+    cancelled: &AtomicBool,
 ) -> Result<Box<dyn symphonia::core::formats::FormatReader>, String> {
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("Audio source is not a regular file".into());
@@ -753,10 +758,11 @@ fn preview_audio_format(
     if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(extension);
     }
+    let input = super::source::from_file(file, cancelled)?;
     let format = symphonia::default::get_probe()
         .format(
             &hint,
-            MediaSourceStream::new(Box::new(file), Default::default()),
+            MediaSourceStream::new(input.stream, Default::default()),
             &FormatOptions {
                 enable_gapless: true,
                 ..Default::default()
@@ -1213,6 +1219,7 @@ mod tests {
             samples[index] = 0.95;
         }
         FullAudioAnalysis {
+            decoded_source: None,
             channels: 1,
             sample_rate: 44_100,
             duration_ms: 1_000,

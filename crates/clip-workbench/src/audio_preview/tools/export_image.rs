@@ -785,6 +785,7 @@ mod tests {
         ];
 
         FullAudioAnalysis {
+            decoded_source: None,
             channels: if stereo { 2 } else { 1 },
             sample_rate,
             duration_ms: 1000,

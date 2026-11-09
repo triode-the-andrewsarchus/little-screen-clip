@@ -115,7 +115,7 @@ them on a shared account if clipboard contents or recipe scripts are sensitive.
 - **Rust Toolchain**: Rust edition 2024 (`cargo`, `rustc`).
 - **Optional Tools for Pipeline Recipes & Picture Studio**:
   - `difftastic` (`difft`) — Structural semantic code diffing.
-  - `ffmpeg` & `sox` — Advanced audio normalization and transcoding.
+  - `ffmpeg` & `sox` — Advanced audio normalization and transcoding. Windows Media Audio reading also uses `ffmpeg`/`ffprobe` on bounded workers to prepare a seekable float PCM snapshot; originals remain intact.
   - `imagemagick` (`magick` / `convert`) — Image framing, resizing, and composition.
   - `python3`, `bash`, `jq` — Custom node scripting.
   - `rsvg-convert` (`librsvg`) — Vector SVG thumbnailing and rasterization.

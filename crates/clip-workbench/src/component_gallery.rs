@@ -280,6 +280,7 @@ fn gallery_audio_source() -> (Arc<FullAudioAnalysis>, PathBuf, tempfile::TempPat
         })
         .collect();
     let source = Arc::new(FullAudioAnalysis {
+        decoded_source: None,
         channels: 1,
         sample_rate,
         duration_ms: 1000,

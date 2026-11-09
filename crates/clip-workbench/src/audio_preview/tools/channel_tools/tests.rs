@@ -194,6 +194,8 @@ fn derived_waveforms_use_sample_sums_and_differences_and_reject_old_revisions() 
     let mut current = state.analysis.as_ref().unwrap().as_ref().clone();
     current.ch1_samples = vec![0.5, 0.25, 0.0, 0.0].into();
     state.edited_waveform = Some(Arc::new(current));
+    // The first tiny job may already be complete; observe the new source before waiting.
+    state.poll_derived_signals(&ctx);
     let deadline = Instant::now() + Duration::from_secs(5);
     while state.channel_tools.derived.is_none() || state.channel_tools.derived_job.is_some() {
         assert!(Instant::now() < deadline);

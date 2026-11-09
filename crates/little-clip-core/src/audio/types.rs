@@ -88,6 +88,8 @@ pub struct PeakBlock {
 /// spectrogram image, ColorChord note ribbon, spectral colors, and transient onset points.
 #[derive(Debug, Clone, Default)]
 pub struct FullAudioAnalysis {
+    /// Optional complete prepared PCM WAV, shared with playback without a UI-thread decode.
+    pub decoded_source: Option<Arc<[u8]>>,
     pub channels: u16,
     pub sample_rate: u32,
     pub duration_ms: u64,

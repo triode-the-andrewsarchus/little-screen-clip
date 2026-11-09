@@ -6,6 +6,8 @@
 
 pub mod analysis;
 pub mod decode;
+mod source;
+pub use source::{AudioInput, SeekableAudio, decoder_input_args, open_audio_input};
 pub mod types;
 pub mod waveform;
 
@@ -641,6 +643,7 @@ mod tests {
         }
 
         let mut analysis = FullAudioAnalysis {
+            decoded_source: None,
             channels: 1,
             sample_rate,
             duration_ms: 3000,

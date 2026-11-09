@@ -79,6 +79,7 @@ fn metadata(path: &Path) -> Metadata {
             "-of",
             "json",
         ])
+        .args(little_clip_core::audio::decoder_input_args(path))
         .arg_content_file(path)
         .ok()
         .and_then(|command| {

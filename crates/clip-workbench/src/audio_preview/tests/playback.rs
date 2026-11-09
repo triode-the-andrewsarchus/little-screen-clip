@@ -795,12 +795,12 @@ fn deferred_playback_opens_a_checked_seekable_decoder_and_rejects_stale_sources(
     let (_dir, path) = generate_fixture_wav("checked-playback", 0.5);
     let cancel = AtomicBool::new(false);
     let mut decoder =
-        super::super::playback::load_decoder(&path, &Default::default(), None, &cancel, 0.1)
+        super::super::playback::load_decoder(&path, &Default::default(), None, &cancel, 0.1, None)
             .unwrap();
     assert!(decoder.next().is_some());
     let deny = crate::file_source::ReadCheck::new(|_| Err("source context expired".into()));
     let missing = path.with_file_name("must-not-open.wav");
-    let result = super::super::playback::load_decoder(&missing, &deny, None, &cancel, 0.0);
+    let result = super::super::playback::load_decoder(&missing, &deny, None, &cancel, 0.0, None);
     assert_eq!(result.err().as_deref(), Some("source context expired"));
 }
 
@@ -885,6 +885,7 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
         ("aifc", "pcm_f32be", "aiff"),
         ("m4b", "aac", "ipod"),
         ("mp2", "mp2", "mp2"),
+        ("wma", "wmav2", "asf"),
         ("adts", "aac", "adts"),
         ("caf", "pcm_s16le", "caf"),
         ("caf", "pcm_f32le", "caf"),
@@ -955,7 +956,12 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
             late > 0.1 && early < late * 0.5,
             "{extension}/{codec}: truncated or mistimed waveform ({early}, {late})"
         );
-        let audio = crate::file_source::open_regular_file(&path, true).unwrap();
+        let audio = little_clip_core::audio::open_audio_input(
+            &path,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap()
+        .stream;
         if extension == "opus" {
             let gapless_file = crate::file_source::open_regular_file(&path, true).unwrap();
             let byte_len = gapless_file.metadata().unwrap().len();
@@ -973,7 +979,7 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
             gapless.try_seek(Duration::ZERO).unwrap();
             assert_eq!(gapless.count() / metadata.channels as usize, 48_000);
         }
-        let mut decoder = rodio::Decoder::try_from(audio).unwrap();
+        let mut decoder = super::super::decode_audio_source(audio).unwrap();
         assert!(decoder.next().is_some());
         for position in [
             Duration::from_millis(500),
@@ -1020,9 +1026,63 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
                 assert_eq!(&std::fs::read(&output_path).unwrap()[8..12], b"AIFC");
             }
             assert!(output.duration_ms > 400 && output.duration_ms < 900);
-            let audio = crate::file_source::open_regular_file(&output_path, true).unwrap();
-            let mut decoder = rodio::Decoder::try_from(audio).unwrap();
+            let audio = little_clip_core::audio::open_audio_input(
+                &output_path,
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap()
+            .stream;
+            let mut decoder = super::super::decode_audio_source(audio).unwrap();
             assert!(decoder.next().is_some());
         }
     }
+}
+
+#[test]
+fn windows_media_playback_seeks_shared_pcm_and_survives_source_rename() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("tones.wma");
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../little-clip-core/tests/fixtures/audio/tones.wma"
+        ),
+        &path,
+    )
+    .unwrap();
+    let metadata = little_clip_core::audio::read_audio_metadata(&path).unwrap();
+    let source = Arc::new(
+        little_clip_core::audio::compute_audio_analysis_progressive(&path, 120, |_| {}).unwrap(),
+    );
+    let bytes = source.decoded_source.clone().unwrap();
+    let mut state = AudioPreviewState::from_completed_source(
+        path.clone(),
+        "tones.wma".into(),
+        Some(metadata),
+        source,
+    )
+    .with_file_source(crate::file_source::FileSource::capture(&path).unwrap());
+    let mut decoder = super::super::decode_audio_source(state.playback_input().unwrap()).unwrap();
+    assert_eq!(decoder.channels().get(), 2);
+    assert_eq!(decoder.sample_rate().get(), 44100);
+    decoder.try_seek(Duration::from_secs_f32(2.0)).unwrap();
+    assert!(decoder.take(1000).any(|sample| sample.abs() > 0.1));
+    let renamed = directory.path().join("renamed.wma");
+    std::fs::rename(&path, &renamed).unwrap();
+    state.relocate_file(
+        renamed.clone(),
+        crate::file_source::FileSource::capture(&renamed).unwrap(),
+    );
+    assert!(Arc::ptr_eq(
+        &bytes,
+        state
+            .completed_source_analysis
+            .as_ref()
+            .unwrap()
+            .decoded_source
+            .as_ref()
+            .unwrap()
+    ));
+    let decoder = super::super::decode_audio_source(state.playback_input().unwrap()).unwrap();
+    assert_eq!(decoder.channels().get(), 2);
 }

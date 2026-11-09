@@ -4,15 +4,20 @@ mod selection;
 mod spectrum;
 use super::ui::music::MusicRange;
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
-use rodio::{Decoder, Player, Source};
-use std::{fs::File, io::BufReader, path::PathBuf, sync::mpsc, time::Duration};
+use rodio::{Player, Source};
+use std::{path::PathBuf, sync::mpsc, time::Duration};
 
-type AudioDecoder = Decoder<BufReader<File>>;
-fn audio_file(path: &std::path::Path) -> Result<File, String> {
+type AudioDecoder = crate::audio_preview::AudioDecoder;
+fn audio_file(path: &std::path::Path) -> Result<std::fs::File, String> {
     crate::file_source::open_regular_file(path, true).map_err(|e| e.to_string())
 }
 fn decode_file(path: &std::path::Path) -> Result<AudioDecoder, String> {
-    Decoder::try_from(audio_file(path)?).map_err(|e| e.to_string())
+    let source = little_clip_core::audio::open_audio_input(
+        path,
+        &std::sync::atomic::AtomicBool::new(false),
+    )?
+    .stream;
+    crate::audio_preview::decode_audio_source(source).map_err(|e| e.to_string())
 }
 fn prepare(path: &std::path::Path, range: Option<MusicRange>) -> Result<Prepared, String> {
     let source = crate::file_source::FileSource::capture(path)?;

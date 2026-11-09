@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) type FileDecoder = Decoder<BufReader<File>>;
+pub(super) type FileDecoder = super::AudioDecoder;
 pub(super) struct PlaybackLoad {
     ticket: JobTicket,
     pub(super) cancel: Arc<AtomicBool>,
@@ -20,12 +20,17 @@ pub(super) fn load_decoder(
     expected: Option<&crate::file_source::FileSource>,
     cancel: &AtomicBool,
     position: f32,
+    decoded: Option<Arc<[u8]>>,
 ) -> Result<FileDecoder, String> {
     if cancel.load(Ordering::Acquire) {
         return Err("Playback cancelled".into());
     }
     let (file, observed) = check.open(path, expected, cancel)?;
-    let mut decoder = Decoder::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+    let input: little_clip_core::audio::SeekableAudio = match decoded {
+        Some(bytes) => Box::new(std::io::Cursor::new(bytes)),
+        None => Box::new(file),
+    };
+    let mut decoder = super::decode_audio_source(input).map_err(|error| error.to_string())?;
     if position > 0.0 {
         decoder
             .try_seek(Duration::from_secs_f32(position))
@@ -40,6 +45,23 @@ pub(super) fn load_decoder(
 }
 
 impl AudioPreviewState {
+    pub(super) fn playback_input(&self) -> Result<little_clip_core::audio::SeekableAudio, String> {
+        if let Some(source) = &self.file_source {
+            source.check()?;
+        }
+        if let Some(bytes) = self
+            .completed_source_analysis
+            .as_ref()
+            .or(self.analysis.as_ref())
+            .and_then(|analysis| analysis.decoded_source.clone())
+        {
+            return Ok(Box::new(std::io::Cursor::new(bytes)));
+        }
+        little_clip_core::kernel_interface::open_content(&self.path, true)
+            .map(|file| Box::new(file) as little_clip_core::audio::SeekableAudio)
+            .map_err(|e| e.to_string())
+    }
+
     pub fn toggle_play(&mut self) {
         if self.is_playing || self.playback_load.is_some() {
             self.pause();
@@ -196,6 +218,8 @@ impl AudioPreviewState {
         }
         self.is_playing = false;
         self.playback_start_instant = None;
+        let decoded = self.completed_source_analysis.as_ref().or(self.analysis.as_ref())
+            .and_then(|analysis| analysis.decoded_source.clone());
         let path = self.path.clone();
         let check = self.read_check.clone();
         let expected = self.file_source.clone();
@@ -203,7 +227,7 @@ impl AudioPreviewState {
         let worker = cancel.clone();
         let (ticket, receiver) = BackgroundJobs::global()
             .submit(Duration::from_secs(60), move || {
-                load_decoder(&path, &check, expected.as_ref(), &worker, position)
+                load_decoder(&path, &check, expected.as_ref(), &worker, position, decoded)
             });
         self.playback_load = Some(PlaybackLoad {
             ticket,

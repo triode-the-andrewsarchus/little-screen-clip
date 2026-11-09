@@ -33,6 +33,15 @@ pub fn is_audio_path(path: &Path) -> bool {
 }
 
 pub fn read_audio_metadata(path: &Path) -> Option<AudioMetadata> {
+    read_audio_metadata_cancellable(path, &AtomicBool::new(false))
+}
+fn read_audio_metadata_cancellable(path: &Path, cancelled: &AtomicBool) -> Option<AudioMetadata> {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("wma"))
+    {
+        return super::source::read_windows_media_metadata(path, cancelled).ok();
+    }
     let file = crate::kernel_interface::open_content(path, true).ok()?;
     let file_len = file.metadata().ok()?.len();
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -292,7 +301,7 @@ where
     if is_cancelled() {
         return None;
     }
-    let meta = match read_audio_metadata(path) {
+    let meta = match read_audio_metadata_cancellable(path, cancelled) {
         Some(m) => m,
         None => {
             on_progress(AudioAnalysisProgress::Failed(
@@ -303,7 +312,7 @@ where
     };
     let num_cols = num_cols.max(120);
 
-    let file = match crate::kernel_interface::open_content(path, true) {
+    let input = match super::source::open_audio_input(path, cancelled) {
         Ok(f) => f,
         Err(e) => {
             on_progress(AudioAnalysisProgress::Failed(format!(
@@ -313,7 +322,8 @@ where
             return None;
         }
     };
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let decoded_source = input.decoded;
+    let mss = MediaSourceStream::new(input.stream, Default::default());
 
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -618,6 +628,7 @@ where
 
     // Emit Stage 1: Waveform is fully ready for immediate interactive rendering!
     let mut analysis = FullAudioAnalysis {
+        decoded_source,
         channels,
         sample_rate,
         duration_ms,
@@ -1109,8 +1120,8 @@ pub fn compute_spectral_colors(
         (false, 0, meta.duration_ms)
     };
 
-    let file = crate::kernel_interface::open_content(path, true).ok()?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let input = super::source::open_audio_input(path, &AtomicBool::new(false)).ok()?;
+    let mss = MediaSourceStream::new(input.stream, Default::default());
 
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {

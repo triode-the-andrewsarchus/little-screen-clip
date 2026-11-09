@@ -177,7 +177,8 @@
   - [ ] `.mpc`
   - [ ] `.tta`
   - [ ] `.wv`
-  - [ ] `.wma`
+  - [x] `.wma` — guarded FFmpeg float-PCM preparation shared by waveform previews, spectral analysis, seeking, Music playback and Audio Studio; source metadata/renaming and existing audio exports retain the original file
+    - [ ] Encrypted/DRM streams and sources larger than 512 MiB encoded / 256 MiB decoded PCM (bounded worker decode, no silent truncation)
   - [x] `.adts` — Audio Data Transport Stream (AAC-LC); Audio Studio, playback, waveform strips and region export
   - [ ] `.au`, `.snd` — Sun/NeXT audio (May need disambiguation with Akai MPC sound samples on `.snd`)
   - [x] `.caf` — Apple Core Audio Format; PCM and Apple Lossless in Audio Studio, playback, waveform strips and region export

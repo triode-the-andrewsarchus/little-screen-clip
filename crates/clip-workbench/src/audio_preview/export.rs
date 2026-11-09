@@ -1287,6 +1287,7 @@ pub(super) fn audio_export_command(
             .arg(format!("{:.4}", region.end));
     }
     request = request
+        .args(little_clip_core::audio::decoder_input_args(source))
         .arg("-i")
         .arg_content_file(source)
         .map_err(|error| error.to_string())?;

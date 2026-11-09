@@ -281,6 +281,25 @@ pub fn format_sample_duration(sec: f32) -> String {
     }
 }
 
+/// Shared Rodio decoder for ordinary files and prepared PCM snapshots.
+pub(crate) type AudioDecoder =
+    rodio::Decoder<std::io::BufReader<little_clip_core::audio::SeekableAudio>>;
+/// Supplies length and seeking information equally for files and shared PCM snapshots.
+pub(crate) fn decode_audio_source(
+    source: little_clip_core::audio::SeekableAudio,
+) -> Result<AudioDecoder, rodio::decoder::DecoderError> {
+    let length = source.byte_len();
+    let builder = rodio::Decoder::builder()
+        .with_data(std::io::BufReader::new(source))
+        .with_seekable(true);
+    let builder = if let Some(length) = length {
+        builder.with_byte_len(length)
+    } else {
+        builder
+    };
+    builder.build()
+}
+
 /// Generates a descriptive filename for an extracted audio slice containing timestamp and duration metadata.
 pub fn format_sample_filename(
     original_stem: &str,
@@ -894,7 +913,15 @@ impl AudioPreviewState {
     }
     /// Initializes an audio workbench viewer for the given audio file path.
     pub fn new(path: PathBuf, title: String) -> Self {
-        let metadata = read_audio_metadata(&path);
+        // Windows Media probing uses a helper; the session worker supplies its metadata.
+        let metadata = if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("wma"))
+        {
+            None
+        } else {
+            read_audio_metadata(&path)
+        };
         Self::new_with_metadata(path, title, metadata)
     }
 

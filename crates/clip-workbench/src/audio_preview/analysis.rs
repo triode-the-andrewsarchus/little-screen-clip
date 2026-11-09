@@ -100,6 +100,17 @@ impl AudioPreviewState {
                 match progress {
                     AudioAnalysisProgress::WaveformReady(box_analysis) => {
                         let analysis = *box_analysis;
+                        self.metadata.get_or_insert_with(|| AudioMetadata {
+                            duration_ms: analysis.duration_ms,
+                            sample_rate: analysis.sample_rate,
+                            channels: analysis.channels,
+                            format: self
+                                .path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("AUDIO")
+                                .to_ascii_uppercase(),
+                        });
                         self.duration_sec = analysis.duration_ms as f32 / 1000.0;
                         if self.view_duration_sec <= 0.05 {
                             self.view_duration_sec = self.duration_sec;
