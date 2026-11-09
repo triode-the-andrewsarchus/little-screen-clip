@@ -29,7 +29,7 @@ This document tracks the step-by-step refactoring plan for the `little-screen-cl
   - Replace the duplicate `which_exists` helper in `crates/little-clip-core/src/document.rs` with `crate::process::command_available`.
   - Consolidate duplicated `numbered` / `digits` / `number` suffix-parsing helpers across `file_manager/system/{btrfs,char_devices,Collections,dma,fabric,firmware,graphics,iommu,leds,media,ptp,scsi,watchdog}.rs` into `file_manager/system/mod.rs`.
 
-- [ ] **Task 3: Consolidate `BinaryDiffViewState` navigation state and Office-to-PDF loading**
+- [x] **Task 3: Consolidate `BinaryDiffViewState` navigation state and Office-to-PDF loading**
   - Make `BinaryDiffViewState.nav: BinaryDiffNavigation` the single source of truth in `crates/clip-workbench/src/binary_diff_view/{mod.rs,navigation.rs}`, removing the shadowed `scroll_row`, `cursor_offset`, `selected_region`, `sync_scroll`, and `bytes_per_row` fields.
   - Extract a shared Office-document-to-PDF/Markdown loader helper used by both `workbench/loaders.rs` and `file_manager/viewers.rs`, eliminating the redundant second `render_to_pdf` call when `ensure_rendered_pdf` fails.
 

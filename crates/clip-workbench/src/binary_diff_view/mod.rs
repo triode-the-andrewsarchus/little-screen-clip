@@ -167,13 +167,8 @@ pub struct BinaryDiffViewState {
     compute_ticket: Option<JobTicket>,
     // Navigation & search state
     pub search_query: String,
-    pub search_matches: Vec<usize>,
-    pub current_search_idx: usize,
-    pub current_diff_idx: usize,
-    pub scroll_target_row: Option<usize>,
     pub hovered_cell: Option<(usize, usize)>, // (row_idx, col_idx)
     pub status_toast: crate::ui_ext::StatusToast,
-    pub selected_diff_block: Option<usize>,
     pub current_scroll_offset_y: f32,
     pub last_scrolled_diff_id: Option<usize>,
     pub visible_row_count: usize,
@@ -275,13 +270,8 @@ impl BinaryDiffViewState {
             receiver: Some(rx),
             compute_ticket: Some(ticket),
             search_query: String::new(),
-            search_matches: Vec::new(),
-            current_search_idx: 0,
-            current_diff_idx: 0,
-            scroll_target_row: None,
             hovered_cell: None,
             status_toast: crate::ui_ext::StatusToast::with_duration(3.0),
-            selected_diff_block: None,
             current_scroll_offset_y: 0.0,
             last_scrolled_diff_id: None,
             visible_row_count: 30,
@@ -389,18 +379,12 @@ impl BinaryDiffViewState {
     pub fn next_diff(&mut self) {
         if let Some(ref res) = self.result {
             self.nav.next_diff(&res.diff_blocks);
-            self.current_diff_idx = self.nav.current_diff_idx;
-            self.selected_diff_block = self.nav.selected_diff_block;
-            self.scroll_target_row = self.nav.scroll_target_row;
         }
     }
 
     pub fn prev_diff(&mut self) {
         if let Some(ref res) = self.result {
             self.nav.prev_diff(&res.diff_blocks);
-            self.current_diff_idx = self.nav.current_diff_idx;
-            self.selected_diff_block = self.nav.selected_diff_block;
-            self.scroll_target_row = self.nav.scroll_target_row;
         }
     }
 
@@ -408,22 +392,15 @@ impl BinaryDiffViewState {
         if let Some(ref res) = self.result {
             let matches = search_rows(res, &self.search_query);
             self.nav.set_search_matches(matches);
-            self.search_matches = self.nav.search_matches.clone();
-            self.current_search_idx = self.nav.current_search_idx;
-            self.scroll_target_row = self.nav.scroll_target_row;
         }
     }
 
     pub fn next_search_match(&mut self) {
         self.nav.next_search_match();
-        self.current_search_idx = self.nav.current_search_idx;
-        self.scroll_target_row = self.nav.scroll_target_row;
     }
 
     pub fn prev_search_match(&mut self) {
         self.nav.prev_search_match();
-        self.current_search_idx = self.nav.current_search_idx;
-        self.scroll_target_row = self.nav.scroll_target_row;
     }
 
     /// Fits the byte columns into the available width, shrinking their font when needed.

@@ -307,6 +307,44 @@ pub fn render_to_markdown(input: &Path) -> Result<String, String> {
     anydoc::to_markdown(input).map_err(|e| format!("anydoc markdown error: {e}"))
 }
 
+/// Prepared studio preview payload for an office document.
+pub enum PreparedOfficePreview {
+    /// Paginated PDF staged in a retained temporary workspace.
+    Pdf {
+        pdf_path: PathBuf,
+        workspace_dir: PathBuf,
+    },
+    /// Fallback Markdown text when paginated PDF rendering is unavailable.
+    Markdown(String),
+}
+
+/// Prepares a studio preview for an office document, preferring a cached paginated PDF
+/// in an isolated temporary workspace and falling back to Markdown conversion.
+pub fn prepare_office_preview(input: &Path) -> Result<PreparedOfficePreview, String> {
+    let store = crate::staging::ArtifactStore::new().map_err(|e| e.to_string())?;
+    let workspace = store
+        .create_workspace("office_preview", "pdf_render")
+        .map_err(|e| e.to_string())?;
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("document");
+    let pdf_path = workspace.path().join(format!("{stem}.pdf"));
+    if let Ok(cached_pdf) = ensure_rendered_pdf(input)
+        && std::fs::copy(&cached_pdf, &pdf_path).is_ok()
+        && std::fs::metadata(&pdf_path)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false)
+    {
+        let workspace_dir = workspace.retain();
+        return Ok(PreparedOfficePreview::Pdf {
+            pdf_path,
+            workspace_dir,
+        });
+    }
+    render_to_markdown(input).map(PreparedOfficePreview::Markdown)
+}
+
 /// Body text and coverage from a passive RTF conversion.
 pub struct RtfText {
     /// Accepted body paragraphs and table cells in document order.

@@ -531,48 +531,20 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         Kind::Midi => {
             little_clip_core::presentation::midi::MidiData::parse_file(path).map(Loaded::Midi)
         }
-        Kind::OfficeDoc => {
-            let store =
-                little_clip_core::staging::ArtifactStore::new().map_err(|e| e.to_string())?;
-            let workspace = store
-                .create_workspace("office_preview", "pdf_render")
-                .map_err(|e| e.to_string())?;
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("document");
-            let pdf_path = workspace.path().join(format!("{stem}.pdf"));
-            if let Ok(cached_pdf) = little_clip_core::document::ensure_rendered_pdf(path) {
-                if std::fs::copy(&cached_pdf, &pdf_path).is_ok()
-                    && std::fs::metadata(&pdf_path)
-                        .map(|m| m.len() > 0)
-                        .unwrap_or(false)
-                {
-                    let workspace_dir = workspace.retain();
-                    return Ok(Loaded::OfficePdf {
-                        pdf_path,
-                        workspace_dir,
-                        original_path: path.to_path_buf(),
-                    });
-                }
-            }
-            if little_clip_core::document::render_to_pdf(path, &pdf_path).is_ok()
-                && std::fs::metadata(&pdf_path)
-                    .map(|m| m.len() > 0)
-                    .unwrap_or(false)
-            {
-                let workspace_dir = workspace.retain();
-                Ok(Loaded::OfficePdf {
-                    pdf_path,
-                    workspace_dir,
-                    original_path: path.to_path_buf(),
-                })
-            } else {
-                let md = little_clip_core::document::render_to_markdown(path)?;
+        Kind::OfficeDoc => match little_clip_core::document::prepare_office_preview(path)? {
+            little_clip_core::document::PreparedOfficePreview::Pdf {
+                pdf_path,
+                workspace_dir,
+            } => Ok(Loaded::OfficePdf {
+                pdf_path,
+                workspace_dir,
+                original_path: path.to_path_buf(),
+            }),
+            little_clip_core::document::PreparedOfficePreview::Markdown(md) => {
                 let text_session = super::text_editor::TextSession::from_markdown(path, md, config);
                 Ok(Loaded::Text(text_session))
             }
-        }
+        },
         Kind::Text => super::text_editor::TextSession::load(path, config).map(Loaded::Text),
         Kind::Video => video::prepare(path).map(Loaded::Video),
         Kind::External => Ok(Loaded::External),

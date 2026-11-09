@@ -84,7 +84,7 @@ impl BinaryDiffViewState {
                 let frac = rel_y / rect.height();
                 let target_row =
                     ((frac * total_rows as f32) as usize).min(total_rows.saturating_sub(1));
-                self.scroll_target_row = Some(target_row);
+                self.nav.scroll_target_row = Some(target_row);
                 ui.ctx().request_repaint();
             }
         }
@@ -221,7 +221,7 @@ impl BinaryDiffViewState {
                         let mut clicked_id = None;
 
                         for block in &res.diff_blocks {
-                            let is_selected = self.selected_diff_block == Some(block.id);
+                            let is_selected = self.nav.selected_diff_block == Some(block.id);
 
                             let badge_color = match block.kind {
                                 DiffKind::Mismatch => hex_to_c32(&palette.diff_mod),
@@ -348,7 +348,7 @@ impl BinaryDiffViewState {
                                     if let Some(idx) =
                                         res.diff_blocks.iter().position(|b| b.id == block.id)
                                     {
-                                        self.current_diff_idx = idx;
+                                        self.nav.current_diff_idx = idx;
                                     }
                                 }
                                 if interact.hovered() {
@@ -359,11 +359,11 @@ impl BinaryDiffViewState {
                         }
 
                         if let Some(target) = clicked_row {
-                            self.scroll_target_row = Some(target);
-                            self.selected_diff_block = clicked_id;
+                            self.nav.scroll_target_row = Some(target);
+                            self.nav.selected_diff_block = clicked_id;
                             ui.ctx().request_repaint();
                         }
-                        self.last_scrolled_diff_id = self.selected_diff_block;
+                        self.last_scrolled_diff_id = self.nav.selected_diff_block;
                     });
             },
         );

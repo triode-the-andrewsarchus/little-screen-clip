@@ -28,11 +28,11 @@ fn test_binary_diff_view_state_creation_and_recompute() {
     // Test search
     state.search_query = "RUSTY".to_string();
     state.update_search();
-    assert!(!state.search_matches.is_empty());
+    assert!(!state.nav.search_matches.is_empty());
 
     // Test navigation
     state.next_diff();
-    assert!(state.scroll_target_row.is_some());
+    assert!(state.nav.scroll_target_row.is_some());
     state.prev_diff();
 
     // Test swap operands
@@ -402,27 +402,21 @@ fn test_global_shortcuts_navigate_diffs_and_switch_widths() {
 
     for key in [egui::Key::J, egui::Key::ArrowRight, egui::Key::ArrowDown] {
         state.nav.current_diff_idx = 0;
-        state.current_diff_idx = 0;
         state.nav.selected_diff_block = None;
         state.nav.scroll_target_row = None;
         trigger_global_shortcut(&mut state, key);
-        assert_eq!(state.current_diff_idx, 1);
+        assert_eq!(state.nav.current_diff_idx, 1);
         assert_eq!(state.nav.selected_diff_block, Some(diff_blocks[1].id));
-        assert_eq!(state.selected_diff_block, Some(diff_blocks[1].id));
         assert_eq!(state.nav.scroll_target_row, Some(diff_blocks[1].start_row));
-        assert_eq!(state.scroll_target_row, Some(diff_blocks[1].start_row));
     }
     for key in [egui::Key::K, egui::Key::ArrowLeft, egui::Key::ArrowUp] {
         state.nav.current_diff_idx = 1;
-        state.current_diff_idx = 1;
         state.nav.selected_diff_block = None;
         state.nav.scroll_target_row = None;
         trigger_global_shortcut(&mut state, key);
-        assert_eq!(state.current_diff_idx, 0);
+        assert_eq!(state.nav.current_diff_idx, 0);
         assert_eq!(state.nav.selected_diff_block, Some(diff_blocks[0].id));
-        assert_eq!(state.selected_diff_block, Some(diff_blocks[0].id));
         assert_eq!(state.nav.scroll_target_row, Some(diff_blocks[0].start_row));
-        assert_eq!(state.scroll_target_row, Some(diff_blocks[0].start_row));
     }
     for (key, expected_width) in [
         (egui::Key::Num0, 8),
@@ -856,17 +850,17 @@ fn binary_diff_search_field_updates_matches_and_navigates_while_focused() {
     assert!(keyboard_focus_kept);
     assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
     assert_eq!(state.search_query, "ABC");
-    assert_eq!(state.search_matches, vec![0, 2]);
-    assert_eq!(state.current_search_idx, 0);
+    assert_eq!(state.nav.search_matches, vec![0, 2]);
+    assert_eq!(state.nav.current_search_idx, 0);
     assert_eq!(state.nav.scroll_target_row, Some(0));
 
     state.next_search_match();
-    assert_eq!(state.current_search_idx, 1);
-    assert_eq!(state.scroll_target_row, Some(2));
+    assert_eq!(state.nav.current_search_idx, 1);
+    assert_eq!(state.nav.scroll_target_row, Some(2));
     assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
     state.prev_search_match();
-    assert_eq!(state.current_search_idx, 0);
-    assert_eq!(state.scroll_target_row, Some(0));
+    assert_eq!(state.nav.current_search_idx, 0);
+    assert_eq!(state.nav.scroll_target_row, Some(0));
     assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
 }
 
@@ -893,7 +887,7 @@ fn focused_binary_diff_search_escape_clears_query_before_close() {
     state.compute_ticket = None;
     state.search_query = "ABC".to_string();
     state.update_search();
-    assert!(!state.search_matches.is_empty());
+    assert!(!state.nav.search_matches.is_empty());
 
     let ctx = egui::Context::default();
     crate::ui_ext::configure_workbench_style(&ctx);
@@ -936,7 +930,7 @@ fn focused_binary_diff_search_escape_clears_query_before_close() {
     );
 
     assert!(state.search_query.is_empty());
-    assert!(state.search_matches.is_empty());
+    assert!(state.nav.search_matches.is_empty());
     assert!(!close_requested, "Escape clears the focused search first");
 }
 
@@ -989,9 +983,9 @@ fn focused_binary_diff_search_preempts_global_shortcuts() {
     state.compute_ticket = None;
     state.search_query = "ABC".to_string();
     state.update_search();
-    assert_eq!(state.search_matches, vec![0, 2]);
+    assert_eq!(state.nav.search_matches, vec![0, 2]);
     state.next_diff();
-    assert!(state.selected_diff_block.is_some());
+    assert!(state.nav.selected_diff_block.is_some());
 
     let ctx = egui::Context::default();
     crate::ui_ext::configure_workbench_style(&ctx);
@@ -1008,9 +1002,9 @@ fn focused_binary_diff_search_preempts_global_shortcuts() {
         (*state.left_bytes).clone(),
         (*state.right_bytes).clone(),
         state.bytes_per_row,
-        state.current_diff_idx,
-        state.selected_diff_block,
-        state.scroll_target_row,
+        state.nav.current_diff_idx,
+        state.nav.selected_diff_block,
+        state.nav.scroll_target_row,
     );
     let mut keys = vec![
         egui::Key::Tab,
@@ -1055,9 +1049,9 @@ fn focused_binary_diff_search_preempts_global_shortcuts() {
                 (*state.left_bytes).clone(),
                 (*state.right_bytes).clone(),
                 state.bytes_per_row,
-                state.current_diff_idx,
-                state.selected_diff_block,
-                state.scroll_target_row,
+                state.nav.current_diff_idx,
+                state.nav.selected_diff_block,
+                state.nav.scroll_target_row,
             ),
             baseline,
             "{key:?} must not run a global shortcut while search owns keyboard input"

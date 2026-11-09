@@ -65,7 +65,7 @@ impl BinaryDiffViewState {
 
         ui.separator();
 
-        let scroll_target = self.scroll_target_row.take();
+        let scroll_target = self.nav.scroll_target_row.take();
         let mut hovered = self.hovered_cell;
 
         let rem_h = ui.available_height();
@@ -90,8 +90,8 @@ impl BinaryDiffViewState {
             for row_idx in row_range {
                 let row = &res.rows[row_idx];
 
-                let is_search_match = self.search_matches.contains(&row_idx);
-                let is_selected_diff = if let Some(sel_id) = self.selected_diff_block {
+                let is_search_match = self.nav.search_matches.contains(&row_idx);
+                let is_selected_diff = if let Some(sel_id) = self.nav.selected_diff_block {
                     if let Some(block) = res.diff_blocks.iter().find(|b| b.id == sel_id) {
                         row_idx >= block.start_row && row_idx <= block.end_row
                     } else {

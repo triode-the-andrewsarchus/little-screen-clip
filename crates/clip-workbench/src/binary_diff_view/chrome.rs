@@ -210,8 +210,8 @@ impl BinaryDiffViewState {
         let left_only_count = res.stats.left_only_count;
         let right_only_count = res.stats.right_only_count;
         let diff_blocks_len = res.diff_blocks.len();
-        let search_len = self.search_matches.len();
-        let search_idx = self.current_search_idx;
+        let search_len = self.nav.search_matches.len();
+        let search_idx = self.nav.current_search_idx;
 
         let mut next_diff = false;
         let mut prev_diff = false;
