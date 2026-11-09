@@ -79,6 +79,7 @@ pub use staging::{ArtifactLease, ArtifactStore, StagingManager};
 
 pub mod gcode;
 pub mod geography;
+pub mod multisample;
 mod xml_content;
 
 pub mod xcf_image;

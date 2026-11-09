@@ -177,6 +177,7 @@
   - [ ] `.mpc`
   - [ ] `.tta`
   - [ ] `.wv`
+  - [x] `.xwma`, `.xwm` — RIFF xWMA Windows Media audio; guarded format-specific float-PCM preparation, mono/stereo waveform and spectral analysis, seeking, Music/Audio Studio playback, guarded rename and export to standard audio formats. Encoding back to xWMA is unavailable; input and PCM budgets match WMA.
   - [x] `.wma` — guarded FFmpeg float-PCM preparation shared by waveform previews, spectral analysis, seeking, Music playback and Audio Studio; source metadata/renaming and existing audio exports retain the original file
     - [ ] Encrypted/DRM streams and sources larger than 512 MiB encoded / 256 MiB decoded PCM (bounded worker decode, no silent truncation)
   - [x] `.adts` — Audio Data Transport Stream (AAC-LC); Audio Studio, playback, waveform strips and region export
@@ -601,10 +602,17 @@
     - [ ] `.pd` — Pure Data patch
     - [ ] `.pj8` — synthesizer patch (device-specific)
   - [ ] Samplers and multisample instruments
-    - [ ] `.dspreset`
-    - [ ] `.nki` — Kontakt instrument
-    - [ ] `.sf2` — SoundFont 2
-    - [ ] `.sfz`
+    - [x] `.dspreset` / `.dslibrary` — DecentSampler inherited sample maps and explicit external/archive-member audition; effects and scripts stay inert
+    - [x] `.multisample` — Bitwig/PreSonus ZIP/XML mappings, ranges and lazy embedded audio audition
+    - [x] `.exs` — positively identified Logic binary sample maps via the separate native helper; ordinary Elixir scripts keep text handling
+    - [x] `.xrni` — Renoise ZIP/XML source maps, indexed embedded samples and slice-alias intervals; raw-source audition, without phrases/DSP
+    - [x] `.ncw` — native sample audio decoding, waveform/playback and prepared PCM exports; bounded whole-file preparation
+    - [x] `.nki` — readable legacy XML, Kontakt 4.2 binary presets and Kontakt 5+ container key/velocity maps through a separate native LGPL metadata helper; explicit external raw-sample audition
+      - [ ] Protected/encrypted containers, unsupported monolith variants, embedded sample extraction and Kontakt DSP/scripts. Build/runtime requirements and license/source distribution are documented in `crates/little-clip-nki/README.md`; input is bounded to 64 MiB, payloads to 16 MiB, and the isolated helper has CPU/memory/output limits.
+    - [x] `.sf2` — SoundFont 2 preset selection, inherited/intersected key/velocity zones, root keys, sample offsets/loops and embedded 16-bit PCM audition; bounded clickable folder maps and guarded rename
+      - [ ] Full synthesizer/modulator processing, ROM samples and compressed SF3. Input: 256 MiB; 256 presets, 8,192 regions, 65,536 records/table and a bounded interpretation budget. Linked stereo sample channels are inspected/auditioned individually.
+    - [x] `.sfz` — literal SFZ v1/v2/ARIA region maps with global/master/group inheritance, guarded includes/defines, note names, sample references and raw-sample audition; bounded clickable folder maps and guarded rename
+      - [ ] DSP, keyswitch/round-robin/trigger synthesis, generated/embedded samples and advanced preprocessing. Uninterpreted opcodes remain inspectable. Input/expanded text: 16 MiB; 32 include files, 128 defines, 8 variable-expansion levels and 8,192 regions; inherited display metadata is capped at 16 MiB. Audition is explicit, capped at 10 seconds / 2 million interleaved samples, and stops on selection/navigation.
   - [ ] Scales
     - [ ] .scala
 - [ ] Radio, RF, and embedded-device captures

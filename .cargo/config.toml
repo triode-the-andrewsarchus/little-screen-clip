@@ -1,0 +1,4 @@
+[build]
+# Avoid overlapping large compiler/linker jobs on constrained development disks.
+# Override explicitly with cargo -j N or CARGO_BUILD_JOBS when appropriate.
+jobs = 1

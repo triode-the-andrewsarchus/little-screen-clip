@@ -914,10 +914,7 @@ impl AudioPreviewState {
     /// Initializes an audio workbench viewer for the given audio file path.
     pub fn new(path: PathBuf, title: String) -> Self {
         // Windows Media probing uses a helper; the session worker supplies its metadata.
-        let metadata = if path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("wma"))
-        {
+        let metadata = if little_clip_core::audio::needs_audio_preparation(&path) {
             None
         } else {
             read_audio_metadata(&path)

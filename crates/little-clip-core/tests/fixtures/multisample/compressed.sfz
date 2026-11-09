@@ -1,0 +1,2 @@
+<region> sample=soft.ncw lokey=48 hikey=71 lovel=0 hivel=63 pitch_keycenter=60
+<region> sample=bright.ncw lokey=48 hikey=71 lovel=64 hivel=127 pitch_keycenter=60

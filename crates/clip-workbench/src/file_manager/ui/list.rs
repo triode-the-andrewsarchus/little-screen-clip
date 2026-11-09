@@ -30,29 +30,32 @@ impl<'a> ListPreviews<'a> {
         marked: bool,
         colors: WorkbenchColors,
     ) -> egui::Response {
-        let response =
-            if entry.system.is_some() || entry.has_content_strip() || self.files.is_binary(entry) {
-                media_row(ui, rect, marked, colors)
-            } else {
-                let lines = (!entry.directory)
-                    .then(|| self.files.listing(entry))
-                    .flatten()
-                    .and_then(|ready| {
-                        ready
-                            .data
-                            .document
-                            .as_ref()
-                            .map(|doc| format!("{} lines", doc.lines))
-                            .or_else(|| {
-                                ready
-                                    .data
-                                    .pdf_info
-                                    .as_ref()
-                                    .map(|info| format!("{} pages", info.page_count))
-                            })
-                    });
-                file_row(ui, rect, entry, marked, self.columns, lines, colors)
-            };
+        let response = if entry.system.is_some()
+            || entry.has_content_strip()
+            || self.files.is_binary(entry)
+            || self.files.is_multisample(entry)
+        {
+            media_row(ui, rect, marked, colors)
+        } else {
+            let lines = (!entry.directory)
+                .then(|| self.files.listing(entry))
+                .flatten()
+                .and_then(|ready| {
+                    ready
+                        .data
+                        .document
+                        .as_ref()
+                        .map(|doc| format!("{} lines", doc.lines))
+                        .or_else(|| {
+                            ready
+                                .data
+                                .pdf_info
+                                .as_ref()
+                                .map(|info| format!("{} pages", info.page_count))
+                        })
+                });
+            file_row(ui, rect, entry, marked, self.columns, lines, colors)
+        };
         response
     }
     fn row(

@@ -21,12 +21,7 @@ use std::{
 };
 
 pub(super) fn known(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        matches!(
-            e.to_ascii_lowercase().as_str(),
-            "sqlite" | "sqlite3" | "db" | "db3"
-        )
-    })
+    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Database)
 }
 pub(super) struct Summary {
     tables: Vec<(String, String, usize)>,

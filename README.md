@@ -112,6 +112,7 @@ them on a shared account if clipboard contents or recipe scripts are sensitive.
   - `pipewire` / `pipewire-pulse` — for rolling system audio buffer capture (`pw-record`).
 - **Image codecs**: `pkg-config` and `libheif` >= 1.17 development headers, with HEVC (e.g. libde265) and AV1 decoder plugins for HEIF/HEIC and AVIF. All standard `image` crate formats and Rayon acceleration are enabled. JPEG XL, JPEG 2000 and PCX images, and Photoshop/Krita saved composites, use shared decoder integrations; edits export to supported raster formats while preserving their original sources. PCX can also save lossless RGB, compositing transparency on white. The View panel explores source layers for PSD and KRA without recompositing them. XCF canvases use an isolated installed GIMP renderer with source layer inspection; edits export to raster copies. PSB, KRZ and native PSD/KRA/XCF output are not supported.
 - **Files video previews**: `ffmpeg`/`ffprobe`/`ffplay`, plus GStreamer and GStreamer App development packages and codec plugins (including GStreamer libav for common formats). `./launch.sh build` and `./launch.sh files` build the pinned [Timelens](https://github.com/timelens/timelens) CLI into `target/tools/timelens`; its first build needs GitHub access. The GPL-2.0-or-later helper runs as a separate executable. FFmpeg development libraries (`libavformat`, `libavcodec`, `libavutil`, `libswscale`) also enable the independent indexed timeline helper in `target/tools/video-strip`; builds without them retain the Timelens fallback. Both helper directories include their source and license notices. Timeline columns follow physical display width; `[file_manager] video_timeline_decimation` accepts `1` (default), `2`, `4`, `8`, or `16`.
+- **Files multisamples**: SFZ, SF2, DecentSampler, Bitwig/PreSonus and Renoise key/velocity maps and raw-sample audition use native Rust readers; selected NCW audio uses a native codec. NKI/EXS metadata uses a separate native LGPL helper, packaged by the default `./launch.sh build` or separately with `python3 scripts/build_multisample_helper.py`. Running it requires `bwrap` and `prlimit`, with no JVM dependency. Its directory includes replaceable source and licenses; see [helper details](crates/little-clip-nki/README.md).
 - **Rust Toolchain**: Rust edition 2024 (`cargo`, `rustc`).
 - **Optional Tools for Pipeline Recipes & Picture Studio**:
   - `difftastic` (`difft`) — Structural semantic code diffing.
@@ -135,6 +136,11 @@ Compile the workspace in release mode:
 cd /home/vega/Documents/git/local/little-screen-clip
 ./launch.sh build
 ```
+
+Development and test builds disable incremental caching and keep only line-level
+debug information to limit disk use. Cargo defaults to one build job; use `-j N`
+or `CARGO_BUILD_JOBS` to override concurrency. Full debugger information remains
+available with `CARGO_PROFILE_DEV_DEBUG=2` (or `CARGO_PROFILE_TEST_DEBUG=2` for tests).
 
 The default `./launch.sh build` automatically removes obsolete release dependency
 artifacts after a successful workspace build. It keeps the complete current build

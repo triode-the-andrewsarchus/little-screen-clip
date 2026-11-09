@@ -32,6 +32,7 @@ enum Loaded {
     Database(super::database::Viewer),
     Geography(super::geography::Viewer),
     Toolpath(super::gcode::Viewer),
+    Multisample(super::multisample::Viewer),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
     Text(super::text_editor::TextSession),
@@ -56,6 +57,7 @@ enum ViewerSession {
     Database(super::database::Viewer),
     Geography(super::geography::Viewer),
     Toolpath(super::gcode::Viewer),
+    Multisample(super::multisample::Viewer),
     Image(ImagePreviewState),
     Text(super::text_editor::TextSession),
     Audio(AudioPreviewState),
@@ -125,11 +127,18 @@ impl Viewers {
     pub fn uses_audio(&self) -> bool {
         matches!(
             self.session,
-            Some(ViewerSession::Audio(_) | ViewerSession::Midi(_) | ViewerSession::Video(_))
-        ) || self
-            .loading
-            .as_ref()
-            .is_some_and(|l| matches!(kind(&l.path), Kind::Audio | Kind::Midi | Kind::Video))
+            Some(
+                ViewerSession::Audio(_)
+                    | ViewerSession::Midi(_)
+                    | ViewerSession::Video(_)
+                    | ViewerSession::Multisample(_)
+            )
+        ) || self.loading.as_ref().is_some_and(|l| {
+            matches!(
+                kind(&l.path),
+                Kind::Audio | Kind::Midi | Kind::Video | Kind::Multisample
+            )
+        })
     }
     pub fn open_system(&mut self, path: PathBuf) {
         self.open_on(path, true);
@@ -169,7 +178,7 @@ impl Viewers {
                         .map(|document| (Loaded::System(document), None))
                 } else {
                     let identity = FileSource::capture(&source);
-                    let loaded = load(&source, &config)?;
+                    let loaded = load(&source, &config, &worker)?;
                     let identity = if matches!(&loaded, Loaded::System(_)) {
                         None
                     } else {
@@ -281,6 +290,10 @@ impl Viewers {
                 Some(ViewerSession::Toolpath(state)),
                 Some(super::DocumentPosition::ToolpathLine(line)),
             ) => state.select_line(line),
+            (
+                Some(ViewerSession::Multisample(state)),
+                Some(super::DocumentPosition::SampleRegion(instrument, region)),
+            ) => state.select(instrument, region),
             (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::SubtitleCue(cue))) => {
                 state.preview.select_subtitle(cue)
             }
@@ -486,6 +499,7 @@ enum Kind {
     Database,
     Geography,
     Toolpath,
+    Multisample,
     Font,
     Image,
     Audio,
@@ -531,20 +545,29 @@ fn kind(path: &Path) -> Kind {
     }
 }
 fn extension_kind(path: &Path) -> Option<Kind> {
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "ttf" | "ttc" | "otf" | "otc" | "woff" | "woff2" => Some(Kind::Font),
-        "mid" | "midi" => Some(Kind::Midi),
-        "ipynb" => Some(Kind::Notebook),
-        "epub" | "cbz" => Some(Kind::Book),
-        "eml" => Some(Kind::Mail),
-        "ics" => Some(Kind::Calendar),
-        "gcode" => Some(Kind::Toolpath),
-        "gpx" | "geojson" => Some(Kind::Geography),
-        "sqlite" | "sqlite3" | "db" | "db3" => Some(Kind::Database),
-        _ => None,
+    use super::document_format::Format;
+    if let Some(format) = Format::for_path(path) {
+        return Some(match format {
+            Format::Font => Kind::Font,
+            Format::Notebook => Kind::Notebook,
+            Format::Book => Kind::Book,
+            Format::Mail => Kind::Mail,
+            Format::Calendar => Kind::Calendar,
+            Format::Database => Kind::Database,
+            Format::Geography => Kind::Geography,
+            Format::Toolpath => Kind::Toolpath,
+            Format::Multisample => Kind::Multisample,
+            Format::Subtitle => Kind::Text,
+        });
     }
+    super::midi_strip::is_midi(path).then_some(Kind::Midi)
 }
-fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
+
+fn load(
+    path: &Path,
+    config: &AppConfig,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<Loaded, String> {
     if little_clip_core::kernel_interface::classify(path)
         .map_err(|e| e.to_string())?
         .semantic()
@@ -556,6 +579,11 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
     let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if !metadata.is_file() {
         return Err("Only regular files can be inspected".into());
+    }
+    if let Some(document) = super::multisample::read_if_identified(path, cancelled) {
+        return Ok(Loaded::Multisample(
+            super::multisample::Viewer::from_identified(path, document),
+        ));
     }
     let kind = kind(path);
     let limit = match kind {
@@ -570,6 +598,9 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         ));
     }
     match kind {
+        Kind::Multisample => {
+            super::multisample::Viewer::load(path, cancelled).map(Loaded::Multisample)
+        }
         Kind::Toolpath => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Geography => super::geography::Viewer::load(path).map(Loaded::Geography),
         Kind::Database => super::database::Viewer::load(path).map(Loaded::Database),
@@ -656,6 +687,7 @@ fn session(
     match loaded {
         Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
+        Loaded::Multisample(viewer) => ViewerSession::Multisample(viewer),
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(viewer),
         Loaded::Database(viewer) => ViewerSession::Database(viewer),
@@ -720,6 +752,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
     match viewer {
         ViewerSession::Notebook(state) => state.ui(ui, close, palette),
         ViewerSession::Book(state) => state.ui(ui, close, palette),
+        ViewerSession::Multisample(state) => state.ui(ui, close, palette),
         ViewerSession::Toolpath(state) => state.ui(ui, close, palette),
         ViewerSession::Geography(state) => state.ui(ui, close, palette),
         ViewerSession::Database(state) => state.ui(ui, close, palette),
@@ -763,7 +796,12 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            load(&path, &AppConfig::default()).unwrap(),
+            load(
+                &path,
+                &AppConfig::default(),
+                &std::sync::atomic::AtomicBool::new(false)
+            )
+            .unwrap(),
             Loaded::Font(_)
         ));
     }
@@ -780,7 +818,12 @@ mod tests {
         .unwrap();
         assert_eq!(&std::fs::read(&path).unwrap()[..4], b"OTTO");
         assert!(matches!(
-            load(&path, &AppConfig::default()).unwrap(),
+            load(
+                &path,
+                &AppConfig::default(),
+                &std::sync::atomic::AtomicBool::new(false)
+            )
+            .unwrap(),
             Loaded::Font(_)
         ));
     }
@@ -791,7 +834,12 @@ mod tests {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join(format!("tests/fixtures/fonts/latin.{extension}"));
             assert!(matches!(
-                load(&path, &AppConfig::default()).unwrap(),
+                load(
+                    &path,
+                    &AppConfig::default(),
+                    &std::sync::atomic::AtomicBool::new(false)
+                )
+                .unwrap(),
                 Loaded::Font(_)
             ));
         }
@@ -849,6 +897,16 @@ mod tests {
                 "../little-clip-core/tests/fixtures/gcode/frame.gcode",
                 super::super::DocumentPosition::ToolpathLine(12),
                 "Source line 12",
+            ),
+            (
+                "../little-clip-core/tests/fixtures/multisample/harbor.sfz",
+                super::super::DocumentPosition::SampleRegion(0, 1),
+                "Bright keys",
+            ),
+            (
+                "../little-clip-core/tests/fixtures/multisample/harbor.sf2",
+                super::super::DocumentPosition::SampleRegion(1, 0),
+                "Harbor Bass",
             ),
             (
                 "tests/fixtures/database/harbor.sqlite",
@@ -1001,7 +1059,12 @@ mod tests {
             )
             .unwrap();
             assert_eq!((thumbnail.width, thumbnail.height), (16, 8));
-            let Loaded::Image(data, _) = load(&path, &AppConfig::default()).unwrap() else {
+            let Loaded::Image(data, _) = load(
+                &path,
+                &AppConfig::default(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap() else {
                 panic!("Expected native image session")
             };
             let state = ImagePreviewState::from_decoded(
@@ -1024,7 +1087,12 @@ mod tests {
             .save(&path)
             .unwrap();
         let original = std::fs::read(&path).unwrap();
-        let Loaded::Image(data, source) = load(&path, &AppConfig::default()).unwrap() else {
+        let Loaded::Image(data, source) = load(
+            &path,
+            &AppConfig::default(),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap() else {
             panic!("image route")
         };
         let mut state = ImagePreviewState::from_decoded(
@@ -1056,11 +1124,23 @@ mod tests {
             .unwrap()
             .set_len(64 * 1024 * 1024 + 1)
             .unwrap();
-        assert!(load(&image, &AppConfig::default()).is_err());
+        assert!(
+            load(
+                &image,
+                &AppConfig::default(),
+                &std::sync::atomic::AtomicBool::new(false)
+            )
+            .is_err()
+        );
         let unknown = dir.path().join("data.unknown");
         std::fs::write(&unknown, [0, 255, 0, 1]).unwrap();
         assert!(matches!(
-            load(&unknown, &AppConfig::default()).unwrap(),
+            load(
+                &unknown,
+                &AppConfig::default(),
+                &std::sync::atomic::AtomicBool::new(false)
+            )
+            .unwrap(),
             Loaded::External
         ));
     }

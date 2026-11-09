@@ -7,7 +7,11 @@
 pub mod analysis;
 pub mod decode;
 mod source;
-pub use source::{AudioInput, SeekableAudio, decoder_input_args, open_audio_input};
+pub use source::{
+    AudioInput, SeekableAudio, ToolAudioInput, decoder_input_args,
+    from_file as audio_input_from_file, needs_audio_preparation, open_audio_input,
+    open_tool_audio_input,
+};
 pub mod types;
 pub mod waveform;
 

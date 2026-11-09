@@ -20,8 +20,7 @@ use std::{
 };
 
 pub(super) fn known(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("ics"))
+    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Calendar)
 }
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;

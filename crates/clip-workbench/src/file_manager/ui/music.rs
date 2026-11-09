@@ -442,7 +442,7 @@ fn paint_audio_fallback(
         "ogg" => crate::icons::Icon::AudioOgg,
         "oga" => crate::icons::Icon::AudioOga,
         "m4a" | "alac" => crate::icons::Icon::AudioM4a,
-        "wma" => crate::icons::Icon::AudioWma,
+        "wma" | "xwma" | "xwm" => crate::icons::Icon::AudioWma,
         _ => crate::icons::Icon::Audio,
     };
     let quality = audio_quality(&extension, metadata);

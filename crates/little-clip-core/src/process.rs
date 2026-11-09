@@ -92,6 +92,21 @@ impl CommandRequest {
     pub fn arg_content_file(self, path: impl AsRef<Path>) -> std::io::Result<Self> {
         self.arg_content_file_with_suffix(path, "")
     }
+    /// Appends an already owned ordinary input as an inherited descriptor.
+    ///
+    /// This also supports unlinked temporary snapshots without reopening their
+    /// staging names. The request retains its own descriptor through spawning.
+    ///
+    /// # Errors
+    /// Rejects protected/nonregular handles and descriptor duplication failures.
+    pub fn arg_owned_content_file(self, source: std::fs::File) -> std::io::Result<Self> {
+        if crate::kernel_interface::classify_handle(&source)?.protected()
+            || !source.metadata()?.is_file()
+        {
+            return Err(std::io::Error::other("Input is not ordinary file content"));
+        }
+        self.arg_content_handle(source, OsStr::new(""))
+    }
     /// Adds a pinned input with a tool-specific selector, such as ImageMagick's `[0]`.
     ///
     /// # Errors
@@ -652,6 +667,25 @@ mod tests {
 #[cfg(test)]
 mod pinned_input_tests {
     use super::*;
+    #[test]
+    fn owned_unlinked_content_inputs_retain_their_bytes_and_reject_directories() {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(b"owned snapshot").unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let request = CommandRequest::new("cat")
+            .arg_owned_content_file(file)
+            .unwrap();
+        let output = request.run().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"owned snapshot");
+        let directory = tempfile::tempdir().unwrap();
+        assert!(
+            CommandRequest::new("cat")
+                .arg_owned_content_file(std::fs::File::open(directory.path()).unwrap())
+                .is_err()
+        );
+    }
     #[test]
     fn prepared_output_command_keeps_its_directory_and_rejects_protected_targets() {
         let root = tempfile::tempdir().unwrap();

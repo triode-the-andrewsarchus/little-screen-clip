@@ -29,8 +29,7 @@ struct Span {
     strokes: Vec<(usize, usize)>,
 }
 pub(super) fn known(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("ipynb"))
+    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Notebook)
 }
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     let mut data = PreviewData::new(String::new(), "Notebook".into(), Icon::Text);

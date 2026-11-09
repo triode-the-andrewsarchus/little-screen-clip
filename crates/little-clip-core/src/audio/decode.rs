@@ -26,7 +26,8 @@ pub fn is_audio_path(path: &Path) -> bool {
     match ext.as_deref() {
         Some(
             "mp2" | "mp3" | "wav" | "wave" | "flac" | "ogg" | "oga" | "m4a" | "m4b" | "aac"
-            | "adts" | "caf" | "mka" | "alac" | "aiff" | "aif" | "aifc" | "opus" | "wma",
+            | "adts" | "caf" | "mka" | "alac" | "aiff" | "aif" | "aifc" | "opus" | "wma" | "xwma"
+            | "xwm" | "ncw",
         ) => true,
         _ => false,
     }
@@ -36,11 +37,8 @@ pub fn read_audio_metadata(path: &Path) -> Option<AudioMetadata> {
     read_audio_metadata_cancellable(path, &AtomicBool::new(false))
 }
 fn read_audio_metadata_cancellable(path: &Path, cancelled: &AtomicBool) -> Option<AudioMetadata> {
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("wma"))
-    {
-        return super::source::read_windows_media_metadata(path, cancelled).ok();
+    if super::source::needs_audio_preparation(path) {
+        return super::source::read_prepared_audio_metadata(path, cancelled).ok();
     }
     let file = crate::kernel_interface::open_content(path, true).ok()?;
     let file_len = file.metadata().ok()?.len();

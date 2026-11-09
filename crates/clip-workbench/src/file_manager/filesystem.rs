@@ -36,19 +36,19 @@ impl Entry {
             || self.is_blend()
             || self.is_material()
             || self.is_photo()
-            || self.is_subtitles()
-            || self.is_notebook()
-            || self.is_book()
-            || self.is_mail()
-            || self.is_calendar()
-            || self.is_database()
-            || self.is_geography()
-            || self.is_toolpath()
-            || (self.regular_file && super::font_strip::known(&self.path))
+            || self.document_format().is_some()
     }
 
+    pub(super) fn document_format(&self) -> Option<super::document_format::Format> {
+        self.regular_file
+            .then(|| super::document_format::Format::for_path(&self.path))
+            .flatten()
+    }
     pub(super) fn is_subtitles(&self) -> bool {
         self.regular_file && little_clip_core::subtitles::is_subtitle_path(&self.path)
+    }
+    pub(super) fn is_multisample(&self) -> bool {
+        self.regular_file && super::multisample::known(&self.path)
     }
     pub(super) fn is_toolpath(&self) -> bool {
         self.regular_file && super::gcode::known(&self.path)

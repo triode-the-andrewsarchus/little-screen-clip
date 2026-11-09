@@ -137,7 +137,9 @@ impl EntryPreviews {
                         path.clone(),
                         (
                             *revision,
-                            ready.data.document.is_some() || ready.data.binary.is_some(),
+                            ready.data.document.is_some()
+                                || ready.data.binary.is_some()
+                                || ready.data.multisample.is_some(),
                         ),
                     );
                 }
@@ -201,10 +203,20 @@ impl EntryPreviews {
             && !little_clip_core::document::is_office_document(&entry.path)
             && (super::binary_strip::known(&entry.path)
                 || self
-                    .identities
-                    .get(&entry.path)
-                    .and_then(|(_, id)| self.cache.get(*id))
+                    .cached(entry)
                     .is_some_and(|ready| ready.data.binary.is_some()))
+    }
+    fn cached(&self, entry: &Entry) -> Option<&super::shelf::preview::Ready> {
+        self.identities
+            .get(&entry.path)
+            .filter(|(revision, _)| *revision == entry.revision)
+            .and_then(|(_, id)| self.cache.get(*id))
+    }
+    pub fn is_multisample(&self, entry: &Entry) -> bool {
+        entry.is_multisample()
+            || self
+                .cached(entry)
+                .is_some_and(|ready| ready.data.multisample.is_some())
     }
     pub fn is_text(&self, entry: &Entry) -> bool {
         if !text_candidate(entry) {
@@ -247,24 +259,8 @@ impl EntryPreviews {
                         path: entry.path.clone(),
                         revision: entry.revision,
                     }
-                } else if entry.is_subtitles() {
-                    Source::Subtitle(entry.path.clone())
-                } else if entry.is_toolpath() {
-                    Source::Toolpath(entry.path.clone())
-                } else if entry.is_geography() {
-                    Source::Geography(entry.path.clone())
-                } else if entry.is_database() {
-                    Source::Database(entry.path.clone())
-                } else if entry.is_calendar() {
-                    Source::Calendar(entry.path.clone())
-                } else if entry.is_mail() {
-                    Source::Mail(entry.path.clone())
-                } else if entry.is_book() {
-                    Source::Book(entry.path.clone())
-                } else if entry.is_notebook() {
-                    Source::Notebook(entry.path.clone())
-                } else if entry.regular_file && super::font_strip::known(&entry.path) {
-                    Source::Font(entry.path.clone())
+                } else if let Some(format) = entry.document_format() {
+                    Source::for_document(format, entry.path.clone())
                 } else if entry.is_blend() {
                     Source::Blend(entry.path.clone())
                 } else if entry.is_material() {
@@ -311,6 +307,10 @@ impl EntryPreviews {
         if entry.is_subtitles() {
             super::subtitle_strip::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::SubtitleCue)
+        } else if self.is_multisample(entry) {
+            super::multisample::show_list(ui, row, entry, columns, self.listing(entry), colors).map(
+                |(instrument, region)| super::DocumentPosition::SampleRegion(instrument, region),
+            )
         } else if entry.is_toolpath() {
             super::gcode::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::ToolpathLine)
@@ -326,7 +326,7 @@ impl EntryPreviews {
         } else if entry.is_mail() {
             super::mail::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::MailAttachment)
-        } else if super::ebook::known(&entry.path) {
+        } else if entry.is_book() {
             super::ebook::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::BookChapter)
         } else if entry.is_notebook() {

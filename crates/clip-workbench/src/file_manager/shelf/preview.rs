@@ -50,6 +50,7 @@ pub(in crate::file_manager) enum Source {
     Database(PathBuf),
     Geography(PathBuf),
     Toolpath(PathBuf),
+    Multisample(PathBuf),
     Mail(PathBuf),
     Subtitle(PathBuf),
     FontRaster {
@@ -97,6 +98,20 @@ impl Source {
             self
         }
     }
+    pub fn for_document(format: super::super::document_format::Format, path: PathBuf) -> Source {
+        match format {
+            super::super::document_format::Format::Font => Source::Font(path),
+            super::super::document_format::Format::Notebook => Source::Notebook(path),
+            super::super::document_format::Format::Book => Source::Book(path),
+            super::super::document_format::Format::Mail => Source::Mail(path),
+            super::super::document_format::Format::Calendar => Source::Calendar(path),
+            super::super::document_format::Format::Database => Source::Database(path),
+            super::super::document_format::Format::Geography => Source::Geography(path),
+            super::super::document_format::Format::Toolpath => Source::Toolpath(path),
+            super::super::document_format::Format::Multisample => Source::Multisample(path),
+            super::super::document_format::Format::Subtitle => Source::Subtitle(path),
+        }
+    }
     fn execution(&self) -> (&'static BackgroundJobs, usize, u64) {
         match self {
             Self::Checked { source, .. } => source.execution(),
@@ -116,6 +131,7 @@ impl Source {
             | Self::Database(_)
             | Self::Geography(_)
             | Self::Toolpath(_)
+            | Self::Multisample(_)
             | Self::Mail(_)
             | Self::FontRaster { .. }
             | Self::Binary(_)
@@ -197,6 +213,7 @@ impl Source {
             Source::System(path) => super::super::system::load(&path, token),
             Source::Subtitle(path) => super::super::subtitle_strip::load(&path, token),
             Source::Notebook(path) => super::super::notebook::load(&path, token),
+            Source::Multisample(path) => super::super::multisample::load(&path, token),
             Source::Toolpath(path) => super::super::gcode::load(&path, token),
             Source::Geography(path) => super::super::geography::load(&path, token),
             Source::Database(path) => super::super::database::load(&path, token),
@@ -215,7 +232,14 @@ impl Source {
                     super::super::font_strip::render(&document, width, height, color, token);
                 data
             }
-            Source::Binary(path) => super::super::binary_strip::load(&path, token),
+            Source::Binary(path) => {
+                if let Some(document) = super::super::multisample::read_if_identified(&path, token)
+                {
+                    super::super::multisample::preview(document)
+                } else {
+                    super::super::binary_strip::load(&path, token)
+                }
+            }
             Source::BinaryRaster {
                 document,
                 width,
@@ -1037,6 +1061,9 @@ mod gallery_completion_tests {
 }
 
 fn document_preview(path: &Path, token: &AtomicBool) -> Data {
+    if let Some(document) = super::super::multisample::read_if_identified(path, token) {
+        return super::super::multisample::preview(document);
+    }
     if little_clip_core::document::is_office_document(path) {
         let mut data = Data::new(display_path(path), "Document".into(), Icon::Pdf);
         preview_regular_file(path, &mut data);

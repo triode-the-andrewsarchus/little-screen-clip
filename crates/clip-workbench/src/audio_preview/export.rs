@@ -911,38 +911,30 @@ pub(super) fn extract_audio_slice_file(
     let staging_dir = plan.output.parent().unwrap_or_else(|| Path::new("."));
     let directory = little_clip_core::kernel_interface::create_content_directory(staging_dir)
         .map_err(|error| format!("Failed to create audio staging directory: {error}"))?;
-    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-    let staging = tempfile::NamedTempFile::new_in(&anchor).map_err(|e| e.to_string())?;
+    let filename = plan
+        .output
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid audio slice filename")?;
+    let source = crate::file_source::FileSource::capture(&plan.source)
+        .map_err(|error| format!("Failed to extract audio segment via ffmpeg: {error}"))?;
+    let save = AudioSavePlan {
+        read_check: plan.read_check.clone(),
+        source: plan.source.clone(),
+        file_source: Some(source),
+        destination: staging_dir.to_owned(),
+        versioned: false,
+        open_folder: false,
+        regions: Vec::new(),
+    };
     let region = AudioSaveRegion {
         start: plan.start,
         end: plan.end,
-        filename: "slice.wav".into(),
+        filename: filename.into(),
         filter: plan.filter.clone(),
     };
-    let mut command = audio_export_command(
-        &plan.source,
-        &region,
-        staging.as_file().try_clone().map_err(|e| e.to_string())?,
-        AudioRenderMode::Export,
-    )?;
-    let status = run_audio_command_cancellable(&mut command, cancelled)
-        .map_err(|error| format!("ffmpeg process failed: {error}"))?;
-    if !status.success() {
-        return Err(format!(
-            "Failed to extract audio segment via ffmpeg ({status})"
-        ));
-    }
-    plan.read_check.validate(cancelled)?;
-    source.check()?;
-    if cancelled.load(Ordering::Acquire) {
-        return Err("Audio slice copy cancelled".into());
-    }
-    staging.as_file().sync_all().map_err(|e| e.to_string())?;
-    let filename = plan.output.file_name().ok_or("Missing slice filename")?;
-    staging
-        .persist_noclobber(anchor.join(filename))
-        .map_err(|e| e.to_string())?;
-    Ok(plan.output.clone())
+    save_audio_region_cancellable(&save, &region, &directory, cancelled)
+        .map_err(|error| format!("Failed to extract audio segment via ffmpeg: {error}"))
 }
 
 fn send_audio_handoff(request: &IpcRequest) -> Result<(), String> {
@@ -1172,6 +1164,14 @@ pub(super) fn save_audio_region(
     region: &AudioSaveRegion,
     directory: &std::fs::File,
 ) -> Result<PathBuf, String> {
+    save_audio_region_cancellable(plan, region, directory, &AtomicBool::new(false))
+}
+fn save_audio_region_cancellable(
+    plan: &AudioSavePlan,
+    region: &AudioSaveRegion,
+    directory: &std::fs::File,
+    cancelled: &AtomicBool,
+) -> Result<PathBuf, String> {
     use std::os::fd::AsRawFd;
     let cancel = AtomicBool::new(false);
     plan.read_check.validate(&cancel)?;
@@ -1180,9 +1180,8 @@ pub(super) fn save_audio_region(
     }
     let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
     let parent = std::fs::read_link(&anchor).map_err(|error| error.to_string())?;
-    let mut out_path = anchor.join(&region.filename);
     let staging = tempfile::NamedTempFile::new_in(&anchor).map_err(|error| error.to_string())?;
-    let status = audio_export_command(
+    let mut command = audio_export_command(
         &plan.source,
         region,
         staging
@@ -1190,9 +1189,9 @@ pub(super) fn save_audio_region(
             .try_clone()
             .map_err(|error| error.to_string())?,
         AudioRenderMode::Export,
-    )?
-    .status()
-    .map_err(|error| error.to_string())?;
+        cancelled,
+    )?;
+    let status = run_audio_command_cancellable(&mut command, cancelled)?;
     if !status.success() {
         return Err(format!("ffmpeg exit {status}"));
     }
@@ -1200,10 +1199,24 @@ pub(super) fn save_audio_region(
         .as_file()
         .sync_all()
         .map_err(|error| error.to_string())?;
-    plan.read_check.validate(&cancel)?;
+    plan.read_check.validate(cancelled)?;
+    let out_path = install_audio_output(staging, &anchor, plan, &region.filename)?;
+    Ok(std::fs::read_link(&anchor)
+        .unwrap_or(parent)
+        .join(out_path.file_name().ok_or("Missing output name")?))
+}
+
+/// Checks source identity and applies the session's installation policy.
+fn install_audio_output(
+    staging: tempfile::NamedTempFile,
+    anchor: &Path,
+    plan: &AudioSavePlan,
+    filename: &str,
+) -> Result<PathBuf, String> {
+    let mut out_path = anchor.join(filename);
     if let Some(source) = &plan.file_source {
         source.check()?;
-        out_path = install_saved_audio(staging, &anchor, &region.filename, plan.versioned)?;
+        out_path = install_saved_audio(staging, anchor, filename, plan.versioned)?;
     } else {
         match little_clip_core::kernel_interface::require_content(&out_path) {
             Ok(()) => {}
@@ -1214,9 +1227,7 @@ pub(super) fn save_audio_region(
             .persist(&out_path)
             .map_err(|error| error.to_string())?;
     }
-    Ok(std::fs::read_link(&anchor)
-        .unwrap_or(parent)
-        .join(out_path.file_name().ok_or("Missing output name")?))
+    Ok(out_path)
 }
 
 /// Installs a staged file once, retrying only atomic name collisions for sibling edits.
@@ -1258,6 +1269,7 @@ pub(super) fn audio_export_command(
     region: &AudioSaveRegion,
     output: std::fs::File,
     mode: AudioRenderMode,
+    cancelled: &AtomicBool,
 ) -> Result<std::process::Command, String> {
     let extension = Path::new(&region.filename)
         .extension()
@@ -1273,6 +1285,12 @@ pub(super) fn audio_export_command(
         "mka" | "mkv" => "matroska",
         value => value,
     };
+    let input = little_clip_core::audio::open_tool_audio_input(source, cancelled)?;
+    let input_args: &[&str] = if input.prepared_wav {
+        &["-f", "wav"]
+    } else {
+        little_clip_core::audio::decoder_input_args(source)
+    };
     let mut request = little_clip_core::process::CommandRequest::new("ffmpeg").args([
         "-nostdin",
         "-protocol_whitelist",
@@ -1287,9 +1305,9 @@ pub(super) fn audio_export_command(
             .arg(format!("{:.4}", region.end));
     }
     request = request
-        .args(little_clip_core::audio::decoder_input_args(source))
+        .args(input_args)
         .arg("-i")
-        .arg_content_file(source)
+        .arg_owned_content_file(input.file)
         .map_err(|error| error.to_string())?;
     if let Some(filter) = &region.filter {
         request = if mode == AudioRenderMode::SessionGraph {

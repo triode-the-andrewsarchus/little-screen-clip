@@ -25,13 +25,7 @@ pub(super) struct Document {
     pub description: String,
 }
 pub(super) fn known(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|s| s.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("ttf" | "otf" | "ttc" | "otc" | "woff" | "woff2")
-    )
+    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Font)
 }
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     let mut data = PreviewData::new(String::new(), "Font".into(), Icon::Text);

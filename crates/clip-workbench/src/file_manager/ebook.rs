@@ -71,8 +71,7 @@ impl Publication {
     }
 }
 pub(super) fn known(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("epub") || e.eq_ignore_ascii_case("cbz"))
+    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Book)
 }
 fn read(path: &Path, token: &AtomicBool) -> Result<Publication, String> {
     if path

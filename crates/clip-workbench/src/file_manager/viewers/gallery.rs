@@ -431,7 +431,7 @@ mod tests {
             })
             .collect();
         let config = AppConfig::default();
-        let loaded = load(&paths[0], &config).unwrap();
+        let loaded = load(&paths[0], &config, &std::sync::atomic::AtomicBool::new(false)).unwrap();
         let viewer = session(
             loaded,
             paths[0].clone(),

@@ -17,8 +17,7 @@ use std::{
     },
 };
 pub(super) fn known(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("gcode"))
+    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Toolpath)
 }
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;

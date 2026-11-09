@@ -8,6 +8,7 @@ mod calendar;
 pub(super) mod constellation;
 mod content;
 mod database;
+mod document_format;
 mod ebook;
 mod edit_ui;
 mod edits;
@@ -24,6 +25,7 @@ mod material_strip;
 mod media;
 mod midi_strip;
 pub(crate) mod mounts;
+mod multisample;
 mod music;
 mod native_drag;
 mod path_serde;
@@ -100,6 +102,7 @@ pub(super) enum DocumentPosition {
     DatabaseTable(usize),
     GeographicFeature(usize),
     ToolpathLine(usize),
+    SampleRegion(usize, usize),
     SubtitleCue(usize),
 }
 

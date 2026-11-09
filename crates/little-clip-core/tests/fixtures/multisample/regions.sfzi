@@ -1,0 +1,5 @@
+<group> lokey=48 hikey=71
+<region> sample=soft.wav lovel=0 hivel=63 loop_start=10 loop_end=22049 region_label=Soft keys
+<region> sample=bright.wav lovel=64 hivel=127 region_label=Bright keys
+<group> lokey=36 hikey=47 pitch_keycenter=48
+<region> sample=soft.wav region_label=Bass keys

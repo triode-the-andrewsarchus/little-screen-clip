@@ -1,0 +1,5 @@
+// Owned mappings, including a guarded textual include.
+#define $ROOT 60
+<control> default_path=.
+<global> pitch_keycenter=$ROOT
+#include "regions.sfzi"

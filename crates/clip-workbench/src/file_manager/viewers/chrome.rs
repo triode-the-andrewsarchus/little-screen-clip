@@ -216,6 +216,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         | ViewerSession::Database(_)
         | ViewerSession::Calendar(_)
         | ViewerSession::Mail(_) => {}
+        ViewerSession::Multisample(state) => state.relocate_file(source),
         ViewerSession::Book(state) => state.relocate_file(source),
     }
 }
@@ -230,7 +231,7 @@ mod tests {
         std::fs::write(&path, "original").unwrap();
         let config = AppConfig::default();
         let mut viewer = session(
-            load(&path, &config).unwrap(),
+            load(&path, &config, &std::sync::atomic::AtomicBool::new(false)).unwrap(),
             path.clone(),
             &config,
             0.0,

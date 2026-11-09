@@ -28,44 +28,48 @@ def include_clock_ocr(session):
 
 def exercise(session, root):
     include_clock_ocr(session)
-    original=hashlib.sha256((root/'tones.wma').read_bytes()).digest()
-    session.observe('01-folder',['tones.wma','mono.wma'])
+    extension=next(ext for ext in ['xwma','ncw','wma'] if (root/f'tones.{ext}').exists())
+    tones=f'tones.{extension}'
+    mono=f'mono.{extension}'
+    renamed='renamed.xwm' if extension=='xwma' else f'renamed.{extension}'
+    original=hashlib.sha256((root/tones).read_bytes()).digest()
+    session.observe('01-folder',[tones,mono])
     session.click(120,160)
-    open_file(session,root,'tones.wma','02-row')
-    text=session.observe('03-studio',['tones.wma','Selection info'],expected_any=['00:00:03.','00:00:04.'])
+    open_file(session,root,tones,'02-row')
+    text=session.observe('03-studio',[tones,'Selection info'],expected_any=['00:00:03.','00:00:04.'])
     assert 'audio analysis unavailable' not in text.lower()
     session.key('space')
-    wait_for(lambda:any(abs(value)>2000 for value in audio_tail(session)[0]),'Windows Media stereo playback')
-    session.observe('04-played',['tones.wma','Selection info'])
+    wait_for(lambda:any(abs(value)>2000 for value in audio_tail(session)[0]),'Native audio stereo playback')
+    session.observe('04-played',[tones,'Selection info'])
     session.key('space')
     session.click(205,126)
     session.observe('05-rename',['Filename'])
     session.key('a','ctrl')
-    private.run_checked(['wtype','renamed.wma'],env=session.env)
+    private.run_checked(['wtype',renamed],env=session.env)
     session.key('Return')
-    wait_for(lambda:(root/'renamed.wma').exists(),'audio rename')
-    session.observe('06-renamed',['renamed.wma','Selection info'])
-    assert hashlib.sha256((root/'renamed.wma').read_bytes()).digest()==original
+    wait_for(lambda:(root/renamed).exists(),'audio rename')
+    session.observe('06-renamed',[renamed,'Selection info'])
+    assert hashlib.sha256((root/renamed).read_bytes()).digest()==original
     session.click(1110,70)
-    session.observe('07-folder',['renamed.wma','mono.wma'])
-    open_file(session,root,'mono.wma','08-mono-row')
-    text=session.observe('09-mono',['mono.wma','Selection info'],expected_any=['00:00:01.','00:00:02.'])
+    session.observe('07-folder',[renamed,mono])
+    open_file(session,root,mono,'08-mono-row')
+    text=session.observe('09-mono',[mono,'Selection info'],expected_any=['00:00:01.','00:00:02.'])
     assert 'audio analysis unavailable' not in text.lower()
     session.click(1110,70)
-    session.observe('10-returned',['renamed.wma','mono.wma'])
-    open_file(session,root,'renamed.wma','11-reopen')
-    session.observe('12-reopened',['renamed.wma','Selection info'],expected_any=['00:00:03.','00:00:04.'])
+    session.observe('10-returned',[renamed,mono])
+    open_file(session,root,renamed,'11-reopen')
+    session.observe('12-reopened',[renamed,'Selection info'],expected_any=['00:00:03.','00:00:04.'])
     session.click(1110,70)
-    session.observe('13-returned',['renamed.wma','mono.wma'])
+    session.observe('13-returned',[renamed,mono])
 
 
 def main():
     repo=Path(__file__).resolve().parents[1]
-    args=application_arguments(__doc__,repo/'target/release/clip-file-manager')
+    args=application_arguments(__doc__,repo/'target/release/clip-file-manager',lambda parser:parser.add_argument('--container',choices=['wma','xwma','ncw'],default='wma'))
     output,root=media_fixture_directory(args)
-    for name in ['tones.wma','mono.wma']:
+    for name in [f'tones.{args.container}',f'mono.{args.container}']:
         shutil.copyfile(repo/'crates/little-clip-core/tests/fixtures/audio'/name,root/name)
-    return run_application_acceptance(args,output,root,exercise,'Windows Media stereo/mono waveform analysis, private audio playback, guarded rename and reopen',lambda env,children:start_private_audio(output,env,children))
+    return run_application_acceptance(args,output,root,exercise,'Native audio stereo/mono waveform analysis, private audio playback, guarded rename and reopen',lambda env,children:start_private_audio(output,env,children))
 
 
 if __name__=='__main__':

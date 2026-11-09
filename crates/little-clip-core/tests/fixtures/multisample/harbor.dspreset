@@ -1,0 +1,5 @@
+<DecentSampler name="Harbor Decent"><groups loNote="48" hiNote="71" rootNote="60">
+<group name="Soft" loVel="0" hiVel="63"><sample path="soft.wav" end="44099" loopStart="10" loopEnd="22049"/></group>
+<group name="Bright" loVel="64" hiVel="127"><sample path="bright.wav" end="44099"/></group>
+<group name="Bass" loNote="36" hiNote="47" rootNote="48"><sample path="soft.wav" end="44099"/></group>
+</groups></DecentSampler>

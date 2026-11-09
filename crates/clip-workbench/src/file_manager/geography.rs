@@ -19,8 +19,8 @@ use std::{
 };
 
 pub(super) fn known(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("gpx") || e.eq_ignore_ascii_case("geojson"))
+    super::document_format::Format::for_path(path)
+        == Some(super::document_format::Format::Geography)
 }
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;

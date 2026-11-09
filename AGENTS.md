@@ -28,6 +28,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Default `./launch.sh build` runs `scripts/build_workspace.py`: after a successful full build, it uses Cargo's complete JSON artifact graph (including fresh units and build-script outputs) to remove obsolete hashed release artifacts. It preserves all current versions/feature variants, debug artifacts and bundled helpers. Failed builds, incomplete inventories and custom/partial builds skip automatic pruning. Explicit `./launch.sh sweep` performs aggressive cleanup toward a 20 GB cache budget (`LITTLE_CLIP_TARGET_MAXSIZE` overrides it), retaining two incremental sessions per crate/configuration; this may evict active dependencies. Without `cargo-sweep`, explicit cleanup clears debug artifacts with `cargo clean --profile dev`. Serialize launch builds and sweeps with all other Cargo commands so cleanup cannot prune a compiler's active artifacts or incremental session.
 
+Development/test profiles disable incremental caching and retain line-level debug information. Cargo defaults to one build job to limit overlapping compiler/linker work; override explicitly when resources permit. Check free disk space before large builds, and serialize cleanup with every Cargo build/test process.
+
 `./launch.sh test` can stop a running daemon and access attached hardware; use it only when that is intended.
 
 ## Coding Style & Naming Conventions
@@ -81,6 +83,8 @@ Film Look enables vendored filmr's `compute-gpu` feature; `gpu` alone does not e
 Async preview completion updates an existing clipboard item in place. Keep `SlotStateSummary` sensitive to preview readiness so open workbenches rehydrate the affected slot and repaint the mirror; item ID and payload kind alone do not reveal these updates. Workbench startup loads clipboard state off the UI thread; mirror rendering and operation discovery use the bounded job executor. Share workbench slot snapshots with `Arc<SlotManager>` and use `Arc::make_mut` for local swaps. Reject stale mirror/action completions after state or selection changes, and stale mirror completions after appearance changes; cache discovery separately from search filtering.
 
 Raster import uses core's `item::image_reader` to initialize HEIF/HEIC/AVIF decoder hooks once. Pass MIME hints through dimensions, thumbnails, and comparisons for formats without reliable signatures (TGA); reuse core image extension and MIME classification. HEIF EXIF extraction uses the existing `kamadak-exif` container reader. SVG/SVGZ readers share core's `svg_image` for bounded expansion, header-only dimensions and stdin-only rasterization without a base URI; retain original encoded bytes and use the shared raster limits.
+
+Multisample studios share core's bounded mapping model and explicit raw-source audition. NKI/EXS parsing stays in the separate LGPL executable, with replaceable source/licenses packaged alongside it; application crates must not link that parser. Ambiguous extensions such as XML and Elixir EXS require positive worker-side content identification. Archive auditions retain guarded archive handles and read selected members without extraction. Native NCW preparation shares the audio snapshot/cache and pinned tool-input path with ordinary studio playback/exports.
 
 Audio Studio channel edits prepare replacement analysis on the bounded job executor. Retain displayed waveforms and spectrum textures while replacements compute; reject stale completions and never replace an edited track with a loading canvas. Spectrum rendering also runs off the UI thread.
 

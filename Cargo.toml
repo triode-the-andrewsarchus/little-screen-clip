@@ -9,6 +9,7 @@ members = [
     "crates/little-clipd",
     "crates/clip-workbench",
     "crates/clipctl",
+    "crates/little-clip-nki",
 ]
 
 [workspace.package]
@@ -38,6 +39,12 @@ syntect = { version = "5.3", default-features = false, features = ["default-fanc
 rayon = "1.10"
 regex = "1.10"
 
+
+# Keep local builds bounded: this workspace's incremental cache can exceed the
+# compiled artifacts many times over. Line tables retain useful backtraces.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 3

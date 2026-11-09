@@ -1039,50 +1039,85 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
 }
 
 #[test]
-fn windows_media_playback_seeks_shared_pcm_and_survives_source_rename() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("tones.wma");
-    std::fs::copy(
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../little-clip-core/tests/fixtures/audio/tones.wma"
-        ),
-        &path,
-    )
-    .unwrap();
-    let metadata = little_clip_core::audio::read_audio_metadata(&path).unwrap();
-    let source = Arc::new(
-        little_clip_core::audio::compute_audio_analysis_progressive(&path, 120, |_| {}).unwrap(),
-    );
-    let bytes = source.decoded_source.clone().unwrap();
-    let mut state = AudioPreviewState::from_completed_source(
-        path.clone(),
-        "tones.wma".into(),
-        Some(metadata),
-        source,
-    )
-    .with_file_source(crate::file_source::FileSource::capture(&path).unwrap());
-    let mut decoder = super::super::decode_audio_source(state.playback_input().unwrap()).unwrap();
-    assert_eq!(decoder.channels().get(), 2);
-    assert_eq!(decoder.sample_rate().get(), 44100);
-    decoder.try_seek(Duration::from_secs_f32(2.0)).unwrap();
-    assert!(decoder.take(1000).any(|sample| sample.abs() > 0.1));
-    let renamed = directory.path().join("renamed.wma");
-    std::fs::rename(&path, &renamed).unwrap();
-    state.relocate_file(
-        renamed.clone(),
-        crate::file_source::FileSource::capture(&renamed).unwrap(),
-    );
-    assert!(Arc::ptr_eq(
-        &bytes,
-        state
-            .completed_source_analysis
-            .as_ref()
-            .unwrap()
-            .decoded_source
-            .as_ref()
-            .unwrap()
-    ));
-    let decoder = super::super::decode_audio_source(state.playback_input().unwrap()).unwrap();
-    assert_eq!(decoder.channels().get(), 2);
+fn bridged_audio_playback_seeks_shared_pcm_and_survives_source_rename() {
+    for extension in ["wma", "xwma", "ncw"] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(format!("tones.{extension}"));
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../little-clip-core/tests/fixtures/audio/tones.{extension}"
+            )),
+            &path,
+        )
+        .unwrap();
+        let metadata = little_clip_core::audio::read_audio_metadata(&path).unwrap();
+        let source = Arc::new(
+            little_clip_core::audio::compute_audio_analysis_progressive(&path, 120, |_| {})
+                .unwrap(),
+        );
+        let bytes = source.decoded_source.clone().unwrap();
+        let mut state = AudioPreviewState::from_completed_source(
+            path.clone(),
+            format!("tones.{extension}"),
+            Some(metadata),
+            source,
+        )
+        .with_file_source(crate::file_source::FileSource::capture(&path).unwrap());
+        let mut decoder =
+            super::super::decode_audio_source(state.playback_input().unwrap()).unwrap();
+        assert_eq!(decoder.channels().get(), 2);
+        assert_eq!(decoder.sample_rate().get(), 44100);
+        decoder.try_seek(Duration::from_secs_f32(2.0)).unwrap();
+        assert!(decoder.take(1000).any(|sample| sample.abs() > 0.1));
+        let original = std::fs::read(&path).unwrap();
+        let existing = directory.path().join("existing.wav");
+        std::fs::write(&existing, b"preserved audio").unwrap();
+        let saved = run_audio_save(AudioSavePlan {
+            source: path.clone(),
+            file_source: Some(crate::file_source::FileSource::capture(&path).unwrap()),
+            destination: directory.path().into(),
+            versioned: false,
+            open_folder: false,
+            regions: ["existing.wav", "edited.wav"]
+                .into_iter()
+                .map(|filename| AudioSaveRegion {
+                    start: 0.1,
+                    end: 0.7,
+                    filename: filename.into(),
+                    filter: Some("volume=0.5".into()),
+                })
+                .collect(),
+        })
+        .unwrap();
+        assert_eq!(saved.saved_count, 1);
+        assert_eq!(saved.failures.len(), 1);
+        assert_eq!(std::fs::read(existing).unwrap(), b"preserved audio");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let output =
+            little_clip_core::audio::read_audio_metadata(&directory.path().join("edited.wav"))
+                .unwrap();
+        assert!((400..900).contains(&output.duration_ms));
+        let renamed = directory.path().join(if extension == "xwma" {
+            "renamed.xwm".to_owned()
+        } else {
+            format!("renamed.{extension}")
+        });
+        std::fs::rename(&path, &renamed).unwrap();
+        state.relocate_file(
+            renamed.clone(),
+            crate::file_source::FileSource::capture(&renamed).unwrap(),
+        );
+        assert!(Arc::ptr_eq(
+            &bytes,
+            state
+                .completed_source_analysis
+                .as_ref()
+                .unwrap()
+                .decoded_source
+                .as_ref()
+                .unwrap()
+        ));
+        let decoder = super::super::decode_audio_source(state.playback_input().unwrap()).unwrap();
+        assert_eq!(decoder.channels().get(), 2);
+    }
 }
