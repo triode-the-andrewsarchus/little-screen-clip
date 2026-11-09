@@ -6,6 +6,7 @@ mod blend_preview;
 mod bookmarks;
 pub(super) mod constellation;
 mod content;
+mod ebook;
 mod edit_ui;
 mod edits;
 mod external;
@@ -88,6 +89,7 @@ pub(super) enum DocumentPosition {
     TextLine(usize),
     PdfPage(usize),
     NotebookCell(usize),
+    BookChapter(usize),
     SubtitleCue(usize),
 }
 
@@ -799,6 +801,7 @@ impl FileManager {
                     || entry.is_photo()
                     || entry.is_subtitles()
                     || entry.is_notebook()
+                    || entry.is_book()
                     || entry.is_paged_document()
                 {
                     VIDEO_ROW_HEIGHT

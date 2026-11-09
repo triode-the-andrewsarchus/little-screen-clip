@@ -38,7 +38,9 @@ impl<'a> ListPreviews<'a> {
             || entry.is_material()
             || entry.is_subtitles()
             || (entry.regular_file
-                && (super::super::font_strip::known(&entry.path) || entry.is_notebook()))
+                && (super::super::font_strip::known(&entry.path)
+                    || entry.is_book()
+                    || entry.is_notebook()))
             || self.files.is_binary(entry)
         {
             media_row(ui, rect, marked, colors)

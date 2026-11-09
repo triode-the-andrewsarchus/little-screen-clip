@@ -400,9 +400,11 @@
   - [x] `.odt`
     - [ ] OpenDocument meta properties (`meta.xml`: title, creator, creation date, statistics)
   - [x] `.rtf`
-  - [ ] `.epub`
-    - [ ] OPF package metadata (`content.opf`: Dublin Core title, creator, identifier, cover image metadata)
-    - [ ] Table of contents navigation (NCX / EPUB 3 Navigation Document)
+  - [x] `.epub` — bounded EPUB 2/3 reflowed reader with chapter selection, local raster illustrations, adjustable text size, clickable list chapter strips and guarded container renaming; original publication stays unchanged
+    - [x] OPF package title, creators, cover resource and explicit spine order; local cover preview
+    - [x] EPUB 2 NCX / EPUB 3 navigation labels linked to reading-order documents
+    - [ ] Full CSS typography, fixed-layout/SVG chapters, inline link/fragment navigation, embedded media, DRM content, and publication editing/export
+    - [ ] Remaining OPF metadata (identifiers, languages, dates, subjects and custom refinements)
   - [ ] `.azw3` — Kindle Format 8
   - [ ] `.mobi` — Mobipocket
   - [ ] `.fb2` — FictionBook

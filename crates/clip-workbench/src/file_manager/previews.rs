@@ -249,6 +249,8 @@ impl EntryPreviews {
                     }
                 } else if entry.is_subtitles() {
                     Source::Subtitle(entry.path.clone())
+                } else if entry.is_book() {
+                    Source::Book(entry.path.clone())
                 } else if entry.is_notebook() {
                     Source::Notebook(entry.path.clone())
                 } else if entry.regular_file && super::font_strip::known(&entry.path) {
@@ -299,6 +301,9 @@ impl EntryPreviews {
         if entry.is_subtitles() {
             super::subtitle_strip::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::SubtitleCue)
+        } else if super::ebook::known(&entry.path) {
+            super::ebook::show_list(ui, row, entry, columns, self.listing(entry), colors)
+                .map(super::DocumentPosition::BookChapter)
         } else if entry.is_notebook() {
             super::notebook::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::NotebookCell)
@@ -803,6 +808,7 @@ fn text_candidate(entry: &Entry) -> bool {
     entry.regular_file
         && !entry.is_subtitles()
         && !super::notebook::known(&entry.path)
+        && !super::ebook::known(&entry.path)
         && !super::font_strip::known(&entry.path)
         && !super::midi_strip::is_midi(&entry.path)
         && !entry.is_scene()

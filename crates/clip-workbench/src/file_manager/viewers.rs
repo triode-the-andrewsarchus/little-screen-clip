@@ -26,6 +26,7 @@ enum Loaded {
     System(super::system::Document),
     Font(super::font_strip::viewer::Viewer),
     Notebook(super::notebook::viewer::Viewer),
+    Book(super::ebook::Viewer),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
     Text(super::text_editor::TextSession),
@@ -44,6 +45,7 @@ enum ViewerSession {
     System(super::system::Inspector),
     Font(super::font_strip::viewer::Viewer),
     Notebook(super::notebook::viewer::Viewer),
+    Book(super::ebook::Viewer),
     Image(ImagePreviewState),
     Text(super::text_editor::TextSession),
     Audio(AudioPreviewState),
@@ -238,6 +240,10 @@ impl Viewers {
                 Some(ViewerSession::Notebook(state)),
                 Some(super::DocumentPosition::NotebookCell(cell)),
             ) => state.select(cell),
+            (
+                Some(ViewerSession::Book(state)),
+                Some(super::DocumentPosition::BookChapter(index)),
+            ) => state.select(index),
             (Some(ViewerSession::Pdf(state)), Some(super::DocumentPosition::PdfPage(page))) => {
                 state.selected_page = Some(page.max(1))
             }
@@ -444,6 +450,7 @@ impl Viewers {
 #[derive(Clone, Copy)]
 enum Kind {
     Notebook,
+    Book,
     Font,
     Image,
     Audio,
@@ -493,6 +500,7 @@ fn extension_kind(path: &Path) -> Option<Kind> {
         "ttf" | "ttc" | "otf" | "otc" | "woff" | "woff2" => Some(Kind::Font),
         "mid" | "midi" => Some(Kind::Midi),
         "ipynb" => Some(Kind::Notebook),
+        "epub" => Some(Kind::Book),
         _ => None,
     }
 }
@@ -522,6 +530,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         ));
     }
     match kind {
+        Kind::Book => super::ebook::Viewer::load(path).map(Loaded::Book),
         Kind::Notebook => super::notebook::viewer::Viewer::load(path).map(Loaded::Notebook),
         Kind::Font => super::font_strip::viewer::Viewer::load(path).map(Loaded::Font),
         Kind::Image => {
@@ -601,6 +610,7 @@ fn session(
 ) -> ViewerSession {
     match loaded {
         Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
+        Loaded::Book(viewer) => ViewerSession::Book(viewer),
         Loaded::Font(viewer) => ViewerSession::Font(viewer),
         Loaded::System(document) => ViewerSession::System(super::system::Inspector::new(document)),
         Loaded::Image(data, source) => ViewerSession::Image(
@@ -659,6 +669,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
     let ctx = ui.ctx().clone();
     match viewer {
         ViewerSession::Notebook(state) => state.ui(ui, close, palette),
+        ViewerSession::Book(state) => state.ui(ui, close, palette),
         ViewerSession::Font(state) => state.ui(ui, close, palette),
         ViewerSession::System(state) => state.ui(ui, close, palette),
         ViewerSession::Image(state) => state.render_ui(ui, &ctx, palette, close),
@@ -732,13 +743,43 @@ mod tests {
     }
 
     #[test]
-    fn clicked_subtitle_cue_survives_background_loading() {
-        for extension in ["srt", "vtt", "ass", "ssa"] {
-            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("tests/fixtures/subtitles/sample.{extension}"));
+    fn clicked_document_position_survives_background_loading() {
+        for (fixture, position, label) in [
+            (
+                "tests/fixtures/subtitles/sample.srt",
+                super::super::DocumentPosition::SubtitleCue(1),
+                "Cue 2",
+            ),
+            (
+                "tests/fixtures/subtitles/sample.vtt",
+                super::super::DocumentPosition::SubtitleCue(1),
+                "Cue 2",
+            ),
+            (
+                "tests/fixtures/subtitles/sample.ass",
+                super::super::DocumentPosition::SubtitleCue(1),
+                "Cue 2",
+            ),
+            (
+                "tests/fixtures/subtitles/sample.ssa",
+                super::super::DocumentPosition::SubtitleCue(1),
+                "Cue 2",
+            ),
+            (
+                "tests/fixtures/notebooks/sample.ipynb",
+                super::super::DocumentPosition::NotebookCell(2),
+                "Code cell 3",
+            ),
+            (
+                "../little-clip-core/tests/fixtures/ebooks/journey.epub",
+                super::super::DocumentPosition::BookChapter(1),
+                "Chapter 2 / 2",
+            ),
+        ] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(fixture);
             let mut viewers = Viewers::default();
             let ctx = Context::default();
-            viewers.open_document_at(path, super::super::DocumentPosition::SubtitleCue(1));
+            viewers.open_document_at(path, position);
             finish_loading(&mut viewers, &ctx);
             let output = ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -751,34 +792,14 @@ mod tests {
                     )
                 });
             });
-            assert!(output.shapes.iter().any(
-            |shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Cue 2")
-        ));
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == label)),
+                "{fixture}: {:?}",
+                viewers.error
+            );
             assert!(viewers.request_close());
         }
-    }
-
-    #[test]
-    fn clicked_notebook_cell_survives_background_loading() {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/notebooks/sample.ipynb");
-        let mut viewers = Viewers::default();
-        let ctx = Context::default();
-        viewers.open_document_at(path, super::super::DocumentPosition::NotebookCell(2));
-        finish_loading(&mut viewers, &ctx);
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                viewers.render_session(
-                    ui,
-                    &crate::ui_appearance::palette(
-                        little_clip_core::config::WorkbenchAppearance::Dark,
-                    ),
-                    &mut false,
-                )
-            });
-        });
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Code cell 3")));
-        assert!(viewers.request_close());
     }
 
     #[test]

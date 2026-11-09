@@ -32,6 +32,9 @@ impl Entry {
     pub(super) fn is_subtitles(&self) -> bool {
         self.regular_file && little_clip_core::subtitles::is_subtitle_path(&self.path)
     }
+    pub(super) fn is_book(&self) -> bool {
+        self.regular_file && super::ebook::known(&self.path)
+    }
     pub(super) fn is_notebook(&self) -> bool {
         self.regular_file && super::notebook::known(&self.path)
     }

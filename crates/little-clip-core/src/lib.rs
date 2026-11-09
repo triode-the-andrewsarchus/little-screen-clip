@@ -10,6 +10,7 @@ pub mod clipboard;
 pub mod color;
 pub mod config;
 pub mod document;
+pub mod ebook;
 pub mod gallery_image;
 pub mod image_document;
 pub mod ipc;
@@ -17,6 +18,7 @@ pub mod item;
 pub mod jobs;
 pub mod kernel_interface;
 pub mod kra_image;
+pub mod zip_content;
 /// Presentation-ready classifiers and decoded models shared by renderers and operations.
 pub mod presentation {
     #[path = "../../../little-clip-ops/src/midi.rs"]
