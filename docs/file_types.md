@@ -524,7 +524,8 @@
     - [ ] Core model metadata (designer, license, title)
     - [ ] Slicer project settings (`Metadata/model_settings.config`, plate previews `Metadata/plate_*.png`, filament type/color, estimated print time, filament length/mass)
   - [ ] `.amf` — Additive Manufacturing Format
-  - [ ] `.gcode` — CNC toolpaths and 3D printer instructions
+  - [x] `.gcode` — read-only program-coordinate toolpaths with XY/XZ/YZ projections, travel/extrusion colors, progress scrubbing, source-line selection, pan/zoom, bounded clickable folder previews and guarded rename
+    - [ ] Machine simulation, macros, subprograms, rotary axes, cutter compensation, canned cycles and non-XY arcs. Literal G0/G1/G2/G3, G20/G21, G90/G91, G92 and M82/M83 are interpreted; unsupported instructions stop a clearly qualified partial preview. Initial origin is assumed zero; homing paths are omitted. Input: 16 MiB / 500,000 lines / 200,000 drawing intervals. No machine connection or command execution.
     - [ ] Slicer generator comments (slicer name/version, print time, filament used, layer height, nozzle/bed temperatures, layer count)
   - [ ] Resin (SLA / DLP / LCD) 3D printing sliced packages
     - [ ] `.ctb` — ChituBox resin print file

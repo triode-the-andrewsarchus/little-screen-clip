@@ -31,6 +31,7 @@ enum Loaded {
     Calendar(super::calendar::Viewer),
     Database(super::database::Viewer),
     Geography(super::geography::Viewer),
+    Toolpath(super::gcode::Viewer),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
     Text(super::text_editor::TextSession),
@@ -54,6 +55,7 @@ enum ViewerSession {
     Calendar(super::calendar::Viewer),
     Database(super::database::Viewer),
     Geography(super::geography::Viewer),
+    Toolpath(super::gcode::Viewer),
     Image(ImagePreviewState),
     Text(super::text_editor::TextSession),
     Audio(AudioPreviewState),
@@ -275,6 +277,10 @@ impl Viewers {
                 state.preview.view_mode = crate::text_preview::TextViewMode::Raw;
                 state.preview.center_source_line = Some(line);
             }
+            (
+                Some(ViewerSession::Toolpath(state)),
+                Some(super::DocumentPosition::ToolpathLine(line)),
+            ) => state.select_line(line),
             (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::SubtitleCue(cue))) => {
                 state.preview.select_subtitle(cue)
             }
@@ -479,6 +485,7 @@ enum Kind {
     Calendar,
     Database,
     Geography,
+    Toolpath,
     Font,
     Image,
     Audio,
@@ -531,6 +538,7 @@ fn extension_kind(path: &Path) -> Option<Kind> {
         "epub" | "cbz" => Some(Kind::Book),
         "eml" => Some(Kind::Mail),
         "ics" => Some(Kind::Calendar),
+        "gcode" => Some(Kind::Toolpath),
         "gpx" | "geojson" => Some(Kind::Geography),
         "sqlite" | "sqlite3" | "db" | "db3" => Some(Kind::Database),
         _ => None,
@@ -562,6 +570,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         ));
     }
     match kind {
+        Kind::Toolpath => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Geography => super::geography::Viewer::load(path).map(Loaded::Geography),
         Kind::Database => super::database::Viewer::load(path).map(Loaded::Database),
         Kind::Calendar => super::calendar::Viewer::load(path).map(Loaded::Calendar),
@@ -647,6 +656,7 @@ fn session(
     match loaded {
         Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
+        Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(viewer),
         Loaded::Database(viewer) => ViewerSession::Database(viewer),
         Loaded::Calendar(viewer) => ViewerSession::Calendar(viewer),
@@ -710,6 +720,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
     match viewer {
         ViewerSession::Notebook(state) => state.ui(ui, close, palette),
         ViewerSession::Book(state) => state.ui(ui, close, palette),
+        ViewerSession::Toolpath(state) => state.ui(ui, close, palette),
         ViewerSession::Geography(state) => state.ui(ui, close, palette),
         ViewerSession::Database(state) => state.ui(ui, close, palette),
         ViewerSession::Calendar(state) => state.ui(ui, close, palette),
@@ -833,6 +844,11 @@ mod tests {
                 "../little-clip-core/tests/fixtures/geography/harbor.geojson",
                 super::super::DocumentPosition::GeographicFeature(3),
                 "Unplaced record",
+            ),
+            (
+                "../little-clip-core/tests/fixtures/gcode/frame.gcode",
+                super::super::DocumentPosition::ToolpathLine(12),
+                "Source line 12",
             ),
             (
                 "tests/fixtures/database/harbor.sqlite",

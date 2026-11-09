@@ -7,6 +7,53 @@ use eframe::egui::{
 };
 use little_clip_core::palette::{AppPalette, contrast_ratio};
 
+/// Fits north/up-positive Cartesian coordinates into a padded canvas, preserving aspect ratio.
+pub(crate) fn fit_cartesian_point(
+    rect: Rect,
+    bounds: [f64; 4],
+    point: [f64; 2],
+    zoom: f32,
+    pan: Vec2,
+) -> Pos2 {
+    let width = (bounds[2] - bounds[0]).max(0.00001);
+    let height = (bounds[3] - bounds[1]).max(0.00001);
+    let scale = ((rect.width() - 24.0).max(1.0) as f64 / width)
+        .min((rect.height() - 24.0).max(1.0) as f64 / height)
+        * zoom as f64;
+    rect.center()
+        + pan
+        + egui::vec2(
+            ((point[0] - (bounds[0] + bounds[2]) * 0.5) * scale) as f32,
+            (-(point[1] - (bounds[1] + bounds[3]) * 0.5) * scale) as f32,
+        )
+}
+
+/// Shared bounded pan and wheel zoom for Cartesian inspection canvases.
+pub(crate) fn pan_zoom_canvas(
+    ui: &Ui,
+    rect: Rect,
+    response: &Response,
+    zoom: &mut f32,
+    pan: &mut Vec2,
+    max_zoom: f32,
+) {
+    if response.dragged() {
+        *pan += ui.input(|i| i.pointer.delta());
+        *pan = pan.clamp(-rect.size() * 8.0, rect.size() * 8.0);
+    }
+    if response.hovered() {
+        *zoom =
+            (*zoom * (ui.input(|i| i.smooth_scroll_delta.y) * 0.003).exp()).clamp(1.0, max_zoom);
+    }
+}
+
+/// Returns the bounded segment parameter and squared screen distance for canvas hit testing.
+pub(crate) fn segment_hit(pointer: Pos2, from: Pos2, to: Pos2) -> (f32, f32) {
+    let delta = to - from;
+    let t = ((pointer - from).dot(delta) / delta.length_sq().max(0.0001)).clamp(0.0, 1.0);
+    (t, (from + delta * t).distance_sq(pointer))
+}
+
 pub const CONTROL_HEIGHT: f32 = 36.0;
 pub const CONTROL_ICON_SIZE: f32 = 18.0;
 pub const BODY_FONT_SIZE: f32 = 16.0;

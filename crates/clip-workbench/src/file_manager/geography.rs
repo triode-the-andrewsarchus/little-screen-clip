@@ -1,5 +1,6 @@
 //! Offline geographic maps with a linked supplied-elevation profile.
 use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
+use crate::ui_ext::fit_cartesian_point as project;
 use crate::{
     icons::Icon,
     shell::{StudioPanelLayout, StudioShell},
@@ -146,14 +147,7 @@ impl Viewer {
                 egui::vec2(ui.available_width(), map_height),
                 egui::Sense::click_and_drag(),
             );
-            if response.dragged() {
-                self.pan += ui.input(|i| i.pointer.delta());
-                self.pan = self.pan.clamp(-rect.size() * 8.0, rect.size() * 8.0);
-            }
-            if response.hovered() {
-                self.zoom = (self.zoom * (ui.input(|i| i.smooth_scroll_delta.y) * 0.003).exp())
-                    .clamp(1.0, 16.0);
-            }
+            crate::ui_ext::pan_zoom_canvas(ui, rect, &response, &mut self.zoom, &mut self.pan, 16.0);
             let hit = paint_map(
                 ui, rect, &self.document, Some(self.selected), self.zoom, self.pan, colors,
             );
@@ -283,25 +277,6 @@ impl Viewer {
             });
     }
 }
-fn project(
-    rect: egui::Rect,
-    bounds: [f64; 4],
-    point: [f64; 2],
-    zoom: f32,
-    pan: egui::Vec2,
-) -> egui::Pos2 {
-    let width = (bounds[2] - bounds[0]).max(0.00001);
-    let height = (bounds[3] - bounds[1]).max(0.00001);
-    let scale = ((rect.width() - 24.0).max(1.0) as f64 / width)
-        .min((rect.height() - 24.0).max(1.0) as f64 / height)
-        * zoom as f64;
-    rect.center()
-        + pan
-        + egui::vec2(
-            ((point[0] - (bounds[0] + bounds[2]) * 0.5) * scale) as f32,
-            (-(point[1] - (bounds[1] + bounds[3]) * 0.5) * scale) as f32,
-        )
-}
 fn paint_map(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -386,10 +361,7 @@ fn nearest_on_path(
         .min_by(|a, b| a.1.total_cmp(&b.1))?;
     if connected {
         for (point, pair) in positions.windows(2).enumerate() {
-            let delta = pair[1] - pair[0];
-            let t =
-                ((pointer - pair[0]).dot(delta) / delta.length_sq().max(0.0001)).clamp(0.0, 1.0);
-            let distance = (pair[0] + delta * t).distance_sq(pointer);
+            let (t, distance) = crate::ui_ext::segment_hit(pointer, pair[0], pair[1]);
             if distance < best.1 {
                 best = (point + usize::from(t > 0.5), distance);
             }

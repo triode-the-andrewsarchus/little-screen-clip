@@ -43,11 +43,15 @@ impl Entry {
             || self.is_calendar()
             || self.is_database()
             || self.is_geography()
+            || self.is_toolpath()
             || (self.regular_file && super::font_strip::known(&self.path))
     }
 
     pub(super) fn is_subtitles(&self) -> bool {
         self.regular_file && little_clip_core::subtitles::is_subtitle_path(&self.path)
+    }
+    pub(super) fn is_toolpath(&self) -> bool {
+        self.regular_file && super::gcode::known(&self.path)
     }
     pub(super) fn is_geography(&self) -> bool {
         self.regular_file && super::geography::known(&self.path)

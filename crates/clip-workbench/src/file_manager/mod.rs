@@ -16,6 +16,7 @@ mod filesystem;
 mod font_strip;
 pub(crate) mod fuse_binwalk;
 mod gallery;
+mod gcode;
 mod geography;
 mod image_strip;
 mod mail;
@@ -98,6 +99,7 @@ pub(super) enum DocumentPosition {
     CalendarEvent(usize),
     DatabaseTable(usize),
     GeographicFeature(usize),
+    ToolpathLine(usize),
     SubtitleCue(usize),
 }
 
