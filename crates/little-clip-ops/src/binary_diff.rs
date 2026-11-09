@@ -140,6 +140,12 @@ pub struct BinaryDiffResult {
     pub diff_blocks: Vec<BinaryDiffBlock>,
 }
 
+const MAX_BINARY_DIFF_FILE_BYTES: usize = 64 * 1024 * 1024;
+
+fn read_binary_diff_file(path: &Path) -> Option<Vec<u8>> {
+    little_clip_core::kernel_interface::read_content_bounded(path, MAX_BINARY_DIFF_FILE_BYTES).ok()
+}
+
 /// Extracts the raw binary bytes and human-readable label from any ClipItem.
 pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
     match &item.payload {
@@ -147,7 +153,7 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
             let trimmed = s.trim();
             let p = Path::new(trimmed);
             if p.is_file() {
-                if let Ok(bytes) = std::fs::read(p) {
+                if let Some(bytes) = read_binary_diff_file(p) {
                     let label = p
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -161,7 +167,7 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
         ClipPayload::Markdown(s) => (item.title.clone(), s.as_bytes().to_vec()),
         ClipPayload::FileBatch(paths) => {
             if let Some(first) = paths.first() {
-                if let Ok(bytes) = std::fs::read(first) {
+                if let Some(bytes) = read_binary_diff_file(first) {
                     let label = first
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -174,14 +180,14 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
         }
         ClipPayload::Image { bytes, path, .. } => {
             if let Some(path) = path {
-                if let Ok(source_bytes) = std::fs::read(path) {
+                if let Some(source_bytes) = read_binary_diff_file(path) {
                     return (item.title.clone(), source_bytes);
                 }
             }
             (item.title.clone(), bytes.clone())
         }
         ClipPayload::AudioRef { path, .. } => {
-            let bytes = std::fs::read(path).unwrap_or_default();
+            let bytes = read_binary_diff_file(path).unwrap_or_default();
             (item.title.clone(), bytes)
         }
         ClipPayload::Color { hex, r, g, b } => {
@@ -191,7 +197,7 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
         ClipPayload::Url(url) => (item.title.clone(), url.as_str().as_bytes().to_vec()),
         ClipPayload::MultiImage { paths, .. } => {
             if let Some(first) = paths.first() {
-                if let Ok(bytes) = std::fs::read(first) {
+                if let Some(bytes) = read_binary_diff_file(first) {
                     let label = first
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -203,7 +209,7 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
             (item.title.clone(), Vec::new())
         }
         ClipPayload::Animation { path, .. } => {
-            let bytes = std::fs::read(path).unwrap_or_default();
+            let bytes = read_binary_diff_file(path).unwrap_or_default();
             (item.title.clone(), bytes)
         }
         ClipPayload::Directory(p) => (item.title.clone(), p.to_string_lossy().as_bytes().to_vec()),
@@ -216,8 +222,8 @@ pub fn resolve_two_files_from_single_item(
 ) -> Option<((String, Vec<u8>), (String, Vec<u8>))> {
     match &item.payload {
         ClipPayload::FileBatch(paths) if paths.len() >= 2 => {
-            let b1 = std::fs::read(&paths[0]).ok()?;
-            let b2 = std::fs::read(&paths[1]).ok()?;
+            let b1 = read_binary_diff_file(&paths[0])?;
+            let b2 = read_binary_diff_file(&paths[1])?;
             let l1 = paths[0]
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -231,8 +237,8 @@ pub fn resolve_two_files_from_single_item(
             Some(((l1, b1), (l2, b2)))
         }
         ClipPayload::MultiImage { paths, .. } if paths.len() >= 2 => {
-            let b1 = std::fs::read(&paths[0]).ok()?;
-            let b2 = std::fs::read(&paths[1]).ok()?;
+            let b1 = read_binary_diff_file(&paths[0])?;
+            let b2 = read_binary_diff_file(&paths[1])?;
             let l1 = paths[0]
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -255,8 +261,8 @@ pub fn resolve_two_files_from_single_item(
                 let p1 = Path::new(lines[0]);
                 let p2 = Path::new(lines[1]);
                 if p1.is_file() && p2.is_file() {
-                    let b1 = std::fs::read(p1).ok()?;
-                    let b2 = std::fs::read(p2).ok()?;
+                    let b1 = read_binary_diff_file(p1)?;
+                    let b2 = read_binary_diff_file(p2)?;
                     let l1 = p1
                         .file_name()
                         .and_then(|n| n.to_str())

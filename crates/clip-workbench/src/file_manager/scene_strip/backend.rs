@@ -102,6 +102,7 @@ fn load_mesh(
     palette: &AppPalette,
     token: &AtomicBool,
 ) -> Result<(Renderer, Metadata), String> {
+    little_clip_core::kernel_interface::require_content(path).map_err(|error| error.to_string())?;
     if std::fs::metadata(path)
         .map_err(|error| error.to_string())?
         .len()

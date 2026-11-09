@@ -4,7 +4,8 @@
 //! tabular clipboard detection that guards against prose punctuation false-positives, and workbook
 //! loading for Excel / OpenDocument formats (`.xlsx`, `.xls`, `.xlsb`, `.ods`) using `calamine`.
 
-use calamine::{Reader, open_workbook_auto};
+use calamine::{Reader, open_workbook_auto_from_rs};
+use std::io::Cursor;
 use std::path::Path;
 
 /// A single tabular sheet containing rows and columns of cell string values.
@@ -232,7 +233,11 @@ pub fn load_spreadsheet(path: &Path) -> Result<SpreadsheetData, String> {
         .unwrap_or_else(|| "Spreadsheet".to_string());
 
     if ext == "csv" || ext == "tsv" {
-        let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let content = little_clip_core::kernel_interface::read_content_to_string_bounded(
+            path,
+            32 * 1024 * 1024,
+        )
+        .map_err(|e| e.to_string())?;
         let rows = parse_csv_string(&content);
         let sheet = SpreadsheetSheet::new("Sheet1".to_string(), rows);
         return Ok(SpreadsheetData {
@@ -242,8 +247,11 @@ pub fn load_spreadsheet(path: &Path) -> Result<SpreadsheetData, String> {
     }
 
     if ext == "xlsx" || ext == "xls" || ext == "xlsb" || ext == "ods" {
-        let mut workbook =
-            open_workbook_auto(path).map_err(|e| format!("Failed to open workbook: {}", e))?;
+        let bytes =
+            little_clip_core::kernel_interface::read_content_bounded(path, 64 * 1024 * 1024)
+                .map_err(|e| format!("Failed to read workbook: {}", e))?;
+        let mut workbook = open_workbook_auto_from_rs(Cursor::new(bytes))
+            .map_err(|e| format!("Failed to open workbook: {}", e))?;
         let sheet_names = workbook.sheet_names();
         let mut sheets = Vec::new();
 
