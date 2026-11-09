@@ -1,0 +1,11 @@
+[package]
+name = "clip-file-manager"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+clip-workbench = { path = "../clip-workbench" }
+eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow", "wayland"] }
+tracing-subscriber.workspace = true

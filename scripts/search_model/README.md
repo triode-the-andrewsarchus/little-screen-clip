@@ -95,7 +95,7 @@ Use `--files 125000` for 187,500 vectors, exceeding the normalized-vector cache 
 For a separate end-to-end scale probe, build both release artifacts and run:
 
 ```sh
-cargo build --release -p clip-workbench --bin clip-file-manager
+cargo build --release -p clip-file-manager
 cargo test --release -p clip-workbench --lib --no-run
 python3 scripts/file_manager_scale_acceptance.py --output-dir NEW_DIRECTORY \
   --appearance dark --files 100000 --samples 21

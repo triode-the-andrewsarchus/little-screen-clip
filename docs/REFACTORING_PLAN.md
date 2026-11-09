@@ -44,7 +44,7 @@ This document tracks the step-by-step refactoring plan for the `little-screen-cl
   - Move `midi.rs`, `model3d.rs`, `network_preview.rs`, `spreadsheet.rs`, `timestamps.rs`, and `units.rs` into `crates/little-clip-core/src/presentation/`.
   - Remove `extern crate self as little_clip_core;` and `#[path = "../../../little-clip-ops/src/..."]` from `crates/little-clip-core/src/lib.rs`, and keep `little-clip-ops` re-exports intact.
 
-- [ ] **Task 7: Decouple `clip-workbench` binary/library targets and extract `crates/clip-file-manager`**
+- [x] **Task 7: Decouple `clip-workbench` binary/library targets and extract `crates/clip-file-manager`**
   - Make `crates/clip-workbench/src/main.rs` a thin binary entrypoint that calls into `clip_workbench` instead of re-declaring `mod` for all studio modules (eliminating double compilation and false-positive dead-code warnings).
   - Extract `file_manager` and `src/bin/clip-file-manager.rs` into a dedicated `crates/clip-file-manager` workspace crate depending on `clip-workbench` and `little-clip-*`.
 
