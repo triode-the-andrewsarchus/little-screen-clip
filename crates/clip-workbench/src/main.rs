@@ -509,8 +509,11 @@ impl ImageLoadSource {
                 })
             }
             Self::ItemFile { path, mime, title } => {
-                let bytes = std::fs::read(&path)
-                    .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
+                let bytes = little_clip_core::kernel_interface::read_content_bounded(
+                    &path,
+                    128 * 1024 * 1024,
+                )
+                .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
                 let data = DecodedImageData::from_bytes(bytes, mime, Some(path.clone()))?;
                 Ok(ImageLoadResult {
                     data,

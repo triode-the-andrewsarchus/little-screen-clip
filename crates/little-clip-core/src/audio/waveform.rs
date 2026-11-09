@@ -402,7 +402,7 @@ pub fn compute_plain_waveform(
         (false, 0, meta.duration_ms)
     };
 
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::kernel_interface::open_content(path, true).ok()?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -559,7 +559,7 @@ pub fn compute_full_waveform(path: &Path, num_bars: usize) -> Option<AudioWavefo
         return None;
     }
 
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::kernel_interface::open_content(path, true).ok()?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();

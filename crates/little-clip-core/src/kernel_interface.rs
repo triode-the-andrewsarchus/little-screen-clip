@@ -320,6 +320,21 @@ pub fn read_content(path: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+pub fn read_content_bounded(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+    let file = open_content(path, true)?;
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(io::Error::other("Content source exceeds its read limit"));
+    }
+    Ok(bytes)
+}
+
+pub fn read_content_to_string_bounded(path: &Path, limit: usize) -> io::Result<String> {
+    let bytes = read_content_bounded(path, limit)?;
+    String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

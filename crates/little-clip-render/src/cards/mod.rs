@@ -242,7 +242,12 @@ impl ScreenRenderer {
                     let trimmed = text.trim();
                     let p = Path::new(trimmed);
                     if p.is_file() && little_clip_core::syntax::is_code_file(p) {
-                        if let Ok(file_content) = std::fs::read_to_string(p) {
+                        if let Ok(file_content) =
+                            little_clip_core::kernel_interface::read_content_to_string_bounded(
+                                p,
+                                1024 * 1024,
+                            )
+                        {
                             let clean_content = file_content
                                 .trim_start_matches(is_zero_width_or_bom)
                                 .to_string();
@@ -491,7 +496,12 @@ impl ScreenRenderer {
                         }
                     }
                     if p.is_file() && little_clip_core::syntax::is_code_file(p) {
-                        if let Ok(file_content) = std::fs::read_to_string(p) {
+                        if let Ok(file_content) =
+                            little_clip_core::kernel_interface::read_content_to_string_bounded(
+                                p,
+                                1024 * 1024,
+                            )
+                        {
                             let clean_content = file_content
                                 .trim_start_matches(is_zero_width_or_bom)
                                 .to_string();

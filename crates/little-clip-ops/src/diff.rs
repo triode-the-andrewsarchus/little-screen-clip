@@ -281,12 +281,15 @@ pub fn guess_image_mime(p: &Path) -> String {
 
 /// Constructs a `DiffTarget` from a filesystem path if the file exists.
 pub fn resolve_diff_target_from_path(p: &Path) -> Option<DiffTarget> {
+    const MAX_DIFF_FILE_BYTES: usize = 64 * 1024 * 1024;
     if !p.is_file() {
         return None;
     }
 
     if is_image_path(p) {
-        if let Ok(bytes) = std::fs::read(p) {
+        if let Ok(bytes) =
+            little_clip_core::kernel_interface::read_content_bounded(p, MAX_DIFF_FILE_BYTES)
+        {
             let mime = guess_image_mime(p);
             let (width, height) =
                 little_clip_core::item::read_image_dimensions_with_mime(&bytes, Some(&mime))
@@ -306,7 +309,9 @@ pub fn resolve_diff_target_from_path(p: &Path) -> Option<DiffTarget> {
         }
     }
 
-    if let Ok(content) = std::fs::read_to_string(p) {
+    if let Ok(content) =
+        little_clip_core::kernel_interface::read_content_to_string_bounded(p, MAX_DIFF_FILE_BYTES)
+    {
         let label = p
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -378,7 +383,10 @@ pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
             let actual_path = path.clone();
             let actual_bytes = path
                 .as_ref()
-                .and_then(|path| std::fs::read(path).ok())
+                .and_then(|path| {
+                    little_clip_core::kernel_interface::read_content_bounded(path, 64 * 1024 * 1024)
+                        .ok()
+                })
                 .unwrap_or_else(|| bytes.clone());
 
             let (actual_w, actual_h) = if *width > 0 && *height > 0 {
@@ -415,40 +423,8 @@ pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
             let trimmed = s.trim();
             let path_candidate = Path::new(trimmed);
             if path_candidate.is_file() {
-                if is_image_path(path_candidate) {
-                    if let Ok(bytes) = std::fs::read(path_candidate) {
-                        let mime = guess_image_mime(path_candidate);
-                        let (width, height) =
-                            little_clip_core::item::read_image_dimensions_with_mime(
-                                &bytes,
-                                Some(&mime),
-                            )
-                            .unwrap_or((0, 0));
-                        let label = path_candidate
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "Image File".to_string());
-                        return Some(DiffTarget::Image {
-                            label,
-                            path: Some(path_candidate.to_path_buf()),
-                            bytes,
-                            width,
-                            height,
-                            mime,
-                        });
-                    }
-                }
-
-                if let Ok(content) = std::fs::read_to_string(path_candidate) {
-                    let label = path_candidate
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "File".to_string());
-                    return Some(DiffTarget::File {
-                        label,
-                        path: path_candidate.to_path_buf(),
-                        content,
-                    });
+                if let Some(target) = resolve_diff_target_from_path(path_candidate) {
+                    return Some(target);
                 }
             }
 

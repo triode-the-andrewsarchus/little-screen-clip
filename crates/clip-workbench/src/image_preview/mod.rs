@@ -276,10 +276,8 @@ pub struct DecodedImageData {
 
 impl DecodedImageData {
     pub fn from_path(path: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(&path)
-            .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
-        let mime = little_clip_core::item::guess_image_mime(&path);
-        Self::from_bytes(bytes, mime, Some(path.to_path_buf()))
+        Self::from_path_bounded(path, 128 * 1024 * 1024)
+            .map_err(|error| format!("Failed to read file {}: {error}", path.display()))
     }
 
     /// Reads a regular image file with a bounded encoded-byte allocation.

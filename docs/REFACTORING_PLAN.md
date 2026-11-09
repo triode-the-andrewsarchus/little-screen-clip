@@ -37,7 +37,7 @@ This document tracks the step-by-step refactoring plan for the `little-screen-cl
   - Add `little_clip_core::process::resolve_bundled_script(script_name: &str) -> PathBuf` that resolves scripts relative to the executable directory, ancestor repo root, or `CARGO_MANIFEST_DIR` before falling back to relative `scripts/<name>`.
   - Update `image_preview/tools/{bg_remove,depth,inpaint}.rs` and `little-clip-core` config resolvers to use `resolve_bundled_script`, and remove dead `ImageConfig::resolve_*_cmd` methods.
 
-- [ ] **Task 5: Route remaining unguarded content readers through `kernel_interface::open_content`**
+- [x] **Task 5: Route remaining unguarded content readers through `kernel_interface::open_content`**
   - Route `audio/waveform.rs::compute_plain_waveform`, `little-clip-ops/src/{lib.rs,diff.rs,binary_diff.rs,midi.rs,spreadsheet.rs}`, `little-clip-render/src/cards/mod.rs`, `clip-workbench/src/main.rs::ImageLoadSource::ItemFile`, and `file_manager/scene_strip/backend.rs` through `kernel_interface::open_content` / bounded readers so special files (FIFOs, device nodes, pseudo-filesystems) cannot block or enter generic decoders.
 
 - [ ] **Task 6: Eliminate cross-crate `#[path]` compilation between `little-clip-core` and `little-clip-ops`**
