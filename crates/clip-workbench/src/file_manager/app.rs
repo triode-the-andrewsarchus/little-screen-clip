@@ -57,10 +57,12 @@ impl DropDestination {
 struct FileManagerApp {
     browser: FileManager,
     viewers: super::viewers::Viewers,
+    external: super::external::Launcher,
     palette: AppPalette,
     native: Option<super::native_drag::NativeDrag>,
     drop_destinations: std::collections::BTreeMap<u64, DropDestination>,
     pad_studio: Option<super::constellation::pad_interaction::StudioRequest>,
+    closing: bool,
 }
 
 impl FileManagerApp {
@@ -75,6 +77,12 @@ impl FileManagerApp {
         browser
             .constellation
             .configure_pad_keys(&config.file_manager.constellation_pad_keys);
+        browser.search.settings = config.file_manager.search.clone();
+        if !browser.search.settings.roots.is_empty()
+            && let Err(error) = browser.search_service()
+        {
+            browser.search.error = Some(error);
+        }
         browser.bookmarks = super::bookmarks::Bookmarks::for_user(&browser.home);
         browser.music_threshold = config.file_manager.music_threshold_percent.clamp(1, 100);
         browser
@@ -98,6 +106,8 @@ impl FileManagerApp {
             browser,
             viewers: super::viewers::Viewers::new(config),
             pad_studio: None,
+            closing: false,
+            external: Default::default(),
             palette,
             native: super::native_drag::NativeDrag::new(cc),
             drop_destinations: Default::default(),
@@ -107,6 +117,14 @@ impl FileManagerApp {
 
 impl FileManagerApp {
     fn edit_menu(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .add_enabled(!self.viewers.active(), egui::Button::new("Find [Ctrl+F]"))
+            .clicked()
+        {
+            self.browser.search.open(self.browser.search.draft.clone());
+            ui.close_menu();
+        }
+        ui.separator();
         let folders = self
             .browser
             .selected_bookmark_folders()
@@ -162,7 +180,7 @@ impl FileManagerApp {
                         self.drop_destinations.insert(token, destination);
                     }
                 }
-                Event::Files(token, paths, moving) => {
+                Event::Files(token, paths, moving, guards) => {
                     let accepted = match self.drop_destinations.remove(&token) {
                         Some(DropDestination::Pad(index, append)) if !moving && pads_visible => {
                             self.browser.constellation.drop_on_pad(
@@ -177,15 +195,15 @@ impl FileManagerApp {
                         }
                         Some(DropDestination::Directory(destination)) => self
                             .browser
-                            .queue_native_drop(token, paths, destination, moving),
+                            .queue_native_drop(token, paths, destination, moving, guards),
                         _ => false,
                     };
                     if !accepted {
                         native.finish(token, false);
                     }
                 }
-                Event::Remove(expected, snapshot) => {
-                    self.browser.native_move_cleanup(expected, snapshot)
+                Event::Remove(expected, snapshot, guards) => {
+                    self.browser.native_move_cleanup(expected, snapshot, guards)
                 }
                 Event::Failed(token, text) => {
                     self.drop_destinations.remove(&token);
@@ -229,22 +247,35 @@ impl FileManagerApp {
         let Some(payload) = egui::DragAndDrop::payload::<super::transfers::FileDrag>(ctx) else {
             return;
         };
+        let guards = match payload.context.guards_for(&payload.paths) {
+            Ok(guards) => guards,
+            Err(error) => {
+                self.browser.error = Some(error);
+                egui::DragAndDrop::clear_payload(ctx);
+                return;
+            }
+        };
         let identities = payload
             .paths
             .iter()
             .map(|path| {
-                let identity = self
-                    .browser
-                    .directory
-                    .as_ref()
-                    .and_then(|dir| dir.entries.iter().find(|e| &e.path == path))
-                    .and_then(|e| e.identity);
+                let identity = guards
+                    .get(path)
+                    .map(super::search::SourceGuard::expected_identity)
+                    .unwrap_or_else(|| {
+                        self.browser
+                            .directory
+                            .as_ref()
+                            .and_then(|dir| dir.entries.iter().find(|e| &e.path == path))
+                            .and_then(|e| e.identity)
+                    });
                 (path.clone(), identity)
             })
             .collect();
         match native.start(
             identities,
             payload.copy_only || ctx.input(|i| i.modifiers.ctrl),
+            guards,
         ) {
             Ok(true) => {
                 egui::DragAndDrop::clear_payload(ctx);
@@ -261,6 +292,28 @@ impl FileManagerApp {
     fn follow_file_renames(&mut self) {
         for (source, destination) in self.viewers.take_file_renames() {
             self.browser.follow_rename(&source, &destination);
+        }
+    }
+    fn tick_external(&mut self, ctx: &egui::Context) {
+        let request = self.viewers.external_request.take().or_else(|| {
+            self.browser
+                .external_file
+                .take()
+                .map(|path| super::external::Request {
+                    search: self.browser.search_source_guard(&path),
+                    path,
+                    saved: None,
+                })
+        });
+        let failure = request
+            .and_then(|request| self.external.start(request).err())
+            .or_else(|| self.external.poll(ctx));
+        if let Some(error) = failure {
+            if self.viewers.active() {
+                self.viewers.external_error(error);
+            } else {
+                self.browser.error = Some(error);
+            }
         }
     }
     fn main_content(&mut self, ctx: &egui::Context) {
@@ -292,7 +345,8 @@ impl FileManagerApp {
                         .open_pad_audio(request.path.clone(), request.trim);
                     self.pad_studio = Some(request);
                 }
-                if let Some(path) = self.browser.open_file.take() {
+                if let Some(path) = self.browser.take_available_open_file() {
+                    self.viewers.source_guard = self.browser.search_source_guard(&path);
                     let pdf_start = self
                         .browser
                         .pdf_start
@@ -335,7 +389,8 @@ impl FileManagerApp {
                         self.viewers.open_video_at(path, seconds);
                     } else {
                         let collection = self.browser.photo_collection(&path);
-                        self.viewers.open_collection(path, collection);
+                        let guards = self.browser.search_source_guards(&collection);
+                        self.viewers.open_collection(path, collection, guards);
                     }
                 }
             }
@@ -373,7 +428,8 @@ impl FileManagerApp {
                 return false;
             }
             if let Some(path) = self.browser.constellation.space_audition(modifiers.shift) {
-                self.browser.music.play(&path);
+                let guard = self.browser.search_source_guard(&path);
+                self.browser.music.play(&path, guard);
             }
             return true;
         }
@@ -386,7 +442,8 @@ impl FileManagerApp {
             && let Some(range) = self.browser.music_selection.clone()
         {
             self.browser.midi.stop();
-            self.browser.music.play_range(range);
+            let guard = self.browser.search_source_guard(&range.path);
+            self.browser.music.play_range(range, guard);
             return true;
         }
         false
@@ -416,7 +473,10 @@ impl FileManagerApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
-        if self.browser.filesystem_busy()
+        // Search maintenance defers through Service::allow_close below so an
+        // accepted close completes after its write, rather than being discarded.
+        if self.browser.edit_busy()
+            || self.browser.transfers.busy()
             || self.browser.constellation.writing_pack()
             || self.browser.bookmarks.busy()
             || self.browser.music.copying()
@@ -436,7 +496,22 @@ impl FileManagerApp {
                 return;
             }
             self.browser.stop_previews();
+            self.closing = true;
+            self.finish_app_close(ctx);
+        }
+    }
+    fn finish_app_close(&mut self, ctx: &egui::Context) {
+        let ready = self
+            .browser
+            .search
+            .service
+            .as_mut()
+            .is_none_or(|service| service.allow_close());
+        if ready {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after(std::time::Duration::from_millis(10));
         }
     }
 }
@@ -448,6 +523,23 @@ impl eframe::App for FileManagerApp {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.closing {
+            central_panel(ctx, |ui| {
+                ui.spinner();
+                ui.label("Closing...");
+            });
+            self.finish_app_close(ctx);
+            return;
+        }
+        self.tick_external(ctx);
+        self.browser
+            .search
+            .images
+            .set_suspended(self.viewers.active());
+        self.browser
+            .search
+            .answers
+            .set_suspended(self.viewers.active());
         self.preview_keys(ctx);
         self.browser.retire_constellation_audition();
         if self.browser.view == super::BrowserView::Constellation {
@@ -554,6 +646,10 @@ impl eframe::App for FileManagerApp {
                             });
                         } else if title == "Edit" {
                             self.edit_menu(ui);
+                            if !self.viewers.active() && ui.button("Search settings…").clicked() {
+                                self.browser.open_search_settings();
+                                ui.close_menu();
+                            }
                         } else if title == "File" {
                             self.constellation_index_menu(ui);
                         } else {

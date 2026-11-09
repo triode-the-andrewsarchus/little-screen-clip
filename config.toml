@@ -91,6 +91,7 @@ rolling_capture_enabled = true
 # If left commented or empty, automatically falls back to $VISUAL, $EDITOR, or system default "xdg-open".
 # editor = "code"
 
+appearance = "dark"
 [image]
 # Preferred raster image editor for escape hatch (e.g. "krita", "gimp").
 external_editor = "krita"
@@ -162,3 +163,7 @@ photo_recursive_limit = 1000000
 photo_recursive_depth = 64
 # Similarity scan and indexing timeout in seconds; 0 disables it (default: 3600).
 photo_recursive_timeout_seconds = 0
+audio_spectrum = false
+
+[file_manager.search]
+roots = ["/home/vega/Documents/type_testing", "/home/vega/OpGuidesHugoSrc/content/Music"]

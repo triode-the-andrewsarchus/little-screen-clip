@@ -35,6 +35,7 @@ impl Fixture {
             sources,
             expected: None,
             native_drop: None,
+            search_guards: HashMap::new(),
         }
         .execute(&Control::default())
     }
@@ -144,7 +145,8 @@ fn conflicts_skip_replace_and_alternate_name_without_losing_source() {
             &fixture.destination,
             false,
             &control,
-            &mut Some(Decision::Skip)
+            &mut Some(Decision::Skip),
+            &Default::default(),
         )
         .unwrap()
         .is_none()
@@ -156,7 +158,8 @@ fn conflicts_skip_replace_and_alternate_name_without_losing_source() {
             &fixture.destination,
             false,
             &control,
-            &mut Some(Decision::Replace)
+            &mut Some(Decision::Replace),
+            &Default::default(),
         )
         .unwrap(),
         Some(target.clone())
@@ -164,10 +167,106 @@ fn conflicts_skip_replace_and_alternate_name_without_losing_source() {
     assert_eq!(fs::read(&target).unwrap(), b"new");
     control.progress.lock().unwrap().decision = Some((Decision::Name("another".into()), false));
     assert_eq!(
-        copy::transfer(&source, &fixture.destination, false, &control, &mut None).unwrap(),
+        copy::transfer(
+            &source,
+            &fixture.destination,
+            false,
+            &control,
+            &mut None,
+            &Default::default()
+        )
+        .unwrap(),
         Some(fixture.destination.join("another"))
     );
     assert_eq!(fs::read(&source).unwrap(), b"new");
+}
+
+#[test]
+fn replacing_move_removes_the_quarantined_regular_file_source() {
+    let fixture = Fixture::new();
+    let source = fixture.file("same", b"new content");
+    let target = fixture.destination.join("same");
+    fs::write(&target, b"old content").unwrap();
+    let result = copy::transfer(
+        &source,
+        &fixture.destination,
+        true,
+        &Control::default(),
+        &mut Some(Decision::Replace),
+        &Default::default(),
+    );
+    assert_eq!(result.unwrap(), Some(target.clone()));
+    assert!(!source.exists());
+    assert_eq!(fs::read(target).unwrap(), b"new content");
+    assert_eq!(fs::read_dir(&fixture.source).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(&fixture.destination).unwrap().count(), 1);
+}
+
+#[test]
+fn source_context_is_rechecked_after_conflict_before_destination_installation() {
+    use std::os::unix::fs::MetadataExt;
+    let fixture = Fixture::new();
+    let source = fixture.file("same", b"original selected bytes");
+    let target = fixture.destination.join("same");
+    fs::write(&target, b"old destination").unwrap();
+    let expected_leaf = super::super::filesystem::identity(&fs::symlink_metadata(&source).unwrap());
+    let before = fs::symlink_metadata(&fixture.source).unwrap();
+    let expected_root = (before.dev(), before.ino());
+    let root = fixture.source.clone();
+    let check = crate::file_source::ReadCheck::new(move |_| {
+        let current = fs::symlink_metadata(&root).map_err(|e| e.to_string())?;
+        if current.is_dir() && (current.dev(), current.ino()) == expected_root {
+            Ok(())
+        } else {
+            Err("original source root changed".into())
+        }
+    });
+    let control = Arc::new(Control::default());
+    let worker_control = control.clone();
+    let directory = fixture.destination.clone();
+    let worker_source = source.clone();
+    let worker = std::thread::spawn(move || {
+        copy::transfer(
+            &worker_source,
+            &directory,
+            true,
+            &worker_control,
+            &mut None,
+            &check,
+        )
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while control.progress.lock().unwrap().conflict.is_none() {
+        if Instant::now() >= deadline {
+            control.cancelled.store(true, Ordering::Relaxed);
+            control.decision_ready.notify_all();
+            let _ = worker.join();
+            panic!("copy worker never requested a conflict choice");
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let held = fixture._root.path().join("original");
+    fs::rename(&fixture.source, &held).unwrap();
+    symlink(&held, &fixture.source).unwrap();
+    assert_eq!(
+        super::super::filesystem::identity(&fs::symlink_metadata(&source).unwrap()),
+        expected_leaf
+    );
+    control.progress.lock().unwrap().decision = Some((Decision::Replace, false));
+    control.decision_ready.notify_all();
+    assert!(
+        worker
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .contains("source root changed")
+    );
+    assert_eq!(fs::read(&target).unwrap(), b"old destination");
+    assert_eq!(
+        fs::read(held.join("same")).unwrap(),
+        b"original selected bytes"
+    );
+    assert_eq!(fs::read_dir(&fixture.destination).unwrap().count(), 1);
 }
 
 #[test]
@@ -182,6 +281,7 @@ fn broken_destination_link_is_a_conflict_and_replace_does_not_follow_it() {
         false,
         &Control::default(),
         &mut Some(Decision::Replace),
+        &Default::default(),
     )
     .unwrap();
     assert_eq!(fs::read(fixture.destination.join("same")).unwrap(), b"new");
@@ -222,6 +322,7 @@ fn cancelling_a_staged_copy_keeps_source_and_never_installs_destination() {
             false,
             &worker_control,
             &mut None,
+            &Default::default(),
         )
     });
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -249,6 +350,7 @@ fn cancelled_batch_counts_unprocessed_entries() {
         sources: vec![source],
         expected: None,
         native_drop: None,
+        search_guards: HashMap::new(),
     }
     .execute(&control);
     assert!(report.cancelled);
@@ -329,6 +431,7 @@ fn desktop_move_cleanup_refuses_changed_descendants_and_accepts_already_moved_so
         sources: vec![folder.clone()],
         expected: Some(BTreeMap::from([(folder.clone(), Some(root_identity))])),
         native_drop: None,
+        search_guards: HashMap::new(),
     };
     fs::write(&file, b"new edits during drop").unwrap();
     let report = batch.execute(&Control::default());
@@ -349,6 +452,7 @@ fn desktop_receiver_receipt_records_partial_failure_without_authorizing_source_r
         sources: vec![source, fixture.source.join("missing")],
         expected: None,
         native_drop: Some(42),
+        search_guards: HashMap::new(),
     };
     let report = batch.execute(&Control::default());
     assert_eq!(report.native_drop, Some(42));
@@ -363,6 +467,7 @@ fn confirmed_deletion(source: &Path) -> Batch {
         sources: vec![source.into()],
         expected: Some(BTreeMap::from([(source.into(), Some(expected))])),
         native_drop: None,
+        search_guards: HashMap::new(),
     }
 }
 
@@ -421,6 +526,7 @@ fn unadmitted_copy(source: PathBuf, destination: PathBuf) -> Running {
             sources: vec![source],
             expected: None,
             native_drop: None,
+            search_guards: HashMap::new(),
         },
         control: Arc::new(Control::default()),
         receiver: None,

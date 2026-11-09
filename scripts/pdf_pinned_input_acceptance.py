@@ -23,6 +23,7 @@ def exercise(session,root):
     session.observe('02-mixed-folder',['document.pdf','notes.txt'])
     path=session.output/'03-page-raster.png'
     def painted():
+        path.unlink(missing_ok=True)
         with preserve_file_clipboard(session.env):private.screenshot(session.niri,session.env,path)
         with Image.open(path) as image:
             # The page raster is white in the first strip body, distinct from dark chrome.

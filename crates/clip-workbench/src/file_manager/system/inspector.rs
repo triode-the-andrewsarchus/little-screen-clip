@@ -389,6 +389,7 @@ impl Inspector {
                     response.dnd_set_drag_payload(crate::file_manager::transfers::FileDrag {
                         paths: vec![relation.target.clone()],
                         copy_only: true,
+                        context: Default::default(),
                     });
                 }
                 if response.clicked() && plain {

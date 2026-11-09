@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "purpose": "Frozen independent video and controlled long-event additions. Human frame inspection and existing ESC-50 labels precede inference. No threshold calibration on these cases. Composites are controlled stress cases, not independent natural long recordings.",
+  "sources": [
+    {
+      "name": "Fireworks_in_summer.webm",
+      "bytes": 9973519,
+      "sha256": "5c0e6646b55b205b2a5fc53b141a2063bbda79fa760d1558fa33414eab4cc154",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/a/a5/Fireworks_in_summer.webm",
+      "page": "https://commons.wikimedia.org/wiki/File%3AFireworks_in_summer.webm",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "artist": "Joyful spherical creature"
+    },
+    {
+      "name": "Small_waterfall.webm",
+      "bytes": 18429839,
+      "sha256": "5284b829ee6d1f52eefece0582a3068c0fb2b3f78c0e05590fd1d4983596a091",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/b/b5/Small_waterfall.webm",
+      "page": "https://commons.wikimedia.org/wiki/File%3ASmall_waterfall.webm",
+      "license": "CC BY 3.0",
+      "license_url": "https://creativecommons.org/licenses/by/3.0",
+      "artist": "https://www.youtube.com/user/Editor"
+    },
+    {
+      "name": "Steam_train_at_station.webm",
+      "bytes": 16730451,
+      "sha256": "ee3021a0cbff77357a5f7e541c92a5d29d25fb29239944d55137cc546c0eae8a",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/e/ee/Steam_train_at_station.webm",
+      "page": "https://commons.wikimedia.org/wiki/File%3ASteam_train_at_station.webm",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "artist": "Petar Milo\u0161evi\u0107"
+    }
+  ],
+  "positives": [
+    {
+      "id": "media-video-01",
+      "file": "movie_002.mp4",
+      "kind": "video",
+      "query": "Steam drifting around the large wheels and connecting rods of an old locomotive",
+      "split": "held-out"
+    },
+    {
+      "id": "media-video-02",
+      "file": "movie_002.mp4",
+      "kind": "video",
+      "query": "Black and white footage of a steam train beside a railway platform",
+      "split": "held-out"
+    },
+    {
+      "id": "media-video-03",
+      "file": "movie_003.mp4",
+      "kind": "video",
+      "query": "Water cascading down rocks amid green and red leaves",
+      "split": "held-out"
+    },
+    {
+      "id": "media-video-04",
+      "file": "movie_003.mp4",
+      "kind": "video",
+      "query": "A garden waterfall surrounded by colorful foliage",
+      "split": "held-out"
+    },
+    {
+      "id": "media-video-05",
+      "file": "movie_004.mp4",
+      "kind": "video",
+      "query": "Bright fireworks exploding in a dark night sky",
+      "split": "held-out"
+    },
+    {
+      "id": "media-video-06",
+      "file": "movie_004.mp4",
+      "kind": "video",
+      "query": "Colorful pyrotechnic bursts above silhouetted trees",
+      "split": "held-out"
+    },
+    {
+      "id": "media-long-video-01",
+      "file": "movie_005.mp4",
+      "kind": "video",
+      "query": "Small cascades flowing between rocks surrounded by red leaves",
+      "split": "held-out",
+      "expected_time_range": [
+        90,
+        100
+      ]
+    },
+    {
+      "id": "media-long-video-02",
+      "file": "movie_006.mp4",
+      "kind": "video",
+      "query": "White and pink fireworks lighting up the night sky",
+      "split": "held-out",
+      "expected_time_range": [
+        60,
+        70
+      ]
+    },
+    {
+      "id": "media-long-audio-01",
+      "file": "sound_012.wav",
+      "kind": "audio",
+      "query": "A dog barking during an otherwise rainy recording",
+      "split": "held-out",
+      "expected_audio_overlap": [
+        65,
+        75
+      ]
+    },
+    {
+      "id": "media-long-audio-02",
+      "file": "sound_013.wav",
+      "kind": "audio",
+      "query": "A car horn briefly interrupts steady rainfall",
+      "split": "held-out",
+      "expected_audio_overlap": [
+        82,
+        92
+      ]
+    }
+  ],
+  "recipes": {
+    "movie_002.mp4": "Steam train; full clip, metadata removed, 384x216 padded, 2 fps; audio retained when present",
+    "movie_003.mp4": "Waterfall; same normalization",
+    "movie_004.mp4": "Fireworks; same normalization",
+    "movie_005.mp4": "Silent 120s composite: train 0..90s, waterfall 90..100s, train 100..120s",
+    "movie_006.mp4": "Silent 120s composite: waterfall 0..60s, fireworks 60..70s, waterfall 70..120s",
+    "movie_007.mp4": "Silent 180s loop of train, no target event; segment-count distractor",
+    "sound_012.wav": "100s rain at gain 0.3; replace 65..75s with 10s loop of existing labeled dog bark",
+    "sound_013.wav": "100s rain at gain 0.3; replace 82..92s with 10s loop of existing labeled car horn"
+  }
+}

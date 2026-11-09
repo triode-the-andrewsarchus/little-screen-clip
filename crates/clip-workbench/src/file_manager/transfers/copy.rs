@@ -15,6 +15,7 @@ pub(super) fn transfer(
     moving: bool,
     control: &Control,
     policy: &mut Option<Decision>,
+    source_check: &crate::file_source::ReadCheck,
 ) -> Result<Option<PathBuf>, String> {
     let parent = little_clip_core::kernel_interface::pin_content_directory(directory)
         .map_err(|e| e.to_string())?;
@@ -31,6 +32,7 @@ pub(super) fn transfer(
         return Err("Source and destination are identical; choose another name".into());
     }
     control.check()?;
+    source_check.validate(&control.cancelled)?;
     if identity(&fs::symlink_metadata(&source).map_err(|e| e.to_string())?) != expected {
         return Err("Source changed while choosing a destination".into());
     }
@@ -47,6 +49,7 @@ pub(super) fn transfer(
         moving,
         replace,
         control,
+        source_check,
     )?;
     Ok(Some(
         fs::read_link(&anchor)
@@ -77,7 +80,9 @@ fn install_transfer(
     moving: bool,
     replace: bool,
     control: &Control,
+    source_check: &crate::file_source::ReadCheck,
 ) -> Result<(), String> {
+    source_check.validate(&control.cancelled)?;
     if moving && !replace {
         match rename_noreplace(source, target) {
             Ok(()) => return Ok(()),
@@ -96,8 +101,15 @@ fn install_transfer(
     let identities = copy_tree(source, &staged, control)?;
     verify_sources(&identities, control)?;
     control.check()?;
+    source_check.validate(&control.cancelled)?;
     install(&staged, target, replace, control)?;
     if moving {
+        source_check.validate(&control.cancelled).map_err(|error| {
+            format!(
+                "Destination copied to {}; source retained: {error}",
+                super::super::display_path(display_target)
+            )
+        })?;
         finish_move(source, display_target, &identities, control)?;
     }
     Ok(())
@@ -155,7 +167,14 @@ fn verify_relocated(
 ) -> Result<(), String> {
     for (path, expected) in identities {
         control.check()?;
-        let moved = quarantine.join(path.strip_prefix(source).map_err(|e| e.to_string())?);
+        let relative = path.strip_prefix(source).map_err(|e| e.to_string())?;
+        // Joining an empty relative path adds a directory separator, which
+        // makes a quarantined regular file fail with ENOTDIR.
+        let moved = if relative.as_os_str().is_empty() {
+            quarantine.to_path_buf()
+        } else {
+            quarantine.join(relative)
+        };
         let actual = identity(&fs::symlink_metadata(&moved).map_err(|e| e.to_string())?);
         let unchanged = if path == source {
             expected.after_rename_matches(actual)
@@ -414,6 +433,7 @@ mod tests {
             false,
             &Control::default(),
             &mut Some(Decision::Replace),
+            &Default::default(),
         )
         .unwrap_err();
         assert!(error.contains("inspection-only"), "{error}");
@@ -437,8 +457,16 @@ mod tests {
             fs::create_dir(&redirected).unwrap();
             let control = Control::default();
             let result = std::thread::scope(|scope| {
-                let worker =
-                    scope.spawn(|| transfer(&source, &destination, moving, &control, &mut None));
+                let worker = scope.spawn(|| {
+                    transfer(
+                        &source,
+                        &destination,
+                        moving,
+                        &control,
+                        &mut None,
+                        &Default::default(),
+                    )
+                });
                 let deadline = Instant::now() + Duration::from_secs(2);
                 while control.progress.lock().unwrap().conflict.is_none() {
                     if Instant::now() >= deadline {

@@ -6,35 +6,7 @@
 use crate::process::CommandRequest;
 use crate::staging::ArtifactStore;
 use lopdf::{Document, Object};
-use std::path::{Path, PathBuf};
-
-fn preview_output_paths(temp_prefix: &Path) -> Vec<PathBuf> {
-    let Some(parent) = temp_prefix.parent() else {
-        return Vec::new();
-    };
-    let Some(prefix) = temp_prefix.file_name().and_then(|name| name.to_str()) else {
-        return Vec::new();
-    };
-    let prefix = format!("{prefix}-");
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".png"))
-        })
-        .collect()
-}
-
-fn cleanup_preview_outputs(temp_prefix: &Path) {
-    for path in preview_output_paths(temp_prefix) {
-        let _ = std::fs::remove_file(path);
-    }
-}
+use std::path::Path;
 
 /// Metadata summary extracted from a PDF document.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +32,7 @@ pub fn is_pdf_path(p: &Path) -> bool {
 /// Runs `pdfinfo` on a file and parses its page count and metadata tags.
 pub fn get_pdf_info(path: &Path) -> Result<PdfInfo, String> {
     let output = CommandRequest::new("pdfinfo")
+        .die_with_parent()
         .arg_content_file(path)
         .map_err(|error| error.to_string())?
         .run()
@@ -125,14 +98,12 @@ fn render_pdf_page_png(
     max_dim: u32,
     square_bounds: bool,
 ) -> Result<(Vec<u8>, u32, u32), String> {
-    let workspace = ArtifactStore::new()
-        .and_then(|store| store.create_workspace("pdf", "preview"))
-        .map_err(|error| format!("could not create PDF preview workspace: {error}"))?;
-    let temp_prefix = workspace.path().join(format!("page-{page}"));
     let page_str = page.to_string();
 
     let mut command = CommandRequest::new("pdftoppm")
+        .die_with_parent()
         .arg("-png")
+        .arg("-singlefile")
         .arg("-f")
         .arg(&page_str)
         .arg("-l")
@@ -149,23 +120,16 @@ fn render_pdf_page_png(
     let output = command
         .arg_content_file(path)
         .map_err(|error| error.to_string())?
-        .arg(&temp_prefix)
+        // Omitting the output prefix makes Poppler write PNG to stdout. The
+        // owned bounded pipe cannot leave rendered pages behind after a crash.
+        .max_output_bytes(if square_bounds { 8 } else { 64 } * 1024 * 1024)
         .run()
         .map_err(|e| format!("pdftoppm execution failed: {}", e))?;
 
-    if !output.status.success() {
-        cleanup_preview_outputs(&temp_prefix);
-        return Err("pdftoppm failed to render page".to_string());
+    if !output.status.success() || output.stdout_truncated {
+        return Err("pdftoppm failed or exceeded the PNG output budget".to_string());
     }
-
-    let out_png = preview_output_paths(&temp_prefix).into_iter().next();
-    let Some(out_png) = out_png else {
-        return Err(format!("pdftoppm did not produce a PNG for page {page}"));
-    };
-
-    let png_bytes = std::fs::read(&out_png).map_err(|e| e.to_string());
-    cleanup_preview_outputs(&temp_prefix);
-    let png_bytes = png_bytes?;
+    let png_bytes = output.stdout;
 
     let (w, h) =
         image::ImageReader::with_format(std::io::Cursor::new(&png_bytes), image::ImageFormat::Png)
@@ -292,6 +256,7 @@ fn flatten_pdf_outline(
 /// Returns an error if `pdftotext` fails, times out, or exceeds the output limit.
 pub fn extract_pdf_page_text(path: &Path, page: usize) -> Result<String, String> {
     let output = CommandRequest::new("pdftotext")
+        .die_with_parent()
         .args(["-layout", "-enc", "UTF-8", "-f"])
         .arg(page.to_string())
         .arg("-l")
@@ -550,6 +515,7 @@ fn rotate_staged_page(source: &Path, output: &Path, degrees: u32) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn pdf_readers_reject_kernel_aliases_before_parsing_or_tool_launch() {
@@ -618,6 +584,21 @@ mod tests {
         document.trailer.set("Root", catalog);
         document.save(&path).unwrap();
         (directory, path)
+    }
+
+    #[test]
+    fn piped_preview_selects_one_page_and_preserves_preview_and_thumbnail_bounds() {
+        let (_directory, path) = navigation_fixture();
+        let (first, width, height) = render_pdf_page_preview(&path, 1, 96).unwrap();
+        assert_eq!(width, 96);
+        assert!(height > 96, "width-only previews preserve portrait height");
+        let (second, second_width, second_height) = render_pdf_page_preview(&path, 2, 96).unwrap();
+        assert_eq!((second_width, second_height), (width, height));
+        assert_ne!(first, second, "the requested page must reach the PNG pipe");
+        let (_, thumb_width, thumb_height) = render_pdf_page_thumbnail(&path, 2, 96).unwrap();
+        assert!(thumb_width <= 96 && thumb_height <= 96);
+        assert_eq!(thumb_height, 96);
+        assert!(render_pdf_page_thumbnail(&path, 4, 96).is_err());
     }
 
     #[test]

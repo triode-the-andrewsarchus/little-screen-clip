@@ -508,6 +508,9 @@ fn validated_edit_publishes_sibling_output_from_open_viewer() {
         }))
         .unwrap();
 
+    // Input staging is complete. Losing its old search scope must not hide
+    // an accepted publication or bind the new derivative to the old revision.
+    state.read_check = crate::file_source::ReadCheck::new(|_| Err("old source unavailable".into()));
     let ctx = egui::Context::default();
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
         state.poll_edit_worker(ctx, 0.0)
@@ -516,6 +519,7 @@ fn validated_edit_publishes_sibling_output_from_open_viewer() {
     assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
     assert_eq!(state.path, output);
     assert!(state.dirty);
+    assert!(!state.read_check.active());
 }
 
 #[test]

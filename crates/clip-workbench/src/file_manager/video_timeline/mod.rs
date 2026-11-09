@@ -56,6 +56,7 @@ struct Hover {
 }
 #[derive(Default)]
 pub(super) struct Previews {
+    context: super::search::PreviewContext,
     ready: BTreeMap<PathBuf, Cached>,
     pending: BTreeMap<PathBuf, Pending>,
     hover: Option<Hover>,
@@ -73,6 +74,12 @@ fn texture(ctx: &Context, name: String, image: ImageThumbnail) -> TextureHandle 
     )
 }
 impl Previews {
+    pub fn set_context(&mut self, context: &super::search::PreviewContext) {
+        if self.context.replace(context) {
+            self.clear();
+        }
+    }
+
     pub fn clear(&mut self) {
         self.ready.clear();
         self.pending.clear();
@@ -120,6 +127,7 @@ impl Previews {
         let path = entry.path.clone();
         let revision = entry.revision;
         let peers = self.visible_jobs;
+        let context = self.context.clone();
         let (inspected, metadata) = mpsc::sync_channel(1);
         let (progress, images) = mpsc::sync_channel(1);
         self.pending.insert(
@@ -130,7 +138,20 @@ impl Previews {
                 inspected: metadata,
                 progress: images,
                 task: Task::start(&TIMELINES, Duration::from_secs(370), move |token| {
-                    backend::load(&path, revision, width, peers, token, inspected, progress)
+                    backend::load(
+                        &path,
+                        revision,
+                        width,
+                        peers,
+                        token,
+                        inspected,
+                        backend::Progress {
+                            sender: progress,
+                            context: &context,
+                            path: &path,
+                            cancel: token,
+                        },
+                    )
                 }),
             },
         );
@@ -247,7 +268,12 @@ impl Previews {
             return;
         }
         if self.frame.is_none() {
-            self.frame = Some(scrub::Session::new(key.clone(), metadata, ctx.clone()));
+            self.frame = Some(scrub::Session::new(
+                key.clone(),
+                metadata,
+                ctx.clone(),
+                self.context.clone(),
+            ));
         }
         self.frame.as_mut().unwrap().request(key);
     }

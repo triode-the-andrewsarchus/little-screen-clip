@@ -65,7 +65,7 @@ pub fn scan_recursive_photos(
                 continue;
             }
 
-            let entry = read_entry(child);
+            let entry = read_entry(child, true);
             if entry.directory {
                 if let Ok(meta) = std::fs::metadata(&entry.path) {
                     let key = (meta.dev(), meta.ino());

@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Local};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Entry {
+    #[serde(with = "super::path_serde")]
     pub path: PathBuf,
     pub name: String,
     pub directory: bool,
@@ -21,6 +22,7 @@ pub(super) struct Entry {
     pub size_bytes: u64,
     pub modified: String,
     pub modified_time: Option<std::time::SystemTime>,
+    pub created_time: Option<std::time::SystemTime>,
     pub warning: Option<String>,
     pub revision: u64,
     pub identity: Option<Identity>,
@@ -60,13 +62,17 @@ impl Entry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Directory {
     pub system: bool,
+    #[serde(with = "super::path_serde")]
     pub path: PathBuf,
     pub entries: Vec<Entry>,
     pub skipped: usize,
     pub signature: u64,
+    pub object: Option<(u64, u64)>,
+    #[serde(default)]
+    pub mount: Option<u64>,
 }
 
 // Called exclusively by the bounded executor. Canonical locations make symlink
@@ -74,14 +80,55 @@ pub(super) struct Directory {
 pub(super) fn read_directory(path: &Path, cancelled: &AtomicBool) -> Result<Directory, String> {
     let path = path.canonicalize().map_err(|error| error.to_string())?;
     let reader = std::fs::read_dir(&path).map_err(|error| error.to_string())?;
+    collect_directory(path, reader, cancelled, usize::MAX, None)
+}
+
+// Search holds the directory across enumeration. Remap descriptor-relative
+// names only after reading their metadata through that retained directory.
+pub(super) fn read_pinned_directory(
+    path: &Path,
+    directory: &std::fs::File,
+    cancelled: &AtomicBool,
+    limit: usize,
+) -> Result<Directory, String> {
+    use std::os::fd::AsRawFd;
+    let held = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let reader = std::fs::read_dir(&held).map_err(|error| error.to_string())?;
+    collect_directory(path.into(), reader, cancelled, limit, Some(&held))
+}
+
+fn collect_directory(
+    path: PathBuf,
+    reader: std::fs::ReadDir,
+    cancelled: &AtomicBool,
+    limit: usize,
+    held: Option<&Path>,
+) -> Result<Directory, String> {
+    let object = std::fs::metadata(held.unwrap_or(&path))
+        .ok()
+        .map(|metadata| (metadata.dev(), metadata.ino()));
+    let mount = super::system::MountIdentity::directory(held.unwrap_or(&path))
+        .ok()
+        .map(|identity| identity.mount);
     let mut entries = Vec::new();
     let mut skipped = 0;
     for child in reader {
         if cancelled.load(Ordering::Relaxed) {
             return Err("Directory read cancelled".into());
         }
+        if entries.len() >= limit {
+            skipped += 1;
+            break;
+        }
         match child {
-            Ok(child) => entries.push(read_entry(child)),
+            Ok(child) => {
+                let mut entry = read_entry(child, held.is_none());
+                if let Some(held) = held {
+                    entry.path =
+                        path.join(entry.path.strip_prefix(held).map_err(|e| e.to_string())?);
+                }
+                entries.push(entry);
+            }
             Err(_) => skipped += 1,
         }
     }
@@ -96,6 +143,22 @@ pub(super) fn read_directory(path: &Path, cancelled: &AtomicBool) -> Result<Dire
         entry.revision.hash(&mut hasher);
     }
     skipped.hash(&mut hasher);
+    object.hash(&mut hasher);
+    mount.hash(&mut hasher);
+    if mount
+        != super::system::MountIdentity::directory(held.unwrap_or(&path))
+            .ok()
+            .map(|identity| identity.mount)
+    {
+        return Err("Directory mount changed while reading".into());
+    }
+    if object
+        != std::fs::metadata(held.unwrap_or(&path))
+            .ok()
+            .map(|metadata| (metadata.dev(), metadata.ino()))
+    {
+        return Err("Directory was replaced while reading".into());
+    }
     let system =
         !little_clip_core::kernel_interface::classify(&path).is_ok_and(|kind| !kind.protected());
     Ok(Directory {
@@ -104,10 +167,12 @@ pub(super) fn read_directory(path: &Path, cancelled: &AtomicBool) -> Result<Dire
         path,
         entries,
         skipped,
+        object,
+        mount,
     })
 }
 
-pub(super) fn read_entry(child: std::fs::DirEntry) -> Entry {
+pub(super) fn read_entry(child: std::fs::DirEntry, inspect_typescript: bool) -> Entry {
     let path = child.path();
     let symlink = child.file_type().is_ok_and(|kind| kind.is_symlink());
     let metadata = std::fs::metadata(&path);
@@ -126,7 +191,9 @@ pub(super) fn read_entry(child: std::fs::DirEntry) -> Entry {
     let entry_identity = link_metadata.as_ref().ok().map(identity);
     entry_identity.hash(&mut hasher);
     Entry {
-        typescript: regular_file && super::text_strip::is_typescript_source(&path),
+        typescript: inspect_typescript
+            && regular_file
+            && super::text_strip::is_typescript_source(&path),
         revision: hasher.finish(),
         identity: entry_identity,
         hidden: child.file_name().as_bytes().starts_with(b"."),
@@ -153,6 +220,7 @@ pub(super) fn read_entry(child: std::fs::DirEntry) -> Entry {
             })
             .unwrap_or_else(|| "—".into()),
         modified_time: modified,
+        created_time: metadata.as_ref().ok().and_then(|data| data.created().ok()),
         warning,
     }
 }
@@ -175,6 +243,15 @@ pub(super) fn format_size(bytes: u64) -> String {
 // A reversible address representation: valid Unicode is preserved, backslashes
 // are doubled, and invalid bytes/control characters are written as \xHH.
 pub(super) fn display_path(path: &Path) -> String {
+    display_path_cow(path).into_owned()
+}
+
+pub(super) fn display_path_cow(path: &Path) -> std::borrow::Cow<'_, str> {
+    if let Some(text) = path.to_str()
+        && !text.chars().any(|ch| ch == '\\' || ch.is_control())
+    {
+        return std::borrow::Cow::Borrowed(text);
+    }
     let mut result = String::new();
     let mut bytes = path.as_os_str().as_bytes();
     while !bytes.is_empty() {
@@ -205,7 +282,7 @@ pub(super) fn display_path(path: &Path) -> String {
         }
         bytes = &bytes[invalid..];
     }
-    result
+    std::borrow::Cow::Owned(result)
 }
 
 pub(super) fn decode_path(text: &str) -> Result<PathBuf, String> {
@@ -253,7 +330,7 @@ pub(super) fn parse_address(text: &str, current: &Path, home: &Path) -> Result<P
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(super) struct Identity(u64, u64, u64, i64, i64, i64, i64, u32);
 
 pub(super) fn identity(data: &std::fs::Metadata) -> Identity {
@@ -307,6 +384,9 @@ pub(super) fn rename_at_noreplace(
 }
 
 impl Identity {
+    pub(super) fn object(self) -> (u64, u64) {
+        (self.0, self.1)
+    }
     // Moving the directory entry changes ctime; object identity, contents, mode
     // and mtime must still match before removing a quarantined move source.
     pub(super) fn after_rename_matches(self, actual: Self) -> bool {

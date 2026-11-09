@@ -263,10 +263,9 @@ impl Transfers {
                 },
                 confirmation.paths,
             ) {
-                self.queue
-                    .back_mut()
-                    .expect("confirmed batch was enqueued")
-                    .expected = Some(confirmation.expected);
+                let batch = self.queue.back_mut().expect("confirmed batch was enqueued");
+                batch.expected = Some(confirmation.expected);
+                batch.search_guards = confirmation.search_guards;
             }
         } else if cancel {
             self.confirmation = None;

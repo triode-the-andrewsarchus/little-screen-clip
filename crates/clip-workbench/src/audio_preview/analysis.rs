@@ -45,7 +45,7 @@ impl AudioPreviewState {
                 .fetch_add(1, Ordering::Release);
         }
         let (cancelled, ticket, progress_rx, job_rx) =
-            submit_session_analysis(self.path.clone(), jobs);
+            submit_session_analysis(self.path.clone(), jobs, self.read_check.clone());
         self.analysis_cancel = Some(cancelled);
         self.analysis_ticket = Some(ticket);
         self.analysis_rx = Some(progress_rx);
@@ -66,6 +66,7 @@ impl AudioPreviewState {
     }
 
     pub(super) fn poll_audio_analysis(&mut self, ctx: &egui::Context, now: f64) {
+        self.poll_file_playback(ctx);
         self.poll_audio_analysis_on(ctx, now, BackgroundJobs::global());
     }
 
@@ -189,7 +190,7 @@ impl AudioPreviewState {
 
     pub(super) fn start_session_analysis_job(&mut self, jobs: &BackgroundJobs) {
         let (cancelled, ticket, progress_rx, job_rx) =
-            submit_session_analysis(self.path.clone(), jobs);
+            submit_session_analysis(self.path.clone(), jobs, self.read_check.clone());
         self.analysis_cancel = Some(cancelled);
         self.analysis_ticket = Some(ticket);
         self.analysis_rx = Some(progress_rx);
@@ -448,37 +449,40 @@ impl AudioPreviewState {
         let cancelled = Arc::new(AtomicBool::new(false));
         let job_cancelled = Arc::clone(&cancelled);
         let (tx, rx) = channel();
+        let check = self.read_check.clone();
         let (ticket, job_rx) = jobs.submit(Duration::MAX, move || {
-            let send_progress = |progress| {
-                if matches!(
-                    progress,
-                    AudioAnalysisProgress::WaveformReady(_)
-                        | AudioAnalysisProgress::SpectrogramAndNotesReady { .. }
-                        | AudioAnalysisProgress::Complete
-                        | AudioAnalysisProgress::Failed(_)
-                ) {
-                    let _ = tx.send(progress);
+            checked_analysis(&check, &job_cancelled, &tx, |send| {
+                let send_progress = |progress| {
+                    if matches!(
+                        progress,
+                        AudioAnalysisProgress::WaveformReady(_)
+                            | AudioAnalysisProgress::SpectrogramAndNotesReady { .. }
+                            | AudioAnalysisProgress::Complete
+                            | AudioAnalysisProgress::Failed(_)
+                    ) {
+                        send(progress);
+                    }
+                };
+                if has_filter {
+                    compute_audio_spectral_preview_with_gain_and_edits_cancellable(
+                        &path,
+                        1200,
+                        job_edits.track_gain_db,
+                        &job_edits.regions,
+                        &job_cancelled,
+                        send_progress,
+                    );
+                } else {
+                    compute_audio_analysis_progressive_with_gain_and_edits_cancellable(
+                        &path,
+                        1200,
+                        job_edits.track_gain_db,
+                        &job_edits.regions,
+                        &job_cancelled,
+                        send_progress,
+                    );
                 }
-            };
-            if has_filter {
-                compute_audio_spectral_preview_with_gain_and_edits_cancellable(
-                    &path,
-                    1200,
-                    job_edits.track_gain_db,
-                    &job_edits.regions,
-                    &job_cancelled,
-                    send_progress,
-                );
-            } else {
-                compute_audio_analysis_progressive_with_gain_and_edits_cancellable(
-                    &path,
-                    1200,
-                    job_edits.track_gain_db,
-                    &job_edits.regions,
-                    &job_cancelled,
-                    send_progress,
-                );
-            }
+            });
         });
         self.edit_analysis_inflight = edits;
         self.edit_analysis_cancel = Some(cancelled);

@@ -16,8 +16,11 @@ impl PdfEditorState {
         self.pages.clear();
         self.page_count = 0;
         let path = self.path.clone();
+        let check = self.read_check.clone();
         self.info_job = Some(
-            BackgroundJobs::global().submit(Duration::from_secs(30), move || get_pdf_info(&path)),
+            BackgroundJobs::global().submit(Duration::from_secs(30), move || {
+                check.read(&AtomicBool::new(false), || get_pdf_info(&path))
+            }),
         );
     }
 
@@ -95,6 +98,8 @@ impl PdfEditorState {
         // drops this receiver to unblock a producer waiting to publish a page.
         let (tx, rx) = sync_channel(PREVIEW_QUEUE_CAPACITY);
         let cancelled = Arc::new(AtomicBool::new(false));
+        let check = self.read_check.clone();
+        let source_cancel = cancelled.clone();
         let (ticket, job_rx) = spawn_preview_worker(
             jobs,
             path,
@@ -103,7 +108,7 @@ impl PdfEditorState {
             raster_cache,
             tx,
             Arc::clone(&cancelled),
-            render_page,
+            move |path, page, width| check.read(&source_cancel, || render_page(path, page, width)),
         );
         self.preview_rx = Some(rx);
         self.preview_job = Some((ticket, job_rx));

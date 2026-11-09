@@ -601,3 +601,107 @@ fn digital_decode_rescan_and_viewer_drop_cancel_queued_jobs() {
         .unwrap()
         .unwrap();
 }
+
+#[test]
+fn progressive_source_checks_keep_earlier_results_and_reject_changed_stages() {
+    let changed = Arc::new(AtomicBool::new(false));
+    let observed = changed.clone();
+    let check = crate::file_source::ReadCheck::new(move |_| {
+        if observed.load(Ordering::Acquire) {
+            Err("source context expired".into())
+        } else {
+            Ok(())
+        }
+    });
+    let cancel = AtomicBool::new(false);
+    let (tx, rx) = channel();
+    checked_analysis(&check, &cancel, &tx, |send| {
+        send(AudioAnalysisProgress::TransientsReady(vec![0.25]));
+        changed.store(true, Ordering::Release);
+        send(AudioAnalysisProgress::TransientsReady(vec![0.5]));
+        send(AudioAnalysisProgress::Complete);
+    });
+    assert!(
+        matches!(rx.try_recv().unwrap(), AudioAnalysisProgress::TransientsReady(v) if v == vec![0.25])
+    );
+    assert!(
+        matches!(rx.try_recv().unwrap(), AudioAnalysisProgress::Failed(e) if e == "source context expired")
+    );
+    assert!(rx.try_recv().is_err());
+    assert!(cancel.load(Ordering::Acquire));
+    checked_analysis(&check, &AtomicBool::new(false), &tx, |_| {
+        panic!("must not reopen a stale source")
+    });
+    assert!(
+        matches!(rx.try_recv().unwrap(), AudioAnalysisProgress::Failed(e) if e == "source context expired")
+    );
+}
+
+#[test]
+fn checked_audio_analysis_rejects_initial_retries_and_edited_source_reads() {
+    let jobs = BackgroundJobs::new(1, 2);
+    let check = crate::file_source::ReadCheck::new(|_| Err("source context expired".into()));
+    let mut state = AudioPreviewState::with_source_analysis_on_jobs(
+        PathBuf::from("missing-source.wav"),
+        "Checked audio".into(),
+        None,
+        &jobs,
+        None,
+        check,
+    );
+    for retry in 0..3 {
+        if retry == 1 {
+            state.restart_session_analysis_on(&jobs);
+        }
+        if retry == 2 {
+            state.start_session_analysis_job(&jobs);
+        }
+        let progress = state
+            .analysis_rx
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(
+            matches!(progress, AudioAnalysisProgress::Failed(e) if e == "source context expired")
+        );
+        state
+            .analysis_job_rx
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        state.cancel_session_analysis();
+    }
+    // Both gain-only and spectral-filter edits reopen the original input.
+    for filtered in [false, true] {
+        if filtered {
+            state
+                .edit_analysis_observed
+                .regions
+                .push(little_clip_core::audio::AudioRegionEdit {
+                    low_pass_hz: Some(1000.0),
+                    ..Default::default()
+                });
+        }
+        state.start_edit_analysis_job(&jobs);
+        let progress = state
+            .edit_analysis_rx
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(
+            matches!(progress, AudioAnalysisProgress::Failed(e) if e == "source context expired")
+        );
+        state
+            .edit_analysis_job_rx
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        state.cancel_edit_analysis();
+    }
+}

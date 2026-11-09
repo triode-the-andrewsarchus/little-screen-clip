@@ -37,6 +37,7 @@ pub(super) struct NameDialog {
     pub name: String,
     pub error: Option<String>,
     pub focus: bool,
+    source_guard: Option<super::search::SourceGuard>,
 }
 
 #[derive(Clone)]
@@ -45,6 +46,7 @@ struct NamingOperation {
     parent: PathBuf,
     name: OsString,
     selection_revision: u64,
+    source_guard: Option<super::search::SourceGuard>,
 }
 
 struct PendingEdit {
@@ -72,9 +74,11 @@ impl FileManager {
     }
 
     pub(super) fn can_edit(&self) -> bool {
-        self.directory
-            .as_ref()
-            .is_some_and(|directory| !directory.system)
+        !self.search.has_offline_results()
+            && self
+                .directory
+                .as_ref()
+                .is_some_and(|directory| !directory.system)
             && self.pending.is_none()
             && !self.filesystem_busy()
             && self.edits.dialog.is_none()
@@ -92,12 +96,23 @@ impl FileManager {
             }
             NamingAction::Content(content) => content.default_name(),
         };
+        let source_guard = match &action {
+            NamingAction::Rename(source) => self.search_source_guard(source),
+            _ => None,
+        };
+        let parent = match &action {
+            NamingAction::Rename(source) if source_guard.is_some() => {
+                source.parent().unwrap_or(self.path()).to_path_buf()
+            }
+            _ => self.path().to_path_buf(),
+        };
         self.edits.dialog = Some(NameDialog {
             action,
-            parent: self.path().into(),
+            parent,
             name,
             error: None,
             focus: true,
+            source_guard,
         });
     }
 
@@ -122,6 +137,7 @@ impl FileManager {
         self.edits.dialog = Some(NameDialog {
             name: content.default_name(),
             action: NamingAction::Content(content),
+            source_guard: None,
             parent,
             error: None,
             focus: true,
@@ -152,6 +168,7 @@ impl FileManager {
                 parent: dialog.parent.clone(),
                 name,
                 selection_revision: self.selection_revision,
+                source_guard: dialog.source_guard.clone(),
             },
             receiver: None,
             admission: super::system_route::Admission::default(),
@@ -251,6 +268,7 @@ impl FileManager {
                 // Keep the captured destination and proposed name available for
                 // correction. A failed filesystem operation is never retried automatically.
                 self.edits.dialog = Some(NameDialog {
+                    source_guard: operation.source_guard,
                     action: operation.action,
                     parent: operation.parent,
                     name: display_path(Path::new(&operation.name)),
@@ -335,6 +353,9 @@ pub(super) fn parse_name(text: &str) -> Result<OsString, String> {
 
 impl NamingOperation {
     fn preflight(&self) -> Result<(), String> {
+        if let Some(guard) = &self.source_guard {
+            guard.check(&std::sync::atomic::AtomicBool::new(false))?;
+        }
         little_clip_core::kernel_interface::require_content(&self.parent)
             .map_err(|e| e.to_string())?;
         if let NamingAction::Rename(source) = &self.action {
@@ -465,6 +486,7 @@ pub(super) fn rename_file(
         parent: path.parent().ok_or("Missing parent")?.into(),
         name: parse_name(name)?,
         selection_revision: 0,
+        source_guard: None,
     };
     operation.preflight()?;
     let directory = little_clip_core::kernel_interface::pin_content_directory(&operation.parent)
@@ -512,6 +534,7 @@ mod tests {
         let content =
             super::super::content::Content::capture(bytes.to_vec(), "text/plain").unwrap();
         let operation = NamingOperation {
+            source_guard: None,
             action: NamingAction::Content(content),
             parent: root.path().into(),
             name: "snapshot.txt".into(),
@@ -537,6 +560,7 @@ mod tests {
             super::super::content::Content::capture(b"captured snapshot".to_vec(), "text/plain")
                 .unwrap();
         let operation = NamingOperation {
+            source_guard: None,
             action: NamingAction::Content(content.clone()),
             parent: parent.clone(),
             name: "snapshot.txt".into(),
@@ -570,6 +594,7 @@ mod tests {
     fn create_and_rename_never_overwrite_existing_files_or_links() {
         let root = tempfile::tempdir().unwrap();
         let operation = |action, name: &str| NamingOperation {
+            source_guard: None,
             action,
             parent: root.path().into(),
             name: name.into(),
@@ -608,6 +633,7 @@ mod tests {
         ] {
             let mut manager = FileManager::new(root.path().into());
             manager.edits.dialog = Some(NameDialog {
+                source_guard: None,
                 action,
                 parent: alias.clone(),
                 name: "admission-test".into(),
@@ -637,6 +663,7 @@ mod tests {
         std::fs::create_dir(&source).unwrap();
         std::fs::write(source.join("ordinary"), b"kept").unwrap();
         let operation = NamingOperation {
+            source_guard: None,
             action: NamingAction::Rename(source.clone()),
             parent: root.path().into(),
             name: "renamed".into(),

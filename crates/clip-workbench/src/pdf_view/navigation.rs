@@ -52,7 +52,13 @@ impl PdfNavigation {
         self.messages = None;
     }
 
-    fn start(&mut self, path: PathBuf, count: usize, ctx: &egui::Context) {
+    fn start(
+        &mut self,
+        path: PathBuf,
+        count: usize,
+        ctx: &egui::Context,
+        check: crate::file_source::ReadCheck,
+    ) {
         if self.worker.is_some() || count == 0 {
             return;
         }
@@ -68,12 +74,14 @@ impl PdfNavigation {
         let repaint = ctx.clone();
         self.worker = Some(BackgroundJobs::global().submit(Duration::MAX, move || {
             let result = (|| {
-                let _ = tx.send(IndexMessage::Outline(read_pdf_outline(&path)));
+                let _ = tx.send(IndexMessage::Outline(
+                    check.read(&worker_cancel, || read_pdf_outline(&path)),
+                ));
                 for page in 1..=count {
                     if worker_cancel.load(Ordering::SeqCst) {
                         break;
                     }
-                    let text = extract_pdf_page_text(&path, page)?;
+                    let text = check.read(&worker_cancel, || extract_pdf_page_text(&path, page))?;
                     if worker_cancel.load(Ordering::SeqCst) {
                         break;
                     }
@@ -342,8 +350,12 @@ impl PdfEditorState {
     pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) -> bool {
         self.navigation.poll(ctx);
         if !self.navigation.attempted && self.info_job.is_none() {
-            self.navigation
-                .start(self.path.clone(), self.page_count, ctx);
+            self.navigation.start(
+                self.path.clone(),
+                self.page_count,
+                ctx,
+                self.read_check.clone(),
+            );
         }
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
             self.navigation.right = Some(RightTab::Find);

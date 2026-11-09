@@ -221,7 +221,13 @@ mod tests {
         let path = dir.path().join("draft.txt");
         std::fs::write(&path, "original").unwrap();
         let config = AppConfig::default();
-        let mut viewer = session(load(&path, &config).unwrap(), path.clone(), &config, 0.0);
+        let mut viewer = session(
+            load(&path, &config).unwrap(),
+            path.clone(),
+            &config,
+            0.0,
+            crate::file_source::ReadCheck::default(),
+        );
         let source = FileSource::capture(&path).unwrap();
         let (destination, source) =
             super::super::super::edits::rename_file(&path, "renamed.txt", &source).unwrap();

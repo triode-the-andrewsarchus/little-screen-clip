@@ -4,6 +4,13 @@ fn main() -> Result<(), eframe::Error> {
     if clip_workbench::worker_cli::run() {
         return Ok(());
     }
+    if std::env::var("LITTLE_CLIP_SEARCH_TIMINGS").is_ok_and(|value| value == "1") {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("off,little_clip_search_timing=debug")
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .try_init();
+    }
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
     if first

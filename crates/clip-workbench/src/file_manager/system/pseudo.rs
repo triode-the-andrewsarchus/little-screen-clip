@@ -196,7 +196,7 @@ mod tests {
         std::fs::create_dir(&locked).unwrap();
         let log = locked.join("kern.log");
         std::fs::write(&log, b"not read").unwrap();
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0)).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o0)).unwrap();
         let mut document =
             super::super::worker::interface(std::path::Path::new("/proc/uptime")).unwrap();
         document.relations.clear();

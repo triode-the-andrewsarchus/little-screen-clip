@@ -275,3 +275,13 @@ pub(super) fn empty_audio_analysis() -> FullAudioAnalysis {
         truncation_warning: None,
     }
 }
+
+pub(super) fn wait_for_session_edit(state: &mut AudioPreviewState) {
+    let ctx = egui::Context::default();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state.session_edit_job.is_some() {
+        assert!(Instant::now() < deadline, "session edit timed out");
+        state.poll_session_edit(&ctx);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

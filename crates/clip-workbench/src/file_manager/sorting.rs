@@ -13,6 +13,7 @@ pub(super) enum Column {
     Name,
     Size,
     Modified,
+    Created,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -42,6 +43,7 @@ impl Sort {
                     (!b.1.directory && b.1.warning.is_none()).then_some(b.1.size_bytes),
                     self.descending,
                 ),
+                Column::Created => available(a.1.created_time, b.1.created_time, self.descending),
                 Column::Modified => {
                     available(a.1.modified_time, b.1.modified_time, self.descending)
                 }
@@ -60,7 +62,7 @@ fn directed(order: Ordering, descending: bool) -> Ordering {
     if descending { order.reverse() } else { order }
 }
 
-fn available<T: Ord>(a: Option<T>, b: Option<T>, descending: bool) -> Ordering {
+pub(super) fn available<T: Ord>(a: Option<T>, b: Option<T>, descending: bool) -> Ordering {
     match (a, b) {
         (Some(a), Some(b)) => directed(a.cmp(&b), descending),
         (Some(_), None) => Ordering::Less,
@@ -71,7 +73,7 @@ fn available<T: Ord>(a: Option<T>, b: Option<T>, descending: bool) -> Ordering {
 
 /// Compare digit runs by value without parsing integers or imposing a digit limit.
 /// Equal numbers with fewer leading zeroes come first. Other text is literal.
-fn natural_cmp(a: &str, b: &str) -> Ordering {
+pub(super) fn natural_cmp(a: &str, b: &str) -> Ordering {
     let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
     while let (Some(&left), Some(&right)) = (a.first(), b.first()) {
         if left.is_ascii_digit() && right.is_ascii_digit() {
@@ -178,16 +180,42 @@ fn extension_category(extension: &str) -> Category {
 
 impl FileManager {
     pub(super) fn sort_by(&mut self, column: Column) {
+        let answer_active = self
+            .search
+            .answers
+            .current()
+            .is_some_and(|folder| folder.sort.is_some());
+        if let Some(folder) = self.search.answers.current_mut() {
+            folder.sort = None;
+        }
+        let active = !answer_active
+            && !self
+                .search
+                .applied
+                .as_ref()
+                .is_some_and(|query| query.browser_sort().is_none());
         self.sort = Sort {
             column,
-            descending: if self.sort.column == column {
+            descending: if active && self.sort.column == column {
                 !self.sort.descending
             } else {
-                column == Column::Modified
+                matches!(column, Column::Modified | Column::Created)
             },
         };
         self.type_navigation.clear();
         self.gallery_layout.invalidate_order();
+        if let Some(query) = &mut self.search.applied {
+            query.sort = Some(super::search::query::Sort {
+                field: match column {
+                    Column::Name => super::search::query::SortField::Name,
+                    Column::Type => super::search::query::SortField::Type,
+                    Column::Size => super::search::query::SortField::Size,
+                    Column::Modified => super::search::query::SortField::Modified,
+                    Column::Created => super::search::query::SortField::Created,
+                },
+                descending: self.sort.descending,
+            });
+        }
         self.rebuild_visible();
         self.reveal_selection = self.selection_count() > 0;
         if let Some(location) = self.location_mut() {

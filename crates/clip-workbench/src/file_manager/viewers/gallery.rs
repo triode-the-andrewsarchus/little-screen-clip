@@ -7,6 +7,7 @@ mod writes;
 
 struct Photo {
     path: PathBuf,
+    guard: Option<super::super::search::SourceGuard>,
     session: Option<Box<ImagePreviewState>>,
     preview_id: uuid::Uuid,
     preview_stamp: Option<ImageInputStamp>,
@@ -23,7 +24,11 @@ pub(super) struct Collection {
     reveal_active: bool,
 }
 impl Collection {
-    fn new(paths: Vec<PathBuf>, index: usize) -> Self {
+    fn new(
+        paths: Vec<PathBuf>,
+        mut guards: std::collections::HashMap<PathBuf, super::super::search::SourceGuard>,
+        index: usize,
+    ) -> Self {
         let export_directory = paths[index]
             .parent()
             .unwrap_or(Path::new("."))
@@ -34,6 +39,7 @@ impl Collection {
             photos: paths
                 .into_iter()
                 .map(|path| Photo {
+                    guard: guards.remove(&path),
                     path,
                     session: None,
                     preview_id: uuid::Uuid::new_v4(),
@@ -133,14 +139,19 @@ impl Viewers {
     pub(super) fn collection_dirty(&self) -> bool {
         self.gallery.as_ref().is_some_and(Collection::dirty)
     }
-    pub(in crate::file_manager) fn open_collection(&mut self, path: PathBuf, paths: Vec<PathBuf>) {
+    pub(in crate::file_manager) fn open_collection(
+        &mut self,
+        path: PathBuf,
+        paths: Vec<PathBuf>,
+        guards: std::collections::HashMap<PathBuf, super::super::search::SourceGuard>,
+    ) {
         if self.active() {
             return;
         }
         self.gallery = paths
             .iter()
             .position(|p| p == &path)
-            .map(|index| Collection::new(paths, index));
+            .map(|index| Collection::new(paths, guards, index));
         self.open(path);
     }
     pub(super) fn gallery_controls(&mut self, ui: &mut Ui) {
@@ -208,6 +219,7 @@ impl Viewers {
         collection.reveal_active = true;
         self.error = None;
         self.path = None;
+        self.source_guard = collection.photos[target].guard.clone();
         if let Some(state) = collection.photos[target].session.take() {
             self.path = state.path.clone();
             self.session = Some(ViewerSession::Image(*state));
@@ -419,18 +431,20 @@ mod tests {
             })
             .collect();
         let config = AppConfig::default();
+        let loaded = load(&paths[0], &config).unwrap();
         let viewer = session(
-            load(&paths[0], &config).unwrap(),
+            loaded,
             paths[0].clone(),
             &config,
             0.0,
+            crate::file_source::ReadCheck::default(),
         );
         (
             dir,
             Viewers {
                 path: Some(paths[0].clone()),
                 session: Some(viewer),
-                gallery: Some(Collection::new(paths, 0)),
+                gallery: Some(Collection::new(paths, Default::default(), 0)),
                 ..Viewers::default()
             },
         )

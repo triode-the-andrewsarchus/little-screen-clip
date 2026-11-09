@@ -1,5 +1,6 @@
 use super::*;
-use crate::audio_preview::tests::write_stereo_pcm_fixture;
+use crate::audio_preview::session_edit::render_session_edit;
+use crate::audio_preview::tests::{wait_for_session_edit, write_stereo_pcm_fixture};
 
 fn stereo_buffer(samples: Vec<f32>) -> rodio::buffer::SamplesBuffer {
     rodio::buffer::SamplesBuffer::new(
@@ -97,16 +98,6 @@ fn channel_edits_preserve_stereo_and_affect_only_selected_samples() {
     }
 }
 
-fn wait_for_channel_edit(state: &mut AudioPreviewState) {
-    let ctx = egui::Context::default();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while state.channel_tools.edit_job.is_some() {
-        assert!(Instant::now() < deadline, "channel edit timed out");
-        state.poll_channel_edit(&ctx);
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 #[test]
 fn committed_channel_edit_is_undoable_and_stale_completion_is_rejected() {
     let directory = tempfile::tempdir().unwrap();
@@ -115,17 +106,16 @@ fn committed_channel_edit_is_undoable_and_stale_completion_is_rejected() {
     let mut state = AudioPreviewState::new(original.clone(), "input".into());
     state.channel_tools.entire_track = true;
     state.start_channel_edit(ChannelEdit::Swap);
-    wait_for_channel_edit(&mut state);
+    wait_for_session_edit(&mut state);
     let edited = state.path.clone();
     assert_ne!(edited, original);
-    assert_eq!(state.editor_handoff_path().unwrap(), edited);
     state.undo();
     assert_eq!(state.path, original);
     state.redo();
     assert_eq!(state.path, edited);
     state.start_channel_edit(ChannelEdit::InvertRight);
     state.track_gain_db = -3.0;
-    wait_for_channel_edit(&mut state);
+    wait_for_session_edit(&mut state);
     assert_eq!(state.path, edited);
     assert!(state.status_toast.as_ref().unwrap().0.contains("discarded"));
     let _ = std::fs::remove_file(edited);
@@ -286,10 +276,10 @@ fn number_edit_shortcuts_preserve_visible_analysis_until_ready_and_apply_each_op
         state.channel_tools.entire_track = true;
         let ctx = egui::Context::default();
         press_number(&mut state, &ctx, key, egui::Modifiers::NONE);
-        assert!(state.channel_tools.edit_job.is_some());
+        assert!(state.session_edit_job.is_some());
         assert!(Arc::ptr_eq(state.analysis.as_ref().unwrap(), &source));
         assert!(!state.is_loading_analysis);
-        wait_for_channel_edit(&mut state);
+        wait_for_session_edit(&mut state);
         assert_ne!(state.path, original);
         assert!(!state.is_loading_analysis);
         assert_eq!(state.current_time_sec, 0.02);
@@ -397,4 +387,97 @@ fn stereo_number_shortcut_keeps_playhead_and_multi_region_number_does_not_previe
         );
         assert_eq!(state.active_multi_index, Some(0));
     }
+}
+
+#[test]
+fn channel_render_rejects_expired_context_before_opening_the_source() {
+    let check = crate::file_source::ReadCheck::new(|_| Err("source context expired".into()));
+    let result = render_session_edit(
+        Path::new("/missing-channel-source.wav"),
+        None,
+        &check,
+        ChannelEdit::Swap.filter(&[]),
+        export::AudioRenderMode::Session,
+        &SessionAudioEdits::default(),
+        &AtomicBool::new(false),
+    );
+    assert_eq!(result.unwrap_err(), "source context expired");
+}
+
+#[test]
+fn channel_render_rejects_a_replaced_observed_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("input.wav");
+    let replacement = directory.path().join("replacement.wav");
+    write_stereo_pcm_fixture(&input, &[8192; 800], &[16384; 800], 8000);
+    let observed = crate::file_source::FileSource::capture(&input).unwrap();
+    write_stereo_pcm_fixture(&replacement, &[4096; 800], &[12288; 800], 8000);
+    std::fs::rename(replacement, &input).unwrap();
+    let result = render_session_edit(
+        &input,
+        Some(&observed),
+        &Default::default(),
+        ChannelEdit::Swap.filter(&[]),
+        export::AudioRenderMode::Session,
+        &SessionAudioEdits::default(),
+        &AtomicBool::new(false),
+    );
+    assert!(result.unwrap_err().contains("source changed"));
+}
+
+#[test]
+fn derived_channel_input_survives_original_invalidation_and_undo_restores_its_guard() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("input.wav");
+    write_stereo_pcm_fixture(&input, &[8192; 800], &[-16384; 800], 8000);
+    let observed = crate::file_source::FileSource::capture(&input).unwrap();
+    let valid = Arc::new(AtomicBool::new(true));
+    let original_valid = valid.clone();
+    let original_check = crate::file_source::ReadCheck::new(move |_| {
+        if original_valid.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err("source context expired".into())
+        }
+    });
+    let mut state =
+        AudioPreviewState::new(input.clone(), "input".into()).with_file_source(observed.clone());
+    state.cancel_session_analysis();
+    state.read_check = original_check.clone();
+    state.channel_tools.entire_track = true;
+    state.start_channel_edit(ChannelEdit::Swap);
+    wait_for_session_edit(&mut state);
+    let derived = state.path.clone();
+    assert_ne!(derived, input, "{:?}", state.status_toast);
+    assert_eq!(state.file_source.as_ref().unwrap().path(), derived);
+    assert_ne!(state.read_check, original_check);
+    assert!(state.has_session_edits());
+    valid.store(false, Ordering::Release);
+    state.read_check.validate(&AtomicBool::new(false)).unwrap();
+    state.file_source.as_ref().unwrap().check().unwrap();
+    state.undo();
+    assert_eq!(state.path, input);
+    assert_eq!(state.file_source, Some(observed));
+    assert_eq!(state.read_check, original_check);
+    assert!(!state.has_session_edits());
+    assert!(state.read_check.validate(&AtomicBool::new(false)).is_err());
+    state.redo();
+    assert_eq!(state.path, derived);
+    assert!(state.has_session_edits());
+    state.read_check.validate(&AtomicBool::new(false)).unwrap();
+    let deferred_check = state.read_check.clone();
+    drop(state);
+    assert!(
+        derived.exists(),
+        "Deferred jobs must retain their input artifact"
+    );
+    drop(deferred_check);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while derived.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !derived.exists(),
+        "The final artifact owner must remove its staged file"
+    );
 }

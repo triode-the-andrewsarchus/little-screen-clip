@@ -47,14 +47,23 @@ impl FileManager {
         self.drop_targets.clear();
         self.bookmark_drop_rect = None;
         self.tick(super::BackgroundJobs::global());
+        self.sync_preview_context();
         let colors = WorkbenchColors::from_palette(palette);
         self.sync_modal_focus(ui.ctx());
         self.shortcuts(ui.ctx());
-        ui.set_enabled(self.edits.dialog.is_none() && !self.transfers_modal());
+        ui.set_enabled(!self.browser_modal());
         self.toolbar(ui, palette);
+        self.search_ui(ui);
+        self.answer_columns_ui(ui);
+        self.sync_preview_context();
         self.media_view_toolbar(ui, palette);
         ui.separator();
         self.docked_panels(ui, palette);
+        // A coalesced header click can also clear focus during the later list
+        // background interaction. Restore it only after that interaction ends.
+        if std::mem::take(&mut self.focus_list) {
+            ui.memory_mut(|memory| memory.request_focus(list_id()));
+        }
         ui.memory_mut(|memory| {
             for id in [
                 tree_id(),
@@ -75,6 +84,7 @@ impl FileManager {
         });
         self.naming_ui(ui.ctx(), colors);
         self.transfer_windows(ui.ctx(), colors);
+        self.search_settings_ui(ui.ctx());
         let file_clipboard = ui.memory(|memory| {
             [
                 list_id(),
@@ -83,12 +93,20 @@ impl FileManager {
             ]
             .into_iter()
             .any(|id| memory.has_focus(id))
-        }) && self.edits.dialog.is_none()
-            && !self.transfers_modal();
+        }) && !self.browser_modal();
+        let text_focus_shortcuts = if ui.memory(|memory| memory.has_focus(list_id())) {
+            vec![egui::KeyboardShortcut::new(Modifiers::CTRL, Key::F)]
+        } else {
+            Vec::new()
+        };
         ui.ctx().data_mut(|data| {
             data.insert_temp(
                 egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS),
                 file_clipboard,
+            );
+            data.insert_temp(
+                egui::Id::new(egui_winit::CLIPBOARD_TEXT_FOCUS_SHORTCUTS),
+                text_focus_shortcuts,
             );
         });
         self.schedule_repaints(ui.ctx());
@@ -160,7 +178,8 @@ impl FileManager {
                 .is_some_and(|directory| directory.skipped > 0)
         {
             egui::TopBottomPanel::bottom("file_manager_status")
-                .default_height(56.0)
+                .default_height(80.0)
+                .min_height(if self.error.is_some() { 80.0 } else { 56.0 })
                 .max_height(150.0)
                 .frame(egui::Frame::none().inner_margin(6.0))
                 .show_inside(ui, |ui| {
@@ -231,15 +250,20 @@ impl FileManager {
 
         self.retire_constellation_audition();
         if let Some(p) = sample_to_play {
-            self.music.play(&p);
+            let guard = self.search_source_guard(&p);
+            self.music.play(&p, guard);
         }
         if let Some(p) = sample_to_select {
             self.select(p);
         }
     }
 
+    fn browser_modal(&self) -> bool {
+        self.edits.dialog.is_some() || self.transfers_modal() || self.search.preferences.open
+    }
+
     fn sync_modal_focus(&mut self, ctx: &egui::Context) {
-        let modal = self.edits.dialog.is_some() || self.transfers_modal();
+        let modal = self.browser_modal();
         if self.was_modal && !modal {
             ctx.memory_mut(|memory| memory.request_focus(list_id()));
         }
@@ -247,7 +271,7 @@ impl FileManager {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if self.edits.dialog.is_some() || self.transfers_modal() {
+        if self.browser_modal() {
             self.type_navigation.clear();
             return;
         }
@@ -256,7 +280,9 @@ impl FileManager {
             return;
         }
         self.navigation_shortcuts(ctx);
-        self.type_navigation_keys(ctx);
+        if self.search_navigation_keys(ctx) {
+            return;
+        }
         if ctx.memory(|memory| memory.has_focus(address_id())) {
             return;
         }
@@ -433,7 +459,7 @@ impl FileManager {
             if nav_button(ui, Icon::ArrowLeft, "Back [Alt+Left]", self.index.is_some_and(|i| i > 0), palette) { self.history_step(false); }
             if nav_button(ui, Icon::ArrowRight, "Forward [Alt+Right]", self.index.is_some_and(|i| i + 1 < self.history.len()), palette) { self.history_step(true); }
             if nav_button(ui, Icon::ArrowUp, "Parent folder [Alt+Up]", self.path().parent().is_some(), palette) { self.parent(); }
-            let address_width = (ui.available_width() - 180.0).max(80.0);
+            let address_width = (ui.available_width() - 235.0).max(80.0);
             let mut output = egui::TextEdit::singleline(&mut self.address)
                 .id(address_id()).hint_text("Directory path [Ctrl+L]")
                 .desired_width(address_width).show(ui);
@@ -449,6 +475,7 @@ impl FileManager {
                 self.address = display_path(self.path());
             }
             self.address_editing = ui.memory(|memory| memory.has_focus(address_id()));
+            self.index_ui(ui);
             if nav_button(ui, Icon::Repeat, "Refresh [F5]", true, palette) { self.refresh(); }
             if ui.add(ui_ext::secondary_button(
                 if self.show_hidden { "Hidden: on" } else { "Hidden: off" }, colors.panel, palette,
@@ -491,7 +518,12 @@ impl FileManager {
             ));
         }
         if parts.is_empty() {
-            return "Empty folder".into();
+            return if self.search.applied.is_some() {
+                "No matching files"
+            } else {
+                "Empty folder"
+            }
+            .into();
         }
         if selected && files == 0 {
             return format!(
@@ -635,7 +667,7 @@ impl FileManager {
             self.type_navigation.clear();
         }
         if let Some((paths, destination, moving)) = actions.transfer {
-            self.queue_transfer(paths, destination, moving);
+            self.queue_drag_transfer(paths, destination, moving);
         }
         if let Some((path, additive, range)) = actions.selection {
             self.select_with(path, additive, range);
@@ -697,6 +729,11 @@ impl FileManager {
                 );
             }
             self.similarity_canvas.search_from_photo(&path);
+        }
+
+        self.external_file = actions.external;
+        if let Some(path) = actions.reveal {
+            self.reveal_search_result(path, false);
         }
     }
 
@@ -771,7 +808,7 @@ impl FileManager {
                 self.navigate(path, Navigation::New);
             }
             Some(TreeAction::Transfer(paths, destination, moving)) => {
-                self.queue_transfer(paths, destination, moving)
+                self.queue_drag_transfer(paths, destination, moving)
             }
             None => {}
         }
@@ -1046,16 +1083,48 @@ pub(super) struct ListColumns {
     size: f32,
     modified: f32,
     right: f32,
+    extra: Option<f32>,
+    extra_count: usize,
 }
 
 impl ListColumns {
-    fn new(header: Rect) -> Self {
+    pub(super) fn new(header: Rect) -> Self {
         let name_width = (header.width() - 245.0).max(header.width() * 0.4);
         Self {
             size: header.left() + name_width,
             modified: header.left() + name_width + 90.0,
             right: header.right(),
+            extra: None,
+            extra_count: 0,
         }
+    }
+    pub(super) fn with_extra(mut self) -> Self {
+        self.extra = Some(self.size - 145.0);
+        self.extra_count = 1;
+        self
+    }
+    pub(super) fn with_extras(mut self, count: usize) -> Self {
+        if count > 0 {
+            self.extra = Some(self.size - count as f32 * 145.0);
+        }
+        self.extra_count = count;
+        self
+    }
+    fn name_end(self) -> f32 {
+        self.extra.unwrap_or(self.size)
+    }
+    pub(super) fn extra_cell(self, row: Rect) -> Option<Rect> {
+        self.extra_cell_at(row, 0)
+    }
+    pub(super) fn extra_cell_at(self, row: Rect, index: usize) -> Option<Rect> {
+        if index >= self.extra_count {
+            return None;
+        }
+        let left = self.extra? + index as f32 * 145.0;
+        Some(Rect::from_min_max(
+            pos2(left, row.top()),
+            pos2(left + 145.0, row.top() + ROW_HEIGHT),
+        ))
     }
 
     fn paint(&self, ui: &Ui, row: Rect, size: &str, modified: &str, color: Color32) {
@@ -1074,7 +1143,7 @@ impl ListColumns {
         &self,
         ui: &mut Ui,
         header: Rect,
-        sort: super::sorting::Sort,
+        sort: Option<super::sorting::Sort>,
         colors: WorkbenchColors,
     ) -> Option<super::sorting::Column> {
         use super::sorting::Column;
@@ -1086,7 +1155,7 @@ impl ListColumns {
                 header.left() + 8.0,
                 header.left() + 64.0,
             ),
-            (Column::Name, "Name", header.left() + 64.0, self.size),
+            (Column::Name, "Name", header.left() + 64.0, self.name_end()),
             (Column::Size, "Size", self.size, self.modified),
             (Column::Modified, "Modified", self.modified, self.right),
         ] {
@@ -1099,7 +1168,7 @@ impl ListColumns {
             if response.hovered() {
                 ui.painter().rect_filled(cell, 2.0, colors.recessed);
             }
-            let active = sort.column == column;
+            let active = sort.is_some_and(|sort| sort.column == column);
             let color = if active {
                 colors.accent
             } else {
@@ -1116,7 +1185,7 @@ impl ListColumns {
                     pos2(cell.left() + width + 10.0, cell.center().y),
                     vec2(14.0, 14.0),
                 );
-                (if sort.descending {
+                (if sort.is_some_and(|sort| sort.descending) {
                     Icon::ArrowDown
                 } else {
                     Icon::ArrowUp
@@ -1151,7 +1220,7 @@ pub(super) fn media_header(
             &entry.modified,
             colors.text_secondary,
         );
-        header.max.x = (columns.size - 8.0).max(header.left());
+        header.max.x = (columns.name_end() - 8.0).max(header.left());
     }
     let details_width = details.as_ref().map_or(0.0, |details| {
         ui.painter()
@@ -1196,7 +1265,7 @@ pub(super) fn media_header(
     }
 }
 
-fn paint_text(ui: &Ui, rect: Rect, x: f32, width: f32, text: &str, color: Color32) {
+pub(super) fn paint_text(ui: &Ui, rect: Rect, x: f32, width: f32, text: &str, color: Color32) {
     let clip = Rect::from_min_max(
         rect.min + vec2(x, 0.0),
         pos2(rect.min.x + x + width.max(0.0), rect.max.y),
@@ -1237,7 +1306,7 @@ fn file_row(
     };
     row_background(ui, rect, selected, response.hovered(), colors);
     let rect = Rect::from_min_size(rect.min, vec2(rect.width(), ROW_HEIGHT));
-    let name_width = columns.size - rect.left();
+    let name_width = columns.name_end() - rect.left();
     let icon = if entry.symlink {
         Icon::Link
     } else if entry.directory {
@@ -1283,7 +1352,7 @@ fn file_row(
 enum TreeAction {
     Toggle(std::path::PathBuf),
     Open(std::path::PathBuf),
-    Transfer(Vec<PathBuf>, PathBuf, bool),
+    Transfer(super::transfers::FileDrag, PathBuf, bool),
 }
 
 // Collect row events before mutating browser state, so virtual rendering borrows
@@ -1294,22 +1363,37 @@ struct ListActions {
     selection: Option<(PathBuf, bool, bool)>,
     open: Option<PathBuf>,
     navigate_folder: Option<PathBuf>,
+    reveal: Option<PathBuf>,
+    external: Option<PathBuf>,
+    search_results: bool,
+    context: super::search::PreviewContext,
+    metadata_only: bool,
     inspect: Option<PathBuf>,
     naming: Option<super::edits::NamingAction>,
     files: Option<super::transfers::ui::SelectionAction>,
     select_all: bool,
     open_trash: bool,
     clear: bool,
-    transfer: Option<(Vec<PathBuf>, PathBuf, bool)>,
+    transfer: Option<(super::transfers::FileDrag, PathBuf, bool)>,
     mount_binary: Option<(PathBuf, bool)>,
     unmount_binary: Option<PathBuf>,
     search_similar: Option<PathBuf>,
 }
 
 impl ListActions {
+    fn for_browser(browser: &FileManager) -> Self {
+        Self {
+            search_results: browser.search.has_result_sources(),
+            metadata_only: browser.search.has_offline_results(),
+            context: browser.search_preview_context(),
+            ..Self::default()
+        }
+    }
+
     fn background(&mut self, ui: &mut Ui, can_edit: bool, selected: bool) -> egui::Response {
         let focus = ui.interact(ui.available_rect_before_wrap(), list_id(), Sense::click());
-        if focus.clicked() {
+        // Enter returning focus from a text field is not a background click.
+        if focus.clicked_by(egui::PointerButton::Primary) {
             focus.request_focus();
             ui.ctx().request_repaint();
             self.clear = true;
@@ -1332,7 +1416,7 @@ impl ListActions {
         path: &PathBuf,
         selected: Option<&std::collections::BTreeSet<PathBuf>>,
     ) {
-        if !response.drag_started_by(egui::PointerButton::Primary) {
+        if self.metadata_only || !response.drag_started_by(egui::PointerButton::Primary) {
             return;
         }
         let marked = selected.is_some_and(|paths| paths.contains(path));
@@ -1346,6 +1430,7 @@ impl ListActions {
         response.dnd_set_drag_payload(super::transfers::FileDrag {
             paths,
             copy_only: false,
+            context: self.context.clone(),
         });
         if !marked {
             self.selection = Some((path.clone(), false, false));
@@ -1396,6 +1481,24 @@ impl ListActions {
         self.row_activation(ui, response, entry);
     }
 
+    fn unavailable_row(
+        &mut self,
+        ui: &mut Ui,
+        response: &egui::Response,
+        entry: &super::filesystem::Entry,
+        selected: Option<&std::collections::BTreeSet<PathBuf>>,
+    ) {
+        self.row_selection(ui, response, entry, selected);
+        response.context_menu(|ui| {
+            ui.label(
+                "Unavailable last-known result. Reconnect and refresh before using this file.",
+            );
+        });
+        if response.double_clicked() {
+            self.open = Some(entry.path.clone());
+        }
+    }
+
     fn row_context_menu(
         &mut self,
         response: &egui::Response,
@@ -1421,9 +1524,13 @@ impl ListActions {
                 self.open = Some(entry.path.clone());
                 ui.close_menu();
             }
+            if self.search_results && ui.button("Reveal in folder").clicked() {
+                self.reveal = Some(entry.path.clone());
+                ui.close_menu();
+            }
             if !entry.directory && entry.system.is_none() && ui.button("Open externally").clicked()
             {
-                let _ = super::viewers::external(entry.path.clone());
+                self.external = Some(entry.path.clone());
                 ui.close_menu();
             }
 
@@ -1543,7 +1650,7 @@ fn drop_files(
     ui: &Ui,
     response: &egui::Response,
     destination: &std::path::Path,
-) -> Option<(Vec<PathBuf>, PathBuf, bool)> {
+) -> Option<(super::transfers::FileDrag, PathBuf, bool)> {
     if !ui.is_enabled() {
         return None;
     }
@@ -1551,7 +1658,7 @@ fn drop_files(
         .dnd_release_payload::<super::transfers::FileDrag>()
         .map(|drag| {
             (
-                drag.paths.clone(),
+                drag.as_ref().clone(),
                 destination.into(),
                 !drag.copy_only && !ui.input(|i| i.modifiers.ctrl),
             )
