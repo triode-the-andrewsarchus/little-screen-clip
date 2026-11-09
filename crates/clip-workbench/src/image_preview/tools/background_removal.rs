@@ -15,21 +15,7 @@ pub enum BgRemovalMsg {
 }
 
 pub(super) fn background_removal_command(configured_cmd: Option<&str>) -> (String, Vec<String>) {
-    if let Some(cmd) = configured_cmd {
-        let parts: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
-        if parts.is_empty() {
-            ("scripts/remove_bg.py".to_string(), Vec::new())
-        } else {
-            (parts[0].clone(), parts[1..].to_vec())
-        }
-    } else if std::path::Path::new("scripts/remove_bg.py").exists() {
-        ("scripts/remove_bg.py".to_string(), Vec::new())
-    } else {
-        (
-            "python3".to_string(),
-            vec!["scripts/remove_bg.py".to_string()],
-        )
-    }
+    little_clip_core::process::resolve_python_script_command(configured_cmd, "remove_bg.py")
 }
 
 pub(super) fn run_image_tool_subprocess(
@@ -586,8 +572,7 @@ impl ImagePreviewState {
             let _ = tx.send(BgRemovalMsg::Progress(init_msg));
 
             // Native ORT fast path if using default/bundled scripts without custom overrides
-            let is_default_bg_cmd = request.command == "scripts/remove_bg.py"
-                || request.command == "./scripts/remove_bg.py"
+            let is_default_bg_cmd = request.command.contains("remove_bg.py")
                 || (request.command == "python3"
                     && request
                         .args

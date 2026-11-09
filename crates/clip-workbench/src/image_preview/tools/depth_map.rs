@@ -360,12 +360,8 @@ mod cancellation_tests {
 
 impl ImagePreviewState {
     pub fn run_depth_estimation(&mut self) {
-        let depth_script = "scripts/depth_estimation.py";
-        let (cmd_bin, cmd_args) = if std::path::Path::new(depth_script).exists() {
-            (depth_script.to_string(), Vec::new())
-        } else {
-            ("python3".to_string(), vec![depth_script.to_string()])
-        };
+        let (cmd_bin, cmd_args) =
+            little_clip_core::process::resolve_python_script_command(None, "depth_estimation.py");
         self.run_depth_estimation_with_command(cmd_bin, cmd_args);
     }
 

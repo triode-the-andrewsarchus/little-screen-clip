@@ -1626,24 +1626,10 @@ impl ImagePreviewState {
             None => return,
         };
 
-        let (cmd, args) = if let Some(ref custom_cmd) = self.inpaint_cmd {
-            let parts: Vec<String> = custom_cmd
-                .split_whitespace()
-                .map(|s| s.to_string())
-                .collect();
-            if parts.is_empty() {
-                ("scripts/inpaint_lama.py".to_string(), Vec::new())
-            } else {
-                (parts[0].clone(), parts[1..].to_vec())
-            }
-        } else if std::path::Path::new("scripts/inpaint_lama.py").exists() {
-            ("scripts/inpaint_lama.py".to_string(), Vec::new())
-        } else {
-            (
-                "python3".to_string(),
-                vec!["scripts/inpaint_lama.py".to_string()],
-            )
-        };
+        let (cmd, args) = little_clip_core::process::resolve_python_script_command(
+            self.inpaint_cmd.as_deref(),
+            "inpaint_lama.py",
+        );
 
         let (tx, rx) = std::sync::mpsc::channel::<LamaInpaintMsg>();
         self.inpaint_rx = Some(rx);

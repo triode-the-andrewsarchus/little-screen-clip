@@ -787,14 +787,9 @@ impl ImagePreviewState {
 }
 
 pub(crate) fn ocr_command() -> (String, String) {
-    let bundled = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/ocr.py");
-    let script_path = if bundled.is_file() {
-        bundled
-    } else {
-        std::path::PathBuf::from("scripts/ocr.py")
-    }
-    .to_string_lossy()
-    .into_owned();
+    let script_path = little_clip_core::process::resolve_bundled_script("ocr.py")
+        .to_string_lossy()
+        .into_owned();
     let venv_python = std::env::var("HOME")
         .map(|home| {
             format!(

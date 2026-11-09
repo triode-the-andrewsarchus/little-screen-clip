@@ -33,7 +33,7 @@ This document tracks the step-by-step refactoring plan for the `little-screen-cl
   - Make `BinaryDiffViewState.nav: BinaryDiffNavigation` the single source of truth in `crates/clip-workbench/src/binary_diff_view/{mod.rs,navigation.rs}`, removing the shadowed `scroll_row`, `cursor_offset`, `selected_region`, `sync_scroll`, and `bytes_per_row` fields.
   - Extract a shared Office-document-to-PDF/Markdown loader helper used by both `workbench/loaders.rs` and `file_manager/viewers.rs`, eliminating the redundant second `render_to_pdf` call when `ensure_rendered_pdf` fails.
 
-- [ ] **Task 4: Centralize bundled helper script resolution in `little-clip-core`**
+- [x] **Task 4: Centralize bundled helper script resolution in `little-clip-core`**
   - Add `little_clip_core::process::resolve_bundled_script(script_name: &str) -> PathBuf` that resolves scripts relative to the executable directory, ancestor repo root, or `CARGO_MANIFEST_DIR` before falling back to relative `scripts/<name>`.
   - Update `image_preview/tools/{bg_remove,depth,inpaint}.rs` and `little-clip-core` config resolvers to use `resolve_bundled_script`, and remove dead `ImageConfig::resolve_*_cmd` methods.
 

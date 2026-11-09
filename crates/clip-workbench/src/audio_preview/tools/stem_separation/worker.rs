@@ -25,8 +25,7 @@ pub(super) struct StemWorkerCommand {
 
 impl StemWorkerCommand {
     pub(super) fn configured() -> Self {
-        let worker =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/separate_stems.py");
+        let worker = little_clip_core::process::resolve_bundled_script("separate_stems.py");
         let venv_python = std::env::var("HOME")
             .map(|home| {
                 PathBuf::from(home).join(".local/share/little-screen-clip/nobg-venv/bin/python")
