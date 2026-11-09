@@ -56,17 +56,11 @@ fn is_tracking_param(key: &str) -> bool {
     TRACKING_PARAMS.iter().any(|&p| lower == p)
 }
 
-/// Trims tracking parameters from a URL string.
-/// Returns `Some(cleaned_url)` if any tracking parameters were removed, or `None` if the URL had no tracking.
-pub fn clean_url_tracking(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-        return None;
-    }
-
-    let parsed = Url::parse(trimmed).ok()?;
+/// Strips known marketing/analytics tracking query parameters from `parsed` in place.
+/// Returns `true` if at least one tracking parameter was removed.
+pub fn strip_url_tracking_params(parsed: &mut Url) -> bool {
     if parsed.query().is_none() {
-        return None;
+        return false;
     }
 
     let mut had_tracking = false;
@@ -81,20 +75,31 @@ pub fn clean_url_tracking(input: &str) -> Option<String> {
     }
 
     if !had_tracking {
-        return None;
+        return false;
     }
 
-    let mut cleaned = parsed.clone();
     if retained_pairs.is_empty() {
-        cleaned.set_query(None);
+        parsed.set_query(None);
     } else {
-        cleaned
+        parsed
             .query_pairs_mut()
             .clear()
             .extend_pairs(retained_pairs);
     }
 
-    Some(cleaned.to_string())
+    true
+}
+
+/// Trims tracking parameters from a URL string.
+/// Returns `Some(cleaned_url)` if any tracking parameters were removed, or `None` if the URL had no tracking.
+pub fn clean_url_tracking(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return None;
+    }
+
+    let mut parsed = Url::parse(trimmed).ok()?;
+    strip_url_tracking_params(&mut parsed).then(|| parsed.to_string())
 }
 
 #[cfg(test)]

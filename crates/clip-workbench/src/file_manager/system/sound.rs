@@ -14,12 +14,7 @@ struct Interface {
     role: &'static str,
     pcm: Option<char>,
 }
-fn number(raw: &str) -> Option<u32> {
-    if raw.is_empty() || !raw.bytes().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    raw.parse().ok()
-}
+use super::buses::parse_number as number;
 fn interface(name: &str) -> Option<Interface> {
     let (card, device, role, pcm) = if let Some(n) = name.strip_prefix("card") {
         (Some(number(n)?), None, "Sound card", None)

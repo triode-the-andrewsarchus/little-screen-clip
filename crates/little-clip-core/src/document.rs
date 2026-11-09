@@ -200,9 +200,9 @@ fn render_with_libreoffice(input: &Path, output_pdf: &Path) -> Result<(), String
         .map_err(|e| e.to_string())?;
     let out_dir = workspace.path();
 
-    let binary = if which_exists("libreoffice") {
+    let binary = if crate::process::command_available("libreoffice").is_some() {
         "libreoffice"
-    } else if which_exists("soffice") {
+    } else if crate::process::command_available("soffice").is_some() {
         "soffice"
     } else {
         return Err("Neither libreoffice nor soffice found on system".to_string());
@@ -348,18 +348,6 @@ pub fn extract_rtf_text(bytes: &[u8], max_text_bytes: usize) -> Result<RtfText, 
         && text.len() <= max_text_bytes;
     text.truncate(text.floor_char_boundary(max_text_bytes.min(text.len())));
     Ok(RtfText { text, complete })
-}
-
-fn which_exists(binary: &str) -> bool {
-    if let Ok(path_var) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(binary);
-            if candidate.is_file() {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 #[cfg(test)]

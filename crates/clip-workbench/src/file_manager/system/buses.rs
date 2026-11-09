@@ -63,13 +63,19 @@ impl Topology {
         document.facts.push(fact);
     }
 }
+/// Parses a non-empty ASCII-digit decimal `u32`.
+pub(super) fn parse_number(raw: &str) -> Option<u32> {
+    (!raw.is_empty() && raw.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| raw.parse().ok())
+        .flatten()
+}
+/// Parses a kernel registration name's bounded decimal suffix.
+pub(super) fn parse_numbered(name: &str, prefix: &str) -> Option<u32> {
+    name.strip_prefix(prefix).and_then(parse_number)
+}
 /// Recognizes kernel registration names with a bounded decimal suffix.
 pub(super) fn numbered(name: &str, prefix: &str) -> bool {
-    name.strip_prefix(prefix).is_some_and(|value| {
-        !value.is_empty()
-            && value.bytes().all(|byte| byte.is_ascii_digit())
-            && value.parse::<u32>().is_ok()
-    })
+    parse_numbered(name, prefix).is_some()
 }
 /// Builds a compact summary from the selected object's observed fields.
 pub(super) fn attribute_summary(document: &Document, root: &Path) -> String {

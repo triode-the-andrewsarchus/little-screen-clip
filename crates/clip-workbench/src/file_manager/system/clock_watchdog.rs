@@ -14,13 +14,8 @@ enum Object {
     Watchdog,
 }
 
-fn numbered(name: &str, prefix: &str) -> bool {
-    name.strip_prefix(prefix).is_some_and(|suffix| {
-        !suffix.is_empty()
-            && suffix.bytes().all(|byte| byte.is_ascii_digit())
-            && suffix.parse::<u32>().is_ok()
-    })
-}
+use super::buses::numbered;
+
 fn object(path: &Path) -> Option<Object> {
     let name = path.file_name()?.to_str()?;
     match buses::subsystem(path).as_deref()? {

@@ -24,7 +24,7 @@ This document tracks the step-by-step refactoring plan for the `little-screen-cl
   - Clear personal machine paths from `[file_manager.search]` `roots` in `config.toml`.
   - Fix `float_literal_f32_fallback` warnings in `crates/clip-workbench`.
 
-- [ ] **Task 2: Deduplicate URL cleaning, command availability checks, and sysfs number parsers**
+- [x] **Task 2: Deduplicate URL cleaning, command availability checks, and sysfs number parsers**
   - Delegate `op_clean_url` in `crates/little-clip-ops/src/lib.rs` to `auto_actions::clean_url_tracking` so expanded tracking rules and bare-domain handling are shared.
   - Replace the duplicate `which_exists` helper in `crates/little-clip-core/src/document.rs` with `crate::process::command_available`.
   - Consolidate duplicated `numbered` / `digits` / `number` suffix-parsing helpers across `file_manager/system/{btrfs,char_devices,Collections,dma,fabric,firmware,graphics,iommu,leds,media,ptp,scsi,watchdog}.rs` into `file_manager/system/mod.rs`.

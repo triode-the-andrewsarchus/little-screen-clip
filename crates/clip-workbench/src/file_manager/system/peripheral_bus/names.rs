@@ -8,12 +8,7 @@ pub(super) enum Object {
     SpiDevice(u32, u32),
     SpiAccess(u32, u32),
 }
-pub(super) fn number(raw: &str) -> Option<u32> {
-    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    raw.parse().ok()
-}
+pub(super) use super::super::buses::parse_number as number;
 impl Object {
     pub fn parse(name: &str, subsystem: &str) -> Option<Self> {
         match subsystem {

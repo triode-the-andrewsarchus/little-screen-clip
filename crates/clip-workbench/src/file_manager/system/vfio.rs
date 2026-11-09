@@ -65,11 +65,7 @@ pub(super) fn directory_group(sys: &Path) -> Option<(Option<std::path::PathBuf>,
     Some((group, role.title().into()))
 }
 
-fn number(name: &str) -> Option<u32> {
-    (!name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()))
-        .then(|| name.parse().ok())
-        .flatten()
-}
+use super::buses::parse_number as number;
 
 pub(super) fn unmapped(document: &mut Document) {
     // A stale conventional node is not evidence that its kernel interface exists.

@@ -16,12 +16,7 @@ enum Object {
     PwmChannel(u32),
 }
 
-fn number(name: &str, prefix: &str) -> Option<u32> {
-    let suffix = name.strip_prefix(prefix)?;
-    (!suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
-        .then(|| suffix.parse().ok())
-        .flatten()
-}
+use super::buses::parse_numbered as number;
 fn object(path: &Path) -> Option<Object> {
     let name = path.file_name()?.to_str()?;
     let subsystem = path.join("subsystem").canonicalize().ok();

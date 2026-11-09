@@ -22,13 +22,7 @@ enum Object {
     VolumeBlock(u32, u32),
     Control,
 }
-fn number(raw: &str) -> Option<u32> {
-    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
-        None
-    } else {
-        raw.parse().ok()
-    }
-}
+use super::buses::parse_number as number;
 fn volume(raw: &str) -> Option<(u32, u32)> {
     let (device, volume) = raw.split_once('_')?;
     Some((number(device)?, number(volume)?))
