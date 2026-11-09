@@ -111,7 +111,8 @@ flowchart TD
         LCO[little-clip-ops<br/><i>Pure Transformations & Diff</i>]
         LCDSP[little-clip-dsp<br/><i>Radio, Morse, AX.25, SSTV</i>]
         
-        CS[clip-studio<br/><i>Shared UI Chrome, Viewers & Studio Widgets (egui)</i>]
+        CUI[clip-ui<br/><i>Generic Design System, Chrome & UI Primitives (egui)</i>]
+        CS[clip-studio<br/><i>Domain Media Viewers, Strips & Studios (egui)</i>]
         
         CW[clip-workbench<br/><i>Lightweight Niri Popup Binary</i>]
         CFM[clip-file-manager<br/><i>Full Resizable File Manager Binary</i>]
@@ -123,6 +124,11 @@ flowchart TD
     LCC --> LCS
     LCC --> LCO
     LCC --> LCDSP
+    
+    LCC --> CUI
+    CUI --> CS
+    CUI --> CW
+    CUI --> CFM
     
     LCR --> CS
     LCS --> CS
@@ -272,25 +278,36 @@ flowchart TD
 [`crates/clip-workbench`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench) currently functions as both a UI library, a background worker runner, a full-fledged file browser, and a clipboard popup. It pulls in heavy third-party dependencies (`ort`, `rusqlite`, `tokenizers`, `udev`, `trash`, `fuse-binwalk`, `raw-cpuid`, `realfft`, `hound`, `rodio`) that are only used by the file manager or specific media studios. Meanwhile, [`crates/clip-file-manager`](file:///home/vcarlson/little-screen-clip/crates/clip-file-manager) is an empty shell that depends backwards on `clip-workbench`.
 
 #### Architectural Solution
-1. **Extract Shared Studio Crate (`crates/clip-studio`)**:
-   - Move shared egui components out of `clip-workbench`:
+1. **Extract Generic Design System Crate (`crates/clip-ui`)**:
+   - Move generic, content-agnostic UI chrome, styling, and design system components out of `clip-workbench`:
+     - Design tokens, padding, control heights, spacing: `ui_ext.rs`.
+     - Standard controls: `action_button`, `secondary_button`, `themed_button`, toggle switches, sliders.
+     - Badges, pills, shortcut chips, and status toasts: `StatusToast`.
+     - Color & theme syncing: `ui_appearance.rs` (OKLCH palette derivation, dark/light mode).
+     - Navigation: `ui_tabs.rs` (segmented pickers, pill tabs).
+     - Icons: `icons.rs` (icon glyph cache and rendering).
+     - Formatting: `ansi.rs` (terminal color parsing).
+     - Visual sandbox: `component_gallery.rs`.
+   - `clip-ui` depends **only** on `egui` and `little-clip-core::palette`. It has ZERO dependencies on heavy media tools, audio codecs, or GPU compute, compiling in < 1–2 seconds.
+2. **Extract Shared Studio Crate (`crates/clip-studio`)**:
+   - Move domain-specific media viewers, inline row preview strips, and full interactive studio workspaces out of `clip-workbench`:
      - Media viewers: `audio_preview/`, `image_preview/`, `text_preview/`, `pdf_view/`, `midi_view/`, `spreadsheet_view/`, `binary_diff_view/`, `diff_view/`, `canvas/`, `shell/`.
-     - Shared UI infrastructure: `ui_ext.rs`, `ui_appearance.rs`, `icons.rs`, `ansi.rs`, `file_source.rs`.
-   - Ensure `clip-studio` depends only on `little-clip-core`, `little-clip-render`, `little-clip-ops`, and `egui`/`eframe`.
-2. **Relocate File Manager to `crates/clip-file-manager`**:
+     - Standardized `GridTileWidget` (for icon grid and shelf cards).
+   - Depends on `clip-ui` for UI chrome/buttons, `little-clip-core` for data models, `little-clip-render`, and domain-specific codecs.
+3. **Relocate File Manager to `crates/clip-file-manager`**:
    - Move the entire `crates/clip-workbench/src/file_manager/` tree directly into `crates/clip-file-manager/src/`.
    - Transfer file-manager-specific dependencies from `clip-workbench/Cargo.toml` to `clip-file-manager/Cargo.toml`:
      - `ort`, `rusqlite`, `tokenizers`, `udev`, `trash`, `fuse-binwalk`, `raw-cpuid`.
-   - Invert the Cargo dependency: `clip-file-manager` depends on `clip-studio` and `little-clip-core`. It no longer depends on `clip-workbench`.
-3. **Partition Worker CLI Dispatches**:
+   - Invert the Cargo dependency: `clip-file-manager` depends on `clip-ui`, `clip-studio`, and `little-clip-core`. It no longer depends on `clip-workbench`.
+4. **Partition Worker CLI Dispatches**:
    - Currently, `crates/clip-workbench/src/worker_cli.rs` intercepts `--internal-file-search-reader`, `--internal-system-inspector`, `--internal-barcode-reader`, etc., via `/proc/self/exe`.
    - Separate file-search and system-inspector worker dispatchers into `clip-file-manager`.
    - Keep only clipboard-relevant workers in `clip-workbench` (or share generic worker boilerplate via `little-clip-core::process`).
-4. **SVG and Media Rendering Inconsistency**:
+5. **SVG and Media Rendering Inconsistency**:
    - `little-clip-core::item::ImageThumbnail::generate_from_svg` attempts to shell out to an external binary `rsvg-convert` via `Command::new("rsvg-convert")`, which fails whenever `librsvg` is not installed on the system.
    - In contrast, `little-clip-render` and `clip-workbench` already include `resvg` (`resvg::usvg`) for pure-Rust SVG parsing and rasterization.
    - Consolidate SVG thumbnail rasterization to use the existing pure-Rust `resvg` rendering pipeline (shared via `little-clip-render` or `clip-studio`), eliminating the fragile external process dependency.
-5. **Lean Clipboard Workbench Popup**:
+6. **Lean Clipboard Workbench Popup**:
    - `clip-workbench` becomes a minimal binary and UI shell containing only `workbench/` popup state, slot management, and quick clipboard viewers.
    - Dramatic build time acceleration: compiling `clip-workbench` in debug mode will no longer require compiling ONNX runtime, SQLite, or Linux udev bindings.
 
@@ -490,11 +507,12 @@ The search indexing subsystem ([`search/retrieval.rs`](file:///home/vcarlson/lit
 
 ```
 Phase 1: Inverted Crate Hierarchy & Dependency Untangling
-├── Task 1.1: Extract `crates/clip-studio` for shared egui viewers & chrome
-├── Task 1.2: Move `file_manager/` tree directly into `crates/clip-file-manager`
-├── Task 1.3: Invert Cargo dependency graph; remove heavy deps from `clip-workbench`
-├── Task 1.4: Split internal worker CLI commands between workbench and file manager
-└── Task 1.5: Unify SVG thumbnail generation onto pure-Rust `resvg` instead of `rsvg-convert`
+├── Task 1.1: Extract `crates/clip-ui` for generic design system, chrome, icons, and widgets
+├── Task 1.2: Extract `crates/clip-studio` for domain media viewers, inline strips, and studio tools
+├── Task 1.3: Move `file_manager/` tree directly into `crates/clip-file-manager`
+├── Task 1.4: Invert Cargo dependency graph; remove heavy deps from `clip-workbench`
+├── Task 1.5: Split internal worker CLI commands between workbench and file manager
+└── Task 1.6: Unify SVG thumbnail generation onto pure-Rust `resvg` instead of `rsvg-convert`
 
 Phase 2: Universal Multi-Tier Content Presentation & Code Reuse
 ├── Task 2.1: Canonical `ContentType` enum & capability registry in `little-clip-core`
