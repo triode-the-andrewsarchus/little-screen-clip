@@ -211,6 +211,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         ViewerSession::System(_)
         | ViewerSession::Font(_)
         | ViewerSession::Notebook(_)
+        | ViewerSession::Geography(_)
         | ViewerSession::Database(_)
         | ViewerSession::Calendar(_)
         | ViewerSession::Mail(_) => {}

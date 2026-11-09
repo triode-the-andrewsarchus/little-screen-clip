@@ -30,6 +30,7 @@ enum Loaded {
     Mail(super::mail::Viewer),
     Calendar(super::calendar::Viewer),
     Database(super::database::Viewer),
+    Geography(super::geography::Viewer),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
     Text(super::text_editor::TextSession),
@@ -52,6 +53,7 @@ enum ViewerSession {
     Mail(super::mail::Viewer),
     Calendar(super::calendar::Viewer),
     Database(super::database::Viewer),
+    Geography(super::geography::Viewer),
     Image(ImagePreviewState),
     Text(super::text_editor::TextSession),
     Audio(AudioPreviewState),
@@ -261,6 +263,10 @@ impl Viewers {
             (
                 Some(ViewerSession::Database(state)),
                 Some(super::DocumentPosition::DatabaseTable(index)),
+            ) => state.select(index),
+            (
+                Some(ViewerSession::Geography(state)),
+                Some(super::DocumentPosition::GeographicFeature(index)),
             ) => state.select(index),
             (Some(ViewerSession::Pdf(state)), Some(super::DocumentPosition::PdfPage(page))) => {
                 state.selected_page = Some(page.max(1))
@@ -472,6 +478,7 @@ enum Kind {
     Mail,
     Calendar,
     Database,
+    Geography,
     Font,
     Image,
     Audio,
@@ -524,6 +531,7 @@ fn extension_kind(path: &Path) -> Option<Kind> {
         "epub" | "cbz" => Some(Kind::Book),
         "eml" => Some(Kind::Mail),
         "ics" => Some(Kind::Calendar),
+        "gpx" => Some(Kind::Geography),
         "sqlite" | "sqlite3" | "db" | "db3" => Some(Kind::Database),
         _ => None,
     }
@@ -554,6 +562,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         ));
     }
     match kind {
+        Kind::Geography => super::geography::Viewer::load(path).map(Loaded::Geography),
         Kind::Database => super::database::Viewer::load(path).map(Loaded::Database),
         Kind::Calendar => super::calendar::Viewer::load(path).map(Loaded::Calendar),
         Kind::Mail => super::mail::Viewer::load(path).map(Loaded::Mail),
@@ -638,6 +647,7 @@ fn session(
     match loaded {
         Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
+        Loaded::Geography(viewer) => ViewerSession::Geography(viewer),
         Loaded::Database(viewer) => ViewerSession::Database(viewer),
         Loaded::Calendar(viewer) => ViewerSession::Calendar(viewer),
         Loaded::Mail(viewer) => ViewerSession::Mail(viewer),
@@ -700,6 +710,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
     match viewer {
         ViewerSession::Notebook(state) => state.ui(ui, close, palette),
         ViewerSession::Book(state) => state.ui(ui, close, palette),
+        ViewerSession::Geography(state) => state.ui(ui, close, palette),
         ViewerSession::Database(state) => state.ui(ui, close, palette),
         ViewerSession::Calendar(state) => state.ui(ui, close, palette),
         ViewerSession::Mail(state) => state.ui(ui, close, palette),
@@ -812,6 +823,11 @@ mod tests {
                 "tests/fixtures/comic.cbz",
                 super::super::DocumentPosition::BookChapter(1),
                 "Page 2 / 3",
+            ),
+            (
+                "../little-clip-core/tests/fixtures/geography/harbor.gpx",
+                super::super::DocumentPosition::GeographicFeature(1),
+                "Ferry route",
             ),
             (
                 "tests/fixtures/database/harbor.sqlite",

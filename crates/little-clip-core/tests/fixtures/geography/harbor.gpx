@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Owned fixture" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><name>Harbor walk</name></metadata>
+  <wpt lat="47.620" lon="-122.350"><ele>12</ele><name>Blue pier</name><desc>Meet at the blue sign.</desc></wpt>
+  <rte><name>Ferry route</name><rtept lat="47.616" lon="-122.352"><ele>0</ele></rtept><rtept lat="47.618" lon="-122.342"><ele>0</ele></rtept></rte>
+  <trk><name>Coastal track</name><desc>Two separately recorded segments.</desc>
+    <trkseg>
+      <trkpt lat="47.620" lon="-122.350"><ele>12</ele><time>2026-11-09T09:00:00-06:00</time></trkpt>
+      <trkpt lat="47.622" lon="-122.348"><ele>28</ele><time>2026-11-09T09:05:00-06:00</time></trkpt>
+      <trkpt lat="47.624" lon="-122.345"><ele>45</ele><time>2026-11-09T09:10:00-06:00</time></trkpt>
+    </trkseg>
+    <trkseg>
+      <trkpt lat="47.628" lon="-122.341"><ele>38</ele><time>2026-11-09T09:20:00-06:00</time></trkpt>
+      <trkpt lat="47.630" lon="-122.338"><ele>19</ele><time>2026-11-09T09:25:00-06:00</time></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

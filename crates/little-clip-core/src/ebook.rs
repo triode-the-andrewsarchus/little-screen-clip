@@ -26,38 +26,8 @@ pub struct Book {
     pub cover: Option<String>,
 }
 pub use crate::html_preview::Block;
-fn validate_markup(bytes: &[u8]) -> Result<(), String> {
-    let mut reader = quick_xml::Reader::from_reader(bytes);
-    let mut depth = 0usize;
-    let mut events = 0usize;
-    loop {
-        events += 1;
-        if events > 100_000 {
-            return Err("EPUB markup exceeds the node budget".into());
-        }
-        use quick_xml::events::Event;
-        match reader.read_event().map_err(|e| e.to_string())? {
-            Event::Start(_) => {
-                depth += 1;
-                if depth > 128 {
-                    return Err("EPUB XML is too deeply nested".into());
-                }
-            }
-            Event::End(_) => depth = depth.checked_sub(1).ok_or("Unbalanced EPUB XML")?,
-            Event::DocType(dtd) if dtd.contains(&b'[') => {
-                return Err("EPUB custom entities are not supported".into());
-            }
-            Event::Eof => break,
-            _ => (),
-        }
-    }
-    if depth != 0 {
-        return Err("Truncated EPUB markup".into());
-    }
-    Ok(())
-}
 fn xml(bytes: &[u8]) -> Result<Xml<'_>, String> {
-    validate_markup(bytes)?;
+    crate::xml_content::validate(bytes, 100_000, 128)?;
     let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
     Xml::parse_with_options(
         text,
@@ -155,7 +125,7 @@ impl Book {
     pub fn chapter(&self, index: usize) -> Result<Vec<Block>, String> {
         let chapter = self.chapters.get(index).ok_or("Unknown EPUB chapter")?;
         let bytes = entry(&mut archive(&self.bytes)?, &chapter.resource, XML_LIMIT)?;
-        validate_markup(&bytes)?;
+        crate::xml_content::validate(&bytes, 100_000, 128)?;
         crate::html_preview::parse(
             std::str::from_utf8(&bytes).map_err(|e| e.to_string())?,
             |href| resource(&chapter.resource, href).ok(),
@@ -467,7 +437,7 @@ mod tests {
         let deep = format!("{}{}", "<x>".repeat(129), "</x>".repeat(129));
         assert!(xml(deep.as_bytes()).is_err());
         let many = format!("<root>{}</root>", "<x/>".repeat(100_000));
-        assert!(validate_markup(many.as_bytes()).is_err());
+        assert!(crate::xml_content::validate(many.as_bytes(), 100_000, 128).is_err());
         assert!(Book::parse(b"not a ZIP".to_vec()).is_err());
         assert!(Book::parse(BOOK[..BOOK.len() - 8].to_vec()).is_err());
     }

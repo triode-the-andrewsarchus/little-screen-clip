@@ -687,7 +687,8 @@
   - [ ] `.fit` — activity / GPS recording
     - [ ] File ID and device metadata (manufacturer, serial, device type, timestamp)
   - [ ] `.geojson`
-  - [ ] `.gpx`
+  - [x] `.gpx` — GPX 1.0/1.1 offline WGS84 map, source-order waypoint/route/track selection, linked supplied-elevation profile, pan/zoom, spherical length excluding segment gaps, bounded clickable folder previews and guarded rename
+    - [ ] Terrain/basemap layers, extension telemetry and full-resolution drawing at arbitrary zoom (16 MiB / 200,000 positions / 4,096 segments; drawing reduction is disclosed). Guitar Pro binary GPX is a separate unsupported format.
     - [ ] `<metadata>` header (name, description, author, copyright, bounds, time)
   - [ ] `.kml`, `.kmz`
     - [ ] Document / folder name, description, author, and schema metadata

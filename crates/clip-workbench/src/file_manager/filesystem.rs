@@ -42,11 +42,15 @@ impl Entry {
             || self.is_mail()
             || self.is_calendar()
             || self.is_database()
+            || self.is_geography()
             || (self.regular_file && super::font_strip::known(&self.path))
     }
 
     pub(super) fn is_subtitles(&self) -> bool {
         self.regular_file && little_clip_core::subtitles::is_subtitle_path(&self.path)
+    }
+    pub(super) fn is_geography(&self) -> bool {
+        self.regular_file && super::geography::known(&self.path)
     }
     pub(super) fn is_database(&self) -> bool {
         self.regular_file && super::database::known(&self.path)

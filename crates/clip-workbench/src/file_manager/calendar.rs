@@ -328,7 +328,7 @@ fn paint_plan(
             let label = tick_label(tick, plan.basis == Basis::Date);
             painter.line_segment(
                 [egui::pos2(x, graph.top()), egui::pos2(x, graph.bottom())],
-                egui::Stroke::new(1.0, colors.border),
+                egui::Stroke::new(1.0_f32, colors.border),
             );
             let align = if step == 4 {
                 egui::Align2::RIGHT_TOP
@@ -365,7 +365,11 @@ fn paint_plan(
         };
         painter.rect_filled(cell, 2.0, color.gamma_multiply(0.5));
         if selected == Some(bar.event) {
-            painter.rect_stroke(cell.shrink(1.0), 2.0, egui::Stroke::new(2.0, colors.focus));
+            painter.rect_stroke(
+                cell.shrink(1.0),
+                2.0,
+                egui::Stroke::new(2.0_f32, colors.focus),
+            );
         }
         if axis {
             painter.with_clip_rect(cell.intersect(ui.clip_rect())).text(

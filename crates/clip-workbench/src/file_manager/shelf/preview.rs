@@ -48,6 +48,7 @@ pub(in crate::file_manager) enum Source {
     Book(PathBuf),
     Calendar(PathBuf),
     Database(PathBuf),
+    Geography(PathBuf),
     Mail(PathBuf),
     Subtitle(PathBuf),
     FontRaster {
@@ -112,6 +113,7 @@ impl Source {
             | Self::Book(_)
             | Self::Calendar(_)
             | Self::Database(_)
+            | Self::Geography(_)
             | Self::Mail(_)
             | Self::FontRaster { .. }
             | Self::Binary(_)
@@ -193,6 +195,7 @@ impl Source {
             Source::System(path) => super::super::system::load(&path, token),
             Source::Subtitle(path) => super::super::subtitle_strip::load(&path, token),
             Source::Notebook(path) => super::super::notebook::load(&path, token),
+            Source::Geography(path) => super::super::geography::load(&path, token),
             Source::Database(path) => super::super::database::load(&path, token),
             Source::Calendar(path) => super::super::calendar::load(&path, token),
             Source::Mail(path) => super::super::mail::load(&path, token),
