@@ -104,40 +104,70 @@ When executing any phase of this plan:
 
 ```mermaid
 flowchart TD
-    subgraph Target Crate Hierarchy
-        LCC[little-clip-core<br/><i>Models, IPC, Colors, Config, Kernel Interface</i>]
-        LCR[little-clip-render<br/><i>Text & Card Rasterization (Tiny-Skia)</i>]
-        LCS[little-clip-scene<br/><i>3D Splats & GPU</i>]
+    subgraph Foundation & Core (Zero egui)
+        LCC[little-clip-core<br/><i>Models, ContentType, Signal Math, IPC</i>]
+        LCR[little-clip-render<br/><i>320x220 Tiny-Skia Hardware Cards</i>]
+        LCS[little-clip-scene<br/><i>3D Splats & GPU wgpu Pipeline</i>]
         LCO[little-clip-ops<br/><i>Pure Transformations & Diff</i>]
         LCDSP[little-clip-dsp<br/><i>Radio, Morse, AX.25, SSTV</i>]
+        CSEARCH[clip-search<br/><i>31k LOC: SQLite, BM25, ONNX Embeddings</i>]
+    end
+    
+    subgraph Design System (egui)
+        CUI[clip-ui<br/><i>Generic Chrome, Buttons, Toasts, Icons (<2s build)</i>]
+    end
+
+    subgraph Modular Domain Studios (egui)
+        CS_IMG[clip-studio-image<br/><i>36k LOC: Viewport, Markup, Filmr, OCR</i>]
+        CS_AUD[clip-studio-audio<br/><i>21k LOC: Waveform, Spectrum, Chords, DAW</i>]
+        CS_PDF[clip-studio-pdf<br/><i>5k LOC: Page Strips, Document Tools</i>]
+        CS_TXT[clip-studio-text<br/><i>6k LOC: Minimap, Syntax, Markdown</i>]
+        CS_DIFF[clip-studio-diff<br/><i>7k LOC: Text, Image & Hex Diff</i>]
+        CS_MIDI[clip-studio-midi<br/><i>3k LOC: Piano Roll, Synth Playback</i>]
+        CS_SHT[clip-studio-sheet<br/><i>2.5k LOC: Table Grid, Formula Bar</i>]
         
-        CUI[clip-ui<br/><i>Generic Design System, Chrome & UI Primitives (egui)</i>]
-        CS[clip-studio<br/><i>Domain Media Viewers, Strips & Studios (egui)</i>]
-        
-        CW[clip-workbench<br/><i>Lightweight Niri Popup Binary</i>]
-        CFM[clip-file-manager<br/><i>Full Resizable File Manager Binary</i>]
-        DAEMON[little-clipd<br/><i>Daemon & Dedicated USB Thread</i>]
-        CLI[clipctl<br/><i>Command Line Tool</i>]
+        CS[clip-studio<br/><i>Umbrella Facade / Re-exports</i>]
+    end
+
+    subgraph Applications
+        CW[clip-workbench<br/><i>Lightweight Niri Popup Binary (<10s build)</i>]
+        CFM[clip-file-manager<br/><i>Full Resizable Desktop File Manager</i>]
+        DAEMON[little-clipd<br/><i>Daemon & Dedicated USB Hardware Thread</i>]
+        CLI[clipctl<br/><i>Command Line Tool & Route Cancellation</i>]
     end
 
     LCC --> LCR
     LCC --> LCS
     LCC --> LCO
     LCC --> LCDSP
+    LCC --> CSEARCH
     
     LCC --> CUI
-    CUI --> CS
+    CUI --> CS_IMG
+    CUI --> CS_AUD
+    CUI --> CS_PDF
+    CUI --> CS_TXT
+    CUI --> CS_DIFF
+    CUI --> CS_MIDI
+    CUI --> CS_SHT
+    
+    CS_IMG --> CS
+    CS_AUD --> CS
+    CS_PDF --> CS
+    CS_TXT --> CS
+    CS_DIFF --> CS
+    CS_MIDI --> CS
+    CS_SHT --> CS
+    
     CUI --> CW
     CUI --> CFM
     
-    LCR --> CS
-    LCS --> CS
-    LCO --> CS
-    
     CS --> CW
     CS --> CFM
+    CSEARCH --> CFM
     
     LCC --> DAEMON
+    LCR --> DAEMON
     LCC --> CLI
 ```
 
@@ -289,25 +319,35 @@ flowchart TD
      - Formatting: `ansi.rs` (terminal color parsing).
      - Visual sandbox: `component_gallery.rs`.
    - `clip-ui` depends **only** on `egui` and `little-clip-core::palette`. It has ZERO dependencies on heavy media tools, audio codecs, or GPU compute, compiling in < 1–2 seconds.
-2. **Extract Shared Studio Crate (`crates/clip-studio`)**:
-   - Move domain-specific media viewers, inline row preview strips, and full interactive studio workspaces out of `clip-workbench`:
-     - Media viewers: `audio_preview/`, `image_preview/`, `text_preview/`, `pdf_view/`, `midi_view/`, `spreadsheet_view/`, `binary_diff_view/`, `diff_view/`, `canvas/`, `shell/`.
-     - Standardized `GridTileWidget` (for icon grid and shelf cards).
-   - Depends on `clip-ui` for UI chrome/buttons, `little-clip-core` for data models, `little-clip-render`, and domain-specific codecs.
-3. **Relocate File Manager to `crates/clip-file-manager`**:
-   - Move the entire `crates/clip-workbench/src/file_manager/` tree directly into `crates/clip-file-manager/src/`.
-   - Transfer file-manager-specific dependencies from `clip-workbench/Cargo.toml` to `clip-file-manager/Cargo.toml`:
-     - `ort`, `rusqlite`, `tokenizers`, `udev`, `trash`, `fuse-binwalk`, `raw-cpuid`.
-   - Invert the Cargo dependency: `clip-file-manager` depends on `clip-ui`, `clip-studio`, and `little-clip-core`. It no longer depends on `clip-workbench`.
-4. **Partition Worker CLI Dispatches**:
+2. **Extract Modular Studio Crates & `clip-studio` Umbrella Facade**:
+   - Large studio tools span 20,000–36,000 lines each. Lumping them into a single monolithic studio crate would simply recreate a 100k-line bottleneck. Instead, partition them into dedicated domain crates with parallel Cargo compilation:
+     - `crates/clip-studio-image` (36.4k LOC): Viewport canvas, markup drawing, film simulation, color grading, OCR (`filmr`, `image`, `webp`).
+     - `crates/clip-studio-audio` (20.9k LOC): Waveform canvas, spectral FFT analysis, chords, DAW editing, audio export (`symphonia`, `rodio`, `realfft`, `hound`).
+     - `crates/clip-studio-pdf` (5.1k LOC): Document tools, multi-page strip, high-res PDF rendering (`lopdf`).
+     - `crates/clip-studio-text` (5.7k LOC): Text minimap, syntax highlighter, markdown live preview (`syntect`).
+     - `crates/clip-studio-diff` (6.8k LOC): Split/unified text diff, image diff, binary hex table diff.
+     - `crates/clip-studio-midi` (2.9k LOC): Piano roll note strip, synthesizer playback (`midir`, `midly`).
+     - `crates/clip-studio-sheet` (2.5k LOC): Spreadsheet table grid, multi-sheet tabs, formula bar (`calamine`).
+     - `crates/clip-studio`: A lightweight umbrella facade crate that re-exports all studios with feature flags (`features = ["audio", "image", "pdf", ...]`) for convenient consumption.
+3. **Extract Search Engine Crate (`crates/clip-search`)**:
+   - Isolate the 31,200 lines of search engine logic from UI crates entirely:
+     - SQLite database connection pool, migrations, and BM25 virtual tables (`rusqlite`).
+     - ONNX runtime semantic embedding inference and cosine vector storage (`ort`, `ndarray`).
+     - HuggingFace BERT tokenization pipeline (`tokenizers`).
+     - Document/text readers and background crawling workers (`--internal-file-search-reader`).
+   - Pure headless library consumed by `clip-file-manager` and background worker processes with zero GUI dependencies.
+4. **Relocate File Manager to `crates/clip-file-manager`**:
+   - Move the remaining `crates/clip-workbench/src/file_manager/` browser shell directly into `crates/clip-file-manager/src/`.
+   - Invert the Cargo dependency: `clip-file-manager` depends on `clip-ui`, `clip-studio` (or specific studio crates), `clip-search`, and `little-clip-core`. It no longer depends on `clip-workbench`.
+5. **Partition Worker CLI Dispatches**:
    - Currently, `crates/clip-workbench/src/worker_cli.rs` intercepts `--internal-file-search-reader`, `--internal-system-inspector`, `--internal-barcode-reader`, etc., via `/proc/self/exe`.
-   - Separate file-search and system-inspector worker dispatchers into `clip-file-manager`.
+   - Separate file-search and system-inspector worker dispatchers into `clip-file-manager` and `clip-search`.
    - Keep only clipboard-relevant workers in `clip-workbench` (or share generic worker boilerplate via `little-clip-core::process`).
-5. **SVG and Media Rendering Inconsistency**:
+6. **SVG and Media Rendering Inconsistency**:
    - `little-clip-core::item::ImageThumbnail::generate_from_svg` attempts to shell out to an external binary `rsvg-convert` via `Command::new("rsvg-convert")`, which fails whenever `librsvg` is not installed on the system.
    - In contrast, `little-clip-render` and `clip-workbench` already include `resvg` (`resvg::usvg`) for pure-Rust SVG parsing and rasterization.
    - Consolidate SVG thumbnail rasterization to use the existing pure-Rust `resvg` rendering pipeline (shared via `little-clip-render` or `clip-studio`), eliminating the fragile external process dependency.
-6. **Lean Clipboard Workbench Popup**:
+7. **Lean Clipboard Workbench Popup**:
    - `clip-workbench` becomes a minimal binary and UI shell containing only `workbench/` popup state, slot management, and quick clipboard viewers.
    - Dramatic build time acceleration: compiling `clip-workbench` in debug mode will no longer require compiling ONNX runtime, SQLite, or Linux udev bindings.
 
@@ -516,11 +556,12 @@ The search indexing subsystem ([`search/retrieval.rs`](file:///home/vcarlson/lit
 ```
 Phase 1: Inverted Crate Hierarchy & Dependency Untangling
 ├── Task 1.1: Extract `crates/clip-ui` for generic design system, chrome, icons, and widgets
-├── Task 1.2: Extract `crates/clip-studio` for domain media viewers, inline strips, and studio tools
-├── Task 1.3: Move `file_manager/` tree directly into `crates/clip-file-manager`
-├── Task 1.4: Invert Cargo dependency graph; remove heavy deps from `clip-workbench`
-├── Task 1.5: Split internal worker CLI commands between workbench and file manager
-└── Task 1.6: Unify SVG thumbnail generation onto pure-Rust `resvg` instead of `rsvg-convert`
+├── Task 1.2: Extract modular studio crates (`clip-studio-audio`, `clip-studio-image`, etc.) and `clip-studio` facade
+├── Task 1.3: Extract `crates/clip-search` engine crate (SQLite, BM25, ONNX embeddings, crawlers)
+├── Task 1.4: Move `file_manager/` browser shell directly into `crates/clip-file-manager`
+├── Task 1.5: Invert Cargo dependency graph; remove heavy deps from `clip-workbench`
+├── Task 1.6: Split internal worker CLI commands between workbench, search, and file manager
+└── Task 1.7: Unify SVG thumbnail generation onto pure-Rust `resvg` instead of `rsvg-convert`
 
 Phase 2: Universal Multi-Tier Content Presentation & Code Reuse
 ├── Task 2.1: Canonical `ContentType` enum & capability registry in `little-clip-core`
