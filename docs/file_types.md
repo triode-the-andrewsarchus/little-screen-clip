@@ -69,7 +69,8 @@
     - [x] `.psd` — Photoshop saved-composite previews and raster edits; 8/16/32-bit sources displayed as RGBA8, with original PSD bytes preserved and PNG/raster export (no PSD writer or PSB support)
       - [x] Source layer/group outline, names, opacity, visibility, blend modes, mask presence and interactive bounds overview; embedded RGB JPEG thumbnails
       - [ ] Layer compositing/editing, mask pixels, and image resource blocks (slices, guides, IPTC/XMP/ICC)
-    - [ ] `.xcf` — GIMP
+    - [x] `.xcf` — native GIMP canvas rendering in a private filesystem/network namespace; shared Photos/List previews, Image Studio raster edits/export and source layer/group names, visibility, opacity, blend identifiers, masks and interactive bounds; original XCF remains unchanged
+      - [ ] Native XCF/layer editing, source ICC/path metadata and external filter resources; rendering requires installed GIMP 3 with Python batch support, bubblewrap and prlimit (64 MiB input, bounded canvas/layer pixels, 30-second renderer lifetime)
     - [ ] `.ai` — Adobe Illustrator
     - [ ] `.cdr` — CorelDRAW
     - [ ] `.eps` — Encapsulated PostScript

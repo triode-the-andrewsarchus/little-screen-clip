@@ -981,6 +981,14 @@ mod tests {
                 .as_slice(),
             ),
             (
+                "xcf",
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/layered.xcf"
+                ))
+                .as_slice(),
+            ),
+            (
                 "psd",
                 include_bytes!(concat!(
                     env!("CARGO_MANIFEST_DIR"),

@@ -150,6 +150,11 @@ fn raster(
         return ImageThumbnail::generate_with_limits(bytes, Some(mime), edge, edge, limits)
             .filter(|_| !cancelled.load(Ordering::Relaxed));
     }
+    if bytes.starts_with(b"gimp xcf ") {
+        return little_clip_core::xcf_image::render_rgba(bytes, Some((edge, edge)), cancelled)
+            .ok()
+            .map(ImageThumbnail::from_rgba);
+    }
     if mime == "image/svg+xml" {
         let png =
             little_clip_core::svg_image::render_png(bytes, Some((edge, edge)), cancelled).ok()?;

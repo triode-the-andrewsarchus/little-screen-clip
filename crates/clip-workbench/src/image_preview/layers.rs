@@ -1,9 +1,10 @@
-//! Read-only layer exploration over the original saved composite.
+//! Read-only source layer exploration over a document canvas.
 use super::*;
 
 pub(super) struct Document {
     summary: little_clip_core::image_document::Summary,
     preview: little_clip_core::ImageThumbnail,
+    stored_composite: bool,
 }
 
 #[cfg(test)]
@@ -112,6 +113,25 @@ mod tests {
     }
 
     #[test]
+    fn xcf_source_inspection_preserves_pixels_and_editor_history() {
+        let path = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../little-clip-core/tests/fixtures/layered.xcf"
+        ));
+        let mut state = ImagePreviewState::from_path(path, &AppConfig::default()).unwrap();
+        let pixels = state.current_rgba.clone();
+        let stamp = state.input_stamp();
+        state.layer_inspector.selected = Some(2);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut state, Vec::new());
+        let output = frame(&ctx, &mut state, Vec::new());
+        assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()=="Rendered canvas")));
+        assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("Raster mask"))));
+        assert_eq!(state.input_stamp(), stamp);
+        assert!(Arc::ptr_eq(&pixels, &state.current_rgba));
+        assert!(state.undo_stack.is_empty());
+    }
+    #[test]
     fn composite_only_document_has_no_layer_selection_prompt() {
         let path = std::path::PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -129,6 +149,8 @@ impl Document {
     pub(super) fn from_bytes(bytes: &[u8], image: &RgbaImage) -> Result<Option<Arc<Self>>, String> {
         let summary = if bytes.starts_with(b"8BPS") {
             little_clip_core::psd_image::inspect(bytes)?
+        } else if bytes.starts_with(b"gimp xcf ") {
+            little_clip_core::xcf_image::inspect(bytes)?
         } else if bytes.starts_with(b"PK\x03\x04") {
             little_clip_core::kra_image::inspect(bytes)?
         } else {
@@ -145,7 +167,11 @@ impl Document {
         let preview = little_clip_core::ImageThumbnail::from_rgba(image::imageops::thumbnail(
             image, width, height,
         ));
-        Ok(Some(Arc::new(Self { summary, preview })))
+        Ok(Some(Arc::new(Self {
+            summary,
+            preview,
+            stored_composite: !bytes.starts_with(b"gimp xcf "),
+        })))
     }
 }
 
@@ -170,7 +196,14 @@ impl Inspector {
             return;
         };
         let summary = &document.summary;
-        ui.label(egui::RichText::new("Saved composite").strong());
+        ui.label(
+            egui::RichText::new(if document.stored_composite {
+                "Saved composite"
+            } else {
+                "Rendered canvas"
+            })
+            .strong(),
+        );
         ui.label(format!(
             "{} × {} · {}{}",
             summary.dimensions.0,
