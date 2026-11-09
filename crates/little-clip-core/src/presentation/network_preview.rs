@@ -4,7 +4,7 @@
 //! specifications (RFC 1918, RFC 1122, RFC 6598, etc.), identifies well-known public DNS resolvers,
 //! performs OUI hardware vendor lookups for MAC addresses, and runs non-blocking ICMP ping reachability checks.
 
-use little_clip_core::CommandRequest;
+use crate::CommandRequest;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;

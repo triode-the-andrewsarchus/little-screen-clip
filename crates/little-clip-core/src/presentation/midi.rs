@@ -92,11 +92,8 @@ enum InstrumentType {
 impl MidiData {
     /// Reads and parses a MIDI file from disk.
     pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let bytes = little_clip_core::kernel_interface::read_content_bounded(
-            path.as_ref(),
-            32 * 1024 * 1024,
-        )
-        .map_err(|e| format!("Failed to read MIDI file: {}", e))?;
+        let bytes = crate::kernel_interface::read_content_bounded(path.as_ref(), 32 * 1024 * 1024)
+            .map_err(|e| format!("Failed to read MIDI file: {}", e))?;
         let title = path
             .as_ref()
             .file_stem()

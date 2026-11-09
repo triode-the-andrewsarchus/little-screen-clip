@@ -24,7 +24,7 @@ fn error(error: impl ToString) -> String {
     error.to_string()
 }
 fn bounded(path: &Path) -> Result<Vec<u8>, String> {
-    let file = little_clip_core::kernel_interface::open_content(path, true).map_err(error)?;
+    let file = crate::kernel_interface::open_content(path, true).map_err(error)?;
     let mut bytes = Vec::new();
     file.take(MAX_SOURCE + 1)
         .read_to_end(&mut bytes)
@@ -50,7 +50,7 @@ impl Prepared {
             if self.resources.len() >= MAX_RESOURCES {
                 return Err("Model exceeds the 4096-resource import limit".into());
             }
-            let file = match little_clip_core::kernel_interface::open_content(path, true) {
+            let file = match crate::kernel_interface::open_content(path, true) {
                 Ok(file) => file,
                 Err(error) if missing_material && error.kind() == std::io::ErrorKind::NotFound => {
                     tempfile::tempfile().map_err(self::error)?

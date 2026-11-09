@@ -33,8 +33,8 @@ pub fn is_material_file(path: &Path) -> bool {
 
 pub fn load(path: &Path) -> Result<Vec<Material>, String> {
     const MAX_BYTES: u64 = 2 * 1024 * 1024;
-    let file = little_clip_core::kernel_interface::open_content(path, true)
-        .map_err(|error| error.to_string())?;
+    let file =
+        crate::kernel_interface::open_content(path, true).map_err(|error| error.to_string())?;
     let mut bytes = Vec::new();
     file.take(MAX_BYTES + 1)
         .read_to_end(&mut bytes)
@@ -94,8 +94,8 @@ fn convert(source: tobj::Material, base: &Path) -> Material {
 /// Finds library declarations using the same filename-with-spaces rule as tobj.
 pub(super) fn obj_libraries(path: &Path) -> Result<Vec<PathBuf>, String> {
     let base = path.parent().unwrap_or_else(|| Path::new("."));
-    let file = little_clip_core::kernel_interface::open_content(path, true)
-        .map_err(|error| error.to_string())?;
+    let file =
+        crate::kernel_interface::open_content(path, true).map_err(|error| error.to_string())?;
     let mut paths = Vec::new();
     for line in BufReader::new(file).lines() {
         let line = line.map_err(|error| error.to_string())?;

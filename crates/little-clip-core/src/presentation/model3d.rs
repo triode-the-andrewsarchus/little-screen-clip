@@ -136,9 +136,9 @@ fn model_retained_bytes(model: &Model3d) -> usize {
 }
 
 fn file_revision(path: &Path) -> Option<FileRevision> {
-    let pinned = little_clip_core::kernel_interface::pin(path, true).ok()?;
-    if little_clip_core::kernel_interface::classify_handle(&pinned).ok()?
-        != little_clip_core::kernel_interface::Kind::Content
+    let pinned = crate::kernel_interface::pin(path, true).ok()?;
+    if crate::kernel_interface::classify_handle(&pinned).ok()?
+        != crate::kernel_interface::Kind::Content
     {
         return None;
     }
@@ -179,7 +179,7 @@ fn model_cache_identity(path: &Path) -> Option<ModelCacheIdentity> {
 
 fn gltf_dependencies(path: &Path) -> Option<Vec<(PathBuf, FileRevision)>> {
     let mut dependencies = Vec::new();
-    let source_bytes = little_clip_core::kernel_interface::read_content(path).ok()?;
+    let source_bytes = crate::kernel_interface::read_content(path).ok()?;
     let document: serde_json::Value = serde_json::from_slice(&source_bytes).ok()?;
     let base_dir = path.parent().unwrap_or_else(|| Path::new("./"));
     for dependency_group in ["buffers", "images"] {
@@ -442,8 +442,7 @@ impl Model3d {
     /// continuous animation / turntable rendering.
     pub fn load_cached<P: AsRef<Path>>(path: P) -> Result<Arc<Self>, String> {
         let path = path.as_ref();
-        little_clip_core::kernel_interface::require_content(path)
-            .map_err(|error| error.to_string())?;
+        crate::kernel_interface::require_content(path).map_err(|error| error.to_string())?;
         let path_buf = path.to_path_buf();
         let identity = model_cache_identity(path);
         {
@@ -501,8 +500,8 @@ impl Model3d {
     }
 
     fn load_stl_file(path: &Path, name: String) -> Result<Self, String> {
-        let bytes = little_clip_core::kernel_interface::read_content(path)
-            .map_err(|error| error.to_string())?;
+        let bytes =
+            crate::kernel_interface::read_content(path).map_err(|error| error.to_string())?;
         let geom = scenix_loader::stl::load_bytes(&bytes)
             .map_err(|e| format!("Failed to parse STL file: {:?}", e))?;
         let triangles = geometry_to_triangles(&geom, None);
@@ -547,7 +546,7 @@ impl Model3d {
         format: ModelFormat,
         triangles: Vec<Triangle>,
     ) -> Result<Self, String> {
-        let budget = little_clip_core::config::AppConfig::load()
+        let budget = crate::config::AppConfig::load()
             .model3d
             .preview_triangle_limit
             .max(100);
