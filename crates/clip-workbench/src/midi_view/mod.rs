@@ -14,7 +14,6 @@ use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::presentation::midi::{MidiData, MidiNote};
 use little_clip_core::{BackgroundJobs, HandSide, JobError, JobTicket};
-use rodio::stream::MixerDeviceSink;
 use rodio::{Decoder, Player};
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
@@ -210,7 +209,6 @@ pub struct MidiViewerState {
     playback_start_instant: Option<Instant>,
     playback_start_offset: f32,
     player: Option<Player>,
-    _sink: Option<MixerDeviceSink>,
     pub wav_cache: Option<Arc<[u8]>>,
     pub view_start_sec: f32,
     pub view_duration_sec: f32,
@@ -323,7 +321,6 @@ impl MidiViewerState {
             playback_start_instant: None,
             playback_start_offset: 0.0,
             player: None,
-            _sink: None,
             wav_cache: None,
             view_start_sec: 0.0,
             view_duration_sec: total_dur,

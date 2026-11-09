@@ -148,7 +148,6 @@ pub(crate) struct StemSeparationState {
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) save_dialog_open: bool,
     pub(crate) save_destination_dir: String,
-    pub(crate) group_sink: Option<MixerDeviceSink>,
     pub(crate) group_is_playing: bool,
     pub(crate) group_current_time_sec: f32,
     pub(crate) editor_playhead_active: bool,
@@ -273,7 +272,6 @@ impl AudioPreviewState {
                             }
                         })
                         .collect();
-                    self.stem_separation.group_sink = None;
                     self.stem_separation.group_current_time_sec = 0.0;
                     self.stem_separation.group_is_playing = false;
                     self.stem_separation.selected_stem = 0;

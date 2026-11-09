@@ -16,7 +16,6 @@ use little_clip_core::audio::{
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
-use rodio::stream::MixerDeviceSink;
 use rodio::{Decoder, Player, Source};
 use std::fs::File;
 use std::io::BufReader;
@@ -681,7 +680,6 @@ pub struct AudioPreviewState {
     // Audio Playback Engine (rodio)
     player: Option<Player>,
     player_factory: fn() -> Option<Player>,
-    _sink: Option<MixerDeviceSink>,
     pub is_playing: bool,
     playback_start_instant: Option<Instant>,
     playback_start_offset_sec: f32,
@@ -1041,7 +1039,6 @@ impl AudioPreviewState {
             editor_job: None,
             player: None,
             player_factory: crate::ui_ext::new_shared_audio_player,
-            _sink: None,
             is_playing: false,
             playback_start_instant: None,
             playback_start_offset_sec: 0.0,

@@ -328,7 +328,6 @@ fn midi_space_pauses_active_transport_without_player_or_sink() {
     state.is_playing = true;
     state.playback_start_instant = Some(Instant::now());
     state.player = None;
-    state._sink = None;
     let palette = AppPalette::for_appearance(WorkbenchAppearance::Dark);
     let mut close_requested = false;
     let ctx = egui::Context::default();
@@ -354,7 +353,6 @@ fn midi_space_pauses_active_transport_without_player_or_sink() {
     assert!(!state.is_playing);
     assert!(state.playback_start_instant.is_none());
     assert!(state.player.is_none());
-    assert!(state._sink.is_none());
     assert!(!close_requested);
 }
 
@@ -379,7 +377,6 @@ fn midi_escape_clears_selected_region_before_closing_viewer() {
     state.is_playing = true;
     state.playback_start_instant = None;
     state.player = None;
-    state._sink = None;
 
     let palette = AppPalette::for_appearance(WorkbenchAppearance::Dark);
     let mut close_requested = false;
@@ -413,7 +410,6 @@ fn midi_escape_clears_selected_region_before_closing_viewer() {
         "clearing selection must not stop transport"
     );
     assert!(state.player.is_none());
-    assert!(state._sink.is_none());
 }
 
 #[test]
@@ -579,7 +575,6 @@ fn midi_viewer_tracks_selection_and_solo_for_export() {
         playback_start_instant: None,
         playback_start_offset: 0.0,
         player: None,
-        _sink: None,
         wav_cache: None,
         view_start_sec: 0.0,
         view_duration_sec: 5.0,
@@ -1029,7 +1024,6 @@ fn test_midi_viewer_render_ui_tracks_and_legend() {
         playback_start_instant: None,
         playback_start_offset: 0.0,
         player: None,
-        _sink: None,
         wav_cache: None,
         view_start_sec: 0.0,
         view_duration_sec: 5.0,

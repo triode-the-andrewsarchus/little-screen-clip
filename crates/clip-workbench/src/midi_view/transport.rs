@@ -65,7 +65,6 @@ impl MidiViewerState {
                             player.append(source);
                         }
                         self.player = Some(player);
-                        self._sink = None;
                         self.is_playing = true;
                         self.playback_start_instant = Some(Instant::now());
                         self.playback_start_offset = self.playhead_sec;
@@ -168,7 +167,6 @@ impl MidiViewerState {
             player.stop();
         }
         self.player = None;
-        self._sink = None;
         self.pending_play = false;
         self.is_playing = false;
         if let Some((s, _)) = self.selected_region {

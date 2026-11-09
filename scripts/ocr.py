@@ -11,13 +11,10 @@ Usage:
 """
 
 import argparse
-import io
 import os
 import subprocess
 import sys
 import time
-import types
-import importlib.machinery
 
 # Auto-reexec inside little-screen-clip venv if available
 user_venv = os.path.expanduser("~/.local/share/little-screen-clip/nobg-venv/bin/python")

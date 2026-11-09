@@ -278,8 +278,12 @@ pub(super) fn scroll_badge(
             let text_color = colors.text_primary.gamma_multiply(alpha);
             let stroke_color = colors.border.gamma_multiply(alpha);
 
-            ui.painter()
-                .rect(badge_rect, 6.0, fill, egui::Stroke::new(1.0, stroke_color));
+            ui.painter().rect(
+                badge_rect,
+                6.0,
+                fill,
+                egui::Stroke::new(1.0_f32, stroke_color),
+            );
             ui.painter().text(
                 badge_rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -333,7 +337,7 @@ fn grid_header(
     let mut action = None;
     let clip = rect.intersect(ui.clip_rect());
     let stroke = egui::Stroke::new(
-        1.0,
+        1.0_f32,
         if grid.selected_for_search {
             colors.accent
         } else {
@@ -480,13 +484,13 @@ fn paint_grid_divider(
     };
     // The painter already clips segments to the canvas; no separate bounds branches are needed.
     ui.painter()
-        .line_segment(segment, egui::Stroke::new(1.0, colors.border));
+        .line_segment(segment, egui::Stroke::new(1.0_f32, colors.border));
 }
 
 fn hud_frame(ui: &Ui, colors: WorkbenchColors) -> egui::Frame {
     egui::Frame::popup(ui.style())
         .fill(colors.panel)
-        .stroke(egui::Stroke::new(1.0, colors.border))
+        .stroke(egui::Stroke::new(1.0_f32, colors.border))
         .rounding(6.0)
         .inner_margin(egui::Margin::symmetric(8.0, 4.0))
 }

@@ -11,7 +11,6 @@ use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::palette::AppPalette;
 use little_clip_core::slot::HandSide;
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
-use rodio::stream::MixerDeviceSink;
 use rodio::{Decoder, Player};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -55,7 +54,6 @@ pub struct RollingAudioStripState {
     pub is_dragging: bool,
 
     // Playback engine
-    _sink: Option<MixerDeviceSink>,
     player: Option<Player>,
     pub is_playing: bool,
     pub playhead_sec: f32,
@@ -153,7 +151,6 @@ impl RollingAudioStripState {
             selected_region: None,
             drag_start_time: None,
             is_dragging: false,
-            _sink: None,
             player: None,
             is_playing: false,
             playhead_sec: 0.0,
@@ -185,7 +182,6 @@ impl RollingAudioStripState {
             selected_region: None,
             drag_start_time: None,
             is_dragging: false,
-            _sink: None,
             player: None,
             is_playing: false,
             playhead_sec: 0.0,

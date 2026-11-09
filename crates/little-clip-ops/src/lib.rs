@@ -35,8 +35,6 @@ pub use little_clip_core::presentation::spreadsheet;
 pub use little_clip_core::presentation::timestamps;
 pub use little_clip_core::presentation::units;
 
-pub mod stl;
-
 pub mod barcode;
 
 pub mod decorrelation_stretch;
