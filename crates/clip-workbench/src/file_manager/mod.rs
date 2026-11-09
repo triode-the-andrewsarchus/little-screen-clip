@@ -15,6 +15,7 @@ mod font_strip;
 pub(crate) mod fuse_binwalk;
 mod gallery;
 mod image_strip;
+mod mail;
 mod material_strip;
 mod media;
 mod midi_strip;
@@ -90,6 +91,7 @@ pub(super) enum DocumentPosition {
     PdfPage(usize),
     NotebookCell(usize),
     BookChapter(usize),
+    MailAttachment(usize),
     SubtitleCue(usize),
 }
 
@@ -802,6 +804,7 @@ impl FileManager {
                     || entry.is_subtitles()
                     || entry.is_notebook()
                     || entry.is_book()
+                    || entry.is_mail()
                     || entry.is_paged_document()
                 {
                     VIDEO_ROW_HEIGHT

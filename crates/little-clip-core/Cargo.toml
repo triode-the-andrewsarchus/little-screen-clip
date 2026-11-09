@@ -40,6 +40,7 @@ flate2 = "1.0"
 quick-xml = "0.41"
 roxmltree = "0.20"
 scraper = { version = "0.27", default-features = false }
+mail-parser = { version = "1.0.1", features = ["full_encoding"] }
 wait-timeout = "0.2"
 libheif-rs = { version = "3.0", default-features = false, features = ["v1_17", "image"] }
 jxl-oxide = { version = "0.12.6", default-features = false, features = ["image", "lcms2"] }

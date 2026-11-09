@@ -25,16 +25,7 @@ pub struct Book {
     /// Optional archive-local cover resource.
     pub cover: Option<String>,
 }
-/// Inert chapter elements. Scripts, styles, embedded objects and remote resources are omitted.
-#[derive(Debug, PartialEq)]
-pub enum Block {
-    /// A heading and its level.
-    Heading(u8, String),
-    /// A paragraph of readable text.
-    Text(String),
-    /// A local image and its alternative text.
-    Image(String, String),
-}
+pub use crate::html_preview::Block;
 fn validate_markup(bytes: &[u8]) -> Result<(), String> {
     let mut reader = quick_xml::Reader::from_reader(bytes);
     let mut depth = 0usize;
@@ -165,19 +156,10 @@ impl Book {
         let chapter = self.chapters.get(index).ok_or("Unknown EPUB chapter")?;
         let bytes = entry(&mut archive(&self.bytes)?, &chapter.resource, XML_LIMIT)?;
         validate_markup(&bytes)?;
-        let doc =
-            scraper::Html::parse_document(std::str::from_utf8(&bytes).map_err(|e| e.to_string())?);
-        let body = doc
-            .root_element()
-            .descendent_elements()
-            .find(|n| n.value().name() == "body")
-            .ok_or("Missing EPUB chapter body")?;
-        let mut blocks = Vec::new();
-        content(body, &chapter.resource, &mut blocks);
-        if blocks.len() > 4096 {
-            return Err("EPUB chapter has too many text or image blocks".into());
-        }
-        Ok(blocks)
+        crate::html_preview::parse(
+            std::str::from_utf8(&bytes).map_err(|e| e.to_string())?,
+            |href| resource(&chapter.resource, href).ok(),
+        )
     }
 }
 fn package(zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>) -> Result<(String, Vec<u8>), String> {
@@ -341,59 +323,6 @@ fn navigation(
     }
     Ok(())
 }
-fn html_text(node: scraper::ElementRef<'_>) -> String {
-    node.descendants()
-        .filter(|node| {
-            !node
-                .ancestors()
-                .filter_map(scraper::ElementRef::wrap)
-                .any(|parent| matches!(parent.value().name(), "script" | "style" | "head"))
-        })
-        .filter_map(|node| node.value().as_text())
-        .map(|text| &**text)
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-fn content(node: scraper::ElementRef<'_>, base: &str, blocks: &mut Vec<Block>) {
-    let name = node.value().name();
-    match name {
-        "script" | "style" | "iframe" | "object" | "audio" | "video" => (),
-        "img" => {
-            if let Some(src) = node.attr("src").and_then(|src| resource(base, src).ok()) {
-                blocks.push(Block::Image(src, node.attr("alt").unwrap_or("").into()));
-            }
-        }
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-            blocks.push(Block::Heading(name.as_bytes()[1] - b'0', html_text(node)))
-        }
-        "p" | "li" | "pre" | "blockquote" | "dt" | "dd" | "figcaption" => {
-            let value = html_text(node);
-            if !value.is_empty() {
-                blocks.push(Block::Text(value));
-            }
-            for image in node
-                .descendent_elements()
-                .filter(|n| n.value().name() == "img")
-            {
-                content(image, base, blocks);
-            }
-        }
-        _ => {
-            for child in node.children() {
-                if let Some(element) = scraper::ElementRef::wrap(child) {
-                    content(element, base, blocks);
-                } else if let Some(text) = child.value().as_text() {
-                    if !text.trim().is_empty() {
-                        blocks.push(Block::Text(text.trim().into()));
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

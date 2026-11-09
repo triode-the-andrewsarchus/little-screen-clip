@@ -27,6 +27,7 @@ enum Loaded {
     Font(super::font_strip::viewer::Viewer),
     Notebook(super::notebook::viewer::Viewer),
     Book(super::ebook::Viewer),
+    Mail(super::mail::Viewer),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
     Text(super::text_editor::TextSession),
@@ -46,6 +47,7 @@ enum ViewerSession {
     Font(super::font_strip::viewer::Viewer),
     Notebook(super::notebook::viewer::Viewer),
     Book(super::ebook::Viewer),
+    Mail(super::mail::Viewer),
     Image(ImagePreviewState),
     Text(super::text_editor::TextSession),
     Audio(AudioPreviewState),
@@ -243,6 +245,10 @@ impl Viewers {
             (
                 Some(ViewerSession::Book(state)),
                 Some(super::DocumentPosition::BookChapter(index)),
+            ) => state.select(index),
+            (
+                Some(ViewerSession::Mail(state)),
+                Some(super::DocumentPosition::MailAttachment(index)),
             ) => state.select(index),
             (Some(ViewerSession::Pdf(state)), Some(super::DocumentPosition::PdfPage(page))) => {
                 state.selected_page = Some(page.max(1))
@@ -451,6 +457,7 @@ impl Viewers {
 enum Kind {
     Notebook,
     Book,
+    Mail,
     Font,
     Image,
     Audio,
@@ -501,6 +508,7 @@ fn extension_kind(path: &Path) -> Option<Kind> {
         "mid" | "midi" => Some(Kind::Midi),
         "ipynb" => Some(Kind::Notebook),
         "epub" | "cbz" => Some(Kind::Book),
+        "eml" => Some(Kind::Mail),
         _ => None,
     }
 }
@@ -530,6 +538,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         ));
     }
     match kind {
+        Kind::Mail => super::mail::Viewer::load(path).map(Loaded::Mail),
         Kind::Book => super::ebook::Viewer::load(path).map(Loaded::Book),
         Kind::Notebook => super::notebook::viewer::Viewer::load(path).map(Loaded::Notebook),
         Kind::Font => super::font_strip::viewer::Viewer::load(path).map(Loaded::Font),
@@ -611,6 +620,7 @@ fn session(
     match loaded {
         Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
+        Loaded::Mail(viewer) => ViewerSession::Mail(viewer),
         Loaded::Font(viewer) => ViewerSession::Font(viewer),
         Loaded::System(document) => ViewerSession::System(super::system::Inspector::new(document)),
         Loaded::Image(data, source) => ViewerSession::Image(
@@ -670,6 +680,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
     match viewer {
         ViewerSession::Notebook(state) => state.ui(ui, close, palette),
         ViewerSession::Book(state) => state.ui(ui, close, palette),
+        ViewerSession::Mail(state) => state.ui(ui, close, palette),
         ViewerSession::Font(state) => state.ui(ui, close, palette),
         ViewerSession::System(state) => state.ui(ui, close, palette),
         ViewerSession::Image(state) => state.render_ui(ui, &ctx, palette, close),
@@ -779,6 +790,11 @@ mod tests {
                 "tests/fixtures/comic.cbz",
                 super::super::DocumentPosition::BookChapter(1),
                 "Page 2 / 3",
+            ),
+            (
+                "../little-clip-core/tests/fixtures/email/harbor.eml",
+                super::super::DocumentPosition::MailAttachment(1),
+                "application/octet-stream",
             ),
         ] {
             let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(fixture);

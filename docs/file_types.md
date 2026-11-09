@@ -637,7 +637,9 @@
   - [ ] `.pcap`
   - [ ] `.pcapng`
     - [ ] Capture file comments, interface descriptions, hardware/OS metadata, and packet timestamps
-  - [ ] `.eml` — email message
+  - [x] `.eml` — saved MIME email; decoded address/date/subject headers, inert reflowed HTML or plain-text alternatives, attachment metadata/chips, original-source preview and guarded container rename
+    - [x] 16 MiB input, 32 MIME nesting levels, 1,024 parts and two encoded-message nesting levels; actual truncation/decoding/structure failures are disclosed
+    - [ ] Full HTML/CSS layout, remote/inline image rendering, attachment extraction/editing, sending, and encrypted-message decryption/signature verification
   - [ ] `.msg` — Microsoft Outlook saved message
     - [ ] Internet message headers (From, To, Cc, Bcc, Subject, Date, Message-ID, In-Reply-To)
     - [ ] Attachment metadata and extraction

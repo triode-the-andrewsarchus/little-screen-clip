@@ -1,0 +1,50 @@
+From: Dana =?utf-8?q?Caf=C3=A9?= <dana@example.test>
+To: Riley <riley@example.test>
+Cc: Morgan <morgan@example.test>
+Reply-To: harbor@example.test
+Subject: Harbor meeting =?utf-8?b?4oCTIGNhZsOp?=
+Date: Sun, 08 Nov 2026 09:30:00 -0600
+Message-ID: <owned-harbor@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="owned-boundary-0"
+
+--owned-boundary-0
+Content-Type: multipart/alternative; boundary="owned-boundary-1"
+
+--owned-boundary-1
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Meet beside the blue pier.
+
+Bring the route notes.
+
+--owned-boundary-1
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><head><style>HIDDEN STYLE</style></head><body><h1>Harbor plan</h1><p>Me=
+et beside the <strong>blue</strong> pier &amp; caf=C3=A9.</p><p>Bring the rou=
+te notes.</p><script>HIDDEN SCRIPT</script><img src=3D"https://example.invali=
+d/tracker.png"/></body></html>
+
+--owned-boundary-1--
+
+--owned-boundary-0
+Content-Type: text/plain
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="route.txt"
+MIME-Version: 1.0
+
+T3duZWQgcm91dGUgbm90ZXMuCg==
+
+--owned-boundary-0
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="tide-data.bin"
+MIME-Version: 1.0
+
+AAECAwQFBgcICQoLDA0ODw==
+
+--owned-boundary-0--

@@ -40,6 +40,7 @@ impl<'a> ListPreviews<'a> {
             || (entry.regular_file
                 && (super::super::font_strip::known(&entry.path)
                     || entry.is_book()
+                    || entry.is_mail()
                     || entry.is_notebook()))
             || self.files.is_binary(entry)
         {
