@@ -688,7 +688,8 @@
 - [ ] Geographic data and GPS tracks
   - [ ] `.fit` — activity / GPS recording
     - [ ] File ID and device metadata (manufacturer, serial, device type, timestamp)
-  - [ ] `.geojson`
+  - [x] `.geojson` — offline WGS84 points, lines and polygon ring outlines, selectable multipart shapes and properties, linked supplied-elevation profiles, bounded clickable folder maps and guarded rename
+    - [ ] Polygon fills, reprojection and external basemaps. Input is limited to 16 MiB / 200,000 positions / 4,096 shapes or paths; other declared coordinate systems require conversion. Null geometry retains attributes; nested attributes show counts, long text is clipped, and drawing reduction is disclosed.
   - [x] `.gpx` — GPX 1.0/1.1 offline WGS84 map, source-order waypoint/route/track selection, linked supplied-elevation profile, pan/zoom, spherical length excluding segment gaps, bounded clickable folder previews and guarded rename
     - [ ] Terrain/basemap layers, extension telemetry and full-resolution drawing at arbitrary zoom (16 MiB / 200,000 positions / 4,096 segments; drawing reduction is disclosed). Guitar Pro binary GPX is a separate unsupported format.
     - [ ] `<metadata>` header (name, description, author, copyright, bounds, time)

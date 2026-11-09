@@ -531,7 +531,7 @@ fn extension_kind(path: &Path) -> Option<Kind> {
         "epub" | "cbz" => Some(Kind::Book),
         "eml" => Some(Kind::Mail),
         "ics" => Some(Kind::Calendar),
-        "gpx" => Some(Kind::Geography),
+        "gpx" | "geojson" => Some(Kind::Geography),
         "sqlite" | "sqlite3" | "db" | "db3" => Some(Kind::Database),
         _ => None,
     }
@@ -828,6 +828,11 @@ mod tests {
                 "../little-clip-core/tests/fixtures/geography/harbor.gpx",
                 super::super::DocumentPosition::GeographicFeature(1),
                 "Ferry route",
+            ),
+            (
+                "../little-clip-core/tests/fixtures/geography/harbor.geojson",
+                super::super::DocumentPosition::GeographicFeature(3),
+                "Unplaced record",
             ),
             (
                 "tests/fixtures/database/harbor.sqlite",

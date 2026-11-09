@@ -19,21 +19,28 @@ use std::{
 
 pub(super) fn known(path: &Path) -> bool {
     path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("gpx"))
+        .is_some_and(|e| e.eq_ignore_ascii_case("gpx") || e.eq_ignore_ascii_case("geojson"))
 }
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;
     if token.load(Ordering::Relaxed) {
         return Err("Geography opening cancelled".into());
     }
-    Document::gpx(&bytes)
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("geojson"))
+    {
+        Document::geojson(&bytes)
+    } else {
+        Document::gpx(&bytes)
+    }
 }
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
-    let mut data = PreviewData::new(String::new(), "GPX".into(), Icon::Image);
+    let mut data = PreviewData::new(String::new(), "Geography".into(), Icon::Image);
     match read(path, token) {
         Ok(mut document) => {
             data.detail = format!(
-                "{} features · {} positions · partial map preview",
+                "{} shapes · {} positions · partial map preview",
                 document.features.len(),
                 document.points
             );
@@ -132,7 +139,9 @@ impl Viewer {
         ui.allocate_ui_at_rect(layout.center, |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             let colors = WorkbenchColors::from_palette(palette);
-            let map_height = (ui.available_height() - 190.0).max(80.0);
+            let feature = &self.document.features[self.selected];
+            let profile_visible = feature.kind != Kind::Point && feature.elevation.is_some() && feature.points > 1;
+            let map_height = (ui.available_height() - if profile_visible { 190.0 } else { 26.0 }).max(80.0);
             let (rect, response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), map_height),
                 egui::Sense::click_and_drag(),
@@ -164,6 +173,7 @@ impl Viewer {
             }
             ui.label("Offline map · north up · drag to pan, scroll to zoom")
                 .on_hover_text("Local equirectangular projection. Supplied positions only; no basemap or terrain information.");
+            if !profile_visible { return; }
             let feature = &self.document.features[self.selected];
             let (profile, response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
@@ -189,7 +199,7 @@ impl Viewer {
             ui.heading(&self.document.title);
         }
         ui.label(format!(
-            "{} features · {} positions",
+            "{} shapes · {} positions",
             self.document.features.len(),
             self.document.points
         ));
@@ -241,7 +251,7 @@ impl Viewer {
                     feature.points,
                     feature.paths.len()
                 ));
-                if feature.kind == Kind::Line {
+                if matches!(feature.kind, Kind::Line | Kind::Polygon) {
                     ui.label(format!(
                         "Spherical length {:.2} km",
                         feature.distance_m / 1000.0
@@ -319,7 +329,7 @@ fn paint_map(
                 .iter()
                 .map(|sample| project(rect, doc.bounds, sample.xy, zoom, pan))
                 .collect();
-            if feature.kind == Kind::Line && positions.len() > 1 {
+            if matches!(feature.kind, Kind::Line | Kind::Polygon) && positions.len() > 1 {
                 painter.add(egui::Shape::line(
                     positions.clone(),
                     egui::Stroke::new(
@@ -338,9 +348,11 @@ fn paint_map(
                 }
             }
             if let Some(pointer) = pointer {
-                if let Some((point, distance)) =
-                    nearest_on_path(&positions, pointer, feature.kind == Kind::Line)
-                {
+                if let Some((point, distance)) = nearest_on_path(
+                    &positions,
+                    pointer,
+                    matches!(feature.kind, Kind::Line | Kind::Polygon),
+                ) {
                     if distance < nearest {
                         nearest = distance;
                         hit = Some(Hit {
@@ -554,6 +566,33 @@ mod tests {
         );
         assert!(read(&path, &AtomicBool::new(true)).is_err());
         assert!(known(Path::new("TRACK.GPX")));
+    }
+    #[test]
+    fn geojson_preview_and_null_geometry_selection_preserve_source_order() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../little-clip-core/tests/fixtures/geography/harbor.geojson");
+        assert!(known(Path::new("MAP.GEOJSON")));
+        let data = load(&path, &AtomicBool::new(false));
+        let summary = data.geography.unwrap();
+        assert_eq!(summary.features[0].kind, Kind::Polygon);
+        assert_eq!(summary.features[0].paths.len(), 2);
+        assert!(summary.samples <= 512);
+        let mut viewer = Viewer::load(&path).unwrap();
+        viewer.select(3);
+        assert_eq!(
+            viewer.document.features[viewer.selected].name,
+            "Unplaced record"
+        );
+        assert!(viewer.current.is_none());
+        viewer.select(1);
+        assert_eq!(
+            viewer
+                .sample(viewer.current.unwrap())
+                .unwrap()
+                .point
+                .elevation,
+            Some(12.0)
+        );
     }
     #[test]
     fn line_hits_choose_actual_endpoints_and_unconnected_points_have_no_line_hits() {

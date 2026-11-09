@@ -15,7 +15,7 @@ def map_pixels(session, shot):
 
 def exercise(session, root):
     original=hashlib.sha256((root/'harbor.gpx').read_bytes()).digest()
-    session.observe('01-geographic-strip',['harbor.gpx','3 features','8 positions','Blue pier','Ferry route','Coastal track'])
+    session.observe('01-geographic-strip',['harbor.gpx','3 shapes','8 positions','Blue pier','Ferry route','Coastal track'])
     _,y=session.word('01-geographic-strip','harbor.gpx',minimum_y=240)
     session.click(860,y+45,delay=0.05)
     session.click(860,y+45,delay=0.05)
@@ -51,7 +51,7 @@ def exercise(session, root):
     assert hashlib.sha256((root/'renamed.gpx').read_bytes()).digest()==original
     session.observe('08-renamed',['renamed.gpx','Ferry route'])
     session.click(1110,70)
-    session.observe('09-folder',['renamed.gpx','3 features','notes.txt'])
+    session.observe('09-folder',['renamed.gpx','3 shapes','notes.txt'])
     open_file(session,root,'renamed.gpx','10-reopen')
     session.observe('11-reopened',['Harbor walk','Coastal track','5 positions','2 segments'])
     session.click(1110,70)

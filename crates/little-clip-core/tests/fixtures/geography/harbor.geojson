@@ -1,0 +1,6 @@
+{"type":"FeatureCollection","name":"Harbor survey","features":[
+{"type":"Feature","id":"park","properties":{"name":"Harbor park","access":"Public footpath","survey":{"year":2026}},"geometry":{"type":"Polygon","coordinates":[[[-122.36,47.61],[-122.34,47.61],[-122.34,47.63],[-122.36,47.63],[-122.36,47.61]],[[-122.355,47.615],[-122.345,47.615],[-122.345,47.625],[-122.355,47.625],[-122.355,47.615]]]}},
+{"type":"Feature","properties":{"name":"Survey route"},"geometry":{"type":"LineString","coordinates":[[-122.36,47.61,12],[-122.35,47.62,28],[-122.34,47.63,19]]}},
+{"type":"Feature","properties":{"name":"Blue pier","description":"Meet at the blue sign"},"geometry":{"type":"MultiPoint","coordinates":[[-122.358,47.613],[-122.342,47.627]]}},
+{"type":"Feature","properties":{"name":"Unplaced record","status":"Awaiting coordinates"},"geometry":null}
+]}

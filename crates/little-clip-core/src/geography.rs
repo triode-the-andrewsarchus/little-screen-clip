@@ -1,4 +1,5 @@
 //! Bounded WGS84 geometry and offline map/profile preparation.
+mod geojson;
 use chrono::DateTime;
 use roxmltree::{Document as Xml, Node};
 
@@ -14,6 +15,10 @@ pub enum Kind {
     Point,
     /// Ordered line paths with explicit segment breaks.
     Line,
+    /// Closed surface boundaries, with separate outer and inner rings.
+    Polygon,
+    /// An unplaced shape whose source attributes remain inspectable.
+    Empty,
 }
 /// One supplied WGS84 position.
 #[derive(Clone, Debug)]
@@ -79,6 +84,14 @@ struct RawFeature {
     properties: Vec<(String, String)>,
 }
 impl Document {
+    /// Parses RFC 7946 points, lines, polygon boundaries and geometry collections.
+    ///
+    /// # Errors
+    /// Rejects invalid coordinates, unsupported declared coordinate systems and exceeded budgets.
+    pub fn geojson(bytes: &[u8]) -> Result<Self, String> {
+        geojson::parse(bytes)
+    }
+
     /// Reads GPX 1.0/1.1 tracks, routes and waypoints without following external resources.
     ///
     /// # Errors
@@ -127,6 +140,9 @@ impl Document {
             notes.push(format!(
                 "{extensions} extension containers are not interpreted."
             ));
+        }
+        if total == 0 {
+            return Err("No readable GPX positions".into());
         }
         prepare(title, raw, notes)
     }
@@ -254,7 +270,26 @@ fn prepare(
 ) -> Result<Document, String> {
     let points: usize = raw.iter().flat_map(|f| &f.paths).map(Vec::len).sum();
     if points == 0 {
-        return Err("No readable GPX positions".into());
+        notes.push("No supplied positions; source attributes remain available.".into());
+        return Ok(Document {
+            title,
+            features: raw
+                .into_iter()
+                .map(|feature| Feature {
+                    name: feature.name,
+                    kind: feature.kind,
+                    paths: Vec::new(),
+                    points: 0,
+                    distance_m: 0.0,
+                    elevation: None,
+                    properties: feature.properties,
+                })
+                .collect(),
+            bounds: [0.0, 0.0, 1.0, 1.0],
+            notes,
+            points: 0,
+            samples: 0,
+        });
     }
     let (origin, cosine) = projection(&raw, points);
     let mut bounds = [
@@ -343,7 +378,7 @@ fn prepare_feature(
         let mut prepared = Vec::new();
         let mut profile_gap = true;
         for (index, point) in path.iter().enumerate() {
-            if index > 0 && feature.kind == Kind::Line {
+            if index > 0 && matches!(feature.kind, Kind::Line | Kind::Polygon) {
                 distance += distance_m(&path[index - 1], point);
             }
             if let Some(value) = point.elevation {
