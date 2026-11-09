@@ -14,10 +14,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn numbered(name: &str, prefix: &str) -> bool {
-    name.strip_prefix(prefix)
-        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit()))
-}
+use super::buses::numbered;
 fn role(path: &Path) -> Option<&'static str> {
     let subsystem = buses::subsystem(path)?;
     let name = path.file_name()?.to_str()?;

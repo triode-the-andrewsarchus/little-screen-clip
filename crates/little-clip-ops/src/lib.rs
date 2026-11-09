@@ -873,41 +873,7 @@ fn op_clean_url(item: &ClipItem) -> Result<ClipItem, OpError> {
     let url_str = get_item_text(item)?;
     let mut parsed = url::Url::parse(url_str.trim())
         .map_err(|e| OpError::ExecutionFailed(format!("Invalid URL: {}", e)))?;
-
-    let tracking_keys: HashSet<&str> = [
-        "utm_source",
-        "utm_medium",
-        "utm_campaign",
-        "utm_term",
-        "utm_content",
-        "fbclid",
-        "gclid",
-        "si",
-        "ref",
-        "ref_src",
-        "igshid",
-        "_hsenc",
-        "_hsmi",
-        "mc_cid",
-        "mc_eid",
-    ]
-    .into_iter()
-    .collect();
-
-    let clean_pairs: Vec<(String, String)> = parsed
-        .query_pairs()
-        .filter(|(k, _)| !tracking_keys.contains(k.as_ref()))
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
-
-    parsed.set_query(None);
-    if !clean_pairs.is_empty() {
-        let mut serializer = parsed.query_pairs_mut();
-        for (k, v) in clean_pairs {
-            serializer.append_pair(&k, &v);
-        }
-    }
-
+    auto_actions::strip_url_tracking_params(&mut parsed);
     Ok(ClipItem::from_url(parsed))
 }
 

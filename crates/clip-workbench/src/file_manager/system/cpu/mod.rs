@@ -26,9 +26,7 @@ struct Member {
     label: String,
     ranges: Option<Vec<(u32, u32)>>,
 }
-fn numbered(name: &str, prefix: &str) -> Option<u32> {
-    name.strip_prefix(prefix)?.parse().ok()
-}
+use super::buses::parse_numbered as numbered;
 
 pub(super) fn directory_group(
     sys: &Path,
