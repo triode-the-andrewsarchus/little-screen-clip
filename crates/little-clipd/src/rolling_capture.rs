@@ -98,6 +98,32 @@ fn spawn_capture_child(target_device: Option<&str>) -> Option<Child> {
     }
 }
 
+const CAPTURE_FRAME_BYTES: usize = 4; // 2 channels * 2 bytes (s16le)
+
+fn read_capture_chunk<R: Read>(
+    stdout: &mut R,
+    buf: &mut [u8; 4096],
+    carry: &mut usize,
+    buffer: &Arc<RwLock<RollingAudioBuffer>>,
+) -> std::io::Result<usize> {
+    let n = stdout.read(&mut buf[*carry..])?;
+    if n == 0 {
+        return Ok(0);
+    }
+    let total = *carry + n;
+    let aligned = total - (total % CAPTURE_FRAME_BYTES);
+    if aligned > 0
+        && let Ok(mut lock) = buffer.write()
+    {
+        lock.push_pcm_s16le(&buf[..aligned]);
+    }
+    *carry = total - aligned;
+    if *carry > 0 {
+        buf.copy_within(aligned..total, 0);
+    }
+    Ok(n)
+}
+
 fn run_capture_loop(buffer: Arc<RwLock<RollingAudioBuffer>>, config: Arc<RwLock<AudioConfig>>) {
     let mut buf = [0u8; 4096];
 
@@ -134,16 +160,14 @@ fn run_capture_loop(buffer: Arc<RwLock<RollingAudioBuffer>>, config: Arc<RwLock<
         };
 
         if let Some(mut stdout) = child.stdout.take() {
+            let mut carry = 0usize;
             loop {
-                match stdout.read(&mut buf) {
+                match read_capture_chunk(&mut stdout, &mut buf, &mut carry, &buffer) {
                     Ok(0) => {
                         warn!("Audio capture process reached EOF (process exited)");
                         break;
                     }
-                    Ok(n) => {
-                        if let Ok(mut lock) = buffer.write() {
-                            lock.push_pcm_s16le(&buf[..n]);
-                        }
+                    Ok(_) => {
                         if capture_settings_changed(&active_config, &config) {
                             info!(
                                 "Rolling audio capture settings changed; restarting capture process"
@@ -189,5 +213,46 @@ mod tests {
 
         current.write().unwrap().rolling_capture_enabled = false;
         assert!(capture_settings_changed(&active, &current));
+    }
+
+    #[test]
+    fn partial_pipe_reads_preserve_stereo_s16le_frame_alignment() {
+        struct ChunkedReader<'a> {
+            data: &'a [u8],
+            sizes: &'a [usize],
+            step: usize,
+        }
+        impl Read for ChunkedReader<'_> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                if self.data.is_empty() {
+                    return Ok(0);
+                }
+                let want = self
+                    .sizes
+                    .get(self.step)
+                    .copied()
+                    .unwrap_or(self.data.len());
+                self.step += 1;
+                let n = want.min(self.data.len()).min(out.len());
+                out[..n].copy_from_slice(&self.data[..n]);
+                self.data = &self.data[n..];
+                Ok(n)
+            }
+        }
+
+        let samples: [i16; 8] = [1000, -1000, 2000, -2000, 3000, -3000, 4000, -4000];
+        let raw_bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+
+        let buffer = Arc::new(RwLock::new(RollingAudioBuffer::new(1, 48000, 2)));
+        let mut reader = ChunkedReader {
+            data: &raw_bytes,
+            sizes: &[1, 2, 3, 1, 5, 2, 2],
+            step: 0,
+        };
+        let mut buf = [0u8; 4096];
+        let mut carry = 0usize;
+        while read_capture_chunk(&mut reader, &mut buf, &mut carry, &buffer).unwrap() > 0 {}
+        assert_eq!(carry, 0);
+        assert_eq!(buffer.read().unwrap().snapshot_samples(), samples);
     }
 }
