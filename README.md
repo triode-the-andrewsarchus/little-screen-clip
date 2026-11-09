@@ -42,13 +42,14 @@ Standard clipboard managers flatten everything into a single chronological list.
 | `little-clip-driver` | USB display protocol, capture and lock monitoring | `little-clip-core` |
 | `little-clipd` | Process lifecycle, IPC dispatch, clipboard integration, and hardware orchestration | The library crates |
 | `clipctl` | Command-line IPC client | `little-clip-core` and operation-facing libraries |
-| `clip-workbench` | egui state and interaction | The library crates through their public APIs |
+| `clip-workbench` | egui state, studio viewers, and workbench interaction | The library crates through their public APIs |
+| `clip-file-manager` | Standalone resizable file manager binary | `clip-workbench` and the library crates |
 
-The `clip-workbench` package also builds `clip-file-manager`, a separate, resizable
-file manager application. Both executables use its shared desktop UI library for
+The `clip-file-manager` package builds `clip-file-manager`, a separate, resizable
+file manager application. Both executables use `clip-workbench`'s shared desktop UI library for
 controls, SVG icons, fonts, and appearance. The file manager runs without the daemon
 or a USB display. Open it with `./launch.sh files [DIRECTORY]` or
-`cargo run -p clip-workbench --bin clip-file-manager -- [DIRECTORY]`.
+`cargo run -p clip-file-manager -- [DIRECTORY]`.
 In List view, click Type, Name, Size, or Modified to sort; click the active header
 again to reverse it. Names use case-insensitive natural ordering (`foo_2` before
 `foo_10`). Type keeps content categories together, then groups by extension and

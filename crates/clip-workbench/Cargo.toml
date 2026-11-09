@@ -6,10 +6,6 @@ authors.workspace = true
 license.workspace = true
 default-run = "clip-workbench"
 
-[[bin]]
-name = "clip-file-manager"
-path = "src/bin/clip-file-manager.rs"
-
 [dependencies]
 little-clip-core = { path = "../little-clip-core" }
 little-clip-render = { path = "../little-clip-render" }

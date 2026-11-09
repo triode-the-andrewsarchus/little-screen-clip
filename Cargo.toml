@@ -8,6 +8,7 @@ members = [
     "crates/little-clip-ops",
     "crates/little-clipd",
     "crates/clip-workbench",
+    "crates/clip-file-manager",
     "crates/clipctl",
     "crates/little-clip-nki",
 ]
