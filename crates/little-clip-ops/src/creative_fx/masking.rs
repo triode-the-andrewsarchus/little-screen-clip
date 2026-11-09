@@ -56,7 +56,7 @@ fn apply_spatial_mask(
     config: &DepthMaskConfig,
     channel: MaskValueChannel,
 ) -> RgbaImage {
-    apply_spatial_mask_cancellable(orig, fx, mask_image, config, channel, None)
+    apply_spatial_mask_cancellable(orig, fx, mask_image, config, channel, None, None)
         .expect("uncancelled mask blend cannot stop")
 }
 
@@ -66,6 +66,7 @@ fn apply_spatial_mask_cancellable(
     mask_image: &RgbaImage,
     config: &DepthMaskConfig,
     channel: MaskValueChannel,
+    crop_window: Option<(u32, u32, u32, u32)>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Option<RgbaImage> {
     if super::is_cancelled(cancel) {
@@ -75,28 +76,41 @@ fn apply_spatial_mask_cancellable(
         return Some(fx.clone());
     }
 
-    let (width, height) = orig.dimensions();
-    if orig.is_empty() || (width, height) != fx.dimensions() {
+    let (orig_w, orig_h) = orig.dimensions();
+    let (start_x, start_y, out_w, out_h) = crop_window.unwrap_or((0, 0, orig_w, orig_h));
+    if orig.is_empty()
+        || fx.is_empty()
+        || fx.dimensions() != (out_w, out_h)
+        || start_x.saturating_add(out_w) > orig_w
+        || start_y.saturating_add(out_h) > orig_h
+    {
         return Some(fx.clone());
     }
 
-    let resampled_mask = resample_mask(mask_image, width, height);
+    let resampled_mask = resample_mask(mask_image, orig_w, orig_h);
 
-    let mut out_bytes = vec![0u8; (width * height * 4) as usize];
-    let orig_raw = orig.as_raw();
+    let mut out_bytes = vec![0u8; (out_w * out_h * 4) as usize];
+    let orig_stride = (orig_w * 4) as usize;
+    let out_stride = (out_w * 4) as usize;
+    let start_x_bytes = (start_x * 4) as usize;
+    let row_start = start_y as usize * orig_stride;
+    let row_end = (start_y + out_h) as usize * orig_stride;
+    let orig_rows = &orig.as_raw()[row_start..row_end];
     let fx_raw = fx.as_raw();
-    let mask_raw = resampled_mask.as_raw();
+    let mask_rows = &resampled_mask.as_raw()[row_start..row_end];
 
     out_bytes
-        .par_chunks_exact_mut((width * 4) as usize)
-        .zip(orig_raw.par_chunks_exact((width * 4) as usize))
-        .zip(fx_raw.par_chunks_exact((width * 4) as usize))
-        .zip(mask_raw.par_chunks_exact((width * 4) as usize))
+        .par_chunks_exact_mut(out_stride)
+        .zip(orig_rows.par_chunks_exact(orig_stride))
+        .zip(fx_raw.par_chunks_exact(out_stride))
+        .zip(mask_rows.par_chunks_exact(orig_stride))
         .for_each(|(((out_row, orig_row), fx_row), mask_row)| {
             if super::is_cancelled(cancel) {
                 return;
             }
-            for x in 0..(width as usize) {
+            let orig_row = &orig_row[start_x_bytes..start_x_bytes + out_stride];
+            let mask_row = &mask_row[start_x_bytes..start_x_bytes + out_stride];
+            for x in 0..(out_w as usize) {
                 let px_idx = x * 4;
                 let weight = mask_weight(&mask_row[px_idx..px_idx + 4], config, channel);
 
@@ -113,7 +127,7 @@ fn apply_spatial_mask_cancellable(
     if super::is_cancelled(cancel) {
         return None;
     }
-    Some(RgbaImage::from_raw(width, height, out_bytes).unwrap_or_else(|| fx.clone()))
+    Some(RgbaImage::from_raw(out_w, out_h, out_bytes).unwrap_or_else(|| fx.clone()))
 }
 
 fn render_creative_fx(img: &RgbaImage, params: &CreativeFxParams) -> RgbaImage {
@@ -202,12 +216,19 @@ fn apply_creative_fx_with_masks_inner(
         };
         if let Some((mask_image, channel)) = mask {
             let fx_result = render_creative_fx_cancellable(img, params, cancel)?;
+            let crop_window = match params {
+                CreativeFxParams::Trichromatic(p) if p.auto_crop && !img.is_empty() => Some(
+                    trichromatic_intersection_box(img.width(), img.height(), &p.channels),
+                ),
+                _ => None,
+            };
             let blended = apply_spatial_mask_cancellable(
                 img,
                 &fx_result,
                 mask_image,
                 mask_config,
                 channel,
+                crop_window,
                 cancel,
             )?;
             if let CreativeFxParams::BasicControls(p) = params

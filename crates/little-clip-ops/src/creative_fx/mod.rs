@@ -260,6 +260,75 @@ mod tests {
     }
 
     #[test]
+    fn test_trichromatic_auto_crop_spatial_mask_alignment() {
+        let img = RgbaImage::from_fn(20, 16, |x, y| {
+            Rgba([(x * 11) as u8, (y * 15) as u8, ((x + y) * 7) as u8, 255])
+        });
+        let mut params = TrichromaticParams {
+            mode: TrichromaticMode::Rgb,
+            channels: [
+                ChannelTransform {
+                    offset_x: 3.0,
+                    offset_y: 2.0,
+                    zoom: 1.0,
+                },
+                ChannelTransform::default(),
+                ChannelTransform {
+                    offset_x: -1.0,
+                    offset_y: -1.0,
+                    zoom: 1.0,
+                },
+            ],
+            auto_crop: true,
+            depth_mask: DepthMaskConfig::default(),
+        };
+        let (start_x, start_y, crop_w, crop_h) =
+            trichromatic_intersection_box(img.width(), img.height(), &params.channels);
+        assert_eq!((start_x, start_y), (3, 2));
+        let unmasked_fx = apply_trichromatic(&img, &params);
+        assert_eq!(unmasked_fx.dimensions(), (crop_w, crop_h));
+
+        let depth = RgbaImage::from_fn(img.width(), img.height(), |x, y| {
+            let v = if x == start_x + 2 && y == start_y + 3 {
+                0
+            } else {
+                255
+            };
+            Rgba([v, v, v, 255])
+        });
+        let alpha = RgbaImage::from_fn(img.width(), img.height(), |x, y| {
+            let a = if x == start_x + 2 && y == start_y + 3 {
+                0
+            } else {
+                255
+            };
+            Rgba([0, 0, 0, a])
+        });
+
+        for source in [
+            CreativeFxMaskSource::DepthMap,
+            CreativeFxMaskSource::BackgroundRemovalAlpha,
+        ] {
+            params.depth_mask = DepthMaskConfig {
+                enabled: true,
+                source,
+                invert: false,
+                threshold: 0.0,
+                feather: 0.1,
+            };
+            let out = apply_creative_fx_with_masks(
+                &img,
+                Some(&depth),
+                Some(&alpha),
+                &CreativeFxParams::Trichromatic(params),
+            );
+            assert_eq!(out.dimensions(), (crop_w, crop_h));
+            assert_eq!(out.get_pixel(2, 3), img.get_pixel(start_x + 2, start_y + 3));
+            assert_eq!(out.get_pixel(5, 4), unmasked_fx.get_pixel(5, 4));
+        }
+    }
+
+    #[test]
     fn test_pixel_sort_directions() {
         let mut img = RgbaImage::new(30, 30);
         for x in 0..30 {
