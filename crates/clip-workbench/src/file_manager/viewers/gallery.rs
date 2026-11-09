@@ -101,9 +101,7 @@ impl Collection {
                 photo.path = destination.into();
             }
         }
-        if let Some(rating) = self.ratings.values.get(source).copied() {
-            self.ratings.set(destination.into(), rating);
-        }
+        self.ratings.relocate(source, destination);
     }
     pub(super) fn dirty(&self) -> bool {
         self.photos.iter().any(|photo| {
@@ -157,9 +155,7 @@ impl Viewers {
         if let Some(path) = active.as_ref().and_then(|state| state.path.as_ref()) {
             let photo = &mut collection.photos[collection.index];
             if photo.path != *path {
-                if let Some(rating) = collection.ratings.values.get(&photo.path).copied() {
-                    collection.ratings.set(path.clone(), rating);
-                }
+                collection.ratings.relocate(&photo.path, path);
                 photo.path = path.clone();
             }
         }

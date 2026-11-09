@@ -36,13 +36,54 @@ type Response = mpsc::Receiver<Result<Result<u8, String>, JobError>>;
 #[derive(Default)]
 pub(super) struct Ratings {
     pub values: BTreeMap<PathBuf, u8>,
+    committed: BTreeMap<PathBuf, u8>,
     writes: BTreeMap<PathBuf, u8>,
     pending: Option<(PathBuf, Option<u8>, Response)>,
 }
 impl Ratings {
     pub fn set(&mut self, path: PathBuf, value: u8) {
-        self.values.insert(path.clone(), value.min(5));
-        self.writes.insert(path, value.min(5));
+        let value = value.min(5);
+        self.values.insert(path.clone(), value);
+        self.writes.insert(path, value);
+    }
+    pub fn relocate(&mut self, source: &Path, destination: &Path) {
+        if source == destination {
+            return;
+        }
+        let dest = destination.to_path_buf();
+        if let Some(committed) = self.committed.remove(source) {
+            self.committed.insert(dest.clone(), committed);
+        } else {
+            self.committed.remove(&dest);
+        }
+        let moved_write = self.writes.remove(source);
+        if let Some(value) = self.values.remove(source) {
+            self.values.insert(dest.clone(), value);
+            if moved_write.is_some() || self.committed.get(&dest) != Some(&value) {
+                self.writes
+                    .insert(dest.clone(), moved_write.unwrap_or(value));
+            } else {
+                self.writes.remove(&dest);
+            }
+        } else {
+            self.values.remove(&dest);
+            if let Some(write) = moved_write {
+                self.values.insert(dest.clone(), write);
+                self.writes.insert(dest.clone(), write);
+            } else {
+                self.writes.remove(&dest);
+            }
+        }
+        if let Some((pending_path, pending_value, _)) = &mut self.pending
+            && pending_path == source
+        {
+            *pending_path = dest.clone();
+            if let Some(v) = *pending_value {
+                let latest = self.writes.get(&dest).copied().unwrap_or(v);
+                self.writes.insert(dest, latest);
+                self.writes.insert(source.to_path_buf(), 0);
+            }
+        }
     }
     pub fn busy(&self) -> bool {
         !self.writes.is_empty()
@@ -101,10 +142,26 @@ impl Ratings {
                         .and_then(|r| r);
                     match result {
                         Ok(rating) => {
-                            self.values.entry(path.clone()).or_insert(rating);
+                            let rating = rating.min(5);
+                            self.committed.insert(path.clone(), rating);
+                            if value.is_some() {
+                                if !self.writes.contains_key(path) {
+                                    self.values.insert(path.clone(), rating);
+                                }
+                            } else {
+                                self.values.entry(path.clone()).or_insert(rating);
+                            }
                         }
                         Err(message) => {
-                            self.values.entry(path.clone()).or_insert(0);
+                            if value.is_some() {
+                                if !self.writes.contains_key(path) {
+                                    let fallback = self.committed.get(path).copied().unwrap_or(0);
+                                    self.values.insert(path.clone(), fallback);
+                                }
+                            } else {
+                                self.committed.entry(path.clone()).or_insert(0);
+                                self.values.entry(path.clone()).or_insert(0);
+                            }
                             error = Some(format!(
                                 "Rating could not be {}: {message}",
                                 if value.is_some() { "saved" } else { "loaded" }
@@ -146,6 +203,8 @@ pub(super) fn relocate(source: &Path, destination: &Path) -> Result<(), String> 
     if rating > 0 {
         save(destination, rating)?;
         save(source, 0)?;
+    } else if load(destination)? > 0 {
+        save(destination, 0)?;
     }
     Ok(())
 }
@@ -197,5 +256,49 @@ mod tests {
         ratings.receive(&Context::default());
         assert_eq!(ratings.writes.get(&path), Some(&4));
         assert_eq!(ratings.values.get(&path), Some(&4));
+    }
+    #[test]
+    fn failed_rating_save_rolls_back_optimistic_value_to_committed_rating() {
+        let path = PathBuf::from("photo.png");
+        let mut ratings = Ratings::default();
+
+        // First save fails with no prior committed rating -> rolls back to 0.
+        ratings.set(path.clone(), 5);
+        let write = ratings.writes.pop_first().unwrap().1;
+        let (sender, receiver) = mpsc::channel();
+        ratings.pending = Some((path.clone(), Some(write), receiver));
+        sender.send(Ok(Err("disk full".into()))).unwrap();
+        let (_, err) = ratings.receive(&Context::default());
+        assert!(err.is_some());
+        assert_eq!(ratings.values.get(&path), Some(&0));
+
+        // Subsequent save succeeds at 3, then save of 5 fails -> rolls back to 3.
+        ratings.set(path.clone(), 3);
+        let write = ratings.writes.pop_first().unwrap().1;
+        let (sender, receiver) = mpsc::channel();
+        ratings.pending = Some((path.clone(), Some(write), receiver));
+        sender.send(Ok(Ok(3))).unwrap();
+        ratings.receive(&Context::default());
+        assert_eq!(ratings.values.get(&path), Some(&3));
+
+        ratings.set(path.clone(), 5);
+        let write = ratings.writes.pop_first().unwrap().1;
+        let (sender, receiver) = mpsc::channel();
+        ratings.pending = Some((path.clone(), Some(write), receiver));
+        sender.send(Ok(Err("permission denied".into()))).unwrap();
+        ratings.receive(&Context::default());
+        assert_eq!(ratings.values.get(&path), Some(&3));
+    }
+    #[test]
+    fn relocate_moves_pending_writes_and_clears_stale_source_entries() {
+        let source = PathBuf::from("/tmp/old.png");
+        let dest = PathBuf::from("/tmp/new.png");
+        let mut ratings = Ratings::default();
+        ratings.set(source.clone(), 4);
+        ratings.relocate(&source, &dest);
+        assert!(!ratings.values.contains_key(&source));
+        assert!(!ratings.writes.contains_key(&source));
+        assert_eq!(ratings.values.get(&dest), Some(&4));
+        assert_eq!(ratings.writes.get(&dest), Some(&4));
     }
 }
