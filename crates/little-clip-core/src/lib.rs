@@ -34,6 +34,7 @@ pub mod presentation {
     #[path = "../../../little-clip-ops/src/units.rs"]
     pub mod units;
 }
+pub mod natural_sort;
 pub mod palette;
 pub mod pcx_image;
 pub mod pdf;

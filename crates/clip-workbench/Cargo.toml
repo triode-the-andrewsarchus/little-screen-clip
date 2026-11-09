@@ -32,6 +32,7 @@ tracing-subscriber.workspace = true
 rodio = { version = "0.22.2", features = ["symphonia-mp2", "symphonia-caf", "symphonia-mkv", "symphonia-aiff"] }
 hound = "3.5.1"
 image = { workspace = true }
+zip = { version = "7.0", default-features = false, features = ["deflate"] }
 imagesize = "0.12"
 kamadak-exif = "0.6.1"
 png = "0.18.1"

@@ -1,4 +1,5 @@
 //! In-memory browser ordering. No file probing or preview readiness dependencies.
+pub(super) use little_clip_core::natural_sort::natural_cmp;
 use std::cmp::Ordering;
 
 use super::{
@@ -71,46 +72,6 @@ pub(super) fn available<T: Ord>(a: Option<T>, b: Option<T>, descending: bool) ->
     }
 }
 
-/// Compare digit runs by value without parsing integers or imposing a digit limit.
-/// Equal numbers with fewer leading zeroes come first. Other text is literal.
-pub(super) fn natural_cmp(a: &str, b: &str) -> Ordering {
-    let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
-    while let (Some(&left), Some(&right)) = (a.first(), b.first()) {
-        if left.is_ascii_digit() && right.is_ascii_digit() {
-            let (ad, ar) = digits(a);
-            let (bd, br) = digits(b);
-            let av = &ad[ad.iter().position(|v| *v != b'0').unwrap_or(ad.len())..];
-            let bv = &bd[bd.iter().position(|v| *v != b'0').unwrap_or(bd.len())..];
-            let order = av
-                .len()
-                .cmp(&bv.len())
-                .then_with(|| av.cmp(bv))
-                .then(ad.len().cmp(&bd.len()));
-            if !order.is_eq() {
-                return order;
-            }
-            (a, b) = (ar, br);
-        } else {
-            let order = left.cmp(&right);
-            if !order.is_eq() {
-                return order;
-            }
-            a = &a[1..];
-            b = &b[1..];
-        }
-    }
-    a.len().cmp(&b.len())
-}
-
-fn digits(bytes: &[u8]) -> (&[u8], &[u8]) {
-    bytes.split_at(
-        bytes
-            .iter()
-            .take_while(|byte| byte.is_ascii_digit())
-            .count(),
-    )
-}
-
 // Categories deliberately group related extensions; extensions stay contiguous
 // inside each category, with natural names used only as the final tie-breaker.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -172,7 +133,7 @@ fn content_type(entry: &Entry) -> (Category, String) {
 fn extension_category(extension: &str) -> Category {
     match extension {
         "pdf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ods" | "ppt" | "pptx" | "odp"
-        | "epub" | "ipynb" => Category::Document,
+        | "epub" | "cbz" | "ipynb" => Category::Document,
         "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "7z" | "rar" => Category::Archive,
         _ => Category::Other,
     }

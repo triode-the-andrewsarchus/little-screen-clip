@@ -500,7 +500,7 @@ fn extension_kind(path: &Path) -> Option<Kind> {
         "ttf" | "ttc" | "otf" | "otc" | "woff" | "woff2" => Some(Kind::Font),
         "mid" | "midi" => Some(Kind::Midi),
         "ipynb" => Some(Kind::Notebook),
-        "epub" => Some(Kind::Book),
+        "epub" | "cbz" => Some(Kind::Book),
         _ => None,
     }
 }
@@ -774,6 +774,11 @@ mod tests {
                 "../little-clip-core/tests/fixtures/ebooks/journey.epub",
                 super::super::DocumentPosition::BookChapter(1),
                 "Chapter 2 / 2",
+            ),
+            (
+                "tests/fixtures/comic.cbz",
+                super::super::DocumentPosition::BookChapter(1),
+                "Page 2 / 3",
             ),
         ] {
             let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(fixture);

@@ -208,10 +208,8 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         }
         ViewerSession::Scene(state) => state.relocate_file(path.into()),
         ViewerSession::Video(state) => state.relocate_file(path.into(), source),
-        ViewerSession::System(_)
-        | ViewerSession::Font(_)
-        | ViewerSession::Notebook(_)
-        | ViewerSession::Book(_) => {}
+        ViewerSession::System(_) | ViewerSession::Font(_) | ViewerSession::Notebook(_) => {}
+        ViewerSession::Book(state) => state.relocate_file(source),
     }
 }
 

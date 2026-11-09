@@ -723,7 +723,9 @@
   - [ ] `.cbr` — Comic Book RAR archive
   - [ ] `.cb7` — Comic Book 7-Zip archive
   - [ ] `.cbt` — Comic Book TAR archive
-  - [ ] `.cbz` — Comic Book ZIP archive
+  - [x] `.cbz` — Comic Book ZIP archive; natural-order page reader with zoom/fit-width, clickable first/last-page thumbnail strips, guarded rename and original archive preservation
+    - [x] Lazy reads from retained ordinary-file handles (up to 2 GiB archives, 8,192 entries and 32 MiB expanded image members); shared bounded raster decoders and source-change checks
+    - [ ] ComicInfo metadata, reading-direction conventions, ZIP64/encrypted archives, animated-page playback, and archive editing/export
   - [ ] `.cbx` — comic-book archive (format varies by application)
 - [ ] Game engines, interactive fiction, and game assets
   - [ ] Minecraft worlds, regions, structures, and resource packs
