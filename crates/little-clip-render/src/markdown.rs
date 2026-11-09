@@ -196,27 +196,26 @@ pub(crate) fn parse_markdown_preview(input: &str) -> (Vec<MarkdownLine>, usize) 
 /// Parses inline formatting spans (bold, italic, code, links) within a line of text.
 pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
     let mut spans = Vec::new();
-    let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
     let mut i = 0;
     let mut buf = String::new();
 
-    while i < len {
+    while i < text.len() {
+        let rest = &text[i..];
+
         // Link: [label](url)
-        if chars[i] == '[' {
-            if let Some(close_bracket) = text[i..].find(']') {
-                let after_bracket = i + close_bracket + 1;
-                if after_bracket < len && chars[after_bracket] == '(' {
-                    if let Some(close_paren) = text[after_bracket..].find(')') {
+        if rest.starts_with('[') {
+            if let Some(close_bracket) = rest[1..].find(']') {
+                let after_bracket = 1 + close_bracket + 1;
+                if rest[after_bracket..].starts_with('(') {
+                    if let Some(close_paren) = rest[after_bracket + 1..].find(')') {
                         if !buf.is_empty() {
                             spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
                         }
-                        let label: String = chars[i + 1..i + close_bracket].iter().collect();
-                        let url: String = chars[after_bracket + 1..after_bracket + close_paren]
-                            .iter()
-                            .collect();
+                        let label = rest[1..1 + close_bracket].to_string();
+                        let url =
+                            rest[after_bracket + 1..after_bracket + 1 + close_paren].to_string();
                         spans.push(MarkdownSpan::Link { label, url });
-                        i = after_bracket + close_paren + 1;
+                        i += after_bracket + 1 + close_paren + 1;
                         continue;
                     }
                 }
@@ -224,67 +223,65 @@ pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
         }
 
         // Inline code: `code`
-        if chars[i] == '`' {
-            if let Some(close_tick) = text[i + 1..].find('`') {
+        if rest.starts_with('`') {
+            if let Some(close_tick) = rest[1..].find('`') {
                 if !buf.is_empty() {
                     spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
                 }
-                let code_str: String = chars[i + 1..i + 1 + close_tick].iter().collect();
+                let code_str = rest[1..1 + close_tick].to_string();
                 spans.push(MarkdownSpan::Code(code_str));
-                i = i + 1 + close_tick + 1;
+                i += 1 + close_tick + 1;
                 continue;
             }
         }
 
         // Bold italic: ***text***
-        if i + 2 < len && chars[i] == '*' && chars[i + 1] == '*' && chars[i + 2] == '*' {
-            if let Some(close_idx) = text[i + 3..].find("***") {
+        if rest.starts_with("***") {
+            if let Some(close_idx) = rest[3..].find("***") {
                 if !buf.is_empty() {
                     spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
                 }
-                let bi_str: String = chars[i + 3..i + 3 + close_idx].iter().collect();
+                let bi_str = rest[3..3 + close_idx].to_string();
                 spans.push(MarkdownSpan::BoldItalic(bi_str));
-                i = i + 3 + close_idx + 3;
+                i += 3 + close_idx + 3;
                 continue;
             }
         }
 
         // Bold: **text** or __text__
-        if i + 1 < len
-            && ((chars[i] == '*' && chars[i + 1] == '*')
-                || (chars[i] == '_' && chars[i + 1] == '_'))
-        {
-            let delim = if chars[i] == '*' { "**" } else { "__" };
-            if let Some(close_idx) = text[i + 2..].find(delim) {
+        if rest.starts_with("**") || rest.starts_with("__") {
+            let delim = &rest[..2];
+            if let Some(close_idx) = rest[2..].find(delim) {
                 if !buf.is_empty() {
                     spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
                 }
-                let b_str: String = chars[i + 2..i + 2 + close_idx].iter().collect();
+                let b_str = rest[2..2 + close_idx].to_string();
                 spans.push(MarkdownSpan::Bold(b_str));
-                i = i + 2 + close_idx + 2;
+                i += 2 + close_idx + 2;
                 continue;
             }
         }
 
         // Italic: *text* or _text_
-        if chars[i] == '*' || chars[i] == '_' {
-            let delim = chars[i];
-            if let Some(close_idx) = text[i + 1..].find(delim) {
+        if rest.starts_with('*') || rest.starts_with('_') {
+            let delim = rest.as_bytes()[0] as char;
+            if let Some(close_idx) = rest[1..].find(delim) {
                 // Ensure not preceded or followed by same delimiter
                 if close_idx > 0 {
                     if !buf.is_empty() {
                         spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
                     }
-                    let it_str: String = chars[i + 1..i + 1 + close_idx].iter().collect();
+                    let it_str = rest[1..1 + close_idx].to_string();
                     spans.push(MarkdownSpan::Italic(it_str));
-                    i = i + 1 + close_idx + 1;
+                    i += 1 + close_idx + 1;
                     continue;
                 }
             }
         }
 
-        buf.push(chars[i]);
-        i += 1;
+        let ch = rest.chars().next().expect("i < text.len()");
+        buf.push(ch);
+        i += ch.len_utf8();
     }
 
     if !buf.is_empty() {
@@ -338,6 +335,31 @@ mod tests {
                     url: "https://example.com".to_string()
                 },
                 MarkdownSpan::Text(" end".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_markdown_spans_with_multibyte_utf8() {
+        let sample = "Prefix — café: **太字**, *斜体*, ***両方***, `コード()` & [リンク🌐](https://example.com/path?q=あ) suffix";
+        let spans = parse_markdown_spans(sample);
+        assert_eq!(
+            spans,
+            vec![
+                MarkdownSpan::Text("Prefix — café: ".to_string()),
+                MarkdownSpan::Bold("太字".to_string()),
+                MarkdownSpan::Text(", ".to_string()),
+                MarkdownSpan::Italic("斜体".to_string()),
+                MarkdownSpan::Text(", ".to_string()),
+                MarkdownSpan::BoldItalic("両方".to_string()),
+                MarkdownSpan::Text(", ".to_string()),
+                MarkdownSpan::Code("コード()".to_string()),
+                MarkdownSpan::Text(" & ".to_string()),
+                MarkdownSpan::Link {
+                    label: "リンク🌐".to_string(),
+                    url: "https://example.com/path?q=あ".to_string(),
+                },
+                MarkdownSpan::Text(" suffix".to_string()),
             ]
         );
     }

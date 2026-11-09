@@ -76,10 +76,10 @@ pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::Layout
                 );
             }
 
-            // Parse escape code
+            // Parse CSI escape sequence: parameter/intermediate bytes (0x20..=0x3F) + final byte (0x40..=0x7E)
             i += 2;
             let code_start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b';') {
+            while i < bytes.len() && (0x20..=0x3F).contains(&bytes[i]) {
                 i += 1;
             }
 
@@ -180,9 +180,12 @@ pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::Layout
                         idx += 1;
                     }
                 }
-            } else {
-                // Not an SGR code, skip to next character
+            } else if i < bytes.len() && (0x40..=0x7E).contains(&bytes[i]) {
+                // Non-SGR CSI sequence: consume the ASCII final byte
                 i += 1;
+                text_start = i;
+            } else {
+                // Malformed or truncated CSI: keep i at the valid UTF-8 char boundary
                 text_start = i;
             }
         } else {
@@ -322,5 +325,11 @@ mod tests {
             ) >= 4.5
         );
         assert_ne!(format.underline, Stroke::NONE);
+    }
+
+    #[test]
+    fn non_sgr_and_malformed_csi_sequences_preserve_multibyte_utf8() {
+        let job = ansi_to_layout_job("start\x1b[?25h—middle\x1b[2K\x1b[—end", 12.0);
+        assert_eq!(job.text, "start—middle—end");
     }
 }
