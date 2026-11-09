@@ -550,6 +550,50 @@ pub fn command_available(program: impl AsRef<OsStr>) -> Option<PathBuf> {
     })
 }
 
+/// Resolves a bundled helper script or directory under `scripts/` independently of the current working directory.
+///
+/// Checks ancestors of the running executable (`current_exe()`), the workspace root relative to
+/// `CARGO_MANIFEST_DIR`, and finally the relative `scripts/<relative_path>` fallback.
+pub fn resolve_bundled_script(relative_path: impl AsRef<Path>) -> PathBuf {
+    let relative = Path::new("scripts").join(relative_path.as_ref());
+    if let Ok(exe) = std::env::current_exe() {
+        for ancestor in exe.ancestors().skip(1) {
+            let candidate = ancestor.join(&relative);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+    let manifest_candidate = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(&relative);
+    if manifest_candidate.exists() {
+        return manifest_candidate;
+    }
+    relative
+}
+
+/// Resolves a Python helper command (`(program, args)`), using `configured_cmd` when non-empty
+/// and otherwise resolving `scripts/<script_name>` via [`resolve_bundled_script`].
+pub fn resolve_python_script_command(
+    configured_cmd: Option<&str>,
+    script_name: &str,
+) -> (String, Vec<String>) {
+    if let Some(cmd) = configured_cmd {
+        let parts: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
+        if !parts.is_empty() {
+            return (parts[0].clone(), parts[1..].to_vec());
+        }
+    }
+    let script = resolve_bundled_script(script_name);
+    let script_str = script.to_string_lossy().into_owned();
+    if script.exists() {
+        (script_str, Vec::new())
+    } else {
+        ("python3".to_string(), vec![script_str])
+    }
+}
+
 fn read_capped(mut reader: impl Read, limit: usize) -> (Vec<u8>, bool) {
     let mut retained = Vec::with_capacity(limit.min(8 * 1024));
     let mut buffer = [0_u8; 8 * 1024];
