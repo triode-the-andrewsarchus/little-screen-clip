@@ -69,12 +69,12 @@ When executing any phase of this plan:
 flowchart TD
     subgraph Target Crate Hierarchy
         LCC[little-clip-core<br/><i>Models, IPC, Colors, Config, Kernel Interface</i>]
-        LCR[little-clip-render<br/><i>Text & Card Rasterization</i>]
+        LCR[little-clip-render<br/><i>Text & Card Rasterization (Tiny-Skia)</i>]
         LCS[little-clip-scene<br/><i>3D Splats & GPU</i>]
         LCO[little-clip-ops<br/><i>Pure Transformations & Diff</i>]
         LCDSP[little-clip-dsp<br/><i>Radio, Morse, AX.25, SSTV</i>]
         
-        CS[clip-studio<br/><i>Shared UI Chrome, Viewers & Studio Widgets</i>]
+        CS[clip-studio<br/><i>Shared UI Chrome, Viewers & Studio Widgets (egui)</i>]
         
         CW[clip-workbench<br/><i>Lightweight Niri Popup Binary</i>]
         CFM[clip-file-manager<br/><i>Full Resizable File Manager Binary</i>]
@@ -97,6 +97,135 @@ flowchart TD
     LCC --> DAEMON
     LCC --> CLI
 ```
+
+---
+
+## Universal Content Presentation Architecture: The 4-Tier Matrix
+
+A core requirement of `little-screen-clip` is that **any file or content type supported by the platform must be fully supported across the entire program**, rather than being implemented in an ad-hoc manner in only one application or view mode. 
+
+### The Problem of Fragmented Viewers & Crate Duplication
+
+Historically, format support was implemented piecemeal:
+- **Asymmetric Support**: A format might receive an inline strip in the file manager, but lack a card renderer on the little screen (e.g., video files or archives on the USB display fall back to plain text file paths, while PDF support in `little-clip-render` is handled only as an ad-hoc branch inside single-file batches).
+- **Duplication Across Crate Boundaries**: Rather than sharing a single visual and mathematical foundation, the same format was re-rendered from scratch across multiple modules:
+  - *Audio Waveforms*: Computed and rendered independently in `little-clip-render/src/cards/audio.rs` (little screen), `file_manager/music/preview.rs` (file manager music view), `rolling_audio_strip.rs` (workbench rolling capture), and `audio_preview/tools/inspect/waveform.rs` (full audio studio). Each independently computes peak downsampling, spacing, zero-crossing points, and color maps.
+  - *Missing Grid / Icon Components*: As the file manager prepares to add a classic **Icon Grid Preview View**, having isolated row renderers forces developers to rewrite thumbnail and badge logic a third time.
+
+### The 4 Presentation Tiers
+
+Every supported content type must fulfill an explicit **4-tier presentation contract**:
+
+```mermaid
+flowchart LR
+    subgraph Presentation Tiers
+        T1["Tier 1: Little Screen Card<br/><i>320×220 Tiny-Skia Card<br/>(little-clip-render)</i>"]
+        T2["Tier 2: Icon & Grid Preview Tile<br/><i>File Manager Grid & Shelf Badge<br/>(clip-studio)</i>"]
+        T3["Tier 3: In-line Strip / Row Preview<br/><i>List View & Rolling Strips<br/>(clip-studio)</i>"]
+        T4["Tier 4: Interactive Studio / Tool<br/><i>Deep Editor & Inspector<br/>(clip-studio)</i>"]
+    end
+```
+
+1. **Tier 1: Hardware USB Little Screen Card (`little-clip-render`)**:
+   - Rendered headlessly with `tiny-skia` and `fontdue` for the 320×220 Trofeo USB display (and virtual display mode) driven by `little-clipd`.
+   - Displays a standardized card layout: category badge, header metadata (duration, resolution, sample rate, file size), primary visual payload (waveform, cover, first page, 3D projection, syntax snippet, table grid), and status indicators.
+2. **Tier 2: Icon & Grid Preview Tile (`clip-studio`)**:
+   - High-density visual card for grid browsing.
+   - Reused across:
+     - The upcoming **File Manager Icon Grid View** (standard file manager thumbnail/icon mode).
+     - Workbench Shelf tiles and drop targets.
+     - Search result visual hit cards.
+   - Shows thumbnail rasters, mini waveform badges, document badges, and selection outlines.
+3. **Tier 3: In-line Strip / Row Preview (`clip-studio`)**:
+   - Compact, high-performance horizontal preview strip embedded directly inside:
+     - File Manager List View rows.
+     - Workbench rolling capture strips.
+     - Shelf expanded row previews.
+   - Features streaming decoders, frequency crossover colors, hover scrubbing, and selection snaps.
+4. **Tier 4: Interactive Studio / Deep Tool (`clip-studio`)**:
+   - Full interactive workspace:
+     - Audio Studio: Waveform canvas, spectral analysis, note/chord detection, gain, transient markers, region edits, audio export.
+     - Image Studio: Zoom/pan viewport, markup overlays, color grading, film simulation, crop/rotate, OCR.
+     - PDF Studio: Page reordering, rotation, deletion, text search, high-res rendering.
+     - MIDI Studio: Note editor, pitch roll, synth playback, WAV/MIDI export.
+     - Video Player: FFplay playback, timelens scrubbing, timeline columns.
+     - Diff Studio: Split/unified text diff, image diff, binary hex diff.
+
+---
+
+### Heavy Code Reuse Across Tiers (Preventing Crate-Boundary Duplication)
+
+Crate boundaries must **not** force duplication of presentation math or rendering algorithms. We partition code into three strict layers:
+
+```mermaid
+flowchart TD
+    subgraph Layer 1: Data & Signal Models (little-clip-core)
+        D1[Canonical ContentType & MIME Classification]
+        D2[Planar Waveform Peaks & Crossover Bands]
+        D3[Timelens Video Keyframe Indices]
+        D4[PDF Page Metrics & Text Minimap Tokens]
+        D5[Zero-Crossing Snapping & Aspect Ratio Solvers]
+    end
+
+    subgraph Layer 2: Headless Rasterization (little-clip-render)
+        R1[Tiny-Skia 320x220 Card Renderers]
+        R2[Universal Dispatch: Audio, Video, PDF, 3D, Text, Table]
+    end
+
+    subgraph Layer 3: Interactive egui Components (clip-studio)
+        S1[WaveformGeometryBuilder & WaveformWidget]
+        S2[PdfPageStripWidget & DocumentPreview]
+        S3[VideoTimelineScrubberWidget]
+        S4[GridTileWidget for File Manager Grid & Shelf]
+        S5[Full Interactive Studios: Audio, Image, PDF, MIDI, Video, Diff]
+    end
+
+    subgraph Layer 4: Application Consumers
+        CW[clip-workbench]
+        CFM[clip-file-manager]
+    end
+
+    Layer 1 --> Layer 2
+    Layer 1 --> Layer 3
+    Layer 2 --> CW
+    Layer 3 --> CW
+    Layer 3 --> CFM
+```
+
+1. **Layer 1: Mathematical & Signal Models (`little-clip-core`)**:
+   - **Zero egui dependencies**: Pure Rust models enabling identical consumption by headless `tiny-skia` renderers and interactive `egui` widgets.
+   - Single source of truth for format classification: `ContentType` enum replaces 15+ scattered `is_*_path()` helper functions.
+   - Shared data structures: `AudioWaveform` (pyramid peak levels, RMS envelopes, spectral crossover bands), `VideoTimelineSummary` (keyframe timestamps, column metrics), `PdfPageCatalog`, `SpreadsheetSheet`, `MidiScore`, `TextMinimapTokens`.
+   - Shared signal math: `WaveformColor` crossovers, zero-crossing search, downsampled column pooling, and time formatting.
+2. **Layer 2: Headless Card Renderers (`little-clip-render`)**:
+   - Implements **Tier 1 (Little Screen Cards)** using `tiny-skia`.
+   - Eliminates cascading single-file `FileBatch` hacks by using a exhaustive `match content_type` dispatch so that **every** supported format (including video, PDF, archives, and spreadsheets) has a first-class card on the little screen.
+3. **Layer 3: Shared Interactive Visual Components (`clip-studio`)**:
+   - Implements **Tier 2 (Grid Tiles)**, **Tier 3 (Inline Strips)**, and **Tier 4 (Full Studios)** in `egui`.
+   - Decomposes massive viewers into shared reusable sub-components:
+     - `WaveformGeometryBuilder`: Translates `AudioWaveform` into bar meshes, gaps, and frequency colors. Shared identically between the mini grid badge, the list-view row strip, rolling audio, and the 1,300-line studio canvas.
+     - `GridTile`: Standardized thumbnail/icon grid card with aspect-ratio letterboxing, badging, and selection state—reused in the File Manager Icon Grid View, workbench shelf, and search results.
+     - `VideoTimelineStrip`: Shared video keyframe scrubber and timeline renderer.
+     - `PdfPageStrip`: Shared multi-page thumbnail strip.
+
+---
+
+### Universal Content Completeness Matrix
+
+| Content Family | Formats | Tier 1: Little Screen Card (`little-clip-render`) | Tier 2: Icon Grid Preview (`clip-studio`) | Tier 3: Inline Strip Preview (`clip-studio`) | Tier 4: Interactive Studio (`clip-studio`) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Audio** | WAV, MP3, FLAC, OGG, AAC, AIFF, M4A | Waveform peaks + dual channel + duration/format | Mini waveform badge + cover / peak thumbnail | Frequency-colored waveform strip + snap range | Full Audio Studio (inspect, spectral, chords, edits, export) |
+| **Images & RAW** | PNG, JPEG, WEBP, AVIF, HEIC, TIFF, BMP, RAW (`.arw`, `.cr2`, etc.) | Premultiplied raster card + dimensions/exif | Aspect-bounded grid thumbnail + rating badge | Compact thumbnail card with aspect letterbox | Image Studio (zoom/pan, markup, color grading, OCR, crop) |
+| **Vector / SVG** | SVG | Pure-Rust `resvg` rasterized card | Scaled vector icon thumbnail | Scaled vector preview tile | Vector Studio / SVG markup view |
+| **Video** | MP4, MKV, WebM, MOV, AVI | Keyframe thumbnail card + duration/resolution badge | Animated / keyframe tile + duration badge | Timelens multi-column keyframe scrub strip | FFplay video player session + scrub controls |
+| **PDF & Documents**| PDF, DOCX, ODT, RTF | Rendered Page 1 thumbnail + page count badge | Page 1 thumbnail tile + document badge | First/last page group preview strip | PDF Studio (page reorder, rotate, delete, search) |
+| **Spreadsheets** | XLSX, XLS, ODS, CSV, TSV | Formatted cell grid card + title/sheet count | Table preview badge + row/col dimensions | Interactive compact spreadsheet row grid | Spreadsheet Studio (multi-sheet tabs, formula bar, cell inspector) |
+| **MIDI** | MID, MIDI | Piano roll note grid card + track count | Musical note icon tile + duration/tempo badge | Compact piano roll strip with playback range | MIDI Studio (pitch roll, note inspector, synth playback, WAV export) |
+| **3D Models / Splats**| OBJ, STL, GLTF, GLB, FBX, PLY | Isometric rendered preview card + poly count | 3D thumbnail tile + material badge | Compact 3D preview badge | 3D Viewport / Gaussian Splat Studio (orbit, rotate, inspect) |
+| **Code & Text** | RS, PY, JS, TS, JSON, TOML, YAML, MD, etc. | Syntax-highlighted text card + language badge | Filetype syntax icon tile | Syntax-highlighted text minimap strip | Text Studio (editor, syntax highlighting, markdown preview) |
+| **Archives** | ZIP, TAR, GZ, 7Z, ISO | Archive card + entry count & compression ratio | Archive package tile | Contents listing preview strip | Archive Studio / FUSE Binwalk inspector |
+| **Diff & Patch** | `.patch`, `.diff`, Clipboard diffs | Split diff card + addition/deletion counts | Diff comparison badge | Compact line diff strip | Diff Studio (unified text diff, image diff, binary hex diff) |
+| **System & Devices**| `/dev`, `/sys`, block mounts, cgroups | Hardware topology / sensor gauge card | Device node icon badge | Resource usage / attribute row strip | System Inspector Studio (cgroups, udev, sysfs, topology) |
 
 ---
 
@@ -137,7 +266,46 @@ flowchart TD
 
 ---
 
-### Phase 2: Concurrency, Threading Boundaries & Non-Blocking I/O
+### Phase 2: Universal Multi-Tier Content Presentation & Code Reuse
+
+#### Problem Statement
+Supported file and content types currently suffer from asymmetric implementation and rampant duplication across crate boundaries:
+1. **Asymmetric Coverage**: A format implemented in the file manager or workbench often lacks a corresponding card on the little screen (e.g., video files and archives on the USB display fall back to plain text paths, while PDF support in `little-clip-render` is an ad-hoc branch inside single-file batches).
+2. **Duplicated Presentation Logic**: The same visual representations are re-calculated and re-rendered in multiple crates:
+   - *Audio Waveforms*: Peak extraction, RMS computation, frequency crossover coloring, downsampling, bar layout, and zero-crossing snapping are duplicated across `little-clip-render` (little screen), `file_manager/music` (music view), `rolling_audio_strip.rs` (workbench rolling capture), and `audio_preview/tools/inspect/waveform.rs` (studio canvas).
+   - *Thumbnail & Grid Tiles*: As the file manager prepares to add an **Icon Grid Preview View**, having isolated row renderers risks writing thumbnailing, aspect-ratio letterboxing, and badge painting a third time.
+
+#### Architectural Solution
+1. **Canonical `ContentType` & Capability Registry in `little-clip-core`**:
+   - Replace 15+ scattered `is_*_path()` helper functions with a unified, extensible `ContentType` enum.
+   - Centralize format detection, MIME mapping, and metadata extraction.
+   - Maintain pure data models (`AudioWaveform`, `VideoTimelineSummary`, `PdfPageCatalog`, `SpreadsheetSheet`, `MidiScore`, `TextMinimapTokens`) with zero egui dependencies so they can be consumed by both headless `tiny-skia` renderers and interactive `egui` widgets.
+2. **Universal Little-Screen Card Coverage in `little-clip-render` (Tier 1)**:
+   - Replace cascading `FileBatch` heuristic branches in `cards/mod.rs` with an exhaustive `match content_type` dispatch.
+   - Add first-class card renderers for previously neglected formats:
+     - Video keyframe thumbnail card with duration and resolution badges.
+     - PDF first-page thumbnail card with page count badge.
+     - Archive summary card with entry count and compression ratio.
+     - Audio file batch cards with inline mini waveform previews.
+3. **Shared Geometry Builders & Widgets in `clip-studio` (Tiers 2, 3, and 4)**:
+   - Extract `WaveformGeometryBuilder`: Translates `little-clip-core::AudioWaveform` into layout bars, gaps, and frequency crossover colors. Reused identically across:
+     - Tier 2: Mini waveform icon tile for the File Manager Icon Grid View.
+     - Tier 3: In-line waveform row strip for File Manager List View and workbench shelf.
+     - Tier 3: Rolling audio capture strip in workbench.
+     - Tier 4: Interactive canvas in the Audio Studio (deconstructing the 1,315-line `waveform.rs`).
+   - Extract `GridTileWidget`: Standardized thumbnail/icon grid card with aspect-ratio letterboxing, format badges, and selection outlines. Shared between the upcoming File Manager Icon Grid View, workbench shelf, and search result tiles.
+   - Extract `VideoTimelineStripWidget`: Shared video keyframe timeline scrubber used in both list view rows and video inspection.
+   - Extract `PdfPageStripWidget`: Shared page thumbnail strip used in list view rows and the PDF studio.
+
+#### Dynamic Expansion Checklist (To be expanded during implementation)
+- [ ] Implement `ContentType` enum and migrate all existing `is_*_path` calls to it.
+- [ ] Add unit tests verifying exhaustive card coverage for every `ContentType` variant.
+- [ ] Benchmark `WaveformGeometryBuilder` reuse across list view, rolling capture, and studio canvas.
+- [ ] Validate that the new `GridTileWidget` meets File Manager Icon Grid View requirements.
+
+---
+
+### Phase 3: Concurrency, Threading Boundaries & Non-Blocking I/O
 
 #### Problem Statement
 Multiple critical subsystems perform synchronous, blocking I/O on async runtimes or UI render threads:
@@ -171,7 +339,7 @@ Multiple critical subsystems perform synchronous, blocking I/O on async runtimes
 
 ---
 
-### Phase 3: Domain Decoupling in Transformation Pipelines (`little-clip-ops`)
+### Phase 4: Domain Decoupling in Transformation Pipelines (`little-clip-ops`)
 
 #### Problem Statement
 [`crates/little-clip-ops`](file:///home/vcarlson/little-screen-clip/crates/little-clip-ops) combines fundamentally unrelated functional domains into a single crate:
@@ -199,7 +367,7 @@ This mixing forces heavy signal processing and DSP dependencies onto anything ne
 
 ---
 
-### Phase 4: Extreme Complexity Hotspots & Monster Function Deconstruction
+### Phase 5: Extreme Complexity Hotspots & Monster Function Deconstruction
 
 #### Problem Statement
 The codebase contains 293 functions with cyclomatic complexity > 15, with top functions reaching CCN > 100–200 and NLOC > 1,000 lines. These "monster functions" mix business logic, state mutations, error recovery, layout calculations, and egui painter calls in deeply nested control flow.
@@ -232,7 +400,7 @@ Systematically decompose the top 10 hotspots into focused, single-responsibility
 
 ---
 
-### Phase 5: Search Engine & Monolithic Subsystems Modularization
+### Phase 6: Search Engine & Monolithic Subsystems Modularization
 
 #### Problem Statement
 The search indexing subsystem ([`search/retrieval.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/file_manager/search/retrieval.rs) and [`search/store.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/file_manager/search/store.rs)) currently concentrates database schema migrations, text tokenization, vector embedding storage, cosine distance calculations, SQLite query construction, and ranked result blending into two dense files.
@@ -256,7 +424,7 @@ The search indexing subsystem ([`search/retrieval.rs`](file:///home/vcarlson/lit
 
 ---
 
-### Phase 6: Clocks, Ephemeral State, Leaks & Hygiene
+### Phase 7: Clocks, Ephemeral State, Leaks & Hygiene
 
 #### Problem Statement
 1. **Clock Desynchronization**: UI animations and toasts use different clock sources across views (`Instant::now()`, `SystemTime::now()`, `ctx.input(|i| i.time)`), causing stutter during frame drops. Workbench `status_msg` has no auto-dismissal mechanism.
@@ -291,32 +459,39 @@ Phase 1: Inverted Crate Hierarchy & Dependency Untangling
 ├── Task 1.4: Split internal worker CLI commands between workbench and file manager
 └── Task 1.5: Unify SVG thumbnail generation onto pure-Rust `resvg` instead of `rsvg-convert`
 
-Phase 2: Concurrency, Threading Boundaries & Non-Blocking I/O
-├── Task 2.1: Move USB driver hardware I/O in `little-clipd` to dedicated `std::thread`
-├── Task 2.2: Convert synchronous UI IPC calls to non-blocking background tasks
-├── Task 2.3: Make block-device (`lsblk`) scanning asynchronous in `mounts.rs`
-└── Task 2.4: Eliminate per-frame formatting allocations in egui `update()`
+Phase 2: Universal Multi-Tier Content Presentation & Code Reuse
+├── Task 2.1: Canonical `ContentType` enum & capability registry in `little-clip-core`
+├── Task 2.2: Universal Little-Screen Card coverage in `little-clip-render` (video, PDF, archives, spreadsheets)
+├── Task 2.3: Extract shared `WaveformGeometryBuilder` & visual widgets into `clip-studio`
+├── Task 2.4: Implement reusable `GridTileWidget` for File Manager Icon Grid View, shelf, and search
+└── Task 2.5: Consolidate shared `VideoTimelineStripWidget` and `PdfPageStripWidget`
 
-Phase 3: Domain Decoupling in Transformation Pipelines (`little-clip-ops`)
-├── Task 3.1: Extract radio/DSP decoders (`digital_decode`, `hf_audio`) into isolated module/crate
-├── Task 3.2: Consolidate text, binary, and visual diff engines under unified trait hierarchy
-└── Task 3.3: Decompose monolithic `execute_node` in pipeline executor into handler registry
+Phase 3: Concurrency, Threading Boundaries & Non-Blocking I/O
+├── Task 3.1: Move USB driver hardware I/O in `little-clipd` to dedicated `std::thread`
+├── Task 3.2: Convert synchronous UI IPC calls to non-blocking background tasks
+├── Task 3.3: Make block-device (`lsblk`) scanning asynchronous in `mounts.rs`
+└── Task 3.4: Eliminate per-frame formatting allocations in egui `update()`
 
-Phase 4: Extreme Complexity Hotspots & Monster Function Deconstruction
-├── Task 4.1: Decompose `render_waveform_canvas` (CCN 205 -> < 20)
-├── Task 4.2: Decompose `render_ui` in image studio (CCN 194 -> < 25)
-├── Task 4.3: Decompose `compute_audio_analysis_inner` into pipelined decode stages
-├── Task 4.4: Decompose `render_standard_ui` and `render_ui_with_copy_dispatch` in audio/midi studios
-└── Task 4.5: Replace massive branch matches (`syntax.rs`, `icons.rs`) with static lookup tables
+Phase 4: Domain Decoupling in Transformation Pipelines (`little-clip-ops`)
+├── Task 4.1: Extract radio/DSP decoders (`digital_decode`, `hf_audio`) into isolated module/crate
+├── Task 4.2: Consolidate text, binary, and visual diff engines under unified trait hierarchy
+└── Task 4.3: Decompose monolithic `execute_node` in pipeline executor into handler registry
 
-Phase 5: Search Engine & Monolithic Subsystems Modularization
-├── Task 5.1: Split `search/retrieval.rs` into scoring, query builder, and blending modules
-└── Task 5.2: Split `search/store.rs` into migrations, vector storage, and cache modules
+Phase 5: Extreme Complexity Hotspots & Monster Function Deconstruction
+├── Task 5.1: Decompose `render_waveform_canvas` (CCN 205 -> < 20)
+├── Task 5.2: Decompose `render_ui` in image studio (CCN 194 -> < 25)
+├── Task 5.3: Decompose `compute_audio_analysis_inner` into pipelined decode stages
+├── Task 5.4: Decompose `render_standard_ui` and `render_ui_with_copy_dispatch` in audio/midi studios
+└── Task 5.5: Replace massive branch matches (`syntax.rs`, `icons.rs`) with static lookup tables
 
-Phase 6: Clocks, Ephemeral State, Leaks & Hygiene
-├── Task 6.1: Standardize UI clock sources on `ctx.input(|i| i.time)` & adopt `StatusToast`
-├── Task 6.2: Add explicit `CancelClipboardRoute` to eliminate `clipctl` 2s dangling window
-└── Task 6.3: Implement RAII temporary file guards and startup scavenger routine
+Phase 6: Search Engine & Monolithic Subsystems Modularization
+├── Task 6.1: Split `search/retrieval.rs` into scoring, query builder, and blending modules
+└── Task 6.2: Split `search/store.rs` into migrations, vector storage, and cache modules
+
+Phase 7: Clocks, Ephemeral State, Leaks & Hygiene
+├── Task 7.1: Standardize UI clock sources on `ctx.input(|i| i.time)` & adopt `StatusToast`
+├── Task 7.2: Add explicit `CancelClipboardRoute` to eliminate `clipctl` 2s dangling window
+└── Task 7.3: Implement RAII temporary file guards and startup scavenger routine
 ```
 
 ---
