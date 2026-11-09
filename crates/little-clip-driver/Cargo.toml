@@ -9,5 +9,3 @@ license.workspace = true
 rusb.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-little-clip-core = { path = "../little-clip-core" }
-tracing-subscriber.workspace = true

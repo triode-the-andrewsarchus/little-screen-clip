@@ -1187,7 +1187,7 @@ impl ImagePreviewState {
             if let Some(norm_p) = self.sam_state.hovered_pos {
                 let screen_p = to_screen(norm_p);
                 painter.circle_filled(screen_p, 3.5, Color32::from_rgb(30, 144, 255));
-                painter.circle_stroke(screen_p, 5.5, Stroke::new(1.5, Color32::WHITE));
+                painter.circle_stroke(screen_p, 5.5, Stroke::new(1.5_f32, Color32::WHITE));
             }
         }
 

@@ -113,7 +113,6 @@ fn inspect_space_starts_playback_with_a_silent_player() {
         }
     });
     state.player = Some(silent_player);
-    state._sink = None;
     assert!(!state.is_playing);
 
     let ctx = egui::Context::default();
@@ -596,7 +595,6 @@ fn inspect_space_pauses_active_transport_with_player_disabled() {
     state.is_loading_analysis = false;
     state.player = None;
     state.player_factory = || None;
-    state._sink = None;
     // Model an already-active transport; with the player disabled, Space can
     // only exercise the production pause transition and cannot emit sound.
     state.is_playing = true;
@@ -620,7 +618,6 @@ fn inspect_space_pauses_active_transport_with_player_disabled() {
     assert!(!state.is_playing);
     assert!(state.playback_start_instant.is_none());
     assert!(state.player.is_none());
-    assert!(state._sink.is_none());
 }
 
 #[test]
@@ -636,7 +633,6 @@ fn hf_space_yields_to_focused_text_editor_with_player_disabled() {
     state.active_mode = AudioToolMode::HfAnalysis;
     state.player = None;
     state.player_factory = || None;
-    state._sink = None;
     // An active transport makes an erroneously handled Space observable as a pause.
     // With playback resources disabled, the test cannot emit audio.
     state.is_playing = true;
@@ -673,7 +669,6 @@ fn hf_space_yields_to_focused_text_editor_with_player_disabled() {
     assert!(state.is_playing, "focused Space should not pause playback");
     assert!(!close_requested);
     assert!(state.player.is_none());
-    assert!(state._sink.is_none());
 }
 
 #[test]
@@ -974,7 +969,6 @@ fn inspect_canvas_right_click_preview_loop_and_shift_remove_stay_session_owned()
     // Keep the production preview-state transitions while preventing output to speakers.
     state.player = None;
     state.player_factory = || None;
-    state._sink = None;
 
     let secondary = egui::PointerButton::Secondary;
     let ctx = egui::Context::default();

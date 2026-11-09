@@ -166,4 +166,4 @@ photo_recursive_timeout_seconds = 0
 audio_spectrum = false
 
 [file_manager.search]
-roots = ["/home/vega/Documents/type_testing", "/home/vega/OpGuidesHugoSrc/content/Music"]
+roots = []

@@ -17,7 +17,7 @@ This document tracks the step-by-step refactoring plan for the `little-screen-cl
 
 ## Task Checklist
 
-- [ ] **Task 1: Prune dead code, unused dependencies, personal config defaults, and compiler warnings**
+- [x] **Task 1: Prune dead code, unused dependencies, personal config defaults, and compiler warnings**
   - Remove unused `little-clip-core` and `tracing-subscriber` dependencies from `crates/little-clip-driver/Cargo.toml`.
   - Delete unreferenced `crates/little-clip-ops/src/stl.rs`, `scripts/segment_anything.py`, and orphaned `scripts/__pycache__/download_raw_samples.cpython-314.pyc`.
   - Remove unused imports in `scripts/ocr.py` and dead `_sink` fields in `crates/clip-workbench/src/audio_preview/mod.rs` and `crates/clip-workbench/src/midi_view/mod.rs`.

@@ -187,7 +187,7 @@ fn render_eject_button(
     if e_resp.hovered() {
         ui.painter().rect_filled(e_rect, 3.0, colors.recessed);
         ui.painter()
-            .rect_stroke(e_rect, 3.0, egui::Stroke::new(1.0, colors.accent));
+            .rect_stroke(e_rect, 3.0, egui::Stroke::new(1.0_f32, colors.accent));
     }
     let eject_icon_rect = Rect::from_min_size(e_rect.center() - vec2(8.0, 8.0), vec2(16.0, 16.0));
     let eject_icon_color = if e_resp.hovered() {
