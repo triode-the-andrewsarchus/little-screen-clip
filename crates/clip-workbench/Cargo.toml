@@ -61,7 +61,7 @@ sha2 = "0.10"
 ort = { version = "2.0.0-rc.15", features = ["download-binaries", "cuda"] }
 ndarray = "0.17.2"
 fuse-binwalk = { git = "https://github.com/triode-the-andrewsarchus/fuse-binwalk" }
-rusqlite = { version = "0.35", features = ["bundled", "backup", "limits", "hooks", "functions"] }
+rusqlite = { version = "0.35", features = ["bundled", "backup", "limits", "hooks", "functions", "serialize"] }
 realfft = "3.5.0"
 midir = "0.11"
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }

@@ -7,6 +7,7 @@ mod bookmarks;
 mod calendar;
 pub(super) mod constellation;
 mod content;
+mod database;
 mod ebook;
 mod edit_ui;
 mod edits;
@@ -94,6 +95,7 @@ pub(super) enum DocumentPosition {
     BookChapter(usize),
     MailAttachment(usize),
     CalendarEvent(usize),
+    DatabaseTable(usize),
     SubtitleCue(usize),
 }
 

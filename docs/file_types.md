@@ -254,8 +254,9 @@
     - [ ] `.parquet` — Apache Parquet columnar storage
       - [ ] File metadata footer (schema, row group counts, creator string, key-value metadata dictionaries)
     - [ ] `.raml` — RESTful API Modeling Language
-    - [ ] `.sqlite`, `.sqlite3` — SQLite database
-      - [ ] Database schema metadata, `PRAGMA user_version`, `PRAGMA application_id`, and table row counts
+    - [x] `.sqlite`, `.sqlite3`, `.db`, `.db3` — read-only bounded SQLite snapshot browser with clickable schema strips, table selection, 200-row paging, shared virtualized grid, declared columns/foreign keys and guarded rename
+      - [x] Database schema definitions, `PRAGMA user_version` and `PRAGMA application_id`
+      - [ ] Live WAL/journal merging, complete table row counts, query console, evaluated views/virtual/generated columns and database editing (checkpointed main file only; 128 MiB input, 512 objects, first 32 ordinary columns per page)
     - [ ] `.styl`, `.stylus` — Stylus stylesheet
     - [ ] `.ttl`, `.n3`, `.nq`, `.nt` — RDF semantic data formats (Turtle, Notation3, N-Quads, N-Triples)
     - [ ] `.webmanifest`, `.webapp` — Web App Manifest

@@ -29,6 +29,7 @@ enum Loaded {
     Book(super::ebook::Viewer),
     Mail(super::mail::Viewer),
     Calendar(super::calendar::Viewer),
+    Database(super::database::Viewer),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
     Text(super::text_editor::TextSession),
@@ -50,6 +51,7 @@ enum ViewerSession {
     Book(super::ebook::Viewer),
     Mail(super::mail::Viewer),
     Calendar(super::calendar::Viewer),
+    Database(super::database::Viewer),
     Image(ImagePreviewState),
     Text(super::text_editor::TextSession),
     Audio(AudioPreviewState),
@@ -255,6 +257,10 @@ impl Viewers {
             (
                 Some(ViewerSession::Calendar(state)),
                 Some(super::DocumentPosition::CalendarEvent(index)),
+            ) => state.select(index),
+            (
+                Some(ViewerSession::Database(state)),
+                Some(super::DocumentPosition::DatabaseTable(index)),
             ) => state.select(index),
             (Some(ViewerSession::Pdf(state)), Some(super::DocumentPosition::PdfPage(page))) => {
                 state.selected_page = Some(page.max(1))
@@ -465,6 +471,7 @@ enum Kind {
     Book,
     Mail,
     Calendar,
+    Database,
     Font,
     Image,
     Audio,
@@ -517,6 +524,7 @@ fn extension_kind(path: &Path) -> Option<Kind> {
         "epub" | "cbz" => Some(Kind::Book),
         "eml" => Some(Kind::Mail),
         "ics" => Some(Kind::Calendar),
+        "sqlite" | "sqlite3" | "db" | "db3" => Some(Kind::Database),
         _ => None,
     }
 }
@@ -546,6 +554,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         ));
     }
     match kind {
+        Kind::Database => super::database::Viewer::load(path).map(Loaded::Database),
         Kind::Calendar => super::calendar::Viewer::load(path).map(Loaded::Calendar),
         Kind::Mail => super::mail::Viewer::load(path).map(Loaded::Mail),
         Kind::Book => super::ebook::Viewer::load(path).map(Loaded::Book),
@@ -629,6 +638,7 @@ fn session(
     match loaded {
         Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
+        Loaded::Database(viewer) => ViewerSession::Database(viewer),
         Loaded::Calendar(viewer) => ViewerSession::Calendar(viewer),
         Loaded::Mail(viewer) => ViewerSession::Mail(viewer),
         Loaded::Font(viewer) => ViewerSession::Font(viewer),
@@ -690,6 +700,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
     match viewer {
         ViewerSession::Notebook(state) => state.ui(ui, close, palette),
         ViewerSession::Book(state) => state.ui(ui, close, palette),
+        ViewerSession::Database(state) => state.ui(ui, close, palette),
         ViewerSession::Calendar(state) => state.ui(ui, close, palette),
         ViewerSession::Mail(state) => state.ui(ui, close, palette),
         ViewerSession::Font(state) => state.ui(ui, close, palette),
@@ -801,6 +812,11 @@ mod tests {
                 "tests/fixtures/comic.cbz",
                 super::super::DocumentPosition::BookChapter(1),
                 "Page 2 / 3",
+            ),
+            (
+                "tests/fixtures/database/harbor.sqlite",
+                super::super::DocumentPosition::DatabaseTable(1),
+                "sailings",
             ),
             (
                 "../little-clip-core/tests/fixtures/calendar/harbor.ics",

@@ -23,6 +23,11 @@ impl InlineSpreadsheetPreview {
         }
     }
 
+    /// Updates the finite host bounds without resetting selection or scroll.
+    pub fn resize(&mut self, size: Vec2) {
+        self.host_size = size.max(Vec2::splat(1.0));
+    }
+
     /// Renders only cells intersecting the visible rows and columns.
     pub fn show(
         &mut self,
@@ -109,6 +114,7 @@ impl InlineSpreadsheetPreview {
                     let output = egui::ScrollArea::both()
                         .id_source(id)
                         .auto_shrink([false, false])
+                        .min_scrolled_height(0.0)
                         .scroll_offset(scroll_offset)
                         .show_viewport(ui, |ui, viewport| {
                             ui.set_min_size(Vec2::new(total_width, total_height));

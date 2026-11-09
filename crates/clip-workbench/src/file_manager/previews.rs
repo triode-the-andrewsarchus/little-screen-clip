@@ -249,6 +249,8 @@ impl EntryPreviews {
                     }
                 } else if entry.is_subtitles() {
                     Source::Subtitle(entry.path.clone())
+                } else if entry.is_database() {
+                    Source::Database(entry.path.clone())
                 } else if entry.is_calendar() {
                     Source::Calendar(entry.path.clone())
                 } else if entry.is_mail() {
@@ -305,6 +307,9 @@ impl EntryPreviews {
         if entry.is_subtitles() {
             super::subtitle_strip::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::SubtitleCue)
+        } else if entry.is_database() {
+            super::database::show_list(ui, row, entry, columns, self.listing(entry), colors)
+                .map(super::DocumentPosition::DatabaseTable)
         } else if entry.is_calendar() {
             super::calendar::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::CalendarEvent)
