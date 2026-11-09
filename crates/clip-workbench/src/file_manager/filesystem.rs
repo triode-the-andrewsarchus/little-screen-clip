@@ -29,8 +29,26 @@ pub(super) struct Entry {
 }
 
 impl Entry {
+    /// Content with an interactive semantic strip instead of a generic text minimap.
+    pub(super) fn has_content_strip(&self) -> bool {
+        self.is_playable_media()
+            || self.is_scene()
+            || self.is_blend()
+            || self.is_material()
+            || self.is_photo()
+            || self.is_subtitles()
+            || self.is_notebook()
+            || self.is_book()
+            || self.is_mail()
+            || self.is_calendar()
+            || (self.regular_file && super::font_strip::known(&self.path))
+    }
+
     pub(super) fn is_subtitles(&self) -> bool {
         self.regular_file && little_clip_core::subtitles::is_subtitle_path(&self.path)
+    }
+    pub(super) fn is_calendar(&self) -> bool {
+        self.regular_file && super::calendar::known(&self.path)
     }
     pub(super) fn is_mail(&self) -> bool {
         self.regular_file && super::mail::known(&self.path)

@@ -6,6 +6,7 @@ extern crate self as little_clip_core;
 
 pub mod animation;
 pub mod audio;
+pub mod calendar;
 pub mod clipboard;
 pub mod color;
 pub mod config;

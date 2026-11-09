@@ -193,8 +193,10 @@
     - [ ] XMP metadata stream (`/Metadata`)
     - [ ] Table of contents / bookmark outline hierarchy (`/Outlines`)
     - [ ] Embedded file attachments (`/EmbeddedFiles`)
-  - [ ] `.ics` — iCalendar events and calendars
-    - [ ] VCALENDAR properties (`PRODID`, `VERSION`, `CALSCALE`, `X-WR-CALNAME`)
+  - [x] `.ics` — bounded read-only event agenda, clickable event strips, overlap timeline, event properties, source preview and guarded rename
+    - [x] VCALENDAR properties (`PRODID`, `VERSION`, `CALSCALE`, `X-WR-CALNAME`)
+    - [x] Separate all-day, UTC, floating and declared-TZID coordinates; exclusive ends, supported durations and cancellation state
+    - [ ] Recurrence expansion, embedded time-zone rule evaluation/conversion, task/journal views and calendar editing (declarations remain inspectable in source)
   - [ ] Plain text
     - [x] `.txt`, `.text`
       - [ ] Byte order mark (BOM) detection and line-ending normalization

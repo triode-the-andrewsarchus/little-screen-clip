@@ -133,7 +133,7 @@ fn content_type(entry: &Entry) -> (Category, String) {
 fn extension_category(extension: &str) -> Category {
     match extension {
         "pdf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ods" | "ppt" | "pptx" | "odp"
-        | "epub" | "cbz" | "eml" | "ipynb" => Category::Document,
+        | "epub" | "cbz" | "ics" | "eml" | "ipynb" => Category::Document,
         "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "7z" | "rar" => Category::Archive,
         _ => Category::Other,
     }

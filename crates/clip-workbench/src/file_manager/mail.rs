@@ -25,15 +25,11 @@ pub(super) fn known(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("eml"))
 }
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
-    let source = crate::file_source::FileSource::capture(path)?;
-    let bytes = crate::file_source::read_file_bytes(path, MAX_BYTES, true, true)
-        .map_err(|e| e.to_string())?;
+    let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;
     if token.load(Ordering::Relaxed) {
         return Err("Email opening cancelled".into());
     }
-    let document = Document::parse(&bytes)?;
-    source.check()?;
-    Ok(document)
+    Document::parse(&bytes)
 }
 pub(super) struct Summary {
     subject: String,
@@ -184,11 +180,7 @@ impl Viewer {
             }
         }
         ui.separator();
-        let font = egui::TextStyle::Button.resolve(ui.style());
-        let row_height = (ui.fonts(|fonts| fonts.row_height(&font))
-            + ui.spacing().button_padding.y * 2.0)
-            .max(ui.spacing().interact_size.y)
-            .max(28.0);
+        let row_height = crate::ui_ext::selectable_text_row_height(ui, 28.0);
         egui::ScrollArea::vertical()
             .id_source("mail-attachments")
             .auto_shrink([false, false])

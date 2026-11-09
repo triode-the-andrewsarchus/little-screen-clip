@@ -28,6 +28,7 @@ enum Loaded {
     Notebook(super::notebook::viewer::Viewer),
     Book(super::ebook::Viewer),
     Mail(super::mail::Viewer),
+    Calendar(super::calendar::Viewer),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
     Text(super::text_editor::TextSession),
@@ -48,6 +49,7 @@ enum ViewerSession {
     Notebook(super::notebook::viewer::Viewer),
     Book(super::ebook::Viewer),
     Mail(super::mail::Viewer),
+    Calendar(super::calendar::Viewer),
     Image(ImagePreviewState),
     Text(super::text_editor::TextSession),
     Audio(AudioPreviewState),
@@ -249,6 +251,10 @@ impl Viewers {
             (
                 Some(ViewerSession::Mail(state)),
                 Some(super::DocumentPosition::MailAttachment(index)),
+            ) => state.select(index),
+            (
+                Some(ViewerSession::Calendar(state)),
+                Some(super::DocumentPosition::CalendarEvent(index)),
             ) => state.select(index),
             (Some(ViewerSession::Pdf(state)), Some(super::DocumentPosition::PdfPage(page))) => {
                 state.selected_page = Some(page.max(1))
@@ -458,6 +464,7 @@ enum Kind {
     Notebook,
     Book,
     Mail,
+    Calendar,
     Font,
     Image,
     Audio,
@@ -509,6 +516,7 @@ fn extension_kind(path: &Path) -> Option<Kind> {
         "ipynb" => Some(Kind::Notebook),
         "epub" | "cbz" => Some(Kind::Book),
         "eml" => Some(Kind::Mail),
+        "ics" => Some(Kind::Calendar),
         _ => None,
     }
 }
@@ -538,6 +546,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
         ));
     }
     match kind {
+        Kind::Calendar => super::calendar::Viewer::load(path).map(Loaded::Calendar),
         Kind::Mail => super::mail::Viewer::load(path).map(Loaded::Mail),
         Kind::Book => super::ebook::Viewer::load(path).map(Loaded::Book),
         Kind::Notebook => super::notebook::viewer::Viewer::load(path).map(Loaded::Notebook),
@@ -620,6 +629,7 @@ fn session(
     match loaded {
         Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
+        Loaded::Calendar(viewer) => ViewerSession::Calendar(viewer),
         Loaded::Mail(viewer) => ViewerSession::Mail(viewer),
         Loaded::Font(viewer) => ViewerSession::Font(viewer),
         Loaded::System(document) => ViewerSession::System(super::system::Inspector::new(document)),
@@ -680,6 +690,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
     match viewer {
         ViewerSession::Notebook(state) => state.ui(ui, close, palette),
         ViewerSession::Book(state) => state.ui(ui, close, palette),
+        ViewerSession::Calendar(state) => state.ui(ui, close, palette),
         ViewerSession::Mail(state) => state.ui(ui, close, palette),
         ViewerSession::Font(state) => state.ui(ui, close, palette),
         ViewerSession::System(state) => state.ui(ui, close, palette),
@@ -790,6 +801,11 @@ mod tests {
                 "tests/fixtures/comic.cbz",
                 super::super::DocumentPosition::BookChapter(1),
                 "Page 2 / 3",
+            ),
+            (
+                "../little-clip-core/tests/fixtures/calendar/harbor.ics",
+                super::super::DocumentPosition::CalendarEvent(1),
+                "Tide watch",
             ),
             (
                 "../little-clip-core/tests/fixtures/email/harbor.eml",

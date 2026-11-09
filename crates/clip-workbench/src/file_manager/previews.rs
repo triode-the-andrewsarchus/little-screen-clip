@@ -249,6 +249,8 @@ impl EntryPreviews {
                     }
                 } else if entry.is_subtitles() {
                     Source::Subtitle(entry.path.clone())
+                } else if entry.is_calendar() {
+                    Source::Calendar(entry.path.clone())
                 } else if entry.is_mail() {
                     Source::Mail(entry.path.clone())
                 } else if entry.is_book() {
@@ -303,6 +305,9 @@ impl EntryPreviews {
         if entry.is_subtitles() {
             super::subtitle_strip::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::SubtitleCue)
+        } else if entry.is_calendar() {
+            super::calendar::show_list(ui, row, entry, columns, self.listing(entry), colors)
+                .map(super::DocumentPosition::CalendarEvent)
         } else if entry.is_mail() {
             super::mail::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::MailAttachment)
@@ -811,18 +816,7 @@ fn raster_dimensions(ui: &egui::Ui, rect: egui::Rect) -> (u32, u32) {
 
 fn text_candidate(entry: &Entry) -> bool {
     entry.regular_file
-        && !entry.is_subtitles()
-        && !super::notebook::known(&entry.path)
-        && !super::ebook::known(&entry.path)
-        && !super::mail::known(&entry.path)
-        && !super::font_strip::known(&entry.path)
-        && !super::midi_strip::is_midi(&entry.path)
-        && !entry.is_scene()
-        && !entry.is_blend()
-        && !entry.is_material()
-        && !entry.is_photo()
-        && !entry.is_video()
-        && !little_clip_core::audio::is_audio_path(&entry.path)
+        && !entry.has_content_strip()
         && !entry
             .path
             .extension()

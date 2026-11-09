@@ -4,6 +4,7 @@ mod app;
 mod binary_strip;
 mod blend_preview;
 mod bookmarks;
+mod calendar;
 pub(super) mod constellation;
 mod content;
 mod ebook;
@@ -92,6 +93,7 @@ pub(super) enum DocumentPosition {
     NotebookCell(usize),
     BookChapter(usize),
     MailAttachment(usize),
+    CalendarEvent(usize),
     SubtitleCue(usize),
 }
 
@@ -795,16 +797,7 @@ impl FileManager {
                     28.0
                 } else if entry.system.is_some()
                     || self.previews.is_text(entry)
-                    || (entry.regular_file && font_strip::known(&entry.path))
-                    || entry.is_playable_media()
-                    || entry.is_scene()
-                    || entry.is_blend()
-                    || entry.is_material()
-                    || entry.is_photo()
-                    || entry.is_subtitles()
-                    || entry.is_notebook()
-                    || entry.is_book()
-                    || entry.is_mail()
+                    || entry.has_content_strip()
                     || entry.is_paged_document()
                 {
                     VIDEO_ROW_HEIGHT

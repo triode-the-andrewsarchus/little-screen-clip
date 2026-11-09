@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Generate an owned calendar with explicit, incompatible time bases and event overlap."""
+from pathlib import Path
+
+
+def make(path):
+    lines = '''BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Owned fixture//Calendar//EN
+CALSCALE:GREGORIAN
+X-WR-CALNAME:Harbor calendar
+BEGIN:VTIMEZONE
+TZID:Harbor/Local
+BEGIN:STANDARD
+DTSTART:19700101T000000
+TZOFFSETFROM:-0600
+TZOFFSETTO:-0600
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:crossing@example.test
+DTSTART:20261110T090000Z
+DTEND:20261110T110000Z
+SUMMARY:Harbor cross
+ ing
+LOCATION:North pier\\, gate 2
+DESCRIPTION:Bring the route notes.\\nMeet at the blue sign.
+ORGANIZER:mailto:dana@example.test
+ATTENDEE;CN=Riley;PARTSTAT=ACCEPTED:mailto:riley@example.test
+END:VEVENT
+BEGIN:VEVENT
+UID:tides@example.test
+DTSTART:20261110T100000Z
+DURATION:PT2H
+SUMMARY:Tide watch
+STATUS:CANCELLED
+END:VEVENT
+BEGIN:VEVENT
+UID:holiday@example.test
+DTSTART;VALUE=DATE:20261111
+SUMMARY:Harbor holiday
+END:VEVENT
+BEGIN:VEVENT
+UID:floating@example.test
+DTSTART:20261112T093000
+DTEND:20261112T103000
+SUMMARY:Floating meeting
+END:VEVENT
+BEGIN:VEVENT
+UID:local@example.test
+DTSTART;TZID=Harbor/Local:20261113T090000
+DTEND;TZID=Harbor/Local:20261113T100000
+SUMMARY:Local workshop
+RRULE:FREQ=WEEKLY;COUNT=3
+BEGIN:VALARM
+TRIGGER:-PT15M
+ACTION:DISPLAY
+DESCRIPTION:Workshop reminder
+END:VALARM
+END:VEVENT
+BEGIN:VTODO
+UID:todo@example.test
+SUMMARY:Review route
+END:VTODO
+END:VCALENDAR
+'''
+    path.write_bytes(lines.replace('\n', '\r\n').encode())
+
+
+if __name__ == '__main__':
+    make(Path(__file__).resolve().parents[1] / 'crates/little-clip-core/tests/fixtures/calendar/harbor.ics')

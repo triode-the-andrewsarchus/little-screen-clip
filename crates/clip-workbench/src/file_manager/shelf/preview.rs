@@ -46,6 +46,7 @@ pub(in crate::file_manager) enum Source {
     Font(PathBuf),
     Notebook(PathBuf),
     Book(PathBuf),
+    Calendar(PathBuf),
     Mail(PathBuf),
     Subtitle(PathBuf),
     FontRaster {
@@ -108,6 +109,7 @@ impl Source {
             | Self::Subtitle(_)
             | Self::Notebook(_)
             | Self::Book(_)
+            | Self::Calendar(_)
             | Self::Mail(_)
             | Self::FontRaster { .. }
             | Self::Binary(_)
@@ -189,6 +191,7 @@ impl Source {
             Source::System(path) => super::super::system::load(&path, token),
             Source::Subtitle(path) => super::super::subtitle_strip::load(&path, token),
             Source::Notebook(path) => super::super::notebook::load(&path, token),
+            Source::Calendar(path) => super::super::calendar::load(&path, token),
             Source::Mail(path) => super::super::mail::load(&path, token),
             Source::Book(path) => super::super::ebook::load(&path, token),
             Source::Font(path) => super::super::font_strip::load(&path, token),

@@ -1770,6 +1770,14 @@ mod tests {
     }
 }
 
+/// Actual height of a single-line selection row at the current text scale.
+pub fn selectable_text_row_height(ui: &Ui, minimum: f32) -> f32 {
+    let font = TextStyle::Button.resolve(ui.style());
+    (ui.fonts(|fonts| fonts.row_height(&font)) + ui.spacing().button_padding.y * 2.0)
+        .max(ui.spacing().interact_size.y)
+        .max(minimum)
+}
+
 /// Draws one clipped, single-line selection row without expanding its host panel.
 pub fn selectable_text_row(
     ui: &mut Ui,
