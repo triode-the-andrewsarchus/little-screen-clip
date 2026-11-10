@@ -572,6 +572,64 @@ fn audio_exports_use_seekable_staging_in_the_held_directory() {
 }
 
 #[test]
+fn audio_save_pins_the_expected_input_before_an_alias_can_select_other_content() {
+    use std::sync::atomic::AtomicUsize;
+    for swap_at in [0, 1] {
+        let (_fixture, source) = generate_fixture_wav("checked-export", 1.0);
+        let root = tempfile::tempdir().unwrap();
+        let other = root.path().join("other.wav");
+        let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(1, 8000, 1);
+        buffer.push_samples(&vec![1234; 8000]);
+        buffer.write_wav(&other).unwrap();
+        let alias = root.path().join("source.wav");
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let check_alias = alias.clone();
+        let counter = calls.clone();
+        let check = crate::file_source::ReadCheck::new(move |_| {
+            if counter.fetch_add(1, Ordering::SeqCst) == swap_at {
+                std::fs::remove_file(&check_alias).unwrap();
+                std::os::unix::fs::symlink(&other, &check_alias).unwrap();
+            }
+            Ok(())
+        });
+        let plan = AudioSavePlan {
+            source: alias,
+            file_source: Some(crate::file_source::FileSource::capture(&source).unwrap()),
+            read_check: check,
+            destination: root.path().into(),
+            regions: vec![],
+            versioned: false,
+            open_folder: false,
+        };
+        let directory =
+            little_clip_core::kernel_interface::pin_content_directory(root.path()).unwrap();
+        let result = save_audio_region(
+            &plan,
+            &AudioSaveRegion {
+                start: 0.1,
+                end: 0.4,
+                filename: "result.wav".into(),
+                filter: None,
+            },
+            &directory,
+        );
+        if swap_at == 0 {
+            // A swap before open must fail admission, before creating output.
+            assert!(result.unwrap_err().contains("changed"));
+            assert!(!root.path().join("result.wav").exists());
+        } else {
+            // A swap after pinning must not redirect the decoder to other data.
+            let metadata = read_audio_metadata(&result.unwrap()).unwrap();
+            let expected = read_audio_metadata(&source).unwrap();
+            assert_eq!(metadata.sample_rate, expected.sample_rate);
+            assert_ne!(metadata.sample_rate, 8000);
+        }
+        assert!(calls.load(Ordering::SeqCst) > swap_at);
+    }
+}
+
+#[test]
 fn audio_save_reports_ffmpeg_process_failure_with_filename() {
     let destination = tempfile::tempdir().unwrap();
     let result = run_audio_save(AudioSavePlan {

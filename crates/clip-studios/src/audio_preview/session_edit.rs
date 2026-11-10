@@ -137,6 +137,7 @@ pub(super) struct RenderedSessionFile {
     pub(super) staging: tempfile::NamedTempFile,
     pub(super) directory: std::fs::File,
     pub(super) observed: crate::file_source::FileSource,
+    _input: std::fs::File,
 }
 
 pub(super) fn render_session_file(
@@ -147,28 +148,46 @@ pub(super) fn render_session_file(
     mode: export::AudioRenderMode,
     cancelled: &AtomicBool,
 ) -> Result<RenderedSessionFile, String> {
-    use std::os::fd::AsRawFd;
-    let (input, observed) = check.open(source, expected, cancelled)?;
-    let directory = little_clip_core::kernel_interface::create_content_directory(
-        &std::env::temp_dir().join("little_clip_audio_sessions"),
-    )
-    .map_err(|error| error.to_string())?;
-    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-    let staging = tempfile::Builder::new()
-        .prefix("audio-session-")
-        .suffix(".wav")
-        .tempfile_in(anchor)
-        .map_err(|error| error.to_string())?;
     let region = AudioSaveRegion {
         start: 0.0,
         end: 0.0,
         filename: "session.wav".into(),
         filter: Some(filter),
     };
+    render_audio_file(source, expected, check, &region, mode, cancelled, None)
+}
+
+pub(super) fn render_audio_file(
+    source: &Path,
+    expected: Option<&crate::file_source::FileSource>,
+    check: &crate::file_source::ReadCheck,
+    region: &AudioSaveRegion,
+    mode: export::AudioRenderMode,
+    cancelled: &AtomicBool,
+    directory: Option<std::fs::File>,
+) -> Result<RenderedSessionFile, String> {
+    use std::os::fd::AsRawFd;
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Audio operation cancelled".into());
+    }
+    let (input, observed) = check.open(source, expected, cancelled)?;
+    let directory = match directory {
+        Some(directory) => directory,
+        None => little_clip_core::kernel_interface::create_content_directory(
+            &std::env::temp_dir().join("little_clip_audio_sessions"),
+        )
+        .map_err(|error| error.to_string())?,
+    };
+    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let staging = tempfile::Builder::new()
+        .prefix("audio-session-")
+        .suffix(".wav")
+        .tempfile_in(anchor)
+        .map_err(|error| error.to_string())?;
     let input_path = PathBuf::from(format!("/proc/self/fd/{}", input.as_raw_fd()));
     let mut command = export::audio_export_command(
         &input_path,
-        &region,
+        region,
         staging
             .as_file()
             .try_clone()
@@ -179,9 +198,12 @@ pub(super) fn render_session_file(
     let status = run_audio_command_cancellable(&mut command, cancelled)
         .map_err(|error| error.to_string())?;
     if !status.success() {
-        return Err(format!("Session edit failed: {status}"));
+        return Err(format!("Audio rendering failed: {status}"));
     }
     check.validate(cancelled)?;
+    if crate::file_source::FileSource::capture_file(&input)? != observed {
+        return Err("Audio source changed during rendering; reload it.".into());
+    }
     observed.check()?;
     staging
         .as_file()
@@ -191,6 +213,7 @@ pub(super) fn render_session_file(
         staging,
         directory,
         observed,
+        _input: input,
     })
 }
 
@@ -219,18 +242,26 @@ fn prepare_session_artifact(
     use std::os::fd::AsRawFd;
     let prepared_path = PathBuf::from(format!("/proc/self/fd/{}", staging.as_file().as_raw_fd()));
     let mut outcome = prepare_session_edit(&prepared_path, edits, cancelled)?;
+    outcome.read_check = retain_session_file(staging, directory, outcome.identity.clone());
+    Ok(outcome)
+}
+
+pub(super) fn retain_session_file(
+    staging: tempfile::NamedTempFile,
+    directory: std::fs::File,
+    identity: crate::file_source::FileSource,
+) -> crate::file_source::ReadCheck {
     let artifact = Arc::new(SessionArtifact {
         _staging: staging,
         _directory: directory,
-        identity: outcome.identity.clone(),
+        identity,
     });
-    outcome.read_check = crate::file_source::ReadCheck::new(move |cancel| {
+    crate::file_source::ReadCheck::new(move |cancel| {
         if cancel.load(Ordering::Acquire) {
             return Err("Audio operation cancelled".into());
         }
         artifact.identity.check()
-    });
-    Ok(outcome)
+    })
 }
 
 pub(super) struct SessionEditJob {

@@ -66,7 +66,8 @@ pub struct RollingAudioStripState {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum RollingAudioAction {
     OpenEditor {
-        snapshot_path: PathBuf,
+        source: FileSource,
+        duration_sec: f32,
         selected_region: Option<(f32, f32)>,
     },
 }
@@ -77,58 +78,22 @@ impl RollingAudioStripState {
     /// explicitly selected. ffmpeg's silence filter is used when available;
     /// the already-trimmed time slice remains a safe fallback otherwise.
     pub(crate) fn materialize_editor_selection(
-        source: &Path,
+        source: &FileSource,
         start_sec: f32,
         end_sec: f32,
         cancelled: &AtomicBool,
-    ) -> Result<PathBuf, String> {
+    ) -> Result<crate::audio_preview::PreparedAudioSlice, String> {
         if cancelled.load(Ordering::Acquire) {
-            return Err("Rolling audio editor handoff cancelled".to_owned());
+            return Err("Rolling audio editor handoff cancelled".into());
         }
-        let (start_sec, end_sec) = (start_sec.min(end_sec), start_sec.max(end_sec));
-        if end_sec - start_sec < 0.05 {
-            return Err("Select at least 50ms of audio before opening the editor".to_string());
+        if !start_sec.is_finite()
+            || !end_sec.is_finite()
+            || start_sec.min(end_sec) < 0.0
+            || (end_sec - start_sec).abs() < 0.05
+        {
+            return Err("Select at least 50ms of audio before opening the editor".into());
         }
-        let directory = std::env::temp_dir().join("little-screen-clip/rolling_editor_slices");
-        std::fs::create_dir_all(&directory)
-            .map_err(|error| format!("Could not create audio slice directory: {error}"))?;
-        let id = uuid::Uuid::new_v4();
-        let sliced = directory.join(format!("rolling-{id}-selected.wav"));
-        little_clip_core::rolling_audio::slice_wav(source, start_sec, end_sec, &sliced)
-            .map_err(|error| format!("Could not materialize selected audio: {error}"))?;
-        if cancelled.load(Ordering::Acquire) {
-            let _ = std::fs::remove_file(&sliced);
-            return Err("Rolling audio editor handoff cancelled".to_owned());
-        }
-
-        let trimmed = directory.join(format!("rolling-{id}-trimmed.wav"));
-        let mut trim = std::process::Command::new("ffmpeg");
-        trim.args(["-y", "-i"])
-            .arg(&sliced)
-            .args([
-                "-af",
-                // Trim each edge independently. `stop_periods` is unreliable
-                // across ffmpeg builds for short WAVs; reverse-and-trim gives
-                // the same deterministic leading-silence operation on the tail.
-                "silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse",
-            ])
-            .arg(&trimmed)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        let trim_status = crate::audio_preview::run_audio_command_cancellable(&mut trim, cancelled);
-        if cancelled.load(Ordering::Acquire) {
-            let _ = std::fs::remove_file(&sliced);
-            let _ = std::fs::remove_file(&trimmed);
-            return Err("Rolling audio editor handoff cancelled".to_owned());
-        }
-        let status = trim_status.is_ok_and(|status| status.success());
-        if status && trimmed.is_file() {
-            let _ = std::fs::remove_file(&sliced);
-            Ok(trimmed)
-        } else {
-            Ok(sliced)
-        }
+        crate::audio_preview::prepare_audio_slice(source, start_sec, end_sec, true, cancelled)
     }
     /// Creates a new rolling audio strip state and loads the latest daemon snapshot.
     pub fn new() -> Self {
@@ -287,7 +252,11 @@ impl RollingAudioStripState {
             }
             _ => return false,
         };
-        let Some(path) = self.path.clone() else {
+        let (Some(path), Some(source)) = (self.path.clone(), self.source.clone()) else {
+            self.copy_notice.set(
+                StatusMessage::error("Refresh the rolling snapshot before copying it."),
+                feedback_time(),
+            );
             return false;
         };
         self.copy_job = Some(crate::desktop_ipc::PendingRequest::start(jobs, move || {
@@ -297,7 +266,8 @@ impl RollingAudioStripState {
                 end,
                 crate::audio_preview::ChannelCopyMode::Native,
                 None,
-            );
+            )
+            .with_file_source(source);
             let path =
                 crate::audio_preview::extract_audio_slice_file(&plan, &AtomicBool::new(false))?;
             send(IpcRequest::PushFile {
@@ -706,9 +676,10 @@ impl RollingAudioStripState {
 
             // Right-click opens the existing full audio editor
             if response.secondary_clicked() {
-                if let Some(ref path) = self.path {
+                if let Some(source) = &self.source {
                     *host_action = Some(RollingAudioAction::OpenEditor {
-                        snapshot_path: path.clone(),
+                        source: source.clone(),
+                        duration_sec: self.duration_sec,
                         selected_region: self.selected_region,
                     });
                 }
@@ -881,42 +852,38 @@ mod tests {
         buffer.push_samples(&vec![1000i16; 44_100 * 2 * 2]);
         buffer.write_wav(&source).unwrap();
 
+        let identity = FileSource::capture(&source).unwrap();
         let output = RollingAudioStripState::materialize_editor_selection(
-            &source,
+            &identity,
             1.25,
             0.5,
             &AtomicBool::new(false),
         )
         .unwrap();
-        assert!(output.is_file());
-        let snapshot = read_snapshot(&output, &AtomicBool::new(false)).unwrap();
+        assert!(output.path().is_file());
+        let snapshot = read_snapshot(output.path(), &AtomicBool::new(false)).unwrap();
         let duration = snapshot.duration_sec;
         assert!(
             (0.6..=0.78).contains(&duration),
             "captured range should remain bounded after optional edge trimming: {duration}s"
         );
-        assert!(
-            output
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .contains("trimmed")
-        );
-        let _ = std::fs::remove_file(output);
     }
 
     #[test]
     fn editor_materialization_rejects_short_or_cancelled_selection() {
         let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("missing.wav");
+        let path = temp.path().join("source.wav");
+        std::fs::write(&path, b"source identity").unwrap();
+        let source = FileSource::capture(&path).unwrap();
         assert_eq!(
             RollingAudioStripState::materialize_editor_selection(
                 &source,
                 0.0,
                 0.04,
                 &AtomicBool::new(false),
-            ),
-            Err("Select at least 50ms of audio before opening the editor".to_owned())
+            )
+            .err(),
+            Some("Select at least 50ms of audio before opening the editor".to_owned())
         );
         assert_eq!(
             RollingAudioStripState::materialize_editor_selection(
@@ -924,8 +891,9 @@ mod tests {
                 0.0,
                 1.0,
                 &AtomicBool::new(true),
-            ),
-            Err("Rolling audio editor handoff cancelled".to_owned())
+            )
+            .err(),
+            Some("Rolling audio editor handoff cancelled".to_owned())
         );
     }
 
@@ -961,6 +929,7 @@ mod tests {
 
         let mut strip = empty_test_strip();
         strip.path = Some(source.clone());
+        strip.source = Some(FileSource::capture(&source).unwrap());
         strip.duration_sec = 2.0;
         strip.sample_rate = 44_100;
         strip.channels = 2;
@@ -1016,7 +985,8 @@ mod tests {
         assert_eq!(
             action,
             Some(RollingAudioAction::OpenEditor {
-                snapshot_path: source,
+                source: FileSource::capture(&source).unwrap(),
+                duration_sec: 2.0,
                 selected_region: Some((0.25, 1.25)),
             })
         );
@@ -1348,6 +1318,7 @@ mod tests {
         let mut buffer = RollingAudioBuffer::new(2, 8000, 2);
         buffer.push_samples(&samples);
         buffer.write_wav(&source).unwrap();
+        strip.source = Some(FileSource::capture(&source).unwrap());
         strip.path = Some(source);
         let (captured, artifact_rx) = std::sync::mpsc::channel();
         strip.selected_region = Some((1.5, 0.5));
@@ -1412,6 +1383,51 @@ mod tests {
             "published artifact survives handoff failure"
         );
         std::fs::remove_dir_all(artifact.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn queued_copy_rejects_a_snapshot_replaced_after_the_click() {
+        let jobs = BackgroundJobs::new(1, 2);
+        let (started, started_rx) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let (_, finished) = jobs.submit(Duration::from_secs(5), move || {
+            started.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("snapshot.wav");
+        let mut buffer = RollingAudioBuffer::new(1, 8000, 1);
+        buffer.push_samples(&vec![1234; 8000]);
+        buffer.write_wav(&path).unwrap();
+        let mut strip = empty_test_strip();
+        strip.source = Some(FileSource::capture(&path).unwrap());
+        strip.path = Some(path.clone());
+        strip.selected_region = Some((0.1, 0.5));
+        assert!(
+            strip.copy_selection_on(0.0, &jobs, |_| panic!("a replaced source reached handoff"))
+        );
+        buffer.push_samples(&vec![4321; 8000]);
+        buffer.write_wav(&path).unwrap();
+        release.send(()).unwrap();
+        finished
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while strip.copy_pending() {
+            strip.poll_copy(&ctx);
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            strip
+                .copy_notice
+                .message(feedback_time() + 60.0)
+                .unwrap()
+                .contains("changed")
+        );
     }
 
     #[test]

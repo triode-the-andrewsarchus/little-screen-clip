@@ -76,12 +76,14 @@ mod editor;
 mod edits;
 mod export;
 mod playback;
+mod prepared_slice;
 mod selection;
 mod session_edit;
 mod studio;
 
 pub use export::{audio_slice_copy_plan, extract_audio_slice_file};
 pub use export::{copy_file_audio_segment, run_audio_command_cancellable};
+pub use prepared_slice::{PreparedAudioSlice, prepare_audio_slice};
 pub use tools::spectrogram_view::{format_time_label, time_ruler_interval};
 
 mod layout;
@@ -816,11 +818,20 @@ impl Drop for AudioSliceCopyJob {
 
 pub struct AudioSliceCopyPlan {
     read_check: crate::file_source::ReadCheck,
+    file_source: Option<crate::file_source::FileSource>,
     source: PathBuf,
     output: PathBuf,
     start: f32,
     end: f32,
     filter: Option<String>,
+}
+
+impl AudioSliceCopyPlan {
+    /// Requires extraction to read the revision observed by the calling view.
+    pub fn with_file_source(mut self, source: crate::file_source::FileSource) -> Self {
+        self.file_source = Some(source);
+        self
+    }
 }
 
 // Validate on the worker before decoding and before every progressive publication.

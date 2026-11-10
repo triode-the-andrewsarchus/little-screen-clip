@@ -8,46 +8,46 @@ impl WorkbenchApp {
     ) {
         match action {
             RollingAudioAction::OpenEditor {
-                snapshot_path,
+                source,
+                duration_sec,
                 selected_region,
             } => {
-                let Some((start, end)) = selected_region else {
-                    let editor =
-                        AudioPreviewState::new(snapshot_path, "Rolling Audio Snapshot".to_owned())
-                            .with_editor(self.config.audio.editor.clone());
-                    self.replace_viewer(Some(ViewerSession::Audio(editor)));
-                    return;
-                };
                 if self.rolling_editor_job.is_some() {
                     self.set_status_message(
                         "A rolling audio editor handoff is already in progress",
                     );
                     return;
                 }
-                let cancelled = Arc::new(AtomicBool::new(false));
-                let worker_cancelled = Arc::clone(&cancelled);
-                let source = snapshot_path;
-                let (ticket, receiver) =
-                    BackgroundJobs::global().submit(Duration::MAX, move || {
-                        RollingAudioStripState::materialize_editor_selection(
+                let title = if selected_region.is_some() {
+                    "Rolling Audio Selection"
+                } else {
+                    "Rolling Audio Snapshot"
+                }
+                .to_owned();
+                let task = little_clip_core::jobs::task::Task::start(
+                    BackgroundJobs::global(),
+                    Duration::from_secs(60),
+                    move |cancel| match selected_region {
+                        Some((start, end)) => RollingAudioStripState::materialize_editor_selection(
+                            &source, start, end, cancel,
+                        ),
+                        None => crate::audio_preview::prepare_audio_slice(
                             &source,
-                            start,
-                            end,
-                            &worker_cancelled,
-                        )
-                        .map(|path| {
-                            let metadata = little_clip_core::audio::read_audio_metadata(&path);
-                            (path, metadata)
-                        })
-                    });
+                            0.0,
+                            duration_sec,
+                            false,
+                            cancel,
+                        ),
+                    },
+                )
+                .with_response_deadline(Duration::from_secs(60));
                 self.rolling_editor_job = Some(RollingEditorLoadJob {
-                    ticket,
-                    cancelled,
-                    receiver,
+                    task,
                     editor: self.config.audio.editor.clone(),
+                    title,
                     ready: None,
                 });
-                self.set_status_message("Preparing selected rolling audio for the editor…");
+                self.set_status_message("Preparing rolling audio for the editor…");
                 ctx.request_repaint();
             }
         }
@@ -58,23 +58,27 @@ impl WorkbenchApp {
             return;
         };
         if job.ready.is_none() {
-            match job.receiver.try_recv() {
-                Ok(Ok(Ok(result))) => job.ready = Some(Ok(result)),
-                Ok(Ok(Err(error))) => job.ready = Some(Err(error)),
-                Ok(Err(error)) => job.ready = Some(Err(error.to_string())),
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
+            match job.task.poll() {
+                Some(result) => {
+                    job.ready = Some(
+                        result
+                            .map_err(|error| error.to_string())
+                            .and_then(|result| result),
+                    )
+                }
+                None => {
                     ctx.request_repaint_after(Duration::from_millis(40));
                     return;
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    job.ready = Some(Err("background job was cancelled".to_owned()));
-                }
             }
         }
+
         if self.viewer.is_some() || !self.startup_viewers.is_empty() {
-            self.set_status_message(
-                "Selected rolling audio is ready; waiting for the active viewer to close",
-            );
+            let message = match job.ready.as_ref() {
+                Some(Err(error)) => format!("Could not open rolling audio selection: {error}"),
+                _ => "Rolling audio is ready; waiting for the active viewer to close".into(),
+            };
+            self.set_status_message(message);
             ctx.request_repaint_after(Duration::from_millis(80));
             return;
         }
@@ -82,13 +86,8 @@ impl WorkbenchApp {
             return;
         };
         match job.ready.take().expect("ready result checked above") {
-            Ok((path, metadata)) => {
-                let editor = AudioPreviewState::new_with_metadata(
-                    path,
-                    "Rolling Audio Selection".to_owned(),
-                    metadata,
-                )
-                .with_editor(job.editor.clone());
+            Ok(prepared) => {
+                let editor = prepared.into_preview(job.title).with_editor(job.editor);
                 self.status_msg = None;
                 self.replace_viewer(Some(ViewerSession::Audio(editor)));
             }
@@ -101,13 +100,18 @@ impl WorkbenchApp {
 
     pub(crate) fn render_rolling_editor_status(&mut self, ctx: &egui::Context) {
         let active = self.rolling_editor_job.is_some();
-        let message = if active {
-            self.rolling_editor_job
-                .as_ref()
-                .filter(|job| job.ready.is_some())
-                .map(|_| "Selected audio is ready; waiting for the active viewer to close")
-                .unwrap_or("Preparing selected rolling audio for the editor…")
-                .to_owned()
+        let pending = self
+            .rolling_editor_job
+            .as_ref()
+            .is_some_and(|job| job.ready.is_none());
+        let message = if let Some(job) = &self.rolling_editor_job {
+            match job.ready.as_ref() {
+                Some(Err(error)) => format!("Could not open rolling audio selection: {error}"),
+                Some(Ok(_)) => {
+                    "Rolling audio is ready; waiting for the active viewer to close".into()
+                }
+                None => "Preparing rolling audio for the editor…".into(),
+            }
         } else {
             match self.status_msg.as_deref() {
                 Some(message) if message.starts_with("Could not open rolling audio selection:") => {
@@ -123,7 +127,7 @@ impl WorkbenchApp {
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if active {
+                        if pending {
                             ui.spinner();
                         }
                         ui.label(&message);

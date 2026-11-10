@@ -1331,3 +1331,78 @@ worker, while editor materialization still uses raw slicing and subprocess paths
 These must use the existing pinned export/output contracts while retaining range
 and optional silence-trim fallback behavior. Pipeline admission, native input
 response evidence and the final requirement audit also remain outstanding.
+
+### Rolling copy/editor intake and shared audio rendering checkpoint
+
+Rolling copy requests and editor actions now retain the displayed `FileSource`.
+Slice-copy plans can carry that revision; Audio Studio copy/batch callers and the
+file-backed copy helper propagate their existing source identity too. Extraction
+opens the expected ordinary input before output admission and keeps that pinned
+handle through staging/installation. A controlled alias-swap regression reproduced
+an actual old failure: the previous save implementation exported an 8 kHz
+replacement while the view expected a 44.1 kHz source
+(`/tmp/deep-rolling-handoff-input-before.log`). The final test covers both swaps:
+replacement before admission is rejected without an output, and replacement after
+pinning cannot redirect the decoder. The accepted source remains 44.1 kHz.
+
+Save and session preparation now share one checked `render_audio_file` path:
+held input, inherited tool descriptors, seekable staging, cancellation, source
+revalidation and sync. Saves still install through their held output directory
+with existing conflict/no-overwrite semantics. The renderer retains its input
+handle through installation or handoff. This consolidates the duplicated render
+workflow rather than adding a second export engine.
+
+`PreparedAudioSlice` reuses the existing session-file owner and read-check
+lifetime. It owns a selected WAV and prepared metadata until handed to Audio
+Studio; the viewer, undo/read jobs and accepted export plans can retain the same
+backing-file owner. Cancellation, dropped queued results and failed handoffs
+clean through the retained directory descriptor. The host no longer removes an
+unowned pathname from a job destructor. Full-snapshot intake also runs on a
+cancellable worker, preserving the frozen source instead of probing synchronously
+or opening a newly replaced snapshot. Selection intake preserves range bounds
+and the existing optional edge-silence filter, falling back to the already
+selected PCM on filter failure. Cancelled/changed sources never publish that
+fallback. Ready failures are displayed as failures while another viewer remains
+open, without a pending spinner.
+
+Validation: **2671 workspace tests pass, 0 fail, 30 ignored**
+(`/tmp/deep-rolling-handoff-workspace.log`). Final host checks after the pending
+failure-label correction pass 165 tests, with two existing ignored cases
+(`/tmp/deep-rolling-handoff-final-host.log`). The focused audio suite passes 176
+tests before render consolidation; final workspace tests cover the consolidated
+path. Separate prepared-result and source-admission checks pass
+(`/tmp/deep-rolling-handoff-prepared-final.log`,
+`/tmp/deep-rolling-handoff-input-final.log`). They verify exact selected stereo
+PCM, stale queued copies, admission before directory creation, actual trim-filter
+failure fallback, deferred-reader retention, cancellation after readiness and
+cleanup after parent-directory replacement. An initial new trim test assumed no
+confirmation window; the preserved filter confirms 50 ms of sound at each edge,
+so the final fixture checks its bounded trimmed result and exact untrimmed fallback.
+
+All-target compilation, both desktop builds, diagnostic Clippy with the documented
+approximate-constant allowance, formatting and studio rustdoc generation pass
+(`/tmp/deep-rolling-handoff-all-targets.log`, `/tmp/deep-rolling-handoff-build.log`,
+`/tmp/deep-rolling-handoff-clippy.log`, `/tmp/deep-rolling-handoff-doc.log`). Existing
+warnings remain; this is not a `-D warnings` claim. Rendered API pages were checked
+for ownership, source-revision and error contracts. The private acceptance runner
+now permits right-clicks on its fake rolling fixture while keeping PDF clipboard
+checks PDF-only. `/tmp/deep-rolling-handoff-ui/report.json` passes; the viewed
+settled capture shows **Rolling Audio Snapshot**, one-second duration and the
+loaded waveform/analysis workspace after the private right-click at (450, 725).
+The run uses a private temporary root and virtual-pointer target; no host input,
+real daemon or audio-device playback was exercised.
+
+Architecture comparison against `deep-rolling-handoff-start` reports raw
+REGRESSION from NLOC +415, functions +17 and clone groups 1503 → 1504, with
+unchanged average/max CCN and 16 cycles. The remaining new fragments are bounded
+copy-test polling/blocker setup and the existing popup-render shape with its
+pending-state variable. Other modified export/layout fragments match baseline.
+Consolidation lowers `save_audio_region_cancellable` from CCN 13 to 7; the shared
+checked renderer is CCN 15 and no new function exceeds the threshold. The raw
+report is `/tmp/deep-rolling-handoff-architecture.json`. Cargo work stayed
+serialized at four jobs, with about 135 GiB free and no sweep.
+
+The rolling caller review is now closed for feedback, playback, source admission,
+editor intake and temporary-result lifetime. Remaining acceptance work is pipeline
+content admission, native prototype input-response evidence and the final complete
+requirement review. This checkpoint does not mark the whole refactor complete.

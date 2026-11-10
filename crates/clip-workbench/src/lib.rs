@@ -25,6 +25,7 @@ use little_clip_render::{SCREEN_HEIGHT, SCREEN_WIDTH, ScreenRenderer};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -500,23 +501,10 @@ struct TextPreviewLoadJob {
 }
 
 struct RollingEditorLoadJob {
-    ticket: JobTicket,
-    cancelled: Arc<AtomicBool>,
-    receiver: Receiver<
-        Result<Result<(PathBuf, Option<little_clip_core::audio::AudioMetadata>), String>, JobError>,
-    >,
+    task: little_clip_core::jobs::task::Task<Result<audio_preview::PreparedAudioSlice, String>>,
     editor: String,
-    ready: Option<Result<(PathBuf, Option<little_clip_core::audio::AudioMetadata>), String>>,
-}
-
-impl Drop for RollingEditorLoadJob {
-    fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Release);
-        self.ticket.cancel();
-        if let Some(Ok((path, _))) = self.ready.take() {
-            let _ = std::fs::remove_file(path);
-        }
-    }
+    title: String,
+    ready: Option<Result<audio_preview::PreparedAudioSlice, String>>,
 }
 
 impl ImageLoadJob {

@@ -218,9 +218,15 @@ fn failed_rolling_selection_action_keeps_the_current_viewer_open() {
         VecDeque::new(),
     );
 
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("snapshot.wav");
+    std::fs::write(&path, b"snapshot identity").unwrap();
+    let source = crate::file_source::FileSource::capture(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
     app.apply_rolling_audio_action(
         RollingAudioAction::OpenEditor {
-            snapshot_path: PathBuf::from("snapshot.wav"),
+            source,
+            duration_sec: 2.0,
             selected_region: Some((1.0, 2.0)),
         },
         &ctx,
@@ -241,6 +247,12 @@ fn failed_rolling_selection_action_keeps_the_current_viewer_open() {
     }
     app.poll_rolling_editor_load(&ctx);
     assert!(app.rolling_editor_job.is_some());
+    assert!(
+        app.status_msg
+            .as_deref()
+            .unwrap()
+            .starts_with("Could not open rolling audio selection:")
+    );
     assert!(matches!(
         app.viewer,
         Some(ViewerSession::ComponentGallery(_))
@@ -270,7 +282,8 @@ fn rolling_editor_materialization_waits_for_active_viewer_and_preserves_range_ed
     let ctx = egui::Context::default();
     app.apply_rolling_audio_action(
         RollingAudioAction::OpenEditor {
-            snapshot_path: source,
+            source: crate::file_source::FileSource::capture(&source).unwrap(),
+            duration_sec: 2.0,
             selected_region: Some((1.25, 0.5)),
         },
         &ctx,
@@ -308,6 +321,46 @@ fn rolling_editor_materialization_waits_for_active_viewer_and_preserves_range_ed
         "selected range should remain bounded after optional edge trimming: {}",
         editor.duration_sec
     );
+}
+
+#[test]
+fn cancelling_ready_full_snapshot_handoff_reclaims_only_its_owned_result() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("snapshot.wav");
+    let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(1, 8000, 1);
+    buffer.push_samples(&vec![1234; 8000]);
+    buffer.write_wav(&path).unwrap();
+    let mut app = test_workbench_app(
+        Some(ViewerSession::ComponentGallery(
+            component_gallery::ComponentGalleryState::default(),
+        )),
+        VecDeque::new(),
+    );
+    let ctx = egui::Context::default();
+    app.apply_rolling_audio_action(
+        RollingAudioAction::OpenEditor {
+            source: crate::file_source::FileSource::capture(&path).unwrap(),
+            duration_sec: 1.0,
+            selected_region: None,
+        },
+        &ctx,
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !app.rolling_editor_job.as_ref().unwrap().ready.is_some() {
+        app.poll_rolling_editor_load(&ctx);
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let job = app.rolling_editor_job.as_ref().unwrap();
+    assert_eq!(job.title, "Rolling Audio Snapshot");
+    let prepared = job.ready.as_ref().unwrap().as_ref().unwrap();
+    let output = prepared.path().to_owned();
+    assert!(output.is_file());
+    assert_ne!(output, path);
+    app.rolling_editor_job = None;
+    assert!(!output.exists());
+    assert!(path.is_file());
+    assert!(app.viewer.is_some());
 }
 
 #[test]

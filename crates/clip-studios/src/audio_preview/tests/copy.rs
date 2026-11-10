@@ -311,6 +311,7 @@ fn single_slice_copy_surfaces_ffmpeg_failure() {
     let temp = tempfile::tempdir().unwrap();
     let plan = AudioSliceCopyPlan {
         read_check: Default::default(),
+        file_source: None,
         source: temp.path().join("missing.wav"),
         output: temp.path().join("copy.wav"),
         start: 0.0,
@@ -319,4 +320,18 @@ fn single_slice_copy_surfaces_ffmpeg_failure() {
     };
     let error = extract_and_handoff_audio_slice(plan, &AtomicBool::new(false)).unwrap_err();
     assert!(error.contains("Failed to extract audio segment via ffmpeg"));
+}
+
+#[test]
+fn slice_copy_rejects_changed_displayed_revision_before_output_admission() {
+    let (_fixture, source) = generate_fixture_wav("stale-slice-copy", 1.0);
+    let expected = crate::file_source::FileSource::capture(&source).unwrap();
+    let mut plan = audio_slice_copy_plan(&source, 0.1, 0.5, ChannelCopyMode::Native, None)
+        .with_file_source(expected);
+    let root = tempfile::tempdir().unwrap();
+    plan.output = root.path().join("must-not-create").join("copy.wav");
+    std::fs::write(&source, b"changed snapshot").unwrap();
+    let error = extract_audio_slice_file(&plan, &AtomicBool::new(false)).unwrap_err();
+    assert!(error.contains("changed"));
+    assert!(!plan.output.parent().unwrap().exists());
 }

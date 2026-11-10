@@ -1669,7 +1669,7 @@ def create_parser() -> argparse.ArgumentParser:
         help="place --scroll after this one-based --click number (default: after all clicks)",
     )
     parser.add_argument("--audio", type=Path, help="optional existing audio fixture")
-    parser.add_argument("--right-click", nargs=2, type=int, metavar=("X", "Y"), help="copy a PDF image through the private pointer")
+    parser.add_argument("--right-click", nargs=2, type=int, metavar=("X", "Y"), help="right-click a PDF image or frozen rolling-audio strip through the private pointer")
     parser.add_argument("--clipboard-mime", choices=("text/plain", "image/png"), help="capture the private PDF clipboard after actions")
     parser.add_argument("--expect-clipboard-text", help="require an exact private clipboard text payload")
     parser.add_argument("--pdf", type=Path, help="optional existing PDF fixture")
@@ -1726,8 +1726,10 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def validate_pdf_clipboard(args: argparse.Namespace) -> None:
-    if (args.right_click is not None or args.clipboard_mime is not None) and args.pdf is None:
+    if args.clipboard_mime is not None and args.pdf is None:
         raise SystemExit("PDF clipboard acceptance requires --pdf")
+    if args.right_click is not None and args.pdf is None and not args.fake_audio_transition:
+        raise SystemExit("--right-click requires --pdf or --fake-audio-transition")
     if args.clipboard_mime and (args.capture_after_actions or args.capture_after_key_actions):
         raise SystemExit("Clipboard checks must precede Niri's post-action screenshots; use the settled capture")
     if args.right_click is not None and not (0 <= args.right_click[0] < args.width and 0 <= args.right_click[1] < args.height):

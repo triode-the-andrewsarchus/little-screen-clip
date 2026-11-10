@@ -124,6 +124,7 @@ impl AudioPreviewState {
             Self::channel_edit_filter(mode, region),
         );
         plan.read_check = self.read_check.clone();
+        plan.file_source = self.file_source.clone();
         if self.slice_copy_job.is_some() {
             self.status_toast = Some((
                 crate::ui_ext::StatusMessage::new(
@@ -230,6 +231,7 @@ impl AudioPreviewState {
                     Self::channel_edit_filter(mode, region),
                 );
                 plan.read_check = self.read_check.clone();
+                plan.file_source = self.file_source.clone();
                 plan
             })
             .collect::<Vec<_>>();
@@ -888,11 +890,14 @@ pub fn extract_audio_slice_file(
     plan: &AudioSliceCopyPlan,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    use std::os::fd::AsRawFd;
     if cancelled.load(Ordering::Acquire) {
         return Err("Audio slice copy cancelled".to_owned());
     }
     plan.read_check.validate(cancelled)?;
-    let source = crate::file_source::FileSource::capture(&plan.source)
+    let (input, source) = plan
+        .read_check
+        .open(&plan.source, plan.file_source.as_ref(), cancelled)
         .map_err(|e| format!("Failed to extract audio segment via ffmpeg: {e}"))?;
     let staging_dir = plan.output.parent().unwrap_or_else(|| Path::new("."));
     let directory = little_clip_core::kernel_interface::create_content_directory(staging_dir)
@@ -904,7 +909,7 @@ pub fn extract_audio_slice_file(
         .ok_or("Invalid audio slice filename")?;
     let save = AudioSavePlan {
         read_check: plan.read_check.clone(),
-        source: plan.source.clone(),
+        source: PathBuf::from(format!("/proc/self/fd/{}", input.as_raw_fd())),
         file_source: Some(source),
         destination: staging_dir.to_owned(),
         versioned: false,
@@ -966,7 +971,8 @@ pub fn copy_file_audio_segment(
     if crate::file_source::FileSource::capture(path)? != *source {
         return Err("Audio source changed; reload it before copying.".into());
     }
-    let plan = audio_slice_copy_plan(path, start, end, ChannelCopyMode::Native, None);
+    let plan = audio_slice_copy_plan(path, start, end, ChannelCopyMode::Native, None)
+        .with_file_source(source.clone());
     let output = extract_audio_slice_file(&plan, cancelled)?;
     if crate::file_source::FileSource::capture(path)? != *source {
         return Err("Audio source changed while copying; copy it again.".into());
@@ -1096,6 +1102,7 @@ pub fn audio_slice_copy_plan(
         format_sample_filename(base_name, start, (end - start).max(0.001), suffix, "wav");
     AudioSliceCopyPlan {
         read_check: Default::default(),
+        file_source: None,
         source: source.to_owned(),
         output: std::env::temp_dir()
             .join("little_clip_audio_segments")
@@ -1157,33 +1164,21 @@ fn save_audio_region_cancellable(
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
     use std::os::fd::AsRawFd;
-    plan.read_check.validate(cancelled)?;
     if Path::new(&region.filename).file_name() != Some(std::ffi::OsStr::new(&region.filename)) {
         return Err("Enter one audio export filename".into());
     }
-    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-    let parent = std::fs::read_link(&anchor).map_err(|error| error.to_string())?;
-    let staging = tempfile::NamedTempFile::new_in(&anchor).map_err(|error| error.to_string())?;
-    let mut command = audio_export_command(
+    let rendered = session_edit::render_audio_file(
         &plan.source,
+        plan.file_source.as_ref(),
+        &plan.read_check,
         region,
-        staging
-            .as_file()
-            .try_clone()
-            .map_err(|error| error.to_string())?,
         AudioRenderMode::Export,
         cancelled,
+        Some(directory.try_clone().map_err(|error| error.to_string())?),
     )?;
-    let status = run_audio_command_cancellable(&mut command, cancelled)?;
-    if !status.success() {
-        return Err(format!("ffmpeg exit {status}"));
-    }
-    staging
-        .as_file()
-        .sync_all()
-        .map_err(|error| error.to_string())?;
-    plan.read_check.validate(cancelled)?;
-    let out_path = install_audio_output(staging, &anchor, plan, &region.filename)?;
+    let anchor = PathBuf::from(format!("/proc/self/fd/{}", rendered.directory.as_raw_fd()));
+    let parent = std::fs::read_link(&anchor).map_err(|error| error.to_string())?;
+    let out_path = install_audio_output(rendered.staging, &anchor, plan, &region.filename)?;
     Ok(std::fs::read_link(&anchor)
         .unwrap_or(parent)
         .join(out_path.file_name().ok_or("Missing output name")?))
