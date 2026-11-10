@@ -418,6 +418,55 @@ mod tests {
     }
 
     #[test]
+    fn escape_keeps_an_accepted_ocr_job_until_completion() {
+        let mut state = PdfEditorState::without_jobs(PathBuf::from("unused-ocr-fixture.pdf"));
+        let (release, wait) = std::sync::mpsc::channel();
+        state.document_tools.ocr_job = Some(ToolJob::start(move |_| {
+            let _ = wait.recv();
+            Err("controlled OCR failure".to_owned())
+        }));
+        let ctx = egui::Context::default();
+        let palette = little_clip_core::palette::AppPalette::default();
+        let mut close = true;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 620.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut close));
+            },
+        );
+        assert!(!close);
+        assert!(state.document_tools.ocr_busy());
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
+        );
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while state.document_tools.ocr_busy() && std::time::Instant::now() < deadline {
+            state.poll_document_tools(&ctx, crate::ui_ext::feedback_time());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!state.document_tools.ocr_busy());
+        assert_eq!(state.document_tools.ocr_status, "controlled OCR failure");
+    }
+
+    #[test]
     fn opening_adopts_only_a_verified_ocr_copy_before_loading_pages() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.pdf");
