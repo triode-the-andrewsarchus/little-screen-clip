@@ -1,17 +1,17 @@
 //! Persisted continuity gates and source-scoped file identity.
 use super::{Store, record_storage_fault};
-use crate::file_manager::search::reader::SourceRoot;
+use crate::source::SourceRoot;
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 
-pub(super) const SCHEMA: &str = "CREATE TABLE source_sessions(
+pub const SCHEMA: &str = "CREATE TABLE source_sessions(
     root_id INTEGER PRIMARY KEY REFERENCES roots(id) ON DELETE CASCADE,
     observation TEXT CHECK(observation IS NULL OR length(observation)<=512),
     scope TEXT NOT NULL, continuity INTEGER NOT NULL DEFAULT 0 CHECK(continuity IN (0,1))
 );";
 
 impl Store {
-    pub(super) fn synchronize_source(
+    pub fn synchronize_source(
         &self,
         tx: &Connection,
         id: i64,
@@ -39,7 +39,7 @@ impl Store {
             params![id, observation, scope])?;
         Ok(())
     }
-    pub(super) fn source_scope(&self, source: &SourceRoot, observation: Option<&str>) -> String {
+    pub fn source_scope(&self, source: &SourceRoot, observation: Option<&str>) -> String {
         let Some(session) = source.session.as_ref().filter(|session| session.unique()) else {
             // No unique mount observation: even two unknown observations cannot
             // establish continuity. Re-extraction still reuses matching inputs.
@@ -52,7 +52,7 @@ impl Store {
         }
         format!("{:x}", digest.finalize())
     }
-    pub(super) fn source_scope_for(&self, root: i64) -> Result<String, String> {
+    pub fn source_scope_for(&self, root: i64) -> Result<String, String> {
         self.connection
             .query_row(
                 "SELECT scope FROM source_sessions WHERE root_id=?1",
@@ -61,7 +61,7 @@ impl Store {
             )
             .map_err(|error| record_storage_fault(&self.storage_fault, error))
     }
-    pub(super) fn break_source_continuity(&self, root: i64) -> Result<(), String> {
+    pub fn break_source_continuity(&self, root: i64) -> Result<(), String> {
         // Preserve last-known rows while offline. Reconnection will make them
         // pending atomically before exposing an available root again.
         self.connection
@@ -75,133 +75,9 @@ impl Store {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
+    use super::super::test_support::Fixture;
     use super::*;
-    use crate::file_manager::{
-        filesystem::{self, Entry},
-        search::{
-            policy::Root,
-            store::{DIMENSION, Segment},
-        },
-    };
-    use std::sync::atomic::AtomicBool;
-
-    pub(crate) struct Fixture {
-        pub(crate) store: Store,
-        pub(crate) root: Root,
-        pub(crate) entry: Entry,
-        pub(crate) file: i64,
-        cache: tempfile::TempDir,
-        _source: tempfile::TempDir,
-    }
-    impl Fixture {
-        pub(crate) fn new() -> Self {
-            let cache = tempfile::tempdir().unwrap();
-            let source = tempfile::tempdir().unwrap();
-            std::fs::write(source.path().join("note.txt"), "original content").unwrap();
-            let root = Root::open(source.path()).unwrap();
-            let entry = filesystem::read_directory(source.path(), &AtomicBool::new(false))
-                .unwrap()
-                .entries
-                .remove(0);
-            let store = Store::open(cache.path()).unwrap();
-            let mut fixture = Self {
-                store,
-                root,
-                entry,
-                file: 0,
-                cache,
-                _source: source,
-            };
-            let (file, changed) = fixture.observe(&SourceRoot::from_root(&fixture.root));
-            assert!(changed);
-            fixture.file = file;
-            fixture.publish(file);
-            fixture
-        }
-        pub(crate) fn without_memberships(self) -> Self {
-            self.store
-                .connection
-                .execute("DELETE FROM memberships", [])
-                .unwrap();
-            self
-        }
-
-        pub(crate) fn observe(&mut self, source: &SourceRoot) -> (i64, bool) {
-            let root = self.store.enroll_source(source).unwrap();
-            let generation = self.store.begin_scan(root).unwrap();
-            self.store
-                .observe(
-                    root,
-                    generation,
-                    &self.entry,
-                    &std::fs::metadata(&self.entry.path).unwrap(),
-                    "model",
-                )
-                .unwrap()
-        }
-        fn publish(&mut self, file: i64) {
-            self.store
-                .publish(
-                    file,
-                    self.entry.revision,
-                    "model",
-                    &[Segment {
-                        modality: "text".into(),
-                        location: "passage 0".into(),
-                        text: "original content".into(),
-                        input_hash: vec![1; 32],
-                        vector: Some(vec![1.0; DIMENSION]),
-                    }],
-                    "complete",
-                )
-                .unwrap();
-        }
-        pub(crate) fn reopen(self) -> Self {
-            drop(self.store); // Release the sole-writer lock before reopening.
-            let store = Store::open(self.cache.path()).unwrap();
-            Self { store, ..self }
-        }
-        fn changed_session(&self, field: &str, value: serde_json::Value) -> SourceRoot {
-            let mut source = SourceRoot::from_root(&self.root);
-            let mut observation = serde_json::to_value(source.session.as_ref().unwrap()).unwrap();
-            observation[field] = value;
-            source.session = Some(serde_json::from_value(observation).unwrap());
-            source
-        }
-        fn legacy_version(&self, version: u32) {
-            // A real legacy shape, independent of the current file-table schema.
-            let (scope_column, scope_select, scope_key, sessions) = match version {
-                4 => ("", "", "", "DROP TABLE source_sessions;"),
-                5 => ("scope TEXT NOT NULL DEFAULT '',", ",scope", ",scope", ""),
-                _ => panic!("Unsupported legacy fixture version"),
-            };
-            self.store.connection.execute_batch(&format!("PRAGMA foreign_keys=OFF; BEGIN;
-                CREATE TABLE files_v4(id INTEGER PRIMARY KEY,device INTEGER NOT NULL,inode INTEGER NOT NULL,
-                  revision INTEGER NOT NULL,pipeline TEXT NOT NULL,metadata TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',
-                  coverage TEXT,error TEXT,extraction_version INTEGER NOT NULL DEFAULT 0,{scope_column}UNIQUE(device,inode{scope_key}));
-                INSERT INTO files_v4 SELECT id,device,inode,revision,pipeline,metadata,state,coverage,error,extraction_version{scope_select} FROM files;
-                DROP TABLE files; ALTER TABLE files_v4 RENAME TO files; {sessions}
-                PRAGMA user_version={version}; COMMIT; PRAGMA foreign_keys=ON;")).unwrap();
-        }
-        fn canonical_backup(&self) -> (tempfile::NamedTempFile, u64) {
-            let backup = self.cache.path().join("backup.sqlite");
-            self.store.export(&backup, &AtomicBool::new(false)).unwrap();
-            let input = std::fs::File::open(backup).unwrap();
-            let snapshot = tempfile::NamedTempFile::new_in(self.cache.path()).unwrap();
-            let staged = tempfile::NamedTempFile::new_in(self.cache.path()).unwrap();
-            let vectors = super::super::restore::prepare_in_helper(
-                &input,
-                snapshot.as_file(),
-                staged.as_file(),
-                16 * 1024 * 1024,
-                100,
-                4096,
-            )
-            .unwrap();
-            (staged, vectors)
-        }
-    }
 
     #[test]
     fn restart_reuses_metadata_only_with_known_local_mount_continuity() {

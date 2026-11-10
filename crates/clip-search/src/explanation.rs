@@ -1,6 +1,6 @@
 //! Bounded evidence from matching segments; no extraction or inference during display.
 use super::{retrieval::Hit, store::Store};
-use crate::file_manager::filesystem::Entry;
+use little_clip_core::file_inventory::Entry;
 use rusqlite::{OptionalExtension, params};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
@@ -11,14 +11,14 @@ use std::{
     },
 };
 
-pub(super) const MAX_PASSAGES: usize = 3;
+pub const MAX_PASSAGES: usize = 3;
 #[derive(Clone, Copy)]
-pub(super) struct SegmentMatch {
+pub struct SegmentMatch {
     pub id: i64,
     pub score: f64,
     pub keyword: bool,
 }
-pub(super) fn merge(target: &mut Vec<SegmentMatch>, incoming: &[SegmentMatch]) {
+pub fn merge(target: &mut Vec<SegmentMatch>, incoming: &[SegmentMatch]) {
     target.extend_from_slice(incoming);
     target.sort_by(|a, b| {
         b.keyword
@@ -32,20 +32,20 @@ pub(super) fn merge(target: &mut Vec<SegmentMatch>, incoming: &[SegmentMatch]) {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct Explanation {
+pub struct Explanation {
     pub unavailable: bool,
     pub coverage: String,
     pub passages: Vec<Passage>,
 }
 #[derive(Clone)]
-pub(super) struct Passage {
+pub struct Passage {
     pub kind: String,
     pub location: String,
     pub text: String,
 }
-pub(super) type Explanations = HashMap<PathBuf, Explanation>;
+pub type Explanations = HashMap<PathBuf, Explanation>;
 
-pub(super) fn clipped(text: &str, count: usize) -> String {
+pub fn clipped(text: &str, count: usize) -> String {
     let mut chars = text.chars();
     let mut result = chars.by_ref().take(count).collect::<String>();
     if chars.next().is_some() {
@@ -55,7 +55,7 @@ pub(super) fn clipped(text: &str, count: usize) -> String {
 }
 
 /// A Unicode-safe context window around a literal case-insensitive match.
-pub(super) fn excerpt(text: &str, needle: &str) -> String {
+pub fn excerpt(text: &str, needle: &str) -> String {
     let found = text
         .to_lowercase()
         .find(&needle.to_lowercase())
@@ -80,7 +80,7 @@ pub(super) fn excerpt(text: &str, needle: &str) -> String {
 }
 
 /// Fetch bounded cached passages for admitted files; the caller labels last-known rows.
-pub(super) fn read(
+pub fn read(
     store: &Store,
     hits: &[Hit],
     entries: &[Entry],

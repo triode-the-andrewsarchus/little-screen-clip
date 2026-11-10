@@ -11,6 +11,8 @@ pub mod config;
 pub mod document;
 pub mod ebook;
 pub mod email;
+pub mod file_format;
+pub mod file_inventory;
 pub mod file_source;
 pub mod font_assets;
 pub mod gallery_image;
@@ -21,6 +23,7 @@ pub mod item;
 pub mod jobs;
 pub mod kernel_interface;
 pub mod kra_image;
+pub mod text_format;
 pub mod zip_content;
 /// Presentation-ready classifiers and decoded models shared by renderers and operations.
 pub mod presentation {

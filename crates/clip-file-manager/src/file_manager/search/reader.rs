@@ -672,49 +672,10 @@ fn extract(
     }
     text(entry, file, cursor)
 }
-pub(super) const NAME_ONLY_UNSUPPORTED: &str = "name-only: extractor unavailable";
-
-pub(super) fn supports_content(entry: &Entry) -> bool {
-    supports_text(entry)
-        || entry.is_photo()
-        || little_clip_core::audio::is_audio_path(&entry.path)
-        || entry.is_video()
-}
-
-pub(super) fn supports_text(entry: &Entry) -> bool {
-    little_clip_core::pdf::is_pdf_path(&entry.path)
-        || (!entry.is_photo()
-            && !little_clip_core::audio::is_audio_path(&entry.path)
-            && !entry.is_video()
-            && text_kind(entry).is_some())
-}
-
-fn text_kind(entry: &Entry) -> Option<&'static str> {
-    let extension = entry
-        .path
-        .extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase();
-    match extension.as_str() {
-        "html" => Some("html"),
-        "htm" => Some("htm"),
-        "xhtml" => Some("xhtml"),
-        "docx" => Some("docx"),
-        "odt" => Some("odt"),
-        "pptx" => Some("pptx"),
-        "xlsx" => Some("xlsx"),
-        "rtf" => Some("rtf"),
-        _ if entry.typescript => Some("txt"),
-        _ if crate::file_manager::text_strip::typescript_suffix(&entry.path) => None,
-        _ if crate::file_manager::text_strip::known_text(&entry.path)
-            || matches!(extension.as_str(), "rst" | "org") =>
-        {
-            Some("txt")
-        }
-        _ => None,
-    }
-}
+use clip_search::source_format::text_kind;
+pub(super) use clip_search::source_format::{
+    NAME_ONLY_UNSUPPORTED, supports_content, supports_text,
+};
 
 fn text(entry: &Entry, file: &mut std::fs::File, cursor: usize) -> Result<Prepared, String> {
     let Some(kind) = text_kind(entry) else {

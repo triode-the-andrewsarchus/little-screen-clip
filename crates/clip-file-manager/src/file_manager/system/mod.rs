@@ -19,7 +19,6 @@ mod events;
 mod firmware;
 mod flash;
 mod identity;
-pub(in crate::file_manager) use identity::MountIdentity;
 mod iio;
 mod illumination;
 mod input;

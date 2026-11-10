@@ -1,15 +1,13 @@
 //! Literal reuse is gated by fresh source observations, never by embedding similarity.
 use super::{EXTRACTION_VERSION, Store};
-use crate::file_manager::{
-    filesystem::Entry,
-    search::{
-        content::{self, Literal},
-        policy,
-        reader::SourceRoot,
-        retrieval::SqlCancellation,
-        session::SourceSession,
-    },
+use crate::{
+    content::{self, Literal},
+    policy,
+    retrieval::SqlCancellation,
+    session::SourceSession,
+    source::SourceRoot,
 };
+use little_clip_core::file_inventory::Entry;
 use rusqlite::{OptionalExtension, params};
 use std::sync::{
     Arc,
@@ -68,7 +66,7 @@ impl TextPart {
 }
 
 impl Store {
-    pub(in crate::file_manager::search) fn cached_content(
+    pub fn cached_content(
         &self,
         root: &SourceRoot,
         entry: &Entry,
@@ -224,7 +222,7 @@ fn reusable_entry(root: &SourceRoot, entry: &Entry) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_manager::search::store::{Segment, TestFixture};
+    use crate::store::{Segment, TestFixture};
 
     fn publish(fixture: &mut TestFixture, coverage: &str) {
         let segments = [(0, 12, "original con"), (9, 16, "content")]

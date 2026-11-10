@@ -132,7 +132,7 @@ fn compact(connection: &Connection) -> rusqlite::Result<bool> {
     Ok(busy != 0)
 }
 
-pub(super) fn copy_database(
+pub fn copy_database(
     source: &Connection,
     destination: &mut Connection,
     cancel: &AtomicBool,
@@ -160,7 +160,7 @@ pub(super) fn copy_database(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_manager::search::store::{DIMENSION, Segment};
+    use crate::store::{DIMENSION, Segment};
     use std::os::unix::fs::PermissionsExt;
     fn populated(path: &Path) -> Store {
         let mut store = Store::open(path).unwrap();
@@ -282,7 +282,7 @@ mod tests {
         let output = root.path().join("output");
         std::fs::create_dir(&output).unwrap();
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "file_manager::search::store::maintenance::tests::killed_backup_retains_one_identified_partial_and_refuses_to_accumulate", "--nocapture"])
+            .args(["--exact", "store::maintenance::tests::killed_backup_retains_one_identified_partial_and_refuses_to_accumulate", "--nocapture"])
             .env(CHILD, root.path())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

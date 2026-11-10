@@ -1,9 +1,9 @@
 //! One literal matcher for current extraction and source-validated indexed text.
 use super::explanation::{self, Explanation, Passage};
 
-pub(super) type Match = (bool, bool, Option<Explanation>);
+pub type Match = (bool, bool, Option<Explanation>);
 
-pub(super) struct Literal {
+pub struct Literal {
     needle: String,
     tail: String,
 }

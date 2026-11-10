@@ -1,24 +1,26 @@
 //! Optional derived cache: only a complete verified source digest can skip extraction.
 use super::{EXTRACTION_VERSION, Segment, Store, decode_vector, record_storage_fault};
-use crate::file_manager::filesystem::Entry;
+use little_clip_core::file_inventory::Entry;
 use rusqlite::{OptionalExtension, params};
 
 // This cache is recreated on open and deliberately excluded from backup imports.
 // Losing it changes performance only; canonical segment hashes remain authoritative.
-pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS source_digests(
+pub const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS source_digests(
     file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
     digest BLOB NOT NULL CHECK(length(digest)=32), format BLOB NOT NULL,
     pipeline TEXT NOT NULL, extraction_version INTEGER NOT NULL, coverage TEXT NOT NULL
 ); CREATE INDEX IF NOT EXISTS source_digest_lookup ON source_digests(digest,format,pipeline,extraction_version);";
-pub(super) const PDF_SPARSE_POLICY: &[u8] = b"\0pdf-nonwhitespace-v2";
-pub(super) const MEDIA_TIMELINE_POLICY: &[u8] = b"\0media-timeline-v2";
+pub const PDF_SPARSE_POLICY: &[u8] = b"\0pdf-nonwhitespace-v2";
+pub const MEDIA_TIMELINE_POLICY: &[u8] = b"\0media-timeline-v2";
 
-pub(in crate::file_manager::search) fn format(entry: &Entry) -> Vec<u8> {
+pub fn format(entry: &Entry) -> Vec<u8> {
     // Readers dispatch on suffix. Equal bytes with different decoding routes
     // must not inherit another format's extraction or unsupported outcome.
     let mut format = b"representation-v1\0".to_vec();
     // Extensionless README/Makefile routes differ from unknown bare names.
-    format.push(u8::from(super::super::reader::supports_content(entry)));
+    format.push(u8::from(super::super::source_format::supports_content(
+        entry,
+    )));
     format.extend(
         entry
             .path
@@ -27,7 +29,7 @@ pub(in crate::file_manager::search) fn format(entry: &Entry) -> Vec<u8> {
             .as_encoded_bytes()
             .to_ascii_lowercase(),
     );
-    if crate::file_manager::text_strip::typescript_suffix(&entry.path) {
+    if little_clip_core::text_format::typescript_suffix(&entry.path) {
         // Older unclassified inventories must not reuse the opposite decoder's
         // full-source result or a cursor from its dispatch route.
         format.extend_from_slice(&[0, 1, u8::from(entry.typescript)]);
@@ -75,7 +77,7 @@ impl Store {
     }
 }
 
-pub(super) fn read_segments(
+pub fn read_segments(
     connection: &rusqlite::Connection,
     file: i64,
     pipeline: &str,
@@ -135,9 +137,9 @@ mod tests {
         let directory = fixture.entry.path.parent().unwrap();
         let path = directory.join("alias.pdf");
         std::fs::hard_link(&fixture.entry.path, &path).unwrap();
-        let root = crate::file_manager::search::reader::SourceRoot::from_root(&fixture.root);
+        let root = crate::source::SourceRoot::from_root(&fixture.root);
         // Capture both aliases after link creation, which changes ctime.
-        let entries = crate::file_manager::filesystem::read_directory(
+        let entries = little_clip_core::file_inventory::read_directory(
             directory,
             &std::sync::atomic::AtomicBool::new(false),
         )

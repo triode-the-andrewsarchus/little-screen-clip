@@ -14,78 +14,9 @@ use std::{
 use syntect::{easy::HighlightLines, highlighting::Color};
 use unicode_width::UnicodeWidthChar;
 
-pub(in crate::file_manager) const TYPESCRIPT_PROBE_BYTES: usize = 8192;
-
-pub(in crate::file_manager) fn typescript_suffix(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "ts" | "mts" | "cts"
-            )
-        })
-}
-
-/// Resolve extensions shared by TypeScript and transport-stream video on workers.
-pub(in crate::file_manager) fn is_typescript_source(path: &Path) -> bool {
-    if !typescript_suffix(path) {
-        return false;
-    }
-    crate::file_source::read_file_bytes(path, TYPESCRIPT_PROBE_BYTES, false, true)
-        .is_ok_and(|bytes| typescript_bytes(&bytes))
-}
-
-// Shared bounded plain-text heuristic, not a compiler or import resolver.
-// Callers own guarded source access and revision verification.
-pub(in crate::file_manager) fn typescript_bytes(bytes: &[u8]) -> bool {
-    if bytes
-        .iter()
-        .any(|byte| *byte < 32 && !matches!(*byte, b'\n' | b'\r' | b'\t' | 12))
-    {
-        return false;
-    }
-    match std::str::from_utf8(bytes) {
-        Ok(_) => true,
-        Err(error) if error.error_len().is_none() => true,
-        Err(_) => {
-            String::from_utf8_lossy(bytes)
-                .chars()
-                .filter(|character| *character == '\u{fffd}')
-                .count()
-                <= bytes.len().div_ceil(100)
-        }
-    }
-}
-
-pub(in crate::file_manager) fn known_text(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    little_clip_core::syntax::is_code_file(path)
-        || matches!(
-            name.as_str(),
-            "makefile"
-                | "dockerfile"
-                | "license"
-                | "readme"
-                | ".gitignore"
-                | ".gitattributes"
-                | ".editorconfig"
-                | ".env"
-        )
-        || path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                matches!(
-                    extension.to_ascii_lowercase().as_str(),
-                    "log" | "csv" | "tsv" | "nix" | "cmake" | "srt" | "vtt"
-                )
-            })
-}
+pub(in crate::file_manager) use little_clip_core::text_format::{
+    TYPESCRIPT_PROBE_BYTES, is_typescript_source, known_text, typescript_bytes, typescript_suffix,
+};
 
 pub(in crate::file_manager) fn load(
     path: &Path,

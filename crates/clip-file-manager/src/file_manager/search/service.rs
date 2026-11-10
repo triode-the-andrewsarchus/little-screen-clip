@@ -1101,7 +1101,9 @@ impl Worker {
         self.snapshot.lock().unwrap().message = "Validating index backup…".into();
         let cancel = self.stop.clone();
         let limits = self.config.limits.clone();
-        let prepared = self.database()?.prepare_restore(path, &limits, &cancel)?;
+        let prepared =
+            self.database()?
+                .prepare_restore(path, &limits, &cancel, reader::prepare_restore)?;
         let mut config = self.config.clone();
         config.paused = true;
         little_clip_core::config::save_file_search_preferences(&config)

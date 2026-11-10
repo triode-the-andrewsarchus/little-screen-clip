@@ -26,7 +26,7 @@ from search_retrieval_benchmark import execute, resolve_binary
 from search_model.setup import digest
 
 
-TEST = 'file_manager::search::retrieval::benchmark::export_native_scale_fixture'
+TEST = 'retrieval::benchmark::export_native_scale_fixture'
 SCOPE = 'Real model/coordinator/current source verification/UI acceptance with synthetic stored vectors and broad relevance floor; all cases use hybrid retrieval; excludes frame presentation; not a quality evaluation'
 
 
@@ -174,7 +174,7 @@ def main():
         fixture['desktop_sha256'] = digest(args.binary.resolve(strict=True))
         fixture['test_binary_sha256'] = digest(test_binary)
         fixture['source_sha256'] = {str(path.relative_to(repo)):digest(path) for path in
-            sorted((repo/'crates/clip-file-manager/src/file_manager/search').rglob('*.rs'))}
+            sorted([*(repo/'crates/clip-file-manager/src/file_manager/search').rglob('*.rs'), *(repo/'crates/clip-search/src').rglob('*.rs'), repo/'crates/little-clip-core/src/file_inventory.rs', repo/'crates/little-clip-core/src/text_format.rs'])}
         (output/'fixture-manifest.json').write_text(json.dumps(fixture, indent=2))
         def environment(env, children):
             env['LITTLE_CLIP_SEARCH_TIMINGS'] = '1'

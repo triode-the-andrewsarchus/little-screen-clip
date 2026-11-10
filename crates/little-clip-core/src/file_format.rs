@@ -5,8 +5,9 @@
 //! documents. Ambiguous sampler names require positive content identification;
 //! they retain their ordinary routing until a worker supplies that evidence.
 use std::path::Path;
+/// Cheap semantic-document path hints; workers establish actual content support.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Format {
+pub enum Format {
     Font,
     Notebook,
     Book,
@@ -19,6 +20,7 @@ pub(super) enum Format {
     Subtitle,
 }
 impl Format {
+    /// Returns the shared filename hint without reading or admitting the source.
     pub fn for_path(path: &Path) -> Option<Self> {
         let extension = path.extension()?.to_str()?;
         let lower;
@@ -40,10 +42,29 @@ impl Format {
             "sfz" | "sf2" | "nki" | "dspreset" | "dslibrary" | "multisample" | "xrni" => {
                 Some(Self::Multisample)
             }
-            _ => little_clip_core::subtitles::is_subtitle_path(path).then_some(Self::Subtitle),
+            _ => crate::subtitles::is_subtitle_path(path).then_some(Self::Subtitle),
         }
     }
 }
+/// Returns whether a path uses a Gaussian-capable scene container extension.
+///
+/// GLB may instead contain meshes; loading classifies it on the worker thread.
+pub fn is_splat_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            ["ply", "splat", "sog", "spz", "glb"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+}
+
+/// Returns whether a path has the conventional MIDI filename suffix.
+pub fn is_midi(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,7 @@
 //! Explicit fixture evaluation using production storage, filters and rank fusion.
 use super::*;
-use crate::file_manager::search::{policy::Root, store::Segment};
+use crate::{policy::Root, store::Segment};
+use little_clip_core::file_inventory as filesystem;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Digest;
@@ -167,7 +168,7 @@ impl Corpus {
             "Equivalent single-root scope changed ranks or evidence"
         );
         let entries = hits.iter().map(|hit| hit.entry.clone()).collect::<Vec<_>>();
-        let explanations = crate::file_manager::search::explanation::read(
+        let explanations = crate::explanation::read(
             &self.store,
             &hits,
             &entries,
@@ -183,11 +184,7 @@ impl Corpus {
         let semantic_only = hits.iter().any(|hit| {
             hit.segments.iter().any(|segment| !segment.keyword)
                 && !hit.segments.iter().any(|segment| segment.keyword)
-                && crate::file_manager::type_navigation::name_rank(
-                    &hit.entry.name,
-                    &text.to_lowercase(),
-                )
-                .is_none()
+                && crate::name_match::name_rank(&hit.entry.name, &text.to_lowercase()).is_none()
         });
         json!({"id":case["id"],"kind":case["kind"],"split":case["split"],"query":text,
             "expected_file":expected,"rank":rank,"has_results":!hits.is_empty(),"semantic_only_result":semantic_only,
@@ -197,7 +194,8 @@ impl Corpus {
     }
 }
 fn read_json(path: &Path) -> Value {
-    let bytes = crate::file_source::read_file_bytes(path, 32 * 1024 * 1024, true, false).unwrap();
+    let bytes = little_clip_core::file_source::read_file_bytes(path, 32 * 1024 * 1024, true, false)
+        .unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 

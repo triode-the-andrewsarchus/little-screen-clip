@@ -7,21 +7,23 @@ use recovery::IndexOwner;
 mod fingerprints;
 mod pruning;
 mod publication;
-pub(super) use pruning::PruneCursor;
+pub use pruning::PruneCursor;
 mod retries;
 mod safety;
-pub(super) use fingerprints::format as source_format;
-pub(super) use publication::Checkpoint;
-pub(super) use retries::Retry;
+pub use fingerprints::format as source_format;
+pub use publication::Checkpoint;
+pub use retries::Retry;
 mod restore;
 mod session;
-#[cfg(test)]
-pub(super) use session::tests::Fixture as TestFixture;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub use test_support::Fixture as TestFixture;
 mod vectors;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::policy::Root;
-use crate::file_manager::filesystem::Entry;
-pub(super) use restore::prepare_in_helper;
+use little_clip_core::file_inventory::Entry;
+pub use restore::{PreparedRestore, RestoreWorker, prepare_in_helper};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
     cell::Cell,
@@ -36,23 +38,23 @@ use std::{
     path::{Path, PathBuf},
 };
 #[cfg(test)]
-pub(super) use vectors::cosine_score;
+pub use vectors::cosine_score;
 
-pub(in crate::file_manager::search) use lexical::Names as LexicalNames;
+pub use lexical::Names as LexicalNames;
 // Both accelerators share a single allocation allowance and catalog epoch.
 const WORKING_CACHE_BUDGET: usize = 512 * 1024 * 1024;
 const LEXICAL_CACHE_BUDGET: usize = 16 * 1024 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::file_manager::search) struct CacheEpoch(u64, i64);
+pub struct CacheEpoch(u64, i64);
 
-pub(super) const DIMENSION: usize = clip_search::EMBEDDING_DIMENSION;
-pub(super) const SCHEMA_VERSION: i64 = 6;
+pub const DIMENSION: usize = crate::EMBEDDING_DIMENSION;
+pub const SCHEMA_VERSION: i64 = 6;
 const FILE_COLUMNS: &str = r#"id INTEGER PRIMARY KEY, device INTEGER NOT NULL, inode INTEGER NOT NULL,
  revision INTEGER NOT NULL, pipeline TEXT NOT NULL, metadata TEXT NOT NULL,
  state TEXT NOT NULL DEFAULT 'pending', coverage TEXT, error TEXT, extraction_version INTEGER NOT NULL DEFAULT 0,
  scope TEXT NOT NULL DEFAULT '', format BLOB NOT NULL DEFAULT X'', UNIQUE(device,inode,scope,format)"#;
 // v3 adds guarded SVG/source-code extraction and explicit name-only budget outcomes.
-pub(super) const EXTRACTION_VERSION: i64 = 4;
+pub const EXTRACTION_VERSION: i64 = 4;
 const DIRECTORY_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS directories (\n root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,\n path BLOB NOT NULL, generation INTEGER NOT NULL, complete INTEGER NOT NULL,\n PRIMARY KEY(root_id,path)\n);\n";
 const SCHEMA: &str = r#"
 CREATE TABLE roots (
@@ -96,7 +98,12 @@ CREATE TRIGGER segment_delete AFTER DELETE ON segments BEGIN
  INSERT INTO segment_fts(segment_fts,rowid,text) VALUES ('delete',old.id,old.text); END;
 "#;
 
-pub(super) struct Store {
+/// Sole-writer SQLite index with bounded derived vector and lexical caches.
+///
+/// Call from the existing background coordinator. Store records are observations,
+/// not authorization to read a source; callers retain guarded source validation.
+/// Dropping the store releases its owner lock, allowing explicit recovery/reopen.
+pub struct Store {
     pub connection: Connection,
     vectors: std::sync::Arc<std::sync::Mutex<vectors::VectorCache>>,
     lexical: std::cell::RefCell<lexical::Cache>,
@@ -106,7 +113,8 @@ pub(super) struct Store {
     process_scope: uuid::Uuid,
 }
 #[derive(Clone, Debug)]
-pub(super) struct RootState {
+/// Index coverage and availability for one enrolled root.
+pub struct RootState {
     pub id: i64,
     pub path: PathBuf,
     pub state: String,
@@ -121,7 +129,8 @@ impl RootState {
             || (path.starts_with(&self.path) && mount.is_some() && self.mount == mount)
     }
 }
-pub(super) struct Segment {
+/// One extracted passage and its optional canonical embedding.
+pub struct Segment {
     pub modality: String,
     pub location: String,
     pub text: String,
@@ -129,6 +138,10 @@ pub(super) struct Segment {
     pub vector: Option<Vec<f32>>,
 }
 impl Store {
+    /// Opens the existing private index, retaining exclusive writer ownership.
+    ///
+    /// # Errors
+    /// Returns storage admission, owner-lock, schema or SQLite failures.
     pub fn open(folder: &Path) -> Result<Self, String> {
         Self::from_owner(IndexOwner::acquire(folder)?)
     }
@@ -233,21 +246,21 @@ impl Store {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn enroll(&self, root: &Root) -> Result<i64, String> {
         root.revalidate()?;
-        self.enroll_source(&super::reader::SourceRoot::from_root(root))
+        self.enroll_source(&crate::source::SourceRoot::from_root(root))
     }
     /// A fresh explicit enrollment can replace a disabled cached lifetime.
     /// Automatic reconciliation must keep using the original expected identity.
-    pub fn enroll_new_source(&mut self, root: &super::reader::SourceRoot) -> Result<i64, String> {
+    pub fn enroll_new_source(&mut self, root: &crate::source::SourceRoot) -> Result<i64, String> {
         let obsolete: Option<i64> = self.connection.query_row("SELECT id FROM roots WHERE path=?1 AND state='disabled' AND (device<>?2 OR inode<>?3)", params![root.path.as_os_str().as_bytes(), root.device as i64, root.inode as i64], |row| row.get(0)).optional().map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         if let Some(id) = obsolete {
             self.remove_root(id)?;
         }
         self.enroll_source(root)
     }
-    pub fn enroll_source(&self, root: &super::reader::SourceRoot) -> Result<i64, String> {
+    pub fn enroll_source(&self, root: &crate::source::SourceRoot) -> Result<i64, String> {
         let tx = self
             .connection
             .unchecked_transaction()
@@ -305,7 +318,7 @@ impl Store {
         Ok(id)
     }
 
-    pub(super) fn cache_epoch(&self) -> Result<CacheEpoch, String> {
+    pub fn cache_epoch(&self) -> Result<CacheEpoch, String> {
         let version = self
             .connection
             .pragma_query_value(None, "data_version", |row| row.get(0))
@@ -348,7 +361,7 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|error| record_storage_fault(&self.storage_fault, error))
     }
-    pub fn source_roots(&self) -> Result<Vec<super::reader::SourceRoot>, String> {
+    pub fn source_roots(&self) -> Result<Vec<crate::source::SourceRoot>, String> {
         use std::os::unix::ffi::OsStringExt;
         let mut query = self
             .connection
@@ -356,7 +369,7 @@ impl Store {
             .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         query
             .query_map([], |row| {
-                Ok(super::reader::SourceRoot {
+                Ok(crate::source::SourceRoot {
                     path: std::ffi::OsString::from_vec(row.get(0)?).into(),
                     device: row.get::<_, i64>(1)? as u64,
                     inode: row.get::<_, i64>(2)? as u64,
@@ -387,7 +400,7 @@ impl Store {
         }
         Ok(result)
     }
-    pub fn monitor_roots(&self) -> Result<Vec<(i64, super::reader::SourceRoot)>, String> {
+    pub fn monitor_roots(&self) -> Result<Vec<(i64, crate::source::SourceRoot)>, String> {
         use std::os::unix::ffi::OsStringExt;
         let mut query = self
             .connection
@@ -397,7 +410,7 @@ impl Store {
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,
-                    super::reader::SourceRoot {
+                    crate::source::SourceRoot {
                         path: std::ffi::OsString::from_vec(row.get(1)?).into(),
                         device: row.get::<_, i64>(2)? as u64,
                         inode: row.get::<_, i64>(3)? as u64,
@@ -474,7 +487,7 @@ impl Store {
             .map_err(|error| record_storage_fault(&self.storage_fault, error))?;
         Ok(generation)
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn observe(
         &mut self,
         root: i64,
@@ -927,7 +940,11 @@ fn prune(tx: &rusqlite::Transaction<'_>, files: bool, fault: &Cell<bool>) -> Res
     Ok(())
 }
 
-pub(super) fn encode_vector(values: &[f32]) -> Result<Vec<u8>, String> {
+/// Normalizes and encodes the existing canonical f16 vector representation.
+///
+/// # Errors
+/// Returns an error for an invalid dimension, nonfinite values or a zero norm.
+pub fn encode_vector(values: &[f32]) -> Result<Vec<u8>, String> {
     if values.len() != DIMENSION || values.iter().any(|v| !v.is_finite()) {
         return Err("Invalid embedding dimension or nonfinite value".into());
     }
@@ -944,11 +961,15 @@ pub(super) fn encode_vector(values: &[f32]) -> Result<Vec<u8>, String> {
         .flat_map(|&value| half::f16::from_f32((f64::from(value) / norm) as f32).to_le_bytes())
         .collect())
 }
-pub(super) fn decode_vector(bytes: &[u8]) -> Result<Vec<f32>, String> {
+/// Decodes and normalizes a canonical persisted embedding.
+///
+/// # Errors
+/// Returns an error for a corrupt representation or zero norm.
+pub fn decode_vector(bytes: &[u8]) -> Result<Vec<f32>, String> {
     decode_vector_array(bytes).map(|values| values.to_vec())
 }
 
-pub(super) fn decode_vector_array(bytes: &[u8]) -> Result<[f32; DIMENSION], String> {
+pub fn decode_vector_array(bytes: &[u8]) -> Result<[f32; DIMENSION], String> {
     if bytes.len() != DIMENSION * 2 {
         return Err("Corrupt embedding length".into());
     }
@@ -980,7 +1001,7 @@ pub(super) fn decode_vector_array(bytes: &[u8]) -> Result<[f32; DIMENSION], Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_manager::filesystem::read_directory;
+    use little_clip_core::file_inventory::read_directory;
     use std::sync::atomic::AtomicBool;
 
     fn observation(folder: &Path) -> Entry {
@@ -1386,7 +1407,7 @@ mod tests {
         let mut store = Store::open(folder.path()).unwrap();
         let id = store.enroll(&root).unwrap();
         store.begin_scan(id).unwrap();
-        let replacement = super::super::reader::SourceRoot {
+        let replacement = crate::source::SourceRoot {
             path: root.path.clone(),
             device: root.device,
             inode: root.inode.wrapping_add(1),
@@ -1783,7 +1804,7 @@ mod tests {
                 false,
             ),
         ] {
-            let mut fixture = session::tests::Fixture::new();
+            let mut fixture = test_support::Fixture::new();
             let path = fixture.entry.path.with_extension(suffix);
             std::fs::rename(&fixture.entry.path, &path).unwrap();
             let entry = observation(path.parent().unwrap());
@@ -1822,13 +1843,13 @@ mod tests {
 
     #[test]
     fn mixed_format_hardlinks_keep_independent_publications_and_compatible_aliases_share() {
-        let mut fixture = session::tests::Fixture::new();
+        let mut fixture = test_support::Fixture::new();
         let directory = fixture.entry.path.parent().unwrap().to_path_buf();
         for name in ["alias.TXT", "page.html", "unknown.data"] {
             std::fs::hard_link(&fixture.entry.path, directory.join(name)).unwrap();
         }
         let entries =
-            crate::file_manager::filesystem::read_directory(&directory, &AtomicBool::new(false))
+            little_clip_core::file_inventory::read_directory(&directory, &AtomicBool::new(false))
                 .unwrap()
                 .entries;
         let root = fixture.store.roots().unwrap()[0].id;
@@ -1888,7 +1909,7 @@ mod tests {
                 unknown.revision,
                 "model",
                 &[],
-                super::super::reader::NAME_ONLY_UNSUPPORTED,
+                super::super::source_format::NAME_ONLY_UNSUPPORTED,
             )
             .unwrap();
         let state = |file| {
@@ -1939,18 +1960,18 @@ mod tests {
 
     #[test]
     fn extensionless_content_routes_do_not_share_unknown_name_only_state() {
-        let mut entry = session::tests::Fixture::new().entry;
+        let mut entry = test_support::Fixture::new().entry;
         entry.path.set_file_name("README");
-        assert!(super::super::reader::supports_content(&entry));
+        assert!(super::super::source_format::supports_content(&entry));
         let content = source_format(&entry);
         entry.path.set_file_name("unknown");
-        assert!(!super::super::reader::supports_content(&entry));
+        assert!(!super::super::source_format::supports_content(&entry));
         assert_ne!(content, source_format(&entry));
     }
 
     #[test]
     fn changed_subtype_reprepares_only_the_affected_file_without_losing_canonical_vectors() {
-        let mut fixture = session::tests::Fixture::new();
+        let mut fixture = test_support::Fixture::new();
         let path = fixture.entry.path.with_file_name("module.ts");
         std::fs::rename(&fixture.entry.path, &path).unwrap();
         let entry = observation(path.parent().unwrap());
@@ -2007,7 +2028,7 @@ mod tests {
 
     #[test]
     fn full_source_reuse_requires_exact_digest_format_pipeline_and_complete_publication() {
-        let mut fixture = session::tests::Fixture::new();
+        let mut fixture = test_support::Fixture::new();
         let store = &mut fixture.store;
         let entry = &fixture.entry;
         let id = fixture.file;

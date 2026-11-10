@@ -78,3 +78,89 @@ fn browser_workers_reject_bad_arguments_before_opening_a_window() {
         );
     }
 }
+
+#[test]
+fn extracted_store_restores_through_the_application_reader_with_inherited_handles() {
+    use clip_search::store::TestFixture;
+    use little_clip_core::{config::FileSearchLimits, process::CommandRequest};
+    use std::{fs::File, sync::atomic::AtomicBool, time::Duration};
+
+    fn reader(
+        handles: [&File; 3],
+        max_bytes: u64,
+        max_vectors: u64,
+        page_size: u32,
+        cancel: &AtomicBool,
+    ) -> Result<u64, String> {
+        let mut request = CommandRequest::new(env!("CARGO_BIN_EXE_clip-file-manager"));
+        let mut fds = [0; 3];
+        for (index, file) in handles.into_iter().enumerate() {
+            let (next, fd) = request.inherit_handle(file).map_err(|e| e.to_string())?;
+            request = next;
+            fds[index] = fd;
+        }
+        let reply = request
+            .arg("--internal-file-search-reader")
+            .stdin_bytes(
+                serde_json::to_vec(&serde_json::json!({"Restore": {
+                    "fds": fds, "max_bytes": max_bytes,
+                    "max_vectors": max_vectors, "page_size": page_size,
+                }}))
+                .unwrap(),
+            )
+            .own_process_group()
+            .die_with_parent()
+            .timeout(Duration::from_secs(30))
+            .run_cancellable(cancel)
+            .map_err(|e| e.to_string())?;
+        if !reply.status.success() || reply.stdout_truncated {
+            return Err(reply.stderr_lossy());
+        }
+        let json: serde_json::Value =
+            serde_json::from_slice(&reply.stdout).map_err(|e| e.to_string())?;
+        json["Ok"]["Restored"]
+            .as_u64()
+            .ok_or_else(|| json.to_string())
+    }
+
+    let mut fixture = TestFixture::new();
+    let output = tempfile::tempdir().unwrap();
+    let backup = output.path().join("backup.sqlite");
+    let cancel = AtomicBool::new(false);
+    fixture.store.export(&backup, &cancel).unwrap();
+    let backup_bytes = std::fs::read(&backup).unwrap();
+    fixture
+        .store
+        .connection
+        .execute("UPDATE segments SET text='changed after backup'", [])
+        .unwrap();
+    let limits = FileSearchLimits {
+        max_mib: 16,
+        max_vectors: 10,
+    };
+    let prepared = fixture
+        .store
+        .prepare_restore(&backup, &limits, &cancel, reader)
+        .unwrap();
+    fixture
+        .store
+        .apply_restore(prepared, &[fixture.root.path.clone()], &cancel)
+        .unwrap();
+    let text: String = fixture
+        .store
+        .connection
+        .query_row("SELECT text FROM segments", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(text, "original content");
+    let vectors: i64 = fixture
+        .store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM segments WHERE length(vector)=1536",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(vectors, 1);
+    assert_eq!(std::fs::read(backup).unwrap(), backup_bytes);
+}

@@ -19,9 +19,6 @@ use std::{
     },
 };
 
-pub(super) fn known(path: &Path) -> bool {
-    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Calendar)
-}
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;
     if token.load(Ordering::Relaxed) {
@@ -441,6 +438,9 @@ mod tests {
         viewer.select(usize::MAX);
         assert_eq!(viewer.selected, 1);
         assert!(read(&path, &AtomicBool::new(true)).is_err());
-        assert!(known(Path::new("CALENDAR.ICS")));
+        assert!(
+            (little_clip_core::file_format::Format::for_path(Path::new("CALENDAR.ICS"))
+                == Some(little_clip_core::file_format::Format::Calendar))
+        );
     }
 }

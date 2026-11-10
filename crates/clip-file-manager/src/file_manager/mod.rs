@@ -8,7 +8,7 @@ mod calendar;
 pub(super) mod constellation;
 mod content;
 mod database;
-mod document_format;
+use little_clip_core::file_format as document_format;
 mod ebook;
 mod edit_ui;
 mod edits;

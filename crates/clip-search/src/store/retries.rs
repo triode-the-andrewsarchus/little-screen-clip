@@ -5,14 +5,14 @@ use std::time::Duration;
 
 // Operational state, deliberately not restored from imported catalogs. Source
 // identity and canonical vectors keep their existing schema/backup contracts.
-pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS file_retries(
+pub const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS file_retries(
     file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
     revision INTEGER NOT NULL, pipeline TEXT NOT NULL, extraction_version INTEGER NOT NULL,
     failures INTEGER NOT NULL CHECK(failures BETWEEN 1 AND 4), retry_after INTEGER
 );";
 
 #[derive(Debug, PartialEq, Eq)]
-pub(in crate::file_manager::search) enum Retry {
+pub enum Retry {
     Ready,
     After(Duration),
     Stopped,
@@ -114,7 +114,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_manager::search::{reader::SourceRoot, store::TestFixture};
+    use crate::{source::SourceRoot, store::TestFixture};
 
     #[test]
     fn retries_survive_reopen_and_stop_after_three_delayed_attempts() {

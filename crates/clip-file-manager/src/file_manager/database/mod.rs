@@ -20,9 +20,6 @@ use std::{
     time::Duration,
 };
 
-pub(super) fn known(path: &Path) -> bool {
-    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Database)
-}
 pub(super) struct Summary {
     tables: Vec<(String, String, usize)>,
     total: usize,
@@ -412,8 +409,14 @@ mod tests {
         assert_eq!(viewer.document.tables[viewer.selected].name, "sailings");
         viewer.select(usize::MAX);
         assert_eq!(viewer.selected, 1);
-        assert!(known(Path::new("SAVED.SQLITE3")));
-        assert!(!known(Path::new("saved.parquet")));
+        assert!(
+            (little_clip_core::file_format::Format::for_path(Path::new("SAVED.SQLITE3"))
+                == Some(little_clip_core::file_format::Format::Database))
+        );
+        assert!(
+            !(little_clip_core::file_format::Format::for_path(Path::new("saved.parquet"))
+                == Some(little_clip_core::file_format::Format::Database))
+        );
         assert!(load(&path, &AtomicBool::new(true)).database.is_none());
     }
 }

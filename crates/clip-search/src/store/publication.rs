@@ -5,7 +5,7 @@ use super::{
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS file_checkpoints(
+pub const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS file_checkpoints(
     file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
     revision INTEGER NOT NULL, pipeline TEXT NOT NULL, extraction_version INTEGER NOT NULL,
     progress TEXT NOT NULL CHECK(length(progress)<=4096),
@@ -14,7 +14,7 @@ pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS file_checkpoints(
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::file_manager::search) struct Checkpoint {
+pub struct Checkpoint {
     pub cursor: usize,
     pub text_cursor: usize,
     pub coverage: String,
@@ -145,7 +145,7 @@ impl Store {
         file: i64,
         revision: u64,
         pipeline: &str,
-        entry: &crate::file_manager::filesystem::Entry,
+        entry: &little_clip_core::file_inventory::Entry,
         digest: Option<[u8; 32]>,
     ) -> Result<Option<(Checkpoint, Vec<Segment>)>, String> {
         let saved: Option<(String, usize)> = self.connection.query_row(
@@ -312,7 +312,7 @@ fn prefix_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_manager::search::{reader::SourceRoot, store::session::tests::Fixture};
+    use crate::{source::SourceRoot, store::test_support::Fixture};
 
     fn progress(fixture: &Fixture) -> Checkpoint {
         Checkpoint {

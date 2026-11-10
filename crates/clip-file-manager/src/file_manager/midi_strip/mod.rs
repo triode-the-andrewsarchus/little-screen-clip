@@ -4,7 +4,7 @@ mod transport;
 mod ui;
 use little_clip_core::presentation::midi::MidiData;
 pub(super) use preview::{load, render};
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 pub(super) use transport::Preview;
 pub(super) use ui::{focus_id, show};
 
@@ -15,10 +15,7 @@ pub(super) struct Document {
     pub cropped: usize,
     pub groups: Vec<(usize, u8)>,
 }
-pub(super) fn is_midi(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi"))
-}
+pub(super) use little_clip_core::file_format::is_midi;
 impl Document {
     pub fn details(&self) -> String {
         let data = &self.data;

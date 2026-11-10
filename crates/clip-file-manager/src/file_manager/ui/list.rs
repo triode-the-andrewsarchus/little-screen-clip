@@ -201,7 +201,7 @@ impl FileManager {
                 .search
                 .applied
                 .as_ref()
-                .is_some_and(|query| query.browser_sort().is_none()))
+                .is_some_and(|query| crate::file_manager::sorting::for_query(query).is_none()))
         .then_some(self.sort);
         if let Some(column) = columns.sort_header(ui, header, sort, colors) {
             self.sort_by(column);

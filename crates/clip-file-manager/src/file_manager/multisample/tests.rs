@@ -22,8 +22,14 @@ fn sfz_includes_defines_and_preview_selection_keep_real_region_indices() {
     let mut viewer = Viewer::load(&path, &token).unwrap();
     viewer.select(0, 1);
     assert_eq!(viewer.current().unwrap().name, "Bright keys");
-    assert!(known(Path::new("BANK.SF2")));
-    assert!(known(Path::new("BANK.NKI")));
+    assert!(
+        (little_clip_core::file_format::Format::for_path(Path::new("BANK.SF2"))
+            == Some(little_clip_core::file_format::Format::Multisample))
+    );
+    assert!(
+        (little_clip_core::file_format::Format::for_path(Path::new("BANK.NKI"))
+            == Some(little_clip_core::file_format::Format::Multisample))
+    );
 }
 #[test]
 fn preprocessing_is_bounded_and_cannot_read_kernel_payloads() {

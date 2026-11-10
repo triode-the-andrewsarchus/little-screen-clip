@@ -88,7 +88,7 @@ A smaller image/audio/text/etc. studio crate is justified when it removes a demo
 
 ## Content and visual reuse policy
 
-Start from [document_format.rs](../crates/clip-file-manager/src/file_manager/document_format.rs), core MIME/extension helpers, decoder hooks, the existing preview caches and [file_types.md](file_types.md). Avoid inventing a second complete format registry.
+Start from [file_format.rs](../crates/little-clip-core/src/file_format.rs), core MIME/extension helpers, decoder hooks, the existing preview caches and [file_types.md](file_types.md). Avoid inventing a second complete format registry.
 
 Keep three distinct facts:
 
@@ -638,3 +638,88 @@ and keeping a canonical guarded source descriptor outside the application, not
 an algorithm-speedup or reduced-build-cost claim. About 149 GiB remains free.
 Diagnostic Clippy also passes with the pre-existing approximate-constant diagnostic
 allowed; existing warnings remain (`/tmp/deep-source-foundation-clippy.log`).
+
+
+### Phase 4 checkpoint: shared inventory, storage and retrieval
+
+`clip-search` now owns the existing query grammar, literal/progressive filename
+ranking, transactional SQLite store (including recovery/import/publication),
+bounded vector and lexical caches, rank fusion, explanations and streaming
+literal matching. The cluster moved together so its transaction/cache/cancellation
+contracts remain intact. Its sole local crate dependency is core; it has no egui
+or application dependency. Browser coordination, source payload extraction and
+internal-reader process dispatch remain application-owned. This checkpoint does
+not claim the entire search coordinator/extraction subsystem has moved.
+
+Core now owns the existing `Entry`, `Directory` and `Identity` snapshots and
+worker-side enumeration, with their exact metadata/revision/availability and
+lossless path representation. Existing formatted inventory fields remain for
+persisted compatibility. Source admission still precedes content access; an
+inventory snapshot or filename hint never substitutes for a pinned root/file.
+The existing cheap semantic-document registry and text/TypeScript probe have one
+core owner. Scene/MIDI path-hint exports and browser compatibility imports use
+those canonical implementations. Eight obsolete `known` wrappers were removed;
+module classification assertions use the shared registry. Decoder/player owners,
+preview caches and ambiguous-format admission are unchanged.
+
+Browser-specific sort conversion now lives with browser sorting; input focus and
+progressive-key event precedence remain in the browser. Restore input, space,
+source-identity checks and private staging remain owned by the store, while a
+function parameter supplies the application's existing disposable-reader
+launcher. The same inherited handles, byte/vector/page limits, cancellation,
+protocol and process lifecycle still reach `prepare_in_helper`. The new actual
+executable integration test exports a populated backup, changes indexed text,
+prepares/restores through the application reader, verifies original text/vector
+restoration and checks the backup bytes remain unchanged. The no-overwrite
+rename syscall used by recovery and browser mutations has one core file-source
+owner; callers retain their existing safety admission and directory pins.
+
+The explicit search `test-support` feature owns shared fixtures, separate from
+unit-test modules. Backend tests moved with their implementation; browser
+orchestration tests consume only that fixture API. Benchmark/quality/scale
+harness selectors and source hashes follow the moved implementation, while
+private mount checks continue to select the browser reader harness. Both runner
+selection tests pass. No database migration, schema/dimension/extraction-version
+change, SQL/ranking change or new connection/model abstraction was introduced.
+
+Validation:
+
+- The serial workspace suite passes 2620 tests (30 ignored) in
+  `/tmp/deep-search-storage-workspace.log`. The actual executable worker suite
+  then passes all three tests, including the new restore handoff, in
+  `/tmp/deep-search-storage-worker-dispatch.log`.
+- Workspace/all-target checks, both desktop builds and core/search API docs pass:
+  `/tmp/deep-search-storage-check-final.log`, `/tmp/deep-search-storage-build.log`
+  and `/tmp/deep-search-storage-doc.log`. Rendered inventory/query/store/opaque
+  restore API pages were inspected. Diagnostic Clippy retains the previously
+  known approximate-constant allowance and existing warnings; it is not a
+  warning-free workspace claim. Logs: `/tmp/deep-search-storage-clippy-final.log`
+  and `/tmp/deep-search-storage-clippy-accepted.log`.
+- Private mount boundary checks pass (`/tmp/deep-search-storage-mounts.json`).
+  The private real-model application run passes literal/recursive content,
+  guarded enrollment, persisted vectors, semantic ranking, stale-source omission,
+  typed answers and return to the embedding role
+  (`/tmp/deep-search-storage-real-search/report.json`). It reused installed
+  models with owned fixtures/private index; no downloads or host input.
+- The relocated retrieval runner passes its 1000-file/1500-vector debug component
+  check (`/tmp/deep-search-storage-retrieval-fixed.json`), retaining its query-plan
+  and cancellation/cache diagnostics. Five-sample p95s range from 1.32 to 39.30 ms;
+  this is a functional component smoke measurement, not optimized scale or
+  end-to-end performance acceptance. The first runner attempt identified stale
+  source-hash paths; those paths were corrected before the accepted run.
+
+A normalized source audit matches all 377 unchanged functions in the moved query,
+store, retrieval, explanation and literal-matching modules. The remaining two
+functions were reviewed explicitly: the same sort conversion moved to browser
+sorting, and restore receives the existing helper launcher through a parameter
+(`/tmp/deep-search-storage-body-audit.json`). In particular, the six high-CCN
+functions reported as "new" by the move-sensitive analyzer already exist in the
+baseline with the same bodies and complexity. The final raw comparison reports
+REGRESSION for those moves and modified-file clone findings. Overall clone groups
+decrease 1511→1508, functions decrease by five, total CCN increases by two from the
+new executable test/launcher and fixture Default after deleting eight wrappers;
+average/max CCN and cycle totals remain unchanged. NLOC increases by 123,
+duplication changes 4.46%→4.45%; no speedup is claimed from these counts.
+`/tmp/deep-search-storage-architecture.json` retains the raw findings. The
+ownership/deletion benefit is separate from its coarse classification. Core's
+broad transitive dependency graph remains; about 147 GiB was free at the check.

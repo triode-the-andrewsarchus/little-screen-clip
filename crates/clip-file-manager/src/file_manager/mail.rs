@@ -20,9 +20,6 @@ use std::{
     },
 };
 
-pub(super) fn known(path: &Path) -> bool {
-    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Mail)
-}
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;
     if token.load(Ordering::Relaxed) {
@@ -318,8 +315,14 @@ mod tests {
         );
         viewer.select(usize::MAX);
         assert_eq!(viewer.selected, 1);
-        assert!(known(Path::new("SAVED.EML")));
-        assert!(!known(Path::new("mail.mbox")));
+        assert!(
+            (little_clip_core::file_format::Format::for_path(Path::new("SAVED.EML"))
+                == Some(little_clip_core::file_format::Format::Mail))
+        );
+        assert!(
+            !(little_clip_core::file_format::Format::for_path(Path::new("mail.mbox"))
+                == Some(little_clip_core::file_format::Format::Mail))
+        );
         assert!(read(&fixture(), &AtomicBool::new(true)).is_err());
     }
 }

@@ -28,9 +28,7 @@ struct Span {
     excerpt: String,
     strokes: Vec<(usize, usize)>,
 }
-pub(super) fn known(path: &Path) -> bool {
-    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Notebook)
-}
+
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     let mut data = PreviewData::new(String::new(), "Notebook".into(), Icon::Text);
     match model::load(path, token) {

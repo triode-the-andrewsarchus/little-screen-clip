@@ -70,9 +70,7 @@ impl Publication {
         }
     }
 }
-pub(super) fn known(path: &Path) -> bool {
-    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Book)
-}
+
 fn read(path: &Path, token: &AtomicBool) -> Result<Publication, String> {
     if path
         .extension()
@@ -617,6 +615,9 @@ mod tests {
         assert_eq!(preview.book.unwrap().chapters, ["Departure", "Arrival"]);
         assert!(preview.detail.contains("Example Author"));
         assert!(preview.image.is_some());
-        assert!(known(Path::new("BOOK.EPUB")));
+        assert!(
+            (little_clip_core::file_format::Format::for_path(Path::new("BOOK.EPUB"))
+                == Some(little_clip_core::file_format::Format::Book))
+        );
     }
 }

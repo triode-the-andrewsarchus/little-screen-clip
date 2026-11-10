@@ -27,10 +27,7 @@ use std::{
     time::Duration,
 };
 pub(super) use strip::Preview;
-pub(super) fn known(path: &Path) -> bool {
-    super::document_format::Format::for_path(path)
-        == Some(super::document_format::Format::Multisample)
-}
+
 fn extension(path: &Path) -> Option<String> {
     path.extension()
         .and_then(|e| e.to_str())

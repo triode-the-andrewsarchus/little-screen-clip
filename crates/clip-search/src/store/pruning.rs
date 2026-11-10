@@ -5,14 +5,14 @@ use rusqlite::params;
 const PAGE: usize = 64;
 
 #[derive(Default)]
-pub(in crate::file_manager::search) struct PruneCursor {
+pub struct PruneCursor {
     path: Vec<u8>,
     file: i64,
     paths_done: bool,
     pub done: bool,
 }
 
-pub(in crate::file_manager::search) struct PruneBatch {
+pub struct PruneBatch {
     next: PruneCursor,
     paths: Vec<Vec<u8>>,
     file: Option<i64>,
@@ -179,13 +179,11 @@ fn retire_segments(tx: &rusqlite::Connection, file: i64) -> rusqlite::Result<(u6
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_manager::{
-        filesystem,
-        search::{
-            reader::SourceRoot,
-            store::{Checkpoint, DIMENSION, Segment, TestFixture, source_format},
-        },
+    use crate::{
+        source::SourceRoot,
+        store::{Checkpoint, DIMENSION, Segment, TestFixture, source_format},
     };
+    use little_clip_core::file_inventory as filesystem;
     use std::sync::atomic::AtomicBool;
 
     fn orphan_fixture() -> TestFixture {

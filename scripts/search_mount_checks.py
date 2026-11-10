@@ -22,7 +22,7 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
-    binary = resolve_binary(argparse.Namespace(binary=args.test_binary, profile='debug'), repo)
+    binary = resolve_binary(argparse.Namespace(binary=args.test_binary, profile='debug'), repo, crate='clip-file-manager')
     with tempfile.TemporaryDirectory(prefix='clip-search-private-mount-') as fixture:
         env = dict(os.environ, CLIP_SEARCH_PRIVATE_MOUNT_TEST='1',
                    CLIP_SEARCH_PRIVATE_MOUNT_FIXTURE=fixture)

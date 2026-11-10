@@ -3,7 +3,7 @@ use super::{
     File, OpenOptions, OpenOptionsExt, Path, PathBuf, PermissionsExt, Store, open_private,
     require_local_storage, restore,
 };
-use crate::file_manager::filesystem::rename_noreplace;
+use little_clip_core::file_source::rename_noreplace;
 use serde::{Deserialize, Serialize};
 use std::{
     io::{Read, Write},
@@ -11,7 +11,7 @@ use std::{
 };
 
 /// Check before SQLite can recover/remove sidecars. New empty files have no header.
-pub(super) fn check_header(input: &File) -> Result<(), String> {
+pub fn check_header(input: &File) -> Result<(), String> {
     if input.metadata().map_err(|e| e.to_string())?.len() != 0 {
         restore::read_header(input).map_err(|e| format!("Unreadable search index header: {e}. Use Recover unreadable index in Search settings; existing files were preserved."))?;
     }
@@ -26,9 +26,9 @@ const FILES: [&str; 4] = [
     "index.sqlite-journal",
 ];
 
-pub(super) struct IndexOwner {
+pub struct IndexOwner {
     _lock: File,
-    pub(super) directory: File,
+    pub directory: File,
 }
 impl Drop for IndexOwner {
     fn drop(&mut self) {
@@ -42,7 +42,7 @@ impl Drop for IndexOwner {
     }
 }
 impl IndexOwner {
-    pub(super) fn acquire(folder: &Path) -> Result<Self, String> {
+    pub fn acquire(folder: &Path) -> Result<Self, String> {
         let pin = little_clip_core::kernel_interface::create_content_directory(folder)
             .map_err(|e| e.to_string())?;
         let held = PathBuf::from(format!("/proc/self/fd/{}", pin.as_raw_fd()));
@@ -64,7 +64,7 @@ impl IndexOwner {
         restore::clean_staging(&held)?;
         Ok(owner)
     }
-    pub(super) fn held(&self) -> PathBuf {
+    pub fn held(&self) -> PathBuf {
         PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd()))
     }
     fn preserve(&self) -> Result<PathBuf, String> {

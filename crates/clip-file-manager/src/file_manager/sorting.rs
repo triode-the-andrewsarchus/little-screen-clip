@@ -155,7 +155,7 @@ impl FileManager {
                 .search
                 .applied
                 .as_ref()
-                .is_some_and(|query| query.browser_sort().is_none());
+                .is_some_and(|query| crate::file_manager::sorting::for_query(query).is_none());
         self.sort = Sort {
             column,
             descending: if active && self.sort.column == column {
@@ -185,6 +185,23 @@ impl FileManager {
         }
         self.restore_scroll = true;
     }
+}
+
+pub(super) fn for_query(query: &clip_search::query::Query) -> Option<Sort> {
+    use clip_search::query::SortField;
+    let sort = query.sort?;
+    let column = match sort.field {
+        SortField::Name => Column::Name,
+        SortField::Type => Column::Type,
+        SortField::Size => Column::Size,
+        SortField::Modified => Column::Modified,
+        SortField::Created => Column::Created,
+        _ => return None,
+    };
+    Some(Sort {
+        column,
+        descending: sort.descending,
+    })
 }
 
 #[cfg(test)]

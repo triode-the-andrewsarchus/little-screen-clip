@@ -18,10 +18,6 @@ use std::{
     },
 };
 
-pub(super) fn known(path: &Path) -> bool {
-    super::document_format::Format::for_path(path)
-        == Some(super::document_format::Format::Geography)
-}
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;
     if token.load(Ordering::Relaxed) {
@@ -537,13 +533,19 @@ mod tests {
             Some(0.0)
         );
         assert!(read(&path, &AtomicBool::new(true)).is_err());
-        assert!(known(Path::new("TRACK.GPX")));
+        assert!(
+            (little_clip_core::file_format::Format::for_path(Path::new("TRACK.GPX"))
+                == Some(little_clip_core::file_format::Format::Geography))
+        );
     }
     #[test]
     fn geojson_preview_and_null_geometry_selection_preserve_source_order() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../little-clip-core/tests/fixtures/geography/harbor.geojson");
-        assert!(known(Path::new("MAP.GEOJSON")));
+        assert!(
+            (little_clip_core::file_format::Format::for_path(Path::new("MAP.GEOJSON"))
+                == Some(little_clip_core::file_format::Format::Geography))
+        );
         let data = load(&path, &AtomicBool::new(false));
         let summary = data.geography.unwrap();
         assert_eq!(summary.features[0].kind, Kind::Polygon);

@@ -10,10 +10,7 @@ use super::{
     query::{Query, Scope},
     store::{CacheEpoch, DIMENSION, LexicalNames, Store},
 };
-use crate::file_manager::{
-    filesystem::{self, Entry},
-    sorting::natural_cmp,
-};
+use little_clip_core::{file_inventory::Entry, natural_sort::natural_cmp};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -24,7 +21,7 @@ use std::{
     },
 };
 
-pub(super) const LIMIT: usize = 500;
+pub const LIMIT: usize = 500;
 // Reject nonmatching names before file/session lookups. Starting at paths also
 // retains the planner's parent/range indexes for narrow directory scopes.
 const NAMES_SELECT: &str = "SELECT p.path,f.id FROM paths p CROSS JOIN files f INDEXED BY file_search ON f.id=p.file_id WHERE clip_filename_matches(p.path,:folded) AND ";
@@ -47,7 +44,8 @@ struct Ranked {
     score: f64,
     segments: Vec<SegmentMatch>,
 }
-pub(super) struct Hit {
+/// A ranked observation with bounded supporting segment matches.
+pub struct Hit {
     pub entry: Entry,
     pub segments: Vec<SegmentMatch>,
 }
@@ -249,7 +247,9 @@ impl<'a> LexicalRankFilter<'a> {
         Ok(filter)
     }
     fn allows(top: &Mutex<Top>, path: &Path, score: f64) -> rusqlite::Result<bool> {
-        let name = filesystem::display_path_cow(Path::new(path.file_name().unwrap_or_default()));
+        let name = little_clip_core::path_address::display_path_cow(Path::new(
+            path.file_name().unwrap_or_default(),
+        ));
         let top = top.lock().map_err(|_| {
             rusqlite::Error::UserFunctionError(Box::new(std::io::Error::other(
                 "Lexical ranking unavailable",
@@ -283,11 +283,13 @@ fn context_path<'a>(context: &'a rusqlite::functions::Context<'_>) -> rusqlite::
     }
 }
 
-// The coordinator exclusively owns its connection. Keep the callback scoped to
-// this read request, including prepare/step, and remove it before later writes.
-pub(super) struct SqlCancellation<'a>(&'a rusqlite::Connection);
+/// Scoped SQLite cancellation for one read on a coordinator-owned connection.
+///
+/// Covers prepare/step and removes the callback on drop before later writes.
+/// Do not nest guards or share the connection with another request owner.
+pub struct SqlCancellation<'a>(&'a rusqlite::Connection);
 impl<'a> SqlCancellation<'a> {
-    pub(super) fn new(connection: &'a rusqlite::Connection, cancel: &Arc<AtomicBool>) -> Self {
+    pub fn new(connection: &'a rusqlite::Connection, cancel: &Arc<AtomicBool>) -> Self {
         let cancel = Arc::clone(cancel);
         connection.progress_handler(4096, Some(move || cancel.load(AtomicOrdering::Relaxed)));
         Self(connection)
@@ -299,7 +301,10 @@ impl Drop for SqlCancellation<'_> {
     }
 }
 
-pub(super) struct Retrieval<'a> {
+/// One hard-filtered lexical/vector request with bounded rank fusion.
+///
+/// Offline observations remain labeled; callers revalidate sources before opening.
+pub struct Retrieval<'a> {
     pub store: &'a Store,
     pub pipeline: &'a str,
     pub vector: &'a [f32],
@@ -315,6 +320,10 @@ pub(super) struct Retrieval<'a> {
     pub progress: Option<&'a AtomicU64>,
 }
 impl Retrieval<'_> {
+    /// Retrieves bounded ranked candidates under the existing filters and budgets.
+    ///
+    /// # Errors
+    /// Returns cancellation, invalid input, vector or SQLite failures.
     pub fn search(&self) -> Result<Vec<Hit>, String> {
         check(self.cancel)?;
         let _cancellation = SqlCancellation::new(&self.store.connection, self.cancel);
@@ -387,15 +396,16 @@ fn register_name_filter(connection: &rusqlite::Connection) -> Result<(), String>
                         ));
                     }
                 };
-                let name =
-                    filesystem::display_path_cow(Path::new(path.file_name().unwrap_or_default()));
-                Ok(crate::file_manager::type_navigation::name_rank(&name, query).is_some())
+                let name = little_clip_core::path_address::display_path_cow(Path::new(
+                    path.file_name().unwrap_or_default(),
+                ));
+                Ok(crate::name_match::name_rank(&name, query).is_some())
             },
         )
         .map_err(|e| e.to_string())
 }
 
-pub(super) fn terms(text: &str) -> Result<Vec<String>, String> {
+pub fn terms(text: &str) -> Result<Vec<String>, String> {
     let pattern = regex::Regex::new(r"[\p{L}\p{N}\p{M}\p{Co}]+").unwrap();
     let tokens = pattern
         .find_iter(text)
@@ -536,7 +546,9 @@ impl Retrieval<'_> {
         entry.hidden = current
             .file_name()
             .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."));
-        entry.name = filesystem::display_path(Path::new(current.file_name().unwrap_or_default()));
+        entry.name = little_clip_core::path_address::display_path(Path::new(
+            current.file_name().unwrap_or_default(),
+        ));
         let visible = self.hidden
             || self.query.scope == Scope::Indexed
             || !super::policy::hidden_descendant(current, self.path);
@@ -552,10 +564,8 @@ impl Retrieval<'_> {
         if keyword {
             return Ok(Some((3, -row.get::<_, f64>(2).map_err(|e| e.to_string())?)));
         }
-        Ok(
-            crate::file_manager::type_navigation::name_rank(name, folded)
-                .map(|tier| (tier, if name == self.text { 1.0 } else { 0.0 })),
-        )
+        Ok(crate::name_match::name_rank(name, folded)
+            .map(|tier| (tier, if name == self.text { 1.0 } else { 0.0 })))
     }
     fn lexical_names(
         &self,
@@ -617,8 +627,9 @@ impl Retrieval<'_> {
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             check(self.cancel)?;
             let path = row_path(row)?;
-            let name =
-                filesystem::display_path_cow(Path::new(path.file_name().unwrap_or_default()));
+            let name = little_clip_core::path_address::display_path_cow(Path::new(
+                path.file_name().unwrap_or_default(),
+            ));
             let Some((tier, score)) = self.lexical_rank(row, &name, &folded, keyword)? else {
                 continue;
             };
@@ -752,7 +763,9 @@ impl Retrieval<'_> {
             return Ok(());
         };
         let score = semantics.value;
-        let name = filesystem::display_path_cow(Path::new(path.file_name().unwrap_or_default()));
+        let name = little_clip_core::path_address::display_path_cow(Path::new(
+            path.file_name().unwrap_or_default(),
+        ));
         let list = lists.entry(modality.into()).or_default();
         if !list.accepts(path, &name, 0, f64::from(score)) {
             return Ok(());
@@ -846,13 +859,11 @@ fn fuse(lexical: &Top, semantics: &BTreeMap<String, Top>, text: &str, partial: b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_manager::{
-        filesystem::read_directory,
-        search::{
-            policy::Root,
-            store::{DIMENSION, Segment},
-        },
+    use crate::{
+        policy::Root,
+        store::{DIMENSION, Segment},
     };
+    use little_clip_core::file_inventory::read_directory;
     use rusqlite::OptionalExtension;
     struct Fixture {
         _cache: tempfile::TempDir,

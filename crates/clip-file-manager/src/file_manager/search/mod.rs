@@ -4,22 +4,20 @@ mod answer;
 mod columns;
 mod columns_ui;
 mod completion;
-mod content;
+use clip_search::content;
 mod controls;
-mod explanation;
+use clip_search::explanation;
 mod explanation_ui;
 mod image_order;
 mod monitor;
 use clip_search::policy;
-pub(super) mod query;
-use clip_search::range;
+pub(super) use clip_search::query;
 mod reader;
-mod retrieval;
+use clip_search::retrieval;
 use clip_search::runtime;
 mod service;
-use clip_search::session;
 mod settings;
-mod store;
+use clip_search::store;
 mod ui;
 mod walk;
 
@@ -150,7 +148,7 @@ impl Search {
             .filter(|sort| matches!(sort.field, SortField::Dhash | SortField::Similarity))
         {
             self.images.order(directory, visible, sort.descending);
-        } else if let Some(sort) = query.browser_sort() {
+        } else if let Some(sort) = super::sorting::for_query(&query) {
             sort.apply(directory, visible);
         } else if !self.result_order.is_empty() {
             visible.sort_by_key(|index| {
@@ -213,7 +211,7 @@ impl FileManager {
                     self.search.restore = self.location().cloned();
                     self.search.restore_sort = Some(self.sort);
                 }
-                if let Some(sort) = query.browser_sort() {
+                if let Some(sort) = super::sorting::for_query(&query) {
                     self.sort = sort;
                 }
                 let remote = query.scope != Scope::Here

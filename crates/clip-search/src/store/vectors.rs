@@ -12,7 +12,7 @@ const OVERHEAD: usize = 64 * 1024;
 type Vector = [f32; DIMENSION];
 
 #[derive(Default)]
-pub(super) struct VectorCache {
+pub struct VectorCache {
     epoch: Option<CacheEpoch>,
     positions: HashMap<i64, usize>,
     values: Vec<Vector>,
@@ -92,17 +92,12 @@ fn normalized_score(query: &[f32], vector: &Vector) -> Result<f32, String> {
 }
 
 #[cfg(test)]
-pub(in crate::file_manager::search) fn cosine_score(
-    query: &[f32],
-    encoded: &[u8],
-) -> Result<f32, String> {
+pub fn cosine_score(query: &[f32], encoded: &[u8]) -> Result<f32, String> {
     normalized_score(query, &decode_vector_array(encoded)?)
 }
 
 impl Store {
-    pub(in crate::file_manager::search) fn prepare_vector_cache(
-        &self,
-    ) -> Result<CacheEpoch, String> {
+    pub fn prepare_vector_cache(&self) -> Result<CacheEpoch, String> {
         let epoch = self.cache_epoch()?;
         self.vectors
             .lock()
@@ -129,24 +124,21 @@ impl Store {
             .map_err(|error| error.to_string())?;
         Ok(epoch)
     }
-    pub(in crate::file_manager::search) fn finish_vector_cache(
-        &self,
-        epoch: CacheEpoch,
-    ) -> Result<(), String> {
+    pub fn finish_vector_cache(&self, epoch: CacheEpoch) -> Result<(), String> {
         if self.cache_epoch()? != epoch {
             self.invalidate_vectors()?;
             return Err("Search index changed during retrieval; retry the query".into());
         }
         Ok(())
     }
-    pub(in crate::file_manager::search) fn invalidate_vectors(&self) -> Result<(), String> {
+    pub fn invalidate_vectors(&self) -> Result<(), String> {
         self.vectors
             .lock()
             .map_err(|_| "Vector cache unavailable")?
             .release();
         Ok(())
     }
-    pub(in crate::file_manager::search) fn score_vector(
+    pub fn score_vector(
         &self,
         id: i64,
         query: &[f32],
@@ -157,7 +149,7 @@ impl Store {
             .map_err(|_| "Vector cache unavailable")?
             .score(id, query, encoded)
     }
-    pub(in crate::file_manager::search) fn release_idle_vectors(&self, idle: Duration) {
+    pub fn release_idle_vectors(&self, idle: Duration) {
         let mut lexical = self.lexical.borrow_mut();
         if lexical.used.is_some_and(|used| used.elapsed() >= idle) {
             lexical.release();
@@ -172,10 +164,7 @@ impl Store {
     // Seed original model outputs into the same normalized f32 scoring path so
     // the quality comparison does not duplicate admission or rank fusion.
     #[cfg(test)]
-    pub(in crate::file_manager::search) fn install_f32_reference(
-        &self,
-        vectors: &[(i64, Vec<f32>)],
-    ) -> Result<(), String> {
+    pub fn install_f32_reference(&self, vectors: &[(i64, Vec<f32>)]) -> Result<(), String> {
         self.invalidate_vectors()?;
         self.prepare_vector_cache()?;
         let mut cache = self
@@ -218,7 +207,7 @@ impl Store {
     }
 
     #[cfg(test)]
-    pub(in crate::file_manager::search) fn vector_cache_usage(&self) -> (usize, usize) {
+    pub fn vector_cache_usage(&self) -> (usize, usize) {
         let cache = self.vectors.lock().unwrap();
         (cache.values.len(), cache.reserved_bound())
     }
@@ -227,7 +216,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_manager::search::store::encode_vector;
+    use crate::store::encode_vector;
 
     #[test]
     fn lane_reduction_agrees_with_double_precision_for_dense_and_cancelling_vectors() {

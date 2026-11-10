@@ -11,25 +11,25 @@ use std::{
     time::Instant,
 };
 
-pub(super) const BUDGET: usize = super::LEXICAL_CACHE_BUDGET;
+pub const BUDGET: usize = super::LEXICAL_CACHE_BUDGET;
 const OVERHEAD: usize = 64 * 1024;
-pub(in crate::file_manager::search) type Names = Arc<HashMap<i64, Box<str>>>;
+pub type Names = Arc<HashMap<i64, Box<str>>>;
 
 #[derive(Default)]
-pub(super) struct Cache {
+pub struct Cache {
     epoch: Option<CacheEpoch>,
     names: Names,
     bytes: usize,
-    pub(super) used: Option<Instant>,
+    pub used: Option<Instant>,
 }
 impl Cache {
-    pub(super) fn release(&mut self) {
+    pub fn release(&mut self) {
         *self = Self::default();
     }
 }
 
 impl Store {
-    pub(in crate::file_manager::search) fn prepare_lexical_names(
+    pub fn prepare_lexical_names(
         &self,
         cancel: &AtomicBool,
     ) -> Result<(CacheEpoch, Names), String> {
@@ -50,10 +50,7 @@ impl Store {
         cache.used = Some(Instant::now());
         Ok((epoch, cache.names.clone()))
     }
-    pub(in crate::file_manager::search) fn finish_lexical_names(
-        &self,
-        epoch: CacheEpoch,
-    ) -> Result<(), String> {
+    pub fn finish_lexical_names(&self, epoch: CacheEpoch) -> Result<(), String> {
         if self.cache_epoch()? != epoch {
             self.lexical.borrow_mut().release();
             return Err("Search index changed during lexical retrieval; retry the query".into());
@@ -97,7 +94,7 @@ fn build(
         if basename.as_encoded_bytes().len() > 1024 {
             continue;
         }
-        let name = crate::file_manager::filesystem::display_path_cow(Path::new(basename));
+        let name = little_clip_core::path_address::display_path_cow(Path::new(basename));
         let needed = name.len().saturating_add(32);
         if names.len() == limit || needed > budget.saturating_sub(bytes) {
             break;
@@ -140,7 +137,7 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert_eq!(
             names[&1].as_ref(),
-            crate::file_manager::filesystem::display_path_cow(Path::new(
+            little_clip_core::path_address::display_path_cow(Path::new(
                 std::ffi::OsStr::from_bytes(b"invalid_\xff.txt")
             ))
             .as_ref()

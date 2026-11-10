@@ -1,10 +1,10 @@
 //! One parser for typed browser commands and search controls. Never shell syntax.
 use super::range::{self, Interval};
-use crate::file_manager::{filesystem::Entry, sorting};
+use little_clip_core::file_inventory::{Directory, Entry};
 use regex::{Regex, RegexBuilder};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum Scope {
+pub enum Scope {
     #[default]
     Here,
     Recursive,
@@ -12,7 +12,7 @@ pub(crate) enum Scope {
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum AnswerType {
+pub enum AnswerType {
     #[default]
     Text,
     Number,
@@ -20,13 +20,13 @@ pub(crate) enum AnswerType {
     Boolean,
 }
 impl AnswerType {
-    pub(super) const OPTIONS: &'static [(&'static str, Self)] = &[
+    pub const OPTIONS: &'static [(&'static str, Self)] = &[
         ("text", Self::Text),
         ("number", Self::Number),
         ("date", Self::Date),
         ("boolean", Self::Boolean),
     ];
-    pub(super) fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         Self::OPTIONS
             .iter()
             .find(|(_, value)| *value == self)
@@ -42,7 +42,7 @@ impl AnswerType {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SortField {
+pub enum SortField {
     Name,
     Type,
     Size,
@@ -52,12 +52,12 @@ pub(crate) enum SortField {
     Similarity,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Sort {
+pub struct Sort {
     pub field: SortField,
     pub descending: bool,
 }
 #[derive(Clone, Debug, Default)]
-pub(crate) enum Operator {
+pub enum Operator {
     #[default]
     Name,
     Regex(Regex),
@@ -91,7 +91,11 @@ struct Selector {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Query {
+/// Parsed selectors, exact constraints and operator settings shared by all hosts.
+///
+/// Parsing never resolves source paths or performs content I/O. Metadata matching
+/// uses the supplied inventory observation and preserves unknown classifications.
+pub struct Query {
     selectors: Vec<Selector>,
     pub name: String,
     pub operator: Operator,
@@ -112,14 +116,14 @@ impl Query {
             ..Self::default()
         })
     }
-    pub(super) fn selector_text(&self) -> String {
+    pub fn selector_text(&self) -> String {
         self.selectors
             .iter()
             .map(|selector| selector.source.as_str())
             .collect::<Vec<_>>()
             .join(",")
     }
-    pub(super) fn date_summary(&self) -> Option<String> {
+    pub fn date_summary(&self) -> Option<String> {
         let dates = self
             .selectors
             .iter()
@@ -144,7 +148,7 @@ impl Query {
         }
     }
 
-    pub fn resolve_navigation_scope(&mut self, directory: &super::Directory, hidden: bool) {
+    pub fn resolve_navigation_scope(&mut self, directory: &Directory, hidden: bool) {
         if self.progressive
             && !self.name.is_empty()
             && !directory
@@ -156,6 +160,10 @@ impl Query {
         }
     }
 
+    /// Parses the existing literal/structured command grammar.
+    ///
+    /// # Errors
+    /// Returns ambiguous, unsupported, malformed or oversized command errors.
     pub fn parse(input: &str) -> Result<Self, String> {
         if input.len() > 8192 {
             return Err("Search commands are limited to 8 KiB".into());
@@ -303,7 +311,7 @@ impl Query {
         Ok(())
     }
 
-    pub(super) fn has_selectors(&self) -> bool {
+    pub fn has_selectors(&self) -> bool {
         !self.selectors.is_empty()
     }
     pub fn metadata_matches(&self, entry: &Entry) -> bool {
@@ -318,34 +326,13 @@ impl Query {
         match &self.operator {
             Operator::Name if self.name.is_empty() => Some((0, 0)),
             Operator::Name if self.progressive => {
-                crate::file_manager::type_navigation::navigation_rank(
-                    &entry.name,
-                    &self.name.to_lowercase(),
-                )
+                crate::name_match::navigation_rank(&entry.name, &self.name.to_lowercase())
             }
-            Operator::Name => crate::file_manager::type_navigation::name_rank(
-                &entry.name,
-                &self.name.to_lowercase(),
-            )
-            .map(|rank| (rank, 0)),
+            Operator::Name => crate::name_match::name_rank(&entry.name, &self.name.to_lowercase())
+                .map(|rank| (rank, 0)),
             Operator::Regex(regex) => regex.is_match(&entry.name).then_some((0, 0)),
             _ => Some((0, 0)),
         }
-    }
-    pub fn browser_sort(&self) -> Option<sorting::Sort> {
-        let sort = self.sort?;
-        let column = match sort.field {
-            SortField::Name => sorting::Column::Name,
-            SortField::Type => sorting::Column::Type,
-            SortField::Size => sorting::Column::Size,
-            SortField::Modified => sorting::Column::Modified,
-            SortField::Created => sorting::Column::Created,
-            _ => return None,
-        };
-        Some(sorting::Sort {
-            column,
-            descending: sort.descending,
-        })
     }
 }
 
@@ -377,7 +364,7 @@ impl Family {
                 entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path)
             }
             Self::Pdf => entry.regular_file && extension(entry) == "pdf",
-            Self::Document => entry.regular_file && super::reader::supports_text(entry),
+            Self::Document => entry.regular_file && crate::source_format::supports_text(entry),
         }
     }
 }
@@ -494,7 +481,7 @@ fn split(text: &str, delimiter: char) -> Result<Vec<&str>, String> {
 }
 
 /// Tolerant counterpart used by draft help, sharing the parser's quote rules.
-pub(super) fn fragments(text: &str, delimiter: char) -> (Vec<&str>, bool) {
+pub fn fragments(text: &str, delimiter: char) -> (Vec<&str>, bool) {
     let (mut quoted, mut escaped, mut start) = (false, false, 0);
     let mut parts = Vec::new();
     for (index, c) in text.char_indices() {
@@ -529,7 +516,7 @@ fn payload(text: &str, require_quotes: bool) -> Result<String, String> {
     Ok(value)
 }
 
-pub(super) fn quoted_payload(text: &str) -> Result<(String, &str), String> {
+pub fn quoted_payload(text: &str) -> Result<(String, &str), String> {
     let text = text
         .strip_prefix('"')
         .ok_or("Use a double-quoted payload")?;

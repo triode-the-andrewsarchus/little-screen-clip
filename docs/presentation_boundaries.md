@@ -6,7 +6,7 @@ or authorization to add missing editors. The product roadmap remains
 
 ## Hints, observed content and actions
 
-[document_format.rs](../crates/clip-file-manager/src/file_manager/document_format.rs)
+[file_format.rs](../crates/little-clip-core/src/file_format.rs)
 provides cheap path hints for semantic documents. Entry admission, strip sources
 and studio dispatch reuse that enum. A hint does not establish readability,
 content identity or write support. Studio dispatch carries the shared format

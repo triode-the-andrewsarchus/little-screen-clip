@@ -1,10 +1,10 @@
 //! Apply current hard content policy to cached metadata without opening sources.
 use super::{count_vectors, record_storage_fault};
-use crate::file_manager::search::policy;
+use crate::policy;
 use rusqlite::functions::FunctionFlags;
 use std::{ffi::OsStr, os::unix::ffi::OsStrExt, path::Path};
 
-pub(super) fn apply_content_policy(
+pub fn apply_content_policy(
     connection: &mut rusqlite::Connection,
     fault: &std::cell::Cell<bool>,
 ) -> Result<u64, String> {
@@ -47,7 +47,7 @@ pub(super) fn apply_content_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_manager::search::store::TestFixture;
+    use crate::store::TestFixture;
     use rusqlite::params;
 
     fn relocate_reference(fixture: &TestFixture, path: &Path) {

@@ -57,9 +57,9 @@ rusqlite = { version = "0.35", features = ["bundled", "backup", "limits", "hooks
 realfft = "3.5.0"
 midir = "0.11"
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
-half = "2"
 
 [dev-dependencies]
+clip-search = { path = "../clip-search", features = ["test-support"] }
 clip-studios = { path = "../clip-studios", features = ["test-support"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]

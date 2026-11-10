@@ -1,9 +1,10 @@
 //! Component benchmark: real SQLite and ranking, synthetic embeddings, no inference.
 use super::*;
-use crate::file_manager::search::{
+use crate::{
     policy::Root,
     store::{DIMENSION, EXTRACTION_VERSION, encode_vector},
 };
+use little_clip_core::file_inventory as filesystem;
 use rusqlite::params;
 use serde_json::json;
 use std::{fs::File, io::Write, os::unix::fs::MetadataExt, time::Instant};
@@ -69,7 +70,7 @@ impl Corpus {
                     serde_json::to_string(entry).unwrap(),
                     EXTRACTION_VERSION,
                     scope,
-                    crate::file_manager::search::store::source_format(entry),
+                    crate::store::source_format(entry),
                 ])
                 .unwrap();
                 let bytes = entry.path.as_os_str().as_encoded_bytes();

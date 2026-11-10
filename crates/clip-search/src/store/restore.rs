@@ -2,7 +2,7 @@
 use super::{
     FTS_SCHEMA, QUERY_INDEXES, SCHEMA_VERSION, Store, create_schema, decode_vector, maintenance,
 };
-use crate::file_manager::filesystem::{self, Entry};
+use little_clip_core::file_inventory::{self as filesystem, Entry};
 use rusqlite::{Connection, OpenFlags, config::DbConfig, limits::Limit, params, types::Value};
 use std::{
     fs::File,
@@ -15,20 +15,37 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
-pub(in crate::file_manager::search) struct PreparedRestore {
+/// Owned validated staging, retained until installation or retirement.
+pub struct PreparedRestore {
     staging: tempfile::NamedTempFile,
     vectors: u64,
 }
 
+/// Existing disposable-helper launcher supplied by the application.
+///
+/// Receives three borrowed, retained input/snapshot/output handles plus byte,
+/// vector and page-size limits and cancellation. The launcher must execute
+/// [`prepare_in_helper`] in the existing disposable reader process, preserving
+/// descriptor inheritance, process budgets and terminal child ownership.
+pub type RestoreWorker = fn([&File; 3], u64, u64, u32, &AtomicBool) -> Result<u64, String>;
+
 impl Store {
+    /// Prepares a validated backup through the host's disposable reader worker.
+    ///
+    /// Source identity, space admission and private staging remain owned here;
+    /// only process dispatch is supplied by the application.
+    ///
+    /// # Errors
+    /// Returns guarded-open, capacity, helper, changed-source or staging failures.
     pub fn prepare_restore(
         &self,
         path: &Path,
         limits: &little_clip_core::config::FileSearchLimits,
         cancel: &AtomicBool,
+        worker: RestoreWorker,
     ) -> Result<PreparedRestore, String> {
-        let input =
-            crate::file_source::open_regular_file(path, false).map_err(|e| e.to_string())?;
+        let input = little_clip_core::file_source::open_regular_file(path, false)
+            .map_err(|e| e.to_string())?;
         let metadata = input.metadata().map_err(|e| e.to_string())?;
         require_space(&self.owner.directory, metadata.len().saturating_mul(2))?;
         let before = filesystem::identity(&metadata);
@@ -45,7 +62,7 @@ impl Store {
             .connection
             .query_row("PRAGMA page_size", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        let vectors = super::super::reader::prepare_restore(
+        let vectors = worker(
             [&input, snapshot.as_file(), staging.as_file()],
             limits.max_mib.saturating_mul(1_048_576),
             limits.max_vectors,
@@ -111,7 +128,7 @@ impl Store {
 }
 
 /// Called only by the disposable reader. Both descriptors are inherited owned handles.
-pub(in crate::file_manager::search) fn prepare_in_helper(
+pub fn prepare_in_helper(
     input: &File,
     snapshot: &File,
     output: &File,
@@ -261,7 +278,7 @@ fn create_staging(output: &File, max_bytes: u64, page_size: u32) -> Result<Conne
 
 /// Called after acquiring the sole writer lock, before accepting new work.
 /// Only our private scratch namespace is retired; symlinks are never followed.
-pub(super) fn clean_staging(directory: &Path) -> Result<(), String> {
+pub fn clean_staging(directory: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let entries = std::fs::read_dir(directory).map_err(|e| e.to_string())?;
     // Stream the whole shallow, local application-owned inventory. A fixed
@@ -308,7 +325,7 @@ fn require_space(directory: &File, reserve: u64) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn read_header(input: &File) -> Result<[u8; 100], String> {
+pub fn read_header(input: &File) -> Result<[u8; 100], String> {
     let mut header = [0; 100];
     input
         .read_exact_at(&mut header, 0)
@@ -684,7 +701,7 @@ fn validate_relations(target: &Connection) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_manager::search::{
+    use crate::{
         policy::Root,
         store::{DIMENSION, Segment},
     };

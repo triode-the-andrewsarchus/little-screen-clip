@@ -16,9 +16,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-pub(super) fn known(path: &Path) -> bool {
-    super::document_format::Format::for_path(path) == Some(super::document_format::Format::Toolpath)
-}
+
 fn read(path: &Path, token: &AtomicBool) -> Result<Document, String> {
     let bytes = crate::file_source::read_file_snapshot(path, MAX_BYTES)?;
     if token.load(Ordering::Relaxed) {
@@ -334,7 +332,10 @@ mod tests {
     fn folder_intervals_select_real_source_lines_and_rename_independent_data() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../little-clip-core/tests/fixtures/gcode/frame.gcode");
-        assert!(known(Path::new("FRAME.GCODE")));
+        assert!(
+            (little_clip_core::file_format::Format::for_path(Path::new("FRAME.GCODE"))
+                == Some(little_clip_core::file_format::Format::Toolpath))
+        );
         let data = load(&path, &AtomicBool::new(false));
         let summary = data.toolpath.unwrap();
         assert!(summary.moves.len() <= 512);
