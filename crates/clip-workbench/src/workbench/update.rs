@@ -88,6 +88,7 @@ impl eframe::App for WorkbenchApp {
         self.handle_global_shortcuts(ctx);
 
         self.render_workbench_header(ctx);
+        self.retire_hidden_rolling_audio();
 
         let mut host_action = None;
 
@@ -519,5 +520,6 @@ impl eframe::App for WorkbenchApp {
                 }
             }
         });
+        self.retire_hidden_rolling_audio();
     }
 }

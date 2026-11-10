@@ -7,32 +7,25 @@ use crate::icons::Icon;
 use crate::ui_ext::{StatusMessage, StatusToast, feedback_time};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use egui::{Color32, Pos2, Rect, Rounding, Stroke, Vec2};
+use little_clip_core::BackgroundJobs;
 use little_clip_core::audio::{PeakBlock, build_peak_pyramid};
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::palette::AppPalette;
 use little_clip_core::slot::HandSide;
-use little_clip_core::{BackgroundJobs, JobError, JobTicket};
-use rodio::{Decoder, Player};
-use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use rodio::Player;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 use tracing::{error, info};
 
-struct RollingSnapshot {
-    path: PathBuf,
-    duration_sec: f32,
-    sample_rate: u32,
-    channels: u16,
-    mono_samples: Vec<f32>,
-    peaks_lvl0: Vec<PeakBlock>,
-    peaks_lvl1: Vec<PeakBlock>,
-    peaks_lvl2: Vec<PeakBlock>,
-}
-
-type SnapshotReceiver = Receiver<Result<Result<RollingSnapshot, String>, JobError>>;
+mod playback;
+mod snapshot;
+use little_clip_core::file_source::FileSource;
+use little_clip_core::jobs::task::Task;
+use playback::PlaybackLoad;
+use snapshot::{RollingSnapshot, read_snapshot};
 
 /// UI and playback state for the rolling audio snapshot quick-strip widget.
 pub struct RollingAudioStripState {
@@ -46,7 +39,9 @@ pub struct RollingAudioStripState {
     pub peaks_lvl2: Vec<PeakBlock>,
     pub is_loaded: bool,
     pub error_msg: Option<String>,
-    snapshot_job: Option<(JobTicket, SnapshotReceiver)>,
+    snapshot_job: Option<Task<Result<RollingSnapshot, String>>>,
+    source: Option<FileSource>,
+    playback_job: Option<PlaybackLoad>,
     copy_job: Option<crate::desktop_ipc::PendingRequest>,
 
     // Region selection & dragging
@@ -58,7 +53,6 @@ pub struct RollingAudioStripState {
     player: Option<Player>,
     pub is_playing: bool,
     pub playhead_sec: f32,
-    playback_start_instant: Option<Instant>,
     playback_start_offset_sec: f32,
     play_stop_time: Option<f32>,
 
@@ -161,6 +155,8 @@ impl RollingAudioStripState {
             is_loaded: false,
             error_msg: None,
             snapshot_job: None,
+            source: None,
+            playback_job: None,
             copy_job: None,
             selected_region: None,
             drag_start_time: None,
@@ -168,7 +164,6 @@ impl RollingAudioStripState {
             player: None,
             is_playing: false,
             playhead_sec: 0.0,
-            playback_start_instant: None,
             playback_start_offset_sec: 0.0,
             play_stop_time: None,
             playback_notice: StatusToast::default(),
@@ -212,42 +207,31 @@ impl RollingAudioStripState {
             .fold(0.0f32, |m, &x| m.max(x.abs()))
     }
 
-    pub fn ensure_player(&mut self) -> Option<&Player> {
-        if self.player.is_none() {
-            let player = crate::ui_ext::new_shared_audio_player();
-            if let Some(ref p) = player {
-                p.set_volume(1.0);
-            }
-            self.player = player;
-        }
-        self.player.as_ref()
-    }
-
     /// Starts fetching a frozen rolling audio snapshot without blocking the UI.
     pub fn load_snapshot(&mut self) {
         self.start_snapshot_load();
     }
 
     fn start_snapshot_load(&mut self) {
-        if let Some((ticket, _)) = self.snapshot_job.take() {
-            ticket.cancel();
-        }
-        let job = BackgroundJobs::global().submit(Duration::from_secs(20), fetch_snapshot);
-        self.snapshot_job = Some(job);
+        self.stop();
+        self.snapshot_job = Some(
+            Task::start(
+                BackgroundJobs::global(),
+                Duration::from_secs(20),
+                fetch_snapshot,
+            )
+            .with_response_deadline(Duration::from_secs(20)),
+        );
         self.error_msg = None;
     }
 
     fn poll_snapshot(&mut self, ctx: &egui::Context) {
-        let Some((_, receiver)) = &self.snapshot_job else {
+        let Some(job) = &self.snapshot_job else {
             return;
         };
-        let result = match receiver.try_recv() {
-            Ok(result) => result,
-            Err(TryRecvError::Empty) => {
-                ctx.request_repaint_after(Duration::from_millis(80));
-                return;
-            }
-            Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        let Some(result) = job.poll() else {
+            ctx.request_repaint_after(Duration::from_millis(80));
+            return;
         };
         self.snapshot_job = None;
         match result {
@@ -261,6 +245,7 @@ impl RollingAudioStripState {
                 self.sample_rate = snapshot.sample_rate;
                 self.channels = snapshot.channels;
                 self.path = Some(snapshot.path);
+                self.source = Some(snapshot.source);
                 self.mono_samples = snapshot.mono_samples;
                 self.peaks_lvl0 = snapshot.peaks_lvl0;
                 self.peaks_lvl1 = snapshot.peaks_lvl1;
@@ -276,131 +261,6 @@ impl RollingAudioStripState {
                 let message = format!("Rolling audio refresh failed: {error}");
                 self.error_msg = Some(message);
             }
-        }
-    }
-
-    pub fn update_playback(&mut self) {
-        if !self.is_playing {
-            return;
-        }
-        if let Some(start_inst) = self.playback_start_instant {
-            let elapsed = start_inst.elapsed().as_secs_f32();
-            let cur = self.playback_start_offset_sec + elapsed;
-            self.playhead_sec = cur;
-            if let Some(stop_t) = self.play_stop_time {
-                if cur >= stop_t {
-                    self.stop();
-                }
-            }
-        }
-    }
-
-    pub fn play_selection(&mut self) {
-        let (s, e) = match self.selected_region {
-            Some((a, b)) if (b - a).abs() > 0.05 => (a.min(b), a.max(b)),
-            _ => return,
-        };
-
-        self.playback_notice.clear();
-        let now = feedback_time();
-
-        if self.is_silent() {
-            self.playback_notice.set(
-                "Buffer is currently silence — play audio through speakers first, then click Refresh".to_string(),
-                now,
-            );
-            return;
-        }
-
-        let sel_peak = self.selected_region_peak();
-        if sel_peak < 0.001 {
-            self.playback_notice.set(
-                "Selected region is silence — drag over colored waveform peaks to hear audio"
-                    .to_string(),
-                now,
-            );
-        }
-
-        let source_path = match &self.path {
-            Some(p) => p.clone(),
-            None => return,
-        };
-
-        let slice_dir = if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
-            PathBuf::from(rt)
-                .join("little-screen-clip")
-                .join("rolling_slices")
-        } else {
-            PathBuf::from("/tmp/little-screen-clip/rolling_slices")
-        };
-        if let Err(err) = std::fs::create_dir_all(&slice_dir) {
-            tracing::warn!(
-                "Failed to create rolling slice directory {}: {err}",
-                slice_dir.display()
-            );
-            return;
-        }
-        let preview_path = slice_dir.join("preview.wav");
-
-        if let Err(err) =
-            little_clip_core::rolling_audio::slice_wav(&source_path, s, e, &preview_path)
-        {
-            eprintln!("play_selection: slice_wav failed: {}", err);
-            return;
-        }
-
-        self.play_stop_time = Some(e);
-        self.playhead_sec = s;
-        self.playback_start_offset_sec = s;
-        self.playback_start_instant = Some(Instant::now());
-
-        self.ensure_player();
-        if let Some(ref p) = self.player {
-            p.play();
-            p.clear();
-            match File::open(&preview_path) {
-                Ok(file) => {
-                    let reader = BufReader::new(file);
-                    let decoder_res = Decoder::new_wav(reader).or_else(|_| {
-                        File::open(&preview_path).and_then(|f2| {
-                            Decoder::new(BufReader::new(f2))
-                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-                        })
-                    });
-
-                    match decoder_res {
-                        Ok(decoder) => {
-                            p.append(decoder);
-                            p.play();
-                            self.is_playing = true;
-                        }
-                        Err(e) => eprintln!("play_selection: Decoder failed: {}", e),
-                    }
-                }
-                Err(e) => eprintln!("play_selection: File::open failed: {}", e),
-            }
-        } else {
-            eprintln!("play_selection: self.player is None");
-        }
-    }
-
-    pub fn stop(&mut self) {
-        self.playback_notice.clear();
-        if let Some(ref p) = self.player {
-            p.pause();
-        }
-        self.is_playing = false;
-        self.playback_start_instant = None;
-        if let Some((s, _)) = self.selected_region {
-            self.playhead_sec = s;
-        }
-    }
-
-    pub fn toggle_playback(&mut self) {
-        if self.is_playing {
-            self.stop();
-        } else {
-            self.play_selection();
         }
     }
 
@@ -587,6 +447,10 @@ impl RollingAudioStripState {
                     );
                 }
 
+                if self.playback_job.is_some() {
+                    ui.spinner();
+                    ui.label("Preparing playback…");
+                }
                 if self.copy_pending() {
                     ui.spinner();
                     ui.label("Preparing audio slice…");
@@ -607,6 +471,7 @@ impl RollingAudioStripState {
         host_action: &mut Option<RollingAudioAction>,
     ) {
         self.poll_snapshot(ctx);
+        self.poll_playback(ctx);
         self.update_playback();
         if self.is_playing {
             ctx.request_repaint();
@@ -812,9 +677,7 @@ impl RollingAudioStripState {
 
             if response.drag_started() {
                 response.request_focus();
-                if self.is_playing {
-                    self.stop();
-                }
+                self.stop();
                 if let Some(pos) = response.interact_pointer_pos() {
                     let t0 = x_to_time(pos.x);
                     self.drag_start_time = Some(t0);
@@ -854,15 +717,10 @@ impl RollingAudioStripState {
     }
 }
 
-impl Drop for RollingAudioStripState {
-    fn drop(&mut self) {
-        if let Some((ticket, _)) = &self.snapshot_job {
-            ticket.cancel();
-        }
+fn fetch_snapshot(cancel: &AtomicBool) -> Result<RollingSnapshot, String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err("Rolling snapshot cancelled".into());
     }
-}
-
-fn fetch_snapshot() -> Result<RollingSnapshot, String> {
     let (path, duration_sec, sample_rate, channels) = match crate::send_ipc_request_with_timeout(
         &IpcRequest::GetRollingAudio,
         Some(Duration::from_secs(5)),
@@ -881,20 +739,7 @@ fn fetch_snapshot() -> Result<RollingSnapshot, String> {
         "Rolling audio snapshot received: {:?} ({:.2}s, {}Hz, ch={})",
         path, duration_sec, sample_rate, channels
     );
-    let (mono_samples, decoded_rate, decoded_channels) =
-        load_pcm16_samples(&path).map_err(|error| format!("Failed to decode WAV: {error}"))?;
-    let (peaks_lvl0, peaks_lvl1, peaks_lvl2) =
-        build_peak_pyramid(&mono_samples, decoded_rate as f32);
-    Ok(RollingSnapshot {
-        path,
-        duration_sec,
-        sample_rate: decoded_rate,
-        channels: decoded_channels,
-        mono_samples,
-        peaks_lvl0,
-        peaks_lvl1,
-        peaks_lvl2,
-    })
+    read_snapshot(&path, cancel)
 }
 
 fn aggregate_blocks(blocks: &[PeakBlock]) -> (f32, f32, [u8; 3]) {
@@ -923,84 +768,6 @@ fn aggregate_blocks(blocks: &[PeakBlock]) -> (f32, f32, [u8; 3]) {
         mx = 0.0;
     }
     (mn, mx, best_rgb)
-}
-
-fn load_pcm16_samples(path: &Path) -> Result<(Vec<f32>, u32, u16), std::io::Error> {
-    let mut file = BufReader::new(File::open(path)?);
-    let mut header = [0u8; 12];
-    file.read_exact(&mut header)?;
-    if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Not a valid WAV",
-        ));
-    }
-    let mut channels = 2u16;
-    let mut sample_rate = 48000u32;
-    let mut bits_per_sample = 16u16;
-    let mut data_size = 0u32;
-
-    loop {
-        let mut chunk_hdr = [0u8; 8];
-        if file.read_exact(&mut chunk_hdr).is_err() {
-            break;
-        }
-        let chunk_id = &chunk_hdr[0..4];
-        let chunk_len =
-            u32::from_le_bytes([chunk_hdr[4], chunk_hdr[5], chunk_hdr[6], chunk_hdr[7]]);
-        if chunk_id == b"fmt " {
-            let mut fmt_bytes = vec![0u8; chunk_len as usize];
-            file.read_exact(&mut fmt_bytes)?;
-            if fmt_bytes.len() >= 16 {
-                channels = u16::from_le_bytes([fmt_bytes[2], fmt_bytes[3]]);
-                sample_rate =
-                    u32::from_le_bytes([fmt_bytes[4], fmt_bytes[5], fmt_bytes[6], fmt_bytes[7]]);
-                bits_per_sample = u16::from_le_bytes([fmt_bytes[14], fmt_bytes[15]]);
-            }
-        } else if chunk_id == b"data" {
-            data_size = chunk_len;
-            break;
-        } else {
-            file.seek(SeekFrom::Current(chunk_len as i64))?;
-        }
-    }
-
-    if bits_per_sample != 16 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Only 16-bit PCM supported",
-        ));
-    }
-
-    let num_samples = (data_size / 2) as usize;
-    let ch = channels.max(1) as usize;
-    let num_frames = num_samples / ch;
-    let mut mono = Vec::with_capacity(num_frames);
-
-    let mut buf = vec![0u8; 8192];
-    let mut current_frame = Vec::with_capacity(ch);
-    let mut remaining = data_size as usize;
-
-    while remaining > 0 {
-        let to_read = remaining.min(buf.len());
-        let n = file.read(&mut buf[..to_read])?;
-        if n == 0 {
-            break;
-        }
-        let read_samples = n / 2;
-        for i in 0..read_samples {
-            let s = i16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]);
-            current_frame.push(s as f32 / 32768.0);
-            if current_frame.len() == ch {
-                let avg: f32 = current_frame.iter().sum::<f32>() / ch as f32;
-                mono.push(avg);
-                current_frame.clear();
-            }
-        }
-        remaining -= n;
-    }
-
-    Ok((mono, sample_rate, channels))
 }
 
 #[cfg(test)]
@@ -1122,8 +889,8 @@ mod tests {
         )
         .unwrap();
         assert!(output.is_file());
-        let (samples, sample_rate, _) = load_pcm16_samples(&output).unwrap();
-        let duration = samples.len() as f32 / sample_rate as f32;
+        let snapshot = read_snapshot(&output, &AtomicBool::new(false)).unwrap();
+        let duration = snapshot.duration_sec;
         assert!(
             (0.6..=0.78).contains(&duration),
             "captured range should remain bounded after optional edge trimming: {duration}s"
@@ -1166,13 +933,18 @@ mod tests {
         strip: &mut RollingAudioStripState,
         result: Result<RollingSnapshot, String>,
     ) {
-        let (ticket, _) = BackgroundJobs::global().submit(Duration::from_secs(1), || ());
-        ticket.cancel();
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        strip.snapshot_job = Some((ticket, receiver));
-        sender.send(Ok(result)).unwrap();
+        strip.snapshot_job = Some(Task::start(
+            BackgroundJobs::global(),
+            Duration::from_secs(5),
+            move |_| result,
+        ));
         let ctx = egui::Context::default();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| strip.poll_snapshot(ctx));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while strip.snapshot_job.is_some() {
+            strip.poll_snapshot(&ctx);
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 
     fn empty_test_strip() -> RollingAudioStripState {
@@ -1345,6 +1117,7 @@ mod tests {
     #[test]
     fn completed_snapshot_replaces_waveform_and_clears_old_selection() {
         let mut strip = empty_test_strip();
+        strip.is_playing = true;
         strip.selected_region = Some((3.0, 7.0));
         strip.is_loaded = true;
         strip.mono_samples = vec![0.0; 16];
@@ -1352,12 +1125,17 @@ mod tests {
         strip
             .copy_notice
             .set(StatusMessage::error("earlier copy failed"), feedback_time());
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("new-snapshot.wav");
+        std::fs::write(&path, b"test snapshot identity").unwrap();
+        let source = FileSource::capture(&path).unwrap();
         let samples = vec![0.0, 0.5, -0.75, 0.0];
         let (peaks_lvl0, peaks_lvl1, peaks_lvl2) = build_peak_pyramid(&samples, 48000.0);
         complete_snapshot(
             &mut strip,
             Ok(RollingSnapshot {
-                path: PathBuf::from("new-snapshot.wav"),
+                path: path.clone(),
+                source: source.clone(),
                 duration_sec: 0.5,
                 sample_rate: 48000,
                 channels: 1,
@@ -1368,12 +1146,14 @@ mod tests {
             }),
         );
 
-        assert_eq!(strip.path.as_deref(), Some(Path::new("new-snapshot.wav")));
+        assert_eq!(strip.path.as_deref(), Some(path.as_path()));
+        assert_eq!(strip.source.as_ref(), Some(&source));
         assert_eq!(strip.mono_samples, samples);
         assert_eq!(strip.max_amplitude(), 0.75);
         assert_eq!(strip.sample_rate, 48000);
         assert_eq!(strip.channels, 1);
         assert!(strip.selected_region.is_none());
+        assert!(!strip.is_playing);
         assert!(strip.snapshot_job.is_none());
         assert!(strip.error_msg.is_none());
         assert!(!strip.playback_notice.is_active(feedback_time()));
@@ -1402,6 +1182,7 @@ mod tests {
     #[test]
     fn silent_playback_hint_uses_render_clock_and_stop_preserves_copy_failure() {
         let mut strip = empty_test_strip();
+        strip.duration_sec = 1.0;
         strip.selected_region = Some((0.0, 1.0));
         strip
             .copy_notice
@@ -1495,7 +1276,12 @@ mod tests {
         buf.push_samples(&samples);
         buf.write_wav(&wav_path).unwrap();
 
-        let (mono, sr, ch) = load_pcm16_samples(&wav_path).unwrap();
+        let snapshot = read_snapshot(&wav_path, &AtomicBool::new(false)).unwrap();
+        let (mono, sr, ch) = (
+            snapshot.mono_samples,
+            snapshot.sample_rate,
+            snapshot.channels,
+        );
         assert_eq!(sr, 44100);
         assert_eq!(ch, 2);
         assert_eq!(mono.len(), 44100 * 2);
@@ -1711,7 +1497,8 @@ mod tests {
         if !path.exists() {
             return;
         }
-        let (mono, sr, _ch) = load_pcm16_samples(&path).unwrap();
+        let snapshot = read_snapshot(&path, &AtomicBool::new(false)).unwrap();
+        let (mono, sr) = (snapshot.mono_samples, snapshot.sample_rate);
         let first_active = mono.iter().position(|&s| s.abs() > 0.1);
         println!(
             "Rust load_pcm16_samples first active: {:?} ({:.3}s)",

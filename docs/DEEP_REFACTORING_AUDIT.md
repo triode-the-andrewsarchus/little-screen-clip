@@ -25,7 +25,7 @@ current status, and an old passing log alone does not prove a changed path.
 | 4: Pipeline ownership and completion | [Per-run artifacts](../crates/little-clip-ops/src/pipeline/artifacts.rs), [guarded saves](../crates/little-clip-ops/src/pipeline/save.rs) and [daemon execution](../crates/little-clipd/src/pipeline.rs) retain outputs, partial saves and accepted replies. **The remaining built-in external-tool input/output call sites still need the ordinary-source/pinned-descriptor audit before claiming the complete pipeline preservation gate.** Scripts remain explicit execution, not a newly promised sandbox. |
 | 4: Diff and DSP scope | Text, binary and image algorithms remain separate. DSP callers/dependency costs were inspected, an unused dependency removed and remaining tools retained. A separate radio crate/optional product configuration is not justified by current consumers. |
 | 5: Optional product changes | Native default adoption and additional presentation redesign were not authorized. Retaining the raster default and recording prototype findings satisfies this conditional branch; no approval is inferred from approval of the structural plan. |
-| 6: Feedback, clocks and artifacts | Shared transient-expiry and persistent-error behavior, monotonic feedback clocks, accepted-write ownership and pipeline scratch cleanup have focused tests. MIDI notice ownership now has caller-level and private-copy verification. **Rolling-strip feedback still needs a current caller-level lifetime review.** No generic `/tmp` or age-only sweep is authorized or enabled by this plan. |
+| 6: Feedback, clocks and artifacts | Shared transient-expiry and persistent-error behavior, monotonic feedback clocks, accepted-write ownership and pipeline scratch cleanup have focused tests. MIDI and rolling notice ownership have caller-level verification; the plan ledger records private UI checks and their limits. Rolling playback/source preparation has a worker-owned follow-up, with remaining copy/editor revision admission tracked below. No generic `/tmp` or age-only sweep is authorized or enabled by this plan. |
 | Integration and stop rules | Final acceptance needs formatting, relevant tests, serial workspace tests, all-target checks, host builds, actual worker/helper checks, appropriate private UI cases and architecture comparison. Existing global Clippy diagnostics must remain distinguished from new ones; the recorded approximate-constant allowance is not a successful `-D warnings` result. |
 
 ## Input, document and job owners
@@ -68,13 +68,17 @@ not be reinterpreted as implementation of those features.
 
 ## Work that still blocks final completion
 
-1. Complete the rolling-strip caller review. Verified feedback fixes separate persistent
-   copy failures from transient playback hints, derive progress from the job and
-   omit refresh-success notices; the plan ledger records integration evidence. The
-   review also found synchronous `slice_wav`, temporary-file creation and decoder
-   initialization in `play_selection`, plus an unguarded snapshot WAV reader.
-   Move playback preparation off the UI thread with retained source identity,
-   bounded range playback and cancellable read ownership before closing this row.
+1. Complete the rolling-strip caller review. Verified feedback fixes separate
+   persistent copy failures from transient playback hints and derive progress
+   from the job. Playback preparation now uses the existing cancellable task,
+   guarded snapshot identity and frame-bounded streaming; device setup also runs
+   on its worker. Snapshot decoding uses the existing WAV reader with size limits
+   and an identity captured from the decoded handle. The plan ledger records
+   passing workspace/build/private-UI checks. Remaining: carry the displayed revision into copy
+   and editor handoff. Copy already uses guarded export staging, but captures a
+   new source revision when its worker runs. Editor materialization still uses
+   raw `slice_wav` and subprocess input/output paths; move it onto the existing
+   pinned export/output mechanism and preserve range/trim fallback behavior.
 2. Trace the remaining pipeline built-in content operations through guarded
    source and output mechanisms; fix bypasses without replacing enum dispatch.
 3. Resolve the native prototype's input-response comparison with appropriately

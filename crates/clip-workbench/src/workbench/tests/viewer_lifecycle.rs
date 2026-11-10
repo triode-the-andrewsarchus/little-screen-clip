@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn hidden_rolling_audio_retires_on_view_switch_and_modal_entry() {
+    let mut app = test_workbench_app(None, VecDeque::new());
+    let mut strip = RollingAudioStripState::empty_test_strip();
+    strip.is_playing = true;
+    strip.selected_region = Some((0.25, 0.75));
+    app.rolling_audio_strip = Some(strip);
+    app.retire_hidden_rolling_audio();
+    assert!(app.rolling_audio_strip.as_ref().unwrap().is_playing);
+
+    app.view = WorkbenchView::NodeMachine;
+    app.retire_hidden_rolling_audio();
+    assert!(!app.rolling_audio_strip.as_ref().unwrap().is_playing);
+    assert_eq!(
+        app.rolling_audio_strip.as_ref().unwrap().selected_region,
+        Some((0.25, 0.75))
+    );
+
+    app.view = WorkbenchView::Palette;
+    app.rolling_audio_strip.as_mut().unwrap().is_playing = true;
+    app.viewer = Some(ViewerSession::ComponentGallery(
+        component_gallery::ComponentGalleryState::default(),
+    ));
+    let ctx = egui::Context::default();
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        assert!(app.render_modal_viewers(ctx));
+    });
+    assert!(!app.rolling_audio_strip.as_ref().unwrap().is_playing);
+}
+
+#[test]
 fn spreadsheet_completion_waits_until_modal_viewer_closes() {
     let mut app = test_workbench_app(
         Some(ViewerSession::ComponentGallery(

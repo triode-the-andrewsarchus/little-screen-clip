@@ -1266,3 +1266,68 @@ WAV decoder initialization in rolling `play_selection`, plus an unguarded
 snapshot WAV reader. Those responsiveness/source-identity issues remain explicit
 acceptance work; this feedback checkpoint does not close the rolling lifetime
 row or the overall refactor.
+
+### Rolling playback and snapshot preparation checkpoint
+
+Rolling selection playback no longer creates directories, writes the shared
+`preview.wav`, opens/initializes a decoder or discovers an audio device in a UI
+frame. An existing bounded `Task` owns preparation of a guarded source and paused
+player. The source must match the revision decoded for the displayed snapshot;
+preparation rechecks the held file and named source after seeking. UI delivery
+also checks the active path/revision/range. Stop, refresh, changed selection,
+hidden Quick Palette and studio/modal entry retire pending playback independently
+of accepted copy jobs. Dropped ready results remain paused and cannot start later.
+Playback position comes from the player, and selected output is limited by the
+source even when the UI is idle.
+
+The initial exact-range regression exposed Rodio's duration limiter returning
+7999 of 8000 stereo samples in an 8 kHz half-second window. Rolling PCM now uses
+a small frame-counted source over the existing streaming decoder; it retains all
+channels and avoids both duration-accumulation drift and a second retained PCM
+buffer. Exact samples/range lengths pass at 8, 44.1 and 48 kHz. This is specific
+to the fixed-layout rolling snapshot, not a new universal audio framework.
+
+Snapshot reads now share cancellable task ownership, ordinary-file admission and
+`FileSource` captured from the decoded handle. Hound replaces the ad hoc chunk
+parser. Encoded input and retained mono PCM each have an explicit 256 MiB limit;
+malformed headers, truncated payloads and excessive declared PCM fail before
+waveform reservation. Oversized-file tests use sparse owned fixtures, not large
+physical writes. Capture duration/rate/channels now describe decoded content,
+with daemon metadata retained only for diagnostics. Peak preparation stays on the
+worker. Playback and snapshot responsibilities have focused private modules;
+painting/selection remain in the strip and visibility/navigation remain in the
+workbench host.
+
+Final evidence: **2662 workspace tests pass, 0 fail, 30 ignored**
+(`/tmp/deep-rolling-playback-final-workspace.log`). This includes source seeking
+and channel/range preservation, nonblocking queued preparation, cancellation
+before device creation, stale source rejection, discarded ready results,
+worker-side player creation, invalid ranges, protected/malformed/oversized
+snapshots, retained copy completion, snapshot replacement and host retirement.
+All-target compilation, both desktop builds and formatting pass
+(`/tmp/deep-rolling-playback-final-check.log`,
+`/tmp/deep-rolling-playback-final-build.log`). Diagnostic Clippy completes with
+the documented approximate-constant allowance and existing warnings; neither new
+module adds a warning (`/tmp/deep-rolling-playback-final-clippy.log`). The private
+fake-audio UI run passes (`/tmp/deep-rolling-playback-ui/report.json`); the viewed
+settled capture retains the compact rolling header/waveform. This verifies host
+integration with a silent fixture, not physical audio-device playback. Unit
+player factories use an unattached Rodio queue and never open a device.
+
+Architecture comparison against `deep-rolling-playback-start` reports raw
+REGRESSION: measured NLOC +426, functions +23, total CCN +57 and clone groups
+1502 → 1503, with average/max CCN and cycle count unchanged. The new clone is a
+short modal-render test setup; other reported fragments exactly match baseline
+test/layout code. `read_snapshot` is flagged at CCN 16; the removed chunk parser
+was already CCN 17. Header/budget admission is a distinct preallocation stage,
+and added guards and regression tests account for the extra behavior/branches.
+No duplicate production parser, executor or device owner was introduced. The
+raw report is `/tmp/deep-rolling-playback-architecture.json`. Builds/checks were
+serialized at four jobs; about 136 GiB remained free, without a sweep.
+
+The remaining rolling audit concerns displayed-revision admission for copy and
+editor handoff: copy's guarded export currently captures a fresh revision on its
+worker, while editor materialization still uses raw slicing and subprocess paths.
+These must use the existing pinned export/output contracts while retaining range
+and optional silence-trim fallback behavior. Pipeline admission, native input
+response evidence and the final requirement audit also remain outstanding.

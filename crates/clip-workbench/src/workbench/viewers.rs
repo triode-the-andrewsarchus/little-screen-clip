@@ -1,6 +1,18 @@
 use super::*;
 
 impl WorkbenchApp {
+    pub(crate) fn retire_hidden_rolling_audio(&mut self) {
+        let hidden = self.view != WorkbenchView::Palette
+            || self.viewer.is_some()
+            || self.in_app_prompt.is_some()
+            || self.image_load_job.is_some()
+            || self.text_load_job.is_some()
+            || self.office_load_job.is_some();
+        if hidden && let Some(strip) = &mut self.rolling_audio_strip {
+            strip.stop();
+        }
+    }
+
     pub fn is_audio_region_active(&self) -> bool {
         self.view == WorkbenchView::Palette
             && self
@@ -10,6 +22,7 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn render_modal_viewers(&mut self, ctx: &egui::Context) -> bool {
+        self.retire_hidden_rolling_audio();
         if self.render_prompt_modal(ctx) {
             return true;
         }
