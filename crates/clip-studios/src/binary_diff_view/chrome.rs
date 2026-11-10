@@ -62,6 +62,15 @@ impl BinaryDiffViewState {
         let hatch = EscapeHatch::new("ImHex", "imhex", "Open in ImHex Hex Editor")
             .with_icon(Icon::BinaryDiff);
 
+        let alignment_note = if self
+            .result
+            .as_ref()
+            .is_some_and(|res| res.alignment_limited)
+        {
+            " (approximate alignment)"
+        } else {
+            ""
+        };
         let mut shell = StudioShell::new("Binary Diff", Icon::BinaryDiff, palette, close_requested)
             .with_badge(format!("Left: {} ({})", self.left_label, l_size_str), None)
             .with_badge(format!("Right: {} ({})", self.right_label, r_size_str), None)
@@ -88,9 +97,9 @@ impl BinaryDiffViewState {
                     Some(hex_to_c32(&palette.diff_del)),
                 )
                 .with_footer_readout(format!(
-                    "{} vs {} • Block count: {}",
-                    res.left_label,
-                    res.right_label,
+                    "{:.1}% similar{} • Block count: {}",
+                    res.stats.similarity_pct,
+                    alignment_note,
                     res.diff_blocks.len()
                 ));
         }
@@ -110,7 +119,7 @@ impl BinaryDiffViewState {
                     if ui.add(copy_btn).clicked() {
                         if let Some(ref res) = self.result {
                             let summary = format!(
-                                "Binary Diff Summary:\nLeft: {} ({} bytes)\nRight: {} ({} bytes)\nSimilarity: {:.2}%\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B\nMode: {:?}",
+                                "Binary Diff Summary:\nLeft: {} ({} bytes)\nRight: {} ({} bytes)\nSimilarity: {:.2}%\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B\nMode: {:?}{}",
                                 res.left_label, res.stats.left_total_bytes,
                                 res.right_label, res.stats.right_total_bytes,
                                 res.stats.similarity_pct,
@@ -118,7 +127,8 @@ impl BinaryDiffViewState {
                                 res.stats.mismatch_count,
                                 res.stats.right_only_count,
                                 res.stats.left_only_count,
-                                res.mode
+                                res.mode,
+                                alignment_note
                             );
                             ctx.output_mut(|o| o.copied_text = summary);
                             self.status_toast.set("Summary copied to clipboard!", now);

@@ -6,6 +6,7 @@
 
 use little_clip_core::{ClipItem, ClipPayload, SlotId, SlotManager};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 /// Indicates the comparison classification for an aligned byte cell or diff block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +131,9 @@ pub struct BinaryDiffResult {
     pub bytes_per_row: usize,
     /// Diff alignment mode used.
     pub mode: BinaryDiffMode,
+    /// Whether the alignment search exhausted its budget and may be approximate.
+    /// All source bytes and offsets are still represented.
+    pub alignment_limited: bool,
     /// All computed diff rows.
     pub rows: Vec<BinaryDiffRow>,
     /// Summary metrics.
@@ -139,6 +143,9 @@ pub struct BinaryDiffResult {
     /// Clustered contiguous diff blocks.
     pub diff_blocks: Vec<BinaryDiffBlock>,
 }
+
+// Bound the quadratic alignment search, independently of linear result construction.
+const ALIGNMENT_BUDGET: Duration = Duration::from_millis(500);
 
 const MAX_BINARY_DIFF_FILE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -348,9 +355,14 @@ pub fn compute_binary_diff(
 ) -> BinaryDiffResult {
     let bpr = bytes_per_row.max(4);
 
-    let (flat_left, flat_right) = match mode {
-        BinaryDiffMode::Aligned => compute_aligned_stream(left_bytes, right_bytes),
-        BinaryDiffMode::Raw => compute_raw_stream(left_bytes, right_bytes),
+    let (flat_left, flat_right, alignment_limited) = match mode {
+        BinaryDiffMode::Aligned => {
+            compute_aligned_stream(left_bytes, right_bytes, Instant::now() + ALIGNMENT_BUDGET)
+        }
+        BinaryDiffMode::Raw => {
+            let (left, right) = compute_raw_stream(left_bytes, right_bytes);
+            (left, right, false)
+        }
     };
 
     let total_cells = flat_left.len().max(flat_right.len());
@@ -488,6 +500,7 @@ pub fn compute_binary_diff(
         right_label: right_label.to_string(),
         bytes_per_row: bpr,
         mode,
+        alignment_limited,
         rows,
         stats,
         diff_row_indices,
@@ -631,8 +644,17 @@ fn build_diff_block(
 fn compute_aligned_stream(
     left_bytes: &[u8],
     right_bytes: &[u8],
-) -> (Vec<AlignedCell>, Vec<AlignedCell>) {
-    let diff_ops = similar::capture_diff_slices(similar::Algorithm::Myers, left_bytes, right_bytes);
+    deadline: Instant,
+) -> (Vec<AlignedCell>, Vec<AlignedCell>, bool) {
+    let diff_ops = similar::capture_diff_slices_deadline(
+        similar::Algorithm::Myers,
+        left_bytes,
+        right_bytes,
+        Some(deadline),
+    );
+    // The library does not expose whether its fallback ran. Conservatively label
+    // any search that returned after the deadline, even if it found an exact diff.
+    let alignment_limited = Instant::now() >= deadline;
 
     let mut flat_left = Vec::new();
     let mut flat_right = Vec::new();
@@ -747,7 +769,7 @@ fn compute_aligned_stream(
         }
     }
 
-    (flat_left, flat_right)
+    (flat_left, flat_right, alignment_limited)
 }
 
 /// Computes unaligned cell streams for left and right byte slices at identical offsets.
@@ -893,6 +915,39 @@ mod tests {
     }
 
     #[test]
+    fn expired_alignment_preserves_every_byte_and_offset() {
+        let left = b"prefix:abcbdbebfbgb:tail";
+        let right = b"prefix:abxbxbxbxbxbxbxb:tail";
+        let (left_cells, right_cells, limited) =
+            compute_aligned_stream(left, right, Instant::now() - Duration::from_secs(1));
+        assert!(limited);
+        assert_eq!(left_cells.len(), right_cells.len());
+        for (source, cells) in [
+            (left.as_slice(), &left_cells),
+            (right.as_slice(), &right_cells),
+        ] {
+            let recovered: Vec<_> = cells.iter().filter_map(|cell| cell.byte_val).collect();
+            let offsets: Vec<_> = cells.iter().filter_map(|cell| cell.offset).collect();
+            assert_eq!(recovered, source);
+            assert_eq!(offsets, (0..source.len()).collect::<Vec<_>>());
+        }
+        for (left, right) in left_cells.iter().zip(&right_cells) {
+            if left.kind == DiffKind::Match || right.kind == DiffKind::Match {
+                assert_eq!(left.byte_val, right.byte_val);
+            }
+        }
+        assert_eq!(left_cells.first().unwrap().kind, DiffKind::Match);
+        assert_eq!(left_cells.last().unwrap().kind, DiffKind::Match);
+    }
+
+    #[test]
+    fn raw_diff_never_reports_an_alignment_limit() {
+        let result = compute_binary_diff("a", b"abc", "b", b"axc", BinaryDiffMode::Raw, 16);
+        assert!(!result.alignment_limited);
+        assert_eq!(result.stats.mismatch_count, 1);
+    }
+
+    #[test]
     fn test_identical_binary_diff() {
         let a = b"Hello, World!";
         let b = b"Hello, World!";
@@ -911,6 +966,7 @@ mod tests {
         let a = b"Hello World";
         let b = b"Hello Brave World";
         let res = compute_binary_diff("left", a, "right", b, BinaryDiffMode::Aligned, 16);
+        assert!(!res.alignment_limited);
         assert_eq!(res.stats.right_only_count, 6); // "Brave "
         assert_eq!(res.stats.match_count, 11); // "Hello World"
         assert_eq!(res.stats.mismatch_count, 0);

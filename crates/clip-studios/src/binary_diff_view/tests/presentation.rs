@@ -396,5 +396,32 @@ fn rendered_binary_diff_summary_button_copies_exact_summary() {
         copied.platform_output.copied_text,
         "Binary Diff Summary:\nLeft: left.bin (3 bytes)\nRight: right.bin (4 bytes)\nSimilarity: 50.00%\nMatches: 2 B | Mismatches: 1 B | Insertions: 1 B | Deletions: 0 B\nMode: Aligned"
     );
+    state.result.as_mut().unwrap().alignment_limited = true;
+    let approximate = render(&mut state, &mut time, Vec::new());
+    assert!(approximate.shapes.iter().any(|clipped| {
+        matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text().contains("50.0% similar (approximate alignment)"))
+    }));
+    // A recomputation can leave the previous result available for copying.
+    state.is_computing = true;
+    for pressed in [true, false] {
+        let frame = render(
+            &mut state,
+            &mut time,
+            vec![egui::Event::PointerButton {
+                pos: summary_position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        if !pressed {
+            assert!(
+                frame
+                    .platform_output
+                    .copied_text
+                    .ends_with("Mode: Aligned (approximate alignment)")
+            );
+        }
+    }
     assert!(!close);
 }
