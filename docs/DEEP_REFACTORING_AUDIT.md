@@ -66,8 +66,44 @@ not be reinterpreted as implementation of those features.
   existing worker semantics and accepted results, not infer an SSH destination
   from a path or promise cross-filesystem transactional rollback.
 
+## Final source checkpoint
+
+At `f83573c`, the serial workspace gate passes 2690 tests, zero failures and
+30 ignored. Workspace/all-target compilation, both desktop builds, formatting
+and diagnostic Clippy pass against that committed source. The only Clippy
+allowance remains the pre-existing approximate-constant diagnostic; no global
+warning-free claim is made. Logs: `/tmp/deep-refactor-final-{revision.txt,workspace.log,all-targets.log,desktops.log,clippy.log,fmt.log}`.
+
+The caller audit repaired and regression-tested workbench MIDI Escape, PDF
+header/window/OCR write guards, and Audio's early-Escape close guard. PDF write
+failures remain visible after idle time. Actual PDF collision/rotation/OCR/return
+and no-rewrite reuse acceptance passes all 11 observations at
+`/tmp/deep-final-pdf-output-current/report.json`. Build/packaging tests pass;
+`/tmp/deep-final-source-audit.json` records current application boundaries,
+unchanged guarded search support and packaged helper source/license checks.
+Generated PDF API documentation was inspected after correcting its method docs.
+
+The aggregate complexity mapping matches 104 of 116 reported high-complexity
+functions to their original owner/symbol at the same CCN. This is a complexity
+mapping, not a body-equivalence claim. The remaining 12 include explicit native
+preparation, route cancellation, guarded snapshot reading, UI notification and
+accepted-job guards; their exact names and old/current CCNs are in
+`/tmp/deep-final-complexity-mapping.json`. The earlier body audits and current
+unchanged-source checks remain separate evidence.
+
 ## Work that still blocks final completion
 
-1. Recheck every row and referenced gate against the final source revision,
-   complete missing evidence, and only then mark the goal complete. Optional
-   feature decisions remain optional; required work is not waived by this list.
+1. Close phase 2's representative performance gate. The historical peak-query
+   artifacts have mismatched saved-source iteration provenance. A fresh current
+   implementation comparison preserves inline annotations, verifies 50,000 exact
+   output tuples and records compiler flags/source hashes with seven alternating
+   5M-query rounds. It measures 93.641 ms before versus 99.299 ms after (about
+   1.13 microseconds additional work per 1000 queries). These isolated timings do
+   not prove complete waveform-frame cost, memory use or absence of a meaningful
+   representative regression. Verify that gate with suitable workload evidence
+   or remove the measured cost while preserving shared behavior and safety. Do
+   not substitute a speedup claim or silently waive the gate.
+2. Reconcile every requirement/evidence row with the final source and acceptance
+   results, including the disclosed architecture/performance limits, before
+   marking the goal complete. Optional native adoption remains optional; required
+   work is not waived by this list.
