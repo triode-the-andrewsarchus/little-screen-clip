@@ -5,6 +5,7 @@
 
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
 use std::path::Path;
 
 /// A thread-safe, fixed-capacity circular buffer storing interleaved 16-bit PCM samples
@@ -343,10 +344,13 @@ fn read_pcm_header(file: &mut BufReader<File>) -> io::Result<(PcmFormat, u64, u3
 /// Slices a finite time range from an 8/16/24/32-bit integer PCM WAV file.
 ///
 /// Reversed bounds are ordered and both endpoints are clamped to complete frames.
+/// Completed output is installed atomically at an unused destination; existing
+/// files and symlinks are preserved.
 ///
 /// # Errors
 /// Returns an error for malformed/truncated containers, unsupported formats,
-/// non-finite endpoints, protected sources, or filesystem failures.
+/// non-finite endpoints, changed/protected sources, existing destinations,
+/// protected output directories, or filesystem failures.
 pub fn slice_wav(
     source: &Path,
     start_sec: f32,
@@ -360,6 +364,8 @@ pub fn slice_wav(
         ));
     }
     let mut file = BufReader::new(crate::kernel_interface::open_content(source, true)?);
+    let observed =
+        crate::file_source::FileSource::capture_file(file.get_ref()).map_err(io::Error::other)?;
     let (format, data_offset, total_data_bytes) = read_pcm_header(&mut file)?;
     let bytes_per_frame = u64::from(format.block_align);
     let total_frames = u64::from(total_data_bytes) / bytes_per_frame;
@@ -380,12 +386,15 @@ pub fn slice_wav(
     let padding = slice_byte_len & 1;
     file.seek(SeekFrom::Start(slice_byte_offset))?;
 
-    if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let out_file = File::create(out_path)?;
-    let mut writer = BufWriter::new(out_file);
+    let name = out_path.file_name().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "Missing WAV output filename")
+    })?;
+    let directory = crate::kernel_interface::create_content_directory(
+        out_path.parent().unwrap_or(Path::new(".")),
+    )?;
+    let parent = std::path::PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let mut temporary = tempfile::NamedTempFile::new_in(&parent)?;
+    let mut writer = BufWriter::new(temporary.as_file_mut());
 
     format.write_header(&mut writer, slice_byte_len)?;
 
@@ -404,6 +413,15 @@ pub fn slice_wav(
     }
 
     writer.flush()?;
+    drop(writer);
+    temporary.as_file().sync_all()?;
+    if crate::file_source::FileSource::capture_file(file.get_ref()).map_err(io::Error::other)?
+        != observed
+    {
+        return Err(io::Error::other("WAV source changed while slicing"));
+    }
+    crate::kernel_interface::pin_content_directory(&parent)?;
+    temporary.persist_noclobber(parent.join(name))?;
     Ok(())
 }
 
@@ -511,6 +529,51 @@ mod tests {
     }
 
     #[test]
+    fn wav_slice_preserves_existing_outputs_and_source() {
+        for destination_kind in ["ordinary", "source", "symlink"] {
+            let (directory, source, original) = slice_fixture();
+            let output = if destination_kind == "source" {
+                source.clone()
+            } else {
+                directory.path().join("slice.wav")
+            };
+            match destination_kind {
+                "ordinary" => std::fs::write(&output, b"keep existing bytes").unwrap(),
+                "symlink" => std::os::unix::fs::symlink(&source, &output).unwrap(),
+                _ => {}
+            }
+            let result = slice_wav(&source, 0.25, 0.75, &output);
+            assert!(
+                result.is_err(),
+                "accepted existing {destination_kind} output"
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            if destination_kind == "ordinary" {
+                assert_eq!(std::fs::read(&output).unwrap(), b"keep existing bytes");
+            }
+            if destination_kind == "symlink" {
+                assert_eq!(std::fs::read_link(&output).unwrap(), source);
+            }
+            assert_eq!(
+                std::fs::read_dir(directory.path()).unwrap().count(),
+                if destination_kind == "source" { 1 } else { 2 }
+            );
+        }
+    }
+
+    #[test]
+    fn wav_slice_installs_only_completed_output_in_new_directories() {
+        let (directory, source, original) = slice_fixture();
+        let output = directory.path().join("exports/audio/slice.wav");
+        slice_wav(&source, 0.0, 1.0, &output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), original);
+        assert_eq!(
+            std::fs::read_dir(output.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
+
+    #[test]
     fn wav_slice_rejects_nonfinite_time_ranges() {
         let (directory, source, _) = slice_fixture();
         for (start, end) in [
@@ -564,10 +627,9 @@ mod tests {
 
     #[test]
     fn test_wav_export_and_slice() {
-        let temp_dir = std::env::temp_dir().join("little_clip_test_audio");
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let wav_path = temp_dir.join("full_test.wav");
-        let slice_path = temp_dir.join("slice_test.wav");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let wav_path = temp_dir.path().join("full_test.wav");
+        let slice_path = temp_dir.path().join("slice_test.wav");
 
         // 1 sec of 44100Hz stereo
         let mut buf = RollingAudioBuffer::new(1, 44100, 2);
