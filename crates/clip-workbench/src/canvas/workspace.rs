@@ -120,6 +120,8 @@ impl NodeCanvasState {
         let mut node_drag_started = false;
 
         let zoom = self.graph.zoom;
+        let mut property_edits = Vec::new();
+        let mut focused_property = None;
         for node in &mut self.graph.nodes {
             let node_id = node.id;
             let screen_rect = *node_screen_rects.get(&node_id).unwrap();
@@ -149,7 +151,7 @@ impl NodeCanvasState {
 
             // Render Card Frame
             let is_selected = self.selected_node == Some(node_id);
-            render_node_card(
+            let card = render_node_card(
                 zoom,
                 &self.node_previews,
                 &mut self.dragging_from,
@@ -162,6 +164,12 @@ impl NodeCanvasState {
                 is_selected,
                 &mut node_to_delete,
                 palette,
+            );
+            focused_property = focused_property.or(card.focused_property);
+            property_edits.extend(
+                card.property_edits
+                    .into_iter()
+                    .map(|(key, value)| (node_id, key, value)),
             );
         }
 
@@ -268,6 +276,8 @@ impl NodeCanvasState {
         }
 
         // Apply mutations
+        self.apply_property_edits(property_edits, focused_property);
+
         if node_drag_started {
             self.snapshot_undo();
         }

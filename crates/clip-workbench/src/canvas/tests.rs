@@ -124,6 +124,7 @@ fn rendered_save_as_dialog_writes_reloadable_recipe_in_private_directory() {
         current_recipe_file: None,
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
+        property_edit_group: None,
         status_message: None,
         available_recipes: Vec::new(),
         selected_recipe_name: "Original Recipe".to_owned(),
@@ -700,4 +701,142 @@ fn painted_node_header_matches_socket_layout_at_each_zoom() {
             "painted header/socket layout drift at zoom={zoom}"
         );
     }
+}
+
+#[test]
+fn inline_property_typing_is_one_undoable_graph_edit() {
+    let mut canvas = NodeCanvasState::new();
+    let mut node = instantiate_template(
+        little_clip_ops::pipeline::catalog::find_template("source_const_text").unwrap(),
+        [0.0, 0.0],
+    );
+    node.props.insert("text".to_owned(), "before".to_owned());
+    canvas.graph.nodes = vec![node];
+    canvas.graph.connections.clear();
+    canvas.graph.pan = [4.0, 4.0];
+    canvas.graph.zoom = 1.0;
+    canvas.selected_node = None;
+    canvas.undo_stack.clear();
+    canvas.redo_stack.clear();
+    let ctx = egui::Context::default();
+    let palette = AppPalette::default();
+    let command = egui::Modifiers {
+        command: true,
+        ctrl: true,
+        ..Default::default()
+    };
+    let key = |key| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: command,
+    };
+    let click = |pos| {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    };
+    let frame = |canvas: &mut NodeCanvasState, events, modifiers| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 620.0))),
+                events,
+                modifiers,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    canvas.ui(ui, &palette);
+                });
+            },
+        )
+    };
+    let output = frame(&mut canvas, vec![], egui::Modifiers::NONE);
+    let position = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "before" => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .expect("rendered inline property");
+    frame(&mut canvas, click(position), egui::Modifiers::NONE);
+    assert!(ctx.wants_keyboard_input());
+    assert!(
+        canvas.undo_stack.is_empty(),
+        "focus alone must not consume an undo step"
+    );
+    frame(&mut canvas, vec![key(egui::Key::A)], command);
+    frame(
+        &mut canvas,
+        vec![egui::Event::Text("after".to_owned())],
+        egui::Modifiers::NONE,
+    );
+    frame(
+        &mut canvas,
+        vec![egui::Event::Text(" more".to_owned())],
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(canvas.graph.nodes[0].props["text"], "after more");
+    assert_eq!(
+        canvas.undo_stack.len(),
+        1,
+        "continuous field editing must capture one pre-edit graph"
+    );
+    frame(
+        &mut canvas,
+        click(Pos2::new(850.0, 550.0)),
+        egui::Modifiers::NONE,
+    );
+    assert!(!ctx.wants_keyboard_input());
+    frame(&mut canvas, vec![key(egui::Key::Z)], command);
+    assert_eq!(canvas.graph.nodes[0].props["text"], "before");
+    let output = frame(&mut canvas, vec![key(egui::Key::Y)], command);
+    assert_eq!(canvas.graph.nodes[0].props["text"], "after more");
+    // Undo/Redo feedback can move the canvas; target the newly rendered field.
+    let position = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "after more" => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .expect("rendered property after Redo");
+    frame(&mut canvas, click(position), egui::Modifiers::NONE);
+    frame(&mut canvas, vec![key(egui::Key::A)], command);
+    frame(
+        &mut canvas,
+        vec![egui::Event::Text("another edit".to_owned())],
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(canvas.graph.nodes[0].props["text"], "another edit");
+    assert_eq!(
+        canvas.undo_stack.len(),
+        2,
+        "returning to the field starts a new edit group"
+    );
+    frame(
+        &mut canvas,
+        click(Pos2::new(850.0, 550.0)),
+        egui::Modifiers::NONE,
+    );
+    frame(&mut canvas, vec![key(egui::Key::Z)], command);
+    assert_eq!(canvas.graph.nodes[0].props["text"], "after more");
 }

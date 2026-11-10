@@ -49,6 +49,7 @@ pub struct NodeCanvasState {
     pub current_recipe_file: Option<PathBuf>,
     pub undo_stack: Vec<NodeGraph>,
     pub redo_stack: Vec<NodeGraph>,
+    property_edit_group: Option<Id>,
     pub status_message: Option<(String, bool)>, // (text, is_error)
     pub available_recipes: Vec<Recipe>,
     pub selected_recipe_name: String,
@@ -97,6 +98,7 @@ impl NodeCanvasState {
             current_recipe_file,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            property_edit_group: None,
             status_message: None,
             available_recipes: recipes,
             selected_recipe_name: sel_name,
@@ -123,7 +125,26 @@ impl NodeCanvasState {
         }
     }
 
+    fn apply_property_edits(&mut self, edits: Vec<(Uuid, String, String)>, focused: Option<Id>) {
+        if edits.is_empty() {
+            if focused.is_none() {
+                self.property_edit_group = None;
+            }
+            return;
+        }
+        if focused.is_none() || self.property_edit_group != focused {
+            self.snapshot_undo();
+        }
+        self.property_edit_group = focused;
+        for (node_id, key, value) in edits {
+            if let Some(node) = self.graph.nodes.iter_mut().find(|node| node.id == node_id) {
+                node.props.insert(key, value);
+            }
+        }
+    }
+
     pub fn snapshot_undo(&mut self) {
+        self.property_edit_group = None;
         if self.undo_stack.len() >= 50 {
             self.undo_stack.remove(0);
         }
@@ -132,6 +153,7 @@ impl NodeCanvasState {
     }
 
     pub fn undo(&mut self) {
+        self.property_edit_group = None;
         if let Some(prev) = self.undo_stack.pop() {
             self.redo_stack.push(self.graph.clone());
             self.graph = prev;
@@ -140,6 +162,7 @@ impl NodeCanvasState {
     }
 
     pub fn redo(&mut self) {
+        self.property_edit_group = None;
         if let Some(next) = self.redo_stack.pop() {
             self.undo_stack.push(self.graph.clone());
             self.graph = next;

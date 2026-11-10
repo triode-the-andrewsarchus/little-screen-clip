@@ -271,6 +271,12 @@ pub(super) fn draw_bezier_cable(
     ));
 }
 
+#[derive(Default)]
+pub(super) struct NodeCardResponse {
+    pub property_edits: Vec<(String, String)>,
+    pub focused_property: Option<Id>,
+}
+
 pub(super) fn render_node_card(
     zoom: f32,
     node_previews: &HashMap<Uuid, String>,
@@ -279,12 +285,12 @@ pub(super) fn render_node_card(
     script_to_edit: &mut Option<Uuid>,
     ui: &mut egui::Ui,
     painter: &egui::Painter,
-    node: &mut NodeInstance,
+    node: &NodeInstance,
     rect: Rect,
     is_selected: bool,
     node_to_delete: &mut Option<Uuid>,
     palette: &AppPalette,
-) {
+) -> NodeCardResponse {
     let border_col = if is_selected {
         hex_to_c32(&palette.harmonies.base)
     } else {
@@ -450,7 +456,7 @@ pub(super) fn render_node_card(
     }
 
     // Inline editable properties inside card (strictly placed below pins, no overlap!)
-    if is_script_node || !node.props.is_empty() {
+    let response = if is_script_node || !node.props.is_empty() {
         let content_min = Pos2::new(rect.min.x + 12.0 * zoom, props_top);
         let content_max = Pos2::new(rect.max.x - 12.0 * zoom, rect.max.y - 8.0 * zoom);
         let content_rect = Rect::from_min_max(content_min, content_max);
@@ -458,66 +464,10 @@ pub(super) fn render_node_card(
         let mut child_ui = ui.child_ui(content_rect, egui::Layout::top_down(egui::Align::Min));
         child_ui.set_clip_rect(content_rect);
 
-        if is_script_node {
-            let script_file = node.props.get("script_file").cloned().unwrap_or_else(|| {
-                let is_py = matches!(node.kind, NodeKind::PythonScript);
-                if is_py {
-                    "Inline Python"
-                } else {
-                    "Inline Bash"
-                }
-                .to_owned()
-            });
-
-            child_ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("file:")
-                        .color(hex_to_c32(&palette.colors.text_muted))
-                        .small(),
-                );
-                let file_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
-                    Some(Icon::Code),
-                    &script_file,
-                    palette,
-                );
-
-                if ui
-                    .add(file_btn)
-                    .on_hover_text("Edit script in the side panel")
-                    .clicked()
-                {
-                    *script_to_edit = Some(node.id);
-                }
-            });
-
-            child_ui.add_space(2.0);
-
-            let edit_btn = clip_ui::buttons::ButtonRole::Secondary
-                .button_with_icon(Some(Icon::Pencil), "Edit Script", palette)
-                .min_size(Vec2::new(child_ui.available_width(), 20.0 * zoom));
-
-            if child_ui.add(edit_btn).clicked() {
-                *script_to_edit = Some(node.id);
-            }
-        } else {
-            for (key, val) in node.props.iter_mut() {
-                child_ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(key.replace('_', " "))
-                            .color(hex_to_c32(&palette.colors.text_muted))
-                            .small(),
-                    );
-                    let field_width = ui.available_width() * 0.95;
-                    ui.add_sized(
-                        [field_width, CONTROL_HEIGHT],
-                        egui::TextEdit::singleline(val)
-                            .desired_width(field_width)
-                            .font(egui::TextStyle::Body),
-                    );
-                });
-            }
-        }
-    }
+        render_node_properties(&mut child_ui, node, zoom, palette, script_to_edit)
+    } else {
+        NodeCardResponse::default()
+    };
 
     // Last Output Preview Badge at bottom
     if let Some(preview_str) = node_previews.get(&node.id) {
@@ -540,6 +490,87 @@ pub(super) fn render_node_card(
             ),
         );
     }
+    response
+}
+
+fn render_node_properties(
+    ui: &mut egui::Ui,
+    node: &NodeInstance,
+    zoom: f32,
+    palette: &AppPalette,
+    script_to_edit: &mut Option<Uuid>,
+) -> NodeCardResponse {
+    let mut response = NodeCardResponse::default();
+    let is_script_node = matches!(node.kind, NodeKind::PythonScript | NodeKind::BashCommand);
+    if is_script_node {
+        let script_file = node.props.get("script_file").cloned().unwrap_or_else(|| {
+            let is_py = matches!(node.kind, NodeKind::PythonScript);
+            if is_py {
+                "Inline Python"
+            } else {
+                "Inline Bash"
+            }
+            .to_owned()
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("file:")
+                    .color(hex_to_c32(&palette.colors.text_muted))
+                    .small(),
+            );
+            let file_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                Some(Icon::Code),
+                &script_file,
+                palette,
+            );
+
+            if ui
+                .add(file_btn)
+                .on_hover_text("Edit script in the side panel")
+                .clicked()
+            {
+                *script_to_edit = Some(node.id);
+            }
+        });
+
+        ui.add_space(2.0);
+
+        let edit_btn = clip_ui::buttons::ButtonRole::Secondary
+            .button_with_icon(Some(Icon::Pencil), "Edit Script", palette)
+            .min_size(Vec2::new(ui.available_width(), 20.0 * zoom));
+
+        if ui.add(edit_btn).clicked() {
+            *script_to_edit = Some(node.id);
+        }
+    } else {
+        for (key, val) in &node.props {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(key.replace('_', " "))
+                        .color(hex_to_c32(&palette.colors.text_muted))
+                        .small(),
+                );
+                let field_width = ui.available_width() * 0.95;
+                let mut value = std::borrow::Cow::Borrowed(val.as_str());
+                let field = ui.add_sized(
+                    [field_width, CONTROL_HEIGHT],
+                    egui::TextEdit::singleline(&mut value)
+                        .desired_width(field_width)
+                        .font(egui::TextStyle::Body),
+                );
+                if field.has_focus() {
+                    response.focused_property = Some(field.id);
+                }
+                if field.changed() {
+                    response
+                        .property_edits
+                        .push((key.clone(), value.into_owned()));
+                }
+            });
+        }
+    }
+    response
 }
 
 pub(super) fn render_socket(
