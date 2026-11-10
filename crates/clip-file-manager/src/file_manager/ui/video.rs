@@ -1,16 +1,17 @@
 //! Timelens rows use ordinary file selection/actions and a precise hover frame.
 use super::super::{filesystem::Entry, video_timeline::Ready};
 use super::*;
+use clip_ui::buttons::ButtonRole;
 
 impl FileManager {
-    pub(super) fn video_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+    pub(super) fn video_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
         ui.horizontal_wrapped(|ui| {
             ui.label("Hover to preview a frame; click the timeline to play there. Ctrl/Shift-click selects files.");
-            if ui.button("Refresh previews").clicked() {
+            if ui.add(ButtonRole::Secondary.button("Refresh previews", palette)).clicked() {
                 self.video_previews.clear();
                 self.previews.retain(&Default::default());
             }
-            if ui.button("Use automatic view").clicked() {
+            if ui.add(ButtonRole::Secondary.button("Use automatic view", palette)).clicked() {
                 if let Some(location) = self.location_mut() { location.manual_view = None; }
                 self.activate_media_view();
             }

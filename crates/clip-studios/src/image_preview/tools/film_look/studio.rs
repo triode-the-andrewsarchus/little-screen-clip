@@ -15,8 +15,6 @@ impl ImagePreviewState {
         let f_high = hex_to_c32(&palette.colors.text_primary);
         let f_med = hex_to_c32(&palette.colors.text_secondary);
         let f_low = hex_to_c32(&palette.colors.text_muted);
-        let diff_add = hex_to_c32(&palette.diff_add);
-        let diff_mod = hex_to_c32(&palette.diff_mod);
 
         // Upload any newly received thumbnails into GPU textures
         for (idx, rgba) in self.film_sim_state.pending_thumbnails.drain(..) {
@@ -403,21 +401,10 @@ impl ImagePreviewState {
 
                             for (style, label, tooltip) in &styles {
                                 let sel = self.film_sim_state.style == *style;
-                                let (s_bg, s_fg) = if sel {
-                                    (base_c, contrast_text_c32(base_c, None, palette))
-                                } else {
-                                    (b_med, f_med)
-                                };
-                                let btn = egui::Button::new(
-                                    egui::RichText::new(*label)
-                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                        .strong()
-                                        .color(s_fg),
-                                )
-                                .fill(s_bg)
-                                .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
-                                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                                .min_size(Vec2::new(right_w - 28.0, crate::ui_ext::CONTROL_HEIGHT));
+                                let btn =
+                                    crate::ui_ext::mode_tab_button(*label, sel, palette).min_size(
+                                        Vec2::new(right_w - 28.0, crate::ui_ext::CONTROL_HEIGHT),
+                                    );
 
                                 if ui.add(btn).on_hover_text(*tooltip).clicked() && !sel {
                                     self.film_sim_state.style = *style;
@@ -647,12 +634,7 @@ impl ImagePreviewState {
                                     .clamp(40.0, 115.0);
 
                                 // Auto Levels
-                                let al_btn = crate::ui_ext::secondary_button_icon(
-                                    Some(Icon::Wand),
-                                    "Auto Levels",
-                                    diff_mod,
-                                    palette,
-                                );
+                                let al_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Wand), "Auto Levels", palette);
                                 if ui
                         .add(al_btn)
                         .on_hover_text(
@@ -670,12 +652,7 @@ impl ImagePreviewState {
                                 ui.add_space(crate::ui_ext::SPACE_XS);
 
                                 // Auto Enhance
-                                let ae_btn = crate::ui_ext::secondary_button_icon(
-                                    Some(Icon::Sparkles),
-                                    "Auto Enhance",
-                                    base_c,
-                                    palette,
-                                );
+                                let ae_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Sparkles), "Auto Enhance", palette);
                                 if ui
                         .add(ae_btn)
                         .on_hover_text(
@@ -806,26 +783,8 @@ impl ImagePreviewState {
                                 ];
                                 for (mode, label) in wb_modes {
                                     let sel = self.film_sim_state.wb_mode == mode;
-                                    let (btn_bg, btn_fg) = if sel {
-                                        (base_c, contrast_text_c32(base_c, None, palette))
-                                    } else {
-                                        (b_med, f_med)
-                                    };
-                                    let b = egui::Button::new(
-                                        egui::RichText::new(label)
-                                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                                            .strong()
-                                            .color(btn_fg),
-                                    )
-                                    .fill(btn_bg)
-                                    .stroke(Stroke::new(
-                                        1.0_f32,
-                                        if sel { base_c } else { b_low },
-                                    ))
-                                    .rounding(Rounding::same(
-                                        crate::ui_ext::BADGE_CORNER_RADIUS,
-                                    ))
-                                    .min_size(Vec2::new(36.0, crate::ui_ext::CONTROL_HEIGHT));
+                                    let b = crate::ui_ext::mode_tab_button(label, sel, palette)
+                                        .min_size(Vec2::new(36.0, crate::ui_ext::CONTROL_HEIGHT));
                                     let description = match mode {
                                         WhiteBalanceMode::Auto => {
                                             "Balance from plausible neutral highlights; skips images without reliable neutral samples"
@@ -848,12 +807,7 @@ impl ImagePreviewState {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        let apply_btn = crate::ui_ext::action_button_icon(
-                                            Some(Icon::Check),
-                                            "Apply to Image",
-                                            diff_add,
-                                            palette,
-                                        );
+                                        let apply_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(Icon::Check), "Apply to Image", palette);
                                         let apply_enabled = self.film_sim_preview_is_current();
                                         if ui
                             .add_enabled(apply_enabled, apply_btn)
@@ -867,12 +821,7 @@ impl ImagePreviewState {
 
                                         ui.add_space(crate::ui_ext::SPACE_XS);
 
-                                        let reset_btn = crate::ui_ext::secondary_button_icon(
-                                            Some(Icon::RotateCcw),
-                                            "Reset",
-                                            b_med,
-                                            palette,
-                                        );
+                                        let reset_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::RotateCcw), "Reset", palette);
                                         if ui
                                             .add(reset_btn)
                                             .on_hover_text(
@@ -904,21 +853,9 @@ impl ImagePreviewState {
                                         ui.add_space(crate::ui_ext::SPACE_XS);
 
                                         if !self.undo_stack.is_empty() {
-                                            let undo_fg = contrast_text_c32(
-                                                b_med,
-                                                Some(diff_mod),
-                                                palette,
+                                            let undo_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                                                Some(crate::icons::Icon::Undo), "Undo (Ctrl+Z)", palette,
                                             );
-                                            let undo_btn = egui::Button::new(
-                                                egui::RichText::new("⟲ Undo (Ctrl+Z)")
-                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                    .strong()
-                                                    .color(undo_fg),
-                                            )
-                                            .fill(b_med)
-                                            .rounding(Rounding::same(
-                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
-                                            ));
                                             if ui.add(undo_btn).clicked() {
                                                 self.undo();
                                                 self.film_sim_state.preview_rgba = None;

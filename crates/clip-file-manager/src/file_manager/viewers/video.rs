@@ -1,5 +1,6 @@
 //! An owned FFplay window provides synchronized playback without retaining decoded frames in Files.
 use crate::file_source::FileSource;
+use clip_ui::buttons::ButtonRole;
 use egui::Ui;
 use std::{
     path::PathBuf,
@@ -165,11 +166,17 @@ impl Video {
         ui.label("In the video window: Space pauses/resumes, Left/Right seek 10 seconds, Up/Down seek one minute, right-click seeks to a point, F toggles fullscreen, Q closes playback.");
         ui.label("Music stays paused while this video session is open. Returning to the folder closes the video window.");
         ui.horizontal(|ui| {
-            if ui.button("Replay video").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Replay video", palette))
+                .clicked()
+            {
                 self.start();
             }
             if ui
-                .add_enabled(self.child.is_some(), egui::Button::new("Stop video"))
+                .add_enabled(
+                    self.child.is_some(),
+                    ButtonRole::Secondary.button("Stop video", palette),
+                )
                 .clicked()
             {
                 self.stop();

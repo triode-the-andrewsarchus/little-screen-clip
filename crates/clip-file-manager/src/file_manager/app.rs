@@ -659,7 +659,7 @@ impl eframe::App for FileManagerApp {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.viewers.active() {
-                        self.viewers.menu_controls(ui);
+                        self.viewers.menu_controls(ui, &self.palette);
                     } else {
                         ui.add(
                             egui::Label::new("Ctrl+L: address  ·  Ctrl+Q: close").truncate(true),
@@ -703,8 +703,12 @@ impl eframe::App for FileManagerApp {
                 });
         }
         let folder = self.browser.path().to_path_buf();
-        self.browser.constellation.render_bank_guard(ctx, &folder);
-        self.browser.constellation.render_duplicate_warning(ctx);
+        self.browser
+            .constellation
+            .render_bank_guard(ctx, &folder, &self.palette);
+        self.browser
+            .constellation
+            .render_duplicate_warning(ctx, &self.palette);
         self.main_content(ctx);
         self.browser.previews.multisample.finish_frame(ctx);
         self.native_start(ctx);

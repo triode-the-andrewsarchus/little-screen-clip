@@ -4,6 +4,8 @@ use super::{
     jobs,
 };
 use crate::file_manager::preview_job::Task;
+use clip_ui::buttons::ButtonRole;
+use little_clip_core::palette::AppPalette;
 use std::{path::PathBuf, time::Duration};
 
 pub(in crate::file_manager) struct Inspector {
@@ -237,7 +239,7 @@ impl Inspector {
             if ui
                 .add_enabled(
                     !self.history.is_empty(),
-                    egui::Button::new("Back in inspector"),
+                    ButtonRole::Secondary.button("Back in inspector", palette),
                 )
                 .clicked()
             {
@@ -247,7 +249,10 @@ impl Inspector {
                 (self.document, self.error) = self.history.pop().unwrap();
                 self.refreshed = std::time::Instant::now();
             }
-            if ui.button("Refresh").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Refresh", palette))
+                .clicked()
+            {
                 self.request(self.document.path.clone(), RefreshPolicy::Manual);
             }
             if self.pending.is_some() || self.browsing.is_some() {
@@ -294,8 +299,8 @@ impl Inspector {
                         palette,
                     );
                 }
-                self.console.show(ui, &self.document);
-                self.facts_ui(ui);
+                self.console.show(ui, &self.document, palette);
+                self.facts_ui(ui, palette);
                 if let Some(topology) = &self.document.topology {
                     ui.heading(&topology.heading);
                     ui.label(&topology.summary);
@@ -309,7 +314,7 @@ impl Inspector {
                         ui.label(format!("{parent} → {}", node.label));
                     }
                 }
-                self.relations_ui(ui)
+                self.relations_ui(ui, palette)
             })
             .inner;
         match action {
@@ -322,7 +327,7 @@ impl Inspector {
             None => {}
         }
     }
-    fn facts_ui(&self, ui: &mut egui::Ui) {
+    fn facts_ui(&self, ui: &mut egui::Ui, palette: &AppPalette) {
         egui::Grid::new("system-facts")
             .min_col_width(0.0)
             .max_col_width((ui.available_width() - 80.0).max(48.0) / 2.0)
@@ -356,7 +361,10 @@ impl Inspector {
                                 .map_or(String::new(), |e| format!("\n{e}"))
                         ));
                     if let Some(value) = &fact.value {
-                        if ui.small_button("Copy value").clicked() {
+                        if ui
+                            .add(ButtonRole::Secondary.button("Copy value", palette).small())
+                            .clicked()
+                        {
                             ui.output_mut(|out| out.copied_text = value.clone());
                         }
                     } else {
@@ -366,7 +374,7 @@ impl Inspector {
                 }
             });
     }
-    fn relations_ui(&self, ui: &mut egui::Ui) -> Option<RelationAction> {
+    fn relations_ui(&self, ui: &mut egui::Ui, palette: &AppPalette) -> Option<RelationAction> {
         ui.separator();
         ui.label("Related kernel objects");
         let plain = ui.input(|input| {
@@ -411,7 +419,7 @@ impl Inspector {
                 if ui
                     .add_enabled(
                         relation.identity.is_some() && relation.process_start.is_none(),
-                        egui::Button::new(label),
+                        ButtonRole::Secondary.button(label, palette),
                     )
                     .clicked()
                     && plain
@@ -476,7 +484,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        action = inspector.relations_ui(ui);
+                        action = inspector.relations_ui(ui, &AppPalette::default());
                     });
                 },
             )

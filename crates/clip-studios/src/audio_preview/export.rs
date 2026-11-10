@@ -725,7 +725,7 @@ impl AudioPreviewState {
                         egui::TextEdit::singleline(&mut self.save_destination_dir)
                             .id(egui::Id::new("audio_save_destination")),
                     );
-                    if ui.add(layout::AudioWorkspace::secondary_button("Browse...", hex_to_c32(&palette.colors.surface_recessed), palette))
+                    if ui.add(clip_ui::buttons::ButtonRole::Secondary.button("Browse...", palette))
                         .on_hover_text("Choose destination folder via file manager dialog").clicked() {
                         self.start_browse_directory(now);
                     }
@@ -740,7 +740,7 @@ impl AudioPreviewState {
                             .strong()
                             .color(hex_to_c32(&palette.colors.text_primary))));
                     ui.add_space(crate::ui_ext::SPACE_SM);
-                    if ui.add(crate::ui_ext::secondary_button_icon(Some(crate::icons::Icon::Undo), "Reset Names", hex_to_c32(&palette.colors.surface_recessed), palette))
+                    if ui.add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(crate::icons::Icon::Undo), "Reset Names", palette))
                         .on_hover_text("Reset filenames to default original_name + timestamp + duration").clicked() {
                         self.reset_save_filenames();
                     }
@@ -786,7 +786,7 @@ impl AudioPreviewState {
                     } else {
                         format!("Save All {} Files [Enter]", slice_count)
                     };
-                    let save_btn = crate::ui_ext::action_button_icon(Some(crate::icons::Icon::Save), btn_text, hex_to_c32(&palette.diff_add), palette)
+                    let save_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(crate::icons::Icon::Save), btn_text, palette)
                         .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                     let is_enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -794,7 +794,7 @@ impl AudioPreviewState {
                         trigger_save = true;
                     }
 
-                    if ui.add(layout::AudioWorkspace::secondary_button("Cancel [Esc]", hex_to_c32(&palette.colors.surface_recessed), palette)).clicked()
+                    if ui.add(clip_ui::buttons::ButtonRole::Secondary.button("Cancel [Esc]", palette)).clicked()
                         || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         close_dialog = true;
                     }

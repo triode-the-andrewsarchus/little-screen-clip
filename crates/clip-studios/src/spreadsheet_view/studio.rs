@@ -78,13 +78,9 @@ impl SpreadsheetViewerState {
                 let mut copy_table_clicked = false;
                 let clicked_hatch = shell.render_header(ui, |ui| {
                     // Copy Table button
-                    let copy_btn = crate::ui_ext::secondary_button_icon(
-                        Some(Icon::Copy),
-                        "Copy Table",
-                        b_med,
-                        palette,
-                    )
-                    .stroke(Stroke::new(1.0_f32, b_low));
+                    let copy_btn = clip_ui::buttons::ButtonRole::Secondary
+                        .button_with_icon(Some(Icon::Copy), "Copy Table", palette)
+                        .stroke(Stroke::new(1.0_f32, b_low));
                     if ui.add(copy_btn).clicked() {
                         copy_table_clicked = true;
                     }

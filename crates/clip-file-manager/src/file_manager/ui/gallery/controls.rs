@@ -53,6 +53,7 @@ impl FileManager {
         ui: &mut Ui,
         canvas_rect: Rect,
         colors: WorkbenchColors,
+        palette: &AppPalette,
     ) {
         // Floating search HUD pill
         let search_id = Id::new("similarity_canvas_search");
@@ -79,7 +80,13 @@ impl FileManager {
                             self.similarity_canvas.search_query.clear();
                         }
                         if (edit_res.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                            || ui.small_button("Search").clicked()
+                            || ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Search", palette)
+                                        .small(),
+                                )
+                                .clicked()
                         {
                             self.similarity_canvas.trigger_search();
                         }
@@ -178,6 +185,7 @@ impl FileManager {
         ui: &mut Ui,
         canvas_rect: Rect,
         colors: WorkbenchColors,
+        palette: &AppPalette,
     ) {
         // Floating HUD pill
         let hud_id = Id::new("similarity_canvas_hud");
@@ -188,14 +196,28 @@ impl FileManager {
             .show(ui.ctx(), |ui| {
                 hud_frame(ui, colors).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.small_button("Fit").clicked() {
+                        if ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Secondary
+                                    .button("Fit", palette)
+                                    .small(),
+                            )
+                            .clicked()
+                        {
                             self.similarity_canvas.fit_to_view(canvas_rect);
                         }
                         ui.label(format!("{:.0}%", self.similarity_canvas.zoom * 100.0));
                         ui.separator();
                         if let Some(error) = self.similarity_canvas.error.clone() {
                             ui.label(egui::RichText::new(error).color(colors.text_secondary));
-                            if ui.small_button("Retry").clicked() {
+                            if ui
+                                .add(
+                                    clip_ui::buttons::ButtonRole::Secondary
+                                        .button("Retry", palette)
+                                        .small(),
+                                )
+                                .clicked()
+                            {
                                 self.similarity_canvas.invalidate();
                             }
                         }

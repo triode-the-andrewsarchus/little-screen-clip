@@ -1,6 +1,7 @@
 //! Small script editor; drafts survive node selection and files are saved explicitly.
 use crate::shell::EscapeHatchLauncher;
 use crate::text_preview::{build_highlighted_layout_job, find_syntax};
+use clip_ui::buttons::ButtonRole;
 use egui::text::{CCursor, CCursorRange};
 use egui::{self, Id};
 use little_clip_core::config::AppConfig;
@@ -198,13 +199,13 @@ impl ScriptEditor {
                 .as_ref()
                 .map_or_else(|| "Inline script".to_owned(), |p| p.display().to_string()),
         );
-        let mut commands = self.render_toolbar(ui, &state);
+        let mut commands = self.render_toolbar(ui, &state, palette);
         commands.extend(self.shortcuts(ui, id));
         let mut state_changed = false;
         for command in commands {
             state_changed |= self.apply_command(command, node, &mut state);
         }
-        let search = self.render_search(ui, id);
+        let search = self.render_search(ui, id, palette);
         if search != SearchAction::None {
             self.apply_search(search, &mut state, ui.input(|i| i.time));
             ui.memory_mut(|m| m.request_focus(id));
@@ -268,6 +269,7 @@ impl ScriptEditor {
         &self,
         ui: &mut egui::Ui,
         state: &egui::text_edit::TextEditState,
+        palette: &AppPalette,
     ) -> Vec<EditorCommand> {
         let undoer = state.undoer();
         let before = (
@@ -277,13 +279,16 @@ impl ScriptEditor {
         let mut commands = Vec::new();
         ui.horizontal_wrapped(|ui| {
             if ui
-                .button(if self.dirty() { "Save *" } else { "Save" })
+                .add(
+                    ButtonRole::Primary
+                        .button(if self.dirty() { "Save *" } else { "Save" }, palette),
+                )
                 .clicked()
             {
                 commands.push(EditorCommand::Save);
             }
             if ui
-                .button("Open in External Editor")
+                .add(ButtonRole::Secondary.button("Open in External Editor", palette))
                 .on_hover_text(
                     "Save this script and open it in your preferred editor (for example, VS Code)",
                 )
@@ -292,23 +297,32 @@ impl ScriptEditor {
                 commands.push(EditorCommand::ExternalEditor);
             }
             if ui
-                .button("Reload")
+                .add(ButtonRole::Secondary.button("Reload", palette))
                 .on_hover_text("Discard this draft and reload the script")
                 .clicked()
             {
                 commands.push(EditorCommand::Reload);
             }
-            if ui.button("Find / Replace").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Find / Replace", palette))
+                .clicked()
+            {
                 commands.push(EditorCommand::Search);
             }
             if ui
-                .add_enabled(undoer.has_undo(&before), egui::Button::new("Undo"))
+                .add_enabled(
+                    undoer.has_undo(&before),
+                    ButtonRole::Secondary.button("Undo", palette),
+                )
                 .clicked()
             {
                 commands.push(EditorCommand::Undo);
             }
             if ui
-                .add_enabled(undoer.has_redo(&before), egui::Button::new("Redo"))
+                .add_enabled(
+                    undoer.has_redo(&before),
+                    ButtonRole::Secondary.button("Redo", palette),
+                )
                 .clicked()
             {
                 commands.push(EditorCommand::Redo);
@@ -369,7 +383,7 @@ impl ScriptEditor {
         }
     }
 
-    fn render_search(&mut self, ui: &mut egui::Ui, id: Id) -> SearchAction {
+    fn render_search(&mut self, ui: &mut egui::Ui, id: Id, palette: &AppPalette) -> SearchAction {
         if !self.search_open {
             return SearchAction::None;
         }
@@ -386,7 +400,10 @@ impl ScriptEditor {
                 self.focus_find = false;
             }
             if ui
-                .add_enabled(!self.find.is_empty(), egui::Button::new("Next"))
+                .add_enabled(
+                    !self.find.is_empty(),
+                    ButtonRole::Secondary.button("Next", palette),
+                )
                 .clicked()
                 || (field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
             {
@@ -403,13 +420,19 @@ impl ScriptEditor {
         });
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(!self.find.is_empty(), egui::Button::new("Replace"))
+                .add_enabled(
+                    !self.find.is_empty(),
+                    ButtonRole::Secondary.button("Replace", palette),
+                )
                 .clicked()
             {
                 action = SearchAction::Replace;
             }
             if ui
-                .add_enabled(!self.find.is_empty(), egui::Button::new("Replace All"))
+                .add_enabled(
+                    !self.find.is_empty(),
+                    ButtonRole::Secondary.button("Replace All", palette),
+                )
                 .clicked()
             {
                 action = SearchAction::ReplaceAll;

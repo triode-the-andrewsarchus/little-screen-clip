@@ -1,4 +1,6 @@
+use clip_ui::buttons::ButtonRole;
 use egui::{Id, Key, Modifiers, Ui};
+use little_clip_core::palette::AppPalette;
 use std::path::Path;
 
 use super::edits::NamingAction;
@@ -38,7 +40,8 @@ pub(super) fn naming_buttons(
 }
 
 impl FileManager {
-    pub(super) fn naming_ui(&mut self, ctx: &egui::Context, colors: WorkbenchColors) {
+    pub(super) fn naming_ui(&mut self, ctx: &egui::Context, palette: &AppPalette) {
+        let colors = WorkbenchColors::from_palette(palette);
         let Some(dialog) = &mut self.edits.dialog else {
             return;
         };
@@ -75,13 +78,13 @@ impl FileManager {
                 }
                 ui.horizontal(|ui| {
                     submit |= ui
-                        .button(if matches!(dialog.action, NamingAction::Rename(_)) {
+                        .add(ButtonRole::Primary.button(if matches!(dialog.action, NamingAction::Rename(_)) {
                             "Rename"
                         } else {
                             "Create"
-                        })
+                        }, palette))
                         .clicked();
-                    cancel |= ui.button("Cancel").clicked();
+                    cancel |= ui.add(ButtonRole::Secondary.button("Cancel", palette)).clicked();
                 });
             });
         cancel |= key(ctx, Modifiers::NONE, Key::Escape);
@@ -96,7 +99,12 @@ impl FileManager {
         }
     }
 
-    pub(super) fn edit_status(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+    pub(super) fn edit_status(
+        &mut self,
+        ui: &mut Ui,
+        colors: WorkbenchColors,
+        palette: &AppPalette,
+    ) {
         if self.edit_busy() {
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -119,7 +127,8 @@ impl FileManager {
                         })
                         .label(egui::RichText::new(&report.text).color(color)),
                     );
-                    ui.small_button("Dismiss").clicked()
+                    ui.add(ButtonRole::Secondary.button("Dismiss", palette).small())
+                        .clicked()
                 })
                 .inner;
             if dismiss {

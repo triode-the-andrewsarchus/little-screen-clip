@@ -411,26 +411,22 @@ impl ImagePreviewState {
 
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 // Apply Crop Button
-                let apply_btn = crate::action_button_icon(
-                    Some(crate::icons::Icon::Check),
-                    "Apply Crop (Enter)",
-                    hex_to_c32(&palette.diff_add),
-                    palette,
-                )
-                .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                let apply_btn = clip_ui::buttons::ButtonRole::Primary
+                    .button_with_icon(
+                        Some(crate::icons::Icon::Check),
+                        "Apply Crop (Enter)",
+                        palette,
+                    )
+                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                 if ui.add(apply_btn).clicked() {
                     self.apply_crop();
                 }
 
                 // Reset Crop Button
-                let reset_crop_btn = crate::secondary_button_icon(
-                    Some(crate::icons::Icon::Close),
-                    "Full Image",
-                    hex_to_c32(&palette.colors.surface_panel),
-                    palette,
-                )
-                .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                let reset_crop_btn = clip_ui::buttons::ButtonRole::Secondary
+                    .button_with_icon(Some(crate::icons::Icon::Close), "Full Image", palette)
+                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                 if ui.add(reset_crop_btn).clicked() {
                     self.crop_state.normalized_rect =
@@ -439,22 +435,11 @@ impl ImagePreviewState {
                 }
 
                 if !self.undo_stack.is_empty() {
-                    let undo_bg = hex_to_c32(&palette.colors.surface_panel);
-                    let undo_fg =
-                        contrast_text_c32(undo_bg, Some(hex_to_c32(&palette.diff_mod)), palette);
-                    let undo_btn = egui::Button::new(
-                        egui::RichText::new("⟲ Undo (Ctrl+Z)")
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .strong()
-                            .color(undo_fg),
-                    )
-                    .fill(undo_bg)
-                    .stroke(Stroke::new(
-                        1.0_f32,
-                        hex_to_c32(&palette.colors.surface_recessed),
-                    ))
-                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                    let undo_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                        Some(crate::icons::Icon::Undo),
+                        "Undo (Ctrl+Z)",
+                        palette,
+                    );
 
                     if ui.add(undo_btn).clicked() {
                         self.undo();

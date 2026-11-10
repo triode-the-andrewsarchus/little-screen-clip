@@ -473,11 +473,9 @@ pub(super) fn render_node_card(
                         .color(hex_to_c32(&palette.colors.text_muted))
                         .small(),
                 );
-                let file_fill = hex_to_c32(&palette.colors.surface_panel);
-                let file_btn = crate::ui_ext::secondary_button_icon(
+                let file_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                     Some(Icon::Code),
                     &script_file,
-                    file_fill,
                     palette,
                 );
 
@@ -492,13 +490,9 @@ pub(super) fn render_node_card(
 
             child_ui.add_space(2.0);
 
-            let edit_btn = crate::ui_ext::secondary_button_icon(
-                Some(Icon::Pencil),
-                "Edit Script",
-                hex_to_c32(&palette.colors.surface_panel),
-                palette,
-            )
-            .min_size(Vec2::new(child_ui.available_width(), 20.0 * zoom));
+            let edit_btn = clip_ui::buttons::ButtonRole::Secondary
+                .button_with_icon(Some(Icon::Pencil), "Edit Script", palette)
+                .min_size(Vec2::new(child_ui.available_width(), 20.0 * zoom));
 
             if child_ui.add(edit_btn).clicked() {
                 *script_to_edit = Some(node.id);

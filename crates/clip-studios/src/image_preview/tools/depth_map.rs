@@ -429,12 +429,8 @@ impl ImagePreviewState {
             }
         }
 
-        let b_low = hex_to_c32(&palette.colors.surface_recessed);
-        let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);
         let diff_del = hex_to_c32(&palette.diff_del);
-        let diff_add = hex_to_c32(&palette.diff_add);
-        let diff_mod = hex_to_c32(&palette.diff_mod);
         let f_low = hex_to_c32(&palette.colors.text_muted);
 
         ui.vertical(|ui| {
@@ -466,16 +462,7 @@ impl ImagePreviewState {
                         .color(f_low),
                 );
             } else {
-                let depth_fg = contrast_text_c32(base_c, None, palette);
-                let depth_btn = egui::Button::image_and_text(crate::icons::Icon::Waves.image_tinted(crate::ui_ext::CONTROL_ICON_SIZE, ui.visuals().text_color()), egui::RichText::new("Generate Depth Map (Enter)")
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(depth_fg))
-                .fill(base_c)
-                .stroke(Stroke::new(1.0_f32, b_med))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
-
+                let depth_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(crate::icons::Icon::Waves), "Generate Depth Map (Enter)", palette);
                 if ui.add(depth_btn).on_hover_text("Generate AI metric depth map with Depth-Anything V2 neural network (Enter)").clicked() {
                     self.run_depth_estimation();
                 }
@@ -498,35 +485,19 @@ impl ImagePreviewState {
 
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 if !self.undo_stack.is_empty() {
-                    let undo_fg = contrast_text_c32(b_med, Some(diff_mod), palette);
-                    let undo_btn = egui::Button::new(
-                        egui::RichText::new("⟲ Undo (Ctrl+Z)").size(crate::ui_ext::BODY_FONT_SIZE).strong().color(undo_fg),
-                    )
-                    .fill(b_med)
-                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
-                    if ui.add(undo_btn).clicked() {
+                    let undo_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(crate::icons::Icon::Undo), "Undo (Ctrl+Z)", palette);
+                if ui.add(undo_btn).clicked() {
                         self.undo();
                     }
                 }
 
                 // Direct Slot Push buttons
-                let rh_fg = contrast_text_c32(b_low, Some(diff_add), palette);
-                let push_rh = egui::Button::image_and_text(crate::icons::Icon::Copy.image_tinted(crate::ui_ext::CONTROL_ICON_SIZE, ui.visuals().text_color()), egui::RichText::new("Slot: Right Hand").size(crate::ui_ext::BODY_FONT_SIZE).color(rh_fg))
-                .fill(b_low)
-                .stroke(Stroke::new(1.0_f32, diff_add))
-                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-                .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                let push_rh = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(crate::icons::Icon::Copy), "Slot: Right Hand", palette);
                 if ui.add(push_rh).on_hover_text("Push current depth map directly to Right Hand slot").clicked() {
                     self.copy_to_hand_slot(HandSide::Right);
                 }
 
-                let lh_fg = contrast_text_c32(b_low, Some(base_c), palette);
-                let push_lh = egui::Button::image_and_text(crate::icons::Icon::Copy.image_tinted(crate::ui_ext::CONTROL_ICON_SIZE, ui.visuals().text_color()), egui::RichText::new("Slot: Left Hand").size(crate::ui_ext::BODY_FONT_SIZE).color(lh_fg))
-                .fill(b_low)
-                .stroke(Stroke::new(1.0_f32, base_c))
-                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-                .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                let push_lh = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(crate::icons::Icon::Copy), "Slot: Left Hand", palette);
                 if ui.add(push_lh).on_hover_text("Push current depth map directly to Left Hand slot").clicked() {
                     self.copy_to_hand_slot(HandSide::Left);
                 }

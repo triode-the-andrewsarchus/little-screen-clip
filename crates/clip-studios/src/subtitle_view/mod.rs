@@ -59,7 +59,10 @@ impl Viewer {
         }
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(self.selected > 0, egui::Button::new("Previous cue"))
+                .add_enabled(
+                    self.selected > 0,
+                    clip_ui::buttons::ButtonRole::Secondary.button("Previous cue", palette),
+                )
                 .clicked()
             {
                 self.select(self.selected - 1);
@@ -67,7 +70,7 @@ impl Viewer {
             if ui
                 .add_enabled(
                     self.selected + 1 < self.document.cues.len(),
-                    egui::Button::new("Next cue"),
+                    clip_ui::buttons::ButtonRole::Secondary.button("Next cue", palette),
                 )
                 .clicked()
             {
@@ -99,7 +102,7 @@ impl Viewer {
         }
         ui.allocate_ui_at_rect(layout.center, |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
-            self.caption(ui);
+            self.caption(ui, palette);
         });
     }
     fn outline(&mut self, ui: &mut Ui) {
@@ -126,7 +129,7 @@ impl Viewer {
             }
         });
     }
-    fn caption(&self, ui: &mut Ui) {
+    fn caption(&self, ui: &mut Ui, palette: &AppPalette) {
         let Some(cue) = self.document.cues.get(self.selected) else {
             ui.label("This file has no subtitle cues.");
             return;
@@ -147,7 +150,10 @@ impl Viewer {
             },
             cue.source_line
         ));
-        if ui.button("Copy cue text").clicked() {
+        if ui
+            .add(clip_ui::buttons::ButtonRole::Secondary.button("Copy cue text", palette))
+            .clicked()
+        {
             ui.output_mut(|output| output.copied_text = cue.text.clone());
         }
         egui::ScrollArea::vertical().id_source((self.id,"caption",self.selected)).show(ui, |ui| {

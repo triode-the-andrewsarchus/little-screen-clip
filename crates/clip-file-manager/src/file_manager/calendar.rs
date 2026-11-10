@@ -214,7 +214,16 @@ impl Viewer {
             self.selected = self.document.plans[self.plan].bars[0].event;
         }
         ui.label("Declared times only · recurring instances are not expanded");
-        ui.add(egui::Slider::new(&mut self.zoom, 1.0..=8.0).text("Timeline zoom"));
+        clip_ui::sliders::render_context_slider(
+            ui,
+            "Timeline zoom",
+            &mut self.zoom,
+            1.0..=8.0,
+            1.0,
+            "×",
+            (ui.available_width() - 90.0).clamp(48.0, 220.0),
+            palette,
+        );
         let plan = &self.document.plans[self.plan];
         let width = ui.available_width().max(1.0) * self.zoom;
         egui::ScrollArea::both()

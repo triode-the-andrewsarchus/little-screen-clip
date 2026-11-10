@@ -48,13 +48,12 @@ impl FileManager {
         self.bookmark_drop_rect = None;
         self.tick(super::BackgroundJobs::global());
         self.sync_preview_context();
-        let colors = WorkbenchColors::from_palette(palette);
         self.sync_modal_focus(ui.ctx());
         self.shortcuts(ui.ctx());
         ui.set_enabled(!self.browser_modal());
         self.toolbar(ui, palette);
-        self.search_ui(ui);
-        self.answer_columns_ui(ui);
+        self.search_ui(ui, palette);
+        self.answer_columns_ui(ui, palette);
         self.sync_preview_context();
         self.media_view_toolbar(ui, palette);
         ui.separator();
@@ -82,9 +81,9 @@ impl FileManager {
                 );
             }
         });
-        self.naming_ui(ui.ctx(), colors);
-        self.transfer_windows(ui.ctx(), colors);
-        self.search_settings_ui(ui.ctx());
+        self.naming_ui(ui.ctx(), palette);
+        self.transfer_windows(ui.ctx(), palette);
+        self.search_settings_ui(ui.ctx(), palette);
         let file_clipboard = ui.memory(|memory| {
             [
                 list_id(),
@@ -187,7 +186,7 @@ impl FileManager {
                     egui::ScrollArea::vertical()
                         .min_scrolled_height(0.0)
                         .max_height(ui.available_height())
-                        .show(ui, |ui| self.status(ui, colors));
+                        .show(ui, |ui| self.status(ui, colors, palette));
                 });
         }
         egui::SidePanel::left("file_manager_folders")
@@ -213,9 +212,9 @@ impl FileManager {
                 if self.view == super::BrowserView::Photos {
                     self.gallery_ui(ui, colors, palette);
                 } else if self.view == super::BrowserView::Music {
-                    self.music_ui(ui, colors);
+                    self.music_ui(ui, colors, palette);
                 } else if self.view == super::BrowserView::Videos {
-                    self.video_ui(ui, colors);
+                    self.video_ui(ui, colors, palette);
                 } else if self.view == super::BrowserView::Constellation {
                     self.constellation_ui(ui, colors, palette);
                 } else {
@@ -454,7 +453,6 @@ impl FileManager {
     }
 
     fn toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
-        let colors = WorkbenchColors::from_palette(palette);
         ui.horizontal(|ui| {
             if nav_button(ui, Icon::ArrowLeft, "Back [Alt+Left]", self.index.is_some_and(|i| i > 0), palette) { self.history_step(false); }
             if nav_button(ui, Icon::ArrowRight, "Forward [Alt+Right]", self.index.is_some_and(|i| i + 1 < self.history.len()), palette) { self.history_step(true); }
@@ -477,9 +475,7 @@ impl FileManager {
             self.address_editing = ui.memory(|memory| memory.has_focus(address_id()));
             self.index_ui(ui);
             if nav_button(ui, Icon::Repeat, "Refresh [F5]", true, palette) { self.refresh(); }
-            if ui.add(ui_ext::secondary_button(
-                if self.show_hidden { "Hidden: on" } else { "Hidden: off" }, colors.panel, palette,
-            )).on_hover_text("Show hidden files [Ctrl+H]").clicked() { self.toggle_hidden(); }
+            if ui.add(clip_ui::buttons::ButtonRole::Secondary.button(if self.show_hidden { "Hidden: on" } else { "Hidden: off" }, palette)).on_hover_text("Show hidden files [Ctrl+H]").clicked() { self.toggle_hidden(); }
         });
     }
 
@@ -548,7 +544,7 @@ impl FileManager {
             || self.transfers.has_status()
     }
 
-    fn pending_status_ui(&mut self, ui: &mut Ui) {
+    fn pending_status_ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
         ui.horizontal(|ui| {
             if let Some(request) = &self.pending {
                 ui.spinner();
@@ -556,7 +552,14 @@ impl FileManager {
                     egui::Label::new(format!("Opening {}…", display_path(&request.path)))
                         .truncate(true),
                 );
-                if ui.small_button("Cancel").clicked() {
+                if ui
+                    .add(
+                        clip_ui::buttons::ButtonRole::Secondary
+                            .button("Cancel", palette)
+                            .small(),
+                    )
+                    .clicked()
+                {
                     self.pending = None;
                     self.address = display_path(self.path());
                     if self.directory.is_none() {
@@ -575,7 +578,7 @@ impl FileManager {
         });
     }
 
-    fn error_status_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+    fn error_status_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
         let Some(error) = &self.error else {
             return;
         };
@@ -585,8 +588,20 @@ impl FileManager {
         let (retry, dismiss) = ui
             .horizontal_wrapped(|ui| {
                 ui.add(Icon::Alert.label(egui::RichText::new(error).color(colors.danger)));
-                let retry = ui.small_button("Retry").clicked();
-                let dismiss = ui.small_button("Dismiss").clicked();
+                let retry = ui
+                    .add(
+                        clip_ui::buttons::ButtonRole::Secondary
+                            .button("Retry", palette)
+                            .small(),
+                    )
+                    .clicked();
+                let dismiss = ui
+                    .add(
+                        clip_ui::buttons::ButtonRole::Secondary
+                            .button("Dismiss", palette)
+                            .small(),
+                    )
+                    .clicked();
                 (retry, dismiss)
             })
             .inner;
@@ -598,7 +613,7 @@ impl FileManager {
         }
     }
 
-    fn last_status_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+    fn last_status_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
         if self.has_active_status() {
             return;
         }
@@ -619,7 +634,12 @@ impl FileManager {
                     last.icon
                         .label(egui::RichText::new(&last.text).color(color)),
                 );
-                ui.small_button("Dismiss").clicked()
+                ui.add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Dismiss", palette)
+                        .small(),
+                )
+                .clicked()
             })
             .inner;
         if dismiss {
@@ -627,12 +647,12 @@ impl FileManager {
         }
     }
 
-    fn status(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
-        self.pending_status_ui(ui);
-        self.error_status_ui(ui, colors);
-        self.edit_status(ui, colors);
-        self.transfer_status(ui, colors);
-        self.last_status_ui(ui, colors);
+    fn status(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
+        self.pending_status_ui(ui, palette);
+        self.error_status_ui(ui, colors, palette);
+        self.edit_status(ui, colors, palette);
+        self.transfer_status(ui, colors, palette);
+        self.last_status_ui(ui, colors, palette);
         if let Some(directory) = &self.directory
             && directory.skipped > 0
         {

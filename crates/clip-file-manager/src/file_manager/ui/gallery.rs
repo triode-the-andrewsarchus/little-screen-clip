@@ -1,6 +1,7 @@
 //! Virtualized tiles share selection, drag/drop, menus and file operations with the list.
 use super::*;
 use crate::file_manager::gallery::similarity::canvas::CanvasGrid;
+use clip_ui::buttons::ButtonRole;
 
 mod controls;
 mod thumbnails;
@@ -85,14 +86,17 @@ impl FileManager {
             if self.search.has_offline_results() {
                 ui.small("Last-known matches: metadata list");
             }
-            self.transfer_toolbar(ui);
+            self.transfer_toolbar(ui, palette);
             if self.view == super::super::BrowserView::Photos {
                 if ui
-                    .button(if self.gallery_selecting {
-                        "Done"
-                    } else {
-                        "Select"
-                    })
+                    .add(ButtonRole::Secondary.button(
+                        if self.gallery_selecting {
+                            "Done"
+                        } else {
+                            "Select"
+                        },
+                        palette,
+                    ))
                     .clicked()
                 {
                     self.gallery_selecting = !self.gallery_selecting;
@@ -110,9 +114,11 @@ impl FileManager {
                     (super::super::sorting::Column::Name, true) => "Sort: Name (Z-A)",
                     _ => "Sort: Date ↓",
                 };
-                let sort_resp = ui.button(sort_label).on_hover_text(
-                    "Switch photo sorting between Date and Name. Right-click for options.",
-                );
+                let sort_resp = ui
+                    .add(ButtonRole::Secondary.button(sort_label, palette))
+                    .on_hover_text(
+                        "Switch photo sorting between Date and Name. Right-click for options.",
+                    );
                 if sort_resp.clicked() {
                     let next_col = if is_time {
                         super::super::sorting::Column::Name
@@ -156,7 +162,10 @@ impl FileManager {
             if self.view == super::super::BrowserView::Photos
                 && self.photo_mode == super::super::gallery::similarity::PhotoMode::Similarity
             {
-                if ui.button("Reset View").clicked() {
+                if ui
+                    .add(ButtonRole::Secondary.button("Reset View", palette))
+                    .clicked()
+                {
                     self.similarity_canvas.reset_view();
                 }
             }
@@ -525,9 +534,9 @@ impl FileManager {
             CANVAS_EDGE_FADE_SIZE,
         );
 
-        self.similarity_search_hud(ui, canvas_rect, colors);
+        self.similarity_search_hud(ui, canvas_rect, colors, palette);
         self.similarity_navigation_hud(ui, canvas_rect, colors);
-        self.similarity_status_hud(ui, canvas_rect, colors);
+        self.similarity_status_hud(ui, canvas_rect, colors, palette);
 
         self.finish_listing(ui, actions, 0.0, &response);
         ui.set_clip_rect(prev_clip);

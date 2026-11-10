@@ -379,8 +379,6 @@ impl ImagePreviewState {
         }
 
         let accent = hex_to_c32(&palette.harmonies.triadic_1);
-        let surface = hex_to_c32(&palette.colors.surface_panel);
-        let border = hex_to_c32(&palette.colors.surface_recessed);
         let text = hex_to_c32(&palette.colors.text_secondary);
         let muted = hex_to_c32(&palette.colors.text_muted);
         let danger = hex_to_c32(&palette.diff_del);
@@ -422,20 +420,7 @@ impl ImagePreviewState {
                 ),
             ] {
                 let active = self.ocr_state.engine == engine;
-                let fill = if active { accent } else { surface };
-                let foreground = contrast_text_c32(fill, Some(text), palette);
-                let button = egui::Button::new(
-                    egui::RichText::new(label)
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(foreground),
-                )
-                .fill(fill)
-                .stroke(Stroke::new(
-                    1.0_f32,
-                    if active { foreground } else { border },
-                ))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS));
+                let button = crate::ui_ext::mode_tab_button(label, active, palette);
                 if ui
                     .add_enabled_ui(!self.ocr_state.in_progress, |ui| {
                         ui.add_sized([engine_width, crate::ui_ext::CONTROL_HEIGHT], button)
@@ -486,7 +471,8 @@ impl ImagePreviewState {
 
         ui.add_space(crate::ui_ext::SPACE_MD);
         if self.ocr_state.in_progress {
-            let cancel = crate::danger_button("Cancel OCR (Esc)", danger, palette);
+            let cancel =
+                clip_ui::buttons::ButtonRole::Secondary.button("Cancel OCR (Esc)", palette);
             if ui
                 .add_sized(
                     [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
@@ -498,7 +484,7 @@ impl ImagePreviewState {
                 self.cancel_ocr();
             }
         } else {
-            let run = crate::action_button("Run OCR", accent, palette);
+            let run = clip_ui::buttons::ButtonRole::Primary.button("Run OCR", palette);
             if ui
                 .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], run)
                 .on_hover_text("Recognize text using the selected engine")
@@ -590,7 +576,6 @@ impl ImagePreviewState {
         palette: &AppPalette,
     ) {
         let accent = hex_to_c32(&palette.harmonies.triadic_1);
-        let surface = hex_to_c32(&palette.colors.surface_panel);
         let text = hex_to_c32(&palette.colors.text_secondary);
         let muted = hex_to_c32(&palette.colors.text_muted);
         let output_is_current = self.ocr_output_is_current();
@@ -671,7 +656,7 @@ impl ImagePreviewState {
         });
 
         ui.add_space(10.0);
-        let copy = crate::action_button("Copy all text", accent, palette);
+        let copy = clip_ui::buttons::ButtonRole::Primary.button("Copy all text", palette);
         if ui
             .add_enabled_ui(has_output && !self.copy_delivery_pending(), |ui| {
                 ui.add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], copy)
@@ -687,7 +672,7 @@ impl ImagePreviewState {
         let slot_width = ((ui.available_width() - 6.0) * 0.5).max(82.0);
         let output_for_slots = self.ocr_state.extracted_text.clone();
         ui.horizontal_wrapped(|ui| {
-            let left = crate::secondary_button("Left hand", surface, palette);
+            let left = clip_ui::buttons::ButtonRole::Secondary.button("Left hand", palette);
             if ui
                 .add_enabled_ui(has_output && !self.copy_delivery_pending(), |ui| {
                     ui.add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], left)
@@ -699,7 +684,7 @@ impl ImagePreviewState {
                 self.push_text_to_hand_slot(HandSide::Left, output_for_slots.clone());
             }
 
-            let right = crate::secondary_button("Right hand", surface, palette);
+            let right = clip_ui::buttons::ButtonRole::Secondary.button("Right hand", palette);
             if ui
                 .add_enabled_ui(has_output && !self.copy_delivery_pending(), |ui| {
                     ui.add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], right)
@@ -727,7 +712,7 @@ impl ImagePreviewState {
                     if ui
                         .add_sized(
                             [64.0, crate::ui_ext::CONTROL_HEIGHT],
-                            crate::compact_toolbar_button("Clear", surface, palette),
+                            clip_ui::buttons::ButtonRole::Secondary.button("Clear", palette),
                         )
                         .clicked()
                     {

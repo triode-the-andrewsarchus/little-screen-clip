@@ -504,34 +504,22 @@ impl Model3dViewerState {
                         // Keep every viewer action one click away while allowing
                         // the controls to wrap on narrower fixed popup sizes.
                         ui.horizontal_wrapped(|ui| {
-                            let auto_rot_bg = if auto_rotate { b_med } else { accent };
                             let (auto_rot_label, auto_rot_icon) = if auto_rotate {
                                 ("Pause Rotation", Icon::Pause)
                             } else {
                                 ("Auto-Rotate", Icon::Play)
                             };
-                            let auto_rot_btn = crate::ui_ext::action_button_icon(
-                                Some(auto_rot_icon),
-                                auto_rot_label,
-                                auto_rot_bg,
-                                palette,
-                            );
+                            let auto_rot_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(auto_rot_icon), auto_rot_label, palette);
                             if ui.add(auto_rot_btn).clicked() {
                                 auto_rot_clicked = true;
                             }
 
-                            let wire_bg = if wireframe { accent } else { b_med };
                             let (wire_label, wire_icon) = if wireframe {
                                 ("Shaded", Icon::Palette)
                             } else {
                                 ("Wireframe", Icon::Teapot)
                             };
-                            let wire_btn = crate::ui_ext::action_button_icon(
-                                Some(wire_icon),
-                                wire_label,
-                                wire_bg,
-                                palette,
-                            );
+                            let wire_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(wire_icon), wire_label, palette);
                             if ui.add(wire_btn).clicked() {
                                 wire_clicked = true;
                             }
@@ -540,12 +528,7 @@ impl Model3dViewerState {
                                 UpAxis::ZUp => "Axis: Z-Up",
                                 UpAxis::YUp => "Axis: Y-Up",
                             };
-                            let axis_btn = crate::ui_ext::secondary_button_icon(
-                                Some(Icon::ArrowUp),
-                                axis_label,
-                                b_med,
-                                palette,
-                            );
+                            let axis_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::ArrowUp), axis_label, palette);
                             let mut axis_clicked = false;
                             if ui
                                 .add(axis_btn)
@@ -557,12 +540,7 @@ impl Model3dViewerState {
                                 axis_clicked = true;
                             }
 
-                            let reset_btn = crate::ui_ext::secondary_button_icon(
-                                Some(Icon::RotateCcw),
-                                "Reset View",
-                                b_med,
-                                palette,
-                            );
+                            let reset_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::RotateCcw), "Reset View", palette);
                             if ui.add(reset_btn).clicked() {
                                 reset_clicked = true;
                             }

@@ -199,10 +199,9 @@ impl TextPreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        let copy_btn = crate::ui_ext::secondary_button_icon(
+        let copy_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
             Some(Icon::Copy),
             "Copy All",
-            hex_to_c32(&palette.colors.surface_panel),
             palette,
         );
         if ui.add(copy_btn).clicked() {

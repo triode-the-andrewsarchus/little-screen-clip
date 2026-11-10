@@ -55,11 +55,9 @@ impl PdfEditorState {
                     .with_footer_hints("Drag text: Select | Ctrl+C: Copy | Right-click image: Copy | Space-drag: Pan | Scroll: Zoom | T: ToC")
                     .with_footer_readout(self.selected_page.map(|page| format!("Page {page} of {}", self.page_count)).unwrap_or_default());
                 let hatch = shell.render_header(ui, |ui| {
-                    self.navigation_buttons(ui);
-                    rotate = ui.add_enabled(actions_enabled, crate::ui_ext::secondary_button_icon(
-                        Some(Icon::RotateCw), "Rotate [R]", colors.panel, palette)).clicked();
-                    delete = ui.add_enabled(actions_enabled, crate::ui_ext::danger_button_icon(
-                        Some(Icon::Trash), "Delete [Del]", colors.recessed, palette)).clicked();
+                    self.navigation_buttons(ui, palette);
+                    rotate = ui.add_enabled(actions_enabled, clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::RotateCw), "Rotate [R]", palette)).clicked();
+                    delete = ui.add_enabled(actions_enabled, clip_ui::buttons::ButtonRole::Destructive.button_with_icon(Some(Icon::Trash), "Delete [Del]", palette)).clicked();
                 });
                 if let Some(0) = hatch { EscapeHatchLauncher::launch("PDF Viewer", "okular", &self.path, &mut self.status_toast, now); }
                 if rotate { self.rotate_current_page(90, now); }
@@ -234,7 +232,10 @@ impl PdfEditorState {
         self.viewport.select_page(page_num);
         ui.horizontal(|ui| {
             ui.label(format!("Page {page_num} of {}", self.page_count));
-            if ui.button("Fit").clicked() {
+            if ui
+                .add(clip_ui::buttons::ButtonRole::Secondary.button("Fit", palette))
+                .clicked()
+            {
                 self.viewport.zoom = 1.0;
                 self.viewport.pan = Vec2::ZERO;
             }

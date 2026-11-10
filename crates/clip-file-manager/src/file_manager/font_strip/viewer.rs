@@ -2,6 +2,7 @@
 use super::super::preview_job::Task;
 use super::{Document, SAMPLES, describe, inspect, raster};
 use crate::{icons::Icon, shell::StudioShell, ui_appearance::WorkbenchColors};
+use clip_ui::buttons::ButtonRole;
 use egui::{Color32, TextureHandle, Ui, vec2};
 use little_clip_core::{BackgroundJobs, ImageThumbnail, palette::AppPalette};
 use std::{
@@ -130,7 +131,7 @@ impl Viewer {
         let colors = WorkbenchColors::from_palette(palette);
         egui::ScrollArea::vertical().show(ui, |ui| {
             self.specimen_controls(ui);
-            self.block_controls(ui);
+            self.block_controls(ui, palette);
             self.request.width = (ui.available_width().round() as u32).clamp(160, 4096);
             self.poll(ui);
             if let Some(error) = &self.error {
@@ -153,7 +154,7 @@ impl Viewer {
             if let Some(character) = self.selected {
                 ui.horizontal(|ui| {
                     ui.label(format!("Selected: {character} · U+{:04X}", character as u32));
-                    if ui.button("Copy character").clicked() {
+                    if ui.add(ButtonRole::Secondary.button("Copy character", palette)).clicked() {
                         ui.output_mut(|output| output.copied_text = character.to_string());
                     }
                 });
@@ -182,7 +183,7 @@ impl Viewer {
                 .char_limit(512),
         );
     }
-    fn block_controls(&mut self, ui: &mut Ui) {
+    fn block_controls(&mut self, ui: &mut Ui, palette: &AppPalette) {
         ui.horizontal_wrapped(|ui| {
             ui.label("Character range");
             egui::ComboBox::from_id_source("font-block")
@@ -197,7 +198,7 @@ impl Viewer {
             if ui
                 .add_enabled(
                     self.request.start >= 128,
-                    egui::Button::new("Previous characters"),
+                    ButtonRole::Secondary.button("Previous characters", palette),
                 )
                 .clicked()
             {
@@ -206,7 +207,7 @@ impl Viewer {
             if ui
                 .add_enabled(
                     self.request.start <= 0x10FF7F,
-                    egui::Button::new("Next characters"),
+                    ButtonRole::Secondary.button("Next characters", palette),
                 )
                 .clicked()
             {

@@ -20,12 +20,12 @@ impl ImagePreviewState {
             });
         }
         self.poll_save_job();
-        if self.save_snapshot_pending() && self.render_save_progress(ui, ctx, close) {
+        if self.save_snapshot_pending() && self.render_save_progress(ui, ctx, close, palette) {
             return;
         }
         self.poll_copy_job();
         if self.copy_snapshot_pending() {
-            self.render_copy_progress(ui, ctx, close);
+            self.render_copy_progress(ui, ctx, close, palette);
             return;
         }
         if self.copy_delivery_pending() {
@@ -52,7 +52,7 @@ impl ImagePreviewState {
 
         let save_modal_active = self.render_save_dialog(ctx, palette);
 
-        if self.render_save_progress(ui, ctx, close) {
+        if self.render_save_progress(ui, ctx, close, palette) {
             return;
         }
 
@@ -539,7 +539,7 @@ impl ImagePreviewState {
                     .resizable(false)
                     .show_inside(ui, |ui| {
                         shell.render_footer_with_center(ui, &toast, now, 184.0, |ui| {
-                            self.render_zoom_controls(ui)
+                            self.render_zoom_controls(ui, palette)
                         });
                     });
 
@@ -632,13 +632,9 @@ impl ImagePreviewState {
         let clicked_hatch = shell.render_header(ui, |ui| {
             // The shared header lays actions out from the right edge inward.
             // Draw Copy first so Save As appears immediately after Close.
-            let copy_btn = crate::ui_ext::action_button_icon(
-                Some(Icon::Copy),
-                "Copy (Ctrl+C)",
-                hex_to_c32(&palette.harmonies.base),
-                palette,
-            )
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)));
+            let copy_btn = clip_ui::buttons::ButtonRole::Primary
+                .button_with_icon(Some(Icon::Copy), "Copy (Ctrl+C)", palette)
+                .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)));
             if ui
                 .add(copy_btn)
                 .on_hover_text(
@@ -652,13 +648,9 @@ impl ImagePreviewState {
             ui.add_space(crate::ui_ext::SPACE_XS);
 
             // Save As button
-            let save_btn = crate::ui_ext::action_button_icon(
-                Some(Icon::Save),
-                "Save As...",
-                hex_to_c32(&palette.diff_add),
-                palette,
-            )
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)));
+            let save_btn = clip_ui::buttons::ButtonRole::Primary
+                .button_with_icon(Some(Icon::Save), "Save As...", palette)
+                .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)));
             if ui
                 .add(save_btn)
                 .on_hover_text("Save current image to file (Ctrl+S)")
@@ -916,18 +908,19 @@ impl ImagePreviewState {
                         } else {
                             "Save"
                         };
-                        let save_color = if self.fallback_save_confirm_overwrite {
-                            hex_to_c32(&palette.harmonies.warm_attention)
-                        } else {
-                            hex_to_c32(&palette.diff_add)
-                        };
                         if ui
-                            .add(crate::ui_ext::action_button_icon(
-                                Some(Icon::Save),
-                                save_label,
-                                save_color,
-                                palette,
-                            ))
+                            .add(
+                                (if self.fallback_save_confirm_overwrite {
+                                    clip_ui::buttons::ButtonRole::Destructive
+                                } else {
+                                    clip_ui::buttons::ButtonRole::Primary
+                                })
+                                .button_with_icon(
+                                    Some(Icon::Save),
+                                    save_label,
+                                    palette,
+                                ),
+                            )
                             .clicked()
                         {
                             let p = PathBuf::from(&self.fallback_save_path);
@@ -940,7 +933,10 @@ impl ImagePreviewState {
                                 self.fallback_save_confirm_overwrite = false;
                             }
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui
+                            .add(clip_ui::buttons::ButtonRole::Secondary.button("Cancel", palette))
+                            .clicked()
+                        {
                             if self.fallback_save_confirm_overwrite {
                                 self.fallback_save_confirm_overwrite = false;
                             } else {

@@ -13,6 +13,7 @@ pub(super) fn layer_strip(
     ui: &mut egui::Ui,
     sample: &mut SlotSample,
     retrigger: &mut bool,
+    palette: &little_clip_core::palette::AppPalette,
 ) -> bool {
     let text_width = |label: &str, style: egui::TextStyle| {
         ui.painter()
@@ -103,9 +104,9 @@ pub(super) fn layer_strip(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     studio = ui
                         .add(
-                            egui::Button::new("Edit in Audio Studio")
-                                .small()
-                                .wrap(false),
+                            clip_ui::buttons::ButtonRole::Secondary
+                                .button("Edit in Audio Studio", palette)
+                                .small(),
                         )
                         .on_hover_text(&sample.filename)
                         .clicked();
@@ -461,7 +462,12 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        layer_strip(ui, &mut sample, &mut retrigger);
+                        layer_strip(
+                            ui,
+                            &mut sample,
+                            &mut retrigger,
+                            &little_clip_core::palette::AppPalette::default(),
+                        );
                     });
                 },
             );

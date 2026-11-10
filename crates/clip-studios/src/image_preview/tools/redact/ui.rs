@@ -2,9 +2,6 @@ use super::*;
 
 impl ImagePreviewState {
     pub(crate) fn render_redact_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let btn_bg = hex_to_c32(&palette.colors.surface_panel);
-        let btn_border = hex_to_c32(&palette.colors.surface_recessed);
-
         ui.vertical(|ui| {
             // Mode selector: Black Bar | Average Color | LaMa Inpaint
             ui.horizontal_wrapped(|ui| {
@@ -16,32 +13,7 @@ impl ImagePreviewState {
 
                 for (mode, label) in modes {
                     let is_active = self.redaction_state.tool_type == mode;
-                    let fill = if is_active {
-                        hex_to_c32(&palette.harmonies.base)
-                    } else {
-                        btn_bg
-                    };
-                    let stroke_col = if is_active {
-                        hex_to_c32(&palette.harmonies.base)
-                    } else {
-                        btn_border
-                    };
-                    let text_col = if is_active {
-                        contrast_text_c32(fill, None, palette)
-                    } else {
-                        hex_to_c32(&palette.colors.text_primary)
-                    };
-
-                    let btn = egui::Button::new(
-                        egui::RichText::new(label)
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .strong()
-                            .color(text_col),
-                    )
-                    .fill(fill)
-                    .stroke(Stroke::new(1.0_f32, stroke_col))
-                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                    let btn = crate::ui_ext::mode_tab_button(label, is_active, palette);
 
                     if ui.add(btn).clicked() {
                         self.redaction_state.tool_type = mode;
@@ -115,17 +87,7 @@ impl ImagePreviewState {
 
                     // Burn / Apply Redactions button
                     let has_boxes = !self.redaction_state.boxes.is_empty();
-                    let burn_bg = if has_boxes {
-                        hex_to_c32(&palette.diff_del)
-                    } else {
-                        btn_bg
-                    };
-                    let burn_btn = crate::ui_ext::action_button_icon(
-                        Some(Icon::Check),
-                        "Burn / Apply (Enter)",
-                        burn_bg,
-                        palette,
-                    );
+                    let burn_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(Icon::Check), "Burn / Apply (Enter)", palette);
 
                     if ui
                         .add_enabled(has_boxes, burn_btn)
@@ -137,24 +99,14 @@ impl ImagePreviewState {
 
                     // Delete Selected button
                     let has_selection = self.redaction_state.selected_idx.is_some();
-                    let del_btn = crate::ui_ext::danger_button_icon(
-                        Some(Icon::Trash),
-                        "Delete Selected (Del)",
-                        btn_bg,
-                        palette,
-                    );
+                    let del_btn = clip_ui::buttons::ButtonRole::Destructive.button_with_icon(Some(Icon::Trash), "Delete Selected (Del)", palette);
 
                     if ui.add_enabled(has_selection, del_btn).clicked() {
                         self.delete_selected_redaction();
                     }
 
                     // Clear All button
-                    let clear_btn = crate::ui_ext::secondary_button_icon(
-                        Some(Icon::Close),
-                        "Clear All",
-                        btn_bg,
-                        palette,
-                    );
+                    let clear_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Close), "Clear All", palette);
 
                     if ui.add_enabled(has_boxes, clear_btn).clicked() {
                         self.clear_all_redactions();
@@ -164,12 +116,7 @@ impl ImagePreviewState {
 
                     // Strip Metadata / EXIF button
                     let has_meta = self.metadata.is_some();
-                    let strip_btn = crate::ui_ext::secondary_button_icon(
-                        Some(Icon::Shield),
-                        "Strip Metadata / EXIF",
-                        btn_bg,
-                        palette,
-                    );
+                    let strip_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Shield), "Strip Metadata / EXIF", palette);
 
                     if ui
                         .add(strip_btn)
@@ -283,12 +230,7 @@ impl ImagePreviewState {
                     } else {
                         "Inpaint with LaMa (Enter)"
                     };
-                    let inpaint_btn = crate::ui_ext::action_button_icon(
-                        Some(Icon::Wand),
-                        run_label,
-                        hex_to_c32(&palette.harmonies.base),
-                        palette,
-                    );
+                    let inpaint_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(Icon::Wand), run_label, palette);
 
                     if ui
                         .add_enabled(has_mask && !in_progress, inpaint_btn)
@@ -302,22 +244,12 @@ impl ImagePreviewState {
 
                     // Action buttons: Clear Mask & Grow Mask
                     ui.horizontal(|ui| {
-                        let clear_mask_btn = crate::ui_ext::secondary_button_icon(
-                            Some(Icon::Close),
-                            "Clear Mask",
-                            btn_bg,
-                            palette,
-                        );
+                        let clear_mask_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Close), "Clear Mask", palette);
                         if ui.add_enabled(has_mask, clear_mask_btn).clicked() {
                             self.clear_inpaint_mask();
                         }
 
-                        let grow_mask_btn = crate::ui_ext::secondary_button_icon(
-                            Some(Icon::Plus),
-                            "Grow Mask",
-                            btn_bg,
-                            palette,
-                        );
+                        let grow_mask_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Plus), "Grow Mask", palette);
                         if ui
                             .add_enabled(has_mask && !in_progress, grow_mask_btn)
                             .on_hover_text(
@@ -355,18 +287,7 @@ impl ImagePreviewState {
             // Undo button
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 if !self.undo_stack.is_empty() {
-                    let undo_fg =
-                        contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.diff_mod)), palette);
-                    let undo_btn = egui::Button::new(
-                        egui::RichText::new("⟲ Undo (Ctrl+Z)")
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .strong()
-                            .color(undo_fg),
-                    )
-                    .fill(btn_bg)
-                    .stroke(Stroke::new(1.0_f32, btn_border))
-                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                    let undo_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(crate::icons::Icon::Undo), "Undo (Ctrl+Z)", palette);
                     if ui.add(undo_btn).clicked() {
                         self.undo();
                     }

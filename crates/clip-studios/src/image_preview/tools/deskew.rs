@@ -160,9 +160,6 @@ impl ImagePreviewState {
         _ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        let btn_bg = hex_to_c32(&palette.colors.surface_panel);
-        let btn_border = hex_to_c32(&palette.colors.surface_recessed);
-
         ui.vertical(|ui| {
             ui.label(
                 egui::RichText::new("4-Point Deskew:")
@@ -273,13 +270,7 @@ impl ImagePreviewState {
             ui.add_space(crate::ui_ext::SPACE_SM);
 
             // 4. Apply Deskew button
-            let apply_bg = hex_to_c32(&palette.diff_add);
-            let apply_btn = crate::ui_ext::action_button_icon(
-                Some(Icon::Check),
-                "Apply Deskew (Enter)",
-                apply_bg,
-                palette,
-            )
+            let apply_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(Icon::Check), "Apply Deskew (Enter)", palette)
             .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
             if ui.add(apply_btn).on_hover_text("Rectify quad perspective into rectangular output (Enter)").clicked() {
@@ -287,14 +278,7 @@ impl ImagePreviewState {
             }
 
             // 5. Reset button
-            let reset_fg = contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.colors.text_secondary)), palette);
-            let reset_btn = egui::Button::new(
-                egui::RichText::new("⟲ Reset Quad").size(crate::ui_ext::BODY_FONT_SIZE).color(reset_fg),
-            )
-            .fill(btn_bg)
-            .stroke(Stroke::new(1.0_f32, btn_border))
-            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+            let reset_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(crate::icons::Icon::Undo), "Reset Quad", palette);
 
             if ui.add(reset_btn).on_hover_text("Reset corner handles to default positions").clicked() {
                 self.deskew_state.reset_quad();

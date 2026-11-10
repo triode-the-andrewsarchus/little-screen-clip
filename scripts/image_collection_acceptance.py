@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise Image Studio's browser collection on private Weston/Niri sockets."""
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageOps
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
 import ui_acceptance_capture as private
 import gzip
@@ -45,19 +45,31 @@ def include_strip_ocr(session, source_layers=False):
     original = session.capture_text
     def capture(name, path, expected):
         text = original(name, path, expected)
-        crop = session.output / f"{name}-collection-controls.png"
-        Image.open(path).crop((90, 50, 1180, 90)).resize((4360, 200)).save(crop)
-        text += private.run_checked(["tesseract", str(crop), "stdout", "--psm", "6"], env=session.env)
-        header = session.output / f"{name}-image-header.png"
-        Image.open(path).crop((90, 200, 1180, 260)).resize((4360, 240)).save(header)
-        text += private.run_checked(["tesseract", str(header), "stdout", "--psm", "6"], env=session.env)
-        footer = session.output / f"{name}-image-footer.png"
-        Image.open(path).crop((90, 720, 1180, 775)).resize((4360, 220)).save(footer)
-        text += private.run_checked(["tesseract", str(footer), "stdout", "--psm", "6"], env=session.env)
+        # suffix, bounds, vertical scale, OCR mode, normalize contrast
+        regions = [
+            ("collection-controls", (90, 50, 1180, 90), 5, "6", False),
+            ("image-header", (90, 200, 1180, 260), 4, "6", False),
+            ("image-footer", (90, 720, 1180, 775), 4, "6", False),
+        ]
+        if {"Export", "Export all edits"}.intersection(expected):
+            # The fixed private viewport keeps this action at the top right.
+            regions.append(("collection-export", (1060, 50, 1186, 92), 4, "7", True))
+        if "Export PNG copies" in expected:
+            # Anchor to the visible field label; retain the exact action text.
+            anchor = session.word(name, "Output", required=False)
+            if anchor:
+                x, y = anchor
+                regions.append(("export-action", (max(0, x - 45), y + 40, x + 380, y + 86), 4, "7", True))
         if source_layers:
-            sidebar = session.output / f"{name}-source-layers.png"
-            Image.open(path).crop((95, 355, 340, 720)).resize((980, 1460)).save(sidebar)
-            text += private.run_checked(["tesseract", str(sidebar), "stdout", "--psm", "6"], env=session.env)
+            regions.append(("source-layers", (95, 355, 340, 720), 4, "6", False))
+        for suffix, bounds, scale_y, mode, normalize in regions:
+            target = session.output / f"{name}-{suffix}.png"
+            with Image.open(path) as screen:
+                crop = screen.crop(bounds)
+                if normalize:
+                    crop = ImageOps.grayscale(crop).point([0] * 140 + [255] * 116)
+                crop.resize((crop.width * 4, crop.height * scale_y)).save(target)
+            text += private.run_checked(["tesseract", str(target), "stdout", "--psm", mode], env=session.env)
         return re.sub(r"\b(FIRST|SECOND|RENAMED)[,.]?(JFIF|SVGZ|JXL|JP2|J2K|JPF|PSD|KRA|PCX)\b", r"\1.\2", text)
     session.capture_text = capture
 

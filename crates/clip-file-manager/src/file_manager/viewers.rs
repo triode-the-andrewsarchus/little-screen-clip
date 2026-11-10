@@ -311,7 +311,7 @@ impl Viewers {
         self.poll(ui.ctx());
         self.poll_file_source(ui.ctx());
         let mut close = std::mem::take(&mut self.close_requested);
-        self.gallery_controls(ui);
+        self.gallery_controls(ui, palette);
         let blocked = self.collection_pending()
             || self.collection_modal()
             || self.rename.open
@@ -328,7 +328,7 @@ impl Viewers {
             self.render_file_session(ui, palette, &mut close)
         });
         // Dialogs paint after the disabled editor, whose focus registrations must not steal typing.
-        self.rename_ui(ui);
+        self.rename_ui(ui, palette);
         self.poll_audio_return();
         if self.session.is_none() {
             close |=
@@ -337,7 +337,7 @@ impl Viewers {
         if close {
             self.request_close();
         }
-        self.close_confirmation(ui);
+        self.close_confirmation(ui, palette);
         !self.active()
     }
     fn poll_audio_return(&mut self) {
@@ -354,7 +354,7 @@ impl Viewers {
         }
     }
 
-    fn close_confirmation(&mut self, ui: &mut Ui) {
+    fn close_confirmation(&mut self, ui: &mut Ui, palette: &AppPalette) {
         if self.confirm_close {
             egui::Window::new("Unsaved edits")
                 .collapsible(false)
@@ -367,7 +367,12 @@ impl Viewers {
                         "Save your changes before returning to the folder."
                     });
                     if self.pad_audio
-                        && ui.button("Save copy and replace pad").clicked()
+                        && ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Primary
+                                    .button("Save copy and replace pad", palette),
+                            )
+                            .clicked()
                         && let Some(ViewerSession::Audio(state)) = &mut self.session
                     {
                         match state.save_edited_sibling(ui.input(|input| input.time)) {
@@ -381,15 +386,24 @@ impl Viewers {
                         }
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Keep editing").clicked() {
+                        if ui
+                            .add(
+                                clip_ui::buttons::ButtonRole::Secondary
+                                    .button("Keep editing", palette),
+                            )
+                            .clicked()
+                        {
                             self.confirm_close = false;
                         }
                         if ui
-                            .button(if self.pad_audio {
-                                "Return without replacing"
-                            } else {
-                                "Discard edits"
-                            })
+                            .add(clip_ui::buttons::ButtonRole::Destructive.button(
+                                if self.pad_audio {
+                                    "Return without replacing"
+                                } else {
+                                    "Discard edits"
+                                },
+                                palette,
+                            ))
                             .clicked()
                         {
                             self.clear();

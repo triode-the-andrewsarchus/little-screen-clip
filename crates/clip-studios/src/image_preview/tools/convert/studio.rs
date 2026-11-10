@@ -11,8 +11,6 @@ impl ImagePreviewState {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         let accent = hex_to_c32(&palette.harmonies.base);
-        let surface = hex_to_c32(&palette.colors.surface_panel);
-        let border = hex_to_c32(&palette.colors.surface_recessed);
         let text = hex_to_c32(&palette.colors.text_secondary);
         let muted = hex_to_c32(&palette.colors.text_muted);
         let success = hex_to_c32(&palette.diff_add);
@@ -105,20 +103,7 @@ impl ImagePreviewState {
         ui.horizontal_wrapped(|ui| {
             for (format, label) in formats {
                 let active = self.convert_state.target_format == format;
-                let fill = if active { accent } else { surface };
-                let foreground = contrast_text_c32(fill, Some(text), palette);
-                let button = egui::Button::new(
-                    egui::RichText::new(label)
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(foreground),
-                )
-                .fill(fill)
-                .stroke(Stroke::new(
-                    1.0_f32,
-                    if active { foreground } else { border },
-                ))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS));
+                let button = crate::ui_ext::mode_tab_button(label, active, palette);
                 if ui
                     .add_sized([format_width, crate::ui_ext::CONTROL_HEIGHT], button)
                     .clicked()
@@ -242,7 +227,7 @@ impl ImagePreviewState {
             } else {
                 "Run OptiPNG"
             };
-            let optimize = crate::secondary_button(optimize_label, warning, palette);
+            let optimize = clip_ui::buttons::ButtonRole::Secondary.button(optimize_label, palette);
             if ui
                 .add_enabled_ui(
                     !self.convert_state.is_running_optipng
@@ -360,7 +345,8 @@ impl ImagePreviewState {
         ui.add_space(14.0);
         let output_ready = self.convert_state.output_matches(&self.input_stamp());
         let extension = self.convert_state.target_format.extension();
-        let save = crate::action_button(format!("Save as .{}", extension), accent, palette);
+        let save = clip_ui::buttons::ButtonRole::Primary
+            .button(format!("Save as .{}", extension), palette);
         if ui
             .add_enabled_ui(output_ready, |ui| {
                 ui.add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], save)
@@ -373,7 +359,8 @@ impl ImagePreviewState {
         }
 
         ui.add_space(crate::ui_ext::SPACE_XS);
-        let apply = crate::secondary_button("Apply to canvas (Enter)", success, palette);
+        let apply =
+            clip_ui::buttons::ButtonRole::Secondary.button("Apply to canvas (Enter)", palette);
         if ui
             .add_enabled_ui(output_ready, |ui| {
                 ui.add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
@@ -396,7 +383,7 @@ impl ImagePreviewState {
         let slot_width =
             crate::ui_ext::wrapped_equal_button_width(ui, &["Left hand", "Right hand"], false, 2);
         ui.horizontal_wrapped(|ui| {
-            let left = crate::secondary_button("Left hand", surface, palette);
+            let left = clip_ui::buttons::ButtonRole::Secondary.button("Left hand", palette);
             if ui
                 .add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], left)
                 .on_hover_text("Copy the converted image to the Left Hand slot")
@@ -405,7 +392,7 @@ impl ImagePreviewState {
                 self.copy_to_hand_slot(HandSide::Left);
             }
 
-            let right = crate::secondary_button("Right hand", surface, palette);
+            let right = clip_ui::buttons::ButtonRole::Secondary.button("Right hand", palette);
             if ui
                 .add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], right)
                 .on_hover_text("Copy the converted image to the Right Hand slot")

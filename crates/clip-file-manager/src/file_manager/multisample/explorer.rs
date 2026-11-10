@@ -114,7 +114,7 @@ impl Explorer {
             false
         }
     }
-    pub fn controls(&mut self, ui: &mut egui::Ui) {
+    pub fn controls(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         use egui::Key::*;
         let choices = [
             (Quality::Major, "1 Major", Num1),
@@ -136,7 +136,11 @@ impl Explorer {
         });
         ui.horizontal_wrapped(|ui| {
             if ui
-                .button(format!("6 Inversion: {:?}", self.voicing))
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button(format!("6 Inversion: {:?}", self.voicing), palette)
+                        .small(),
+                )
                 .clicked()
             {
                 action = Some(Num6);
@@ -151,7 +155,14 @@ impl Explorer {
                     action = Some(key);
                 }
             }
-            if ui.small_button("Center").clicked() {
+            if ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Center", palette)
+                        .small(),
+                )
+                .clicked()
+            {
                 self.pan = egui::Vec2::ZERO;
                 self.zoom = 1.0;
             }

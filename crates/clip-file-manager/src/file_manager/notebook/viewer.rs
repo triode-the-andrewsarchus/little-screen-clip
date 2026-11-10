@@ -13,6 +13,7 @@ use crate::{
     ui_appearance::WorkbenchColors,
     ui_tabs::{Tab, TabBar},
 };
+use clip_ui::buttons::ButtonRole;
 use egui::{Ui, Vec2, vec2};
 use little_clip_core::{BackgroundJobs, palette::AppPalette};
 use std::{
@@ -138,7 +139,7 @@ impl Viewer {
         {
             self.select(index);
         }
-        self.controls(ui);
+        self.controls(ui, palette);
         self.poll(ui);
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
@@ -152,10 +153,13 @@ impl Viewer {
             self.body(ui, palette);
         });
     }
-    fn controls(&mut self, ui: &mut Ui) {
+    fn controls(&mut self, ui: &mut Ui, palette: &AppPalette) {
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(self.selected > 0, egui::Button::new("Previous cell"))
+                .add_enabled(
+                    self.selected > 0,
+                    ButtonRole::Secondary.button("Previous cell", palette),
+                )
                 .clicked()
             {
                 self.select(self.selected - 1);
@@ -163,7 +167,7 @@ impl Viewer {
             if ui
                 .add_enabled(
                     self.selected + 1 < self.document.cells.len(),
-                    egui::Button::new("Next cell"),
+                    ButtonRole::Secondary.button("Next cell", palette),
                 )
                 .clicked()
             {
@@ -218,7 +222,10 @@ impl Viewer {
                     format!("Saved execution [{count}]")
                 }));
             }
-            if ui.button("Copy cell source").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Copy cell source", palette))
+                .clicked()
+            {
                 ui.output_mut(|output| output.copied_text = cell.source.as_str().to_owned());
             }
         });
@@ -248,14 +255,17 @@ impl Viewer {
             if !view.outputs.is_empty() { ui.separator(); ui.strong("Saved outputs"); }
             for output in &mut view.outputs { output.show(ui, palette); }
             if view.omitted_outputs > 0 { ui.label(format!("{} further saved output items are outside this cell’s 32-item preview limit.", view.omitted_outputs)); }
-            metadata(ui, "Cell metadata", &cell.metadata);
-            metadata(ui, "Notebook metadata", &self.document.metadata);
+            metadata(ui, "Cell metadata", &cell.metadata, palette);
+            metadata(ui, "Notebook metadata", &self.document.metadata, palette);
         });
     }
 }
-fn metadata(ui: &mut Ui, label: &str, text: &str) {
+fn metadata(ui: &mut Ui, label: &str, text: &str, palette: &AppPalette) {
     egui::CollapsingHeader::new(label).show(ui, |ui| {
-        if ui.button("Copy metadata").clicked() {
+        if ui
+            .add(ButtonRole::Secondary.button("Copy metadata", palette))
+            .clicked()
+        {
             ui.output_mut(|output| output.copied_text = text.into());
         }
         ui.monospace(text.chars().take(4096).collect::<String>());
@@ -321,7 +331,10 @@ impl OutputView {
                     } else {
                         ui.label(label.as_str());
                     }
-                    if ui.button("Copy output").clicked() {
+                    if ui
+                        .add(ButtonRole::Secondary.button("Copy output", palette))
+                        .clicked()
+                    {
                         ui.output_mut(|output| output.copied_text = text.as_str().to_owned());
                     }
                 });

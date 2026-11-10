@@ -1927,7 +1927,12 @@ fn escape_clears_search_before_the_text_edit_surrenders_focus() {
     state.focus_search = true;
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            state.render_toolbar(ui, std::path::Path::new("/samples"), &mut |_| {});
+            state.render_toolbar(
+                ui,
+                std::path::Path::new("/samples"),
+                &mut |_| {},
+                &little_clip_core::palette::AppPalette::default(),
+            );
         });
     });
     assert!(ctx.wants_keyboard_input());
@@ -1943,7 +1948,12 @@ fn escape_clears_search_before_the_text_edit_surrenders_focus() {
     };
     let _ = ctx.run(input, |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            state.render_toolbar(ui, std::path::Path::new("/samples"), &mut |_| {});
+            state.render_toolbar(
+                ui,
+                std::path::Path::new("/samples"),
+                &mut |_| {},
+                &little_clip_core::palette::AppPalette::default(),
+            );
         });
     });
     assert!(state.search_query.is_empty());

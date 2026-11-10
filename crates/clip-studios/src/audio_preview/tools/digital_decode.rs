@@ -1025,7 +1025,6 @@ impl AudioPreviewState {
 
         // Top Toolbar: Scan button, protocol toggles, playback controls, and summary
         ui.horizontal(|ui| {
-            let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
             // Play/Pause button
             let (play_label, play_icon) = if self.is_playing {
                 ("Pause", Icon::Pause)
@@ -1033,10 +1032,9 @@ impl AudioPreviewState {
                 ("Play", Icon::Play)
             };
             if ui
-                .add(crate::ui_ext::secondary_button_icon(
+                .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                     Some(play_icon),
                     play_label,
-                    b_med,
                     palette,
                 ))
                 .on_hover_text("Play / Pause audio (Space)")
@@ -1060,7 +1058,8 @@ impl AudioPreviewState {
             if ui
                 .add_enabled(
                     !self.digital_decode.in_progress && self.analysis.is_some(),
-                    crate::ui_ext::secondary_button_icon(scan_icon, scan_label, b_med, palette),
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button_with_icon(scan_icon, scan_label, palette),
                 )
                 .clicked()
             {
@@ -1142,12 +1141,10 @@ impl AudioPreviewState {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Copy transcript to clipboard button
-                let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
                 if ui
-                    .add(crate::ui_ext::secondary_button_icon(
+                    .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                         Some(Icon::Copy),
                         "Copy Transcript",
-                        b_med,
                         palette,
                     ))
                     .on_hover_text("Copy decoded text to clipboard")

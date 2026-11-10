@@ -205,8 +205,8 @@ impl ConstellationState {
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(8.0, 0.0))
             .show(ui, |ui| {
-                self.render_toolbar(ui, current_folder, on_play_sample);
-                self.render_indexing_progress(ui);
+                self.render_toolbar(ui, current_folder, on_play_sample, palette);
+                self.render_indexing_progress(ui, palette);
             });
 
         // Paint the divider at the canvas boundary instead of reserving a
@@ -292,9 +292,9 @@ impl ConstellationState {
                             .min_scrolled_height(0.0)
                             .show(ui, |ui| self.render_compressor(ui));
                     } else if self.browser_open {
-                        self.render_pack_browser(ui, current_folder);
+                        self.render_pack_browser(ui, current_folder, palette);
                     } else {
-                        self.render_pack_shelf(ui, current_folder);
+                        self.render_pack_shelf(ui, current_folder, palette);
                     }
                 });
         }
@@ -315,7 +315,7 @@ impl ConstellationState {
             .show_inside(ui, |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                 if self.samples.is_empty() && self.active_job.is_none() {
-                    self.render_empty_state(ui, current_folder);
+                    self.render_empty_state(ui, current_folder, palette);
                     return;
                 }
                 if self.pack_shelf_open

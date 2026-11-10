@@ -1,6 +1,7 @@
 //! Collection mutations retain actual completions and never overwrite export siblings.
 use super::*;
 use crate::image_preview::ImageInputStamp;
+use clip_ui::buttons::ButtonRole;
 use std::{collections::VecDeque, os::fd::AsRawFd};
 
 type ExportResult = Vec<(usize, ImageInputStamp, Result<PathBuf, String>)>;
@@ -18,7 +19,12 @@ impl Collection {
     pub(super) fn writes_pending(&self) -> bool {
         self.export.is_some() || self.ratings.busy()
     }
-    pub(super) fn export_ui(&mut self, ui: &mut Ui, active: Option<&mut ImagePreviewState>) {
+    pub(super) fn export_ui(
+        &mut self,
+        ui: &mut Ui,
+        active: Option<&mut ImagePreviewState>,
+        palette: &AppPalette,
+    ) {
         if !self.export_open {
             return;
         }
@@ -35,8 +41,13 @@ impl Collection {
                 ui.label("Output folder:");
                 ui.add(egui::TextEdit::singleline(&mut self.export_directory).desired_width(420.0));
                 ui.horizontal(|ui| {
-                    start = ui.button("Export PNG copies").clicked();
-                    if ui.button("Cancel").clicked() {
+                    start = ui
+                        .add(ButtonRole::Primary.button("Export PNG copies", palette))
+                        .clicked();
+                    if ui
+                        .add(ButtonRole::Secondary.button("Cancel", palette))
+                        .clicked()
+                    {
                         self.export_open = false;
                     }
                 });

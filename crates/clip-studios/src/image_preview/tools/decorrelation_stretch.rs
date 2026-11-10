@@ -336,11 +336,8 @@ impl ImagePreviewState {
         palette: &AppPalette,
     ) {
         let accent = hex_to_c32(&palette.harmonies.base);
-        let surface = hex_to_c32(&palette.colors.surface_panel);
-        let border = hex_to_c32(&palette.colors.surface_recessed);
         let text = hex_to_c32(&palette.colors.text_secondary);
         let muted = hex_to_c32(&palette.colors.text_muted);
-        let success = hex_to_c32(&palette.diff_add);
         let mut recompute = false;
 
         ui.label(
@@ -389,20 +386,7 @@ impl ImagePreviewState {
                 ),
             ] {
                 let active = self.dcs_state.params == preset;
-                let fill = if active { accent } else { surface };
-                let foreground = contrast_text_c32(fill, Some(text), palette);
-                let button = egui::Button::new(
-                    egui::RichText::new(label)
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(foreground),
-                )
-                .fill(fill)
-                .stroke(Stroke::new(
-                    1.0_f32,
-                    if active { foreground } else { border },
-                ))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS));
+                let button = crate::ui_ext::mode_tab_button(label, active, palette);
                 if ui
                     .add_sized([preset_width, crate::ui_ext::CONTROL_HEIGHT], button)
                     .on_hover_text(tooltip)
@@ -445,20 +429,7 @@ impl ImagePreviewState {
                 ),
             ] {
                 let active = self.dcs_state.params.mode == mode;
-                let fill = if active { accent } else { surface };
-                let foreground = contrast_text_c32(fill, Some(text), palette);
-                let button = egui::Button::new(
-                    egui::RichText::new(label)
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(foreground),
-                )
-                .fill(fill)
-                .stroke(Stroke::new(
-                    1.0_f32,
-                    if active { foreground } else { border },
-                ))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS));
+                let button = crate::ui_ext::mode_tab_button(label, active, palette);
                 if ui
                     .add_sized([mode_width, crate::ui_ext::CONTROL_HEIGHT], button)
                     .on_hover_text(tooltip)
@@ -647,14 +618,14 @@ impl ImagePreviewState {
             });
 
         ui.add_space(crate::ui_ext::SPACE_MD);
-        let hold = crate::secondary_button("Hold to view original", surface, palette);
+        let hold = clip_ui::buttons::ButtonRole::Secondary.button("Hold to view original", palette);
         let hold_response = ui
             .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], hold)
             .on_hover_text("Press and hold to temporarily hide the stretch");
         self.dcs_state.is_holding_original = hold_response.is_pointer_button_down_on();
 
         ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-        let apply = crate::action_button("Apply stretch (Enter)", success, palette);
+        let apply = clip_ui::buttons::ButtonRole::Primary.button("Apply stretch (Enter)", palette);
         if ui
             .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
             .on_hover_text("Commit the current stretch to the image")
@@ -664,7 +635,7 @@ impl ImagePreviewState {
         }
 
         ui.add_space(crate::ui_ext::SPACE_XS);
-        let refresh = crate::secondary_button("Recompute preview", surface, palette);
+        let refresh = clip_ui::buttons::ButtonRole::Secondary.button("Recompute preview", palette);
         if ui
             .add_sized(
                 [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
@@ -678,7 +649,8 @@ impl ImagePreviewState {
 
         if !self.undo_stack.is_empty() {
             ui.add_space(crate::ui_ext::SPACE_XS);
-            let undo = crate::secondary_button("Undo last edit (Ctrl+Z)", surface, palette);
+            let undo =
+                clip_ui::buttons::ButtonRole::Secondary.button("Undo last edit (Ctrl+Z)", palette);
             if ui
                 .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], undo)
                 .clicked()

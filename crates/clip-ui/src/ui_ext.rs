@@ -55,6 +55,8 @@ pub fn segment_hit(pointer: Pos2, from: Pos2, to: Pos2) -> (f32, f32) {
 }
 
 pub const CONTROL_HEIGHT: f32 = 36.0;
+/// Minimum hit height for compact toolbar actions at the standard text size.
+pub const COMPACT_CONTROL_HEIGHT: f32 = 24.0;
 pub const CONTROL_ICON_SIZE: f32 = 18.0;
 pub const BODY_FONT_SIZE: f32 = 16.0;
 pub const SPACE_XS: f32 = 4.0;
@@ -496,6 +498,21 @@ impl<'a> StyledButton<'a> {
         self
     }
 
+    /// Uses egui's inline button size without imposing the standard control height.
+    ///
+    /// Retains native horizontal padding and the shared surface. Use this for
+    /// compact toolbars and footers whose existing height must stay unchanged.
+    pub fn small(mut self) -> Self {
+        self.button = self.button.small().min_size(Vec2::ZERO);
+        self
+    }
+
+    /// Uses the shared compact toolbar height while retaining native button input.
+    pub fn compact(self) -> Self {
+        self.small()
+            .min_size(Vec2::new(0.0, COMPACT_CONTROL_HEIGHT))
+    }
+
     pub fn stroke(mut self, stroke: impl Into<Stroke>) -> Self {
         self.stroke = stroke.into();
         self
@@ -512,7 +529,7 @@ impl egui::Widget for StyledButton<'_> {
         let background = ui.painter().add(egui::Shape::Noop);
         let response = ui.add(
             self.button
-                .frame(false)
+                .frame(true)
                 .fill(Color32::TRANSPARENT)
                 .stroke(Stroke::NONE),
         );

@@ -183,17 +183,31 @@ impl ImagePreviewState {
         (fit * 5.0).clamp(5.0, 50.0)
     }
 
-    pub(super) fn render_zoom_controls(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn render_zoom_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
         ui.add_space(4.0);
         if ui
-            .add_sized(Vec2::new(56.0, 24.0), egui::Button::new("Reset").small())
+            .add_sized(
+                Vec2::new(56.0, 24.0),
+                clip_ui::buttons::ButtonRole::Secondary
+                    .button("Reset", palette)
+                    .small(),
+            )
             .on_hover_text("Fit and center the image (0)")
             .clicked()
         {
             self.fit_to_view(self.viewport_size);
         }
         if ui
-            .add_sized(Vec2::new(40.0, 24.0), egui::Button::new("1:1").small())
+            .add_sized(
+                Vec2::new(40.0, 24.0),
+                clip_ui::buttons::ButtonRole::Secondary
+                    .button("1:1", palette)
+                    .small(),
+            )
             .on_hover_text("100% actual pixel size (1)")
             .clicked()
         {

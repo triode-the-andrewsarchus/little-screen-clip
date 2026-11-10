@@ -1,7 +1,9 @@
 use super::*;
+use clip_ui::buttons::ButtonRole;
+use little_clip_core::palette::AppPalette;
 
 impl ConstellationState {
-    pub(super) fn render_indexing_progress(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn render_indexing_progress(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let Some(status) = self.indexing_status.clone() else {
             return;
         };
@@ -23,7 +25,10 @@ impl ConstellationState {
                         .desired_width(width)
                         .text(text),
                 );
-                if ui.button("Cancel").clicked() {
+                if ui
+                    .add(ButtonRole::Secondary.button("Cancel", palette))
+                    .clicked()
+                {
                     self.cancel_indexing();
                 }
             });
@@ -36,7 +41,10 @@ impl ConstellationState {
         } else {
             ui.horizontal_wrapped(|ui| {
                 ui.label(status);
-                if ui.small_button("Dismiss").clicked() {
+                if ui
+                    .add(ButtonRole::Secondary.button("Dismiss", palette).small())
+                    .clicked()
+                {
                     self.indexing_status = None;
                 }
             });
@@ -48,6 +56,7 @@ impl ConstellationState {
         ui: &mut egui::Ui,
         _current_folder: &std::path::Path,
         on_play_sample: &mut dyn FnMut(&std::path::Path),
+        palette: &AppPalette,
     ) {
         ui.horizontal_wrapped(|ui| {
             let response = ui.add(
@@ -77,7 +86,7 @@ impl ConstellationState {
             self.render_camera_controls(ui);
             self.render_audio_filters(ui);
             if ui
-                .add_enabled(!self.samples.is_empty(), egui::Button::new("Random"))
+                .add_enabled(!self.samples.is_empty(), ButtonRole::Secondary.button("Random", palette))
                 .clicked()
             {
                 let query = self.search_query.to_lowercase();
@@ -102,27 +111,38 @@ impl ConstellationState {
                 }
             }
             if ui
-                .add_enabled(self.selected_path.is_some(), egui::Button::new("Next unplayed"))
+                .add_enabled(self.selected_path.is_some(), ButtonRole::Secondary.button("Next unplayed", palette))
                 .on_hover_text("Audition the nearest unplayed sample (Shift+Space); click a sample to start a new exploration")
                 .clicked()
             {
                 self.play_nearest_neighbor(on_play_sample);
             }
         });
-        self.render_set_navigation(ui);
+        self.render_set_navigation(ui, palette);
     }
 
-    pub(super) fn render_set_navigation(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn render_set_navigation(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.horizontal_wrapped(|ui| {
             if self.expanded_set.is_some() {
-                if ui.button("Back to Map").clicked() {
+                if ui
+                    .add(
+                        ButtonRole::Secondary
+                            .button("Back to Map", palette)
+                            .min_size(egui::Vec2::ZERO),
+                    )
+                    .clicked()
+                {
                     self.leave_set();
                 }
                 return;
             }
             if let Some(set) = self.selected_set() {
                 if ui
-                    .button("Explore set")
+                    .add(
+                        ButtonRole::Secondary
+                            .button("Explore set", palette)
+                            .min_size(egui::Vec2::ZERO),
+                    )
                     .on_hover_text(
                         "Open pitch rings; cross rings to audition from lowest to highest",
                     )
@@ -327,6 +347,7 @@ impl ConstellationState {
         &mut self,
         ui: &mut egui::Ui,
         current_folder: &std::path::Path,
+        palette: &AppPalette,
     ) {
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() * 0.28).max(10.0));
@@ -336,7 +357,7 @@ impl ConstellationState {
             ui.label("Choose a sample, then assign it to a drum pad.");
             ui.add_space(16.0);
             if ui
-                .button("Index folder")
+                .add(ButtonRole::Primary.button("Index folder", palette))
                 .on_hover_text("Analyze audio in this folder and its subfolders")
                 .clicked()
             {

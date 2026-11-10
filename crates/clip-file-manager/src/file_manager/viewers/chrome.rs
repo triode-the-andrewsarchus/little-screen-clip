@@ -1,9 +1,10 @@
 //! Files owns navigation and naming; studios keep their editing and playback state.
 use super::*;
 use crate::shell::file_editor::FileEditor;
+use clip_ui::buttons::ButtonRole;
 
 impl Viewers {
-    pub(in crate::file_manager) fn menu_controls(&mut self, ui: &mut Ui) {
+    pub(in crate::file_manager) fn menu_controls(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let ready = !self.confirm_close
             && !self.audio_return_saving
             && !self.collection_pending()
@@ -17,10 +18,13 @@ impl Viewers {
                 Some(ViewerSession::Image(state)) => Some(state),
                 _ => None,
             };
-            collection.export_controls(ui, active, ready && self.loading.is_none());
+            collection.export_controls(ui, active, ready && self.loading.is_none(), palette);
         }
         if ui
-            .add_enabled(ready, egui::Button::new("Back to folder"))
+            .add_enabled(
+                ready,
+                ButtonRole::Secondary.button("Back to folder", palette),
+            )
             .clicked()
         {
             self.close_requested = true;
@@ -156,8 +160,8 @@ impl Viewers {
             self.rename.begin(path, source);
         }
     }
-    pub(super) fn rename_ui(&mut self, ui: &mut Ui) {
-        if let Some((old, result)) = self.rename.ui(ui) {
+    pub(super) fn rename_ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        if let Some((old, result)) = self.rename.ui(ui, palette) {
             ui.ctx().request_repaint();
             match result {
                 Ok((path, source)) => {

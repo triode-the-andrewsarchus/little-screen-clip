@@ -23,7 +23,10 @@ impl ImagePreviewState {
         ui.label("RGB tone curve");
         changed |= render_tone_curve(ui, &mut p.curve, palette);
         ui.small("Click to add · drag to move · right-click to delete");
-        if ui.button("Reset curve").clicked() {
+        if ui
+            .add(clip_ui::buttons::ButtonRole::Secondary.button("Reset curve", palette))
+            .clicked()
+        {
             p.curve = BasicControlsParams::default().curve;
             changed = true;
         }

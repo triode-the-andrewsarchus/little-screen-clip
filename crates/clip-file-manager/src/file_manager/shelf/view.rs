@@ -4,19 +4,19 @@ use super::super::FileManager;
 use super::preview::{Previews, Ready, Source};
 use super::{Action, Entry, Payload, ResultValue, Selected, Shelf, ipc};
 use crate::{icons::Icon, ui_appearance::WorkbenchColors};
+use clip_ui::buttons::ButtonRole;
 use egui::{Align2, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
 use little_clip_core::palette::AppPalette;
 use little_clip_core::{HandSide, SlotId};
 
 impl FileManager {
     pub(in crate::file_manager) fn shelf_ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
-        let colors = WorkbenchColors::from_palette(palette);
         self.shelf.previews.poll(ui.ctx());
         if self.shelf.checked_at.elapsed() >= std::time::Duration::from_millis(500) {
             self.shelf.refresh_inventory();
         }
         let mut action = None;
-        self.shelf_header(ui, colors, &mut action);
+        self.shelf_header(ui, palette, &mut action);
         let height = ((ui.available_height() - 10.0) / 2.0).clamp(24.0, 96.0);
         self.shelf.rows_ui(ui, palette, height, &mut action);
         if let Some(action) = action {
@@ -24,11 +24,12 @@ impl FileManager {
         }
     }
 
-    fn shelf_header(&mut self, ui: &mut Ui, colors: WorkbenchColors, action: &mut Option<Action>) {
+    fn shelf_header(&mut self, ui: &mut Ui, palette: &AppPalette, action: &mut Option<Action>) {
+        let colors = WorkbenchColors::from_palette(palette);
         egui::ScrollArea::horizontal().id_source("shelf_actions").max_height(28.0).show(ui, |ui| ui.horizontal(|ui| {
             ui.add(Icon::Layers.label(egui::RichText::new("Shelf").strong()));
             ui.small(format!("{} collected", self.shelf.entries.len()));
-            self.shelf.selected_controls(ui, self.directory.is_some(), action);
+            self.shelf.selected_controls(ui, self.directory.is_some(), action, palette);
             ui.menu_button("More", |ui| {
                 if ui.add_enabled(!self.shelf.busy(), egui::Button::new("Refresh hands and previews")).clicked() { *action = Some(Action::Refresh); ui.close_menu(); }
                 if ui.add_enabled(!self.shelf.busy(), egui::Button::new("Check file references")).clicked() { *action = Some(Action::Check); ui.close_menu(); }
@@ -99,11 +100,22 @@ impl Shelf {
         self.selected = None;
     }
 
-    fn selected_controls(&mut self, ui: &mut Ui, can_place: bool, action: &mut Option<Action>) {
+    fn selected_controls(
+        &mut self,
+        ui: &mut Ui,
+        can_place: bool,
+        action: &mut Option<Action>,
+        palette: &AppPalette,
+    ) {
         if let Some(Selected::Slot(slot)) = self.selected {
             if let Some(card) = self.summary.as_ref().and_then(|summary| summary.card(slot))
                 && ui
-                    .add_enabled(!self.busy(), egui::Button::new("Collect hand item"))
+                    .add_enabled(
+                        !self.busy(),
+                        ButtonRole::Secondary
+                            .button("Collect hand item", palette)
+                            .compact(),
+                    )
                     .clicked()
             {
                 *action = Some(Action::CollectSlot(slot, card.item_id));
@@ -114,10 +126,16 @@ impl Shelf {
         let selected = self.selected;
         if let Some(entry) = self.selected_entry_mut() {
             if let Payload::Files { cut, .. } = &mut entry.payload {
-                if ui.add(egui::Button::new("Copy").selected(!*cut)).clicked() {
+                if ui
+                    .add(crate::ui_ext::mode_tab_button("Copy", !*cut, palette).compact())
+                    .clicked()
+                {
                     *cut = false;
                 }
-                if ui.add(egui::Button::new("Move").selected(*cut)).clicked() {
+                if ui
+                    .add(crate::ui_ext::mode_tab_button("Move", *cut, palette).compact())
+                    .clicked()
+                {
                     *cut = true;
                 }
             }
@@ -127,7 +145,10 @@ impl Shelf {
                 _ => "Create file…",
             };
             if ui
-                .add_enabled(can_place, egui::Button::new(label))
+                .add_enabled(
+                    can_place,
+                    ButtonRole::Primary.button(label, palette).compact(),
+                )
                 .clicked()
             {
                 *action = Some(Action::Place(entry.payload.clone()));

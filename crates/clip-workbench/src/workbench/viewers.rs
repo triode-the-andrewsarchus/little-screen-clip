@@ -1,4 +1,5 @@
 use super::*;
+use clip_ui::buttons::ButtonRole;
 
 impl WorkbenchApp {
     pub(crate) fn retire_hidden_rolling_audio(&mut self) {
@@ -43,7 +44,9 @@ impl WorkbenchApp {
                         } else {
                             "Loading text…"
                         });
-                        cancel = ui.button("Cancel [Esc]").clicked();
+                        cancel = ui
+                            .add(ButtonRole::Secondary.button("Cancel [Esc]", &self.ui_palette))
+                            .clicked();
                     });
                 });
                 if cancel || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -83,7 +86,9 @@ impl WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label("Loading image…");
-                        close = ui.button("Cancel [Esc]").clicked();
+                        close = ui
+                            .add(ButtonRole::Secondary.button("Cancel [Esc]", &self.ui_palette))
+                            .clicked();
                     });
                 });
                 close |= ctx.input(|input| input.key_pressed(egui::Key::Escape));
@@ -167,13 +172,19 @@ impl WorkbenchApp {
                                 } else {
                                     "Loading text…"
                                 });
-                                if ui.button("Cancel").clicked() {
+                                if ui
+                                    .add(ButtonRole::Secondary.button("Cancel", &self.ui_palette))
+                                    .clicked()
+                                {
                                     self.image_load_job = None;
                                     self.text_load_job = None;
                                 }
                             } else if let Some(message) = &self.status_msg {
                                 ui.label(message);
-                                if ui.button("Dismiss").clicked() {
+                                if ui
+                                    .add(ButtonRole::Secondary.button("Dismiss", &self.ui_palette))
+                                    .clicked()
+                                {
                                     self.status_msg = None;
                                 }
                             }
@@ -269,31 +280,11 @@ impl WorkbenchApp {
 
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
-                        let sub_bg = hex_to_c32(&self.ui_palette.harmonies.base);
-                        let sub_fg = contrast_text_c32(
-                            sub_bg,
-                            Some(hex_to_c32(&self.ui_palette.colors.text_primary)),
-                            &self.ui_palette,
-                        );
                         let submit_btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new("Execute & Run [Enter]")
-                                    .color(sub_fg)
-                                    .strong(),
-                            )
-                            .fill(sub_bg),
+                            ButtonRole::Primary.button("Execute & Run [Enter]", &self.ui_palette),
                         );
-
-                        let can_bg = hex_to_c32(&self.ui_palette.colors.surface_panel);
-                        let can_fg = contrast_text_c32(
-                            can_bg,
-                            Some(hex_to_c32(&self.ui_palette.colors.text_secondary)),
-                            &self.ui_palette,
-                        );
-                        let cancel_btn = ui.add(
-                            egui::Button::new(egui::RichText::new("Cancel [Esc]").color(can_fg))
-                                .fill(can_bg),
-                        );
+                        let cancel_btn =
+                            ui.add(ButtonRole::Secondary.button("Cancel [Esc]", &self.ui_palette));
 
                         if !pending && (submit_btn.clicked() || enter) {
                             submit_request = Some(IpcRequest::ExecuteRecipeWithPrompt {

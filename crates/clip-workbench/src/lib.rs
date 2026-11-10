@@ -700,12 +700,7 @@ fn contextual_palette_action_button<'a>(
     label: impl Into<String>,
     palette: &AppPalette,
 ) -> crate::ui_ext::StyledButton<'a> {
-    ui_ext::secondary_button_icon(
-        icon,
-        label,
-        hex_to_c32(&palette.colors.surface_panel),
-        palette,
-    )
+    clip_ui::buttons::ButtonRole::Secondary.button_with_icon(icon, label, palette)
 }
 
 fn render_auto_actions(
@@ -994,19 +989,14 @@ impl eframe::App for PromptApp {
 
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
-                    let sub_bg = hex_to_c32(&self.palette.harmonies.base);
-                    let submit_btn = ui.add(ui_ext::action_button(
-                        "Execute & Run [Enter]",
-                        sub_bg,
-                        &self.palette,
-                    ));
-
-                    let can_bg = hex_to_c32(&self.palette.colors.surface_panel);
-                    let cancel_btn = ui.add(ui_ext::secondary_button(
-                        "Cancel [Esc]",
-                        can_bg,
-                        &self.palette,
-                    ));
+                    let submit_btn = ui.add(
+                        clip_ui::buttons::ButtonRole::Primary
+                            .button("Execute & Run [Enter]", &self.palette),
+                    );
+                    let cancel_btn = ui.add(
+                        clip_ui::buttons::ButtonRole::Secondary
+                            .button("Cancel [Esc]", &self.palette),
+                    );
 
                     if self.pending.is_none() && (submit_btn.clicked() || enter) {
                         let text = self.input_text.clone();

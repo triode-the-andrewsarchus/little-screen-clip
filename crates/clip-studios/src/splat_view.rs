@@ -244,10 +244,9 @@ impl SplatViewerState {
                     .with_footer_readout(format!("Zoom {:.1}×", self.desired.camera.zoom));
                 shell.render_header(ui, |ui| {
                     if ui
-                        .add(crate::ui_ext::secondary_button_icon(
+                        .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                             Some(Icon::ZoomFit),
                             "Reset view",
-                            crate::hex_to_c32(&palette.colors.surface_panel),
                             palette,
                         ))
                         .clicked()

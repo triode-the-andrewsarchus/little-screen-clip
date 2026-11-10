@@ -304,7 +304,7 @@ impl ImagePreviewState {
 
         let action_width = ((ui.available_width() - 6.0) * 0.5).max(72.0);
         ui.horizontal(|ui| {
-            let refresh = crate::secondary_button("Refresh", surface, palette);
+            let refresh = clip_ui::buttons::ButtonRole::Secondary.button("Refresh", palette);
             if ui
                 .add_sized([action_width, crate::ui_ext::CONTROL_HEIGHT], refresh)
                 .on_hover_text("Re-extract dominant colors from the current image")
@@ -314,7 +314,7 @@ impl ImagePreviewState {
                 ctx.request_repaint();
             }
 
-            let copy = crate::secondary_button("Copy CSV", surface, palette);
+            let copy = clip_ui::buttons::ButtonRole::Secondary.button("Copy CSV", palette);
             if ui
                 .add_enabled_ui(!self.palette_state.extracted_colors.is_empty(), |ui| {
                     ui.add_sized([action_width, crate::ui_ext::CONTROL_HEIGHT], copy)
@@ -369,7 +369,7 @@ impl ImagePreviewState {
                     .italics()
                     .color(muted),
             );
-            let extract = crate::action_button("Extract palette", accent, palette);
+            let extract = clip_ui::buttons::ButtonRole::Primary.button("Extract palette", palette);
             if ui
                 .add_sized(
                     [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],

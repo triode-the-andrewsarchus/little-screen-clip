@@ -99,6 +99,7 @@ impl Preview {
         bounds: [u8; 2],
         active: bool,
         colors: WorkbenchColors,
+        palette: &AppPalette,
     ) {
         ui.spacing_mut().interact_size.y = 20.0;
         ui.horizontal(|ui| {
@@ -107,7 +108,15 @@ impl Preview {
                 surface::note(bounds[0]),
                 surface::note(bounds[1])
             ));
-            if active && ui.small_button("Stop").clicked() {
+            if active
+                && ui
+                    .add(
+                        clip_ui::buttons::ButtonRole::Secondary
+                            .button("Stop", palette)
+                            .small(),
+                    )
+                    .clicked()
+            {
                 self.clear();
             }
         });
@@ -168,7 +177,7 @@ impl Preview {
             );
             ui.allocate_ui_at_rect(controls, |ui| {
                 ui.set_clip_rect(controls.intersect(ui.clip_rect()));
-                self.controls(ui, bounds, active, colors);
+                self.controls(ui, bounds, active, colors, palette);
             });
             let keys =
                 egui::Rect::from_min_max(egui::pos2(controls.right() + 6.0, rect.top()), rect.max);

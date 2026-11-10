@@ -120,7 +120,13 @@ impl Controls {
         Query::parse(&command)?;
         Ok(command)
     }
-    pub fn ui(&mut self, ui: &mut egui::Ui, draft: &str, literal: bool) -> Option<String> {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        draft: &str,
+        literal: bool,
+        palette: &little_clip_core::palette::AppPalette,
+    ) -> Option<String> {
         ui.set_max_width(440.0);
         let current = self
             .source
@@ -129,7 +135,10 @@ impl Controls {
         if !current && let Err(error) = self.load(draft, literal) {
             ui.label("Finish the current command before opening its controls.");
             ui.colored_label(ui.visuals().error_fg_color, error);
-            if ui.button("Start a new draft").clicked() {
+            if ui
+                .add(clip_ui::buttons::ButtonRole::Secondary.button("Start a new draft", palette))
+                .clicked()
+            {
                 return Some(String::new());
             }
             return None;
@@ -170,7 +179,11 @@ impl Controls {
                 (Scope::Indexed, "Indexed folders"),
             ] {
                 if ui
-                    .add(egui::Button::new(name).selected(self.scope == scope))
+                    .add(crate::ui_ext::mode_tab_button(
+                        name,
+                        self.scope == scope,
+                        palette,
+                    ))
                     .clicked()
                 {
                     self.scope = scope;
@@ -192,7 +205,10 @@ impl Controls {
         if let Some(error) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        if ui.button("Apply to draft").clicked() {
+        if ui
+            .add(clip_ui::buttons::ButtonRole::Primary.button("Apply to draft", palette))
+            .clicked()
+        {
             match self.command() {
                 Ok(command) => return Some(command),
                 Err(error) => self.error = Some(error),

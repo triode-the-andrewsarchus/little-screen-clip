@@ -296,9 +296,8 @@ mod tests {
                 expected
             );
             let ctx = egui::Context::default();
-            let colors = crate::ui_appearance::WorkbenchColors::from_palette(
-                &crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark),
-            );
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
             let _ = ctx.run(
                 egui::RawInput {
                     events: vec![egui::Event::Key {
@@ -310,7 +309,7 @@ mod tests {
                     }],
                     ..Default::default()
                 },
-                |ctx| manager.transfer_windows(ctx, colors),
+                |ctx| manager.transfer_windows(ctx, &palette),
             );
             assert!(
                 manager.transfers.busy(),

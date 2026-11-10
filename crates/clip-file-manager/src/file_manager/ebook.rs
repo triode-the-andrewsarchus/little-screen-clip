@@ -1,6 +1,7 @@
 //! Chapter navigation and reflowed reading, sharing one bounded EPUB model with rows.
 use super::{media::PreviewData, preview_job::Task};
 use crate::{icons::Icon, shell::StudioShell};
+use clip_ui::buttons::ButtonRole;
 use little_clip_core::{
     BackgroundJobs,
     ebook::{Block, Book},
@@ -338,10 +339,10 @@ impl Viewer {
             if ui
                 .add_enabled(
                     self.selected > 0,
-                    egui::Button::new(format!(
-                        "Previous {}",
-                        self.book.unit().to_ascii_lowercase()
-                    )),
+                    ButtonRole::Secondary.button(
+                        format!("Previous {}", self.book.unit().to_ascii_lowercase()),
+                        palette,
+                    ),
                 )
                 .clicked()
             {
@@ -350,14 +351,20 @@ impl Viewer {
             if ui
                 .add_enabled(
                     self.selected + 1 < self.book.chapters().len(),
-                    egui::Button::new(format!("Next {}", self.book.unit().to_ascii_lowercase())),
+                    ButtonRole::Secondary.button(
+                        format!("Next {}", self.book.unit().to_ascii_lowercase()),
+                        palette,
+                    ),
                 )
                 .clicked()
             {
                 self.select(self.selected + 1);
             }
             if matches!(&*self.book, Publication::Comic(_)) {
-                if ui.button("Fit width").clicked() {
+                if ui
+                    .add(ButtonRole::Secondary.button("Fit width", palette))
+                    .clicked()
+                {
                     self.zoom = 100.0;
                 }
                 ui.add(

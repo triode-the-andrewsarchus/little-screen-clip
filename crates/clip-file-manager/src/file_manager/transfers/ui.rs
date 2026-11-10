@@ -1,4 +1,6 @@
+use clip_ui::buttons::ButtonRole;
 use egui::{Key, Modifiers, Ui};
+use little_clip_core::palette::AppPalette;
 use std::sync::atomic::Ordering;
 
 use super::super::{FileManager, display_path};
@@ -16,11 +18,17 @@ impl FileManager {
         self.transfers.trash.show();
     }
 
-    pub(crate) fn transfer_toolbar(&mut self, ui: &mut Ui) {
-        if ui.button("Clear held files").clicked() {
+    pub(crate) fn transfer_toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        if ui
+            .add(ButtonRole::Secondary.button("Clear held files", palette))
+            .clicked()
+        {
             self.transfers.clipboard = None;
         }
-        if ui.button(format!("Shelf ({})", self.shelf.len())).clicked() {
+        if ui
+            .add(ButtonRole::Secondary.button(format!("Shelf ({})", self.shelf.len()), palette))
+            .clicked()
+        {
             self.shelf.open = !self.shelf.open;
         }
     }
@@ -35,7 +43,12 @@ impl FileManager {
         }
     }
 
-    pub(crate) fn transfer_status(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+    pub(crate) fn transfer_status(
+        &mut self,
+        ui: &mut Ui,
+        colors: WorkbenchColors,
+        palette: &AppPalette,
+    ) {
         if !self.filesystem_busy()
             && let Some(directory) = &self.directory
         {
@@ -53,13 +66,13 @@ impl FileManager {
                 ui.colored_label(colors.warning, format!("{artifacts} transfer artifacts remain. Enable hidden files to inspect staged copies or preserved originals."));
             }
         }
-        self.transfers.status(ui, colors, !self.shelf.open);
+        self.transfers.status(ui, colors, !self.shelf.open, palette);
     }
 
-    pub(crate) fn transfer_windows(&mut self, ctx: &egui::Context, colors: WorkbenchColors) {
-        self.transfers.conflict_ui(ctx, colors);
-        self.transfers.confirmation_ui(ctx, colors);
-        self.transfers.trash_ui(ctx, colors);
+    pub(crate) fn transfer_windows(&mut self, ctx: &egui::Context, palette: &AppPalette) {
+        self.transfers.conflict_ui(ctx, palette);
+        self.transfers.confirmation_ui(ctx, palette);
+        self.transfers.trash_ui(ctx, palette);
     }
 }
 
@@ -76,7 +89,13 @@ impl Transfers {
         })
     }
 
-    fn status(&mut self, ui: &mut Ui, colors: WorkbenchColors, show_held: bool) {
+    fn status(
+        &mut self,
+        ui: &mut Ui,
+        colors: WorkbenchColors,
+        show_held: bool,
+        palette: &AppPalette,
+    ) {
         if let Some(running) = &self.running {
             let progress = running
                 .control
@@ -96,7 +115,10 @@ impl Transfers {
                     ))
                     .truncate(true),
                 );
-                if ui.button("Cancel operation").clicked() {
+                if ui
+                    .add(ButtonRole::Secondary.button("Cancel operation", palette))
+                    .clicked()
+                {
                     running.control.cancelled.store(true, Ordering::Relaxed);
                     running.control.decision_ready.notify_all();
                 }
@@ -105,7 +127,10 @@ impl Transfers {
         if !self.queue.is_empty() {
             ui.horizontal(|ui| {
                 ui.label(format!("{} batches waiting", self.queue.len()));
-                if ui.button("Cancel waiting").clicked() {
+                if ui
+                    .add(ButtonRole::Secondary.button("Cancel waiting", palette))
+                    .clicked()
+                {
                     self.cancel_waiting();
                 }
             });
@@ -153,7 +178,8 @@ impl Transfers {
         }
     }
 
-    fn conflict_ui(&mut self, ctx: &egui::Context, colors: WorkbenchColors) {
+    fn conflict_ui(&mut self, ctx: &egui::Context, palette: &AppPalette) {
+        let colors = WorkbenchColors::from_palette(palette);
         let Some(running) = &self.running else {
             return;
         };
@@ -177,14 +203,14 @@ impl Transfers {
                 ui.colored_label(colors.warning, "Replace discards the previous destination, including its contents if it is a folder. It cannot be undone here.");
                 ui.checkbox(&mut self.apply_all, "Apply Replace or Skip to remaining conflicts in this batch");
                 ui.horizontal(|ui| {
-                    if ui.button("Replace").clicked() { decision = Some(Decision::Replace); }
-                    if ui.button("Skip").clicked() { decision = Some(Decision::Skip); }
-                    cancel = ui.button("Cancel batch").clicked();
+                    if ui.add(ButtonRole::Destructive.button("Replace", palette)).clicked() { decision = Some(Decision::Replace); }
+                    if ui.add(ButtonRole::Secondary.button("Skip", palette)).clicked() { decision = Some(Decision::Skip); }
+                    cancel = ui.add(ButtonRole::Secondary.button("Cancel batch", palette)).clicked();
                 });
                 ui.horizontal(|ui| {
                     ui.label("Another name:");
                     ui.text_edit_singleline(&mut self.conflict_name);
-                    if ui.button("Use name").clicked() {
+                    if ui.add(ButtonRole::Primary.button("Use name", palette)).clicked() {
                         match super::super::edits::parse_name(&self.conflict_name) {
                             Ok(name) => decision = Some(Decision::Name(name)),
                             Err(error) => self.conflict_error = Some(error),
@@ -213,7 +239,8 @@ impl Transfers {
         }
     }
 
-    fn confirmation_ui(&mut self, ctx: &egui::Context, colors: WorkbenchColors) {
+    fn confirmation_ui(&mut self, ctx: &egui::Context, palette: &AppPalette) {
+        let colors = WorkbenchColors::from_palette(palette);
         let Some(confirmation) = &self.confirmation else {
             return;
         };
@@ -242,13 +269,18 @@ impl Transfers {
                 }
                 ui.horizontal(|ui| {
                     accept = ui
-                        .button(if confirmation.permanent {
-                            "Delete permanently"
-                        } else {
-                            "Move to Trash"
-                        })
+                        .add(ButtonRole::Destructive.button(
+                            if confirmation.permanent {
+                                "Delete permanently"
+                            } else {
+                                "Move to Trash"
+                            },
+                            palette,
+                        ))
                         .clicked();
-                    cancel = ui.button("Cancel").clicked();
+                    cancel = ui
+                        .add(ButtonRole::Secondary.button("Cancel", palette))
+                        .clicked();
                 });
             });
         accept |= ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter));
@@ -272,7 +304,8 @@ impl Transfers {
         }
     }
 
-    fn trash_ui(&mut self, ctx: &egui::Context, colors: WorkbenchColors) {
+    fn trash_ui(&mut self, ctx: &egui::Context, palette: &AppPalette) {
+        let colors = WorkbenchColors::from_palette(palette);
         if !self.trash.open {
             return;
         }
@@ -281,9 +314,9 @@ impl Transfers {
         egui::Window::new("Trash").default_size([640.0, 420.0]).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("Refresh").clicked() { self.trash.invalidate(); }
-                    restore = ui.add_enabled(!self.trash.selected.is_empty(), egui::Button::new("Restore selected")).clicked();
-                    close = ui.button("Close").clicked();
+                    if ui.add(ButtonRole::Secondary.button("Refresh", palette)).clicked() { self.trash.invalidate(); }
+                    restore = ui.add_enabled(!self.trash.selected.is_empty(), ButtonRole::Primary.button("Restore selected", palette)).clicked();
+                    close = ui.add(ButtonRole::Secondary.button("Close", palette)).clicked();
                 });
                 ui.label("Restore returns files to their original folders and refuses to overwrite existing entries.");
                 if self.trash.pending.is_some() { ui.spinner(); }

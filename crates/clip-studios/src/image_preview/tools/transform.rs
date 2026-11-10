@@ -56,8 +56,6 @@ impl ImagePreviewState {
     }
 
     pub(crate) fn render_transform_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let btn_bg = hex_to_c32(&palette.colors.surface_panel);
-
         ui.vertical(|ui| {
             ui.label(
                 egui::RichText::new("Transforms:")
@@ -68,10 +66,9 @@ impl ImagePreviewState {
             ui.add_space(crate::ui_ext::SPACE_SM);
 
             // Rotate CCW
-            let ccw_btn = crate::ui_ext::secondary_button_icon(
+            let ccw_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                 Some(Icon::RotateCcw),
                 "90° CCW",
-                btn_bg,
                 palette,
             );
             if ui
@@ -83,10 +80,9 @@ impl ImagePreviewState {
             }
 
             // Rotate CW
-            let cw_btn = crate::ui_ext::secondary_button_icon(
+            let cw_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                 Some(Icon::RotateCw),
                 "90° CW",
-                btn_bg,
                 palette,
             );
             if ui
@@ -98,8 +94,11 @@ impl ImagePreviewState {
             }
 
             // Rotate 180
-            let r180_btn =
-                crate::ui_ext::secondary_button_icon(Some(Icon::Repeat), "180°", btn_bg, palette);
+            let r180_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                Some(Icon::Repeat),
+                "180°",
+                palette,
+            );
             if ui
                 .add(r180_btn)
                 .on_hover_text("Rotate 180 degrees")
@@ -116,10 +115,9 @@ impl ImagePreviewState {
             );
 
             // Flip H
-            let fh_btn = crate::ui_ext::secondary_button_icon(
+            let fh_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                 Some(Icon::FlipHorizontal),
                 "Flip Horiz",
-                btn_bg,
                 palette,
             );
             if ui
@@ -131,10 +129,9 @@ impl ImagePreviewState {
             }
 
             // Flip V
-            let fv_btn = crate::ui_ext::secondary_button_icon(
+            let fv_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                 Some(Icon::FlipVertical),
                 "Flip Vert",
-                btn_bg,
                 palette,
             );
             if ui
@@ -147,10 +144,9 @@ impl ImagePreviewState {
 
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 // Revert all
-                let revert_btn = crate::ui_ext::secondary_button_icon(
+                let revert_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                     Some(Icon::RotateCcw),
                     "Revert to Original",
-                    btn_bg,
                     palette,
                 );
                 if ui.add(revert_btn).clicked() {
@@ -159,8 +155,11 @@ impl ImagePreviewState {
 
                 // Undo
                 if !self.undo_stack.is_empty() {
-                    let undo_btn =
-                        crate::ui_ext::secondary_button("⟲ Undo (Ctrl+Z)", btn_bg, palette);
+                    let undo_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                        Some(crate::icons::Icon::Undo),
+                        "Undo (Ctrl+Z)",
+                        palette,
+                    );
                     if ui.add(undo_btn).clicked() {
                         self.undo();
                     }

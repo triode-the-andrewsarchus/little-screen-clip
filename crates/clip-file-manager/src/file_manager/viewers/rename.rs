@@ -1,6 +1,7 @@
 //! One shared rename dialog for every ordinary file-backed editor.
 use super::super::{edits, system_route};
 use super::*;
+use clip_ui::buttons::ButtonRole;
 
 type RenameResult = Result<(PathBuf, FileSource), String>;
 #[derive(Default)]
@@ -23,8 +24,8 @@ impl Rename {
         self.open = true;
         self.focus = true;
     }
-    pub fn ui(&mut self, ui: &mut Ui) -> Option<(PathBuf, RenameResult)> {
-        if let Some(error) = self.dialog(ui) {
+    pub fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) -> Option<(PathBuf, RenameResult)> {
+        if let Some(error) = self.dialog(ui, palette) {
             return Some((self.source.as_ref()?.0.clone(), Err(error)));
         }
         if !self.requested {
@@ -71,7 +72,7 @@ impl Rename {
         self.finish();
         Some((path, result))
     }
-    fn dialog(&mut self, ui: &mut Ui) -> Option<String> {
+    fn dialog(&mut self, ui: &mut Ui, palette: &AppPalette) -> Option<String> {
         if !self.open {
             return None;
         }
@@ -100,8 +101,13 @@ impl Rename {
                     output.response.request_focus();
                 }
                 ui.horizontal(|ui| {
-                    submit |= ui.button("Rename").clicked();
-                    if ui.button("Cancel").clicked() {
+                    submit |= ui
+                        .add(ButtonRole::Primary.button("Rename", palette))
+                        .clicked();
+                    if ui
+                        .add(ButtonRole::Secondary.button("Cancel", palette))
+                        .clicked()
+                    {
                         self.open = false;
                     }
                 });

@@ -7,7 +7,8 @@ use crate::spreadsheet_view::InlineSpreadsheetPreview;
 use crate::text_preview::{InlineTextPreview, TextPreviewData};
 use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext::BODY_FONT_SIZE;
-use crate::ui_ext::{self, action_button, badge_pill, secondary_button, themed_button};
+use crate::ui_ext::{self, badge_pill};
+use clip_ui::buttons::ButtonRole;
 use eframe::egui::{self, Color32, RichText, Rounding, Stroke, Vec2};
 use little_clip_core::audio::{FullAudioAnalysis, PeakBlock};
 use little_clip_core::palette::AppPalette;
@@ -23,6 +24,7 @@ pub struct ComponentGalleryState {
     notes: String,
     level: f32,
     selected_mode: usize,
+    selected_tool: usize,
     enabled: bool,
     image_source: Arc<DecodedImageData>,
     text_source: Arc<TextPreviewData>,
@@ -111,6 +113,7 @@ impl Default for ComponentGalleryState {
             notes: "Multiline fields should remain comfortable to read.".to_owned(),
             level: 0.62,
             selected_mode: 0,
+            selected_tool: 0,
             enabled: true,
             image_source: Arc::clone(&image_source),
             text_source: Arc::clone(&text_source),
@@ -329,7 +332,7 @@ impl ComponentGalleryState {
                         badge_pill(ui, "STYLE CHECK", Some(colors.accent), palette);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
-                                .add(secondary_button("Close (Esc)", colors.recessed, palette))
+                                .add(ButtonRole::Secondary.button("Close (Esc)", palette))
                                 .clicked()
                             {
                                 *close = true;
@@ -353,7 +356,10 @@ impl ComponentGalleryState {
                 ui.horizontal(|ui| {
                     self.image_previews[0].show(ui, Vec2::new(150.0, 64.0));
                     self.image_previews[1].show(ui, Vec2::new(150.0, 64.0));
-                    if ui.button("Open Image Studio").clicked() {
+                    if ui
+                        .add(ButtonRole::Secondary.button("Open Image Studio", palette))
+                        .clicked()
+                    {
                         self.request_open(GalleryPreviewKind::Image);
                     }
                 });
@@ -362,7 +368,10 @@ impl ComponentGalleryState {
                 ui.horizontal(|ui| {
                     self.text_previews[0].show(ui, palette);
                     self.text_previews[1].show(ui, palette);
-                    if ui.button("Open Text Studio").clicked() {
+                    if ui
+                        .add(ButtonRole::Secondary.button("Open Text Studio", palette))
+                        .clicked()
+                    {
                         self.request_open(GalleryPreviewKind::Text);
                     }
                 });
@@ -371,7 +380,10 @@ impl ComponentGalleryState {
                 ui.horizontal(|ui| {
                     self.spreadsheet_previews[0].show(ui, palette);
                     self.spreadsheet_previews[1].show(ui, palette);
-                    if ui.button("Open Spreadsheet Studio").clicked() {
+                    if ui
+                        .add(ButtonRole::Secondary.button("Open Spreadsheet Studio", palette))
+                        .clicked()
+                    {
                         self.request_open(GalleryPreviewKind::Spreadsheet);
                     }
                 });
@@ -380,7 +392,10 @@ impl ComponentGalleryState {
                 ui.horizontal(|ui| {
                     self.midi_previews[0].show(ui, palette);
                     self.midi_previews[1].show(ui, palette);
-                    if ui.button("Open MIDI Studio").clicked() {
+                    if ui
+                        .add(ButtonRole::Secondary.button("Open MIDI Studio", palette))
+                        .clicked()
+                    {
                         self.request_open(GalleryPreviewKind::Midi);
                     }
                 });
@@ -389,7 +404,10 @@ impl ComponentGalleryState {
                 ui.horizontal(|ui| {
                     self.model3d_previews[0].show(ui, palette);
                     self.model3d_previews[1].show(ui, palette);
-                    if ui.button("Open Model3D Studio").clicked() {
+                    if ui
+                        .add(ButtonRole::Secondary.button("Open Model3D Studio", palette))
+                        .clicked()
+                    {
                         self.request_open(GalleryPreviewKind::Model3d);
                     }
                 });
@@ -399,7 +417,10 @@ impl ComponentGalleryState {
                     ui.allocate_ui(Vec2::new(260.0, 48.0), |ui| {
                         self.audio_preview.render(ui, palette);
                     });
-                    if ui.button("Open Audio Studio").clicked() {
+                    if ui
+                        .add(ButtonRole::Secondary.button("Open Audio Studio", palette))
+                        .clicked()
+                    {
                         self.request_open(GalleryPreviewKind::Audio);
                     }
                 });
@@ -408,7 +429,10 @@ impl ComponentGalleryState {
                 ui.horizontal(|ui| {
                     let ctx = ui.ctx().clone();
                     self.pdf_preview.show(ui, &ctx, Vec2::new(96.0, 128.0));
-                    if ui.button("Open PDF Editor").clicked() {
+                    if ui
+                        .add(ButtonRole::Secondary.button("Open PDF Editor", palette))
+                        .clicked()
+                    {
                         self.request_open(GalleryPreviewKind::Pdf);
                     }
                 });
@@ -418,20 +442,25 @@ impl ComponentGalleryState {
             ui.columns(2, |columns| {
                 render_section(&mut columns[0], "Buttons and modes", palette, |ui| {
                     ui.horizontal_wrapped(|ui| {
-                        ui.add(action_button("Primary action", colors.accent, palette));
-                        ui.add(secondary_button("Secondary", colors.recessed, palette));
-                        ui.add(themed_button("Destructive", colors.danger, None, palette));
+                        ui.add(ButtonRole::Primary.button("Primary action", palette));
+                        ui.add(ButtonRole::Secondary.button("Secondary", palette));
+                        ui.add(ButtonRole::Destructive.button("Destructive", palette));
                     });
                     ui.horizontal_wrapped(|ui| {
-                        ui.add_enabled(
-                            false,
-                            secondary_button("Disabled", colors.recessed, palette),
+                        ui.add_enabled(false, ButtonRole::Secondary.button("Disabled", palette));
+                        ui.add(ButtonRole::Secondary.button("Ordinary control", palette));
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add(
+                            ButtonRole::Secondary
+                                .button("Compact action", palette)
+                                .compact(),
                         );
-                        ui.add(secondary_button(
-                            "Ordinary control",
-                            colors.recessed,
-                            palette,
-                        ));
+                        ui.add(
+                            ButtonRole::Secondary
+                                .button("Inline action", palette)
+                                .small(),
+                        );
                     });
                     let tabs = [
                         crate::ui_tabs::Tab::new(0, "Normal"),
@@ -475,8 +504,17 @@ impl ComponentGalleryState {
                         }
                         ui.label("Choice controls use a shared readable baseline.");
                     });
-                    ui.add(egui::Slider::new(&mut self.level, 0.0..=1.0).text("Level"));
-                    crate::shell::render_track_slider(
+                    clip_ui::sliders::render_context_slider(
+                        ui,
+                        "Level",
+                        &mut self.level,
+                        0.0..=1.0,
+                        0.5,
+                        "",
+                        ui.spacing().slider_width,
+                        palette,
+                    );
+                    clip_ui::sliders::render_track_slider(
                         ui,
                         &mut self.level,
                         0.0..=1.0,
@@ -513,19 +551,30 @@ impl ComponentGalleryState {
 
                 render_section(&mut columns[1], "Panels and toolbar", palette, |ui| {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("IMAGE STUDIO").strong());
-                        ui.label(RichText::new("— sample.webp").color(colors.text_muted));
+                        ui.add(
+                            crate::icons::Icon::Image.label(RichText::new("sample.webp").strong()),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.add(secondary_button("Close", colors.recessed, palette));
-                            ui.add(action_button("Save", colors.accent, palette));
+                            ui.add(ButtonRole::Secondary.button("Close", palette));
+                            ui.add(ButtonRole::Primary.button("Save", palette));
                         });
                     });
                     ui.separator();
-                    ui.horizontal_wrapped(|ui| {
-                        for label in ["View", "Crop", "Markup", "Resize", "Convert"] {
-                            ui.add(secondary_button(label, colors.recessed, palette));
-                        }
-                    });
+                    let tools: Vec<_> = ["View", "Crop", "Markup", "Resize", "Convert"]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, label)| crate::ui_tabs::Tab::new(index, label))
+                        .collect();
+                    if let Some(tool) = crate::ui_tabs::TabBar::new(
+                        "gallery_tool_tabs",
+                        self.selected_tool,
+                        &tools,
+                        palette,
+                    )
+                    .show(ui)
+                    {
+                        self.selected_tool = tool;
+                    }
                     egui::Frame::none()
                         .fill(colors.recessed)
                         .rounding(Rounding::same(ui_ext::CARD_CORNER_RADIUS))

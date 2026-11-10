@@ -505,7 +505,7 @@ impl Viewer {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             let colors = WorkbenchColors::from_palette(palette);
             self.explorer_ui(ui, palette);
-            self.playback_ui(ui, colors);
+            self.playback_ui(ui, colors, palette);
         });
     }
     fn explorer_ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
@@ -531,7 +531,7 @@ impl Viewer {
                 self.explorer.lower,
                 self.explorer.upper,
             );
-            self.explorer.controls(ui);
+            self.explorer.controls(ui, palette);
             let current = (
                 self.explorer.quality,
                 self.explorer.voicing,
@@ -680,7 +680,7 @@ impl Viewer {
             self.play();
         }
     }
-    fn playback_ui(&mut self, ui: &mut egui::Ui, colors: WorkbenchColors) {
+    fn playback_ui(&mut self, ui: &mut egui::Ui, colors: WorkbenchColors, palette: &AppPalette) {
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
@@ -688,7 +688,7 @@ impl Viewer {
                         self.strike
                             .is_none_or(|strike| surface::matches(region, strike))
                     }) && self.task.is_none(),
-                    egui::Button::new("Replay sample"),
+                    clip_ui::buttons::ButtonRole::Secondary.button("Replay sample", palette),
                 )
                 .clicked()
             {
@@ -697,7 +697,7 @@ impl Viewer {
             if ui
                 .add_enabled(
                     self.player.is_some() || self.task.is_some() || self.midi.active(),
-                    egui::Button::new("Stop"),
+                    clip_ui::buttons::ButtonRole::Secondary.button("Stop", palette),
                 )
                 .clicked()
             {

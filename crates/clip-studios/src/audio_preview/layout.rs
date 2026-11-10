@@ -55,42 +55,6 @@ impl AudioWorkspace {
         )
     }
 
-    pub(super) fn primary_button(
-        label: impl Into<String>,
-        fill: Color32,
-        palette: &AppPalette,
-    ) -> crate::ui_ext::StyledButton<'static> {
-        Self::primary_button_icon(None, label, fill, palette)
-    }
-
-    pub(super) fn primary_button_icon(
-        icon: Option<crate::icons::Icon>,
-        label: impl Into<String>,
-        fill: Color32,
-        palette: &AppPalette,
-    ) -> crate::ui_ext::StyledButton<'static> {
-        crate::action_button_icon(icon, label, fill, palette)
-            .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
-    }
-
-    pub(super) fn secondary_button(
-        label: impl Into<String>,
-        fill: Color32,
-        palette: &AppPalette,
-    ) -> crate::ui_ext::StyledButton<'static> {
-        Self::secondary_button_icon(None, label, fill, palette)
-    }
-
-    pub(super) fn secondary_button_icon(
-        icon: Option<crate::icons::Icon>,
-        label: impl Into<String>,
-        fill: Color32,
-        palette: &AppPalette,
-    ) -> crate::ui_ext::StyledButton<'static> {
-        crate::secondary_button_icon(icon, label, fill, palette)
-            .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
-    }
-
     pub(super) fn toggle_button_icon(
         icon: Option<crate::icons::Icon>,
         label: impl Into<String>,
@@ -495,8 +459,8 @@ mod tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 for button in [
-                    AudioWorkspace::primary_button("Play", Color32::GREEN, &palette),
-                    AudioWorkspace::secondary_button("Start", Color32::DARK_GRAY, &palette),
+                    clip_ui::buttons::ButtonRole::Primary.button("Play", &palette),
+                    clip_ui::buttons::ButtonRole::Secondary.button("Start", &palette),
                     AudioWorkspace::toggle_button("Loop", true, &palette),
                 ] {
                     heights.push(ui.add(button).rect.height());

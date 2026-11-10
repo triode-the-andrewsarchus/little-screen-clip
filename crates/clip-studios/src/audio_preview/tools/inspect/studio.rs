@@ -7,10 +7,9 @@ impl AudioPreviewState {
         palette: &AppPalette,
         now: f64,
     ) {
-        let button = layout::AudioWorkspace::secondary_button_icon(
+        let button = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
             Some(crate::icons::Icon::Volume),
             "Normalize Track",
-            hex_to_c32(&palette.colors.surface_recessed),
             palette,
         );
         if ui
@@ -395,24 +394,15 @@ impl AudioPreviewState {
                 } else {
                     (crate::icons::Icon::Play, "Play [Space]")
                 };
-                let play_color = if self.is_playing {
-                    hex_to_c32(&palette.diff_mod)
-                } else {
-                    hex_to_c32(&palette.diff_add)
-                };
                 // Leave one point for bold glyph shaping beyond the regular-label measurement.
                 let play_width =
                     crate::ui_ext::equal_button_width(ui, &["Play [Space]", "Pause [Space]"], true)
                         + 1.0;
 
-                let play_btn = layout::AudioWorkspace::primary_button_icon(
-                    Some(play_icon),
-                    play_label,
-                    play_color,
-                    palette,
-                )
-                .min_size(Vec2::new(play_width, crate::ui_ext::CONTROL_HEIGHT))
-                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                let play_btn = clip_ui::buttons::ButtonRole::Primary
+                    .button_with_icon(Some(play_icon), play_label, palette)
+                    .min_size(Vec2::new(play_width, crate::ui_ext::CONTROL_HEIGHT))
+                    .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                 if ui.add(play_btn).clicked() {
                     self.toggle_play();
@@ -420,10 +410,9 @@ impl AudioPreviewState {
 
                 ui.add_space(3.0);
 
-                let replay_btn = layout::AudioWorkspace::secondary_button_icon(
+                let replay_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                     Some(crate::icons::Icon::Undo),
                     "Start",
-                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
                 if ui.add(replay_btn).clicked() {
@@ -458,10 +447,9 @@ impl AudioPreviewState {
                 ui.add_space(crate::ui_ext::SPACE_MD);
 
                 if ui
-                    .add(layout::AudioWorkspace::secondary_button_icon(
+                    .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                         Some(crate::icons::Icon::ZoomFit),
                         "Fit",
-                        hex_to_c32(&palette.colors.surface_recessed),
                         palette,
                     ))
                     .on_hover_text("Fit Track / Window (Ctrl+0)")
@@ -569,10 +557,9 @@ impl AudioPreviewState {
                 self.render_normalize_button(ui, palette, now);
 
                 // Trim Silence Button
-                let trim_btn = layout::AudioWorkspace::secondary_button_icon(
+                let trim_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                     Some(crate::icons::Icon::Scissors),
                     "Trim Silence",
-                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
                 if ui
@@ -597,13 +584,9 @@ impl AudioPreviewState {
                             "Copy Track [Ctrl+C]"
                         };
 
-                        let copy_btn = layout::AudioWorkspace::primary_button_icon(
-                            Some(crate::icons::Icon::Copy),
-                            copy_label,
-                            hex_to_c32(&palette.harmonies.base),
-                            palette,
-                        )
-                        .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                        let copy_btn = clip_ui::buttons::ButtonRole::Primary
+                            .button_with_icon(Some(crate::icons::Icon::Copy), copy_label, palette)
+                            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                         if ui
                             .add(copy_btn)
@@ -616,11 +599,8 @@ impl AudioPreviewState {
                         // Channel-Specific Copy Buttons (Left only mono, Right only mono)
                         if channels_count >= 2 {
                             ui.add_space(crate::ui_ext::SPACE_XS);
-                            let left_btn = layout::AudioWorkspace::secondary_button(
-                                "Copy left (mono)",
-                                hex_to_c32(&palette.colors.surface_recessed),
-                                palette,
-                            );
+                            let left_btn = clip_ui::buttons::ButtonRole::Secondary
+                                .button("Copy left (mono)", palette);
                             if ui
                                 .add(left_btn)
                                 .on_hover_text("Copy only the Left channel as a mono audio file")
@@ -629,11 +609,8 @@ impl AudioPreviewState {
                                 self.copy_selected_segment(now, ChannelCopyMode::LeftOnly);
                             }
 
-                            let right_btn = layout::AudioWorkspace::secondary_button(
-                                "Copy right (mono)",
-                                hex_to_c32(&palette.colors.surface_recessed),
-                                palette,
-                            );
+                            let right_btn = clip_ui::buttons::ButtonRole::Secondary
+                                .button("Copy right (mono)", palette);
                             if ui
                                 .add(right_btn)
                                 .on_hover_text("Copy only the Right channel as a mono audio file")
@@ -649,13 +626,9 @@ impl AudioPreviewState {
                         } else {
                             "Save Track... [Ctrl+S]"
                         };
-                        let save_btn = layout::AudioWorkspace::primary_button_icon(
-                            Some(crate::icons::Icon::Save),
-                            save_label,
-                            hex_to_c32(&palette.diff_add),
-                            palette,
-                        )
-                        .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                        let save_btn = clip_ui::buttons::ButtonRole::Primary
+                            .button_with_icon(Some(crate::icons::Icon::Save), save_label, palette)
+                            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
                         if ui.add(save_btn).on_hover_text("Save slice to disk formatted as original_name + timestamp + duration [Ctrl+S]").clicked() {
                                 self.open_save_dialog();
                             }
@@ -668,13 +641,9 @@ impl AudioPreviewState {
                             "Copy Track [Ctrl+C]".to_string()
                         };
 
-                        let copy_btn = layout::AudioWorkspace::primary_button_icon(
-                            Some(crate::icons::Icon::Copy),
-                            copy_label,
-                            hex_to_c32(&palette.harmonies.base),
-                            palette,
-                        )
-                        .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                        let copy_btn = clip_ui::buttons::ButtonRole::Primary
+                            .button_with_icon(Some(crate::icons::Icon::Copy), copy_label, palette)
+                            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                         if ui
                             .add(copy_btn)
@@ -688,11 +657,8 @@ impl AudioPreviewState {
 
                         if channels_count >= 2 {
                             ui.add_space(crate::ui_ext::SPACE_XS);
-                            let left_btn = layout::AudioWorkspace::secondary_button(
-                                "Copy left (mono)",
-                                hex_to_c32(&palette.colors.surface_recessed),
-                                palette,
-                            );
+                            let left_btn = clip_ui::buttons::ButtonRole::Secondary
+                                .button("Copy left (mono)", palette);
                             if ui
                                 .add(left_btn)
                                 .on_hover_text(
@@ -703,11 +669,8 @@ impl AudioPreviewState {
                                 self.copy_all_multi_segments(now, ChannelCopyMode::LeftOnly);
                             }
 
-                            let right_btn = layout::AudioWorkspace::secondary_button(
-                                "Copy right (mono)",
-                                hex_to_c32(&palette.colors.surface_recessed),
-                                palette,
-                            );
+                            let right_btn = clip_ui::buttons::ButtonRole::Secondary
+                                .button("Copy right (mono)", palette);
                             if ui
                                 .add(right_btn)
                                 .on_hover_text(
@@ -725,13 +688,9 @@ impl AudioPreviewState {
                         } else {
                             "Save Track [Ctrl+S]".to_string()
                         };
-                        let save_btn = layout::AudioWorkspace::primary_button_icon(
-                            Some(crate::icons::Icon::Save),
-                            save_label,
-                            hex_to_c32(&palette.diff_add),
-                            palette,
-                        )
-                        .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
+                        let save_btn = clip_ui::buttons::ButtonRole::Primary
+                            .button_with_icon(Some(crate::icons::Icon::Save), save_label, palette)
+                            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
                         if ui
                             .add(save_btn)
                             .on_hover_text(
@@ -748,10 +707,9 @@ impl AudioPreviewState {
 
                 let has_analysis = self.analysis.is_some();
 
-                let copy_wave_btn = layout::AudioWorkspace::secondary_button_icon(
+                let copy_wave_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                     Some(crate::icons::Icon::Copy),
                     "Copy Wave .png",
-                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
                 let copy_wave_response = crate::ui_ext::on_hover_text_with_disabled_reason(
@@ -765,10 +723,9 @@ impl AudioPreviewState {
 
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
-                let copy_spec_btn = layout::AudioWorkspace::secondary_button_icon(
+                let copy_spec_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                     Some(crate::icons::Icon::Copy),
                     "Copy FFT .png",
-                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
                 let copy_spec_response = crate::ui_ext::on_hover_text_with_disabled_reason(

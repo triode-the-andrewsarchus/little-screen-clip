@@ -603,27 +603,14 @@ impl<'a> StudioShell<'a> {
                     let ui = &mut action_ui;
                     // Place the actions at the far right of the title row.
                     for (idx, hatch) in self.escape_hatches.iter().enumerate().rev() {
-                        let (bg, fg) = if hatch.is_primary {
-                            (colors.accent, colors.text_primary)
+                        let role = if hatch.is_primary {
+                            clip_ui::buttons::ButtonRole::Primary
                         } else {
-                            (colors.panel, colors.text_secondary)
+                            clip_ui::buttons::ButtonRole::Secondary
                         };
-                        let contrast_fg = contrast_text_c32(bg, Some(fg), palette);
-                        let text = egui::RichText::new(&hatch.label)
-                            .strong()
-                            .color(contrast_fg);
-                        let btn = if let Some(icon) = hatch.icon {
-                            egui::Button::image_and_text(
-                                icon.image_tinted(CONTROL_ICON_SIZE, contrast_fg),
-                                text,
-                            )
-                        } else {
-                            egui::Button::new(text)
-                        }
-                        .fill(bg)
-                        .stroke(Stroke::new(1.0_f32, colors.recessed))
-                        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-                        .min_size(Vec2::new(hatch_width, CONTROL_HEIGHT));
+                        let btn = role
+                            .button_with_icon(hatch.icon, &hatch.label, palette)
+                            .min_size(Vec2::new(hatch_width, CONTROL_HEIGHT));
 
                         if ui.add(btn).on_hover_text(&hatch.tooltip).clicked() {
                             clicked_hatch = Some(idx);
@@ -634,16 +621,11 @@ impl<'a> StudioShell<'a> {
                     right_actions(ui);
 
                     if file_editor.is_none() {
-                        let close_bg = colors.panel;
-                        let close_fg = contrast_text_c32(close_bg, Some(colors.danger), palette);
-                        let close_btn = egui::Button::image_and_text(
-                            Icon::Close.image_tinted(CONTROL_ICON_SIZE, close_fg),
-                            egui::RichText::new("Close (Esc)").strong().color(close_fg),
-                        )
-                        .fill(close_bg)
-                        .stroke(Stroke::new(1.0_f32, colors.recessed))
-                        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-                        .min_size(Vec2::new(0.0, CONTROL_HEIGHT));
+                        let close_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                            Some(Icon::Close),
+                            "Close (Esc)",
+                            palette,
+                        );
 
                         if ui.add(close_btn).clicked() {
                             *self.close = true;
@@ -866,7 +848,7 @@ impl<'a> StudioShell<'a> {
                                 ui.set_min_width(center_width);
                                 render_center(ui);
                                 if has_photo_controls {
-                                    super::file_editor::FileEditor::photo_controls(ui);
+                                    super::file_editor::FileEditor::photo_controls(ui, palette);
                                 }
                             },
                         );
@@ -1089,7 +1071,6 @@ mod tests {
         crate::ui_ext::configure_workbench_style(&ctx);
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-        let colors = WorkbenchColors::from_palette(&palette);
         let mut close = false;
         let output = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -1100,6 +1081,23 @@ mod tests {
                 shell.render_header(ui, |_| {});
             });
         });
+
+        fn outline_width(shape: &egui::epaint::Shape, text_center: f32) -> Option<f32> {
+            match shape {
+                egui::epaint::Shape::Vec(shapes) => shapes
+                    .iter()
+                    .find_map(|shape| outline_width(shape, text_center)),
+                egui::epaint::Shape::Rect(rect)
+                    if rect.stroke.width > 0.0
+                        && (rect.rect.height() - crate::ui_ext::CONTROL_HEIGHT).abs() < 0.1
+                        && rect.rect.left() <= text_center
+                        && text_center <= rect.rect.right() =>
+                {
+                    Some(rect.rect.width())
+                }
+                _ => None,
+            }
+        }
 
         let hatch_widths: Vec<_> = ["Krita", "Inkscape", "Nomacs"]
             .iter()
@@ -1117,18 +1115,7 @@ mod tests {
                 output
                     .shapes
                     .iter()
-                    .find_map(|clipped| match &clipped.shape {
-                        egui::epaint::Shape::Rect(rect)
-                            if rect.fill == colors.panel
-                                && (rect.rect.height() - crate::ui_ext::CONTROL_HEIGHT).abs()
-                                    < 0.1
-                                && rect.rect.left() <= text_center
-                                && text_center <= rect.rect.right() =>
-                        {
-                            Some(rect.rect.width())
-                        }
-                        _ => None,
-                    })
+                    .find_map(|clipped| outline_width(&clipped.shape, text_center))
                     .unwrap_or_else(|| panic!("missing button background for {label}"))
             })
             .collect();

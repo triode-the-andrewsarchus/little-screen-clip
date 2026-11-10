@@ -78,7 +78,6 @@ impl MidiViewerState {
         let f_low = crate::hex_to_c32(&palette.colors.text_muted);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let playhead_color = crate::hex_to_c32(&palette.harmonies.complementary);
-        let success_color = crate::hex_to_c32(&palette.diff_add);
         let pause_color = crate::hex_to_c32(&palette.harmonies.warm_attention);
 
         egui::Frame::none()
@@ -168,7 +167,7 @@ impl MidiViewerState {
                         ui.horizontal_wrapped(|ui| {
                             // Transport controls
                             if is_playing {
-                                let pause_btn = crate::ui_ext::action_button_icon(Some(Icon::Pause), "Pause [Space]", pause_color, palette);
+                                let pause_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(Icon::Pause), "Pause [Space]", palette);
                                 if ui.add(pause_btn).clicked() {
                                     pause_clicked = true;
                                 }
@@ -178,15 +177,13 @@ impl MidiViewerState {
                                 } else {
                                     "Play [Space]"
                                 };
-                                let play_btn = crate::ui_ext::action_button_icon(Some(if self.is_synthesizing { Icon::Hourglass } else { Icon::Play }), play_label, success_color, palette);
+                                let play_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(Some(if self.is_synthesizing { Icon::Hourglass } else { Icon::Play }), play_label, palette);
                                 if ui.add(play_btn).clicked() {
                                     play_clicked = true;
                                 }
                             }
 
-                            let stop_btn = crate::ui_ext::action_button_icon(Some(Icon::Stop), "Stop", b_med, palette)
-                                .min_size(egui::Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT))
-                                .stroke(Stroke::new(1.0_f32, b_low));
+                            let stop_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Stop), "Stop", palette);
                             if ui.add(stop_btn).clicked() {
                                 stop_clicked = true;
                             }
@@ -220,7 +217,7 @@ impl MidiViewerState {
                                 }
                                 (false, None) => "Copy MIDI [Ctrl+C]".to_string(),
                             };
-                            let copy_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Copy), copy_label, b_med, palette)
+                            let copy_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Copy), copy_label, palette)
                                 .min_size(egui::Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                             if ui.add(copy_btn).on_hover_text("Export selected region (or full score) as .mid to Left Hand & clipboard").clicked() {
                                 copy_clicked = true;
@@ -237,8 +234,8 @@ impl MidiViewerState {
                                             .strong()
                                             .color(accent),
                                     );
-                                    let x_btn = egui::Button::image_and_text(crate::icons::Icon::Close.image_tinted(crate::ui_ext::CONTROL_ICON_SIZE, ui.visuals().text_color()), egui::RichText::new("").size(crate::ui_ext::BODY_FONT_SIZE))
-                                        .min_size(egui::Vec2::new(crate::ui_ext::CONTROL_HEIGHT, crate::ui_ext::CONTROL_HEIGHT));
+                                    let x_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Close), "", palette)
+                                        .min_size(egui::Vec2::splat(crate::ui_ext::CONTROL_HEIGHT));
                                     if ui.add(x_btn).on_hover_text("Clear selection [Esc]").clicked() {
                                         clear_sel_clicked = true;
                                     }

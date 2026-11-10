@@ -93,7 +93,7 @@ impl FileEditor {
             ctx.data_mut(|data| data.insert_temp(Self::id(), chrome));
         }
     }
-    pub fn photo_controls(ui: &mut Ui) {
+    pub fn photo_controls(ui: &mut Ui, palette: &little_clip_core::palette::AppPalette) {
         let Some(mut chrome) = Self::current(ui.ctx()) else {
             return;
         };
@@ -107,7 +107,11 @@ impl FileEditor {
             ui.spacing_mut().button_padding = egui::vec2(2.0, 1.0);
             ui.spacing_mut().interact_size.y = 18.0;
             if ui
-                .small_button("0")
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("0", palette)
+                        .small(),
+                )
                 .on_hover_text("Clear rating [0]")
                 .clicked()
             {
@@ -228,11 +232,15 @@ mod tests {
                                 shell.render_footer_with_center(ui, &None, 0.0, 184.0, |ui| {
                                     ui.add_sized(
                                         egui::vec2(56.0, 24.0),
-                                        egui::Button::new("Reset").small(),
+                                        clip_ui::buttons::ButtonRole::Secondary
+                                            .button("Reset", &palette)
+                                            .small(),
                                     );
                                     ui.add_sized(
                                         egui::vec2(40.0, 24.0),
-                                        egui::Button::new("1:1").small(),
+                                        clip_ui::buttons::ButtonRole::Secondary
+                                            .button("1:1", &palette)
+                                            .small(),
                                     );
                                 });
                                 height = ui.cursor().top() - start;

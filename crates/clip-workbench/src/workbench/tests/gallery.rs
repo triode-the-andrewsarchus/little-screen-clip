@@ -3,7 +3,7 @@ use super::*;
 fn contextual_palette_preview_actions_use_neutral_secondary_surface() {
     for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
         let palette = ui_appearance::palette(appearance);
-        let expected_fill = hex_to_c32(&palette.colors.surface_panel);
+        let expected_fill = crate::ui_appearance::WorkbenchColors::from_palette(&palette).raised;
         let ctx = egui::Context::default();
         let output = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -57,7 +57,10 @@ fn contextual_palette_preview_actions_use_neutral_secondary_surface() {
                 );
             }
         }
-        assert!(saw_fill, "{appearance:?} action should use panel fill");
+        assert!(
+            saw_fill,
+            "{appearance:?} action should use the shared secondary fill"
+        );
         assert!(saw_label, "{appearance:?} action label should render");
     }
 }

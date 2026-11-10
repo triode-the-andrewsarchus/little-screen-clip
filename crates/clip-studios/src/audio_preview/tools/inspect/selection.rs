@@ -52,10 +52,9 @@ impl AudioPreviewState {
                             }
                             Self::render_crossfade_label(ui, self.active_region_crossfade());
                             if ui
-                                .add(layout::AudioWorkspace::secondary_button_icon(
+                                .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                                     Some(crate::icons::Icon::Close),
                                     "Clear",
-                                    hex_to_c32(&palette.colors.surface_recessed),
                                     palette,
                                 ))
                                 .clicked()
@@ -125,10 +124,9 @@ impl AudioPreviewState {
                         }
                         if count > 0
                             && ui
-                                .add(layout::AudioWorkspace::secondary_button_icon(
+                                .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                                     Some(crate::icons::Icon::Trash),
                                     "Clear All",
-                                    hex_to_c32(&palette.colors.surface_recessed),
                                     palette,
                                 ))
                                 .clicked()

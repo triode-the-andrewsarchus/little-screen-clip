@@ -343,16 +343,11 @@ impl RollingAudioStripState {
                 };
                 let refresh_btn = ui.add_enabled(
                     self.snapshot_job.is_none(),
-                    crate::ui_ext::secondary_button_icon(
+                    clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                         Some(Icon::RotateCw),
                         refresh_label,
-                        hex_to_c32(&palette.colors.surface_recessed),
                         palette,
-                    )
-                    .stroke(Stroke::new(
-                        1.0_f32,
-                        hex_to_c32(&palette.colors.surface_panel),
-                    )),
+                    ),
                 );
                 if refresh_btn.clicked() {
                     self.load_snapshot();

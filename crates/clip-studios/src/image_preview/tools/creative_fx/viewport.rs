@@ -16,7 +16,6 @@ impl ImagePreviewState {
         let f_high = hex_to_c32(&palette.colors.text_primary);
         let f_med = hex_to_c32(&palette.colors.text_secondary);
         let f_low = hex_to_c32(&palette.colors.text_muted);
-        let diff_add = hex_to_c32(&palette.diff_add);
 
         // Upload any newly received thumbnails into GPU textures
         for (fx_type, rgba) in self.creative_fx_state.pending_thumbnails.drain(..) {
@@ -393,22 +392,8 @@ impl ImagePreviewState {
                             for preset in &presets {
                                 let sel =
                                     self.creative_fx_state.selected_preset_name == preset.name;
-                                let (s_bg, s_fg) = if sel {
-                                    (base_c, contrast_text_c32(base_c, None, palette))
-                                } else {
-                                    (b_med, f_med)
-                                };
-                                let btn = egui::Button::new(
-                                    egui::RichText::new(preset.name)
-                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                        .strong()
-                                        .color(s_fg),
-                                )
-                                .fill(s_bg)
-                                .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
-                                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                                .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
-
+                                let btn = crate::ui_ext::mode_tab_button(preset.name, sel, palette)
+                                    .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
                                 if ui.add(btn).on_hover_text(preset.description).clicked() {
                                     self.creative_fx_state.selected_preset_name =
                                         preset.name.to_string();
@@ -499,21 +484,13 @@ impl ImagePreviewState {
                             ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                             // ── Action Buttons ──
-                            let apply_fg = contrast_text_c32(diff_add, Some(f_high), palette);
-                            let apply_btn = egui::Button::image_and_text(
-                                crate::icons::Icon::Check.image_tinted(
-                                    crate::ui_ext::CONTROL_ICON_SIZE,
-                                    ui.visuals().text_color(),
-                                ),
-                                egui::RichText::new("Apply to Image")
-                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .strong()
-                                    .color(apply_fg),
-                            )
-                            .fill(diff_add)
-                            .stroke(Stroke::new(1.0_f32, diff_add))
-                            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                            .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
+                            let apply_btn = clip_ui::buttons::ButtonRole::Primary
+                                .button_with_icon(
+                                    Some(crate::icons::Icon::Check),
+                                    "Apply to Image",
+                                    palette,
+                                )
+                                .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
 
                             let apply_enabled = self.creative_fx_state.preview_rgba.is_some()
                                 && self.creative_fx_state.preview_stamp.as_ref()
@@ -530,17 +507,13 @@ impl ImagePreviewState {
 
                             ui.add_space(crate::ui_ext::SPACE_XS);
 
-                            let reset_fg = contrast_text_c32(b_med, Some(f_med), palette);
-                            let reset_btn = egui::Button::new(
-                                egui::RichText::new("⟲ Reset Defaults")
-                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .strong()
-                                    .color(reset_fg),
-                            )
-                            .fill(b_med)
-                            .stroke(Stroke::new(1.0_f32, b_low))
-                            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                            .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
+                            let reset_btn = clip_ui::buttons::ButtonRole::Secondary
+                                .button_with_icon(
+                                    Some(crate::icons::Icon::Undo),
+                                    "Reset Defaults",
+                                    palette,
+                                )
+                                .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
 
                             if ui
                                 .add(reset_btn)

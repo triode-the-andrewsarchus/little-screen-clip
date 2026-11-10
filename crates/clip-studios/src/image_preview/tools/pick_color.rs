@@ -560,7 +560,7 @@ impl ImagePreviewState {
             });
         });
         ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-        let copy_hex = crate::action_button("Copy current hex", accent, palette);
+        let copy_hex = clip_ui::buttons::ButtonRole::Primary.button("Copy current hex", palette);
         if ui
             .add_sized(
                 [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
@@ -602,7 +602,7 @@ impl ImagePreviewState {
         }
 
         ui.add_space(crate::ui_ext::SPACE_XS);
-        let copy_all = crate::secondary_button("Copy all colors", surface, palette);
+        let copy_all = clip_ui::buttons::ButtonRole::Secondary.button("Copy all colors", palette);
         if ui
             .add_sized(
                 [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
@@ -643,7 +643,7 @@ impl ImagePreviewState {
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(crate::compact_toolbar_button("Copy", surface, palette))
+                        .add(clip_ui::buttons::ButtonRole::Secondary.button("Copy", palette))
                         .clicked()
                     {
                         self.copy_color_to_clipboard(color, ctx);

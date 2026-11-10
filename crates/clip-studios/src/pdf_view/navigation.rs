@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui_tabs::{Tab, TabBar};
+use clip_ui::buttons::ButtonRole;
 use little_clip_core::pdf::{PdfOutlineEntry, extract_pdf_page_text, read_pdf_outline};
 use std::sync::mpsc::channel;
 
@@ -376,12 +377,22 @@ impl PdfEditorState {
         false
     }
 
-    pub(super) fn navigation_buttons(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Find [Ctrl+F]").clicked() {
+    pub(super) fn navigation_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
+        if ui
+            .add(ButtonRole::Secondary.button("Find [Ctrl+F]", palette))
+            .clicked()
+        {
             self.navigation.right = Some(RightTab::Find);
             self.navigation.focus_find = true;
         }
-        if ui.button("OCR").clicked() {
+        if ui
+            .add(ButtonRole::Secondary.button("OCR", palette))
+            .clicked()
+        {
             self.navigation.right = Some(RightTab::Ocr);
         }
     }
@@ -407,7 +418,14 @@ impl PdfEditorState {
             self.navigation.focus_find = tab == RightTab::Find;
         }
         ui.add_space(crate::ui_ext::SPACE_SM);
-        if ui.small_button("Hide panel").clicked() {
+        if ui
+            .add(
+                clip_ui::buttons::ButtonRole::Secondary
+                    .button("Hide panel", palette)
+                    .small(),
+            )
+            .clicked()
+        {
             self.navigation.right = None;
         }
         match self.navigation.right {
@@ -423,12 +441,16 @@ impl PdfEditorState {
                     self.selected_page = Some(page);
                 }
             }
-            Some(RightTab::Ocr) => self.render_pdf_ocr_controls(ui),
+            Some(RightTab::Ocr) => self.render_pdf_ocr_controls(ui, palette),
             None => {}
         }
     }
 
-    fn render_pdf_ocr_controls(&mut self, ui: &mut egui::Ui) {
+    fn render_pdf_ocr_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
         ui.label("Tesseract · searchable PDF");
         ui.label(
             "Adds invisible text beneath the page content. Native text and images are preserved.",
@@ -441,7 +463,10 @@ impl PdfEditorState {
         );
         if self.document_tools.ocr_busy() {
             ui.spinner();
-            if ui.button("Cancel OCR").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Cancel OCR", palette))
+                .clicked()
+            {
                 self.document_tools.cancel_ocr();
             }
         } else if ui
@@ -450,11 +475,14 @@ impl PdfEditorState {
                     && self.info_job.is_none()
                     && self.document_tools.layout.is_some()
                     && !self.document_tools.ocr_complete,
-                egui::Button::new(if self.document_tools.ocr_complete {
-                    "Text layer already complete"
-                } else {
-                    "Add text layer to PDF"
-                }),
+                ButtonRole::Primary.button(
+                    if self.document_tools.ocr_complete {
+                        "Text layer already complete"
+                    } else {
+                        "Add text layer to PDF"
+                    },
+                    palette,
+                ),
             )
             .clicked()
         {

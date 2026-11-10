@@ -1,7 +1,9 @@
 //! Search preferences are edited locally and persisted by the index coordinator.
 use super::{service::Command, store::RootState};
 use crate::file_manager::{FileManager, filesystem};
+use clip_ui::buttons::ButtonRole;
 use little_clip_core::config::FileSearchConfig;
+use little_clip_core::palette::AppPalette;
 
 #[derive(Default)]
 pub(in crate::file_manager) struct Settings {
@@ -32,14 +34,22 @@ struct ViewState {
 use clip_search::policy::validate_preferences as validate;
 
 impl Settings {
-    fn restore_ui(&mut self, ui: &mut egui::Ui, busy: bool) -> Option<Command> {
+    fn restore_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        busy: bool,
+        palette: &AppPalette,
+    ) -> Option<Command> {
         let mut command = None;
         ui.label("Restore source");
         ui.add(egui::TextEdit::singleline(&mut self.restore_address).desired_width(f32::INFINITY));
         if self.restore_confirm {
             ui.label("Replace the generated index with this backup and pause indexing? Configured folders will be kept. Restored files require fresh verification.");
             if ui
-                .add_enabled(!busy, egui::Button::new("Restore index and pause"))
+                .add_enabled(
+                    !busy,
+                    ButtonRole::Destructive.button("Restore index and pause", palette),
+                )
                 .clicked()
             {
                 match filesystem::decode_path(&self.restore_address) {
@@ -50,11 +60,17 @@ impl Settings {
                     _ => self.error = Some("Enter an absolute backup filename".into()),
                 }
             }
-            if ui.button("Cancel restore").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Cancel restore", palette))
+                .clicked()
+            {
                 self.restore_confirm = false;
             }
         } else if ui
-            .add_enabled(!busy, egui::Button::new("Restore index…"))
+            .add_enabled(
+                !busy,
+                ButtonRole::Secondary.button("Restore index…", palette),
+            )
             .clicked()
         {
             self.restore_confirm = true;
@@ -64,23 +80,35 @@ impl Settings {
         command
     }
 
-    fn recovery_ui(&mut self, ui: &mut egui::Ui, busy: bool, has_index: bool) -> Option<Command> {
+    fn recovery_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        busy: bool,
+        has_index: bool,
+        palette: &AppPalette,
+    ) -> Option<Command> {
         if self.recover_confirm {
             ui.label("Pause indexing and create an empty cache? The previous database and SQLite sidecars will be preserved in a private recovery folder. Configured folders, models and source files are kept. Use this when the index cannot be opened.");
             if ui
-                .add_enabled(!busy, egui::Button::new("Preserve old cache and reset"))
+                .add_enabled(
+                    !busy,
+                    ButtonRole::Primary.button("Preserve old cache and reset", palette),
+                )
                 .clicked()
             {
                 self.recover_confirm = false;
                 return Some(Command::Recover);
             }
-            if ui.button("Cancel recovery").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Cancel recovery", palette))
+                .clicked()
+            {
                 self.recover_confirm = false;
             }
         } else if ui
             .add_enabled(
                 !busy && has_index,
-                egui::Button::new("Recover unreadable index…"),
+                ButtonRole::Secondary.button("Recover unreadable index…", palette),
             )
             .clicked()
         {
@@ -97,12 +125,16 @@ impl Settings {
         busy: bool,
         has_index: bool,
         outcome: Option<&Result<String, String>>,
+        palette: &AppPalette,
     ) -> Option<Command> {
         let mut command = None;
         ui.label("Backup destination");
         ui.add(egui::TextEdit::singleline(&mut self.backup_address).desired_width(f32::INFINITY));
         if ui
-            .add_enabled(!busy && has_index, egui::Button::new("Back up index"))
+            .add_enabled(
+                !busy && has_index,
+                ButtonRole::Primary.button("Back up index", palette),
+            )
             .clicked()
         {
             match filesystem::decode_path(&self.backup_address) {
@@ -120,19 +152,25 @@ impl Settings {
         if self.clear_confirm {
             ui.label("Clear generated inventory and embeddings, then pause indexing? Enrolled folders and models will be kept. Source files are unchanged.");
             if ui
-                .add_enabled(!busy, egui::Button::new("Clear index and pause"))
+                .add_enabled(
+                    !busy,
+                    ButtonRole::Destructive.button("Clear index and pause", palette),
+                )
                 .clicked()
             {
                 self.clear_confirm = false;
                 command = Some(Command::Clear);
             }
-            if ui.button("Cancel clear").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Cancel clear", palette))
+                .clicked()
+            {
                 self.clear_confirm = false;
             }
         } else if ui
             .add_enabled(
                 !busy && has_index,
-                egui::Button::new("Clear generated index…"),
+                ButtonRole::Secondary.button("Clear generated index…", palette),
             )
             .clicked()
         {
@@ -140,8 +178,8 @@ impl Settings {
             self.restore_confirm = false;
             self.recover_confirm = false;
         }
-        command = self.restore_ui(ui, busy).or(command);
-        command = self.recovery_ui(ui, busy, has_index).or(command);
+        command = self.restore_ui(ui, busy, palette).or(command);
+        command = self.recovery_ui(ui, busy, has_index, palette).or(command);
         if let Some(outcome) = outcome {
             match outcome {
                 Ok(message) => {
@@ -157,7 +195,12 @@ impl Settings {
         }
         command
     }
-    fn show(&mut self, ctx: &egui::Context, state: &ViewState) -> Option<Command> {
+    fn show(
+        &mut self,
+        ctx: &egui::Context,
+        state: &ViewState,
+        palette: &AppPalette,
+    ) -> Option<Command> {
         if self.maintenance_pending && !state.busy {
             self.draft.paused = state.paused;
             self.maintenance_pending = false;
@@ -184,11 +227,13 @@ impl Settings {
                 ui.collapsing("Semantic relevance thresholds", |ui| {
                     ui.small("Higher values omit weaker meaning matches. Filename and keyword matches remain available. Changing thresholds does not rebuild vectors.");
                     for modality in ["text", "image", "audio"] {
-                        ui.add(egui::Slider::new(self.draft.semantic_floors.entry(modality.into()).or_insert_with(|| FileSearchConfig::default_semantic_floor(modality)), -1.0..=1.0).text(modality));
+                        let default = FileSearchConfig::default_semantic_floor(modality);
+                        let value = self.draft.semantic_floors.entry(modality.into()).or_insert(default);
+                        clip_ui::sliders::render_context_slider(ui, modality, value, -1.0..=1.0, default, "", ui.spacing().slider_width, palette);
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Save preferences").clicked() {
+                    if ui.add(ButtonRole::Primary.button("Save preferences", palette)).clicked() {
                         self.draft.excluded_paths = self.exclusions.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
                         self.draft.always_search = self.locations.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
                         match validate(&self.draft) {
@@ -196,7 +241,7 @@ impl Settings {
                             Err(error) => self.error = Some(error),
                         }
                     }
-                    if ui.button("Close").clicked() { self.open = false; }
+                    if ui.add(ButtonRole::Secondary.button("Close", palette)).clicked() { self.open = false; }
                 });
                 if let Some(error) = self.error.as_deref().or(error) {
                     ui.colored_label(ui.visuals().error_fg_color, error);
@@ -220,8 +265,8 @@ impl Settings {
                         ui.small(format!("{} · {} files · {} vectors", root.state, root.files, root.vectors));
                         if let Some(error) = &root.error { ui.small(error); }
                         ui.horizontal(|ui| {
-                            if ui.button("Refresh index").clicked() { command = Some(Command::Rebuild(root.path.clone())); }
-                            if ui.button("Remove indexed folder").clicked() { command = Some(Command::Remove(root.path.clone())); }
+                            if ui.add(ButtonRole::Secondary.button("Refresh index", palette)).clicked() { command = Some(Command::Rebuild(root.path.clone())); }
+                            if ui.add(ButtonRole::Destructive.button("Remove indexed folder", palette)).clicked() { command = Some(Command::Remove(root.path.clone())); }
                         });
                     });
                 }
@@ -231,7 +276,7 @@ impl Settings {
                     ui.horizontal(|ui| { ui.label("Vectors"); ui.add(egui::DragValue::new(&mut self.draft.limits.max_vectors).clamp_range(1..=100_000_000)); });
                 });
                 ui.collapsing("Index maintenance", |ui| {
-                    command = self.maintenance_ui(ui, busy, has_index, outcome).or(command.take());
+                    command = self.maintenance_ui(ui, busy, has_index, outcome, palette).or(command.take());
                 });
             });
         });
@@ -265,7 +310,11 @@ impl FileManager {
             maintenance_pending: false,
         };
     }
-    pub(in crate::file_manager) fn search_settings_ui(&mut self, ctx: &egui::Context) {
+    pub(in crate::file_manager) fn search_settings_ui(
+        &mut self,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+    ) {
         if !self.search.preferences.open {
             return;
         }
@@ -286,7 +335,7 @@ impl FileManager {
                 }
             })
             .unwrap_or_default();
-        if let Some(command) = self.search.preferences.show(ctx, &state) {
+        if let Some(command) = self.search.preferences.show(ctx, &state, palette) {
             let maintenance = matches!(
                 &command,
                 Command::Restore(_) | Command::Clear | Command::Recover
@@ -317,7 +366,7 @@ mod tests {
                 ..Default::default()
             };
             let _ = context.run(Default::default(), |context| {
-                settings.show(context, &busy);
+                settings.show(context, &busy, &AppPalette::default());
             });
             assert!(settings.maintenance_pending);
             let completed = ViewState {
@@ -325,7 +374,7 @@ mod tests {
                 ..Default::default()
             };
             let _ = context.run(Default::default(), |context| {
-                settings.show(context, &completed);
+                settings.show(context, &completed, &AppPalette::default());
             });
             assert!(!settings.maintenance_pending);
             assert_eq!(settings.draft.paused, paused);

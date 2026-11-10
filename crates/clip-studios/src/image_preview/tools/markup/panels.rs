@@ -165,16 +165,17 @@ impl ImagePreviewState {
 
             // Stroke Width Slider
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("Stroke:")
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .color(f_med),
-                );
                 let mut stroke_w = self.markup_state.active_stroke_width;
-                if ui
-                    .add(egui::Slider::new(&mut stroke_w, 1.0..=32.0).suffix(" px"))
-                    .changed()
-                {
+                if clip_ui::sliders::render_context_slider(
+                    ui,
+                    "Stroke",
+                    &mut stroke_w,
+                    1.0..=32.0,
+                    MarkupState::DEFAULT_STROKE_WIDTH,
+                    " px",
+                    (ui.available_width() - 90.0).max(48.0),
+                    palette,
+                ) {
                     self.markup_state.active_stroke_width = stroke_w;
                     if let Some(sel) = self.markup_state.selected_idx {
                         if sel < self.markup_state.items.len() {
@@ -186,16 +187,17 @@ impl ImagePreviewState {
 
             // Font Size Slider
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("Font:")
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .color(f_med),
-                );
                 let mut font_sz = self.markup_state.active_font_size;
-                if ui
-                    .add(egui::Slider::new(&mut font_sz, 10.0..=200.0).suffix(" px"))
-                    .changed()
-                {
+                if clip_ui::sliders::render_context_slider(
+                    ui,
+                    "Font",
+                    &mut font_sz,
+                    10.0..=200.0,
+                    MarkupState::DEFAULT_FONT_SIZE,
+                    " px",
+                    (ui.available_width() - 90.0).max(48.0),
+                    palette,
+                ) {
                     self.markup_state.active_font_size = font_sz;
                     if let Some(sel) = self.markup_state.selected_idx {
                         if sel < self.markup_state.items.len() {
@@ -242,7 +244,7 @@ impl ImagePreviewState {
                         .color(f_high),
                 );
                 if ui
-                    .button("Reset")
+                    .add(clip_ui::buttons::ButtonRole::Secondary.button("Reset", palette))
                     .on_hover_text("Reset next badge number to lowest available positive integer")
                     .clicked()
                 {
@@ -252,16 +254,17 @@ impl ImagePreviewState {
 
             // Badge Size Slider
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("Badge:")
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .color(f_med),
-                );
                 let mut badge_r = self.markup_state.active_badge_radius;
-                if ui
-                    .add(egui::Slider::new(&mut badge_r, 12.0..=300.0).suffix(" px"))
-                    .changed()
-                {
+                if clip_ui::sliders::render_context_slider(
+                    ui,
+                    "Badge",
+                    &mut badge_r,
+                    12.0..=300.0,
+                    MarkupState::DEFAULT_BADGE_RADIUS,
+                    " px",
+                    (ui.available_width() - 90.0).max(48.0),
+                    palette,
+                ) {
                     self.markup_state.active_badge_radius = badge_r;
                     if let Some(sel) = self.markup_state.selected_idx {
                         if sel < self.markup_state.items.len() {
@@ -453,15 +456,9 @@ impl ImagePreviewState {
                 let has_items = !self.markup_state.items.is_empty();
 
                 // Burn / Flatten button
-                let burn_bg = if has_items {
-                    hex_to_c32(&palette.diff_del)
-                } else {
-                    b_med
-                };
-                let burn_btn = crate::ui_ext::action_button_icon(
+                let burn_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(
                     Some(Icon::Check),
                     "Flatten / Burn Layers (Enter)",
-                    burn_bg,
                     palette,
                 );
 
@@ -478,10 +475,9 @@ impl ImagePreviewState {
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Clear All button
-                let clear_btn = crate::ui_ext::danger_button_icon(
+                let clear_btn = clip_ui::buttons::ButtonRole::Destructive.button_with_icon(
                     Some(Icon::Close),
                     "Clear All",
-                    b_low,
                     palette,
                 );
 

@@ -8,6 +8,7 @@ use crate::{
     ui_appearance::WorkbenchColors,
     ui_tabs::{Tab, TabBar},
 };
+use clip_ui::buttons::ButtonRole;
 use little_clip_core::{BackgroundJobs, palette::AppPalette};
 use little_clip_ops::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
 use model::{Document, PAGE_ROWS, Page, Table, clipped};
@@ -198,7 +199,10 @@ impl Viewer {
         if let Some(page) = &self.page {
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(page.offset > 0, egui::Button::new("Previous rows"))
+                    .add_enabled(
+                        page.offset > 0,
+                        ButtonRole::Secondary.button("Previous rows", palette),
+                    )
                     .clicked()
                 {
                     offset = Some(page.offset.saturating_sub(PAGE_ROWS));
@@ -214,7 +218,10 @@ impl Viewer {
                     )
                 });
                 if ui
-                    .add_enabled(page.more, egui::Button::new("Next rows"))
+                    .add_enabled(
+                        page.more,
+                        ButtonRole::Secondary.button("Next rows", palette),
+                    )
                     .clicked()
                 {
                     offset = Some(page.offset + PAGE_ROWS);

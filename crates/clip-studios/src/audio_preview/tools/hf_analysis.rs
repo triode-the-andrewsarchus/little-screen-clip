@@ -311,7 +311,6 @@ impl AudioPreviewState {
     ) {
         let text_f_med = hex_to_c32(&palette.colors.text_secondary);
         let text_f_high = hex_to_c32(&palette.colors.text_primary);
-        let accent_base = hex_to_c32(&palette.harmonies.base);
         let accent_cyan = Color32::from_rgb(0, 210, 255);
 
         // --- TOP TOOLBAR STRIP ---
@@ -326,16 +325,12 @@ impl AudioPreviewState {
                 crate::ui_ext::equal_button_width(ui, &["Play (Space)", "Pause (Space)"], true);
             if ui
                 .add(
-                    layout::AudioWorkspace::primary_button_icon(
-                        Some(play_icon),
-                        play_label,
-                        accent_base,
-                        palette,
-                    )
-                    .min_size(egui::Vec2::new(
-                        transport_width,
-                        crate::ui_ext::CONTROL_HEIGHT,
-                    )),
+                    clip_ui::buttons::ButtonRole::Primary
+                        .button_with_icon(Some(play_icon), play_label, palette)
+                        .min_size(egui::Vec2::new(
+                            transport_width,
+                            crate::ui_ext::CONTROL_HEIGHT,
+                        )),
                 )
                 .clicked()
             {
@@ -461,25 +456,15 @@ impl AudioPreviewState {
             );
             for &sz in HfAnalysisState::FFT_SIZES {
                 let is_sel = self.hf_analysis.fft_size == sz;
-                let (btn_bg, btn_fg) = if is_sel {
-                    (accent_base, Color32::WHITE)
-                } else {
-                    (hex_to_c32(&palette.colors.surface_recessed), text_f_med)
-                };
                 let freq_res = sample_rate as f32 / sz as f32;
                 let time_res_ms = (sz as f32 / sample_rate as f32) * 1000.0_f32;
                 let tooltip = format!("{sz} pts (Δf: {freq_res:.1} Hz, Δt: {time_res_ms:.2} ms)");
                 if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(format!("{sz}"))
-                                .monospace()
-                                .strong()
-                                .color(btn_fg),
-                        )
-                        .fill(btn_bg)
-                        .rounding(4.0_f32),
-                    )
+                    .add(crate::ui_ext::mode_tab_button(
+                        format!("{sz}"),
+                        is_sel,
+                        palette,
+                    ))
                     .on_hover_text(tooltip)
                     .clicked()
                 {
@@ -516,17 +501,11 @@ impl AudioPreviewState {
             .on_hover_text("Display contrast curve exponent (0.2 to 3.0)");
 
             if ui
-                .add(
-                    egui::Button::image_and_text(
-                        crate::icons::Icon::Undo.image_tinted(
-                            crate::ui_ext::CONTROL_ICON_SIZE,
-                            ui.visuals().text_color(),
-                        ),
-                        egui::RichText::new("Reset").color(text_f_med),
-                    )
-                    .fill(hex_to_c32(&palette.colors.surface_recessed))
-                    .rounding(4.0_f32),
-                )
+                .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                    Some(crate::icons::Icon::Undo),
+                    "Reset",
+                    palette,
+                ))
                 .on_hover_text("Reset FFT and intensity settings to defaults")
                 .clicked()
             {
@@ -554,10 +533,9 @@ impl AudioPreviewState {
 
                 let mut jump_target = None;
                 if ui
-                    .add(layout::AudioWorkspace::secondary_button_icon(
+                    .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                         Some(Icon::ArrowLeft),
                         "Prev",
-                        hex_to_c32(&palette.colors.surface_recessed),
                         palette,
                     ))
                     .on_hover_text("Jump to previous ultrasonic chirp")
@@ -579,10 +557,9 @@ impl AudioPreviewState {
                 }
 
                 if ui
-                    .add(layout::AudioWorkspace::secondary_button_icon(
+                    .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                         Some(Icon::ArrowRight),
                         "Next",
-                        hex_to_c32(&palette.colors.surface_recessed),
                         palette,
                     ))
                     .on_hover_text("Jump to next ultrasonic chirp")

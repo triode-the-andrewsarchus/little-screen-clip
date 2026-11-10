@@ -113,7 +113,11 @@ impl ConstellationState {
         }
     }
 
-    pub(crate) fn render_duplicate_warning(&mut self, ctx: &egui::Context) {
+    pub(crate) fn render_duplicate_warning(
+        &mut self,
+        ctx: &egui::Context,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
         let Some(pending) = &self.duplicate_layers else {
             return;
         };
@@ -129,10 +133,16 @@ impl ConstellationState {
                 ));
                 ui.label("Identical layers can increase loudness and reinforce the same sound.");
                 ui.horizontal(|ui| {
-                    if ui.button("Add anyway").clicked() {
+                    if ui
+                        .add(clip_ui::buttons::ButtonRole::Primary.button("Add anyway", palette))
+                        .clicked()
+                    {
                         decision = Some(true);
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui
+                        .add(clip_ui::buttons::ButtonRole::Secondary.button("Cancel", palette))
+                        .clicked()
+                    {
                         decision = Some(false);
                     }
                 });

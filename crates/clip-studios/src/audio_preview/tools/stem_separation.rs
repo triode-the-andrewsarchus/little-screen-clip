@@ -432,10 +432,9 @@ impl AudioPreviewState {
                 layout::AudioWorkspace::control_row(ui, palette, "Separation", |ui| {
                     if !self.stem_separation.stems.is_empty() {
                         if ui
-                            .add(layout::AudioWorkspace::secondary_button_icon(
+                            .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                                 Some(Icon::RotateCw),
                                 "Separate Again",
-                                hex_to_c32(&palette.colors.surface_recessed),
                                 palette,
                             ))
                             .clicked()
@@ -443,10 +442,9 @@ impl AudioPreviewState {
                             self.start_stem_separation();
                         }
                         if ui
-                            .add(layout::AudioWorkspace::primary_button_icon(
+                            .add(clip_ui::buttons::ButtonRole::Primary.button_with_icon(
                                 Some(Icon::Save),
                                 "Save All Stems…",
-                                hex_to_c32(&palette.diff_add),
                                 palette,
                             ))
                             .clicked()
@@ -505,14 +503,9 @@ impl AudioPreviewState {
                             ("Play All", Icon::Play)
                         };
                         if ui
-                            .add(layout::AudioWorkspace::primary_button_icon(
+                            .add(clip_ui::buttons::ButtonRole::Primary.button_with_icon(
                                 Some(play_icon),
                                 play_label,
-                                if self.stem_separation.group_is_playing {
-                                    hex_to_c32(&palette.diff_mod)
-                                } else {
-                                    hex_to_c32(&palette.diff_add)
-                                },
                                 palette,
                             ))
                             .clicked()
@@ -524,10 +517,9 @@ impl AudioPreviewState {
                             }
                         }
                         if ui
-                            .add(layout::AudioWorkspace::secondary_button_icon(
+                            .add(clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                                 Some(Icon::Stop),
                                 "Stop All",
-                                hex_to_c32(&palette.colors.surface_recessed),
                                 palette,
                             ))
                             .clicked()
@@ -679,18 +671,13 @@ impl AudioPreviewState {
                     );
                     ui.horizontal(|ui| {
                         save = ui
-                            .add(layout::AudioWorkspace::primary_button(
-                                "Save all stems",
-                                hex_to_c32(&palette.diff_add),
-                                palette,
-                            ))
+                            .add(
+                                clip_ui::buttons::ButtonRole::Primary
+                                    .button("Save all stems", palette),
+                            )
                             .clicked();
                         cancel = ui
-                            .add(layout::AudioWorkspace::secondary_button(
-                                "Cancel",
-                                hex_to_c32(&palette.colors.surface_recessed),
-                                palette,
-                            ))
+                            .add(clip_ui::buttons::ButtonRole::Secondary.button("Cancel", palette))
                             .clicked();
                     });
                 });

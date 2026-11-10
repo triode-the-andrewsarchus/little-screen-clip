@@ -528,7 +528,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| manager.search_ui(ui));
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        manager.search_ui(ui, &little_clip_core::palette::AppPalette::default())
+                    });
                 },
             );
             let painted = output.shapes.iter().any(|shape| matches!(&shape.shape,
@@ -703,7 +705,9 @@ mod tests {
                         memory.request_focus(crate::file_manager::ui::list_id())
                     });
                     assert!(manager.search_navigation_keys(ctx));
-                    egui::CentralPanel::default().show(ctx, |ui| manager.search_ui(ui));
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        manager.search_ui(ui, &little_clip_core::palette::AppPalette::default())
+                    });
                 },
             );
             assert_eq!(manager.search.draft, command);

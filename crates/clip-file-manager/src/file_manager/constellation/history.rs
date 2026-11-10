@@ -1,5 +1,7 @@
 //! Bounded document history and unsaved-work admission, separate from audio caches.
 use super::{ConstellationState, SamplePackBank};
+use clip_ui::buttons::ButtonRole;
+use little_clip_core::palette::AppPalette;
 use std::path::{Path, PathBuf};
 
 pub(super) fn metadata(bank: &SamplePackBank) -> SamplePackBank {
@@ -121,7 +123,7 @@ impl ConstellationState {
     }
 
     /// Shows an inline decision bar even when another media view is active.
-    pub fn render_bank_guard(&mut self, ctx: &egui::Context, folder: &Path) {
+    pub fn render_bank_guard(&mut self, ctx: &egui::Context, folder: &Path, palette: &AppPalette) {
         if self.pending_bank_action.is_none() {
             return;
         }
@@ -129,7 +131,10 @@ impl ConstellationState {
             ui.horizontal_wrapped(|ui| {
                 ui.strong("This sample pack has unsaved changes.");
                 if ui
-                    .add_enabled(!self.writing_pack(), egui::Button::new("Save and continue"))
+                    .add_enabled(
+                        !self.writing_pack(),
+                        ButtonRole::Primary.button("Save and continue", palette),
+                    )
                     .clicked()
                 {
                     let root = self
@@ -141,12 +146,18 @@ impl ConstellationState {
                     self.guard_saving = self.writing_pack();
                 }
                 if ui
-                    .add_enabled(!self.writing_pack(), egui::Button::new("Discard changes"))
+                    .add_enabled(
+                        !self.writing_pack(),
+                        ButtonRole::Destructive.button("Discard changes", palette),
+                    )
                     .clicked()
                 {
                     self.continue_bank_action();
                 }
-                if ui.button("Keep editing").clicked() {
+                if ui
+                    .add(ButtonRole::Secondary.button("Keep editing", palette))
+                    .clicked()
+                {
                     self.pending_bank_action = None;
                     self.guard_saving = false;
                 }
@@ -154,7 +165,7 @@ impl ConstellationState {
         });
     }
 
-    pub(super) fn render_history_controls(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn render_history_controls(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.horizontal(|ui| {
             ui.weak(if self.bank_dirty() {
                 "Unsaved changes"
@@ -162,13 +173,19 @@ impl ConstellationState {
                 "Saved"
             });
             if ui
-                .add_enabled(!self.history.undo.is_empty(), egui::Button::new("Undo"))
+                .add_enabled(
+                    !self.history.undo.is_empty(),
+                    ButtonRole::Secondary.button("Undo", palette).compact(),
+                )
                 .clicked()
             {
                 self.undo_bank(false);
             }
             if ui
-                .add_enabled(!self.history.redo.is_empty(), egui::Button::new("Redo"))
+                .add_enabled(
+                    !self.history.redo.is_empty(),
+                    ButtonRole::Secondary.button("Redo", palette).compact(),
+                )
                 .clicked()
             {
                 self.undo_bank(true);

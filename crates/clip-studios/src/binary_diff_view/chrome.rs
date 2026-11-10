@@ -101,12 +101,12 @@ impl BinaryDiffViewState {
             .show(ui, |ui| {
                 // Zone 1: Header
                 let clicked_hatch = shell.render_header(ui, |ui| {
-                    let swap_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Swap), "Swap [S]", hex_to_c32(&palette.colors.surface_panel), palette);
+                    let swap_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Swap), "Swap [S]", palette);
                     if ui.add(swap_btn).on_hover_text("Swap operands (S)").clicked() {
                         self.swap_operands();
                     }
 
-                    let copy_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Copy), "Summary", hex_to_c32(&palette.colors.surface_panel), palette);
+                    let copy_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Copy), "Summary", palette);
                     if ui.add(copy_btn).clicked() {
                         if let Some(ref res) = self.result {
                             let summary = format!(
@@ -313,19 +313,17 @@ impl BinaryDiffViewState {
 
                     // Right side of bar: Search & Diff nav
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let next_btn = crate::ui_ext::secondary_button_icon(
+                        let next_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                             Some(Icon::ArrowDown),
                             "Next [J]",
-                            b_med,
                             palette,
                         );
                         if ui.add(next_btn).clicked() {
                             next_diff = true;
                         }
-                        let prev_btn = crate::ui_ext::secondary_button_icon(
+                        let prev_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                             Some(Icon::ArrowUp),
                             "Prev [K]",
-                            b_med,
                             palette,
                         );
                         if ui.add(prev_btn).clicked() {

@@ -615,6 +615,7 @@ impl ImagePreviewState {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         close: &mut bool,
+        palette: &little_clip_core::palette::AppPalette,
     ) {
         let Some(job) = self.copy_job.as_ref() else {
             return;
@@ -628,12 +629,19 @@ impl ImagePreviewState {
                 "Copying image to clipboard…"
             });
             if ui
-                .add_enabled(!job.restored, egui::Button::new("Cancel copy"))
+                .add_enabled(
+                    !job.restored,
+                    clip_ui::buttons::ButtonRole::Secondary.button("Cancel copy", palette),
+                )
                 .clicked()
             {
                 job.cancel();
             }
-            if blocked && ui.button("Close (Esc)").clicked() {
+            if blocked
+                && ui
+                    .add(clip_ui::buttons::ButtonRole::Secondary.button("Close (Esc)", palette))
+                    .clicked()
+            {
                 *close = true;
             }
         });
@@ -796,6 +804,7 @@ impl ImagePreviewState {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         close: &mut bool,
+        palette: &little_clip_core::palette::AppPalette,
     ) -> bool {
         let Some(job) = self.save_job.as_ref() else {
             return false;
@@ -816,12 +825,19 @@ impl ImagePreviewState {
                 "Saving image…"
             });
             if ui
-                .add_enabled(!cancelled && !writing, egui::Button::new("Cancel save"))
+                .add_enabled(
+                    !cancelled && !writing,
+                    clip_ui::buttons::ButtonRole::Secondary.button("Cancel save", palette),
+                )
                 .clicked()
             {
                 job.cancel();
             }
-            if blocked && ui.button("Close (Esc)").clicked() {
+            if blocked
+                && ui
+                    .add(clip_ui::buttons::ButtonRole::Secondary.button("Close (Esc)", palette))
+                    .clicked()
+            {
                 *close = true;
             }
         });
@@ -1888,7 +1904,12 @@ mod tests {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(state.render_save_progress(ui, ctx, &mut false));
+                    assert!(state.render_save_progress(
+                        ui,
+                        ctx,
+                        &mut false,
+                        &little_clip_core::palette::AppPalette::default()
+                    ));
                 });
             },
         );

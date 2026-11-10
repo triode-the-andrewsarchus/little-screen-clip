@@ -19,7 +19,11 @@ enum Action {
     Refresh(u64),
 }
 impl FileManager {
-    pub(in crate::file_manager) fn answer_columns_ui(&mut self, ui: &mut Ui) {
+    pub(in crate::file_manager) fn answer_columns_ui(
+        &mut self,
+        ui: &mut Ui,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
         let mut retry = None;
         if let Some(folder) = self
             .search
@@ -47,7 +51,14 @@ impl FileManager {
                 }
                 if folder.paused {
                     ui.label("Answer model unavailable. Install it from Index, then retry.");
-                    if ui.button("Retry").clicked() {
+                    if ui
+                        .add(
+                            clip_ui::buttons::ButtonRole::Secondary
+                                .button("Retry", palette)
+                                .small(),
+                        )
+                        .clicked()
+                    {
                         retry = Some(folder.focused);
                     }
                 }

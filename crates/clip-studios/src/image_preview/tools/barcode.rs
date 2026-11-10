@@ -266,28 +266,20 @@ impl ImagePreviewState {
         let b_low = hex_to_c32(&palette.colors.surface_recessed);
         let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);
-        let diff_add = hex_to_c32(&palette.diff_add);
         let diff_mod = hex_to_c32(&palette.diff_mod);
         let f_high = hex_to_c32(&palette.colors.text_primary);
         let f_med = hex_to_c32(&palette.colors.text_secondary);
         let f_low = hex_to_c32(&palette.colors.text_muted);
 
         ui.vertical(|ui| {
-            let rescan_fg = contrast_text_c32(base_c, None, palette);
-            let rescan_btn = egui::Button::new(
-                egui::RichText::new(if self.barcode_state.is_scanning {
+            let rescan_btn = clip_ui::buttons::ButtonRole::Primary.button(
+                if self.barcode_state.is_scanning {
                     "Scanning…"
                 } else {
                     "Rescan (Enter)"
-                })
-                .size(crate::ui_ext::BODY_FONT_SIZE)
-                .strong()
-                .color(rescan_fg),
-            )
-            .fill(base_c)
-            .stroke(Stroke::new(1.0_f32, b_med))
-            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                },
+                palette,
+            );
 
             if ui
                 .add_enabled(!self.barcode_state.is_scanning, rescan_btn)
@@ -328,20 +320,11 @@ impl ImagePreviewState {
 
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 if !self.barcode_state.detections.is_empty() {
-                    let copy_fg = contrast_text_c32(b_med, Some(f_med), palette);
-                    let copy_all_btn = egui::Button::image_and_text(
-                        crate::icons::Icon::Copy.image_tinted(
-                            crate::ui_ext::CONTROL_ICON_SIZE,
-                            ui.visuals().text_color(),
-                        ),
-                        egui::RichText::new("Copy All")
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(copy_fg),
-                    )
-                    .fill(b_med)
-                    .stroke(Stroke::new(1.0_f32, b_low))
-                    .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                    let copy_all_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                        Some(crate::icons::Icon::Copy),
+                        "Copy All",
+                        palette,
+                    );
 
                     if ui.add(copy_all_btn).clicked() {
                         let combined: Vec<String> = self
@@ -395,19 +378,12 @@ impl ImagePreviewState {
                                 .on_hover_text(&det.text);
 
                                 if det.is_url {
-                                    let url_fg = contrast_text_c32(b_med, Some(base_c), palette);
-                                    let url_btn = egui::Button::image_and_text(
-                                        crate::icons::Icon::Globe.image_tinted(
-                                            crate::ui_ext::CONTROL_ICON_SIZE,
-                                            ui.visuals().text_color(),
-                                        ),
-                                        egui::RichText::new("Open")
-                                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                                            .color(url_fg),
-                                    )
-                                    .fill(b_med)
-                                    .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-                                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                                    let url_btn = clip_ui::buttons::ButtonRole::Secondary
+                                        .button_with_icon(
+                                            Some(crate::icons::Icon::Globe),
+                                            "Open",
+                                            palette,
+                                        );
                                     if ui.add(url_btn).clicked() {
                                         ctx.open_url(egui::output::OpenUrl::new_tab(
                                             det.text.clone(),
@@ -415,13 +391,12 @@ impl ImagePreviewState {
                                     }
                                 }
 
-                                let copy_btn = crate::secondary_button_icon(
-                                    Some(crate::icons::Icon::Copy),
-                                    "Copy",
-                                    b_med,
-                                    palette,
-                                )
-                                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS));
+                                let copy_btn = clip_ui::buttons::ButtonRole::Secondary
+                                    .button_with_icon(
+                                        Some(crate::icons::Icon::Copy),
+                                        "Copy",
+                                        palette,
+                                    );
                                 if ui.add(copy_btn).on_hover_text("Copy this code").clicked() {
                                     ctx.output_mut(|o| o.copied_text = det.text.clone());
                                     self.show_toast(crate::ui_ext::StatusMessage::new(
@@ -430,16 +405,8 @@ impl ImagePreviewState {
                                     ));
                                 }
 
-                                let rh_fg = contrast_text_c32(b_low, Some(diff_add), palette);
-                                let push_btn = egui::Button::new(
-                                    egui::RichText::new("RH")
-                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                        .color(rh_fg),
-                                )
-                                .fill(b_low)
-                                .stroke(Stroke::new(1.0_f32, diff_add))
-                                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-                                .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                                let push_btn =
+                                    clip_ui::buttons::ButtonRole::Secondary.button("RH", palette);
                                 if ui
                                     .add(push_btn)
                                     .on_hover_text("Push to Right Hand slot")

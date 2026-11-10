@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use clip_ui::buttons::ButtonRole;
 use eframe::egui;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::palette::AppPalette;
@@ -79,7 +80,9 @@ impl AppearanceSync {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(error).color(colors.text_primary));
-                            dismiss = ui.button("Dismiss").clicked();
+                            dismiss = ui
+                                .add(ButtonRole::Secondary.button("Dismiss", palette))
+                                .clicked();
                         });
                     });
             });

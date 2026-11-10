@@ -3,7 +3,9 @@
 //! Application navigation, document sessions, native dialogs and audio-device
 //! ownership belong to their hosts. This crate does not depend on either app
 //! or on the raster/scene renderers.
+pub mod buttons;
 pub mod icons;
+pub mod sliders;
 pub mod ui_appearance;
 pub mod ui_ext;
 pub mod ui_tabs;

@@ -146,10 +146,9 @@ impl AudioPreviewState {
                 (crate::icons::Icon::Play, "Play [Space]")
             };
             if ui
-                .add(layout::AudioWorkspace::primary_button_icon(
+                .add(clip_ui::buttons::ButtonRole::Primary.button_with_icon(
                     Some(icon),
                     label,
-                    hex_to_c32(&palette.diff_add),
                     palette,
                 ))
                 .clicked()
@@ -157,11 +156,7 @@ impl AudioPreviewState {
                 self.toggle_play();
             }
             if ui
-                .add(layout::AudioWorkspace::secondary_button(
-                    "Start",
-                    hex_to_c32(&palette.colors.surface_recessed),
-                    palette,
-                ))
+                .add(clip_ui::buttons::ButtonRole::Secondary.button("Start", palette))
                 .clicked()
             {
                 self.seek_to(0.0);
@@ -177,21 +172,13 @@ impl AudioPreviewState {
                 self.loop_selection = !self.loop_selection;
             }
             if ui
-                .add(layout::AudioWorkspace::secondary_button(
-                    "Fit",
-                    hex_to_c32(&palette.colors.surface_recessed),
-                    palette,
-                ))
+                .add(clip_ui::buttons::ButtonRole::Secondary.button("Fit", palette))
                 .clicked()
             {
                 self.fit_to_window();
             }
             if ui
-                .add(layout::AudioWorkspace::secondary_button(
-                    "Copy [Ctrl+C]",
-                    hex_to_c32(&palette.colors.surface_recessed),
-                    palette,
-                ))
+                .add(clip_ui::buttons::ButtonRole::Secondary.button("Copy [Ctrl+C]", palette))
                 .clicked()
             {
                 let now = ctx.input(|input| input.time);
@@ -205,11 +192,7 @@ impl AudioPreviewState {
                 }
             }
             if ui
-                .add(layout::AudioWorkspace::secondary_button(
-                    "Save [Ctrl+S]",
-                    hex_to_c32(&palette.colors.surface_recessed),
-                    palette,
-                ))
+                .add(clip_ui::buttons::ButtonRole::Secondary.button("Save [Ctrl+S]", palette))
                 .clicked()
             {
                 self.open_save_dialog();
@@ -259,11 +242,8 @@ impl AudioPreviewState {
                     if ui
                         .add_enabled(
                             enabled,
-                            layout::AudioWorkspace::secondary_button(
-                                operation.label(),
-                                hex_to_c32(&palette.colors.surface_recessed),
-                                palette,
-                            ),
+                            clip_ui::buttons::ButtonRole::Secondary
+                                .button(operation.label(), palette),
                         )
                         .clicked()
                     {

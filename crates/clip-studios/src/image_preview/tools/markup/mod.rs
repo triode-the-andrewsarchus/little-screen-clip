@@ -313,9 +313,9 @@ impl Default for MarkupState {
             selected_idx: None,
             active_tool: MarkupToolType::Arrow,
             active_color: Color32::from_rgb(255, 42, 42), // Pure Red
-            active_stroke_width: 4.0,
-            active_font_size: 20.0,
-            active_badge_radius: 28.0,
+            active_stroke_width: Self::DEFAULT_STROKE_WIDTH,
+            active_font_size: Self::DEFAULT_FONT_SIZE,
+            active_badge_radius: Self::DEFAULT_BADGE_RADIUS,
             active_filled: false,
             next_badge_number: 1,
             editing_text_idx: None,
@@ -325,6 +325,9 @@ impl Default for MarkupState {
 }
 
 impl MarkupState {
+    const DEFAULT_STROKE_WIDTH: f32 = 4.0;
+    const DEFAULT_FONT_SIZE: f32 = 20.0;
+    const DEFAULT_BADGE_RADIUS: f32 = 28.0;
     /// Palette swatch presets: 9 vibrant markup primaries + neutrals.
     pub const PALETTE_SWATCHES: [(&'static str, Color32); 9] = [
         ("Pure Red", Color32::from_rgb(255, 42, 42)),

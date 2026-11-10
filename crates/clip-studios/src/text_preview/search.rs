@@ -315,20 +315,18 @@ impl TextPreviewState {
 
                     self.render_search_status_label(ui, palette);
 
-                    let prev_btn = crate::ui_ext::secondary_button_icon(
+                    let prev_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                         Some(Icon::ArrowUp),
                         "Prev",
-                        hex_to_c32(&palette.colors.surface_panel),
                         palette,
                     );
                     if ui.add(prev_btn).clicked() {
                         self.prev_match();
                     }
 
-                    let next_btn = crate::ui_ext::secondary_button_icon(
+                    let next_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                         Some(Icon::ArrowDown),
                         "Next",
-                        hex_to_c32(&palette.colors.surface_panel),
                         palette,
                     );
                     if ui.add(next_btn).clicked() {

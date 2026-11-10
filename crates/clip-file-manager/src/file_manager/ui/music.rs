@@ -1,5 +1,6 @@
 use super::super::BrowserView;
 use super::*;
+use clip_ui::buttons::ButtonRole;
 
 #[derive(Clone, PartialEq)]
 pub(in crate::file_manager) struct MusicRange {
@@ -63,7 +64,7 @@ impl FileManager {
             self.music.copy_range(range.clone());
         }
     }
-    fn music_toolbar(&mut self, ui: &mut Ui) {
+    fn music_toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
         ui.horizontal_wrapped(|ui| {
             ui.label("Title · Artist · Album · Duration");
             if ui
@@ -76,7 +77,10 @@ impl FileManager {
             {
                 self.activate_media_view();
             }
-            if ui.button("Use automatic view").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Use automatic view", palette))
+                .clicked()
+            {
                 if let Some(location) = self.location_mut() {
                     location.manual_view = None;
                 }
@@ -86,14 +90,20 @@ impl FileManager {
         let range = self.music_selection.clone();
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(range.is_some(), egui::Button::new("Copy audio selection"))
+                .add_enabled(
+                    range.is_some(),
+                    ButtonRole::Primary.button("Copy audio selection", palette),
+                )
                 .clicked()
             {
                 if let Some(range) = &range {
                     self.music.copy_range(range.clone());
                 }
             }
-            if ui.button("Paste as file").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Paste as file", palette))
+                .clicked()
+            {
                 self.paste_files();
             }
             ui.add(
@@ -118,7 +128,7 @@ impl FileManager {
         }
         ui.label("Click an audio strip to play or seek. Space plays the selected range; Escape stops playback. Selection edges snap to zero crossings. Ctrl/Shift+click selects files. Drag to select audio; Ctrl+C copies the selection, Ctrl+V pastes into this folder.");
     }
-    pub(super) fn music_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+    pub(super) fn music_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
         // Register the shared waveform focus target every frame so egui retains it
         // after the pointer leaves the per-file waveform widget.
         ui.interact(
@@ -126,7 +136,7 @@ impl FileManager {
             waveform_id(),
             Sense::focusable_noninteractive(),
         );
-        self.music_toolbar(ui);
+        self.music_toolbar(ui, palette);
         self.music_previews.poll(ui.ctx());
         let scroll = self.list_scroll(108.0);
         let Some(directory) = &self.directory else {

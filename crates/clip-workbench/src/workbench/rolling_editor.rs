@@ -1,4 +1,5 @@
 use super::*;
+use clip_ui::buttons::ButtonRole;
 
 impl WorkbenchApp {
     pub(crate) fn apply_rolling_audio_action(
@@ -132,12 +133,17 @@ impl WorkbenchApp {
                         }
                         ui.label(&message);
                         if active {
-                            if ui.button("Cancel").clicked() {
+                            if ui
+                                .add(ButtonRole::Secondary.button("Cancel", &self.ui_palette))
+                                .clicked()
+                            {
                                 self.rolling_editor_job = None;
                                 self.status_msg = None;
                             }
                         } else {
-                            dismiss = ui.button("Dismiss").clicked();
+                            dismiss = ui
+                                .add(ButtonRole::Secondary.button("Dismiss", &self.ui_palette))
+                                .clicked();
                         }
                     });
                 });

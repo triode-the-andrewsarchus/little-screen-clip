@@ -130,7 +130,7 @@ impl Viewer {
         if let Some(left) = layout.left {
             ui.allocate_ui_at_rect(left, |ui| {
                 ui.set_clip_rect(left.intersect(ui.clip_rect()));
-                self.details(ui);
+                self.details(ui, palette);
             });
         }
         ui.allocate_ui_at_rect(layout.center, |ui| {
@@ -184,7 +184,7 @@ impl Viewer {
             .get(hit.path)?
             .get(hit.point)
     }
-    fn details(&mut self, ui: &mut egui::Ui) {
+    fn details(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         if !self.document.title.is_empty() {
             ui.heading(&self.document.title);
         }
@@ -194,7 +194,14 @@ impl Viewer {
             self.document.points
         ));
         ui.horizontal(|ui| {
-            if ui.button("Fit map").clicked() {
+            if ui
+                .add(
+                    clip_ui::buttons::ButtonRole::Secondary
+                        .button("Fit map", palette)
+                        .compact(),
+                )
+                .clicked()
+            {
                 self.zoom = 1.0;
                 self.pan = egui::Vec2::ZERO;
             }

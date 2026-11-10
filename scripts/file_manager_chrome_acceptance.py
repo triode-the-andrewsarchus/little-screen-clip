@@ -19,10 +19,15 @@ def exercise(session, root):
     session.move_pointer_to_title = lambda: None
     for menu in ["File", "Edit", "View"]:
         session.click(*session.word("compact-browser", menu, tree=True))
-        session.observe(f"menu-{menu.lower()}", [{"View": "Audio", "Edit": "No actions available", "File": "No actions yet"}[menu]])
+        expected = {
+            "View": ["Audio"],
+            "Edit": ["No actions available"],
+            "File": ["Index folder", "constellation", "recursive"],
+        }[menu]
+        session.observe(f"menu-{menu.lower()}", expected)
         session.key("Escape")
     session.click(*session.word("compact-browser", "payload", minimum_y=150))
-    session.observe("one-file", ["Selection: 1 file (10.0KB)"])
+    session.observe("one-file", ["Selection: 1 file (9.8 KiB)"])
     session.key("a", "ctrl")
     session.observe("all-selected", ["Selection: 2 folders", "2 files (10.3 KiB)"])
     session.key("Escape")

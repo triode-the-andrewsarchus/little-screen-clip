@@ -83,31 +83,7 @@ pub struct CreativeFxThumbnailMsg {
     pub rgba: RgbaImage,
 }
 
-fn creative_fx_choice_button(
-    label: impl Into<String>,
-    selected: bool,
-    palette: &AppPalette,
-) -> egui::Button<'static> {
-    let fill = if selected {
-        hex_to_c32(&palette.harmonies.base)
-    } else {
-        hex_to_c32(&palette.colors.surface_panel)
-    };
-    let foreground = if selected {
-        contrast_text_c32(fill, None, palette)
-    } else {
-        hex_to_c32(&palette.colors.text_secondary)
-    };
-    egui::Button::new(
-        egui::RichText::new(label)
-            .size(crate::ui_ext::BODY_FONT_SIZE)
-            .strong()
-            .color(foreground),
-    )
-    .fill(fill)
-    .stroke(Stroke::new(1.0_f32, fill))
-    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-}
+use crate::ui_ext::mode_tab_button as creative_fx_choice_button;
 
 fn creative_fx_icon(effect: CreativeFxType) -> crate::icons::Icon {
     use crate::icons::Icon;
@@ -150,27 +126,8 @@ fn render_creative_fx_mask_button(
     width: f32,
     palette: &AppPalette,
 ) -> egui::Response {
-    let fill = if active {
-        hex_to_c32(&palette.diff_add)
-    } else {
-        hex_to_c32(&palette.colors.surface_panel)
-    };
-    let foreground = contrast_text_c32(
-        fill,
-        Some(hex_to_c32(&palette.colors.text_primary)),
-        palette,
-    );
-    let button = egui::Button::image_and_text(
-        icon.image_tinted(crate::ui_ext::CONTROL_ICON_SIZE, foreground),
-        egui::RichText::new(label)
-            .size(crate::ui_ext::BODY_FONT_SIZE)
-            .strong()
-            .color(foreground),
-    )
-    .fill(fill)
-    .stroke(Stroke::new(1.0_f32, fill))
-    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-    .min_size(Vec2::new(width, crate::ui_ext::CONTROL_HEIGHT));
+    let button = crate::ui_ext::mode_tab_button_icon(Some(icon), label, active, palette)
+        .min_size(Vec2::new(width, crate::ui_ext::CONTROL_HEIGHT));
     ui.add_enabled(!loading, button)
 }
 

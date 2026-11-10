@@ -1015,7 +1015,6 @@ impl ImagePreviewState {
 
         let accent = hex_to_c32(&palette.harmonies.base);
         let guided_accent = hex_to_c32(&palette.harmonies.triadic_2);
-        let surface = hex_to_c32(&palette.colors.surface_panel);
         let text = hex_to_c32(&palette.colors.text_secondary);
         let muted = hex_to_c32(&palette.colors.text_muted);
         let danger = hex_to_c32(&palette.diff_del);
@@ -1095,7 +1094,7 @@ impl ImagePreviewState {
         } else {
             "Remove background"
         };
-        let run_button = crate::action_button(run_label, action_color, palette);
+        let run_button = clip_ui::buttons::ButtonRole::Primary.button(run_label, palette);
         if ui
             .add_enabled_ui(!self.bg_removal_in_progress, |ui| {
                 ui.add_sized(
@@ -1196,7 +1195,8 @@ impl ImagePreviewState {
 
             if error.contains("nobg") || error.contains("pip") {
                 ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-                let copy_install = crate::secondary_button("Copy setup command", surface, palette);
+                let copy_install =
+                    clip_ui::buttons::ButtonRole::Secondary.button("Copy setup command", palette);
                 if ui
                     .add_sized(
                         [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
@@ -1223,7 +1223,7 @@ impl ImagePreviewState {
         ui.add_space(crate::ui_ext::SPACE_XS);
 
         ui.vertical(|ui| {
-            let left = crate::secondary_button("Left hand", surface, palette);
+            let left = clip_ui::buttons::ButtonRole::Secondary.button("Left hand", palette);
             if ui
                 .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], left)
                 .on_hover_text("Copy the current cutout to the Left Hand slot")
@@ -1232,7 +1232,7 @@ impl ImagePreviewState {
                 self.copy_to_hand_slot(HandSide::Left);
             }
 
-            let right = crate::secondary_button("Right hand", surface, palette);
+            let right = clip_ui::buttons::ButtonRole::Secondary.button("Right hand", palette);
             if ui
                 .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], right)
                 .on_hover_text("Copy the current cutout to the Right Hand slot")
@@ -1244,7 +1244,8 @@ impl ImagePreviewState {
 
         if !self.undo_stack.is_empty() {
             ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-            let undo = crate::secondary_button("Undo last edit (Ctrl+Z)", surface, palette);
+            let undo =
+                clip_ui::buttons::ButtonRole::Secondary.button("Undo last edit (Ctrl+Z)", palette);
             if ui
                 .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], undo)
                 .clicked()

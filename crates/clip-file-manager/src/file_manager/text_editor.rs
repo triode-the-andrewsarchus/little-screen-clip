@@ -4,6 +4,7 @@ use crate::{
     text_preview::TextPreviewState,
     ui_tabs::{Tab, TabBar},
 };
+use clip_ui::buttons::ButtonRole;
 use little_clip_core::{BackgroundJobs, JobError, palette::AppPalette};
 use std::{
     path::{Path, PathBuf},
@@ -142,7 +143,7 @@ impl TextSession {
                     close,
                 );
                 shell.render_header(ui, |_| {});
-                editor.ui(ui);
+                editor.ui(ui, palette);
                 return;
             }
         }
@@ -197,15 +198,21 @@ impl Editor {
         });
         self.pending = Some(receiver);
     }
-    fn ui(&mut self, ui: &mut egui::Ui) {
+    fn ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(self.pending.is_none(), egui::Button::new("Save"))
+                .add_enabled(
+                    self.pending.is_none(),
+                    ButtonRole::Primary.button("Save", palette),
+                )
                 .clicked()
             {
                 self.save(self.path.clone());
             }
-            if ui.button("Save As…").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Save As…", palette))
+                .clicked()
+            {
                 self.save_as = true;
             }
             if self.text != self.saved {
@@ -240,7 +247,10 @@ impl Editor {
                     ui.label("Choose a new, unused filename.");
                     ui.text_edit_singleline(&mut self.name);
                     ui.horizontal(|ui| {
-                        if ui.button("Create file").clicked() {
+                        if ui
+                            .add(ButtonRole::Primary.button("Create file", palette))
+                            .clicked()
+                        {
                             if super::edits::parse_name(&self.name).is_ok() {
                                 let path = self.path.with_file_name(&self.name);
                                 self.save(path);
@@ -249,7 +259,10 @@ impl Editor {
                                 self.error = Some("Enter a single filename.".into());
                             }
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui
+                            .add(ButtonRole::Secondary.button("Cancel", palette))
+                            .clicked()
+                        {
                             self.save_as = false;
                         }
                     });

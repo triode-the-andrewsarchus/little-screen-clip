@@ -1,7 +1,9 @@
 //! Compact drum rack, selected-pad editor, and reference-pack browser.
 
 use super::ConstellationState;
+use clip_ui::buttons::ButtonRole;
 use egui::{Rect, Stroke, Vec2};
+use little_clip_core::palette::AppPalette;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -112,10 +114,15 @@ impl ConstellationState {
     }
 
     /// Renders the sixteen-pad rack and only the selected pad's layer controls.
-    pub fn render_pack_shelf(&mut self, ui: &mut egui::Ui, current_folder: &Path) {
+    pub fn render_pack_shelf(
+        &mut self,
+        ui: &mut egui::Ui,
+        current_folder: &Path,
+        palette: &AppPalette,
+    ) {
         ui.spacing_mut().interact_size.y = 24.0;
         ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
-        self.render_history_controls(ui);
+        self.render_history_controls(ui, palette);
         ui.horizontal(|ui| {
             let width = (ui.available_width() - 120.0).max(40.0);
             ui.add(
@@ -124,7 +131,10 @@ impl ConstellationState {
                     .hint_text("Pack name"),
             );
             if ui
-                .add_enabled(!self.writing_pack(), egui::Button::new("Save pack"))
+                .add_enabled(
+                    !self.writing_pack(),
+                    ButtonRole::Primary.button("Save pack", palette).compact(),
+                )
                 .clicked()
             {
                 let root = self
@@ -444,7 +454,7 @@ impl ConstellationState {
         ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
         ui.spacing_mut().item_spacing.y = 4.0;
         let index = self.selected_slot;
-        self.render_selected_pad_header(ui, index);
+        self.render_selected_pad_header(ui, index, palette);
         let slot = &mut self.pack_bank.slots[index];
         if slot.samples.is_empty() {
             ui.weak("Select a sample on the map, then Add selected or Shift+click a pad.");
@@ -503,7 +513,7 @@ impl ConstellationState {
                         egui::pos2(wave.right(), ui.clip_rect().bottom()),
                     )));
                     Self::render_layer_waveform(&mut canvas, sample);
-                    if super::mixer_controls::layer_strip(&mut canvas, sample, retrigger) {
+                    if super::mixer_controls::layer_strip(&mut canvas, sample, retrigger, palette) {
                         studio_layer = Some(layer);
                     }
                     // Reserve actual contents, not the canvas's generous layout hint.
@@ -523,7 +533,12 @@ impl ConstellationState {
         }
     }
 
-    fn render_selected_pad_header(&mut self, ui: &mut egui::Ui, index: usize) {
+    fn render_selected_pad_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        palette: &AppPalette,
+    ) {
         ui.horizontal_wrapped(|ui| {
             ui.strong(format!("{} · Pad {}", self.pad_keys[index].to_ascii_uppercase(), index + 1));
             if super::ui::outlined_toggle(ui, "Mute", self.pack_bank.slots[index].mute, ui.visuals().hyperlink_color).clicked() {
@@ -543,17 +558,25 @@ impl ConstellationState {
                 if ui.add_enabled(self.selected_path.is_some(), egui::Button::new("Add map sample")).clicked() { self.assign_selected_to_pad(index); ui.close_menu(); }
                 if ui.button("Clear pad").clicked() { self.clear_slot(index); ui.close_menu(); }
             });
-            if self.pack_bank.slots[index].samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path)) && ui.small_button("Retry audio").clicked() {
+            if self.pack_bank.slots[index].samples.iter().any(|sample| self.failed_audio.contains(&sample.file_path)) && ui.add(ButtonRole::Secondary.button("Retry audio", palette).small()).clicked() {
                 for sample in &self.pack_bank.slots[index].samples { self.failed_audio.remove(&sample.file_path); }
             }
         });
     }
 
     /// Browses saved reference packs in the rack's side panel, keeping the map visible.
-    pub fn render_pack_browser(&mut self, ui: &mut egui::Ui, current_folder: &Path) {
+    pub fn render_pack_browser(
+        &mut self,
+        ui: &mut egui::Ui,
+        current_folder: &Path,
+        palette: &AppPalette,
+    ) {
         ui.horizontal(|ui| {
             ui.strong("Saved packs");
-            if ui.small_button("Refresh").clicked() {
+            if ui
+                .add(ButtonRole::Secondary.button("Refresh", palette).small())
+                .clicked()
+            {
                 self.refresh_browser_packs(current_folder);
             }
         });
@@ -605,11 +628,17 @@ impl ConstellationState {
             summary.slot_count, summary.sample_count
         ));
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Load pack").clicked() {
+            if ui
+                .add(ButtonRole::Primary.button("Load pack", palette))
+                .clicked()
+            {
                 self.load_browser_bank(summary.folder_path.clone(), true);
             }
             if ui
-                .add_enabled(!self.writing_pack(), egui::Button::new("Save new version"))
+                .add_enabled(
+                    !self.writing_pack(),
+                    ButtonRole::Secondary.button("Save new version", palette),
+                )
                 .on_hover_text("Save the current rack as a new version of this pack")
                 .clicked()
             {
@@ -622,7 +651,10 @@ impl ConstellationState {
                 self.save_bank(root.to_path_buf(), bank);
             }
             if ui
-                .add_enabled(!self.writing_pack(), egui::Button::new("Delete"))
+                .add_enabled(
+                    !self.writing_pack(),
+                    ButtonRole::Destructive.button("Delete", palette),
+                )
                 .clicked()
             {
                 self.delete_bank(summary.folder_path.clone());
@@ -645,7 +677,14 @@ impl ConstellationState {
                         .filter(|(_, slot)| !slot.is_empty())
                     {
                         ui.horizontal(|ui| {
-                            if ui.small_button(format!("Play {}", index + 1)).clicked() {
+                            if ui
+                                .add(
+                                    ButtonRole::Secondary
+                                        .button(format!("Play {}", index + 1), palette)
+                                        .small(),
+                                )
+                                .clicked()
+                            {
                                 audition = Some(slot.samples.clone());
                             }
                             ui.label(slot.display_title());

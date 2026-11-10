@@ -22,7 +22,6 @@ impl ImagePreviewState {
         }
 
         let accent = hex_to_c32(&palette.harmonies.base);
-        let surface = hex_to_c32(&palette.colors.surface_panel);
         let text = hex_to_c32(&palette.colors.text_secondary);
         let muted = hex_to_c32(&palette.colors.text_muted);
         let success = hex_to_c32(&palette.diff_add);
@@ -164,7 +163,7 @@ impl ImagePreviewState {
                     crate::ui_ext::wrapped_equal_button_width(ui, &labels, false, presets.len());
                 ui.horizontal_wrapped(|ui| {
                     for (label, factor) in presets {
-                        let button = crate::compact_toolbar_button(label, surface, palette);
+                        let button = clip_ui::buttons::ButtonRole::Secondary.button(label, palette);
                         if ui
                             .add_sized([button_width, crate::ui_ext::CONTROL_HEIGHT], button)
                             .clicked()
@@ -218,7 +217,8 @@ impl ImagePreviewState {
                             .color(hex_to_c32(&palette.diff_del)),
                     );
                 }
-                let apply = crate::action_button("Apply resize (Enter)", accent, palette);
+                let apply =
+                    clip_ui::buttons::ButtonRole::Primary.button("Apply resize (Enter)", palette);
                 if ui
                     .add_enabled_ui(!self.pixel_resize_job.pending, |ui| {
                         ui.add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
@@ -256,8 +256,7 @@ impl ImagePreviewState {
                     for (label, value, megabytes) in presets {
                         let selected = (self.resize_state.target_size_val - value).abs() < 0.01
                             && self.resize_state.target_size_unit_mb == megabytes;
-                        let fill = if selected { success } else { surface };
-                        let button = crate::compact_toolbar_button(label, fill, palette);
+                        let button = crate::ui_ext::mode_tab_button(label, selected, palette);
                         if ui
                             .add_sized([button_width, crate::ui_ext::CONTROL_HEIGHT], button)
                             .clicked()
@@ -286,7 +285,11 @@ impl ImagePreviewState {
                         "KB"
                     };
                     if ui
-                        .add(crate::compact_toolbar_button(unit, surface, palette))
+                        .add(crate::ui_ext::mode_tab_button(
+                            unit,
+                            self.resize_state.target_size_unit_mb,
+                            palette,
+                        ))
                         .on_hover_text("Switch between KB and MB")
                         .clicked()
                     {
@@ -325,13 +328,16 @@ impl ImagePreviewState {
                 if self.resize_state.is_optimizing {
                     ui.add_enabled(
                         false,
-                        crate::action_button("Optimizing…", surface, palette).min_size(Vec2::new(
-                            ui.available_width(),
-                            crate::ui_ext::CONTROL_HEIGHT,
-                        )),
+                        clip_ui::buttons::ButtonRole::Primary
+                            .button("Optimizing…", palette)
+                            .min_size(Vec2::new(
+                                ui.available_width(),
+                                crate::ui_ext::CONTROL_HEIGHT,
+                            )),
                     );
                 } else {
-                    let run = crate::action_button("Run optimizer", success, palette);
+                    let run =
+                        clip_ui::buttons::ButtonRole::Primary.button("Run optimizer", palette);
                     if ui
                         .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], run)
                         .on_hover_text("Fit quality and resolution to the target file size")
@@ -396,14 +402,16 @@ impl ImagePreviewState {
                     );
                     ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
-                    let apply = crate::action_button("Apply to canvas", success, palette);
+                    let apply =
+                        clip_ui::buttons::ButtonRole::Primary.button("Apply to canvas", palette);
                     if ui
                         .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
                         .clicked()
                     {
                         self.apply_optimized_result();
                     }
-                    let copy = crate::secondary_button("Copy to slot", surface, palette);
+                    let copy =
+                        clip_ui::buttons::ButtonRole::Secondary.button("Copy to slot", palette);
                     if ui
                         .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], copy)
                         .clicked()
@@ -418,7 +426,8 @@ impl ImagePreviewState {
             ui.add_space(crate::ui_ext::SPACE_MD);
             ui.separator();
             ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-            let undo = crate::secondary_button("Undo resize (Ctrl+Z)", surface, palette);
+            let undo =
+                clip_ui::buttons::ButtonRole::Secondary.button("Undo resize (Ctrl+Z)", palette);
             if ui
                 .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], undo)
                 .clicked()

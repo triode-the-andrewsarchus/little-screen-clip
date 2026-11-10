@@ -19,13 +19,9 @@ fn inspect_play_and_pause_keep_the_same_button_width() {
             ] {
                 widths.push(
                     ui.add(
-                        layout::AudioWorkspace::primary_button_icon(
-                            Some(icon),
-                            label,
-                            hex_to_c32(&palette.diff_add),
-                            &palette,
-                        )
-                        .min_size(Vec2::new(width, crate::ui_ext::CONTROL_HEIGHT)),
+                        clip_ui::buttons::ButtonRole::Primary
+                            .button_with_icon(Some(icon), label, &palette)
+                            .min_size(Vec2::new(width, crate::ui_ext::CONTROL_HEIGHT)),
                     )
                     .rect
                     .size(),

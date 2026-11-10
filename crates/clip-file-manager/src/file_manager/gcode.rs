@@ -5,6 +5,7 @@ use crate::{
     shell::{StudioPanelLayout, StudioShell},
     ui_appearance::WorkbenchColors,
 };
+use clip_ui::buttons::ButtonRole;
 use little_clip_core::{
     gcode::{Document, MAX_BYTES, Move},
     palette::AppPalette,
@@ -95,7 +96,7 @@ impl Viewer {
         if let Some(left) = layout.left {
             ui.allocate_ui_at_rect(left, |ui| {
                 ui.set_clip_rect(left.intersect(ui.clip_rect()));
-                self.details(ui);
+                self.details(ui, palette);
             });
         }
         ui.allocate_ui_at_rect(layout.center, |ui| {
@@ -171,7 +172,7 @@ impl Viewer {
             .checked_sub(1)
             .and_then(|index| self.document.moves.get(index))
     }
-    fn details(&mut self, ui: &mut egui::Ui) {
+    fn details(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.label(format!("{} moves", self.document.moves.len()));
         ui.label(format!("Path length {:.1} mm", self.document.length_mm));
         if ui
@@ -193,7 +194,10 @@ impl Viewer {
                 }
             }
         });
-        if ui.button("Fit path").clicked() {
+        if ui
+            .add(ButtonRole::Secondary.button("Fit path", palette))
+            .clicked()
+        {
             self.pan = egui::Vec2::ZERO;
             self.zoom = 1.0;
         }

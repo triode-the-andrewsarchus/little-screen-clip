@@ -2,7 +2,9 @@ use crate::file_manager::{
     FileManager,
     ui::{key, list_id},
 };
+use clip_ui::buttons::ButtonRole;
 use egui::{Id, Key, Modifiers, Ui};
+use little_clip_core::palette::AppPalette;
 
 pub(in crate::file_manager) fn input_id() -> Id {
     Id::new("file_manager_search")
@@ -126,7 +128,7 @@ impl FileManager {
         self.search.focus
     }
 
-    pub(in crate::file_manager) fn search_ui(&mut self, ui: &mut Ui) {
+    pub(in crate::file_manager) fn search_ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
         if !self.search.open {
             return;
         }
@@ -163,7 +165,7 @@ impl FileManager {
             // frame, so also accept Enter with this frame's explicit Ctrl+F.
             submit = (focus_input || output.response.lost_focus())
                 && ui.input(|input| input.key_pressed(Key::Enter));
-            if ui.add(egui::Button::new("Literal").selected(self.search.literal))
+            if ui.add(crate::ui_ext::mode_tab_button("Literal", self.search.literal, palette))
                 .on_hover_text("Treat the whole input as a filename, including a leading colon. Changes apply when you press Search.")
                 .clicked() {
                 self.search.literal = !self.search.literal;
@@ -174,7 +176,7 @@ impl FileManager {
             let mut options_visible = false;
             ui.menu_button("Options", |ui| {
                 options_visible = true;
-                if let Some(command) = self.search.controls.ui(ui, &self.search.draft, self.search.literal) {
+                if let Some(command) = self.search.controls.ui(ui, &self.search.draft, self.search.literal, palette) {
                     self.search.draft = command;
                     self.search.literal = false;
                     self.search.automatic = false;
@@ -185,8 +187,8 @@ impl FileManager {
                 }
             });
             self.search.controls.visible = options_visible;
-            submit |= ui.button("Search").clicked();
-            close = ui.button("Close").clicked();
+            submit |= ui.add(ButtonRole::Primary.button("Search", palette)).clicked();
+            close = ui.add(ButtonRole::Secondary.button("Close", palette)).clicked();
             output
         }).inner;
         self.search.completion.ui(
@@ -197,7 +199,7 @@ impl FileManager {
         );
         let live = self.search.live_submission(ui.ctx()) && !submit;
         submit |= live;
-        self.search_status(ui);
+        self.search_status(ui, palette);
         if submit {
             ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter));
             self.search.edit_at = None;
@@ -219,7 +221,7 @@ impl FileManager {
         }
     }
 
-    fn search_status(&mut self, ui: &mut Ui) {
+    fn search_status(&mut self, ui: &mut Ui, palette: &AppPalette) {
         if let Some(error) = &self.search.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         } else if self.search.edit_at.is_some() {
@@ -260,7 +262,11 @@ impl FileManager {
                     &self.search.message
                 }
             ));
-            if self.visible.len() < self.search.matching_count && ui.button("Load more").clicked() {
+            if self.visible.len() < self.search.matching_count
+                && ui
+                    .add(ButtonRole::Secondary.button("Load more", palette))
+                    .clicked()
+            {
                 self.search.result_pages = self.search.result_pages.saturating_add(1);
                 self.rebuild_visible();
             }

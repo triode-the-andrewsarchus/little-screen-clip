@@ -9,10 +9,9 @@ impl NodeCanvasState {
     ) {
         ui.horizontal_wrapped(|ui| {
             // Group 1: Add Node button (Prominent)
-            let add_btn = crate::ui_ext::action_button_icon(
+            let add_btn = clip_ui::buttons::ButtonRole::Primary.button_with_icon(
                 Some(Icon::Plus),
                 "Add Node",
-                hex_to_c32(&palette.colors.surface_panel),
                 palette,
             );
             if ui.add(add_btn).clicked() {
@@ -24,10 +23,9 @@ impl NodeCanvasState {
             ui.separator();
 
             // Group 2: Recipe Management
-            let new_btn = crate::ui_ext::secondary_button_icon(
+            let new_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                 Some(Icon::Text),
                 "New Recipe",
-                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -87,10 +85,9 @@ impl NodeCanvasState {
             }
 
             // Direct Save button
-            let save_btn = crate::ui_ext::secondary_button_icon(
+            let save_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                 Some(Icon::Save),
                 "Save",
-                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -138,10 +135,9 @@ impl NodeCanvasState {
             }
 
             // Save As button
-            let save_as_btn = crate::ui_ext::secondary_button_icon(
+            let save_as_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                 Some(Icon::Save),
                 "Save As...",
-                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -162,10 +158,9 @@ impl NodeCanvasState {
 
             // Group 3: Undo, Redo, Clear
             let undo_enabled = !self.undo_stack.is_empty();
-            let undo_btn = crate::ui_ext::secondary_button_icon(
+            let undo_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                 Some(Icon::Undo),
                 "Undo",
-                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -177,10 +172,9 @@ impl NodeCanvasState {
             }
 
             let redo_enabled = !self.redo_stack.is_empty();
-            let redo_btn = crate::ui_ext::secondary_button_icon(
+            let redo_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                 Some(Icon::Redo),
                 "Redo",
-                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -192,10 +186,9 @@ impl NodeCanvasState {
             }
 
             // Clear button
-            let clear_btn = crate::ui_ext::secondary_button_icon(
+            let clear_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                 Some(Icon::Trash),
                 "Clear",
-                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -212,13 +205,9 @@ impl NodeCanvasState {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // RUN PIPELINE BUTTON (Themed hero accent)
-                let run_btn = crate::ui_ext::action_button_icon(
-                    Some(Icon::Play),
-                    "RUN PIPELINE",
-                    hex_to_c32(&palette.harmonies.base),
-                    palette,
-                )
-                .min_size(Vec2::new(140.0, CONTROL_HEIGHT));
+                let run_btn = clip_ui::buttons::ButtonRole::Primary
+                    .button_with_icon(Some(Icon::Play), "RUN PIPELINE", palette)
+                    .min_size(Vec2::new(140.0, CONTROL_HEIGHT));
 
                 if ui.add(run_btn).clicked() {
                     *action = self.run_pipeline_action();
@@ -284,16 +273,12 @@ impl NodeCanvasState {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    let close_btn = crate::ui_ext::danger_button_icon(
-                                        Some(Icon::Close),
-                                        "Close",
-                                        hex_to_c32(&palette.colors.surface_recessed),
-                                        palette,
-                                    )
-                                    .stroke(egui::Stroke::new(
-                                        1.0_f32,
-                                        hex_to_c32(&palette.undo_border),
-                                    ));
+                                    let close_btn = clip_ui::buttons::ButtonRole::Secondary
+                                        .button_with_icon(Some(Icon::Close), "Close", palette)
+                                        .stroke(egui::Stroke::new(
+                                            1.0_f32,
+                                            hex_to_c32(&palette.undo_border),
+                                        ));
                                     if ui.add(close_btn).clicked() {
                                         self.catalog_open = false;
                                     }
@@ -376,11 +361,9 @@ impl NodeCanvasState {
                                                         egui::Align::Center,
                                                     ),
                                                     |ui| {
-                                                        let add_btn = crate::action_button(
-                                                            "+ Add",
-                                                            hex_to_c32(&palette.harmonies.base),
-                                                            palette,
-                                                        );
+                                                        let add_btn =
+                                                            clip_ui::buttons::ButtonRole::Primary
+                                                                .button("+ Add", palette);
                                                         if ui.add(add_btn).clicked() {
                                                             let spawn_pos = self
                                                                 .spawn_node_pos
@@ -487,8 +470,7 @@ impl NodeCanvasState {
                 resp.request_focus();
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    let save_btn =
-                        crate::action_button("Save", hex_to_c32(&palette.harmonies.base), palette);
+                    let save_btn = clip_ui::buttons::ButtonRole::Primary.button("Save", palette);
                     if ui
                         .add_enabled(!self.save_name.trim().is_empty(), save_btn)
                         .clicked()
@@ -530,11 +512,8 @@ impl NodeCanvasState {
                         }
                         self.save_dialog_open = false;
                     }
-                    let cancel_btn = crate::secondary_button(
-                        "Cancel",
-                        hex_to_c32(&palette.colors.surface_panel),
-                        palette,
-                    );
+                    let cancel_btn =
+                        clip_ui::buttons::ButtonRole::Secondary.button("Cancel", palette);
                     if ui.add(cancel_btn).clicked() {
                         self.save_dialog_open = false;
                     }

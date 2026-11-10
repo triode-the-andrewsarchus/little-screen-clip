@@ -64,7 +64,12 @@ impl InlineSpreadsheetPreview {
                                 .max(1.0);
                             ui.horizontal(|ui| {
                                 if ui
-                                    .add_enabled(active_sheet_idx > 0, egui::Button::new("‹"))
+                                    .add_enabled(
+                                        active_sheet_idx > 0,
+                                        clip_ui::buttons::ButtonRole::Secondary
+                                            .button("‹", palette)
+                                            .min_size(Vec2::ZERO),
+                                    )
                                     .clicked()
                                 {
                                     active_sheet_idx -= 1;
@@ -84,7 +89,9 @@ impl InlineSpreadsheetPreview {
                                 if ui
                                     .add_enabled(
                                         active_sheet_idx + 1 < data.sheets.len(),
-                                        egui::Button::new("›"),
+                                        clip_ui::buttons::ButtonRole::Secondary
+                                            .button("›", palette)
+                                            .min_size(Vec2::ZERO),
                                     )
                                     .clicked()
                                 {

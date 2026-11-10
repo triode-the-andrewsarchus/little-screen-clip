@@ -876,8 +876,6 @@ impl ImagePreviewState {
             return;
         }
 
-        let b_med = hex_to_c32(&palette.colors.surface_panel);
-        let f_high = hex_to_c32(&palette.colors.text_primary);
         ui.add_space(crate::ui_ext::SPACE_XS);
         let invert_text = match (config.source, config.invert) {
             (CreativeFxMaskSource::DepthMap, true) => "⇄ Invert Mask: ON (Far / Background)",
@@ -889,14 +887,8 @@ impl ImagePreviewState {
                 "⇄ Invert Mask: OFF (Foreground)"
             }
         };
-        let invert_button = egui::Button::new(
-            egui::RichText::new(invert_text)
-                .size(crate::ui_ext::BODY_FONT_SIZE)
-                .color(f_high),
-        )
-        .fill(b_med)
-        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-        .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
+        let invert_button = crate::ui_ext::mode_tab_button(invert_text, config.invert, palette)
+            .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
         if ui
             .add(invert_button)
             .on_hover_text("Swap the foreground and background mask regions")

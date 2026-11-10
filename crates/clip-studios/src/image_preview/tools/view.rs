@@ -37,7 +37,6 @@ impl ImagePreviewState {
         };
         let text = hex_to_c32(&palette.colors.text_secondary);
         let accent = hex_to_c32(&palette.harmonies.base);
-        let btn_bg = hex_to_c32(&palette.colors.surface_panel);
         ui.label(egui::RichText::new("Metadata").strong().color(accent));
         for summary in [
             meta.camera_summary(),
@@ -51,8 +50,11 @@ impl ImagePreviewState {
             ui.label(egui::RichText::new(summary).color(text));
         }
         if let Some(osm) = meta.osm_url() {
-            let map =
-                crate::ui_ext::secondary_button_icon(Some(Icon::Search), "Map", btn_bg, palette);
+            let map = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                Some(Icon::Search),
+                "Map",
+                palette,
+            );
             if ui
                 .add(map)
                 .on_hover_text("Open GPS location in OpenStreetMap")
@@ -93,8 +95,11 @@ impl ImagePreviewState {
         if let (Some(lat), Some(lon)) = (meta.gps_latitude, meta.gps_longitude) {
             ui.label(egui::RichText::new("GPS Coordinates").strong().color(text));
             ui.label(format!("{lat:.6}, {lon:.6}"));
-            let copy =
-                crate::ui_ext::secondary_button_icon(Some(Icon::Copy), "Copy", btn_bg, palette);
+            let copy = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                Some(Icon::Copy),
+                "Copy",
+                palette,
+            );
             if ui.add(copy).clicked() {
                 ctx.output_mut(|output| output.copied_text = format!("{lat:.6}, {lon:.6}"));
             }

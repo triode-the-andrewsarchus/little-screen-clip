@@ -140,11 +140,10 @@ impl WorkbenchApp {
                         WorkbenchAppearance::Light => "Dark mode [F4/F6]",
                     };
                     if ui
-                        .add(ui_ext::secondary_button(
-                            appearance_label,
-                            hex_to_c32(&self.ui_palette.colors.surface_panel),
-                            &self.ui_palette,
-                        ))
+                        .add(
+                            clip_ui::buttons::ButtonRole::Secondary
+                                .button(appearance_label, &self.ui_palette),
+                        )
                         .on_hover_text(
                             "Switch the workbench and little screen to the other color mode",
                         )

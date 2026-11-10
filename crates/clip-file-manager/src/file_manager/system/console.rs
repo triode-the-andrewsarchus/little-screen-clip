@@ -333,7 +333,12 @@ pub(super) struct Capture {
     error: Option<String>,
 }
 impl Capture {
-    pub fn show(&mut self, ui: &mut egui::Ui, document: &Document) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        document: &Document,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
         if format(document.kind).is_none() {
             return;
         }
@@ -359,7 +364,8 @@ impl Capture {
             if ui
                 .add_enabled(
                     self.pending.is_none(),
-                    egui::Button::new("Capture console snapshot"),
+                    clip_ui::buttons::ButtonRole::Primary
+                        .button("Capture console snapshot", palette),
                 )
                 .clicked()
             {
@@ -546,7 +552,13 @@ mod render_tests {
         };
         let context = egui::Context::default();
         let output = context.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| capture.show(ui, &document));
+            egui::CentralPanel::default().show(ctx, |ui| {
+                capture.show(
+                    ui,
+                    &document,
+                    &little_clip_core::palette::AppPalette::default(),
+                )
+            });
         });
         assert!(capture.pending.is_none());
         assert!(output.platform_output.copied_text.is_empty());

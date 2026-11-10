@@ -133,7 +133,6 @@ impl DiffViewerState {
             }
         }
 
-        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let success_color = crate::hex_to_c32(&palette.diff_add);
         let del_color = crate::hex_to_c32(&palette.diff_del);
@@ -194,10 +193,9 @@ impl DiffViewerState {
             .show(ui, |ui| {
                 // Zone 1: Header
                 let clicked_hatch = shell.render_header(ui, |ui| {
-                    let swap_btn = crate::ui_ext::secondary_button_icon(
+                    let swap_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                         Some(Icon::Swap),
                         "Swap [S]",
-                        b_med,
                         palette,
                     );
                     if ui
@@ -213,10 +211,9 @@ impl DiffViewerState {
                     } else {
                         "Copy Diff"
                     };
-                    let copy_btn = crate::ui_ext::secondary_button_icon(
+                    let copy_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
                         Some(Icon::Copy),
                         copy_label,
-                        b_med,
                         palette,
                     );
                     if ui.add(copy_btn).clicked() {
