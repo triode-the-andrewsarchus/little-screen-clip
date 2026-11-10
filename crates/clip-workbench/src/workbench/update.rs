@@ -503,14 +503,14 @@ impl eframe::App for WorkbenchApp {
                 }
                 WorkbenchView::AutoActions => {
                     let previous_enabled = self.config.auto_actions.trim_link_tracking;
-                    if let Some(enabled) = render_auto_actions(ui, &mut self.config, &self.ui_palette).0 {
-                        self.execute_auto_action_change_with(
-                            ctx,
-                            previous_enabled,
-                            enabled,
-                            &mut |request| {
-                                send_ipc_request(request).map_err(|error| error.to_string())
-                            },
+                    let changed = ui.add_enabled_ui(self.daemon_mutation.is_none(), |ui| {
+                        render_auto_actions(ui, &mut self.config, &self.ui_palette).0
+                    }).inner;
+                    if let Some(enabled) = changed {
+                        self.config.auto_actions.trim_link_tracking = previous_enabled;
+                        self.submit_daemon_mutation(
+                            IpcRequest::SetAutoAction { key: "trim_link_tracking".into(), enabled },
+                            DaemonMutationKind::AutoAction { enabled },
                         );
                     }
                 }

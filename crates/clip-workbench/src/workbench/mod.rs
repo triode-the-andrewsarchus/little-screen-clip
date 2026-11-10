@@ -4,7 +4,7 @@ use super::*;
 
 mod actions;
 mod daemon_actions;
-pub(super) use daemon_actions::{DaemonMutation, DaemonMutationKind};
+pub(super) use daemon_actions::{DaemonMutation, DaemonMutationKind, action_result};
 mod background;
 pub(super) use background::{ClipboardSelection, MirrorJob, PaletteOpsJob};
 mod appearance;

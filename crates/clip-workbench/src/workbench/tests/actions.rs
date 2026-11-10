@@ -562,14 +562,162 @@ fn background_pipeline_completion_reaches_canvas_after_view_switch() {
     assert_eq!(app.canvas_state.last_run_duration_ms, Some(17));
 }
 
-fn finish_daemon_mutation(app: &mut WorkbenchApp, ctx: &egui::Context) {
+fn finish_daemon_mutation(app: &mut WorkbenchApp, ctx: &egui::Context) -> usize {
+    let mut closes = 0;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while app.daemon_mutation.is_some() {
-        app.poll_daemon_mutation(ctx);
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            app.poll_daemon_mutation(ctx)
+        });
+        closes += viewport_close_command_count(&output);
         assert!(
             std::time::Instant::now() < deadline,
             "daemon completion was not published"
         );
         std::thread::sleep(Duration::from_millis(2));
+    }
+    closes
+}
+
+impl WorkbenchApp {
+    fn execute_current_action_with(
+        &mut self,
+        ctx: &egui::Context,
+        mut send: impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
+    ) {
+        self.dispatch_current_action(|app, request| {
+            app.apply_action_response(ctx, send(&request), true);
+        });
+    }
+    pub(super) fn render_prompt_modal_with(
+        &mut self,
+        ctx: &egui::Context,
+        mut send: impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
+    ) -> bool {
+        self.render_prompt_modal_dispatch(ctx, |app, request| {
+            app.apply_action_response(ctx, send(&request), true);
+        })
+    }
+    fn execute_auto_action_change_with(
+        &mut self,
+        ctx: &egui::Context,
+        previous_enabled: bool,
+        enabled: bool,
+        send: &mut impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
+    ) {
+        let response = send(&IpcRequest::SetAutoAction {
+            key: "trim_link_tracking".into(),
+            enabled,
+        });
+        self.config.auto_actions.trim_link_tracking = previous_enabled;
+        if self.apply_action_response(ctx, response, false) {
+            self.config.auto_actions.trim_link_tracking = enabled;
+        }
+    }
+}
+
+#[test]
+fn retained_actions_close_only_on_success_and_settings_publish_only_on_confirmation() {
+    let ctx = egui::Context::default();
+    let jobs = BackgroundJobs::new(1, 2);
+    for success in [false, true] {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let (release, wait) = std::sync::mpsc::channel();
+        app.submit_daemon_mutation_with(
+            IpcRequest::ExecuteRecipe {
+                recipe_name: "fixture".into(),
+            },
+            DaemonMutationKind::Action,
+            &jobs,
+            move |_| {
+                wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                if success {
+                    Ok(IpcResponse::Success {
+                        message: "done".into(),
+                    })
+                } else {
+                    Err("controlled failure".into())
+                }
+            },
+        );
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            app.poll_daemon_mutation(ctx)
+        });
+        assert_eq!(viewport_close_command_count(&output), 0);
+        release.send(()).unwrap();
+        assert_eq!(finish_daemon_mutation(&mut app, &ctx), usize::from(success));
+        assert_eq!(app.status_msg.is_some(), !success);
+
+        app.config.auto_actions.trim_link_tracking = false;
+        app.submit_daemon_mutation_with(
+            IpcRequest::SetAutoAction {
+                key: "trim_link_tracking".into(),
+                enabled: true,
+            },
+            DaemonMutationKind::AutoAction { enabled: true },
+            &jobs,
+            move |_| {
+                if success {
+                    Ok(IpcResponse::Success {
+                        message: "updated".into(),
+                    })
+                } else {
+                    Err("controlled failure".into())
+                }
+            },
+        );
+        assert!(!app.config.auto_actions.trim_link_tracking);
+        assert_eq!(finish_daemon_mutation(&mut app, &ctx), 0);
+        assert_eq!(app.config.auto_actions.trim_link_tracking, success);
+    }
+}
+
+#[test]
+fn standalone_prompt_keeps_input_on_failure_and_closes_after_confirmed_retry() {
+    let ctx = egui::Context::default();
+    let jobs = BackgroundJobs::new(1, 2);
+    let mut app = test_workbench_app(None, VecDeque::new());
+    let mut prompt = PromptApp::new(
+        "Recipe".into(),
+        "Input".into(),
+        "draft".into(),
+        None,
+        ui_appearance::palette(AppConfig::default().workbench.appearance),
+    );
+    for success in [false, true] {
+        app.submit_daemon_mutation_with(
+            IpcRequest::ExecuteLastAction {
+                prompt_text: Some("draft".into()),
+            },
+            DaemonMutationKind::Action,
+            &jobs,
+            move |_| {
+                if success {
+                    Ok(IpcResponse::Success {
+                        message: "done".into(),
+                    })
+                } else {
+                    Ok(IpcResponse::Error {
+                        error: "rejected".into(),
+                    })
+                }
+            },
+        );
+        prompt.pending = app.daemon_mutation.take();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut closes = 0;
+        while prompt.pending.is_some() {
+            let frame = ctx.run(egui::RawInput::default(), |ctx| {
+                prompt.poll_pending(ctx);
+            });
+            closes += viewport_close_command_count(&frame);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(closes, usize::from(success));
+        assert_eq!(prompt.input_text, "draft");
+        if !success {
+            assert_eq!(prompt.error.as_deref(), Some("rejected"));
+        }
     }
 }

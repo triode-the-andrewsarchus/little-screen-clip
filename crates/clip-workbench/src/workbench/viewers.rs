@@ -198,16 +198,17 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn render_prompt_modal(&mut self, ctx: &egui::Context) -> bool {
-        self.render_prompt_modal_with(ctx, |request| {
-            send_ipc_request(request).map_err(|error| error.to_string())
+        self.render_prompt_modal_dispatch(ctx, |app, request| {
+            app.submit_daemon_mutation(request, DaemonMutationKind::Action);
         })
     }
 
-    pub(crate) fn render_prompt_modal_with(
+    pub(crate) fn render_prompt_modal_dispatch(
         &mut self,
         ctx: &egui::Context,
-        mut send: impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
+        dispatch: impl FnOnce(&mut Self, IpcRequest),
     ) -> bool {
+        let pending = self.daemon_mutation.is_some();
         if let Some(prompt) = &mut self.in_app_prompt {
             let mut close_prompt = false;
             let mut submit_request: Option<IpcRequest> = None;
@@ -227,6 +228,7 @@ impl WorkbenchApp {
                         .inner_margin(egui::Margin::symmetric(22.0, 18.0)),
                 )
                 .show(ctx, |ui| {
+                    ui.set_enabled(!pending);
                     ui.horizontal(|ui| {
                         Icon::Sparkles.ui(
                             ui,
@@ -289,7 +291,7 @@ impl WorkbenchApp {
                                 .fill(can_bg),
                         );
 
-                        if submit_btn.clicked() || enter {
+                        if !pending && (submit_btn.clicked() || enter) {
                             submit_request = Some(IpcRequest::ExecuteRecipeWithPrompt {
                                 recipe_name: prompt.recipe_name.clone(),
                                 prompt_text: Some(prompt.input_text.clone()),
@@ -303,8 +305,9 @@ impl WorkbenchApp {
                 });
 
             if let Some(request) = submit_request {
-                self.execute_action_request_with(ctx, &request, true, &mut send);
-            } else if close_prompt {
+                dispatch(self, request);
+                ctx.request_repaint();
+            } else if close_prompt && !pending {
                 self.in_app_prompt = None;
             }
             return true;

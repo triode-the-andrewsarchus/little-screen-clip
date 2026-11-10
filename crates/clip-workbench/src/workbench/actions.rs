@@ -228,16 +228,16 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn execute_current_action(&mut self, ctx: &egui::Context) {
-        self.execute_current_action_with(ctx, |request| {
-            send_ipc_request(request).map_err(|error| error.to_string())
+        self.dispatch_current_action(|app, request| {
+            app.submit_daemon_mutation(request, DaemonMutationKind::Action);
         });
+        ctx.request_repaint();
     }
 
-    pub(crate) fn execute_current_action_with(
-        &mut self,
-        ctx: &egui::Context,
-        mut send: impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
-    ) {
+    pub(crate) fn dispatch_current_action(&mut self, dispatch: impl FnOnce(&mut Self, IpcRequest)) {
+        if self.daemon_mutation.is_some() {
+            return;
+        }
         let actions = self.filtered_actions();
         if let Some(act) = actions.get(self.selected_action_index) {
             match act {
@@ -257,7 +257,7 @@ impl WorkbenchApp {
                         selected_slots: Some(self.selected_slots.clone()),
                         separator: None,
                     };
-                    self.execute_action_request_with(ctx, &req, true, &mut send);
+                    dispatch(self, req);
                 }
                 PaletteAction::Recipe(r) => {
                     if let Some((msg, def)) = recipe_needs_prompt(r, &self.state) {
@@ -271,58 +271,30 @@ impl WorkbenchApp {
                         let req = IpcRequest::ExecuteRecipe {
                             recipe_name: r.name.clone(),
                         };
-                        self.execute_action_request_with(ctx, &req, true, &mut send);
+                        dispatch(self, req);
                     }
                 }
             }
         }
     }
 
-    pub(crate) fn execute_action_request_with(
+    pub(crate) fn apply_action_response(
         &mut self,
         ctx: &egui::Context,
-        request: &IpcRequest,
+        response: Result<IpcResponse, String>,
         close_on_success: bool,
-        send: &mut impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
     ) -> bool {
-        if self.daemon_mutation.is_some() {
-            return false;
-        }
-        match send(request) {
-            Ok(IpcResponse::OpResult { .. } | IpcResponse::Success { .. }) => {
+        match response.and_then(super::daemon_actions::action_result) {
+            Ok(()) => {
                 if close_on_success {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 true
             }
-            Ok(IpcResponse::Error { error }) => {
-                self.set_status_message(format!("Error: {error}"));
-                false
-            }
-            Ok(_) => {
-                self.set_status_message("Error: unexpected response from daemon");
-                false
-            }
             Err(error) => {
                 self.set_status_message(format!("Error: {error}"));
                 false
             }
-        }
-    }
-
-    pub(crate) fn execute_auto_action_change_with(
-        &mut self,
-        ctx: &egui::Context,
-        previous_enabled: bool,
-        enabled: bool,
-        send: &mut impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
-    ) {
-        let request = IpcRequest::SetAutoAction {
-            key: "trim_link_tracking".to_owned(),
-            enabled,
-        };
-        if !self.execute_action_request_with(ctx, &request, false, send) {
-            self.config.auto_actions.trim_link_tracking = previous_enabled;
         }
     }
 }

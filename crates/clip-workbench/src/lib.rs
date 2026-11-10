@@ -932,6 +932,8 @@ struct PromptApp {
     recipe_name: Option<String>,
     first_frame: bool,
     palette: AppPalette,
+    pending: Option<DaemonMutation>,
+    error: Option<String>,
 }
 
 impl PromptApp {
@@ -949,13 +951,36 @@ impl PromptApp {
             recipe_name,
             first_frame: true,
             palette,
+            pending: None,
+            error: None,
         }
+    }
+}
+
+impl PromptApp {
+    fn poll_pending(&mut self, ctx: &egui::Context) -> bool {
+        if let Some(job) = &self.pending {
+            if let Some(response) = job.poll(ctx) {
+                self.pending = None;
+                match workbench::action_result(response) {
+                    Ok(()) => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return true;
+                    }
+                    Err(error) => self.error = Some(error),
+                }
+            }
+        }
+        false
     }
 }
 
 impl eframe::App for PromptApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if self.poll_pending(ctx) {
+            return;
+        }
+        if self.pending.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
@@ -969,6 +994,19 @@ impl eframe::App for PromptApp {
                     .inner_margin(egui::Margin::symmetric(24.0, 20.0)),
             )
             .show(ctx, |ui| {
+                if self.pending.is_some() {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Waiting for daemon operation to finish…");
+                    });
+                }
+                if let Some(error) = &self.error {
+                    ui.horizontal(|ui| {
+                        Icon::Alert.ui(ui, 18.0, hex_to_c32(&self.palette.colors.text_primary));
+                        ui.label(error);
+                    });
+                }
+                ui.set_enabled(self.pending.is_none());
                 ui.horizontal(|ui| {
                     Icon::Sparkles.ui(ui, 18.0, hex_to_c32(&self.palette.harmonies.triadic_1));
                     ui.heading(
@@ -1016,22 +1054,25 @@ impl eframe::App for PromptApp {
                         &self.palette,
                     ));
 
-                    if submit_btn.clicked() || enter {
+                    if self.pending.is_none() && (submit_btn.clicked() || enter) {
                         let text = self.input_text.clone();
-                        if let Some(ref r_name) = self.recipe_name {
-                            let _ = send_ipc_request(&IpcRequest::ExecuteRecipeWithPrompt {
-                                recipe_name: r_name.clone(),
+                        let request = if let Some(ref name) = self.recipe_name {
+                            IpcRequest::ExecuteRecipeWithPrompt {
+                                recipe_name: name.clone(),
                                 prompt_text: Some(text),
-                            });
+                            }
                         } else {
-                            let _ = send_ipc_request(&IpcRequest::ExecuteLastAction {
+                            IpcRequest::ExecuteLastAction {
                                 prompt_text: Some(text),
-                            });
-                        }
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        };
+                        self.error = None;
+                        self.pending =
+                            Some(DaemonMutation::submit(request, DaemonMutationKind::Action));
+                        ctx.request_repaint();
                     }
 
-                    if cancel_btn.clicked() {
+                    if self.pending.is_none() && cancel_btn.clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
