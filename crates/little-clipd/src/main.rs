@@ -587,7 +587,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     let mut mgr = ctx.manager.write().await;
                     apply_prepared_push_text(&mut mgr, item.clone(), original, hand);
                 }
-                copy_to_os_clipboard(&item, &ctx).await;
+                publish_pushed_clipboard(&item, hand, &ctx).await;
                 ctx.refresh_display().await;
                 IpcResponse::Success {
                     message: format!("Pushed to {:?}", hand),
@@ -605,7 +605,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                         let mut mgr = ctx.manager.write().await;
                         mgr.push_to_hand(item.clone(), hand);
                     }
-                    copy_to_os_clipboard(&item, &ctx).await;
+                    publish_pushed_clipboard(&item, hand, &ctx).await;
                     ctx.refresh_display().await;
                     IpcResponse::Success {
                         message: format!("Pushed image to {:?}", hand),
@@ -628,7 +628,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     let mut mgr = ctx.manager.write().await;
                     mgr.push_to_hand(item.clone(), hand);
                 }
-                copy_to_os_clipboard(&item, &ctx).await;
+                publish_pushed_clipboard(&item, hand, &ctx).await;
                 ctx.refresh_display().await;
                 IpcResponse::Success {
                     message: format!("Pushed file {:?} to {:?}", path, hand),
@@ -653,7 +653,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                         let mut mgr = ctx.manager.write().await;
                         mgr.push_to_hand(item.clone(), hand);
                     }
-                    copy_to_os_clipboard(&item, &ctx).await;
+                    publish_pushed_clipboard(&item, hand, &ctx).await;
                     ctx.refresh_display().await;
                     IpcResponse::Success {
                         message: format!("Pushed {} file(s) to {:?}", paths.len(), hand),
@@ -1508,6 +1508,13 @@ fn is_image_file_path(p: &std::path::Path) -> bool {
     little_clip_core::item::is_image_path(p)
 }
 
+// Explicit Right Hand pushes collect references/content without replacing the system selection.
+async fn publish_pushed_clipboard(item: &ClipItem, hand: HandSide, ctx: &DaemonContext) {
+    if hand == HandSide::Left {
+        copy_to_os_clipboard(item, ctx).await;
+    }
+}
+
 async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
     match &item.payload {
         little_clip_core::ClipPayload::Image { bytes, mime, .. } => {
@@ -1639,6 +1646,142 @@ mod tests {
             rolling_capture_config: Arc::new(std::sync::RwLock::new(config.audio)),
             route_next_clipboard: RwLock::new(clipboard_route::ClipboardRoute::default()),
         })
+    }
+
+    // The child sees only a fake clipboard adapter, never the user's Wayland/X11 sockets.
+    fn isolated_clipboard_test(name: &str) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        if std::env::var_os("CLIPD_TEST_CLIPBOARD").is_some() {
+            return false;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let adapter = directory.path().join("wl-copy");
+        std::fs::write(
+            &adapter,
+            r#"#!/bin/sh
+/bin/cat > "$CLIPD_TEST_CLIPBOARD/bytes"
+printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&adapter, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--test-threads=1"])
+            .env("CLIPD_TEST_CLIPBOARD", directory.path())
+            .env("PATH", directory.path())
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("DISPLAY")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
+    #[tokio::test]
+    async fn right_hand_pushes_do_not_modify_the_system_clipboard() {
+        if isolated_clipboard_test("tests::right_hand_pushes_do_not_modify_the_system_clipboard") {
+            return;
+        }
+        let directory = PathBuf::from(std::env::var_os("CLIPD_TEST_CLIPBOARD").unwrap());
+        let path = directory.join("reference.txt");
+        std::fs::write(&path, b"reference contents").unwrap();
+        let mut manager = SlotManager::default();
+        manager.push_left(ClipItem::from_text("original left"));
+        let original_left = manager.left_hand().unwrap().id;
+        let ctx = test_context(manager);
+        let (client, server) = UnixStream::pair().unwrap();
+        let handler = tokio::spawn(handle_client(server, Arc::clone(&ctx)));
+        let (reader, mut writer) = client.into_split();
+        let mut lines = BufReader::new(reader).lines();
+        let hand = HandSide::Right;
+        let requests = [
+            IpcRequest::PushText {
+                text: "reference text".into(),
+                hand,
+            },
+            IpcRequest::PushImage {
+                bytes: vec![
+                    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0,
+                    0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156,
+                    99, 248, 207, 192, 0, 0, 3, 1, 1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69,
+                    78, 68, 174, 66, 96, 130,
+                ],
+                mime: "image/png".into(),
+                hand,
+            },
+            IpcRequest::PushFile {
+                path: path.clone(),
+                hand,
+            },
+            IpcRequest::PushFiles {
+                paths: vec![path.clone()],
+                hand,
+            },
+            IpcRequest::PushFileReferences {
+                paths: vec![path],
+                hand,
+            },
+        ];
+        for request in requests {
+            writer
+                .write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes())
+                .await
+                .unwrap();
+            let response = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(
+                    serde_json::from_str::<IpcResponse>(&response).unwrap(),
+                    IpcResponse::Success { .. }
+                ),
+                "{response}"
+            );
+            assert_eq!(
+                ctx.manager.read().await.left_hand().unwrap().id,
+                original_left
+            );
+            assert!(ctx.manager.read().await.get(SlotId::RightHand).is_some());
+            assert!(
+                !directory.join("bytes").exists(),
+                "a Right Hand push wrote the clipboard"
+            );
+            assert!(ctx.self_copied_text.read().await.is_empty());
+            assert!(ctx.self_copied_image_hash.read().await.is_none());
+        }
+        // The same handler must still publish an explicit Left Hand push.
+        let request = IpcRequest::PushText {
+            text: "new left".into(),
+            hand: HandSide::Left,
+        };
+        writer
+            .write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            serde_json::from_str::<IpcResponse>(&response).unwrap(),
+            IpcResponse::Success { .. }
+        ));
+        assert_eq!(std::fs::read(directory.join("bytes")).unwrap(), b"new left");
+        assert_eq!(
+            std::fs::read_to_string(directory.join("mime")).unwrap(),
+            "text/plain;charset=utf-8"
+        );
+        drop(writer);
+        drop(lines);
+        handler.await.unwrap();
     }
 
     #[tokio::test]
