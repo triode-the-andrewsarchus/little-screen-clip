@@ -457,10 +457,14 @@ mod tests {
             ));
             if let ClipPayload::Image { bytes, path, .. } = item.payload {
                 assert_eq!(bytes, std::fs::read(&image).unwrap());
-                if let Some(path) = path {
-                    assert_eq!(std::fs::read(&path).unwrap(), bytes);
-                    std::fs::remove_file(path).unwrap();
-                }
+                let path =
+                    path.expect("materialized image bytes retain an owned disk representation");
+                assert_ne!(
+                    path, image,
+                    "the result must survive cleanup of the input workspace"
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                std::fs::remove_file(path).unwrap();
             }
         }
         let binary = fixture.path().join("ordinary.bin");
