@@ -39,11 +39,12 @@ Standard clipboard managers flatten everything into a single chronological list.
 | `little-clip-core` | Clipboard/slot models, configuration, IPC messages, artifacts, and domain-neutral presentation data | Third-party libraries only |
 | `little-clip-ops` | Transformations, diffs, operation dispatch, pipeline compilation and execution | `little-clip-core` |
 | `little-clip-render` | Pixel layout, text/image drawing, and card rendering | `little-clip-core` |
-| `little-clip-driver` | USB display protocol, capture and lock monitoring | `little-clip-core` |
+| `little-clip-driver` | USB display protocol, capture and lock monitoring | Third-party libraries only |
 | `little-clipd` | Process lifecycle, IPC dispatch, clipboard integration, and hardware orchestration | The library crates |
 | `clipctl` | Command-line IPC client | `little-clip-core` and operation-facing libraries |
 | `clip-workbench` | egui state, studio viewers, and workbench interaction | The library crates through their public APIs |
 | `clip-file-manager` | Standalone resizable file manager binary | `clip-workbench` and the library crates |
+| `little-clip-nki` | Isolated native NKI/EXS sample-map helper | Standalone executable; never linked into the desktop library |
 
 The `clip-file-manager` package builds `clip-file-manager`, a separate, resizable
 file manager application. Both executables use `clip-workbench`'s shared desktop UI library for

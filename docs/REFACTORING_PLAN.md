@@ -1,6 +1,6 @@
 # Workspace & Code Quality Refactoring Plan
 
-This document tracks the step-by-step refactoring plan for the `little-screen-clip` workspace following the repository-wide code review in [`docs/CODE_REVIEW_FINDINGS.md`](file:///home/vcarlson/little-screen-clip/docs/CODE_REVIEW_FINDINGS.md). Each task is executed and verified as an independent commit on `refactor/workspace-and-code-quality`.
+This document tracks the step-by-step refactoring plan for the `little-screen-clip` workspace following the repository-wide code review in [CODE_REVIEW_FINDINGS.md](CODE_REVIEW_FINDINGS.md). Each task is executed and verified as an independent commit on `refactor/workspace-and-code-quality`.
 
 ---
 
@@ -30,7 +30,7 @@ This document tracks the step-by-step refactoring plan for the `little-screen-cl
   - Consolidate duplicated `numbered` / `digits` / `number` suffix-parsing helpers across `file_manager/system/{btrfs,char_devices,Collections,dma,fabric,firmware,graphics,iommu,leds,media,ptp,scsi,watchdog}.rs` into `file_manager/system/mod.rs`.
 
 - [x] **Task 3: Consolidate `BinaryDiffViewState` navigation state and Office-to-PDF loading**
-  - Make `BinaryDiffViewState.nav: BinaryDiffNavigation` the single source of truth in `crates/clip-workbench/src/binary_diff_view/{mod.rs,navigation.rs}`, removing the shadowed `scroll_row`, `cursor_offset`, `selected_region`, `sync_scroll`, and `bytes_per_row` fields.
+  - Make `BinaryDiffViewState.nav: BinaryDiffNavigation` the single source of truth in `crates/clip-workbench/src/binary_diff_view/{mod.rs,navigation.rs}`, removing the mirrored search matches, search/difference indices, pending scroll target, and selected difference block.
   - Extract a shared Office-document-to-PDF/Markdown loader helper used by both `workbench/loaders.rs` and `file_manager/viewers.rs`, eliminating the redundant second `render_to_pdf` call when `ensure_rendered_pdf` fails.
 
 - [x] **Task 4: Centralize bundled helper script resolution in `little-clip-core`**
@@ -46,7 +46,27 @@ This document tracks the step-by-step refactoring plan for the `little-screen-cl
 
 - [x] **Task 7: Decouple `clip-workbench` binary/library targets and extract `crates/clip-file-manager`**
   - Make `crates/clip-workbench/src/main.rs` a thin binary entrypoint that calls into `clip_workbench` instead of re-declaring `mod` for all studio modules (eliminating double compilation and false-positive dead-code warnings).
-  - Extract `file_manager` and `src/bin/clip-file-manager.rs` into a dedicated `crates/clip-file-manager` workspace crate depending on `clip-workbench` and `little-clip-*`.
+  - Move the standalone entrypoint from `src/bin/clip-file-manager.rs` into `crates/clip-file-manager`. The browser and studios remain shared library modules in `clip-workbench`; moving them into sibling UI/studio crates is a separate pending task in the deep refactoring plan.
 
 - [x] **Task 8: Decompose oversized monolithic modules**
   - Split `file_manager/constellation/ui.rs` (~3,950 lines), `file_manager/search/service.rs` (~4,530 lines), and `image_preview/tools/redact.rs` (~2,270 lines) into focused implementation and test submodules.
+
+
+## Integration with format support on main
+
+Rebased onto `2f75a97` after the format-support branch merged. The completed refactoring tasks above apply to the combined tree; the larger `DEEP_REFACTORING_PLAN.md` remains a roadmap.
+
+- The thin workbench entrypoint uses one library module graph, including subtitles, layered images, notebooks, books/comics, mail/calendar, databases, maps, G-code and multisamples. The subtitle module is retained in that library rather than reintroduced in the binary.
+- The standalone file-manager package retains the shared worker dispatcher before CLI parsing. Native image/conversion workers and the separately packaged NKI/EXS reader keep their existing isolation and licenses.
+- Waveform readers retain `audio::open_audio_input`, which already uses guarded ordinary-file opening and handles prepared WMA/xWMA/NCW audio. Replacing it with a raw guarded file would lose those decoders.
+- New format parsers already live in core; their UI state remains in shared studio/browser modules. Identity-aware reads continue through `FileSource`; the generic bounded reader does not replace those identity checks.
+- The six moved presentation modules have one canonical source under core, with the ops reexports preserved. The latest MIDI timing fixes remain in that source.
+- Shared Office preparation remains behind the file manager's source guard. Search-preview validation, multisample MIDI focus, and prepared-audio playback are retained.
+
+Build the desktop binaries with `cargo build -p clip-workbench -p clip-file-manager`, or use the workspace launch helper. Run `cargo test --workspace -- --test-threads=1`; studio tests now run once through the shared library instead of being duplicated in the workbench binary.
+
+Integration verification: `cargo check -j4 --workspace --all-targets`, `cargo build -j4 --workspace --bins`, and formatting pass. The final serial workspace run passes 2,585 tests with 29 ignored. The removed duplicate binary compilation accounts for most of the count reduction; the obsolete STL compatibility-alias test was removed with its unused module. Shared worker dispatch was checked in both binaries from `/tmp`.
+
+Two regression fixes retain the refactor's behavior: binary-diff tests now observe consumption of the single pending scroll target instead of a stale mirror field, and the guarded image reader preserves the distinction between read failures and decode failures.
+
+Private Weston/Niri acceptance passes for both the workbench component gallery and the file-manager multisample suite (68 observations), including velocity-layer selection, MIDI focus/sustain, harmony controls, format previews and renaming. Reports are local artifacts at `/tmp/refactor-rebase-workbench/report.json` and `/tmp/refactor-rebase-multisample/report.json`.

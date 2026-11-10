@@ -278,7 +278,6 @@ pub struct DecodedImageData {
 impl DecodedImageData {
     pub fn from_path(path: &Path) -> Result<Self, String> {
         Self::from_path_bounded(path, 128 * 1024 * 1024)
-            .map_err(|error| format!("Failed to read file {}: {error}", path.display()))
     }
 
     /// Reads a regular image file with a bounded encoded-byte allocation.
@@ -288,7 +287,7 @@ impl DecodedImageData {
     /// image library's default allocation limits.
     pub fn from_path_bounded(path: &Path, max_bytes: usize) -> Result<Self, String> {
         let bytes = crate::file_source::read_file_bytes(path, max_bytes, true, true)
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
         Self::from_bytes(
             bytes,
             little_clip_core::item::guess_image_mime(path),

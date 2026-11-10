@@ -852,7 +852,9 @@ fn binary_diff_search_field_updates_matches_and_navigates_while_focused() {
     assert_eq!(state.search_query, "ABC");
     assert_eq!(state.nav.search_matches, vec![0, 2]);
     assert_eq!(state.nav.current_search_idx, 0);
-    assert_eq!(state.nav.scroll_target_row, Some(0));
+    // Rendering consumes the pending jump; navigation has no stale mirror field.
+    assert_eq!(state.nav.scroll_target_row, None);
+    assert_eq!(state.current_scroll_offset_y, 0.0);
 
     state.next_search_match();
     assert_eq!(state.nav.current_search_idx, 1);
