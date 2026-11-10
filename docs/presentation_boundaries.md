@@ -6,7 +6,7 @@ or authorization to add missing editors. The product roadmap remains
 
 ## Hints, observed content and actions
 
-[document_format.rs](../crates/clip-workbench/src/file_manager/document_format.rs)
+[document_format.rs](../crates/clip-file-manager/src/file_manager/document_format.rs)
 provides cheap path hints for semantic documents. Entry admission, strip sources
 and studio dispatch reuse that enum. A hint does not establish readability,
 content identity or write support. Studio dispatch carries the shared format
@@ -16,7 +16,7 @@ Multisamples are the classification pilot. Distinct extensions such as `.sfz`
 and `.sf2` select a bounded parser, whose failure remains a failure rather than
 proof of a playable instrument. Ambiguous `.xml` and `.exs` names keep their
 ordinary handling unless the existing worker-side
-[`read_if_identified`](../crates/clip-workbench/src/file_manager/multisample/mod.rs)
+[`read_if_identified`](../crates/clip-file-manager/src/file_manager/multisample/mod.rs)
 returns a parsed document with mapped regions. Generic `.preset` and `.iso`
 files are not admitted by resemblance. List/Shelf and studio workers use this
 same observation path. The prepared `Document` enables the existing mapping and
@@ -87,9 +87,9 @@ one compulsory visual for every context.
 | System interfaces | Separate policy; not ordinary content | Typed bounded metadata | System summaries | Dedicated system inspector; no generic payload decoding |
 
 The implementing dispatch is in
-[viewers.rs](../crates/clip-workbench/src/file_manager/viewers.rs),
-[previews.rs](../crates/clip-workbench/src/file_manager/previews.rs),
-[Shelf preview sources](../crates/clip-workbench/src/file_manager/shelf/preview.rs)
+[viewers.rs](../crates/clip-file-manager/src/file_manager/viewers.rs),
+[previews.rs](../crates/clip-file-manager/src/file_manager/previews.rs),
+[Shelf preview sources](../crates/clip-file-manager/src/file_manager/shelf/preview.rs)
 and [raster cards](../crates/little-clip-render/src/cards/mod.rs). Detailed format
 support remains in [file_types.md](file_types.md). These are current source-level
 capabilities, not a claim of end-to-end acceptance for every format combination.
@@ -104,10 +104,9 @@ first extraction does not make an isolated UI build independent of those.
 Core's `font_assets` owns fallback byte constants, reexported by render. Fonts
 and icons retain one canonical asset location and their original licenses.
 
-The workbench forwards its old UI module paths during migration. Its `ui_ext`
-facade still owns shared audio-device access and native-dialog availability;
-those services are not generic widgets. Studio/session ownership and the
-file-manager-to-workbench dependency are subsequent extraction work. Neither
+The workbench forwards its old UI module paths during migration. Shared
+audio-device access and native-dialog availability now live in studio runtime
+code; those services are not generic widgets. Neither
 application's lifecycle or internal worker dispatch moves into `clip-ui`.
 
 ## Shared studio ownership
@@ -122,8 +121,8 @@ Both executables retain internal worker dispatch before ordinary argument parsin
 Host tests opt into explicit fixture helpers through `test-support`; normal
 builds do not enable that feature. Subtitle fixtures are shared from core.
 
-The browser still resides in workbench and the file-manager binary still depends
-on it. Removing that remaining application dependency is the next extraction.
+The browser resides in `clip-file-manager`, which has no workbench dependency.
+Both applications depend directly on the neutral studio/UI owners.
 Navigation, current-folder assumptions, selection and history stay in the browser;
 these have not been promoted into shared studio APIs. Studio sessions retain
 accepted write completion and document edits while hosts control navigation.

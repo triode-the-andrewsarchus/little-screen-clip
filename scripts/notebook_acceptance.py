@@ -55,7 +55,7 @@ def main():
     repo = Path(__file__).resolve().parent.parent
     args = application_arguments(__doc__, repo / "target/release/clip-file-manager")
     output, root = media_fixture_directory(args)
-    shutil.copyfile(repo / "crates/clip-workbench/tests/fixtures/notebooks/sample.ipynb", root / "sample.ipynb")
+    shutil.copyfile(repo / "crates/clip-file-manager/tests/fixtures/notebooks/sample.ipynb", root / "sample.ipynb")
     (root / "notes.txt").write_text("An ordinary neighboring text file.\n")
     return run_application_acceptance(args, output, root, exercise, "semantic notebook strip, clicked cell, source copy, saved error, Markdown, rename and reopen")
 

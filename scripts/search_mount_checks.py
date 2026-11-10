@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run guarded search mount tests in disposable user/mount namespaces.
 
-Build tests first with `cargo test -p clip-workbench --lib --no-run`. No mount is
+Build tests first with `cargo test -p clip-file-manager --lib --no-run`. No mount is
 created in the host namespace. Fixtures are removed only after the child and its
 private mounts have exited, including on failure. This script sends no UI input.
 """
@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from search_retrieval_benchmark import resolve_binary
 
 TEST = 'file_manager::search::reader::tests::bind_mount_boundaries_block_inventory_extraction_and_absence_checks'
 
@@ -20,15 +21,8 @@ def main():
     parser.add_argument('--test-binary', type=Path)
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
-    if args.test_binary:
-        binary = args.test_binary.resolve(strict=True)
-    else:
-        repo = Path(__file__).resolve().parent.parent
-        candidates = [path for path in (repo / 'target/debug/deps').glob('clip_workbench-*')
-                      if path.is_file() and os.access(path, os.X_OK) and not path.suffix]
-        if not candidates:
-            parser.error('Build clip-workbench library tests first')
-        binary = max(candidates, key=lambda path: path.stat().st_mtime_ns)
+    repo = Path(__file__).resolve().parent.parent
+    binary = resolve_binary(argparse.Namespace(binary=args.test_binary, profile='debug'), repo)
     with tempfile.TemporaryDirectory(prefix='clip-search-private-mount-') as fixture:
         env = dict(os.environ, CLIP_SEARCH_PRIVATE_MOUNT_TEST='1',
                    CLIP_SEARCH_PRIVATE_MOUNT_FIXTURE=fixture)

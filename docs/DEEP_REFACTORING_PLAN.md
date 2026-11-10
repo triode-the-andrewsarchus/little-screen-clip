@@ -36,7 +36,7 @@ This is primarily behavior-preserving work. New views, additional format coverag
 | Delete stale `/tmp` files by process signature | Too broad. Cleanup must use application-owned locations, verified ownership/lifetime and held directory handles. Accepted outputs and other sessions must remain untouched. |
 | Every change must make aggregate metrics monotonically better | A noisy, move-sensitive tool cannot enforce that safely. Review new complexity and duplication in context; verify concrete improvements and record justified tradeoffs. |
 
-Evidence anchors: [entrypoints/library](../crates/clip-workbench/src/lib.rs), [file-manager entrypoint](../crates/clip-file-manager/src/main.rs), [search runtime](../crates/clip-workbench/src/file_manager/search/runtime.rs), [model helper documentation](../scripts/search_model/README.md), [ONNX runtime](../crates/clip-studios/src/onnx_runtime.rs), [SigLIP](../crates/clip-workbench/src/file_manager/gallery/similarity/siglip.rs), [SVG thumbnails](../crates/little-clip-core/src/item.rs), [screen dimensions](../crates/little-clip-render/src/lib.rs), [shared waveform mechanisms](../crates/little-clip-core/src/audio/waveform.rs).
+Evidence anchors: [entrypoints/library](../crates/clip-workbench/src/lib.rs), [file-manager entrypoint](../crates/clip-file-manager/src/main.rs), [search runtime](../crates/clip-file-manager/src/file_manager/search/runtime.rs), [model helper documentation](../scripts/search_model/README.md), [ONNX runtime](../crates/clip-studios/src/onnx_runtime.rs), [SigLIP](../crates/clip-file-manager/src/file_manager/gallery/similarity/siglip.rs), [SVG thumbnails](../crates/little-clip-core/src/item.rs), [screen dimensions](../crates/little-clip-render/src/lib.rs), [shared waveform mechanisms](../crates/little-clip-core/src/audio/waveform.rs).
 
 ## Baseline and evidence limits
 
@@ -88,7 +88,7 @@ A smaller image/audio/text/etc. studio crate is justified when it removes a demo
 
 ## Content and visual reuse policy
 
-Start from [document_format.rs](../crates/clip-workbench/src/file_manager/document_format.rs), core MIME/extension helpers, decoder hooks, the existing preview caches and [file_types.md](file_types.md). Avoid inventing a second complete format registry.
+Start from [document_format.rs](../crates/clip-file-manager/src/file_manager/document_format.rs), core MIME/extension helpers, decoder hooks, the existing preview caches and [file_types.md](file_types.md). Avoid inventing a second complete format registry.
 
 Keep three distinct facts:
 
@@ -363,3 +363,69 @@ spelling (`/tmp/deep-studios-symbol-comparison.json`). This is an ownership
 improvement, not a claimed reduction of studio algorithm complexity or a clean
 architecture-tool score. Disk remains about 155 GiB free; no cache sweep was
 needed during this extraction.
+
+### Phase 3 checkpoint: independent application ownership
+
+The browser now lives in `clip-file-manager`, including navigation, selection,
+Shelf, transfers, system observations and the existing search implementation.
+Its 286 Rust source files are byte-identical to the previous workbench-owned
+files. Both desktop applications consume `clip-studios`/`clip-ui` directly;
+neither application depends on the other. Workbench direct production dependency
+entries fall from 51 to 19; browser-only dependencies move with their actual
+owners. This proves dependency isolation, not a proportional reduction in the
+transitive graph or a clean-build speedup. Local ownership snapshot:
+`/tmp/deep-browser-local-dependencies.json`.
+
+Barcode/conversion dispatch belongs to studios and remains enabled in both
+executables. File-manager dispatch owns search/extraction, system and FUSE
+workers. Actual executable tests check shared worker output from another working
+directory and rejection of malformed browser-worker arguments before window
+startup. Existing workbench executable tests retain barcode/pixel equivalence.
+Browser fixtures and their private acceptance/generation scripts moved together;
+search benchmark/quality/mount tools now select the file-manager test harness.
+The mount runner reuses the existing verified-harness selector rather than
+risking execution of a GUI artifact. Current source links and roadmap ownership
+references follow the delivered boundary.
+
+Serial workspace tests pass (2610 passed, 29 ignored), both desktop binaries
+build, and the updated executable dispatch suite passes both tests. All-target
+checks pass; diagnostic all-target Clippy passes with existing warnings and only
+the known approximate-constant diagnostic allowed. Logs:
+`/tmp/deep-browser-workspace.log`, `/tmp/deep-browser-build.log`,
+`/tmp/deep-browser-check-pruned.log`, `/tmp/deep-browser-dispatch.log`,
+`/tmp/deep-browser-clippy.log`. The two Python harness-selection tests pass.
+The explicit private user/mount-namespace search safety test passes
+(`/tmp/deep-browser-mounts.json`).
+
+Private UI acceptance passes for ordinary font/binary/text/image previews,
+selection-preserving studio return, exact captured Shelf content and collision
+handling (`/tmp/deep-browser-files/report.json`), and the workbench component
+gallery launched from `/tmp` (`/tmp/deep-browser-gallery-dark/report.json`).
+Search-to-model/PDF acceptance passes, including exact selected PDF, no automatic
+index enrollment, deferred source revalidation and no replacement payload access
+(`/tmp/deep-browser-studio-source-verified/report.json`). That runner's obsolete
+Back-button coordinate was replaced with visible-text targeting; its substantive
+source-access assertions remain intact.
+
+Architecture comparison against `deep-browser-start` reports REGRESSION from
+move-sensitive function attribution. Clone groups remain 1511, dependency cycles
+remain 16, average/max CCN and duplication percentage are unchanged; measured
+NLOC +69, functions +2 and total CCN +2 reflect worker dispatch separation and
+its executable test. The browser bodies are byte-identical, so their reported
+new complexity is not newly added logic. No metric improvement is claimed for
+relocation. Current-folder assumptions, location/history and input routing stay
+in browser composition; studio and mutation lifetimes remain with their existing
+owners. Later Home/views/rules can reuse these boundaries without depending on
+the popup application. Native mirror prototyping, search extraction, selected
+hotspot simplification and remaining targeted hygiene are still outstanding.
+
+The full private multisample acceptance also passes all 68 observations:
+inline velocity and MIDI/sustain, mapping/harmony/pads, missing-note indication,
+zoom, guarded rename, SFZ/SF2/NKI/DecentSampler/EXS/Renoise and packed/archive
+sources, native compressed audio, modern NKI mapping, and ordinary XML/Elixir
+fallbacks (`/tmp/deep-browser-multisamples-verified/report.json`). The first run
+exposed a test setup omission: the existing separately licensed helper was
+packaged beside the release executable but absent beside the debug executable.
+Packaging it with the existing `build_multisample_helper.py --skip-build
+--output-dir target/debug/nki-helper` retained corresponding source/licenses;
+no parser code or application linkage changed. About 152 GiB remains free.

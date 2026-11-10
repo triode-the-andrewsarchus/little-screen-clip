@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the production Rust SQLite/ranking component benchmark.
 
-Build first: cargo test --release -p clip-workbench --lib --no-run
+Build first: cargo test --release -p clip-file-manager --lib --no-run
 Synthetic unit vectors are used, with 1.5 segments per real fixture file. This
 measures retrieval only, not end-to-end model/source-verification/UI latency.
 Owned temporary source/index folders are deleted by the Rust test on completion.
@@ -20,7 +20,7 @@ TEST = 'file_manager::search::retrieval::benchmark::retrieval_scale_benchmark'
 
 def is_test_harness(binary):
     # Prove this is a Rust test executable before passing it any arguments.
-    # Cargo also produces a GUI binary named clip_workbench-* in deps; asking
+    # Cargo also produces a GUI binary named clip_file_manager-* in deps; asking
     # that binary for --list can launch the ordinary application instead.
     with tempfile.TemporaryFile(mode='w+') as symbols:
         result = subprocess.run(['nm', '-C', '--defined-only', str(binary)],
@@ -33,14 +33,14 @@ def resolve_binary(args, repo):
     if args.binary:
         binary = args.binary.resolve(strict=True)
         if not is_test_harness(binary):
-            raise RuntimeError(f'Refusing to execute a non-test binary: {binary}; build cargo test --release -p clip-workbench --lib --no-run')
+            raise RuntimeError(f'Refusing to execute a non-test binary: {binary}; build cargo test --release -p clip-file-manager --lib --no-run')
         return binary
-    candidates = [path for path in (repo / f'target/{args.profile}/deps').glob('clip_workbench-*')
+    candidates = [path for path in (repo / f'target/{args.profile}/deps').glob('clip_file_manager-*')
                   if path.is_file() and os.access(path, os.X_OK) and not path.suffix]
     for binary in sorted(candidates, key=lambda path: path.stat().st_mtime_ns, reverse=True):
         if is_test_harness(binary):
             return binary
-    raise RuntimeError(f'Build the {args.profile} clip-workbench library tests first; no verified test harness exists')
+    raise RuntimeError(f'Build the {args.profile} clip-file-manager library tests first; no verified test harness exists')
 
 
 def execute(binary, env, timeout, log, test=TEST):
@@ -87,7 +87,7 @@ def main():
         env['CLIP_RETRIEVAL_BENCH_SQLITE_CACHE_MIB'] = str(args.sqlite_cache_mib)
     else:
         env.pop('CLIP_RETRIEVAL_BENCH_SQLITE_CACHE_MIB', None)
-    sources = {name: hashlib.sha256((repo / 'crates/clip-workbench/src/file_manager/search' / name).read_bytes()).hexdigest()
+    sources = {name: hashlib.sha256((repo / 'crates/clip-file-manager/src/file_manager/search' / name).read_bytes()).hexdigest()
                for name in ('retrieval.rs', 'retrieval/benchmark.rs', 'store.rs', 'store/vectors.rs', 'store/lexical.rs', 'policy.rs', 'query.rs', '../filesystem.rs', '../type_navigation.rs')}
     binary_hash = hashlib.sha256(binary.read_bytes()).hexdigest()
     log = report.with_suffix(report.suffix + '.stdout.log')

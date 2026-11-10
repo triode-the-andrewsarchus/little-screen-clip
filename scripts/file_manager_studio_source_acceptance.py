@@ -24,7 +24,7 @@ def exercise(session, root):
     session.observe('model-result', ['mesh.stl', '1 matching entries'])
     open_result(session, 'model-result', 'mesh.stl')
     session.observe('checked-model-studio', ['Back to folder', '1 triangles'])
-    session.click(155, 118)  # Verified Back-to-folder button in the private 1280x800 output.
+    session.click(*session.word('checked-model-studio', 'Back'))
     session.observe('returned-model-results', ['mesh.stl', '1 matching entries'])
     submit(session, ':*.pdf Document.pdf;scope:recursive')
     session.observe('pdf-result', ['Document.pdf', '1 matching entries'])

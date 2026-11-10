@@ -55,7 +55,7 @@ def main():
     repo=Path(__file__).resolve().parents[1]
     args=application_arguments(__doc__,repo/'target/release/clip-file-manager')
     output,root=media_fixture_directory(args)
-    shutil.copyfile(repo/'crates/clip-workbench/tests/fixtures/database/harbor.sqlite',root/'harbor.sqlite')
+    shutil.copyfile(repo/'crates/clip-file-manager/tests/fixtures/database/harbor.sqlite',root/'harbor.sqlite')
     (root/'notes.txt').write_text('An ordinary neighboring file.\n')
     return run_application_acceptance(args,output,root,exercise,'schema strip selection, bounded row paging, table switching, declared schema, metadata-only views, guarded rename and reopen without sidecar writes')
 

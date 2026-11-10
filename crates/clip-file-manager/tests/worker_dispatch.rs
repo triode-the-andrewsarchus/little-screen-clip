@@ -29,3 +29,52 @@ fn studio_workers_dispatch_before_browser_startup_from_another_directory() {
         assert_eq!(std::fs::read(output).unwrap(), expected, "{worker}");
     }
 }
+
+#[test]
+fn browser_workers_reject_bad_arguments_before_opening_a_window() {
+    for (flag, extra_argument, expected_error) in [
+        (
+            "--internal-file-search-reader",
+            true,
+            "Invalid internal worker arguments",
+        ),
+        (
+            "--internal-file-extraction-plan",
+            true,
+            "Invalid internal worker arguments",
+        ),
+        (
+            "--internal-system-console-snapshot",
+            false,
+            "Invalid internal worker arguments",
+        ),
+        (
+            "--internal-system-processes",
+            false,
+            "Invalid internal worker arguments",
+        ),
+        (
+            "--internal-system-inspector",
+            false,
+            "Invalid internal worker arguments",
+        ),
+        (
+            "--internal-fuse-binwalk-daemon",
+            false,
+            "Usage: --internal-fuse-binwalk-daemon",
+        ),
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_clip-file-manager"));
+        command.arg(flag);
+        if extra_argument {
+            command.arg("unexpected");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{flag}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected_error),
+            "{flag}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

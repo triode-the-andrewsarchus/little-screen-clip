@@ -19,4 +19,4 @@ INSERT INTO ports VALUES(1,'North harbor'),(2,'Café pier');
 
 
 if __name__=='__main__':
-    make(Path(__file__).resolve().parents[1]/'crates/clip-workbench/tests/fixtures/database/harbor.sqlite')
+    make(Path(__file__).resolve().parents[1]/'crates/clip-file-manager/tests/fixtures/database/harbor.sqlite')

@@ -48,7 +48,7 @@ def main():
     output, root = media_fixture_directory(args)
     source = repo / "crates/little-clip-render/assets/fonts/NotoSansCJK-JP-Regular.ttf"
     if args.extension in ["woff", "woff2"]:
-        source = repo / f"crates/clip-workbench/tests/fixtures/fonts/latin.{args.extension}"
+        source = repo / f"crates/clip-file-manager/tests/fixtures/fonts/latin.{args.extension}"
     shutil.copyfile(source, root / f"specimen.{args.extension}")
     return run_application_acceptance(args, output, root, exercise, "font strip, live specimen, glyph selection/copy and guarded rename")
 

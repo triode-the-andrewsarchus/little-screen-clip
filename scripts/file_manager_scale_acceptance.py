@@ -174,7 +174,7 @@ def main():
         fixture['desktop_sha256'] = digest(args.binary.resolve(strict=True))
         fixture['test_binary_sha256'] = digest(test_binary)
         fixture['source_sha256'] = {str(path.relative_to(repo)):digest(path) for path in
-            sorted((repo/'crates/clip-workbench/src/file_manager/search').rglob('*.rs'))}
+            sorted((repo/'crates/clip-file-manager/src/file_manager/search').rglob('*.rs'))}
         (output/'fixture-manifest.json').write_text(json.dumps(fixture, indent=2))
         def environment(env, children):
             env['LITTLE_CLIP_SEARCH_TIMINGS'] = '1'

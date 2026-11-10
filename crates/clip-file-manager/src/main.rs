@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 fn main() -> Result<(), eframe::Error> {
-    if clip_workbench::worker_cli::run() {
+    if clip_file_manager::worker_cli::run() {
         return Ok(());
     }
     if std::env::var("LITTLE_CLIP_SEARCH_TIMINGS").is_ok_and(|value| value == "1") {
@@ -26,5 +26,5 @@ fn main() -> Result<(), eframe::Error> {
         eprintln!("Usage: clip-file-manager [DIRECTORY]");
         std::process::exit(2);
     }
-    clip_workbench::file_manager::run(first.map(PathBuf::from))
+    clip_file_manager::file_manager::run(first.map(PathBuf::from))
 }

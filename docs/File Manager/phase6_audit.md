@@ -4,7 +4,7 @@ This is the requirement-by-requirement audit of [Phase 6](plan.md#phase-6--searc
 
 `Checked` means the stated, bounded obligation has inspected source and relevant evidence. `Partial` identifies what that evidence does not establish. `Pending` requires further source/evidence inspection, not necessarily new implementation. `Open` identifies a known failure or missing proof. These labels are not a percentage estimate. Requirement groups retain their subconditions; a passing test count alone cannot close a row.
 
-Source paths below are relative to `crates/clip-workbench/src/file_manager/search/`, unless specified otherwise. Retained `/tmp` reports are local evidence and are not portable release artifacts.
+Source paths below are relative to `crates/clip-file-manager/src/file_manager/search/`, unless specified otherwise. Retained `/tmp` reports are local evidence and are not portable release artifacts.
 
 ## Enrollment and ordinary-content safety
 

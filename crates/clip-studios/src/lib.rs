@@ -27,6 +27,7 @@ pub mod spreadsheet_view;
 pub mod subtitle_view;
 pub mod text_preview;
 pub mod ui_ext;
+pub mod worker_cli;
 
 pub fn send_ipc_request(req: &IpcRequest) -> Result<IpcResponse, Box<dyn std::error::Error>> {
     send_ipc_request_with_timeout(req, None)

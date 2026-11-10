@@ -10,7 +10,7 @@ The spec's injectable-fixture/read-only-hardware strategy applies throughout. Op
 
 ## Required family coverage
 
-Paths below are relative to `crates/clip-workbench/src/file_manager/system/`. Detailed field, interpretation and discriminating-test mappings are in the corresponding current reconciliation sections of the requirement audit.
+Paths below are relative to `crates/clip-file-manager/src/file_manager/system/`. Detailed field, interpretation and discriminating-test mappings are in the corresponding current reconciliation sections of the requirement audit.
 
 | Spec sections | Current implementation and evidence |
 |---|---|

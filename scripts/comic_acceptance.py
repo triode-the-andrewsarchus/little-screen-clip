@@ -64,7 +64,7 @@ def main():
     repo=Path(__file__).resolve().parents[1]
     args=application_arguments(__doc__,repo/'target/release/clip-file-manager')
     output,root=media_fixture_directory(args)
-    shutil.copyfile(repo/'crates/clip-workbench/tests/fixtures/comic.cbz',root/'comic.cbz')
+    shutil.copyfile(repo/'crates/clip-file-manager/tests/fixtures/comic.cbz',root/'comic.cbz')
     (root/'notes.txt').write_text('Neighboring file.\n')
     return run_application_acceptance(args,output,root,exercise,'comic page strip, natural order, zoom/fit-width pixel extents, guarded rename and pinned reads after rename')
 

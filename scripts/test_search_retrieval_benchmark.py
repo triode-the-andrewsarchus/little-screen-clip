@@ -24,13 +24,13 @@ class HarnessSelectionTests(unittest.TestCase):
             root = Path(directory)
             deps = root / 'target/release/deps'
             deps.mkdir(parents=True)
-            for name in ['clip_workbench-tests', 'clip_workbench-application']:
+            for name in ['clip_file_manager-tests', 'clip_file_manager-application']:
                 path = deps / name
                 path.write_bytes(b'fixture')
                 path.chmod(0o700)
             with patch.object(runner, 'is_test_harness', side_effect=lambda path: path.name.endswith('-tests')):
                 selected = runner.resolve_binary(argparse.Namespace(binary=None, profile='release'), root)
-            self.assertEqual(selected.name, 'clip_workbench-tests')
+            self.assertEqual(selected.name, 'clip_file_manager-tests')
 
 
 if __name__ == '__main__':

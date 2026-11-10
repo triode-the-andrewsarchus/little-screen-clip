@@ -32,7 +32,6 @@ use std::time::Duration;
 mod appearance_sync;
 mod canvas;
 mod component_gallery;
-pub mod file_manager;
 mod popup;
 mod rolling_audio_strip;
 mod script_editor;

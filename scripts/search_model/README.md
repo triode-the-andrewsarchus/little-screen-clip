@@ -81,7 +81,7 @@ Run `python3 scripts/file_manager_quality_acceptance.py --output-dir NEW_DIRECTO
 From the repository root, build the library tests in release mode, then run:
 
 ```sh
-cargo test --release -p clip-workbench --lib --no-run
+cargo test --release -p clip-file-manager --lib --no-run
 python3 scripts/search_retrieval_benchmark.py --files 100000 --samples 21 \
   --report /tmp/clip-retrieval-report.json
 ```
@@ -96,7 +96,7 @@ For a separate end-to-end scale probe, build both release artifacts and run:
 
 ```sh
 cargo build --release -p clip-file-manager
-cargo test --release -p clip-workbench --lib --no-run
+cargo test --release -p clip-file-manager --lib --no-run
 python3 scripts/file_manager_scale_acceptance.py --output-dir NEW_DIRECTORY \
   --appearance dark --files 100000 --samples 21
 ```
@@ -136,7 +136,7 @@ Candidate per-modality cutoffs are midpoint estimates from the frozen calibratio
 For the production storage/ranking stage, build the library tests and use the frozen output directory above:
 
 ```sh
-cargo test -p clip-workbench --lib --no-run
+cargo test -p clip-file-manager --lib --no-run
 python3 scripts/search_quality_ranking.py --folder /tmp/clip-semantic-quality-new \
   --report /tmp/clip-quality-ranking.json --require-targets
 ```
