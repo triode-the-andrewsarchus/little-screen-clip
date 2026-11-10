@@ -30,7 +30,7 @@ impl Workspace {
             .or_else(|_| Self::in_parent(&std::env::temp_dir()))
     }
 
-    fn in_parent(parent: &Path) -> io::Result<Self> {
+    pub(super) fn in_parent(parent: &Path) -> io::Result<Self> {
         let parent = pin_content_directory(parent)?;
         Self::create_in(&parent, "pipeline-run-")
     }
@@ -52,6 +52,11 @@ impl Workspace {
 
     pub(super) fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(super) fn identity(&self) -> io::Result<(u64, u64)> {
+        let metadata = self.root.metadata()?;
+        Ok((metadata.dev(), metadata.ino()))
     }
 
     pub(super) fn stage_output(&self) -> io::Result<tempfile::NamedTempFile> {

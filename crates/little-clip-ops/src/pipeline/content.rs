@@ -8,17 +8,17 @@ use std::{
     path::Path,
 };
 
-struct Input {
-    file: File,
+pub(super) struct Input {
+    pub(super) file: File,
     observed: FileSource,
 }
 impl Input {
-    fn open(path: &Path) -> io::Result<Self> {
+    pub(super) fn open(path: &Path) -> io::Result<Self> {
         let file = little_clip_core::kernel_interface::open_content(path, true)?;
         let observed = FileSource::capture_file(&file).map_err(io::Error::other)?;
         Ok(Self { file, observed })
     }
-    fn check(&self) -> io::Result<()> {
+    pub(super) fn check(&self) -> io::Result<()> {
         if FileSource::capture_file(&self.file).map_err(io::Error::other)? != self.observed {
             return Err(io::Error::other("Pipeline input changed while processing"));
         }

@@ -22,7 +22,7 @@ current status, and an old passing log alone does not prove a changed path.
 | 3a: Native mirror prototype | The opt-in prototype, exact raster reference, bounded display data, appearance/source rejection, CPU paint measurements and private captures are recorded in the plan. Raster remains default. **The original input-latency comparison still needs an explicit final disposition/evidence; CPU tessellation and shared-handler tests are not physical-input or GPU-presentation measurements.** |
 | 4: Headless guarded search | `clip-search` owns backend orchestration/readers with a core dependency and no egui/application dependency. Ranking/schema/source-lifetime and actual helper/model acceptance are recorded at the search checkpoints. Final review must check current source changes against those verified revisions rather than substitute a UI smoke test for backend safety/quality. |
 | 4: Selected domain state transitions | Audio viewport/selection calculations, image history restoration, MIDI transport/ranges and their existing UI consumers are the concrete seams. No universal controller or generic diff algorithm is required. MIDI playback/export feedback now has separate owners, retry/stop and idle-expiry tests, live-job progress and a private actual-copy check; the plan ledger records the evidence. |
-| 4: Pipeline ownership and completion | [Per-run artifacts](../crates/little-clip-ops/src/pipeline/artifacts.rs), [guarded saves](../crates/little-clip-ops/src/pipeline/save.rs) and [daemon execution](../crates/little-clipd/src/pipeline.rs) retain outputs, partial saves and accepted replies. **The remaining built-in external-tool input/output call sites still need the ordinary-source/pinned-descriptor audit before claiming the complete pipeline preservation gate.** Scripts remain explicit execution, not a newly promised sandbox. |
+| 4: Pipeline ownership and completion | [Per-run artifacts](../crates/little-clip-ops/src/pipeline/artifacts.rs), [guarded saves](../crates/little-clip-ops/src/pipeline/save.rs) and [daemon execution](../crates/little-clipd/src/pipeline.rs) retain outputs, partial saves and accepted replies. Media/diff/checksum/hydration inputs use shared guarded admission and staging. [Recursive ZIP](../crates/little-clip-ops/src/pipeline/archive.rs) now enumerates held directories, opens guarded files and validates revisions before no-overwrite publication. Independent ZIP-reader and controlled source-change tests cover names, metadata, links, limits, output conflicts and completed saves. Final source review must retain these contracts. Scripts remain explicit execution, not a newly promised sandbox. |
 | 4: Diff and DSP scope | Text, binary and image algorithms remain separate. DSP callers/dependency costs were inspected, an unused dependency removed and remaining tools retained. A separate radio crate/optional product configuration is not justified by current consumers. |
 | 5: Optional product changes | Native default adoption and additional presentation redesign were not authorized. Retaining the raster default and recording prototype findings satisfies this conditional branch; no approval is inferred from approval of the structural plan. |
 | 6: Feedback, clocks and artifacts | Shared transient-expiry and persistent-error behavior, monotonic feedback clocks, accepted-write ownership and pipeline scratch cleanup have focused tests. MIDI and rolling notice ownership have caller-level verification. Rolling playback, copy and editor intake retain the displayed revision; cancelled editor results and deferred readers own a guarded temporary-file lifetime. The plan ledger records source-swap reproduction, cleanup/range tests and private pointer handoff evidence. No generic `/tmp` or age-only sweep is authorized or enabled by this plan. |
@@ -68,19 +68,9 @@ not be reinterpreted as implementation of those features.
 
 ## Work that still blocks final completion
 
-1. Trace the remaining pipeline built-in content operations through guarded
-   source and output mechanisms; fix bypasses without replacing enum dispatch.
-   Media transforms, image diff, checksums and image-output hydration now use
-   guarded inputs with revision checks and owned staging; one-file batches retain
-   reference intent. The ledger records passing integration checks. Recursive ZIP
-   creation still passes names directly to the archive tool. Preserve directory
-   recursion, member names and metadata while validating every consumed entry and
-   owning the output; directory links must not route protected payloads into the
-   archiver. Preserve completed saves and final artifact retention. Scripts remain
-   explicit execution, not a newly promised sandbox.
-2. Resolve the native prototype's input-response comparison with appropriately
+1. Resolve the native prototype's input-response comparison with appropriately
    scoped evidence; do not label CPU routing or private capture timing as a
    physical hardware/GPU latency guarantee.
-3. Recheck every row and referenced gate against the final source revision,
+2. Recheck every row and referenced gate against the final source revision,
    complete missing evidence, and only then mark the goal complete. Optional
    feature decisions remain optional; required work is not waived by this list.

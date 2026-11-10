@@ -1477,3 +1477,73 @@ closes. Directory recursion, supported filenames and metadata, final output
 retention and completed saves must remain intact. Scripts are explicit execution,
 not a newly promised sandbox. Native prototype input-response evidence and the
 final complete acceptance audit also remain outstanding.
+
+
+### Pipeline recursive archive admission checkpoint
+
+The built-in ZIP node now streams through rawzip and the existing flate2
+compressor instead of allowing a recursive subprocess to resolve input names.
+The archive owns its unpublished workspace stage. Each entry is classified from
+an O_PATH pin before enumeration or payload access; directories are enumerated
+through their held descriptors, and regular files reuse pipeline content
+admission. Core inventory fingerprints check the held objects and logical input
+paths, including root aliases, before publication. Changed inputs fail the node;
+accepted earlier saves retain their paths in the partial-execution error.
+
+Ordinary file/directory links retain the previous follow behavior. Protected
+links and directory cycles fail explicitly. The active workspace's exact object
+identity is excluded when an input contains it, preventing self-archiving without
+excluding unrelated directories by name. Entry count (100,000), retained names
+and observation paths (32 MiB), directory depth (64), streaming buffer (64 KiB)
+and the existing 60-second operation budget bound work. Deadline checks do not
+promise preemption of a blocked filesystem syscall or a filesystem-wide atomic
+snapshot. Publication still uses the shared held-directory no-overwrite install.
+Archive names must be literal single filenames, including rejection of trailing
+separators that would leave an unusable file reference.
+
+Empty directories, raw Unix member-name bytes, permissions, modification times
+and owner/group IDs are retained. UTF-8 names use the encoding flag or a Unicode
+Path field when literal Unix punctuation requires verbatim storage. UID/GID and
+Unicode metadata follow the [published extra-field specifications](https://libzip.org/specifications/extrafld.txt);
+rawzip owns ZIP framing, CRC/size accounting, central-directory and ZIP64 writing.
+The existing zip reader cannot write raw member bytes, while async writers add
+unnecessary runtime adaptation for this synchronous worker. [rawzip 0.5.2](https://docs.rs/rawzip/0.5.2/rawzip/struct.ZipArchiveWriter.html)
+is MIT licensed with no runtime dependencies; flate2 and the independent zip test
+reader already exist in the workspace. No native binding, helper process or
+custom ZIP serializer is introduced. Script nodes retain their explicit execution
+policy.
+
+Verification passes 48 focused pipeline tests, including an independent ZIP
+reader checking payload CRCs, Unicode/non-UTF-8 and backslash names, empty and
+overlapping directories, compression, modes, timestamps and owner/group fields.
+Tests replace directories/files with protected links during writes, change file
+contents in place, rebind an alias before final validation, exercise traversal
+budgets, preserve occupied outputs, exclude the active stage, retain serialized
+archive outputs and report completed saves after archive installation fails.
+Focused evidence: `/tmp/deep-pipeline-archive-verified-pipeline.log`.
+
+Integration passes **2688 tests, zero failures, 30 ignored** with the serial
+workspace gate (`/tmp/deep-pipeline-archive-accepted-workspace.log`). The final
+fixture consolidation and filename-validation adjustment also pass the focused
+gate above, workspace/all-target compilation, both desktop builds, ops/all-target
+Clippy and formatting (`/tmp/deep-pipeline-archive-verified-{all-targets,desktop-build,clippy,fmt}.log`).
+Workspace diagnostic Clippy passes at the integration checkpoint
+(`/tmp/deep-pipeline-archive-accepted-clippy.log`), with only the previously
+recorded approximate-constant allowance; existing warnings remain. Earlier
+intermediate metadata-import errors are not counted as passing evidence. No UI
+layout or entrypoint behavior changed, so this slice uses archive/worker tests
+rather than another compositor capture. About 132 GiB remains free; Cargo runs
+were serialized with four build jobs.
+
+Architecture comparison against `deep-pipeline-archive-start` reports raw
+REGRESSION: measured NLOC +580, functions +27, total CCN +111; average/max CCN
+remain 4.04/195, duplication falls 4.40→4.39%, clone groups 1504→1503 and cycles
+remain 16 (`/tmp/deep-pipeline-archive-architecture-verified.json`). Directory
+walking and file compression have separate responsibilities; no new function
+exceeds CCN 15. A repeated race-test fixture was consolidated. Remaining reported
+clones are the pre-existing media signatures, dispatch and test scaffolding;
+reported Python cycle changes only reorder unchanged members. Replacing a short
+unsafe CLI call with explicitly owned traversal and revision checks adds real
+code and tests; this is a correctness/lifetime improvement, not a claim of lower
+aggregate complexity or faster compression. Native input-response comparison and
+the final requirement-by-requirement audit remain outstanding.

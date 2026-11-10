@@ -782,7 +782,7 @@ else:
                 let mut components = Path::new(archive_name).components();
                 if !matches!(
                     (components.next(), components.next()),
-                    (Some(Component::Normal(_)), None)
+                    (Some(Component::Normal(name)), None) if name == std::ffi::OsStr::new(archive_name)
                 ) {
                     return Err(PipelineError::NodeFailed(
                         node.title.clone(),
@@ -791,12 +791,8 @@ else:
                 }
                 let out_path = temp_dir.join(archive_name);
 
-                let mut args = vec!["-r", path_arg!(out_path)];
-                for p in &paths {
-                    args.push(path_arg!(p));
-                }
-                run_command("zip", &args)
-                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                super::archive::write(workspace, &paths, &out_path)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
 
                 preview = Some(format!("Zipped {} files", paths.len()));
                 out.push(("Zip Archive".to_string(), PortValue::FilePath(out_path)));
@@ -1041,25 +1037,6 @@ fn prompt_desktop_entry(title: &str, message: &str, default_val: &str) -> Option
     None
 }
 
-fn run_command(cmd: &str, args: &[&str]) -> Result<String, String> {
-    let request = args.iter().fold(
-        CommandRequest::new(cmd).timeout(EXTERNAL_COMMAND_TIMEOUT),
-        |request, arg| request.arg(*arg),
-    );
-    let output = request.run().map_err(|error| error.to_string())?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "{} error (exit {:?}): {}",
-            cmd,
-            output.status.code(),
-            output.stderr_lossy()
-        ));
-    }
-
-    Ok(output.stdout_lossy())
-}
-
 fn run_command_with_stdin(cmd: &str, args: &[&str], stdin_data: &str) -> Result<String, String> {
     let request = args.iter().fold(
         CommandRequest::new(cmd)
@@ -1222,6 +1199,35 @@ mod tests {
     }
 
     #[test]
+    fn archive_install_failure_reports_previously_completed_saves() {
+        let fixture = tempfile::tempdir().unwrap();
+        let input = fixture.path().join("source.bin");
+        std::fs::write(&input, b"completed save").unwrap();
+        let destination = fixture.path().join("output");
+        let mut graph = save_graph(&destination);
+        let mut archive = instantiate_template(find_template("file_zip").unwrap(), [200.0, 0.0]);
+        archive
+            .props
+            .insert("archive_name".into(), format!("{}.zip", "a".repeat(300)));
+        // Both depend on the sole source; connection order enqueues save before ZIP.
+        graph.connections.push(Connection {
+            from_node: graph.nodes[0].id,
+            from_pin: "Out".into(),
+            to_node: archive.id,
+            to_pin: "Files In".into(),
+        });
+        graph.nodes.push(archive);
+        let mut slots = SlotManager::default();
+        slots.push_left(ClipItem::from_files(vec![input]));
+        let error = PipelineExecutor::new(&graph, &slots).execute().unwrap_err();
+        let completed = destination.join("source.bin");
+        assert_eq!(std::fs::read(&completed).unwrap(), b"completed save");
+        assert!(
+            matches!(error, PipelineError::PartialExecution { saved_files, .. } if saved_files == [completed])
+        );
+    }
+
+    #[test]
     fn generated_archive_survives_executor_and_result_serialization() {
         let fixture = tempfile::tempdir().unwrap();
         let input = fixture.path().join("notes.txt");
@@ -1279,6 +1285,8 @@ mod tests {
             "../escaped.zip",
             "nested/file.zip",
             "/tmp/escaped.zip",
+            "trailing.zip/",
+            "trailing.zip/.",
             "",
             ".",
         ] {

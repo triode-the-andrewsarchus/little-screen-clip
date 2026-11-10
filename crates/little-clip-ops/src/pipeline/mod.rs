@@ -5,6 +5,7 @@
 
 const EXTERNAL_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+mod archive;
 mod artifacts;
 pub mod catalog;
 pub mod compiler;

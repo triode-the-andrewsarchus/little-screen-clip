@@ -29,3 +29,10 @@ cwdit-morse = { git = "https://github.com/swilcox/cw-dit", package = "cwdit-mors
 realfft = "3.5.0"
 fearless_simd = "1.0"
 fearless_simd_macros = "0.1"
+
+# Synchronous ZIP writing with byte-exact Unix member names.
+rawzip = "0.5.2"
+flate2 = "1.0"
+
+[dev-dependencies]
+zip = { version = "7.0", default-features = false, features = ["deflate"] }
