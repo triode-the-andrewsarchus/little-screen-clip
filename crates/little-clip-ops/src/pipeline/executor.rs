@@ -13,7 +13,7 @@ use little_clip_core::item::{ClipItem, ClipPayload};
 use little_clip_core::slot::SlotManager;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -998,38 +998,27 @@ fn prompt_desktop_entry(title: &str, message: &str, default_val: &str) -> Option
         return None;
     }
 
-    if let Ok(out) = Command::new("zenity")
-        .args([
-            "--entry",
-            &format!("--title={}", title),
-            &format!("--text={}", message),
-            &format!("--entry-text={}", default_val),
-            "--timeout=30",
-        ])
-        .output()
-    {
-        if out.status.success() {
-            let res = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !res.is_empty() {
-                return Some(res);
-            }
-        }
-    }
-
-    if let Ok(out) = Command::new("yad")
-        .args([
-            "--entry",
-            &format!("--title={}", title),
-            &format!("--text={}", message),
-            &format!("--entry-text={}", default_val),
-            "--timeout=30",
-        ])
-        .output()
-    {
-        if out.status.success() {
-            let res = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !res.is_empty() {
-                return Some(res);
+    let title_arg = format!("--title={title}");
+    let message_arg = format!("--text={message}");
+    let default_arg = format!("--entry-text={default_val}");
+    for program in ["zenity", "yad"] {
+        if let Ok(output) = CommandRequest::new(program)
+            .args([
+                "--entry",
+                &title_arg,
+                &message_arg,
+                &default_arg,
+                "--timeout=30",
+            ])
+            .timeout(Duration::from_secs(32))
+            .own_process_group()
+            .run()
+            && output.status.success()
+            && !output.stdout_truncated
+        {
+            let text = output.stdout_lossy();
+            if !text.trim().is_empty() {
+                return Some(text.trim().to_owned());
             }
         }
     }
