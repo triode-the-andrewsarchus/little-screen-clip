@@ -4,7 +4,7 @@
 //! non-destructive slicing of sub-regions from standard 16-bit PCM WAV containers.
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// A thread-safe, fixed-capacity circular buffer storing interleaved 16-bit PCM samples
@@ -182,26 +182,14 @@ impl RollingAudioBuffer {
         let block_align = channels * (bits_per_sample / 8);
         let byte_rate = sample_rate * block_align as u32;
         let data_size = (samples.len() * 2) as u32;
-        let riff_size = 36 + data_size;
-
-        // RIFF header
-        writer.write_all(b"RIFF")?;
-        writer.write_all(&riff_size.to_le_bytes())?;
-        writer.write_all(b"WAVE")?;
-
-        // "fmt " chunk
-        writer.write_all(b"fmt ")?;
-        writer.write_all(&16u32.to_le_bytes())?; // Subchunk1Size for PCM
-        writer.write_all(&1u16.to_le_bytes())?; // AudioFormat 1 = PCM
-        writer.write_all(&channels.to_le_bytes())?;
-        writer.write_all(&sample_rate.to_le_bytes())?;
-        writer.write_all(&byte_rate.to_le_bytes())?;
-        writer.write_all(&block_align.to_le_bytes())?;
-        writer.write_all(&bits_per_sample.to_le_bytes())?;
-
-        // "data" chunk
-        writer.write_all(b"data")?;
-        writer.write_all(&data_size.to_le_bytes())?;
+        PcmFormat {
+            channels,
+            sample_rate,
+            byte_rate,
+            block_align,
+            bits_per_sample,
+        }
+        .write_header(&mut writer, data_size)?;
 
         for sample in samples {
             writer.write_all(&sample.to_le_bytes())?;
@@ -218,94 +206,163 @@ impl RollingAudioBuffer {
     }
 }
 
-/// Slices a sub-region `[start_sec, end_sec]` from a 16-bit PCM WAV file and writes it to `out_path`.
+struct PcmFormat {
+    channels: u16,
+    sample_rate: u32,
+    byte_rate: u32,
+    block_align: u16,
+    bits_per_sample: u16,
+}
+
+impl PcmFormat {
+    fn write_header(&self, writer: &mut impl Write, data_size: u32) -> io::Result<()> {
+        let riff_size = data_size.checked_add(36 + (data_size & 1)).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "WAV exceeds RIFF size limit")
+        })?;
+        writer.write_all(b"RIFF")?;
+        writer.write_all(&riff_size.to_le_bytes())?;
+        writer.write_all(b"WAVEfmt ")?;
+        writer.write_all(&16u32.to_le_bytes())?;
+        writer.write_all(&1u16.to_le_bytes())?;
+        writer.write_all(&self.channels.to_le_bytes())?;
+        writer.write_all(&self.sample_rate.to_le_bytes())?;
+        writer.write_all(&self.byte_rate.to_le_bytes())?;
+        writer.write_all(&self.block_align.to_le_bytes())?;
+        writer.write_all(&self.bits_per_sample.to_le_bytes())?;
+        writer.write_all(b"data")?;
+        writer.write_all(&data_size.to_le_bytes())
+    }
+
+    fn read(reader: &mut impl Read) -> io::Result<Self> {
+        let mut bytes = [0u8; 16];
+        reader.read_exact(&mut bytes)?;
+        let tag = u16::from_le_bytes(bytes[0..2].try_into().unwrap());
+        let format = Self {
+            channels: u16::from_le_bytes(bytes[2..4].try_into().unwrap()),
+            sample_rate: u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+            byte_rate: u32::from_le_bytes(bytes[8..12].try_into().unwrap()),
+            block_align: u16::from_le_bytes(bytes[12..14].try_into().unwrap()),
+            bits_per_sample: u16::from_le_bytes(bytes[14..16].try_into().unwrap()),
+        };
+        if tag != 1
+            || format.channels == 0
+            || format.sample_rate == 0
+            || !matches!(format.bits_per_sample, 8 | 16 | 24 | 32)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid or unsupported PCM WAV format",
+            ));
+        }
+        if format.channels.checked_mul(format.bits_per_sample / 8) != Some(format.block_align)
+            || format
+                .sample_rate
+                .checked_mul(u32::from(format.block_align))
+                != Some(format.byte_rate)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Inconsistent PCM WAV frame layout",
+            ));
+        }
+        Ok(format)
+    }
+}
+
+fn read_wave_container_end(file: &mut BufReader<File>) -> io::Result<u64> {
+    let mut header = [0u8; 12];
+    file.read_exact(&mut header)?;
+    let end = u64::from(u32::from_le_bytes(header[4..8].try_into().unwrap())) + 8;
+    if &header[..4] != b"RIFF"
+        || &header[8..] != b"WAVE"
+        || end < 12
+        || end > file.get_ref().metadata()?.len()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid or truncated RIFF/WAVE container",
+        ));
+    }
+    Ok(end)
+}
+
+fn read_pcm_header(file: &mut BufReader<File>) -> io::Result<(PcmFormat, u64, u32)> {
+    let end = read_wave_container_end(file)?;
+    let mut format = None;
+    // Bound work even for a multi-gigabyte container full of empty metadata chunks.
+    for _ in 0..4096 {
+        if file.stream_position()? + 8 > end {
+            break;
+        }
+        let mut chunk = [0u8; 8];
+        file.read_exact(&mut chunk)?;
+        let size = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
+        let offset = file.stream_position()?;
+        let next = offset + u64::from(size) + u64::from(size & 1);
+        if next > end {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "WAV chunk exceeds its RIFF container",
+            ));
+        }
+        match &chunk[..4] {
+            b"fmt " => {
+                if size < 16 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Short WAV format chunk",
+                    ));
+                }
+                format = Some(PcmFormat::read(file)?);
+            }
+            b"data" => {
+                let format = format.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Missing PCM format before WAV data",
+                    )
+                })?;
+                if size % u32::from(format.block_align) != 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Incomplete PCM frame in WAV data",
+                    ));
+                }
+                return Ok((format, offset, size));
+            }
+            _ => {}
+        }
+        file.seek(SeekFrom::Start(next))?;
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "Missing WAV data or excessive chunk count",
+    ))
+}
+
+/// Slices a finite time range from an 8/16/24/32-bit integer PCM WAV file.
+///
+/// Reversed bounds are ordered and both endpoints are clamped to complete frames.
+///
+/// # Errors
+/// Returns an error for malformed/truncated containers, unsupported formats,
+/// non-finite endpoints, protected sources, or filesystem failures.
 pub fn slice_wav(
     source: &Path,
     start_sec: f32,
     end_sec: f32,
     out_path: &Path,
 ) -> Result<(), std::io::Error> {
-    let mut file = BufReader::new(File::open(source)?);
-
-    let mut riff_header = [0u8; 12];
-    file.read_exact(&mut riff_header)?;
-    if &riff_header[0..4] != b"RIFF" || &riff_header[8..12] != b"WAVE" {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Not a valid RIFF/WAVE file",
+    if !start_sec.is_finite() || !end_sec.is_finite() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "WAV slice endpoints must be finite",
         ));
     }
-
-    let mut channels: Option<u16> = None;
-    let mut sample_rate: Option<u32> = None;
-    let mut bits_per_sample: Option<u16> = None;
-    let mut data_start_offset: Option<u64> = None;
-    let mut data_bytes_len: Option<u32> = None;
-
-    // Scan chunks
-    loop {
-        let mut chunk_header = [0u8; 8];
-        if file.read_exact(&mut chunk_header).is_err() {
-            break;
-        }
-
-        let chunk_id = &chunk_header[0..4];
-        let chunk_size = u32::from_le_bytes([
-            chunk_header[4],
-            chunk_header[5],
-            chunk_header[6],
-            chunk_header[7],
-        ]);
-
-        if chunk_id == b"fmt " {
-            let mut fmt_bytes = vec![0u8; chunk_size as usize];
-            file.read_exact(&mut fmt_bytes)?;
-            if fmt_bytes.len() >= 16 {
-                let format_tag = u16::from_le_bytes([fmt_bytes[0], fmt_bytes[1]]);
-                if format_tag != 1 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Only uncompressed PCM WAV is supported for slicing",
-                    ));
-                }
-                channels = Some(u16::from_le_bytes([fmt_bytes[2], fmt_bytes[3]]));
-                sample_rate = Some(u32::from_le_bytes([
-                    fmt_bytes[4],
-                    fmt_bytes[5],
-                    fmt_bytes[6],
-                    fmt_bytes[7],
-                ]));
-                bits_per_sample = Some(u16::from_le_bytes([fmt_bytes[14], fmt_bytes[15]]));
-            }
-        } else if chunk_id == b"data" {
-            let offset = file.stream_position()?;
-            data_start_offset = Some(offset);
-            data_bytes_len = Some(chunk_size);
-            break;
-        } else {
-            file.seek(SeekFrom::Current(chunk_size as i64))?;
-        }
-    }
-
-    let channels = channels.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing fmt chunk in WAV")
-    })?;
-    let sample_rate = sample_rate.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Missing sample rate in WAV",
-        )
-    })?;
-    let bits_per_sample = bits_per_sample.unwrap_or(16);
-    let bytes_per_sample = (bits_per_sample / 8) as u32;
-    let bytes_per_frame = channels as u32 * bytes_per_sample;
-
-    let data_offset = data_start_offset.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing data chunk in WAV")
-    })?;
-    let total_data_bytes = data_bytes_len.unwrap_or(0);
-    let total_frames = total_data_bytes / bytes_per_frame;
-    let total_duration = total_frames as f32 / sample_rate as f32;
+    let mut file = BufReader::new(crate::kernel_interface::open_content(source, true)?);
+    let (format, data_offset, total_data_bytes) = read_pcm_header(&mut file)?;
+    let bytes_per_frame = u64::from(format.block_align);
+    let total_frames = u64::from(total_data_bytes) / bytes_per_frame;
 
     let (s, e) = if start_sec <= end_sec {
         (start_sec, end_sec)
@@ -313,15 +370,14 @@ pub fn slice_wav(
         (end_sec, start_sec)
     };
 
-    let start_clamped = s.clamp(0.0, total_duration);
-    let end_clamped = e.clamp(0.0, total_duration);
-    let frame_start = (start_clamped * sample_rate as f32) as u32;
-    let frame_end = (end_clamped * sample_rate as f32).max(frame_start as f32) as u32;
-    let frames_to_copy = (frame_end - frame_start).min(total_frames.saturating_sub(frame_start));
-
-    let slice_byte_offset = data_offset + (frame_start * bytes_per_frame) as u64;
-    let slice_byte_len = frames_to_copy * bytes_per_frame;
-
+    let frame_start =
+        ((f64::from(s.max(0.0)) * f64::from(format.sample_rate)).floor() as u64).min(total_frames);
+    let frame_end =
+        ((f64::from(e.max(0.0)) * f64::from(format.sample_rate)).floor() as u64).min(total_frames);
+    let slice_byte_offset = data_offset + frame_start * bytes_per_frame;
+    let slice_byte_len = u32::try_from((frame_end - frame_start) * bytes_per_frame)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let padding = slice_byte_len & 1;
     file.seek(SeekFrom::Start(slice_byte_offset))?;
 
     if let Some(parent) = out_path.parent() {
@@ -331,38 +387,20 @@ pub fn slice_wav(
     let out_file = File::create(out_path)?;
     let mut writer = BufWriter::new(out_file);
 
-    let riff_size = 36 + slice_byte_len;
-    let byte_rate = sample_rate * bytes_per_frame;
+    format.write_header(&mut writer, slice_byte_len)?;
 
-    // RIFF header
-    writer.write_all(b"RIFF")?;
-    writer.write_all(&riff_size.to_le_bytes())?;
-    writer.write_all(b"WAVE")?;
-
-    // "fmt " chunk
-    writer.write_all(b"fmt ")?;
-    writer.write_all(&16u32.to_le_bytes())?;
-    writer.write_all(&1u16.to_le_bytes())?; // PCM
-    writer.write_all(&channels.to_le_bytes())?;
-    writer.write_all(&sample_rate.to_le_bytes())?;
-    writer.write_all(&byte_rate.to_le_bytes())?;
-    writer.write_all(&(bytes_per_frame as u16).to_le_bytes())?;
-    writer.write_all(&bits_per_sample.to_le_bytes())?;
-
-    // "data" chunk
-    writer.write_all(b"data")?;
-    writer.write_all(&slice_byte_len.to_le_bytes())?;
-
-    let mut remaining = slice_byte_len as usize;
-    let mut buffer = [0u8; 8192];
-    while remaining > 0 {
-        let to_read = remaining.min(buffer.len());
-        let n = file.read(&mut buffer[..to_read])?;
-        if n == 0 {
-            break;
-        }
-        writer.write_all(&buffer[..n])?;
-        remaining -= n;
+    let copied = io::copy(
+        &mut (&mut file).take(u64::from(slice_byte_len)),
+        &mut writer,
+    )?;
+    if copied != u64::from(slice_byte_len) {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "WAV data changed while slicing",
+        ));
+    }
+    if padding != 0 {
+        writer.write_all(&[0])?;
     }
 
     writer.flush()?;
@@ -372,6 +410,119 @@ pub fn slice_wav(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn slice_fixture() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>) {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("input.wav");
+        let mut buffer = RollingAudioBuffer::new(1, 8, 1);
+        buffer.push_samples(&[0, 1, 2, 3, 4, 5, 6, 7]);
+        buffer.write_wav(&source).unwrap();
+        let bytes = std::fs::read(&source).unwrap();
+        (directory, source, bytes)
+    }
+
+    #[test]
+    fn wav_slice_handles_odd_chunks_and_extended_format_padding() {
+        for extended_format in [false, true] {
+            let (directory, source, original) = slice_fixture();
+            let mut bytes = original.clone();
+            if extended_format {
+                bytes[16..20].copy_from_slice(&17u32.to_le_bytes());
+                bytes.splice(36..36, [0x42, 0]);
+            } else {
+                let mut metadata = b"JUNK".to_vec();
+                metadata.extend_from_slice(&3u32.to_le_bytes());
+                metadata.extend_from_slice(&[1, 2, 3, 0]);
+                bytes.splice(12..12, metadata);
+            }
+            let length = (bytes.len() - 8) as u32;
+            bytes[4..8].copy_from_slice(&length.to_le_bytes());
+            std::fs::write(&source, bytes).unwrap();
+            let output = directory.path().join("slice.wav");
+            slice_wav(&source, 0.25, 0.75, &output).unwrap();
+            assert_eq!(&std::fs::read(output).unwrap()[44..], &original[48..56]);
+        }
+    }
+
+    #[test]
+    fn wav_slice_preserves_pcm_widths_and_clamps_reversed_ranges() {
+        for bits in [8u16, 16, 24, 32] {
+            let (directory, source, mut bytes) = slice_fixture();
+            let stride = bits / 8;
+            let payload: Vec<u8> = (0..8 * stride as u8).collect();
+            bytes.truncate(44);
+            bytes[4..8].copy_from_slice(&(36 + payload.len() as u32).to_le_bytes());
+            bytes[28..32].copy_from_slice(&(8 * u32::from(stride)).to_le_bytes());
+            bytes[32..34].copy_from_slice(&stride.to_le_bytes());
+            bytes[34..36].copy_from_slice(&bits.to_le_bytes());
+            bytes[40..44].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(&payload);
+            std::fs::write(&source, &bytes).unwrap();
+            let output = directory.path().join("slice.wav");
+            slice_wav(&source, 0.5, 0.125, &output).unwrap();
+            let sliced = std::fs::read(output).unwrap();
+            let length = 3 * usize::from(stride);
+            assert_eq!(
+                &sliced[44..44 + length],
+                &payload[usize::from(stride)..4 * usize::from(stride)]
+            );
+            assert_eq!(sliced.len(), 44 + length + (length & 1));
+            assert_eq!(
+                u32::from_le_bytes(sliced[4..8].try_into().unwrap()) as usize + 8,
+                sliced.len()
+            );
+            let output = directory.path().join("clamped.wav");
+            slice_wav(&source, f32::MAX, -10.0, &output).unwrap();
+            assert_eq!(std::fs::read(output).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn wav_slice_rejects_invalid_format_fields_before_creating_output() {
+        for (offset, value) in [
+            (22, 0u16.to_le_bytes().to_vec()),
+            (24, 0u32.to_le_bytes().to_vec()),
+            (28, 0u32.to_le_bytes().to_vec()),
+            (32, 0u16.to_le_bytes().to_vec()),
+            (34, 0u16.to_le_bytes().to_vec()),
+            (34, 7u16.to_le_bytes().to_vec()),
+            (22, u16::MAX.to_le_bytes().to_vec()),
+            (24, u32::MAX.to_le_bytes().to_vec()),
+        ] {
+            let (directory, source, mut bytes) = slice_fixture();
+            bytes[offset..offset + value.len()].copy_from_slice(&value);
+            std::fs::write(&source, bytes).unwrap();
+            let output = directory.path().join("slice.wav");
+            assert!(slice_wav(&source, 0.0, 1.0, &output).is_err());
+            assert!(!output.exists());
+        }
+    }
+
+    #[test]
+    fn wav_slice_rejects_truncation_and_huge_chunk_claims_without_allocating_them() {
+        for (offset, size) in [(4, u32::MAX), (16, u32::MAX), (40, u32::MAX), (40, 15)] {
+            let (directory, source, mut bytes) = slice_fixture();
+            bytes[offset..offset + 4].copy_from_slice(&size.to_le_bytes());
+            std::fs::write(&source, bytes).unwrap();
+            let output = directory.path().join("slice.wav");
+            assert!(slice_wav(&source, 0.0, 1.0, &output).is_err());
+            assert!(!output.exists());
+        }
+    }
+
+    #[test]
+    fn wav_slice_rejects_nonfinite_time_ranges() {
+        let (directory, source, _) = slice_fixture();
+        for (start, end) in [
+            (f32::NAN, 0.5),
+            (0.0, f32::INFINITY),
+            (f32::NEG_INFINITY, 0.5),
+        ] {
+            let output = directory.path().join("slice.wav");
+            assert!(slice_wav(&source, start, end, &output).is_err());
+            assert!(!output.exists());
+        }
+    }
 
     #[test]
     fn test_circular_audio_buffer_wrap() {
