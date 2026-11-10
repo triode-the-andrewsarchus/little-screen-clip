@@ -1605,3 +1605,69 @@ unchanged members. The added code is the required bounded acceptance/measurement
 fixture, not a reduction in application complexity. Evidence:
 `/tmp/deep-native-input-architecture-final.json`. About 132 GiB remains free.
 The final requirement-by-requirement source and integration audit remains open.
+
+
+### Final session-completion audit repairs
+
+The final caller audit found three concrete close-path gaps. Workbench's MIDI
+Escape handling bypassed the shared studio, so it could drop an accepted export
+receiver before completion. The host now delegates that interaction to the shared
+renderer. A controlled host test fails on the previous implementation and now
+retains the pending receiver, observes `CancelClose`, handles its failure, and
+permits a later explicit close. Its narrow fixture bridge is available only under
+the existing `test-support` feature; normal builds gain no public runtime API.
+
+PDF's shared renderer previously guarded Escape only for page edits, while
+header/window close and OCR writes could bypass that check. It now uses the same
+write-pending contract throughout the frame and cancels window close while an
+accepted write remains outstanding. A controlled test fails before the fix and
+covers header/Escape close and result handling afterward. Page-edit failures use
+persistent error feedback; the assertion checks visibility after an hour of
+simulated idle time. The API comments for relocation and pending writes now
+belong to the correct methods, and their generated documentation was inspected.
+Audio's early Escape return also skipped its final window-close guard. The
+shortcut path now skips painting while still reaching that common guard. The
+existing real image-copy/handoff failure test exercises the complete renderer
+and asserts `CancelClose`, then releases the worker and verifies its result.
+
+The first complete integration gate passes 2690 tests, zero failures, 30 ignored
+(`/tmp/deep-final-session-workspace.log`). All-target compilation, both desktop
+builds and diagnostic workspace Clippy pass. The final PDF error-lifetime
+adjustment additionally passes its targeted test, all-target compilation, both
+desktop builds, studio/workbench Clippy, API docs and formatting. Logs:
+`/tmp/deep-final-{midi-host-before,pdf-close-before,pdf-retained-feedback}.log`
+and `/tmp/deep-final-session-{pdf-test,audio-test,midi-host-test,all-targets,desktops,clippy,post-check,post-build,post-clippy,post-doc,post-fmt}.log`.
+Only the previously recorded approximate-constant allowance is used; existing
+Clippy warnings remain. The final overall acceptance still requires its own
+current-revision integration audit.
+
+The actual private PDF run passes all 11 observations, including occupied-output
+preservation, rotation/page geometry, OCR text and source digest, folder return,
+and reopening the verified derivative without changing its bytes or mtime
+(`/tmp/deep-final-pdf-output-current/report.json`). Earlier runs exposed stale
+runner assumptions about the compact header, footer totals and ellipsized names.
+The runner now targets visible controls, checks exact owned-directory contents,
+and pairs the unique displayed derivative name with unchanged complete-file
+bytes/mtime. Its substantive source/collision/geometry/text/hash assertions remain.
+Earlier failed runs are retained as runner-drift evidence, not counted as passes.
+
+Current Cargo metadata confirms neutral UI/studio ownership, no application
+cross-dependency, and headless search's sole local dependency on core. Search and
+its guarded job/source/photo support are unchanged since `4cd42c4`, preserving
+that checkpoint's actual-model and source-safety evidence. The packaged native
+helper still includes source and licenses; the separate video helper's source
+matches the repository. Five build/packaging tests pass. Evidence:
+`/tmp/deep-final-{metadata,source-audit}.json`,
+`/tmp/deep-final-packaging-tests.log`. The requirement audit remains open until
+these observations and all other plan rows are reconciled at the final revision.
+
+This close-lifetime slice's architecture comparison reports raw REGRESSION:
+NLOC +137, functions +3, total CCN +7; average/max CCN remain 4.04/195 and cycles
+remain 16. Clone groups rise 1503→1505 from the independent frame/keyboard and
+close-command assertions in the new regression tests. The larger modified-file
+clone list mostly reattributes existing fixture setup. The PDF renderer's
+18→19 CCN change is the explicit pending-write close guard; the workbench's
+duplicate MIDI handling is deleted, and Audio retains one shared end-of-frame
+guard. No new controller, queue or duplicated production algorithm is added.
+These small checks protect accepted-write completion rather than move complexity
+out of sight. Evidence: `/tmp/deep-final-session-architecture.json`.

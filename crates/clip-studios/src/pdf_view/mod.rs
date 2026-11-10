@@ -614,7 +614,7 @@ impl PdfEditorState {
         self.protect_outputs = true;
         self
     }
-    /// Reports an accepted page edit or OCR write that must finish before closing.
+    /// Updates the file location while retiring previews tied to its previous name.
     pub fn relocate_file(&mut self, path: PathBuf) {
         self.path = path;
         if self.info_job.is_some() {
@@ -630,6 +630,7 @@ impl PdfEditorState {
             self.start_preview_worker();
         }
     }
+    /// Reports an accepted page edit or OCR write that must finish before closing.
     pub fn file_write_pending(&self) -> bool {
         self.edit_in_progress || self.document_tools.ocr_busy()
     }

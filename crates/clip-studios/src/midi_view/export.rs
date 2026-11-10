@@ -261,3 +261,15 @@ pub(super) fn handoff_midi_export(
     artifact.retain();
     Ok(artifact)
 }
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub fn hold_export_for_test(state: &mut MidiViewerState) -> impl FnOnce(String) + use<> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    state.export_job = Some(MidiExportJob { receiver });
+    move |error| {
+        sender
+            .send(Ok(Err(error)))
+            .expect("host must retain the accepted export receiver");
+    }
+}

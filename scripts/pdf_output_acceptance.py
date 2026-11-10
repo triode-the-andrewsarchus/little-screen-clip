@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 import ui_acceptance_fixtures as fixtures
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for, private
-from file_manager_phase4_acceptance import open_file, click_word, back
+from file_manager_phase4_acceptance import open_file, click_word
 
 
 def properties(session, path):
@@ -49,7 +49,7 @@ def exercise(session, root):
     rotation = properties(session, rotated)
     assert rotation["pages"] == 3 and rotation["rotations"] == [90, 0, 0], rotation
     rotated_bytes = rotated.read_bytes()
-    click_word(session, "05-rotated", "OCR", minimum_y=150, maximum_y=270)
+    click_word(session, "05-rotated", "OCR", minimum_y=105, maximum_y=170)
     session.observe("06-ocr-controls", ["Tesseract", "Add text layer to PDF"])
     click_word(session, "06-ocr-controls", "Add")
     wait_for(searchable.exists, "searchable PDF sibling")
@@ -59,12 +59,17 @@ def exercise(session, root):
     assert ocr["source_hash"] == hashlib.sha256(rotated_bytes).hexdigest(), ocr
     assert "Acceptance page 01" in ocr["text"][0], ocr
     assert rotated.read_bytes() == rotated_bytes and source.read_bytes() == original_bytes
-    back(session, "07-searchable")
-    session.observe("08-return", ["Folders", "3 items"])
+    click_word(session, "07-searchable", "Back", minimum_y=40, maximum_y=95)
+    session.observe("08-return", ["Folders", "document.pdf"])
+    assert len(list(root.iterdir())) == 3, "unexpected output or staging entry"
+    reused_bytes, reused_mtime = searchable.read_bytes(), searchable.stat().st_mtime_ns
     open_file(session, root, rotated.name, "09-reopen-row")
-    session.observe("10-verified-reuse", [searchable.name, "3 pages"])
-    back(session, "10-verified-reuse")
-    session.observe("11-final-folder", ["Folders", "3 items"])
+    # The compact filename label elides its extension; this prefix uniquely
+    # identifies the only owned OCR derivative. Verify the complete file below.
+    session.observe("10-verified-reuse", [searchable.stem, "3 pages"])
+    assert searchable.read_bytes() == reused_bytes and searchable.stat().st_mtime_ns == reused_mtime, "reuse rewrote the existing searchable PDF"
+    click_word(session, "10-verified-reuse", "Back", minimum_y=40, maximum_y=95)
+    session.observe("11-final-folder", ["Folders", "document.pdf"])
     assert sorted(path.name for path in root.iterdir()) == sorted([source.name, rotated.name, searchable.name])
     (session.output / "pdf-properties.json").write_text(json.dumps(dict(rotation=rotation, ocr=ocr), indent=2))
 

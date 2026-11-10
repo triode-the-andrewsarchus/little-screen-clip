@@ -36,7 +36,7 @@ application; the hosts still own navigation and close decisions.
 
 | Concern | Owner and transition contract |
 | --- | --- |
-| Workbench document | One active `ViewerSession`; startup requests retain FIFO order. Accepted image jobs prevent retirement/replacement until their result is handled. A retained image session is distinct from a fresh source load. |
+| Workbench document | One active `ViewerSession`; startup requests retain FIFO order. Accepted image jobs prevent retirement/replacement until their result is handled. Audio and PDF frame guards defer close during writes; MIDI delegates Escape to its shared export owner rather than bypassing it. Controlled host/studio tests verify completion and retained failures. A retained image session is distinct from a fresh source load. |
 | Browser document | `Viewers` owns one loading/session request. It polls source identity, disables conflicting editor/navigation actions, asks about dirty sessions and defers close for accepted writes. Browser selection/history/scroll live outside the studio. |
 | Photo history | A collection retains one `ImagePreviewState` per photo and its independent undo/redo revisions. Host rename/order/ratings and export-all ownership remain outside the shared image editing state. Pixel revisions remain shared `Arc` values. |
 | Audio interaction | `AudioViewport` and `AudioSelectionModel` supply calculations; pointer precedence and per-tool scroll edits remain in their existing consumers. Playback clocks remain separate from frame time and monotonic job lifetimes. Accepted save/copy jobs survive playback stop. |

@@ -106,18 +106,9 @@ impl WorkbenchApp {
                 pdf_dirty = close && state.dirty;
             }
             ViewerSession::Midi(state) => {
-                if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                    if state.selected_region.is_some() {
-                        state.selected_region = None;
-                        state.play_stop_time = None;
-                    } else {
-                        close = true;
-                    }
-                } else {
-                    show_viewer_panel(ctx, |ui| {
-                        state.render_ui(ui, &self.ui_palette, &mut close);
-                    });
-                }
+                show_viewer_panel(ctx, |ui| {
+                    state.render_ui(ui, &self.ui_palette, &mut close);
+                });
                 if close {
                     state.stop();
                 }

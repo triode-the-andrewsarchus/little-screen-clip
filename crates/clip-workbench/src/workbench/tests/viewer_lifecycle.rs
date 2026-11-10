@@ -413,3 +413,58 @@ fn idle_audio_mode_escape_closes_to_the_originating_workbench_route() {
         assert_eq!(app.selected_slots, selected_slots);
     }
 }
+
+#[test]
+fn midi_escape_retains_accepted_export_and_handles_its_completion() {
+    let data = MidiData {
+        title: "retained MIDI export".into(),
+        track_count: 1,
+        track_names: vec!["fixture".into()],
+        total_notes: 0,
+        duration_sec: 1.0,
+        bpm: 120.0,
+        min_key: 60,
+        max_key: 60,
+        notes: Vec::new(),
+    };
+    let mut midi = MidiViewerState::from_shared(Arc::new(data), None, "fixture".into());
+    let complete = clip_studios::midi_view::hold_export_for_test(&mut midi);
+    let mut app = test_workbench_app(Some(ViewerSession::Midi(midi)), VecDeque::new());
+    let ctx = egui::Context::default();
+    let escape = || egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    let output = ctx.run(escape(), |ctx| {
+        assert!(app.render_modal_viewers(ctx));
+    });
+    assert!(matches!(&app.viewer, Some(ViewerSession::Midi(state)) if state.export_pending()));
+    assert!(
+        output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
+    );
+    complete("controlled host export failure".into());
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        app.render_modal_viewers(ctx);
+    });
+    let Some(ViewerSession::Midi(state)) = &app.viewer else {
+        panic!("completion should remain inspectable");
+    };
+    assert!(!state.export_pending());
+    assert_eq!(
+        state.status_toast.message(crate::ui_ext::feedback_time()),
+        Some("controlled host export failure")
+    );
+    let _ = ctx.run(escape(), |ctx| {
+        app.render_modal_viewers(ctx);
+    });
+    assert!(app.viewer.is_none());
+}

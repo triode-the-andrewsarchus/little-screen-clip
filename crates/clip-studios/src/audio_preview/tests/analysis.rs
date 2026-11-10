@@ -740,17 +740,24 @@ fn audio_image_copies_keep_captured_analysis_and_report_delayed_handoff_failures
         );
         let ctx = egui::Context::default();
         let mut close = false;
-        let _ = ctx.run(
+        let output = ctx.run(
             egui::RawInput {
                 events: vec![super::key_press_event(egui::Key::Escape)],
                 ..Default::default()
             },
             |ctx| {
-                state.poll_image_copy(ctx, 3.0);
-                state.handle_studio_shortcuts(ctx, &mut close);
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &AppPalette::default(), &mut close);
+                });
             },
         );
         assert!(!close);
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
+        );
         release.send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while state.image_copy_job.is_some() {

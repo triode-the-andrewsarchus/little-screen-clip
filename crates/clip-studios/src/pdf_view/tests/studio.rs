@@ -387,3 +387,60 @@ fn selecting_another_page_resets_pdf_zoom_and_pan() {
     assert_eq!(view.zoom, 1.0);
     assert_eq!(view.pan, Vec2::ZERO);
 }
+
+#[test]
+fn accepted_pdf_edits_block_header_escape_and_viewport_close_until_completion() {
+    for escape in [false, true] {
+        let mut state = super::action_guard_state(PathBuf::from("fixture.pdf"), 0, None);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        state.edit_rx = Some(receiver);
+        state.edit_in_progress = true;
+        let ctx = egui::Context::default();
+        let palette = little_clip_core::palette::AppPalette::default();
+        let mut close = true;
+        let input = egui::RawInput {
+            events: if escape {
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]
+            } else {
+                Vec::new()
+            },
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| {
+            egui::CentralPanel::default()
+                .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut close));
+        });
+        assert!(!close, "accepted edit lost on escape={escape}");
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
+        );
+        sender
+            .send(Ok(PdfEditMsg {
+                operation: "rotate",
+                page_num: 1,
+                result: Err("controlled PDF failure".into()),
+            }))
+            .unwrap();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default()
+                .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut close));
+        });
+        assert!(!state.file_write_pending());
+        assert!(
+            state
+                .status_toast
+                .message(crate::ui_ext::feedback_time() + 3600.0)
+                .unwrap()
+                .contains("controlled PDF failure")
+        );
+    }
+}

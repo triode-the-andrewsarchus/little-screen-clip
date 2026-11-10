@@ -431,3 +431,7 @@ fn midi_space_action(is_playing: bool) -> MidiSpaceAction {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use export::hold_export_for_test;

@@ -17,7 +17,7 @@ impl PdfEditorState {
         self.poll_document_tools(ctx, now);
         let navigation_escape = self.navigation_shortcuts(ctx);
         if !navigation_escape && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            if self.edit_in_progress {
+            if self.file_write_pending() {
                 self.status_toast
                     .set("PDF edit is still running; wait for it to finish", now);
             } else {
@@ -73,6 +73,11 @@ impl PdfEditorState {
             self.ensure_page_texture(page, ctx);
         }
         self.schedule_page_decode(ctx);
+        if self.file_write_pending() {
+            *close = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
     }
 
     fn render_docked_body(

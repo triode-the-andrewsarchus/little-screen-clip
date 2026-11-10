@@ -129,8 +129,10 @@ impl PdfEditorState {
                 self.edit_rx = None;
                 self.edit_ticket = None;
                 self.edit_in_progress = false;
-                self.status_toast
-                    .set(format!("PDF edit unavailable: {error}"), now);
+                self.status_toast.set(
+                    crate::ui_ext::StatusMessage::error(format!("PDF edit unavailable: {error}")),
+                    now,
+                );
                 return;
             }
             Some(Err(TryRecvError::Disconnected)) => {
@@ -178,7 +180,10 @@ impl PdfEditorState {
                     );
                 }
                 Err(error) => self.status_toast.set(
-                    format!("Failed to {} page: {}", message.operation, error),
+                    crate::ui_ext::StatusMessage::error(format!(
+                        "Failed to {} page: {}",
+                        message.operation, error
+                    )),
                     now,
                 ),
             }

@@ -97,43 +97,45 @@ impl AudioPreviewState {
         self.poll_slice_copy_job(ctx, ctx.input(|input| input.time));
         self.poll_save_job(ctx, ctx.input(|input| input.time));
         self.poll_digital_decode(ctx);
-        if self.handle_studio_shortcuts_with_start(ctx, close_requested, &mut start_stem_separation)
-        {
-            return;
+        if !self.handle_studio_shortcuts_with_start(
+            ctx,
+            close_requested,
+            &mut start_stem_separation,
+        ) {
+            layout::AudioWorkspace::show(ui, palette, |ui| {
+                self.render_audio_header(ui, ctx, palette, close_requested);
+                ui.add_space(crate::ui_ext::SPACE_XS);
+                self.render_audio_tool_bar(ui, palette);
+                if mode_before_frame == AudioToolMode::StemSeparation
+                    && self.active_mode != AudioToolMode::StemSeparation
+                {
+                    self.cancel_stem_separation();
+                    self.pause_group_playback();
+                } else if mode_before_frame != AudioToolMode::StemSeparation
+                    && self.active_mode == AudioToolMode::StemSeparation
+                    && self.stem_separation.stems.is_empty()
+                    && !self.stem_separation.in_progress
+                {
+                    start_stem_separation(self);
+                }
+                self.sync_channel_monitor();
+                ui.add_space(crate::ui_ext::SPACE_SM);
+                match self.active_mode {
+                    AudioToolMode::Inspect | AudioToolMode::ChannelTools => {
+                        self.render_standard_ui(ui, ctx, palette, close_requested, None)
+                    }
+                    AudioToolMode::StemSeparation => {
+                        self.render_stem_separation_ui(ui, ctx, palette, close_requested)
+                    }
+                    AudioToolMode::DigitalDecode => {
+                        self.render_digital_decode_ui(ui, ctx, palette, close_requested)
+                    }
+                    AudioToolMode::HfAnalysis => {
+                        self.render_hf_analysis_ui(ui, ctx, palette, close_requested)
+                    }
+                }
+            });
         }
-        layout::AudioWorkspace::show(ui, palette, |ui| {
-            self.render_audio_header(ui, ctx, palette, close_requested);
-            ui.add_space(crate::ui_ext::SPACE_XS);
-            self.render_audio_tool_bar(ui, palette);
-            if mode_before_frame == AudioToolMode::StemSeparation
-                && self.active_mode != AudioToolMode::StemSeparation
-            {
-                self.cancel_stem_separation();
-                self.pause_group_playback();
-            } else if mode_before_frame != AudioToolMode::StemSeparation
-                && self.active_mode == AudioToolMode::StemSeparation
-                && self.stem_separation.stems.is_empty()
-                && !self.stem_separation.in_progress
-            {
-                start_stem_separation(self);
-            }
-            self.sync_channel_monitor();
-            ui.add_space(crate::ui_ext::SPACE_SM);
-            match self.active_mode {
-                AudioToolMode::Inspect | AudioToolMode::ChannelTools => {
-                    self.render_standard_ui(ui, ctx, palette, close_requested, None)
-                }
-                AudioToolMode::StemSeparation => {
-                    self.render_stem_separation_ui(ui, ctx, palette, close_requested)
-                }
-                AudioToolMode::DigitalDecode => {
-                    self.render_digital_decode_ui(ui, ctx, palette, close_requested)
-                }
-                AudioToolMode::HfAnalysis => {
-                    self.render_hf_analysis_ui(ui, ctx, palette, close_requested)
-                }
-            }
-        });
         if self.file_write_pending() {
             *close_requested = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
