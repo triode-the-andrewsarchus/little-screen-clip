@@ -42,7 +42,7 @@ static PATTERN_FEET_INCHES: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static PATTERN_SINGLE_VALUE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)^\s*(-?\d+(?:\.\d+)?)\s*([°a-z/]+(?:/[a-z]+)?|'|")\s*$"#).unwrap()
+    Regex::new(r#"(?i)^\s*(-?\d+(?:\.\d+)?)\s*(fl\s+oz|[°a-z/]+(?:/[a-z]+)?|'|")\s*$"#).unwrap()
 });
 
 /// Recognizes physical unit expressions and computes converted metrics.
@@ -75,7 +75,10 @@ pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
     // 2. Single value + unit
     let caps = PATTERN_SINGLE_VALUE.captures(trimmed)?;
     let val: f64 = caps[1].parse().ok()?;
-    let unit_raw = caps[2].to_lowercase();
+    let unit_raw = caps[2]
+        .split_whitespace()
+        .collect::<String>()
+        .to_lowercase();
     let unit = unit_raw.as_str();
 
     match unit {
@@ -302,7 +305,7 @@ pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
                 rule_of_thumb: None,
             })
         }
-        "floz" | "fl oz" => {
+        "floz" => {
             let ml = val * 29.5735;
             Some(UnitConversion {
                 original: format!("{} fl oz", val),
@@ -377,6 +380,22 @@ pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fluid_ounces_accept_spaced_and_compact_names() {
+        for input in ["12 fl oz", "12floz", " 12 FL OZ ", "12 fl  oz", "12 fl\toz"] {
+            let converted = detect_unit_conversion(input).expect(input);
+            assert_eq!(converted.original, "12 fl oz");
+            assert_eq!(converted.primary_conversion, "354.9 ml");
+        }
+        for input in ["12 f l oz", "12 fl oz garbage", "12 fl", "12 oz fl"] {
+            assert!(detect_unit_conversion(input).is_none(), "accepted {input}");
+        }
+        assert_eq!(
+            detect_unit_conversion("12 oz").unwrap().primary_conversion,
+            "340.2 g"
+        );
+    }
 
     #[test]
     fn test_unit_conversions() {
