@@ -113,16 +113,18 @@ async fn send_ipc_req(
     }
 }
 
-async fn copy_text_to_os_clipboard(text: String) {
-    match tokio::task::spawn_blocking(move || copy_text_to_system_clipboard(&text)).await {
-        Ok(Err(error)) => eprintln!("Clipboard copy failed: {error}"),
-        Err(error) => eprintln!("Clipboard copy worker failed: {error}"),
-        Ok(Ok(())) => {}
-    }
-}
-
-async fn copy_bytes_to_os_clipboard(bytes: Vec<u8>, mime: String) {
-    match tokio::task::spawn_blocking(move || copy_bytes_to_system_clipboard(&bytes, &mime)).await {
+async fn copy_item_to_os_clipboard(item: little_clip_core::ClipItem) {
+    let result = tokio::task::spawn_blocking(move || {
+        if let Some(text) = item.to_clipboard_text() {
+            copy_text_to_system_clipboard(&text)
+        } else if let little_clip_core::ClipPayload::Image { bytes, mime, .. } = item.payload {
+            copy_bytes_to_system_clipboard(&bytes, &mime)
+        } else {
+            Ok(())
+        }
+    })
+    .await;
+    match result {
         Ok(Err(error)) => eprintln!("Clipboard copy failed: {error}"),
         Err(error) => eprintln!("Clipboard copy worker failed: {error}"),
         Ok(Ok(())) => {}
@@ -172,13 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let get_req = IpcRequest::GetSlotItem(slot);
             let resp = send_ipc_req(&mut writer, &mut lines, &get_req).await?;
             if let IpcResponse::SlotItem(Some(item)) = resp {
-                if let Some(text) = item.to_clipboard_text() {
-                    copy_text_to_os_clipboard(text).await;
-                } else if let little_clip_core::ClipPayload::Image { bytes, mime, .. } =
-                    item.payload
-                {
-                    copy_bytes_to_os_clipboard(bytes, mime).await;
-                }
+                copy_item_to_os_clipboard(item).await;
 
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                 let _ = tokio::process::Command::new("wtype")
@@ -192,9 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(IpcResponse::SlotItem(Some(left_item))) =
                         send_ipc_req(&mut writer, &mut lines, &left_req).await
                     {
-                        if let Some(left_text) = left_item.to_clipboard_text() {
-                            copy_text_to_os_clipboard(left_text).await;
-                        }
+                        copy_item_to_os_clipboard(left_item).await;
                     }
                 }
 
@@ -430,3 +424,64 @@ fn parse_slot_str(s: &str) -> Result<SlotId, String> {
 
 /// Returns the active daemon Unix socket path (`$XDG_RUNTIME_DIR/little-screen-clip.sock`).
 use little_clip_core::ipc::socket_path as get_socket_path;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn clipboard_item_copy_preserves_image_bytes_and_mime_for_paste_and_restore() {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(directory) = std::env::var_os("CLIPCTL_TEST_CLIPBOARD") {
+            let directory = std::path::PathBuf::from(directory);
+            for mime in ["image/png", "image/webp"] {
+                let bytes = vec![0, 255, 128, 1, 0];
+                copy_item_to_os_clipboard(little_clip_core::ClipItem::from_image(
+                    bytes.clone(),
+                    1,
+                    1,
+                    mime,
+                ))
+                .await;
+                assert_eq!(std::fs::read(directory.join("bytes")).unwrap(), bytes);
+                assert_eq!(
+                    std::fs::read_to_string(directory.join("mime")).unwrap(),
+                    mime
+                );
+            }
+            copy_item_to_os_clipboard(little_clip_core::ClipItem::from_text("restored text")).await;
+            assert_eq!(
+                std::fs::read(directory.join("bytes")).unwrap(),
+                b"restored text"
+            );
+            assert_eq!(
+                std::fs::read_to_string(directory.join("mime")).unwrap(),
+                "text/plain;charset=utf-8"
+            );
+            return;
+        }
+        // Only the isolated child sees the fake adapter. No host clipboard or input is touched.
+        let directory = tempfile::tempdir().unwrap();
+        let adapter = directory.path().join("wl-copy");
+        std::fs::write(&adapter, "#!/bin/sh\nprintf '%s' \"$2\" > \"$CLIPCTL_TEST_CLIPBOARD/mime\"\n/bin/cat > \"$CLIPCTL_TEST_CLIPBOARD/bytes\"\n").unwrap();
+        std::fs::set_permissions(&adapter, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::clipboard_item_copy_preserves_image_bytes_and_mime_for_paste_and_restore",
+                "--test-threads=1",
+            ])
+            .env("CLIPCTL_TEST_CLIPBOARD", directory.path())
+            .env("PATH", directory.path())
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("DISPLAY")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
