@@ -193,3 +193,33 @@ caches and guarded source/revision checks. Browser photo rows, Shelf, similarity
 preparation and search readers use those implementations. Cache/layout/job
 ownership in the browser remains distinct from prepared image data; this move
 does not introduce another cache or make decoding a UI-frame operation.
+
+
+### Synthetic mirror input-response comparison
+
+From the repository root, run a fresh private output directory for each case:
+
+```sh
+TESSDATA_PREFIX=/tmp/little-clip-tessdata python3 scripts/native_mirror_input_acceptance.py \
+  --appearance dark --mode raster --scale 1 --samples 20 --output-dir /tmp/mirror-input-raster-new
+```
+
+Repeat with `--mode native` and with `--scale 2`; use a different output directory
+each time. The fixture supports dark 1280×800 logical outputs, calibrates the
+actual selected/unselected Right Hand border, checks prepared mixed content, and
+alternates selection through private Wayland pointer events. It never plays the
+audio card or connects to the user's daemon/compositor. Keep timing cases serial
+and avoid building during them.
+
+`input-report.json` retains every capture observation, command-return duration,
+visible-response upper bound, capture-cost distribution, executable SHA-256 and
+compositor versions. Screenshot polling uses 1 ms rather than the ordinary
+runner's unchanged 100 ms cadence, and waits for a decodable PNG. Capture paths
+are fresh; the shared helper removes any reused destination before requesting an
+asynchronous capture. All spawned processes are retired by the runner.
+
+These bounds include pointer-process and screenshot overhead. They do not locate
+the actual presentation instant, measure physical input/display latency, or prove
+rendering performance parity. The [refactor ledger](DEEP_REFACTORING_PLAN.md#native-mirror-input-response-checkpoint)
+records the measured distributions and their interpretation. The raster default
+and separate native-adoption decision remain unchanged.

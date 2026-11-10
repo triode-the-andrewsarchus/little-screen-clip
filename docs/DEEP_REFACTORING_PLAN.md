@@ -1547,3 +1547,61 @@ unsafe CLI call with explicitly owned traversal and revision checks adds real
 code and tests; this is a correctness/lifetime improvement, not a claim of lower
 aggregate complexity or faster compression. Native input-response comparison and
 the final requirement-by-requirement audit remain outstanding.
+
+
+### Native mirror input-response checkpoint
+
+The remaining input comparison now has direct synthetic-click-to-visible-pixels
+evidence, separate from the earlier CPU paint and shared-handler tests. The new
+[private fixture](../scripts/native_mirror_input_acceptance.py) reuses the existing
+Weston/Niri owner, virtual-pointer guard, mixed-card daemon, window checks and
+capture helper. It calibrates the selected/unselected Right Hand border, then
+verifies 20 alternating selection transitions in each mode/density. Prepared
+content is checked before sampling; no audio playback, MIDI/USB access or connection to the user's daemon
+occurs. All four cases use the same debug executable SHA-256, stored with
+versions, raw attempts, dispatch durations and process cleanup in each report.
+
+The first comparison used the capture helper's normal 100 ms file-poll cadence.
+The accepted comparison uses a concrete 1 ms polling option and retries PNG
+reads until decodable, reducing polling error without changing normal runner
+cadence. The shared helper also deletes a reused destination before requesting
+a new asynchronous screenshot. An isolated stale-file guard check passes
+(`/tmp/deep-native-input-capture-guard.log`).
+
+Measured conservative bounds from synthetic command launch to observed selection
+pixels, in milliseconds (20 clicks per row, dark 1280×800 logical output):
+
+| Density / mode | Median upper bound | p95 upper bound | Maximum upper bound | Median capture cost |
+| --- | ---: | ---: | ---: | ---: |
+| 1× raster | 141.80 | 164.51 | 169.78 | 55.61 |
+| 1× native | 143.44 | 173.71 | 256.51 | 53.76 |
+| 2× raster | 361.50 | 381.98 | 385.93 | 138.51 |
+| 2× native | 349.86 | 376.21 | 377.18 | 131.50 |
+
+Reports and screenshots are under `/tmp/deep-native-input-fine-{raster,native}-{1,2}x/`;
+each `input-report.json` contains every observation rather than only averages.
+These are upper bounds including command launch, compositor/capture scheduling,
+PNG delivery and verification. Capture cost is substantial and is not subtracted
+to invent an actual input latency. The 1× native outlier remains disclosed.
+Results establish working input feedback in both modes and provide a scoped
+comparison, but do not establish a rendering speedup or latency parity. Physical
+input, scanout and GPU-presentation timestamps remain unmeasured; the prototype
+cannot support claims about those quantities. The raster mirror stays default,
+and adopting the prototype remains a separate user decision.
+
+All 80 fine-poll clicks pass, as do all 80 initial coarse-poll clicks and Python
+compilation. The common mixed-card capture runner also passes after the helper
+change (`/tmp/deep-native-input-common-smoke/report.json`). This slice changes
+acceptance tooling and documentation, not application Rust code, so it does not
+repeat the preceding workspace test/build gates. Reproduction instructions are
+in [presentation boundaries](presentation_boundaries.md#synthetic-mirror-input-response-comparison).
+
+Architecture comparison against `deep-native-input-start` reports raw REGRESSION:
+NLOC +133, functions +6, total CCN +25. Average/max CCN remain 4.04/195; clone groups
+and dependency cycles remain 1503/16, and duplication remains 4.39%. No new
+high-complexity function or clone group is reported. Modified-file clone notices
+refer to existing shared-runner scaffolding; Python cycle changes reorder
+unchanged members. The added code is the required bounded acceptance/measurement
+fixture, not a reduction in application complexity. Evidence:
+`/tmp/deep-native-input-architecture-final.json`. About 132 GiB remains free.
+The final requirement-by-requirement source and integration audit remains open.

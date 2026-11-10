@@ -908,7 +908,9 @@ def wayland_size_hints(log_path: Path) -> dict[str, list[int] | None]:
     return hints
 
 
-def screenshot(niri: Path, env: dict[str, str], path: Path) -> dict[str, Any]:
+def screenshot(niri: Path, env: dict[str, str], path: Path, *, poll_interval: float = 0.1) -> dict[str, Any]:
+    assert 0 < poll_interval <= 1
+    path.unlink(missing_ok=True)
     started = time.monotonic()
     run_checked(
         [str(niri), "msg", "action", "screenshot-screen", "--show-pointer=false", "--path", str(path)],
@@ -919,7 +921,7 @@ def screenshot(niri: Path, env: dict[str, str], path: Path) -> dict[str, Any]:
     while time.monotonic() < deadline:
         if path.is_file() and path.stat().st_size:
             return {"path": str(path), "bytes": path.stat().st_size, "elapsed_ms": round((time.monotonic() - started) * 1000)}
-        time.sleep(0.1)
+        time.sleep(poll_interval)
     raise RuntimeError(f"screenshot did not appear: {path}")
 
 
