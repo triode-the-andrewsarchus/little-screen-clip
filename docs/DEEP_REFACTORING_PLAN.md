@@ -1,6 +1,6 @@
 # Deep refactoring plan — reviewed proposal
 
-**Status: awaiting user approval. Do not implement this roadmap yet.**
+**Status: implementation authorized and in progress. Native mirror adoption remains separately reviewable.**
 
 This plan follows the completed work in [REFACTORING_PLAN.md](REFACTORING_PLAN.md), rebased onto `main` at `2f75a97`. It replaces the previous proposal after checking its claims against the combined source tree. It preserves the goal of shared, useful interactive views while removing speculative interfaces, incorrect diagnoses, and unsupported performance promises.
 
@@ -111,13 +111,55 @@ Audit coverage family by family rather than requiring every cell to become an ed
 
 Reuse decoded summaries and proven signal/geometry algorithms between contexts. Keep distinct interaction layers: a tiny waveform badge needs neither a studio's channel editing state nor a row's selection routing. An isomorphic keyboard, piano mapping view, constellation, and waveform have different jobs. Do not force a universal visual or a generic event bus around them.
 
+## Preparation for future changes
+
+Apply these acceptance criteria where the approved refactor already touches the relevant code. They prepare concrete reuse paths without requiring new product features or a framework for every boundary.
+
+| Preparation | Acceptance criterion | Future benefit |
+| --- | --- | --- |
+| Prepared content separate from painting and interaction | Existing prepared data can feed raster and native views without duplicate decoding or caches; preserve source identity, revision, access context and pending/error states. | Native mirror, richer Shelf cards and new previews. |
+| Studio sessions independent of their host | Document identity, undo/history, unsaved edits, background jobs and accepted exports have explicit owners; host navigation and window lifecycle stay outside the session. | Consistent hosting in both applications and a foundation for possible tabs or multiple documents later. |
+| Explicit input and audition ownership | Document how MIDI, shortcuts, pointer gestures and playback acquire and release focus, including navigation, view disappearance and non-multisample selection. Preserve text editing and the existing single-preview policy. | More interactive views without competing players or stolen input. |
+| Incremental format capabilities | Reuse existing classification and record thumbnail, strip, inspection, editing and export availability; distinguish safe observed capabilities from extension hints. | New formats can join existing views without another registry or decoder path. |
+| Explicit background completion contracts | Existing workers carry operation/session identity and reject stale read results; cancellation, progress and shutdown preserve authoritative completion of accepted writes. | Consistent behavior as more previews and exports are added. |
+| Parsers and search independent of egui | Keep parsing, ranking and guarded data access outside painting and application state; use the smallest notification boundary that real callers need. | Isolated tests, CLI reuse and possible future batch operations. |
+
+The central review question is who owns each document session, preview job, playback instance and accepted save, including when its view disappears. Prefer clarifying existing owners over introducing a generic event bus, plugin system or universal widget abstraction. This preparation does not add tabs, multi-document UI or batch features.
+
+Retain a small representative fixture and workflow set: mixed-folder opening, studio switching with unsaved edits, multisample velocity/MIDI auditioning, slow search and delayed daemon responses. Reuse existing fixtures and private acceptance runners; record relevant responsiveness, correctness and bounded resource use rather than creating a large benchmark suite unrelated to the change.
+
+## Compatibility with later file-manager phases
+
+[File Manager/plan.md](<File Manager/plan.md>) remains the product roadmap. Its later phases are intended capabilities, with design decisions still open. Although it records accepted phase 5–6 checkpoints, ongoing media/search work remains a practical focus; this refactor must support that work and avoid baking the current single-folder presentation into shared services. It does not reopen completion claims or authorize implementation of later phases.
+
+Prepare the following boundaries as their existing owners are refactored. The objective is to avoid foreseeable structural rework, not to guarantee that future requirements will never require adaptation.
+
+| Roadmap phase | Prepare during this refactor | Leave to the feature design |
+| --- | --- | --- |
+| **7: Views and meaningful sorting** | Keep location/source identity, listing data, view composition, selection and scroll state distinct. Avoid making shared preview/search services depend on one mutable current-directory field. Preserve origin/provenance for entries so Miller columns and bounded inline expansion can reuse them. Reuse the phase 6 query/sort representation, typed missing/pending states and stable selection identity. Keep view preference resolution separate from observed content categories. | Column UI, expansion policy/budgets, dominant-type thresholds, metadata sort choices and preference inheritance rules. |
+| **8: Organization and Home** | Keep filesystem facts separate from pins, session marks, sorting sets, visibility preferences and project references. Retain explicit browse/reveal targets and source identity rather than treating every displayed item as an immediate child of one directory. Isolate history/location handling so a future virtual Home need not impersonate a filesystem path. Keep persistence ownership separate from rendering and portable metadata separate from machine-local state. | Virtual Home implementation, durable annotation identity across rename/move/restart, `.fmproject`/`.hide`/`.show` schemas and precedence. No browsing-created sidecars. |
+| **9: Transformations and metadata** | Preserve a UI-independent path from an explicit selection and output/naming policy through validation, execution and per-item results. Reuse existing ops/pipeline, naming and save mechanisms; retain source revisions, held output-directory handles, conflicts and partial completion. Distinguish read/probe support from safe write capability. | Batch planning UI, metadata writer policies, sidecars and assisted rename suggestions. |
+| **10: Rules and contextual workflows** | Keep operation submission independent of the initiating button or studio, with explicit inputs, operation identity, cancellation and attributable results. Preserve the existing node/pipeline model. Separate read-only proposal/validation from mutation so a future dry run can report intended effects without executing actions; execution must still revalidate. Keep observed filesystem events distinct from a policy decision to run a rule. | Trigger orchestration, execution history persistence, imported recipe trust, loop prevention and dynamic Home policies. Do not prebuild a rule engine or generic event bus. |
+| **11: Storage analysis and reconciliation** | Keep evidence tied to source identity/revision and coverage; distinguish exact content verification from similarity and incomplete observations from absence. Reuse bounded scans and pairwise comparison tools. Keep proposed changes inspectable before submission through the established operation mechanism; do not tie comparison results directly to mutations. | Duplicate indexing strategy, hard-link and allocated-size accounting, merge planning and cleanup policy. |
+| **12: Remote performance and scheduling** | Separate operation correctness/completion from queue admission and scheduling. Keep bounded read cancellation distinct from accepted writes, preserve typed unavailable/partial outcomes, and avoid assuming that an ordinary mounted path is fast or local. Keep storage/mount observations usable without embedding SSH addresses or guessed host identity into path strings. Retain existing pinned local-file safety contracts. | Verified remote mappings, resource contention scheduling, execution backend selection, SSH terminals and jobs surviving disconnection. No universal filesystem trait or remote executor merely for future use. |
+| **13: Filesystem editing and Git** | Keep proposed rename/move/create/delete actions, validation and application independent of the UI that creates them, reusing the same operation boundary needed by phases 9–11. Preserve external-change checks and per-item outcomes. Keep Git observations asynchronous and separate from directory facts and visibility policy; an ignored item is not an absent item. | Textual filesystem syntax, Git status UI and any separately approved Git mutations. Do not promise cross-filesystem transactional rollback. |
+
+### Cross-phase acceptance criteria
+
+- **Location and presentation:** inspect the existing location/history, search scope and entry models before changing them. Preserve lossless paths, source-root guards and navigation provenance. During extraction, document remaining single-folder assumptions and keep them in the current browser composition layer rather than moving them into shared domain APIs. Do not weaken system-interface navigation guards to accommodate future virtual results.
+- **One operation path:** trace representative naming, transfer, editor save/export and pipeline paths. Share established validation/execution contracts where they actually fit; document necessary differences rather than forcing all operations into one oversized command enum. Future batch, rule, merge and textual planners should be able to submit through these owners without bypassing safety or rewriting mutation execution. A preview plan is never an authorization token or a substitute for execution-time checks.
+- **Facts, annotations and policy:** prepared content and metadata remain observations with freshness/coverage; presentation preferences and temporary marks remain separate state. Rendering must not write persistence or trigger rules. Keep future persistence/schema choices open until rename/move and portability behavior is specified.
+- **Scheduling:** preserve explicit job/session ownership and priorities. Make scheduler decisions separable from worker semantics so future storage-aware admission can reuse correctness, cancellation and completion handling. Do not introduce persistent queues or new resource keys without a current consumer.
+- **Dependency ownership:** browser navigation, future Home/organization and rule-trigger UI belong with the file manager; reusable studios remain neutral; transformations remain in ops; search owns retrieval rather than all browser metadata. These directions are more important than one crate per roadmap phase.
+- **Review gate:** each relevant extraction records which later phases it enables, which current assumptions remain, and why those assumptions can be changed locally. Verify with existing concrete consumers and focused contract tests; do not create unused adapters or implement speculative future features just to check this list.
+
 ## Execution sequence proposed for approval
 
 ### 0. Establish targeted evidence and contracts
 
 - Record current dependency/caller maps and representative workflow baselines. Use Cargo metadata/tree/timings and existing architecture tools; do not delete build caches to benchmark without an explicit need.
-- Inventory worker entrypoints, IPC call sites, preview/cache ownership and feature configurations. Mark facts versus suspected issues in the review findings.
-- Select one concrete slice for each milestone and specify its user-visible behavior, rollback boundary, tests and expected benefit.
+- Inventory worker entrypoints, IPC call sites, preview/cache ownership and feature configurations. Mark facts versus suspected issues in the review findings. Map session, input, audition and accepted-write ownership using the preparation criteria above; establish the representative workflow baseline.
+- Select one concrete slice for each milestone and specify its user-visible behavior, rollback boundary, tests and expected benefit. Map the affected owners to the later-phase compatibility checklist above, including any single-folder, persistence or scheduling assumptions that must remain local.
 
 **Exit:** an evidence-backed worklist, with no implicit authorization to expand into unrelated features.
 
@@ -136,6 +178,7 @@ These have clearer user value than a large crate move and can land independently
 
 - Pilot the classification/capability policy with one existing family, including ambiguous-name and protected-source tests. Preserve all existing dispatch routes while migrating consumers incrementally.
 - Use audio as the first reuse candidate: inspect core waveform summaries, crossover colors, downsampling and snapping, then consolidate only genuinely repeated behavior across two consumers.
+- Make prepared-content boundaries usable by both the existing raster mirror and a future native view, preserving guarded source and readiness states. Keep current rendering operational during extraction.
 - Separate pure calculations, background work, interaction state and painting where that makes the code testable. Keep explicit event/ownership contracts rather than creating an all-purpose `GeometryBuilder` or controller framework.
 - Extend the same method to PDF or video only after the first slice demonstrates a benefit. Preserve the specialized photo grid layout and Timelens renderer/helper boundaries.
 
@@ -144,13 +187,24 @@ These have clearer user value than a large crate move and can land independently
 ### 3. Extract application boundaries in small, buildable steps
 
 - Extract a small shared UI boundary and the minimum studio/session interfaces needed to remove application-to-application ownership. Measure what dependencies remain through core.
+- Preserve explicit session ownership of undo, unsaved edits, playback and accepted jobs independently of host navigation. Verify focus transfer and teardown against the input/audition contract; do not add multi-document UI as part of extraction.
 - Move shared desktop/studio implementation to a neutral owner while retaining temporary forwarding exports where needed. Keep browser-specific system, mounts, transfers, search UI and Shelf navigation with the browser.
 - Remove `clip-file-manager → clip-workbench` only when both applications can consume the neutral implementation without a dependency cycle. Do not copy modules to make the build pass.
 - Move dependencies with code. ONNX remains available to image tools; SigLIP/tokenizers remain available to photo similarity; SQLite remains available to both search and its document inspector.
 - Audit internal worker launchers and `/proc/self/exe` assumptions at each step. Preserve dispatch in both hosts where necessary; use separate helper binaries only with explicit discovery, packaging and lifetime contracts.
-- Update launch/build/acceptance commands, documentation, helper packaging and alternate-working-directory behavior together.
+- Update launch/build/acceptance commands, documentation, helper packaging and alternate-working-directory behavior together. When the neutral library extraction lands, update the file-manager roadmap’s current `clip-workbench` sharing references to the delivered ownership without changing its product scope.
 
 **Exit:** both binaries keep all current studios and workflows; each source is compiled once per configuration; Cargo has the intended acyclic ownership graph; measured rebuild cost or dependency isolation improves.
+
+### 3a. Validate the shared boundary with a native mirror prototype
+
+Schedule this immediately after the relevant shared UI and prepared-content extraction, before unrelated search or domain restructuring. Preparing and prototyping during the refactor avoids cementing a raster-only interface. Keep ownership moves and rendering changes in separate, buildable commits so regressions remain attributable.
+
+- Build a native egui slot view against the prepared-content boundary, using existing input routing and shared presentation semantics. Use the prototype to validate the boundary with a second real consumer; avoid speculative interfaces.
+- Compare appearance, text clarity, interaction, frame time, memory, input latency and slot hit testing against the current raster mirror at relevant scales. Include pending/error states and representative content types.
+- Keep the current mirror working and retain the hardware renderer plus an exact display-reference view. Native rendering does not remove asynchronous preparation or guarantee a particular frame rate.
+
+**Exit:** reviewable prototype and measured findings. Adopting it as the on-screen replacement requires separate user approval; the prototype must not block independently useful structural changes. The mirror and rolling capture remain specific to Quick Palette.
 
 ### 4. Extract search and simplify selected domain hotspots
 
@@ -170,8 +224,7 @@ This follows interface preparation; it is not a second simultaneous workspace re
 
 These are separately reviewable designs, not prerequisites for the structural work.
 
-- Prototype a native egui slot view using prepared content, shared layout semantics and existing input routing. Compare sharpness, frame time, memory, input latency and slot hit testing with the existing raster mirror at relevant scales.
-- Retain an exact hardware-render reference during evaluation. Native rendering does not eliminate asynchronous content preparation or guarantee subpixel rendering/compositor-rate updates.
+- If the phase 3a prototype is approved, adopt the native on-screen mirror in a separate change while retaining the hardware renderer and exact display-reference view. Otherwise retain the current mirror and record the findings.
 - Assess icon-grid/Shelf/search-tile reuse against the actual layouts. Reuse common pieces without forcing the photo mosaic, Shelf and similarity grid into identical cards.
 - Add missing useful summaries or interactions by an approved capability priority list. Do not make complete four-tier coverage a prerequisite for shipping safe refactors.
 
@@ -200,6 +253,13 @@ For each approved slice:
 - Keep commits buildable and reversible. Do not combine schema changes, visual redesign and crate relocation in one commit.
 - If investigation reveals a new architectural mechanism, major scope increase, lost capability or changed product behavior, update this proposal and seek approval before proceeding with that extension. Routine implementation choices within an approved slice do not require repeated permission.
 
-## Approval requested
+## Execution status
 
-Approve the revised direction and initial sequence, particularly phases 0–1, before implementation. The later phases provide bounded direction and decision gates; their speculative interfaces and visual changes are not pre-approved by this document. No work from this new roadmap has been started as part of the rebase.
+The user authorized completing this plan after the review and future-roadmap additions. Execute the phases incrementally, retaining the specific design and adoption gates above. The initial architecture baseline is `deep-refactor-start`; the working tree began at `4fabcc3`, with 164 GiB available. Phase 1 begins with asynchronous mount discovery and bounded subprocess execution. Later phases remain outstanding.
+
+
+### Implementation ledger
+
+- **Initial dependency evidence:** Cargo metadata confirms `clip-file-manager → clip-workbench`, with workbench depending on core, ops, render and scene; render depends on core/scene; ops and scene depend on core. The native NKI helper remains independent. Snapshot: `/tmp/deep-refactor-metadata.json`. Neutral studio ownership and search extraction are still outstanding.
+- **Phase 1, mount discovery:** construction now performs no scan; the first tick submits to the existing bounded executor. Explicit refresh replaces the previous observation receiver and cancels its ticket. `lsblk` uses core's command runner with a five-second timeout, a 2 MiB output limit and owned process-group cleanup; truncated JSON is rejected. Existing mounted-entry fallback remains available. Seven mount tests pass, including deferred startup with an occupied worker and retired-result rejection (`/tmp/deep-mount-tests.log`). Architecture comparison against `deep-refactor-start` keeps clone groups and dependency cycles unchanged; added checks/test contribute three CCN points. Full integration and private UI verification remain due.
+- **Next phase 1 slice:** USB ownership must cover the synchronous startup `TrofeoDriver::open` as well as worker open/send callbacks. Existing retry/keepalive tests provide the baseline. UI IPC and clipboard-route audit remain outstanding.

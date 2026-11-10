@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use little_clip_core::process::CommandRequest;
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 
 use crate::icons::Icon;
@@ -79,7 +80,7 @@ struct PendingJob {
 pub(crate) struct Mounts {
     pub entries: Vec<MountEntry>,
     pending: Option<PendingJob>,
-    last_scan: Instant,
+    last_scan: Option<Instant>,
     scan_ticket: Option<JobTicket>,
     scan_receiver: Option<mpsc::Receiver<Result<Vec<MountEntry>, JobError>>>,
     pub status: Option<String>,
@@ -93,12 +94,10 @@ impl Default for Mounts {
 
 impl Mounts {
     pub fn new() -> Self {
-        // Fast synchronous initial parse so the sidebar has immediate content without flashing.
-        let initial_entries = scan_mounts_sync();
         Self {
-            entries: initial_entries,
+            entries: Vec::new(),
             pending: None,
-            last_scan: Instant::now(),
+            last_scan: None,
             scan_ticket: None,
             scan_receiver: None,
             status: None,
@@ -116,13 +115,15 @@ impl Mounts {
 
     /// Triggers an asynchronous scan of mounts and unmounted devices.
     pub fn request_scan(&mut self, jobs: &BackgroundJobs) {
-        if self.scan_receiver.is_some() {
-            return;
+        // Explicit refreshes retire the previous observation, including results
+        // already queued before a mount/unmount completed.
+        if let Some(ticket) = self.scan_ticket.take() {
+            ticket.cancel();
         }
         let (ticket, receiver) = jobs.submit(Duration::from_secs(10), scan_mounts_sync);
         self.scan_ticket = Some(ticket);
         self.scan_receiver = Some(receiver);
-        self.last_scan = Instant::now();
+        self.last_scan = Some(Instant::now());
     }
 
     /// Requests mounting an unmounted block device.
@@ -189,7 +190,11 @@ impl Mounts {
         }
 
         // Periodic background scan every 3 seconds if idle
-        if self.scan_receiver.is_none() && self.last_scan.elapsed() >= Duration::from_secs(3) {
+        if self.scan_receiver.is_none()
+            && self
+                .last_scan
+                .is_none_or(|scan| scan.elapsed() >= Duration::from_secs(3))
+        {
             self.request_scan(jobs);
         }
 
@@ -243,17 +248,20 @@ pub(crate) fn unescape_octal(raw: &str) -> String {
 /// Scans mounts from `/proc/mounts` and block devices from `lsblk`.
 pub(crate) fn scan_mounts_sync() -> Vec<MountEntry> {
     let proc_mounts = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
-    let lsblk_json = std::process::Command::new("lsblk")
+    let lsblk_json = CommandRequest::new("lsblk")
         .args([
             "--list",
             "--json",
             "-o",
             "NAME,PATH,LABEL,PARTLABEL,FSTYPE,MOUNTPOINT,SIZE,RM,HOTPLUG,MODEL,TYPE",
         ])
-        .output()
+        .timeout(Duration::from_secs(5))
+        .max_output_bytes(2 * 1024 * 1024)
+        .own_process_group()
+        .run()
         .ok()
         .and_then(|output| {
-            if output.status.success() {
+            if output.status.success() && !output.stdout_truncated {
                 String::from_utf8(output.stdout).ok()
             } else {
                 None
@@ -773,6 +781,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn initial_scan_is_deferred_and_refresh_retires_stale_results() {
+        let mut mounts = Mounts::new();
+        assert!(mounts.entries.is_empty());
+        assert!(mounts.last_scan.is_none());
+        assert!(mounts.scan_receiver.is_none());
+
+        // Occupy the worker so ticking and refreshing must return while discovery waits.
+        let jobs = BackgroundJobs::new(1, 4);
+        let (release, wait) = mpsc::channel();
+        let (_ticket, _completion) = jobs.submit(Duration::from_secs(10), move || {
+            let _ = wait.recv();
+        });
+        assert!(mounts.tick(&jobs).is_none());
+        let first_revision = mounts.scan_ticket.as_ref().unwrap().revision();
+        assert!(mounts.scan_receiver.is_some());
+        mounts.request_scan(&jobs);
+        assert_ne!(
+            mounts.scan_ticket.as_ref().unwrap().revision(),
+            first_revision
+        );
+        // A retired sender cannot publish into the replacement receiver.
+        let (stale_sender, stale_receiver) = mpsc::channel();
+        mounts.scan_receiver = Some(stale_receiver);
+        mounts.request_scan(&jobs);
+        assert!(stale_sender.send(Ok(Vec::new())).is_err());
+        mounts.scan_ticket.as_ref().unwrap().cancel();
+        release.send(()).unwrap();
+    }
+
+    #[test]
     fn test_unescape_octal() {
         assert_eq!(unescape_octal(r"/mnt/my\040folder"), "/mnt/my folder");
         assert_eq!(unescape_octal(r"/mnt/normal"), "/mnt/normal");
@@ -985,7 +1023,7 @@ fuse-binwalk /run/user/1001/fuse-binwalk/app-abc1234 fuse.fuse-binwalk rw,nosuid
         let mounts = Mounts {
             entries: Vec::new(),
             pending: None,
-            last_scan: Instant::now(),
+            last_scan: None,
             scan_ticket: None,
             scan_receiver: None,
             status: Some("Test status".into()),
