@@ -175,6 +175,13 @@ pub fn is_fuse_binwalk_mounted(mount_point: &Path) -> bool {
 
 /// Unmounts an active FUSE mount at `mount_point` using `fusermount3` / `fusermount`.
 pub fn unmount_fuse_binwalk(mount_point: &Path) -> Result<(), String> {
+    unmount_fuse(mount_point)?;
+    let _ = std::fs::remove_dir(mount_point);
+    Ok(())
+}
+
+/// Unmounts a FUSE filesystem without removing a caller-owned mount directory.
+pub(super) fn unmount_fuse(mount_point: &Path) -> Result<(), String> {
     let status = std::process::Command::new("fusermount3")
         .args(["-u", "-z"])
         .arg(mount_point)
@@ -188,7 +195,6 @@ pub fn unmount_fuse_binwalk(mount_point: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to run fusermount: {e}"))?;
 
     if status.success() {
-        let _ = std::fs::remove_dir(mount_point);
         Ok(())
     } else {
         Err(format!(

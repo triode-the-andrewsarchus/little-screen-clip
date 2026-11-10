@@ -155,12 +155,13 @@ impl Mounts {
             return;
         };
         let device_path = entry.device_path.clone();
+        let filesystem = entry.filesystem.clone();
         let kind = entry.kind;
         let label = entry.label.clone();
         self.status = Some(format!("Unmounting '{label}'…"));
         let mp = mount_point.clone();
         let (ticket, receiver) = jobs.submit(Duration::from_secs(30), move || {
-            unmount_target(&mp, device_path.as_deref(), kind).map(|()| mp)
+            unmount_target(&mp, device_path.as_deref(), filesystem.as_deref(), kind).map(|()| mp)
         });
         self.pending = Some(PendingJob {
             action: PendingAction::Unmount,
@@ -725,6 +726,7 @@ pub(crate) fn extract_mount_point_from_udisksctl_output(stdout: &str) -> Option<
 pub(crate) fn unmount_target(
     mount_point: &Path,
     device_path: Option<&Path>,
+    filesystem: Option<&str>,
     kind: MountKind,
 ) -> Result<(), String> {
     // If it's a fuse-binwalk mount, use fusermount3/fusermount
@@ -747,8 +749,10 @@ pub(crate) fn unmount_target(
         return Ok(());
     }
 
-    // Fallback: fusermount3 / fusermount
-    if super::fuse_binwalk::unmount_fuse_binwalk(mount_point).is_ok() {
+    if filesystem.is_some_and(|filesystem| {
+        filesystem == "fuse" || filesystem == "fuseblk" || filesystem.starts_with("fuse.")
+    }) && super::fuse_binwalk::unmount_fuse(mount_point).is_ok()
+    {
         return Ok(());
     }
 
@@ -797,6 +801,73 @@ mod tests {
         assert!(stale_sender.send(Ok(Vec::new())).is_err());
         mounts.scan_ticket.as_ref().unwrap().cancel();
         release.send(()).unwrap();
+    }
+
+    #[test]
+    fn ordinary_unmount_never_uses_fuse_cleanup() {
+        const FIXTURE_ENV: &str = "LITTLE_CLIP_UNMOUNT_TEST_DIRECTORY";
+        let Some(directory) = std::env::var_os(FIXTURE_ENV).map(PathBuf::from) else {
+            use std::os::unix::fs::PermissionsExt;
+            let directory = tempfile::tempdir().unwrap();
+            for (program, body) in [
+                ("udisksctl", "exit 1"),
+                ("umount", "printf 'umount\\n' >> \"$UNMOUNT_TEST_LOG\""),
+                ("fusermount3", "printf 'fuse\\n' >> \"$UNMOUNT_TEST_LOG\""),
+                ("fusermount", "printf 'fuse\\n' >> \"$UNMOUNT_TEST_LOG\""),
+            ] {
+                let path = directory.path().join(program);
+                std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "file_manager::mounts::tests::ordinary_unmount_never_uses_fuse_cleanup",
+                    "--nocapture",
+                ])
+                .env(FIXTURE_ENV, directory.path())
+                .env("UNMOUNT_TEST_LOG", directory.path().join("commands"))
+                .env("PATH", directory.path())
+                .env_remove("DBUS_SESSION_BUS_ADDRESS")
+                .env_remove("DBUS_SYSTEM_BUS_ADDRESS")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated unmount test failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let log = directory.join("commands");
+        for kind in [MountKind::Drive, MountKind::Removable, MountKind::DiscImage] {
+            let mount = directory.join("mount");
+            std::fs::create_dir(&mount).unwrap();
+            std::fs::write(&log, "").unwrap();
+            unmount_target(
+                &mount,
+                Some(Path::new("/dev/fake-test-device")),
+                Some("ext4"),
+                kind,
+            )
+            .unwrap();
+            assert!(
+                mount.is_dir(),
+                "ordinary unmount removed its mount directory"
+            );
+            assert_eq!(std::fs::read_to_string(&log).unwrap(), "umount\n");
+            std::fs::remove_dir(&mount).unwrap();
+        }
+        let mount = directory.join("fuse-mount");
+        std::fs::create_dir(&mount).unwrap();
+        std::fs::write(&log, "").unwrap();
+        unmount_target(&mount, None, Some("fuse.sshfs"), MountKind::Drive).unwrap();
+        assert!(
+            mount.is_dir(),
+            "generic FUSE unmount must preserve its mount directory"
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "fuse\n");
     }
 
     #[test]
