@@ -1978,21 +1978,10 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
             },
         ];
         for request in requests {
-            writer
-                .write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes())
-                .await
-                .unwrap();
-            let response = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
+            let response = test_ipc_request(&mut writer, &mut lines, request).await;
             assert!(
-                matches!(
-                    serde_json::from_str::<IpcResponse>(&response).unwrap(),
-                    IpcResponse::Success { .. }
-                ),
-                "{response}"
+                matches!(response, IpcResponse::Success { .. }),
+                "{response:?}"
             );
             assert_eq!(
                 ctx.manager.read().await.left_hand().unwrap().id,
@@ -2011,19 +2000,11 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
             text: "new left".into(),
             hand: HandSide::Left,
         };
-        writer
-            .write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes())
-            .await
-            .unwrap();
-        let response = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert!(matches!(
-            serde_json::from_str::<IpcResponse>(&response).unwrap(),
-            IpcResponse::Success { .. }
-        ));
+        let response = test_ipc_request(&mut writer, &mut lines, request).await;
+        assert!(
+            matches!(response, IpcResponse::Success { .. }),
+            "{response:?}"
+        );
         assert_eq!(std::fs::read(directory.join("bytes")).unwrap(), b"new left");
         assert_eq!(
             std::fs::read_to_string(directory.join("mime")).unwrap(),
@@ -2106,14 +2087,10 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
         let (client, server) = UnixStream::pair().unwrap();
         let handler = tokio::spawn(handle_client(server, Arc::clone(&ctx)));
         let (reader, mut writer) = client.into_split();
-        let mut reader = BufReader::new(reader);
-        let mut encoded = serde_json::to_vec(&request).unwrap();
-        encoded.push(b'\n');
-        writer.write_all(&encoded).await.unwrap();
-        let mut response = String::new();
-        reader.read_line(&mut response).await.unwrap();
+        let mut lines = BufReader::new(reader).lines();
+        let response = test_ipc_request(&mut writer, &mut lines, request).await;
         let completed = destination.join("first.bin");
-        match serde_json::from_str::<IpcResponse>(&response).unwrap() {
+        match response {
             IpcResponse::Error { error } => {
                 assert!(error.contains(completed.to_str().unwrap()), "{error}");
                 assert!(error.contains(missing.to_str().unwrap()), "{error}");
@@ -2123,7 +2100,7 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
         assert_eq!(std::fs::read(completed).unwrap(), b"completed bytes");
         assert_eq!(ctx.manager.read().await.left_hand().unwrap().id, id);
         drop(writer);
-        drop(reader);
+        drop(lines);
         handler.await.unwrap();
     }
 
