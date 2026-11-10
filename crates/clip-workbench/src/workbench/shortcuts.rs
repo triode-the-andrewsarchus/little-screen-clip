@@ -33,7 +33,12 @@ impl WorkbenchApp {
                 }
             }
             WorkbenchEscapeRoute::CloseWorkbench => {
-                if self.daemon_mutation.is_none() {
+                if self.daemon_mutation.is_none()
+                    && !self
+                        .rolling_audio_strip
+                        .as_ref()
+                        .is_some_and(|strip| strip.copy_pending())
+                {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }

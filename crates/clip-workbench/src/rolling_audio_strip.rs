@@ -47,6 +47,7 @@ pub struct RollingAudioStripState {
     pub error_msg: Option<String>,
     snapshot_job: Option<(JobTicket, SnapshotReceiver)>,
     snapshot_feedback: bool,
+    copy_job: Option<crate::desktop_ipc::PendingRequest>,
 
     // Region selection & dragging
     pub selected_region: Option<(f32, f32)>, // (start_sec, end_sec)
@@ -148,6 +149,7 @@ impl RollingAudioStripState {
             error_msg: None,
             snapshot_job: None,
             snapshot_feedback: false,
+            copy_job: None,
             selected_region: None,
             drag_start_time: None,
             is_dragging: false,
@@ -179,6 +181,7 @@ impl RollingAudioStripState {
             error_msg: None,
             snapshot_job: None,
             snapshot_feedback: false,
+            copy_job: None,
             selected_region: None,
             drag_start_time: None,
             is_dragging: false,
@@ -440,69 +443,74 @@ impl RollingAudioStripState {
     }
 
     pub fn copy_selection(&mut self, now: f64) -> bool {
-        let slice_dir = if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
-            PathBuf::from(rt)
-                .join("little-screen-clip")
-                .join("rolling_slices")
-        } else {
-            PathBuf::from("/tmp/little-screen-clip/rolling_slices")
-        };
-        self.copy_selection_to(now, &slice_dir, |request| {
-            crate::send_ipc_request(request).is_ok()
+        self.copy_selection_on(now, crate::desktop_ipc::mutation_jobs(), |request| {
+            crate::send_ipc_request(&request).map_err(|error| error.to_string())
         })
     }
 
-    fn copy_selection_to(
+    fn copy_selection_on(
         &mut self,
         now: f64,
-        slice_dir: &Path,
-        mut push: impl FnMut(&IpcRequest) -> bool,
+        jobs: &BackgroundJobs,
+        send: impl FnOnce(IpcRequest) -> Result<IpcResponse, String> + Send + 'static,
     ) -> bool {
-        let (s, e) = match self.selected_region {
-            Some((a, b)) if (b - a).abs() > 0.05 => (a.min(b), a.max(b)),
-            _ => return false,
-        };
-        let source_path = match &self.path {
-            Some(path) => path.clone(),
-            None => return false,
-        };
-        if let Err(err) = std::fs::create_dir_all(&slice_dir) {
-            tracing::warn!(
-                "Failed to create rolling slice directory {}: {err}",
-                slice_dir.display()
-            );
-            self.status_toast = Some((format!("Failed to create slice directory: {err}"), now));
+        if self.copy_pending() {
             return false;
         }
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let slice_path = slice_dir.join(format!("rolling_slice_{}.wav", timestamp));
+        let (start, end) = match self.selected_region {
+            Some((a, b))
+                if a.is_finite() && b.is_finite() && a.min(b) >= 0.0 && (b - a).abs() > 0.05 =>
+            {
+                (a.min(b), a.max(b))
+            }
+            _ => return false,
+        };
+        let Some(path) = self.path.clone() else {
+            return false;
+        };
+        self.copy_job = Some(crate::desktop_ipc::PendingRequest::start(jobs, move || {
+            let plan = crate::audio_preview::audio_slice_copy_plan(
+                &path,
+                start,
+                end,
+                crate::audio_preview::ChannelCopyMode::Native,
+                None,
+            );
+            let path =
+                crate::audio_preview::extract_audio_slice_file(&plan, &AtomicBool::new(false))?;
+            send(IpcRequest::PushFile {
+                path,
+                hand: HandSide::Left,
+            })
+        }));
+        self.status_toast = Some(("Preparing audio slice…".into(), now));
+        true
+    }
 
-        match little_clip_core::rolling_audio::slice_wav(&source_path, s, e, &slice_path) {
-            Ok(_) => {
-                let req = IpcRequest::PushFile {
-                    path: slice_path,
-                    hand: HandSide::Left,
-                };
-                if push(&req) {
-                    self.status_toast = Some((
-                        format!("Copied {:.1}s audio slice to Left Hand & clipboard!", e - s),
-                        now,
-                    ));
-                    true
-                } else {
-                    self.status_toast =
-                        Some(("Failed to push slice to Left Hand".to_string(), now));
-                    false
-                }
-            }
-            Err(err) => {
-                self.status_toast = Some((format!("Failed to slice audio: {}", err), now));
-                false
-            }
-        }
+    pub(crate) fn copy_pending(&self) -> bool {
+        self.copy_job.is_some()
+    }
+
+    pub(crate) fn poll_copy(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.copy_job else {
+            return;
+        };
+        let Some(result) = job.try_result() else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after(Duration::from_millis(50));
+            return;
+        };
+        self.copy_job = None;
+        self.status_toast = result
+            .and_then(crate::desktop_ipc::action_result)
+            .err()
+            .map(|error| {
+                (
+                    format!("Failed to copy audio slice: {error}"),
+                    ctx.input(|i| i.time),
+                )
+            });
+        ctx.request_repaint();
     }
 
     pub fn query_peaks(&self, frame_start: usize, frame_end: usize) -> (f32, f32, [u8; 3]) {
@@ -932,18 +940,20 @@ impl Drop for RollingAudioStripState {
 }
 
 fn fetch_snapshot() -> Result<RollingSnapshot, String> {
-    let (path, duration_sec, sample_rate, channels) =
-        match crate::send_ipc_request(&IpcRequest::GetRollingAudio) {
-            Ok(IpcResponse::RollingAudio {
-                path,
-                duration_secs,
-                sample_rate,
-                channels,
-            }) => (path, duration_secs, sample_rate, channels),
-            Ok(IpcResponse::Error { error }) => return Err(error),
-            Ok(_) => return Err("Unexpected response from daemon".to_string()),
-            Err(error) => return Err(format!("IPC connection error: {error}")),
-        };
+    let (path, duration_sec, sample_rate, channels) = match crate::send_ipc_request_with_timeout(
+        &IpcRequest::GetRollingAudio,
+        Some(Duration::from_secs(5)),
+    ) {
+        Ok(IpcResponse::RollingAudio {
+            path,
+            duration_secs,
+            sample_rate,
+            channels,
+        }) => (path, duration_secs, sample_rate, channels),
+        Ok(IpcResponse::Error { error }) => return Err(error),
+        Ok(_) => return Err("Unexpected response from daemon".to_string()),
+        Err(error) => return Err(format!("IPC connection error: {error}")),
+    };
     info!(
         "Rolling audio snapshot received: {:?} ({:.2}s, {}Hz, ch={})",
         path, duration_sec, sample_rate, channels
@@ -1560,71 +1570,67 @@ mod tests {
     }
 
     #[test]
-    fn copy_selection_slices_selected_wav_and_requests_left_hand_delivery() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("source.wav");
-        let output_dir = directory.path().join("rolling-slices");
-        let interleaved = [
-            10, 100, 20, 200, 30, 300, 40, 400, 50, 500, 60, 600, 70, 700, 80, 800,
-        ];
-        let mut buffer = RollingAudioBuffer::new(2, 4, 2);
-        buffer.push_samples(&interleaved);
-        assert_eq!(buffer.write_wav(&source).unwrap(), 2.0);
-
+    fn copy_selection_retains_completion_after_stop_and_rejects_repeated_submission() {
+        let jobs = BackgroundJobs::new(1, 2);
+        let (release, wait) = std::sync::mpsc::channel();
         let mut strip = empty_test_strip();
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("snapshot.wav");
+        let samples: Vec<i16> = (0..16000).flat_map(|n| [n as i16, -(n as i16)]).collect();
+        let mut buffer = RollingAudioBuffer::new(2, 8000, 2);
+        buffer.push_samples(&samples);
+        buffer.write_wav(&source).unwrap();
         strip.path = Some(source);
-        strip.duration_sec = 2.0;
-        strip.sample_rate = 4;
-        strip.channels = 2;
-        strip.selected_region = Some((0.5, 1.5));
-        let mut captured = None;
-        assert!(strip.copy_selection_to(7.0, &output_dir, |request| {
-            match request {
-                IpcRequest::PushFile { path, hand } => {
-                    captured = Some((path.clone(), *hand));
-                    true
-                }
-                _ => false,
-            }
+        let (captured, artifact_rx) = std::sync::mpsc::channel();
+        strip.selected_region = Some((1.5, 0.5));
+        assert!(strip.copy_selection_on(7.0, &jobs, move |request| {
+            let IpcRequest::PushFile { path, hand } = request else {
+                panic!("unexpected handoff");
+            };
+            assert_eq!(hand, HandSide::Left);
+            let mut reader = hound::WavReader::open(&path).unwrap();
+            assert_eq!(reader.spec().channels, 2);
+            assert_eq!(reader.spec().sample_rate, 8000);
+            let actual: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
+            assert_eq!(actual, samples[8000..24000]);
+            captured.send(path).unwrap();
+            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok(IpcResponse::Error {
+                error: "controlled handoff failure".into(),
+            })
         }));
-
-        let (output_path, hand) = captured.expect("PushFile request captured");
-        assert_eq!(hand, HandSide::Left);
-        assert_eq!(output_path.parent(), Some(output_dir.as_path()));
+        assert!(!strip.copy_selection_on(8.0, &jobs, |_| panic!("duplicate copy")));
+        strip.stop();
+        strip.selected_region = None;
+        assert!(strip.copy_pending());
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| strip.poll_copy(ctx));
+        assert!(output.viewport_output.values().any(|v| {
+            v.commands
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::CancelClose))
+        }));
+        let artifact = artifact_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while strip.copy_pending() {
+            strip.poll_copy(&ctx);
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
         assert!(
-            output_path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("rolling_slice_")
-        );
-        assert_eq!(
-            output_path.extension().and_then(|ext| ext.to_str()),
-            Some("wav")
-        );
-
-        let output = std::fs::read(output_path).unwrap();
-        assert_eq!(&output[0..4], b"RIFF");
-        assert_eq!(&output[8..12], b"WAVE");
-        assert_eq!(u16::from_le_bytes([output[22], output[23]]), 2);
-        assert_eq!(u32::from_le_bytes(output[24..28].try_into().unwrap()), 4);
-        assert_eq!(u16::from_le_bytes([output[34], output[35]]), 16);
-        let data_size = u32::from_le_bytes(output[40..44].try_into().unwrap());
-        assert_eq!(data_size, 16);
-        let duration_sec = data_size as f32 / (4.0 * 2.0 * 2.0);
-        assert_eq!(duration_sec, 1.0);
-        let sliced_samples = output[44..]
-            .chunks_exact(2)
-            .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
-            .collect::<Vec<_>>();
-        assert_eq!(sliced_samples, interleaved[4..12]);
-        assert_eq!(
             strip
                 .status_toast
                 .as_ref()
-                .map(|(message, _)| message.as_str()),
-            Some("Copied 1.0s audio slice to Left Hand & clipboard!")
+                .unwrap()
+                .0
+                .contains("controlled handoff failure")
         );
+        assert!(
+            artifact.is_file(),
+            "published artifact survives handoff failure"
+        );
+        std::fs::remove_dir_all(artifact.parent().unwrap()).unwrap();
     }
 
     #[test]

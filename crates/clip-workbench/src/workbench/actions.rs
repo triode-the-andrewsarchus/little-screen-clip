@@ -286,7 +286,12 @@ impl WorkbenchApp {
     ) -> bool {
         match response.and_then(super::daemon_actions::action_result) {
             Ok(()) => {
-                if close_on_success {
+                if close_on_success
+                    && !self
+                        .rolling_audio_strip
+                        .as_ref()
+                        .is_some_and(|strip| strip.copy_pending())
+                {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 true

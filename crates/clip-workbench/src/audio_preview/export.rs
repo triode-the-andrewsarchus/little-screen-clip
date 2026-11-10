@@ -899,7 +899,7 @@ pub fn run_audio_command_cancellable(
     }
 }
 
-pub(super) fn extract_audio_slice_file(
+pub(crate) fn extract_audio_slice_file(
     plan: &AudioSliceCopyPlan,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
@@ -1091,7 +1091,7 @@ pub(super) fn audio_slice_copy_description(mode: ChannelCopyMode) -> &'static st
     }
 }
 
-pub(super) fn audio_slice_copy_plan(
+pub(crate) fn audio_slice_copy_plan(
     source: &Path,
     start: f32,
     end: f32,

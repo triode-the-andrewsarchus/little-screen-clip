@@ -8,6 +8,9 @@ impl eframe::App for WorkbenchApp {
             self.appearance_applied = true;
         }
 
+        if let Some(strip) = &mut self.rolling_audio_strip {
+            strip.poll_copy(ctx);
+        }
         self.poll_daemon_mutation(ctx);
         if self.daemon_mutation.is_some() {
             egui::TopBottomPanel::bottom("daemon_mutation_progress").show(ctx, |ui| {

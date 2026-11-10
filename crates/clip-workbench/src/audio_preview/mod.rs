@@ -80,6 +80,7 @@ mod selection;
 mod session_edit;
 mod studio;
 
+pub(crate) use export::{audio_slice_copy_plan, extract_audio_slice_file};
 pub use export::{copy_file_audio_segment, run_audio_command_cancellable};
 pub(crate) use tools::spectrogram_view::{format_time_label, time_ruler_interval};
 
@@ -814,7 +815,7 @@ impl Drop for AudioSliceCopyJob {
     }
 }
 
-struct AudioSliceCopyPlan {
+pub(crate) struct AudioSliceCopyPlan {
     read_check: crate::file_source::ReadCheck,
     source: PathBuf,
     output: PathBuf,
