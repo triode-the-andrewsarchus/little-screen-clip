@@ -94,6 +94,7 @@ impl WorkbenchApp {
             state,
             state_rx,
             state_loaded: false,
+            daemon_mutation: None,
             startup_comparison: (!open_component_gallery
                 && (start_with_diff || start_with_binary_diff))
                 .then_some(start_with_binary_diff),

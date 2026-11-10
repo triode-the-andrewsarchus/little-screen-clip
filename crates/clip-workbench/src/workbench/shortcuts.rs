@@ -33,7 +33,9 @@ impl WorkbenchApp {
                 }
             }
             WorkbenchEscapeRoute::CloseWorkbench => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                if self.daemon_mutation.is_none() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             }
         }
         true
@@ -80,9 +82,7 @@ impl WorkbenchApp {
             if strip.selected_region.is_some() {
                 let now = ctx.input(|i| i.time);
                 if strip.copy_selection(now) {
-                    if let Ok(IpcResponse::State(s)) = send_ipc_request(&IpcRequest::GetState) {
-                        self.state = Arc::new(s);
-                    }
+                    // The existing background state poller observes the copied item.
                     self.dirty_mirror = true;
                 }
             }
@@ -209,10 +209,7 @@ impl WorkbenchApp {
     pub(crate) fn swap_selected_slots(&mut self) {
         let a = self.selected_slots[0];
         let b = self.selected_slots[1];
-        let _ = send_ipc_request(&IpcRequest::SwapSlots(a, b));
-        Arc::make_mut(&mut self.state).swap_slots(a, b);
-        self.dirty_mirror = true;
-        self.status_msg = Some(format!("Swapped {} and {}", a.label(), b.label()));
+        self.submit_daemon_mutation(IpcRequest::SwapSlots(a, b), DaemonMutationKind::Swap);
     }
 
     pub(crate) fn handle_search_prefix_shortcuts(&mut self, audio_region_active: bool) {

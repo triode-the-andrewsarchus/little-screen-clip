@@ -8,6 +8,15 @@ impl eframe::App for WorkbenchApp {
             self.appearance_applied = true;
         }
 
+        self.poll_daemon_mutation(ctx);
+        if self.daemon_mutation.is_some() {
+            egui::TopBottomPanel::bottom("daemon_mutation_progress").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Waiting for daemon operation to finish…");
+                });
+            });
+        }
         self.handle_appearance_shortcut(ctx);
 
         while let Ok(result) = self.state_rx.try_recv() {
@@ -484,17 +493,11 @@ impl eframe::App for WorkbenchApp {
 
                 }
                 WorkbenchView::NodeMachine => {
-                    let action = self.canvas_state.ui(ui, &self.ui_palette);
+                    let action = ui.add_enabled_ui(self.daemon_mutation.is_none(), |ui| self.canvas_state.ui(ui, &self.ui_palette)).inner;
                     if let Some(CanvasAction::RunPipeline { yaml }) = action {
-                        match send_ipc_request(&IpcRequest::ExecuteGraphYaml { yaml }) {
-                            Ok(response) => self.canvas_state.apply_pipeline_response(response),
-                            Err(error) => self.canvas_state.apply_pipeline_response(
-                                IpcResponse::Error {
-                                    error: error.to_string(),
-                                },
-                            ),
-                        }
-                        self.dirty_mirror = true;
+                        self.submit_daemon_mutation(
+                            IpcRequest::ExecuteGraphYaml { yaml }, DaemonMutationKind::Pipeline,
+                        );
                         ctx.request_repaint();
                     }
                 }

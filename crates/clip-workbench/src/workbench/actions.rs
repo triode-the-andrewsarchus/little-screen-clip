@@ -26,10 +26,10 @@ impl WorkbenchApp {
                 }
             }
             Some(MirrorAction::DropSwap { from, to }) => {
-                let _ = send_ipc_request(&IpcRequest::SwapSlots(from, to));
-                Arc::make_mut(&mut self.state).swap_slots(from, to);
-                self.dirty_mirror = true;
-                self.status_msg = Some(format!("Swapped {} and {}", from.label(), to.label()));
+                self.submit_daemon_mutation(
+                    IpcRequest::SwapSlots(from, to),
+                    DaemonMutationKind::Swap,
+                );
             }
             None => {}
         }
@@ -285,6 +285,9 @@ impl WorkbenchApp {
         close_on_success: bool,
         send: &mut impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
     ) -> bool {
+        if self.daemon_mutation.is_some() {
+            return false;
+        }
         match send(request) {
             Ok(IpcResponse::OpResult { .. } | IpcResponse::Success { .. }) => {
                 if close_on_success {

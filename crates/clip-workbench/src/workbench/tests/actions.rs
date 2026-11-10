@@ -492,3 +492,84 @@ fn auto_action_failure_rolls_back_optimistic_toggle_with_feedback() {
         Some("Error: controlled daemon failure")
     );
 }
+
+#[test]
+fn delayed_daemon_swap_retains_completion_without_speculative_state_or_duplicate_send() {
+    let mut app = test_workbench_app(None, VecDeque::new());
+    let original = Arc::clone(&app.state);
+    let ctx = egui::Context::default();
+    let jobs = BackgroundJobs::new(1, 2);
+    let (started, running) = std::sync::mpsc::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    app.submit_daemon_mutation_with(
+        IpcRequest::SwapSlots(SlotId::LeftHand, SlotId::RightHand),
+        DaemonMutationKind::Swap,
+        &jobs,
+        move |request| {
+            assert!(matches!(request, IpcRequest::SwapSlots(..)));
+            started.send(()).unwrap();
+            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok(IpcResponse::Error {
+                error: "swap rejected".into(),
+            })
+        },
+    );
+    running.recv_timeout(Duration::from_secs(5)).unwrap();
+    app.submit_daemon_mutation_with(
+        IpcRequest::SwapSlots(SlotId::LeftHand, SlotId::RightHand),
+        DaemonMutationKind::Swap,
+        &jobs,
+        |_| panic!("must not submit a second mutation"),
+    );
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        app.poll_daemon_mutation(ctx)
+    });
+    assert!(
+        output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
+    );
+    assert!(Arc::ptr_eq(&original, &app.state));
+    app.view = WorkbenchView::NodeMachine;
+    release.send(()).unwrap();
+    finish_daemon_mutation(&mut app, &ctx);
+    assert_eq!(app.status_msg.as_deref(), Some("swap rejected"));
+    assert!(Arc::ptr_eq(&original, &app.state));
+}
+
+#[test]
+fn background_pipeline_completion_reaches_canvas_after_view_switch() {
+    let mut app = test_workbench_app(None, VecDeque::new());
+    let ctx = egui::Context::default();
+    let jobs = BackgroundJobs::new(1, 1);
+    app.submit_daemon_mutation_with(
+        IpcRequest::ExecuteGraphYaml {
+            yaml: "fixture".into(),
+        },
+        DaemonMutationKind::Pipeline,
+        &jobs,
+        |_| {
+            Ok(IpcResponse::PipelineExecuted {
+                node_previews: Default::default(),
+                output_title: Some("output".into()),
+                duration_ms: 17,
+            })
+        },
+    );
+    app.view = WorkbenchView::Palette;
+    finish_daemon_mutation(&mut app, &ctx);
+    assert_eq!(app.canvas_state.last_run_duration_ms, Some(17));
+}
+
+fn finish_daemon_mutation(app: &mut WorkbenchApp, ctx: &egui::Context) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while app.daemon_mutation.is_some() {
+        app.poll_daemon_mutation(ctx);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "daemon completion was not published"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}

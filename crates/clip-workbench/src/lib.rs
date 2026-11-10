@@ -105,7 +105,7 @@ pub use shell::*;
 use spreadsheet_view::SpreadsheetViewerState;
 use text_preview::{TextPreviewData, TextPreviewState};
 pub use ui_ext::*;
-use workbench::{ClipboardSelection, MirrorJob, PaletteOpsJob};
+use workbench::{ClipboardSelection, DaemonMutation, DaemonMutationKind, MirrorJob, PaletteOpsJob};
 
 /// Primary navigation view tabs in the desktop workbench.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -615,6 +615,7 @@ struct WorkbenchApp {
     state: Arc<SlotManager>,
     state_rx: Receiver<Result<Arc<SlotManager>, String>>,
     state_loaded: bool,
+    daemon_mutation: Option<DaemonMutation>,
     startup_comparison: Option<bool>,
     view: WorkbenchView,
     canvas_state: NodeCanvasState,

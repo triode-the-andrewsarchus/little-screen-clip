@@ -22,6 +22,7 @@ pub(super) fn test_workbench_app(
         state: Arc::new(SlotManager::default()),
         state_rx,
         state_loaded: true,
+        daemon_mutation: None,
         startup_comparison: None,
         view: WorkbenchView::Palette,
         canvas_state: NodeCanvasState::new(),
