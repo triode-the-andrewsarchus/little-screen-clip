@@ -54,6 +54,8 @@ display unless explicitly stated.
 ### 2. `crates/clipctl`
 
 - [ ] **[Bug / Race & State Leak] `clipctl copy` leaves `RouteNextClipboard` armed in the daemon when falling back to primary selection or failing**:
+  **Current verification — partially resolved, still open:** The new identity-scoped route API and CLI cancellation tests prevent a claimed route from being followed by a duplicate primary-selection push and prevent an ordinary fallback from leaving its route armed. However, the current daemon poller still deduplicates image hashes and self-copied text before claiming routes; its active-right-route text shortcut can also claim unchanged pre-shortcut text. Same-content capture/event identity therefore still needs correction. The existing acknowledgement/cancellation tests do not prove that part fixed.
+
   In [`crates/clipctl/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/clipctl/src/main.rs#L160-L238):
   1. `clipctl copy` first sends `IpcRequest::RouteNextClipboard { hand, timeout_ms: 2000, restore_os_clipboard: !no_restore }` to the daemon.
   2. It only polls `wl-paste` for 350ms (`while start.elapsed() < Duration::from_millis(350)`), checking only UTF-8 text (`String::from_utf8(out.stdout)`) and comparing `text != initial_cb`.
@@ -98,7 +100,9 @@ display unless explicitly stated.
   In [`crates/little-clipd/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clipd/src/main.rs#L691-L700), if a client sends a line with invalid UTF-8 bytes, `handle_client` logs a warning and executes `continue;` without writing an `IpcResponse::Error` back to `writer`, causing a request-response client on that stream to hang waiting for a reply line.
 - [ ] **[Bug / Transient Config Persistence Lost] `SetAutoAction` mutates in-memory config without saving or syncing**:
   In [`crates/little-clipd/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clipd/src/main.rs#L1085-L1092), `IpcRequest::SetAutoAction` updates `ctx.config.write().await.auto_actions.trim_link_tracking`, but neither persists it nor updates `ctx.renderer.write().await.config`, and any subsequent `ReloadConfig` overwrites it.
-- [ ] **[Dead Code] Unused `TrofeoDriver::check_alive`**:
+- [x] **[Dead Code] Unused `TrofeoDriver::check_alive`**:
+  **Current verification:** Already resolved by the refactor: daemon startup passes a send callback that calls `driver.check_alive()` before `send_frame`. The callback runs on the dedicated display owner thread. The method is live and must remain.
+
   `TrofeoDriver::check_alive` in [`crates/little-clip-driver/src/device.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-driver/src/device.rs#L208) is never called anywhere in `little-clipd` (or anywhere else in the workspace).
 
 ---
@@ -348,6 +352,8 @@ display unless explicitly stated.
 - [ ] **[Bug / Same-Stem Collection Export Collisions & Unchecked Pending Jobs When Starting Export] (`viewers/gallery/writes.rs`)**:
   1. In [`Collection::export_ui`](file:///home/vcarlson/little-screen-clip/crates/clip-file-manager/src/file_manager/viewers/gallery/writes.rs#L56-L65), every exported photo's output filename is derived solely from `photo.path.file_stem()` plus `"_edit.png"`. If two edited photos in the collection share the same stem with different extensions (e.g., `IMG_0001.jpg` and `IMG_0001.png` or `IMG_0001.raf`), both map to `IMG_0001_edit.png` and the second export fails with a collision.
   2. While the `"Export all edits"` modal is open (`self.export_open == true`), clicking `"Export PNG copies"` in [`Collection::export_ui`](file:///home/vcarlson/little-screen-clip/crates/clip-file-manager/src/file_manager/viewers/gallery/writes.rs#L44-L73) captures `state.display_image_snapshot_request()` immediately without checking `state.poll_session_snapshots()` or waiting for in-flight image preview jobs.
-- [ ] **[Bug / Blocking Synchronous USB Enumeration & Bulk Transfers on Tokio Worker Thread] (`little-clipd/src/display_worker.rs`, `little-clipd/src/main.rs`)**:
+- [x] **[Bug / Blocking Synchronous USB Enumeration & Bulk Transfers on Tokio Worker Thread] (`little-clipd/src/display_worker.rs`, `little-clipd/src/main.rs`)**:
+  **Current verification:** Already resolved: `display_worker::spawn` builds a current-thread runtime inside a named OS owner thread, keeping enumeration, descriptor checks, transfer callbacks and driver destruction off the daemon executor. All four display-worker tests pass, including a stalled hardware callback while frame publication remains responsive (`/tmp/review-display-owner-tests.log`). Retry pacing remains bounded; no physical device was used.
+
   In [`crates/little-clipd/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clipd/src/main.rs#L292-L298) and [`crates/little-clipd/src/display_worker.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clipd/src/display_worker.rs#L39-L70), `display_worker::run` is spawned via `tokio::spawn` and directly invokes synchronous blocking `rusb` operations (`TrofeoDriver::open`, `driver.check_alive()`, and `driver.send_frame(frame)`, which perform USB bus enumeration, `std::thread::sleep` during handshake, and blocking bulk/interrupt transfers with 2-second timeouts) on a Tokio async worker thread without `spawn_blocking` or a dedicated OS thread. Furthermore, when running in virtual mode with no Trofeo USB display connected (`driver.is_none()`), the worker wakes every 400 ms and calls `TrofeoDriver::open()` (enumerating all system USB devices via `rusb::devices()`) every 500 ms indefinitely on the Tokio executor.
 
