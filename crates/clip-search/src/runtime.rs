@@ -1,5 +1,5 @@
 //! One owned, cancellable model process; prepared bytes are its only content input.
-use super::store::DIMENSION;
+use crate::EMBEDDING_DIMENSION as DIMENSION;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
@@ -15,14 +15,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) const ANSWER_PROVIDER: &str = "qwen3.5-9b";
+/// Identifier passed to the existing structured-answer helper.
+pub const ANSWER_PROVIDER: &str = "qwen3.5-9b";
 
+/// Per-user search storage and packaged helper locations, resolved by workers.
 #[derive(Clone)]
-pub(super) struct Paths {
+pub struct Paths {
+    /// Existing index/runtime/model data root.
     pub data: PathBuf,
+    /// Directory containing the packaged Python transport/setup scripts.
     pub helpers: PathBuf,
 }
 impl Paths {
+    /// Selects the existing XDG data root, falling back to the supplied home.
     pub fn for_user(home: &Path) -> Self {
         let data = std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
@@ -35,7 +40,10 @@ impl Paths {
             helpers: bundled,
         }
     }
-    /// Resolve packaged helpers on the worker, independently of the launch directory.
+    /// Resolves packaged helpers on the worker, independently of the launch directory.
+    ///
+    /// # Errors
+    /// Returns an error when worker/setup scripts are absent.
     pub fn resolve_helpers(&mut self) -> Result<(), String> {
         let worker = helper_script("worker.py", &self.helpers)?;
         let parent = worker.parent().ok_or("Cannot locate search helpers")?;
@@ -45,12 +53,15 @@ impl Paths {
         self.helpers = parent.into();
         Ok(())
     }
+    /// Returns the installed native inference runtime directory.
     pub fn runtime(&self) -> PathBuf {
         self.data.join("runtime")
     }
+    /// Returns the installed model directory.
     pub fn models(&self) -> PathBuf {
         self.data.join("models")
     }
+    /// Checks required runtime/model files on the worker; does not start inference.
     pub fn configured(&self, role: Role) -> bool {
         let files: &[&str] = match role {
             Role::Embedding => &[
@@ -65,7 +76,11 @@ impl Paths {
     }
 }
 
-pub(super) fn helper_script(name: &str, fallback: &Path) -> Result<PathBuf, String> {
+/// Resolves an existing packaged helper independently of the launch directory.
+///
+/// # Errors
+/// Returns an error when no executable-relative or fallback installation exists.
+pub fn helper_script(name: &str, fallback: &Path) -> Result<PathBuf, String> {
     let here = std::env::current_exe().map_err(|e| e.to_string())?;
     let parent = here.parent().ok_or("Cannot locate search helpers")?;
     for candidate in [
@@ -82,15 +97,22 @@ pub(super) fn helper_script(name: &str, fallback: &Path) -> Result<PathBuf, Stri
 }
 
 type Replies = mpsc::Receiver<Result<Value, ModelFailure>>;
-pub(super) struct Model {
+/// Owns one cancellable model child, its bounded replies and backend recovery.
+///
+/// Calls block the owning worker, never the UI. Dropping the model kills/reaps
+/// its child and joins the reply reader. Inputs are prepared data, not source paths.
+pub struct Model {
     child: Child,
     input: ChildStdin,
     replies: Replies,
     reader: Option<JoinHandle<()>>,
+    /// Validated readiness metadata, including the current pipeline identifier.
     pub info: Value,
+    /// Monotonic activity time used by the owner for idle retirement.
     pub last_used: Instant,
     next_id: u64,
     failed: bool,
+    /// Role of the process started by this owner.
     pub role: Role,
     paths: Paths,
     fallback_from: Vec<String>,
@@ -116,9 +138,12 @@ impl From<String> for ModelFailure {
         Self::Request(message)
     }
 }
+/// Existing inference protocol role.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Role {
+pub enum Role {
+    /// Produces normalized vectors with [`EMBEDDING_DIMENSION`](crate::EMBEDDING_DIMENSION) components.
     Embedding,
+    /// Produces structured answers/evidence for host-side validation.
     Answer,
 }
 impl Role {
@@ -130,6 +155,10 @@ impl Role {
     }
 }
 impl Model {
+    /// Starts the existing backend preference order under one startup deadline.
+    ///
+    /// # Errors
+    /// Returns startup, readiness, cancellation or deadline failures after retiring failed children.
     pub fn start_preferred(paths: &Paths, role: Role, token: &AtomicBool) -> Result<Self, String> {
         let mut failures = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -360,6 +389,7 @@ impl Model {
             failures.join("; ")
         ))
     }
+    /// Returns the usable backend label and any fallback history.
     pub fn backend_status(&self) -> Option<String> {
         if !self.usable() {
             return None;
@@ -373,6 +403,7 @@ impl Model {
         }
         Some(label)
     }
+    /// Reports whether the process has avoided a terminal protocol/backend failure.
     pub fn usable(&self) -> bool {
         !self.failed
     }
@@ -384,6 +415,10 @@ impl Model {
             let _ = reader.join();
         }
     }
+    /// Requests validated UTF-8 passage boundaries for the supplied text.
+    ///
+    /// # Errors
+    /// Returns transport, cancellation, timeout or invalid-offset errors.
     pub fn passage(&mut self, text: &str, token: &AtomicBool) -> Result<(usize, usize), String> {
         let response = self.exchange(
             json!({"op":"passage", "text":text}),
@@ -410,6 +445,10 @@ impl Model {
         }
     }
 
+    /// Embeds prepared strings, retaining only one exact query vector per model lifetime.
+    ///
+    /// # Errors
+    /// Returns cancellation, transport, backend-recovery or invalid-vector errors.
     pub fn texts(
         &mut self,
         inputs: &[String],
@@ -446,6 +485,12 @@ impl Model {
         }
         Ok(vectors)
     }
+    /// Executes one existing structured-answer operation with the supplied timeout.
+    ///
+    /// The host still validates applicability, evidence and typed values.
+    ///
+    /// # Errors
+    /// Returns role, operation, transport, cancellation or missing-response errors.
     pub fn answer(
         &mut self,
         mut request: Value,
@@ -472,6 +517,10 @@ impl Model {
             .cloned()
             .ok_or_else(|| "Missing structured answer".into())
     }
+    /// Embeds prepared image/audio bytes under the existing 8 MiB input limit.
+    ///
+    /// # Errors
+    /// Returns size, transport, cancellation, timeout or vector-validation errors.
     pub fn media(
         &mut self,
         bytes: &[u8],

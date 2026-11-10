@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+clip-search = { path = "../clip-search" }
 clip-studios = { path = "../clip-studios" }
 clip-ui = { path = "../clip-ui" }
 little-clip-core = { path = "../little-clip-core" }

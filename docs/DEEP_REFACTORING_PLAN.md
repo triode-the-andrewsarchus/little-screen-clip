@@ -36,7 +36,7 @@ This is primarily behavior-preserving work. New views, additional format coverag
 | Delete stale `/tmp` files by process signature | Too broad. Cleanup must use application-owned locations, verified ownership/lifetime and held directory handles. Accepted outputs and other sessions must remain untouched. |
 | Every change must make aggregate metrics monotonically better | A noisy, move-sensitive tool cannot enforce that safely. Review new complexity and duplication in context; verify concrete improvements and record justified tradeoffs. |
 
-Evidence anchors: [entrypoints/library](../crates/clip-workbench/src/lib.rs), [file-manager entrypoint](../crates/clip-file-manager/src/main.rs), [search runtime](../crates/clip-file-manager/src/file_manager/search/runtime.rs), [model helper documentation](../scripts/search_model/README.md), [ONNX runtime](../crates/clip-studios/src/onnx_runtime.rs), [SigLIP](../crates/clip-file-manager/src/file_manager/gallery/similarity/siglip.rs), [SVG thumbnails](../crates/little-clip-core/src/item.rs), [screen dimensions](../crates/little-clip-render/src/lib.rs), [shared waveform mechanisms](../crates/little-clip-core/src/audio/waveform.rs).
+Evidence anchors: [entrypoints/library](../crates/clip-workbench/src/lib.rs), [file-manager entrypoint](../crates/clip-file-manager/src/main.rs), [search runtime](../crates/clip-search/src/runtime.rs), [model helper documentation](../scripts/search_model/README.md), [ONNX runtime](../crates/clip-studios/src/onnx_runtime.rs), [SigLIP](../crates/clip-file-manager/src/file_manager/gallery/similarity/siglip.rs), [SVG thumbnails](../crates/little-clip-core/src/item.rs), [screen dimensions](../crates/little-clip-render/src/lib.rs), [shared waveform mechanisms](../crates/little-clip-core/src/audio/waveform.rs).
 
 ## Baseline and evidence limits
 
@@ -531,3 +531,60 @@ No new dependencies, Cargo feature configurations or external runtimes were
 introduced. About 151 GiB remains free. Native default adoption, real GPU/input
 latency measurements and any further visual redesign remain separately
 reviewable; the next structural milestone is search extraction.
+
+### Phase 4 checkpoint: search runtime and notification boundary
+
+`clip-search` now owns the existing external model-process runtime and exact
+size/date ranges. It has no egui or application dependency. Backend preference,
+startup/exchange deadlines, cancellation identity, nonblocking input, bounded
+replies, query-vector reuse, recovery and child kill/reap behavior are unchanged.
+Helpers still resolve relative to the executable/packaged install, with the same
+repository fallback depth after the move. Public API docs describe these worker
+contracts. The existing 768-component protocol constant now has one search
+library owner; persisted dimensions, schema versions, SQL and ranking are intact.
+
+The browser service stores a plain completion callback instead of an egui
+context. The browser caches its egui adapter once and registers shared callback
+handles. Publication, registration of an already available result and observer
+teardown all occur outside the snapshot lock. The headless contract test checks
+completion-before-registration, completion-after-registration, replacement of an
+observer and request-scoped progress. Host progress-painting tests remain with
+the browser. No generic event bus, model backend trait or connection pool was
+introduced.
+
+This is a partial extraction. Service/store/retrieval, source policy, extraction
+and browser composition still use the existing guarded entry/root descriptors
+in file manager. Those guards have not been weakened or replaced with path-only
+records. Their shared source boundary is the next step; this checkpoint does not
+claim that the complete search backend has moved.
+
+Validation passes: 2617 serial workspace tests, including the new range API
+doctest (30 tests remain ignored), workspace/all-target compilation, both desktop builds,
+search API documentation and diagnostic Clippy with the previously known
+approximate-constant diagnostic allowed. Existing warnings remain. Logs:
+`/tmp/deep-search-foundation-workspace-accepted.log`,
+`/tmp/deep-search-foundation-check.log`, `/tmp/deep-search-foundation-build.log`,
+`/tmp/deep-search-foundation-doc.log` and `/tmp/deep-search-foundation-clippy.log`.
+The 13 new-crate unit tests include controlled model startup/failure/recovery,
+cancellation, reaping, vector validation and exact size/DST bounds. The calendar
+test's self-spawned exact selector was updated to its new test-harness path.
+After normalizing documentation, visibility, the dimension import and that test
+selector, both moved source bodies match their originals exactly.
+
+Private acceptance passes for command controls, explicit scopes, exact UTC/date
+bounds, invalid-draft retention and protected/private/repository/kernel-alias
+exclusions without a database/model (`/tmp/deep-search-foundation-controls/report.json`).
+The actual installed models also pass private literal-content/recursive search,
+guarded enrollment, persisted embeddings, stale-source omission, semantic
+ranking, typed session answers and return to the embedding role
+(`/tmp/deep-search-foundation-real-search/report.json`). Only owned fixtures and
+a private index were used; existing runtime/model files were reused, not downloaded.
+
+Comparison with `deep-search-start` reports REGRESSION from the UI adapter's two
+closure expressions: `search_ui` CCN 15→17. Overall functions stay 10593, total
+CCN changes by +2, measured NLOC by +11, clone groups stay 1511 and cycles stay 16;
+average/max CCN and duplication percentage are unchanged. No production parsing,
+ranking or process algorithm changed. The callback closures add an actual
+notification boundary and cache its host adapter; the analyzer's count is not
+represented as a simplification. Core's broad existing dependency graph remains
+a build-cost limit. About 150 GiB remains free.

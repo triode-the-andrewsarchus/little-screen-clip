@@ -2,14 +2,16 @@
 use chrono::{DateTime, Local, NaiveDate, TimeZone};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Exact integer bounds, including inclusivity captured when the expression is parsed.
 #[derive(Clone, Debug)]
-pub(super) struct Interval {
+pub struct Interval {
     lower: Option<(i128, bool)>,
     upper: Option<(i128, bool)>,
 }
 impl Interval {
     // Render the captured instants, never reparse dates under a later timezone.
-    pub(super) fn date_bounds(&self) -> String {
+    /// Formats captured instants without reinterpreting them in a later timezone.
+    pub fn date_bounds(&self) -> String {
         [(">", ">=", self.lower), ("<", "<=", self.upper)]
             .into_iter()
             .filter_map(|(open, closed, bound)| {
@@ -26,7 +28,8 @@ impl Interval {
             .join(" and ")
     }
 
-    pub(super) fn contains(&self, value: i128) -> bool {
+    /// Tests the stored exact bounds.
+    pub fn contains(&self, value: i128) -> bool {
         self.lower
             .is_none_or(|(bound, inclusive)| value > bound || (inclusive && value == bound))
             && self
@@ -35,9 +38,23 @@ impl Interval {
     }
 }
 
-pub(super) const BYTE_SCALE: i128 = 1_000_000_000;
+/// Fixed-point scale for exact fractional byte constraints.
+pub const BYTE_SCALE: i128 = 1_000_000_000;
 
-pub(super) fn size(text: &str) -> Result<Interval, String> {
+/// Parses a size comparison or inclusive range using existing decimal/binary units.
+///
+/// # Examples
+/// ```
+/// use clip_search::range::{size, BYTE_SCALE};
+/// let interval = size(">=1.5KiB")?;
+/// assert!(interval.contains(1536 * BYTE_SCALE));
+/// assert!(!interval.contains(1535 * BYTE_SCALE));
+/// # Ok::<(), String>(())
+/// ```
+///
+/// # Errors
+/// Rejects invalid, overflowing or reversed bounds.
+pub fn size(text: &str) -> Result<Interval, String> {
     let (op, value) = comparison(text);
     if let Some((left, right)) = split_range(value, false) {
         if !op.is_empty() {
@@ -143,7 +160,8 @@ fn compare(op: &str, value: i128, end: Option<i128>) -> Interval {
     }
 }
 
-pub(super) fn timestamp(time: SystemTime) -> i128 {
+/// Converts a system timestamp to signed Unix nanoseconds, including pre-epoch times.
+pub fn timestamp(time: SystemTime) -> i128 {
     match time.duration_since(UNIX_EPOCH) {
         Ok(value) => value.as_nanos() as i128,
         Err(value) => -(value.duration().as_nanos() as i128),
@@ -169,7 +187,11 @@ fn instant(text: &str) -> Result<(i128, Option<i128>), String> {
         None,
     ))
 }
-pub(super) fn date(text: &str) -> Result<Interval, String> {
+/// Parses calendar-aware dates or explicitly offset RFC 3339 timestamps.
+///
+/// # Errors
+/// Rejects invalid, reversed, mixed calendar/timestamp or ambiguous local bounds.
+pub fn date(text: &str) -> Result<Interval, String> {
     let (op, value) = comparison(text);
     if let Some((left, right)) = split_range(value, true) {
         if !op.is_empty() {
@@ -224,7 +246,7 @@ mod tests {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "file_manager::search::range::tests::local_calendar_days_follow_daylight_saving_boundaries",
+                    "range::tests::local_calendar_days_follow_daylight_saving_boundaries",
                     "--nocapture",
                     "--test-threads=1",
                 ])

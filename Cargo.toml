@@ -10,6 +10,7 @@ members = [
     "crates/clip-workbench",
     "crates/clip-ui",
     "crates/clip-studios",
+    "crates/clip-search",
     "crates/clip-file-manager",
     "crates/clipctl",
     "crates/little-clip-nki",

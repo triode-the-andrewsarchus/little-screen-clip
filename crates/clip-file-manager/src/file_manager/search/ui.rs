@@ -211,7 +211,11 @@ impl FileManager {
             ui.memory_mut(|memory| memory.request_focus(list_id()));
         }
         if let Some(service) = &self.search.service {
-            service.set_repaint_context(ui.ctx());
+            let notify = self.search.notifier.get_or_insert_with(|| {
+                let ctx = ui.ctx().clone();
+                std::sync::Arc::new(move || ctx.request_repaint_of(egui::ViewportId::ROOT))
+            });
+            service.set_notifier(notify.clone());
         }
     }
 

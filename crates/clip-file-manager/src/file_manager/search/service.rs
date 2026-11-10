@@ -86,7 +86,7 @@ pub(super) struct Snapshot {
     pub answer_pipeline: Option<String>,
     pub reused_vectors: u64,
     pub generated_vectors: u64,
-    repaint: Option<egui::Context>,
+    notifier: Option<clip_search::ChangeNotifier>,
 }
 impl Snapshot {
     pub fn checked_segments(&self, request: u64) -> Option<u64> {
@@ -98,17 +98,17 @@ impl Snapshot {
 }
 
 fn publish_search_result(snapshot: &Mutex<Snapshot>, result: SearchResult) {
-    let repaint = {
+    let notifier = {
         let mut snapshot = snapshot.lock().unwrap();
         if result.complete {
             snapshot.progress = None;
         }
         snapshot.result = Some(result);
-        snapshot.repaint.clone()
+        snapshot.notifier.clone()
     };
-    // UI callbacks can inspect the snapshot; never wake while holding its lock.
-    if let Some(ctx) = repaint {
-        ctx.request_repaint_of(egui::ViewportId::ROOT);
+    // Consumer callbacks can inspect the snapshot; never wake while holding its lock.
+    if let Some(notify) = notifier {
+        notify();
     }
 }
 // Command admission and starting a background model step share this lock.
@@ -267,15 +267,17 @@ impl Service {
         Ok(())
     }
 
-    pub(super) fn set_repaint_context(&self, ctx: &egui::Context) {
-        let available = {
+    pub(super) fn set_notifier(&self, notify: clip_search::ChangeNotifier) {
+        let (available, previous) = {
             let mut snapshot = self.snapshot.lock().unwrap();
-            snapshot.repaint = Some(ctx.clone());
-            snapshot.result.is_some()
+            let previous = snapshot.notifier.replace(notify.clone());
+            (snapshot.result.is_some(), previous)
         };
-        // Cover a completion that raced ahead of the first UI registration.
+        // Observer teardown may also access state; keep it outside the lock.
+        drop(previous);
+        // Cover a completion that raced ahead of the first consumer registration.
         if available {
-            ctx.request_repaint();
+            notify();
         }
     }
 }

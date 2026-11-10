@@ -45,7 +45,7 @@ const LEXICAL_CACHE_BUDGET: usize = 16 * 1024 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::file_manager::search) struct CacheEpoch(u64, i64);
 
-pub(super) const DIMENSION: usize = 768;
+pub(super) const DIMENSION: usize = clip_search::EMBEDDING_DIMENSION;
 pub(super) const SCHEMA_VERSION: i64 = 6;
 const FILE_COLUMNS: &str = r#"id INTEGER PRIMARY KEY, device INTEGER NOT NULL, inode INTEGER NOT NULL,
  revision INTEGER NOT NULL, pipeline TEXT NOT NULL, metadata TEXT NOT NULL,

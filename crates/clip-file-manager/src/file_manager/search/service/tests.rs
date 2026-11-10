@@ -1604,15 +1604,10 @@ fn maintenance_admission_interrupts_a_foreground_model_and_reaps_before_return()
 #[test]
 fn search_publication_wakes_after_unlock_and_registration_cannot_miss_a_result() {
     let (service, _receiver) = queued_service();
-    let ctx = egui::Context::default();
-    for _ in 0..3 {
-        let _ = ctx.run(egui::RawInput::default(), |_| {});
-    }
-    assert!(!ctx.has_requested_repaint());
     let calls = Arc::new(AtomicU64::new(0));
     let observed = calls.clone();
     let snapshot = service.snapshot.clone();
-    ctx.set_request_repaint_callback(move |_| {
+    let notify: clip_search::ChangeNotifier = Arc::new(move || {
         assert!(
             snapshot.try_lock().is_ok(),
             "callback ran under snapshot lock"
@@ -1640,20 +1635,26 @@ fn search_publication_wakes_after_unlock_and_registration_cannot_miss_a_result()
         service.snapshot.lock().unwrap().checked_segments(7),
         Some(2048)
     );
-    service.set_repaint_context(&ctx);
-    assert!(ctx.has_requested_repaint());
-    assert!(calls.load(Ordering::Relaxed) > 0);
-    for _ in 0..3 {
-        let _ = ctx.run(egui::RawInput::default(), |_| {});
-    }
+    service.set_notifier(notify);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
     let previous = calls.load(Ordering::Relaxed);
     // Publication after registration clears final progress and wakes too.
     publish_search_result(&service.snapshot, result(true));
     assert!(calls.load(Ordering::Relaxed) > previous);
+    let replacement = Arc::new(AtomicU64::new(0));
+    let observed = replacement.clone();
+    let old_calls = calls.load(Ordering::Relaxed);
+    service.set_notifier(Arc::new(move || {
+        observed.fetch_add(1, Ordering::Relaxed);
+    }));
+    assert_eq!(replacement.load(Ordering::Relaxed), 1);
+    publish_search_result(&service.snapshot, result(true));
+    assert_eq!(replacement.load(Ordering::Relaxed), 2);
+    assert_eq!(calls.load(Ordering::Relaxed), old_calls);
     let mut snapshot = service.snapshot.lock().unwrap();
     assert!(snapshot.result.as_ref().unwrap().complete);
     assert!(snapshot.progress.is_none());
-    snapshot.repaint = None; // The test callback itself captures this snapshot.
+    snapshot.notifier = None;
 }
 #[test]
 fn progress_is_request_scoped_and_replaced_only_after_queue_admission() {

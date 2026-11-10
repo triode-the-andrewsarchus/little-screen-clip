@@ -12,10 +12,10 @@ mod image_order;
 mod monitor;
 mod policy;
 pub(super) mod query;
-mod range;
+use clip_search::range;
 mod reader;
 mod retrieval;
-mod runtime;
+use clip_search::runtime;
 mod service;
 mod session;
 mod settings;
@@ -55,6 +55,7 @@ pub(super) struct Search {
     restore_sort: Option<super::sorting::Sort>,
     restore_directory: Option<Directory>,
     pub service: Option<service::Service>,
+    notifier: Option<clip_search::ChangeNotifier>,
     pub settings: little_clip_core::config::FileSearchConfig,
     pub preferences: settings::Settings,
     request_id: u64,
