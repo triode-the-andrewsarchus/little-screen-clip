@@ -626,3 +626,37 @@ fn test_magnetic_snap_distance_threshold() {
     assert!(close_mouse.distance(pin_pos) < snap_threshold);
     assert!(far_mouse.distance(pin_pos) >= snap_threshold);
 }
+
+#[test]
+fn node_preview_badge_truncates_unicode_without_splitting_characters() {
+    let template = little_clip_ops::pipeline::catalog::find_template("source_const_text").unwrap();
+    let palette = AppPalette::default();
+    for (preview, expected) in [
+        ("短い結果".to_owned(), "短い結果".to_owned()),
+        (
+            "abcdefghijklmnopqrstuvwx".to_owned(),
+            "abcdefghijklmnopqrstuvwx".to_owned(),
+        ),
+        (
+            format!("{}漢字尾", "a".repeat(22)),
+            format!("{}漢…", "a".repeat(22)),
+        ),
+        ("界".repeat(25), format!("{}…", "界".repeat(23))),
+    ] {
+        let mut node = instantiate_template(template, [0.0, 0.0]);
+        let previews = [(node.id, preview)].into_iter().collect();
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let rect =
+                    Rect::from_min_size(Pos2::ZERO, Vec2::new(250.0, estimate_node_height(&node)));
+                let painter = ui.painter_at(rect);
+                render_node_card(
+                    1.0, &previews, &mut None, &mut None, &mut None, ui, &painter, &mut node, rect,
+                    false, &mut None, &palette,
+                );
+            });
+        });
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == expected)), "missing preview {expected:?}");
+    }
+}

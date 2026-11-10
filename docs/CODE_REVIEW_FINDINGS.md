@@ -283,6 +283,12 @@ touches the host clipboard or USB display unless explicitly stated.
 - [ ] **[Bug / Path Traversal & Non-Atomic Save in `script_editor.rs`]**:
   In [`crates/clip-workbench/src/script_editor.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/script_editor.rs#L46-L56) and [`lines 130–150`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/script_editor.rs#L130-L150), `ScriptEditor::load` constructs `get_recipes_dir().join(name)` directly from `node.props.get("script_file")` without path-traversal validation (`..` or absolute paths) or `kernel_interface::open_content`, and `ScriptEditor::save` overwrites the file non-atomically via `std::fs::write(path, &self.text)` instead of `FileSource` or atomic temp-file rename.
 - [ ] **[Bug / UTF-8 Byte-Slice Panic, Header Height Mismatch & Missing Undo on Prop Edits in `canvas/drawing.rs`]**:
+  **Current verification — partially resolved:**
+
+  - [x] Preview labels now truncate by Unicode characters with a bounded prefix scan. The rendered-card regression covers short Unicode, exact-width ASCII, a mixed string splitting byte 23, and long CJK output. It reproduced the UTF-8 panic before the fix; the canvas tests pass (`/tmp/review-canvas-unicode-after.log`).
+  - [ ] Align painted header geometry with node sizing and socket positions.
+  - [ ] Record inline property edits in graph undo history.
+
   - In [`crates/clip-workbench/src/canvas/drawing.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/canvas/drawing.rs#L529-L533), `if preview_str.len() > 24 { format!("{}…", &preview_str[..23]) }` slices `preview_str` at byte index 23 without checking UTF-8 character boundaries, which panics if a multi-byte character straddles byte 23.
   - In [`render_node_card`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/canvas/drawing.rs#L305), `header_h` is `26.0 * zoom`, whereas [`estimate_node_height`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/canvas/drawing.rs#L605) and [`get_pin_pos_by_idx`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/canvas/drawing.rs#L659) use `28.0 * zoom`.
   - Editing node properties via `egui::TextEdit::singleline(val)` ([`drawing.rs:507-522`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/canvas/drawing.rs#L507-L522)) mutates `node.props` directly in place without calling `self.snapshot_undo()`, so property edits cannot be undone with `Ctrl+Z`.

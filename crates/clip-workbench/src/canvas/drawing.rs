@@ -520,8 +520,8 @@ pub(super) fn render_node_card(
     // Last Output Preview Badge at bottom
     if let Some(preview_str) = node_previews.get(&node.id) {
         let btm_pos = rect.left_bottom() + Vec2::new(10.0, -8.0);
-        let preview_short = if preview_str.len() > 24 {
-            format!("{}…", &preview_str[..23])
+        let preview_short = if preview_str.chars().take(25).count() > 24 {
+            format!("{}…", preview_str.chars().take(23).collect::<String>())
         } else {
             preview_str.clone()
         };
