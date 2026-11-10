@@ -29,8 +29,7 @@ impl WorkbenchApp {
         match source {
             Ok(source) => self.start_image_load_with_key(source, Some(key)),
             Err(error) => {
-                self.image_load_job = None;
-                self.text_load_job = None;
+                self.cancel_preview_loads();
                 self.active_image_key = None;
                 self.set_status_message(format!("Image preview failed: {error}"));
             }
@@ -54,20 +53,7 @@ impl WorkbenchApp {
         key: Option<ImageSessionKey>,
     ) {
         self.retained_image_session = None;
-        self.image_load_job = None;
-        self.text_load_job = None;
-        if matches!(self.viewer, Some(ViewerSession::ImageLoading(_))) {
-            self.replace_viewer(None);
-        }
-        if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
-            ticket.cancel();
-        }
-        if let Some((ticket, _)) = self.midi_load_job.take() {
-            ticket.cancel();
-        }
-        if let Some((ticket, _)) = self.office_load_job.take() {
-            ticket.cancel();
-        }
+        self.prepare_preview_load();
         self.image_load_job = Some(ImageLoadJob::new_with_key(source, key));
         self.clear_status_message();
     }
@@ -76,14 +62,14 @@ impl WorkbenchApp {
         if self.active_image_key.as_ref() == Some(key)
             && matches!(self.viewer, Some(ViewerSession::Image(_)))
         {
+            self.cancel_preview_loads();
             return true;
         }
         let Some((cached_key, state)) = self.retained_image_session.take() else {
             return false;
         };
         if cached_key == *key {
-            self.image_load_job = None;
-            self.text_load_job = None;
+            self.cancel_preview_loads();
             self.viewer = Some(ViewerSession::Image(state));
             self.active_image_key = Some(key.clone());
             self.clear_status_message();

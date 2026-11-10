@@ -312,3 +312,31 @@ fn office_document_loads_via_pdf_or_markdown() {
         "expected Pdf or Text viewer session for office document"
     );
 }
+
+#[test]
+fn switching_preview_cancels_queued_office_conversion() {
+    for switch in [
+        |app: &mut WorkbenchApp| {
+            app.start_spreadsheet_load(SpreadsheetLoadSource::Text {
+                content: Arc::new("name,value\nclip,1".into()),
+                title: "replacement table".into(),
+            })
+        },
+        |app: &mut WorkbenchApp| app.start_midi_load(PathBuf::from("replacement.mid")),
+        |app: &mut WorkbenchApp| app.replace_viewer(Some(gallery_viewer())),
+    ] {
+        let ran = Arc::new(AtomicBool::new(false));
+        let worker_ran = Arc::clone(&ran);
+        let (jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
+            worker_ran.store(true, Ordering::Release);
+            Err::<OfficeLoadResult, String>("obsolete office job ran".into())
+        });
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.office_load_job = Some((ticket, receiver));
+
+        switch(&mut app);
+        release_blocker_and_wait_for_queue_to_drain(&jobs, release);
+        assert!(app.office_load_job.is_none());
+        assert!(!ran.load(Ordering::Acquire));
+    }
+}

@@ -50,9 +50,7 @@ impl WorkbenchApp {
                     });
                 });
                 if cancel || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                    self.image_load_job = None;
-                    self.text_load_job = None;
-                    self.office_load_job = None;
+                    self.cancel_preview_loads();
                 }
                 ctx.request_repaint_after(Duration::from_millis(40));
                 return true;
@@ -176,8 +174,7 @@ impl WorkbenchApp {
                                     .add(ButtonRole::Secondary.button("Cancel", &self.ui_palette))
                                     .clicked()
                                 {
-                                    self.image_load_job = None;
-                                    self.text_load_job = None;
+                                    self.cancel_preview_loads();
                                 }
                             } else if let Some(message) = &self.status_msg {
                                 ui.label(message);
@@ -196,8 +193,7 @@ impl WorkbenchApp {
             }
         }
         if close {
-            self.image_load_job = None;
-            self.text_load_job = None;
+            self.cancel_preview_loads();
             if !self.retain_current_image_session() {
                 self.pending_image_close = true;
                 ctx.request_repaint_after(Duration::from_millis(16));
@@ -314,8 +310,7 @@ impl WorkbenchApp {
         if !self.retain_current_image_session() {
             return;
         }
-        self.image_load_job = None;
-        self.text_load_job = None;
+        self.cancel_preview_loads();
         self.active_image_key = None;
         self.pending_image_close = false;
         self.viewer = viewer;

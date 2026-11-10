@@ -857,18 +857,7 @@ fn recipe_needs_prompt(recipe: &Recipe, state: &SlotManager) -> Option<(String, 
 
 impl Drop for WorkbenchApp {
     fn drop(&mut self) {
-        if let Some(job) = &self.text_load_job {
-            job.ticket.cancel();
-        }
-        if let Some((ticket, _, _)) = &self.spreadsheet_load_job {
-            ticket.cancel();
-        }
-        if let Some((ticket, _)) = &self.midi_load_job {
-            ticket.cancel();
-        }
-        if let Some((ticket, _)) = &self.office_load_job {
-            ticket.cancel();
-        }
+        self.cancel_preview_loads();
     }
 }
 

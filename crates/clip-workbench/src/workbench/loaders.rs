@@ -2,13 +2,13 @@ use super::*;
 
 impl WorkbenchApp {
     pub(crate) fn start_text_file_load(&mut self, path: PathBuf) {
-        self.prepare_text_load();
+        self.prepare_preview_load();
         self.text_load_job = Some(TextPreviewLoadJob::from_file(path, self.config.clone()));
         self.clear_status_message();
     }
 
     pub(crate) fn start_text_preview_load(&mut self, content: String, title: Option<String>) {
-        self.prepare_text_load();
+        self.prepare_preview_load();
         self.text_load_job = Some(TextPreviewLoadJob::from_text(
             content,
             title,
@@ -18,7 +18,7 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn start_shared_text_preview_load(&mut self, content: Arc<String>, title: String) {
-        self.prepare_text_load();
+        self.prepare_preview_load();
         self.text_load_job = Some(TextPreviewLoadJob::from_shared_text(
             content,
             title,
@@ -27,12 +27,17 @@ impl WorkbenchApp {
         self.clear_status_message();
     }
 
-    pub(crate) fn prepare_text_load(&mut self) {
-        self.image_load_job = None;
-        self.text_load_job = None;
+    pub(crate) fn prepare_preview_load(&mut self) {
         if matches!(self.viewer, Some(ViewerSession::ImageLoading(_))) {
             self.replace_viewer(None);
+        } else {
+            self.cancel_preview_loads();
         }
+    }
+
+    pub(crate) fn cancel_preview_loads(&mut self) {
+        self.image_load_job = None;
+        self.text_load_job = None;
         if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
             ticket.cancel();
         }
@@ -69,14 +74,7 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn start_spreadsheet_load(&mut self, source: SpreadsheetLoadSource) {
-        self.image_load_job = None;
-        self.text_load_job = None;
-        if let Some((ticket, _)) = self.midi_load_job.take() {
-            ticket.cancel();
-        }
-        if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
-            ticket.cancel();
-        }
+        self.prepare_preview_load();
         let fallback = match &source {
             SpreadsheetLoadSource::Text { content, title } => {
                 Some((Arc::clone(content), title.clone()))
@@ -130,14 +128,7 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn start_midi_load(&mut self, path: PathBuf) {
-        self.image_load_job = None;
-        self.text_load_job = None;
-        if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
-            ticket.cancel();
-        }
-        if let Some((ticket, _)) = self.midi_load_job.take() {
-            ticket.cancel();
-        }
+        self.prepare_preview_load();
         let (ticket, receiver) = BackgroundJobs::global()
             .submit(Duration::from_secs(30), move || {
                 MidiData::parse_file(&path).map(|data| (data, path))
@@ -193,10 +184,7 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn start_office_document_load(&mut self, path: PathBuf) {
-        self.prepare_text_load();
-        if let Some((ticket, _)) = self.office_load_job.take() {
-            ticket.cancel();
-        }
+        self.prepare_preview_load();
         let (ticket, receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(60), move || {
                 let title = path
