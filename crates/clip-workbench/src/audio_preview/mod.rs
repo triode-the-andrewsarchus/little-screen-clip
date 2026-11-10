@@ -16,10 +16,10 @@ use little_clip_core::audio::{
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
+#[cfg(test)]
+use rodio::Decoder;
 use rodio::stream::MixerDeviceSink;
-use rodio::{Decoder, Player, Source};
-use std::fs::File;
-use std::io::BufReader;
+use rodio::{Player, Source};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::sync::{
@@ -27,6 +27,8 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::{fs::File, io::BufReader};
 
 /// Top-level audio workbench modes. Future audio tools should be added here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

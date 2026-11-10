@@ -1063,8 +1063,15 @@ fn bridged_audio_playback_seeks_shared_pcm_and_survives_source_rename() {
             source,
         )
         .with_file_source(crate::file_source::FileSource::capture(&path).unwrap());
-        let mut decoder =
-            super::super::decode_audio_source(state.playback_input().unwrap()).unwrap();
+        let mut decoder = super::super::playback::load_decoder(
+            &state.path,
+            &state.read_check,
+            state.file_source.as_ref(),
+            &AtomicBool::new(false),
+            0.0,
+            Some(bytes.clone()),
+        )
+        .unwrap();
         assert_eq!(decoder.channels().get(), 2);
         assert_eq!(decoder.sample_rate().get(), 44100);
         decoder.try_seek(Duration::from_secs_f32(2.0)).unwrap();
@@ -1073,6 +1080,7 @@ fn bridged_audio_playback_seeks_shared_pcm_and_survives_source_rename() {
         let existing = directory.path().join("existing.wav");
         std::fs::write(&existing, b"preserved audio").unwrap();
         let saved = run_audio_save(AudioSavePlan {
+            read_check: Default::default(),
             source: path.clone(),
             file_source: Some(crate::file_source::FileSource::capture(&path).unwrap()),
             destination: directory.path().into(),
@@ -1117,7 +1125,15 @@ fn bridged_audio_playback_seeks_shared_pcm_and_survives_source_rename() {
                 .as_ref()
                 .unwrap()
         ));
-        let decoder = super::super::decode_audio_source(state.playback_input().unwrap()).unwrap();
+        let decoder = super::super::playback::load_decoder(
+            &state.path,
+            &state.read_check,
+            state.file_source.as_ref(),
+            &AtomicBool::new(false),
+            0.0,
+            Some(bytes.clone()),
+        )
+        .unwrap();
         assert_eq!(decoder.channels().get(), 2);
     }
 }

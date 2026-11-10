@@ -7,6 +7,7 @@ use std::{collections::BTreeSet, path::PathBuf, time::Duration};
 
 #[derive(Default)]
 pub(in crate::file_manager) struct Preview {
+    pub context: crate::file_manager::search::PreviewContext,
     source: Option<(PathBuf, u64)>,
     task: Option<Task<Result<Viewer, String>>>,
     viewer: Option<Viewer>,
@@ -18,7 +19,10 @@ pub(in crate::file_manager) struct Preview {
 }
 impl Preview {
     pub fn clear(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            context: self.context.clone(),
+            ..Self::default()
+        };
     }
     pub fn retain(&mut self, paths: &BTreeSet<PathBuf>) {
         if self
@@ -35,10 +39,11 @@ impl Preview {
             self.clear();
             self.source = Some(source);
             let path = entry.path.clone();
+            let context = self.context.clone();
             self.task = Some(Task::start(
                 BackgroundJobs::global(),
                 Duration::from_secs(35),
-                move |token| Viewer::load(&path, token),
+                move |token| context.read(&path, token, || Viewer::load(&path, token)),
             ));
         }
         self.focused = true;

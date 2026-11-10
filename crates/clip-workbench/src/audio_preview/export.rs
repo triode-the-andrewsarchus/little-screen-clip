@@ -904,7 +904,6 @@ pub(super) fn extract_audio_slice_file(
     if cancelled.load(Ordering::Acquire) {
         return Err("Audio slice copy cancelled".to_owned());
     }
-    use std::os::fd::AsRawFd;
     plan.read_check.validate(cancelled)?;
     let source = crate::file_source::FileSource::capture(&plan.source)
         .map_err(|e| format!("Failed to extract audio segment via ffmpeg: {e}"))?;
@@ -916,8 +915,6 @@ pub(super) fn extract_audio_slice_file(
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or("Invalid audio slice filename")?;
-    let source = crate::file_source::FileSource::capture(&plan.source)
-        .map_err(|error| format!("Failed to extract audio segment via ffmpeg: {error}"))?;
     let save = AudioSavePlan {
         read_check: plan.read_check.clone(),
         source: plan.source.clone(),
@@ -1173,8 +1170,7 @@ fn save_audio_region_cancellable(
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
     use std::os::fd::AsRawFd;
-    let cancel = AtomicBool::new(false);
-    plan.read_check.validate(&cancel)?;
+    plan.read_check.validate(cancelled)?;
     if Path::new(&region.filename).file_name() != Some(std::ffi::OsStr::new(&region.filename)) {
         return Err("Enter one audio export filename".into());
     }

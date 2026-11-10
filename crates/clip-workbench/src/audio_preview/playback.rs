@@ -45,23 +45,6 @@ pub(super) fn load_decoder(
 }
 
 impl AudioPreviewState {
-    pub(super) fn playback_input(&self) -> Result<little_clip_core::audio::SeekableAudio, String> {
-        if let Some(source) = &self.file_source {
-            source.check()?;
-        }
-        if let Some(bytes) = self
-            .completed_source_analysis
-            .as_ref()
-            .or(self.analysis.as_ref())
-            .and_then(|analysis| analysis.decoded_source.clone())
-        {
-            return Ok(Box::new(std::io::Cursor::new(bytes)));
-        }
-        little_clip_core::kernel_interface::open_content(&self.path, true)
-            .map(|file| Box::new(file) as little_clip_core::audio::SeekableAudio)
-            .map_err(|e| e.to_string())
-    }
-
     pub fn toggle_play(&mut self) {
         if self.is_playing || self.playback_load.is_some() {
             self.pause();
@@ -218,7 +201,10 @@ impl AudioPreviewState {
         }
         self.is_playing = false;
         self.playback_start_instant = None;
-        let decoded = self.completed_source_analysis.as_ref().or(self.analysis.as_ref())
+        let decoded = self
+            .completed_source_analysis
+            .as_ref()
+            .or(self.analysis.as_ref())
             .and_then(|analysis| analysis.decoded_source.clone());
         let path = self.path.clone();
         let check = self.read_check.clone();

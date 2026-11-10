@@ -66,7 +66,6 @@ realfft = "3.5.0"
 midir = "0.11"
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 half = "2"
-base64 = "0.22"
 
 [dev-dependencies]
 rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }

@@ -37,6 +37,7 @@ fn load_group(
                 input.identity.as_ref(),
                 cancel,
                 offset,
+                None,
             )
             .map(|decoder| (input.index, decoder))
         })

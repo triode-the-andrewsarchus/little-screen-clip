@@ -174,6 +174,7 @@ pub(super) fn render_session_file(
             .try_clone()
             .map_err(|error| error.to_string())?,
         mode,
+        cancelled,
     )?;
     let status = run_audio_command_cancellable(&mut command, cancelled)
         .map_err(|error| error.to_string())?;

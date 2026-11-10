@@ -42,6 +42,7 @@ impl EntryPreviews {
         if self.context.replace(context) {
             self.retire();
             self.text_status.clear();
+            self.multisample.context = context.clone();
             self.pdf_pages.context = context.clone();
             self.image_hover.context = context.clone();
             self.scenes.set_context(context);

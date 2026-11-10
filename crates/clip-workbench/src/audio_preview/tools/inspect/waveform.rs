@@ -1,41 +1,6 @@
 use super::*;
 
 impl AudioPreviewState {
-    fn paint_analysis_placeholder(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        color: Color32,
-    ) -> bool {
-        if !self.is_loading_analysis && self.analysis.is_some() {
-            return false;
-        }
-        let (icon, message) = if self.is_loading_analysis {
-            let elapsed = self.loading_start_time.elapsed().as_secs_f32();
-            (
-                crate::icons::Icon::Hourglass,
-                format!(
-                    "Decoding audio track & building waveform... ({:.1}s)",
-                    elapsed
-                ),
-            )
-        } else {
-            (
-                crate::icons::Icon::Alert,
-                "Audio analysis unavailable".into(),
-            )
-        };
-        icon.paint_text(
-            painter,
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            message,
-            egui::FontId::proportional(15.0),
-            color,
-        );
-        true
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(super) fn paint_hovered_region_crossfade(
         &self,
