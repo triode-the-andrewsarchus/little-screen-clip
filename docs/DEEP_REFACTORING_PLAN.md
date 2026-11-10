@@ -255,6 +255,10 @@ For each approved slice:
 
 ## Execution status
 
+The current requirement/evidence map and remaining completion blockers are in
+[DEEP_REFACTORING_AUDIT.md](DEEP_REFACTORING_AUDIT.md). Historical ledger entries
+below describe their checkpoint, not the current status of every later phase.
+
 The user authorized completing this plan after the review and future-roadmap additions. Execute the phases incrementally, retaining the specific design and adoption gates above. The initial architecture baseline is `deep-refactor-start`; the working tree began at `4fabcc3`, with 164 GiB available. Phase 1 is complete against its confirmed blocking/lifecycle worklist: mount discovery, USB ownership, retained UI mutations, clipboard routes, studio handoffs, worker isolation and image retirement have been verified. Phase 2 has delivered shared peak-range queries, direct document hints, source/readiness contracts and the presentation inventory. Phase 3 has delivered shared UI, neutral studios and independent application ownership. Phase 3a has delivered the opt-in native mirror prototype and its measured findings; the raster mirror remains the default. Phase 4 has delivered the headless search backend, including source readers and coordinator. Phase 6 has delivered targeted feedback lifetimes/clock repairs and per-execution pipeline scratch/output ownership. Remaining domain/state-transition and operation-completion audits, plus the final requirement-by-requirement integration audit, are outstanding; native mirror adoption retains its separate review gate.
 
 
@@ -1143,3 +1147,78 @@ doc comments (`/tmp/deep-dsp-architecture.json`). The dependency graph provides
 the relevant improvement, which the source-only vector does not quantify. The
 remaining input/feedback contracts and full requirement-by-requirement acceptance
 review still prevent declaring the entire deep plan complete.
+
+
+### Phase 4/6 checkpoint: MIDI feedback belongs to playback or export
+
+A cached-play attempt reproduced stale persistent playback feedback
+(`/tmp/deep-midi-feedback-before.log`). Playback and accepted exports previously
+shared one toast; clearing it on retry would also erase an export failure. The
+shared MIDI state now has separate playback feedback. Play attempts/stop retire
+only playback messages; export/external-action messages survive. Studio footer
+composition shows the latest active message, then derives progress from live
+export/synthesis state when no active notice takes precedence. It uses the same
+footer layout, without adding a permanent bar or coupling job lifetime to a toast.
+Playback clocks, note/range state, synthesis, cached `Arc` WAV bytes, seeking and
+source checks are unchanged.
+
+The browser likewise retains distinct copy and playback notices. Navigation and
+preview stops retire playback feedback while accepted-copy polling/results remain
+owned independently. The list uses shared status renderers, preserving error
+severity and requesting the actual expiry repaint instead of leaving a plain
+label on an idle frame. Copy/synthesis progress follows the pending job state;
+redundant progress-toast producer writes are removed to avoid duplicate strip labels.
+Monotonic playback timestamps translate to the host frame clock at forwarding;
+copy completion already uses that host clock. Forwarding retains the original
+message age rather than restarting the expiry interval. No new generic feedback
+framework, worker queue, parser or audio path was introduced.
+
+Successful MIDI copies no longer emit an unconditional success message (which
+also incorrectly claimed Left Hand delivery after clipboard-only fallback).
+Four private artifact fields used solely to format that message and their string
+construction are removed. Real output filename, note count, track remapping,
+onset/duration, bytes and handoff checks remain. Tests now inspect actual encoded
+MIDI rather than success-only metadata. Cancelled export progress is cleared;
+actual failures retain the shared persistent-error role.
+
+All **49 MIDI-focused tests** and **2650 workspace tests, zero failures, 30
+ignored** pass. Coverage includes doctests, accepted-export lifetime/close tests,
+playback retry versus export failure, stop/retirement isolation and rendered idle
+expiry/error persistence (`/tmp/deep-midi-owned-progress-focused.log`,
+`/tmp/deep-midi-owned-progress-workspace.log`). The first complete run caught
+an incorrect new assertion that a note's duration equaled the whole selection:
+the fixture selects 0.5–2.0s but its note begins at 1.0s. The corrected assertion
+checks the encoded clipped duration of 1.0s; the failed run remains
+`/tmp/deep-midi-feedback-workspace.log` and is not accepted evidence.
+
+Workspace all-target compilation, both desktop builds, diagnostic studio/browser
+Clippy and studio documentation pass (`/tmp/deep-midi-owned-progress-check.log`,
+`/tmp/deep-midi-owned-progress-build.log`, `/tmp/deep-midi-owned-progress-clippy.log`,
+`/tmp/deep-midi-owned-progress-doc.log`). Clippy retains the previously recorded
+approximate-constant allowance and existing diagnostics; no warning points to the
+new feedback composition/rendering methods. The rendered playback-field ownership
+documentation was checked. Formatting/diff checks pass.
+
+A private Weston/Niri capture verifies the MIDI layout
+(`/tmp/deep-midi-feedback-layout/report.json`). Its observed Copy button was then
+clicked through the private pointer with the real exporter and fake daemon:
+`/tmp/deep-midi-owned-progress-copy/report.json` passes, accepting one 114-byte MIDI
+inside the run's private runtime with three declared/encoded tracks and note-on
+data. The final capture has the existing footer and no copy-success toast. These
+are actual UI/export checks; no physical MIDI controller or host audio-device
+acceptance is claimed. Unit retry tests deliberately use EOF to avoid opening an
+audio device while testing the feedback transition.
+
+Architecture comparison against `deep-midi-feedback-start` reports raw REGRESSION
+from total CCN +31 / NLOC +163 / functions +10 and modified existing clone blocks.
+Clone groups (1501), cycles (16) and average/max CCN remain unchanged; no newly
+introduced production function crosses the high-complexity threshold. The added
+branches express independent owners, progress state and regression checks while
+removing success-message machinery. Evidence:
+`/tmp/deep-midi-owned-progress-architecture.json`. About 135 GiB remains free;
+Cargo work was serialized at four jobs and no sweep was needed.
+
+[The acceptance audit](DEEP_REFACTORING_AUDIT.md) now separates delivered ownership
+contracts from the remaining rolling-strip feedback, pipeline built-in content
+admission, native input-response evidence and final requirement review. It keeps
+the full original scope and explicitly does not declare the goal complete.

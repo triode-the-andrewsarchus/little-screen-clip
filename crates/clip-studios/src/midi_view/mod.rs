@@ -214,7 +214,10 @@ pub struct MidiViewerState {
     pub view_duration_sec: f32,
     pub user_panned_during_playback: bool,
     pub hovered_note: Option<MidiNote>,
+    /// Export and external-action feedback, retained independently of playback retries.
     pub status_toast: StatusToast,
+    /// Playback feedback on [`ui_ext::feedback_time`], cleared on retry or stop.
+    pub playback_status: StatusToast,
     pub selected_region: Option<(f32, f32)>,
     pub solo_track: Option<usize>,
     pub drag_start_time: Option<f32>,
@@ -235,10 +238,6 @@ struct MidiExportJob {
 struct MidiExportArtifact {
     path: PathBuf,
     directory: std::fs::File,
-    total_notes: usize,
-    duration_sec: f32,
-    is_slice: bool,
-    solo_info: String,
     delivery: MidiExportDelivery,
     retain_file: bool,
 }
@@ -325,6 +324,7 @@ impl MidiViewerState {
             user_panned_during_playback: false,
             hovered_note: None,
             status_toast: StatusToast::new(),
+            playback_status: StatusToast::new(),
             selected_region: None,
             solo_track: None,
             drag_start_time: None,
@@ -337,6 +337,28 @@ impl MidiViewerState {
             export_job: None,
             data,
         }
+    }
+
+    fn feedback(&self, now: f64) -> Option<(crate::ui_ext::StatusMessage, f64)> {
+        self.status_toast
+            .active(now)
+            .into_iter()
+            .chain(self.playback_status.active(now))
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+            .cloned()
+            .or_else(|| {
+                let message = if self.export_pending() {
+                    "Preparing MIDI export…"
+                } else if self.is_synthesizing {
+                    "Synthesizing audio…"
+                } else {
+                    return None;
+                };
+                Some((
+                    crate::ui_ext::StatusMessage::new(Icon::Hourglass, message),
+                    now,
+                ))
+            })
     }
 
     pub fn zoom(&mut self, factor: f32, anchor_time: f32) {

@@ -227,9 +227,7 @@ impl FileManager {
             super::super::midi_strip::focus_id(),
             Sense::focusable_noninteractive(),
         );
-        if let Some(message) = self.midi.notice.message(ui.input(|input| input.time)) {
-            ui.label(message);
-        }
+        self.midi.render_feedback(ui, palette);
         let scroll = self.list_scroll(ROW_HEIGHT);
         let Some(directory) = &self.directory else {
             ui.label(if self.pending.is_some() {

@@ -27,6 +27,39 @@ fn inline_midi_data(note_count: usize) -> Arc<MidiData> {
     })
 }
 
+#[test]
+fn cached_midi_play_attempt_retires_previous_playback_failure() {
+    let mut state = MidiViewerState::from_shared(inline_midi_data(1), None, "Retry".into());
+    let now = crate::ui_ext::feedback_time();
+    state.playback_status.set(
+        crate::ui_ext::StatusMessage::error("old playback failure"),
+        now,
+    );
+    state
+        .status_toast
+        .set(crate::ui_ext::StatusMessage::error("export failure"), now);
+    state.wav_cache = Some(Arc::from([]));
+    // Reaching EOF avoids opening any real audio device in this state test.
+    state.playhead_sec = state.data.duration_sec;
+    state.play();
+    assert!(!state.playback_status.is_active(now));
+    assert_eq!(state.status_toast.message(now), Some("export failure"));
+}
+
+#[test]
+fn stopping_midi_playback_preserves_export_failure_feedback() {
+    let mut state = MidiViewerState::from_shared(inline_midi_data(1), None, "Stop".into());
+    state
+        .playback_status
+        .set(crate::ui_ext::StatusMessage::error("playback failure"), 0.0);
+    state
+        .status_toast
+        .set(crate::ui_ext::StatusMessage::error("export failure"), 0.0);
+    state.stop();
+    assert!(!state.playback_status.is_active(100.0));
+    assert_eq!(state.feedback(100.0).unwrap().0.text, "export failure");
+}
+
 fn render_inline_midi_pair(
     ctx: &egui::Context,
     first: &mut InlineMidiPreview,
@@ -581,6 +614,7 @@ fn midi_viewer_tracks_selection_and_solo_for_export() {
         user_panned_during_playback: false,
         hovered_note: None,
         status_toast: StatusToast::new(),
+        playback_status: StatusToast::new(),
         selected_region: None,
         solo_track: None,
         drag_start_time: None,
@@ -662,14 +696,11 @@ fn midi_export_worker_writes_selected_solo_slice_with_original_timing_and_name()
     )
     .unwrap();
 
-    assert_eq!(artifact.total_notes, 1);
-    assert_eq!(artifact.duration_sec, 1.5);
     assert!(
         artifact
             .path
             .ends_with("midi_slice_123_0.5s-2.0s_Bass_Line.mid")
     );
-    assert_eq!(artifact.solo_info, " (solo 'Bass Line')");
     let bytes = std::fs::read(&artifact.path).unwrap();
     let parsed = MidiData::parse_bytes(&bytes, "round trip".to_string()).unwrap();
     assert_eq!(parsed.total_notes, 1);
@@ -678,6 +709,9 @@ fn midi_export_worker_writes_selected_solo_slice_with_original_timing_and_name()
         "solo track is remapped to track zero"
     );
     assert!((parsed.notes[0].start_sec - 0.5).abs() < 0.01);
+    // The note originally spans 1.0–2.25s; the selected 0.5–2.0s window
+    // shifts its onset to 0.5s and clips its duration to 1.0s.
+    assert!((parsed.notes[0].duration_sec - 1.0).abs() < 0.01);
     let moved = test_dir.with_extension("moved");
     std::fs::rename(&test_dir, &moved).unwrap();
     std::fs::create_dir(&test_dir).unwrap();
@@ -769,10 +803,7 @@ fn midi_full_score_copy_uses_injected_job_directory_and_handoff() {
         state.export_job.is_none(),
         "injected export job did not resolve"
     );
-    assert_eq!(
-        state.status_toast.message(1.1),
-        Some("Copied full MIDI (1 notes) to Clipboard & Left Hand!")
-    );
+    assert_eq!(state.status_toast.message(1.1), None);
 }
 
 #[test]
@@ -887,10 +918,7 @@ fn rendered_full_score_copy_shortcut_exports_parseable_midi_to_left_hand() {
         state.export_job.is_none(),
         "rendered MIDI export did not finish"
     );
-    assert_eq!(
-        state.status_toast.message(time + 0.1),
-        Some("Copied full MIDI (1 notes) to Clipboard & Left Hand!")
-    );
+    assert_eq!(state.status_toast.message(time + 0.1), None);
 }
 
 #[test]
@@ -1030,6 +1058,7 @@ fn test_midi_viewer_render_ui_tracks_and_legend() {
         user_panned_during_playback: false,
         hovered_note: None,
         status_toast: StatusToast::new(),
+        playback_status: StatusToast::new(),
         selected_region: None,
         solo_track: None,
         drag_start_time: None,
@@ -1139,6 +1168,10 @@ fn accepted_midi_export_survives_repeat_copy_stop_and_viewer_drop() {
         ))
     );
     state.stop();
+    assert_eq!(
+        state.feedback(100.0).unwrap().0.text,
+        "Preparing MIDI export…"
+    );
     let ctx = egui::Context::default();
     let palette = AppPalette::default();
     let mut close = true;

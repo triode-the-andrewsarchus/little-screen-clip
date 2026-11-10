@@ -16,7 +16,7 @@ impl MidiViewerState {
 
     pub(super) fn copy_selection_on(
         &mut self,
-        now: f64,
+        _now: f64,
         jobs: &BackgroundJobs,
         export_dir: PathBuf,
         handoff: impl FnOnce(
@@ -56,7 +56,7 @@ impl MidiViewerState {
             handoff(artifact, &job_cancelled, started)
         });
         self.export_job = Some(MidiExportJob { receiver });
-        self.status_toast.set("Preparing MIDI export…", now);
+        self.status_toast.clear();
         true
     }
 
@@ -66,17 +66,6 @@ impl MidiViewerState {
         };
         match job.receiver.try_recv() {
             Ok(Ok(Ok(mut artifact))) => {
-                let desc = if artifact.is_slice {
-                    format!(
-                        "Copied {:.1}s MIDI slice ({} notes{}) to Clipboard & Left Hand!",
-                        artifact.duration_sec, artifact.total_notes, artifact.solo_info
-                    )
-                } else {
-                    format!(
-                        "Copied full MIDI ({} notes{}) to Clipboard & Left Hand!",
-                        artifact.total_notes, artifact.solo_info
-                    )
-                };
                 match artifact.delivery {
                     MidiExportDelivery::PushedToWorkbench => {}
                     MidiExportDelivery::ClipboardFallback => {
@@ -84,18 +73,22 @@ impl MidiViewerState {
                     }
                 }
                 artifact.retain();
-                self.status_toast.set(desc, now);
+                self.status_toast.clear();
                 self.export_job = None;
             }
             Ok(Ok(Err(error))) => {
                 if error == "MIDI export cancelled" {
+                    self.status_toast.clear();
                     self.export_job = None;
                     return;
                 }
                 self.status_toast.set(StatusMessage::error(error), now);
                 self.export_job = None;
             }
-            Ok(Err(JobError::Cancelled)) => self.export_job = None,
+            Ok(Err(JobError::Cancelled)) => {
+                self.status_toast.clear();
+                self.export_job = None;
+            }
             Ok(Err(error)) => {
                 self.status_toast.set(
                     StatusMessage::error(format!("Failed to export MIDI: {error}")),
@@ -224,17 +217,6 @@ pub(super) fn write_midi_export(
     let artifact = MidiExportArtifact {
         path,
         directory,
-        total_notes: sliced_data.total_notes,
-        duration_sec: end_sec - start_sec,
-        is_slice,
-        solo_info: solo_track.map_or_else(String::new, |track| {
-            let name = data
-                .track_names
-                .get(track)
-                .map(String::as_str)
-                .unwrap_or("track");
-            format!(" (solo '{name}')")
-        }),
         delivery: MidiExportDelivery::PushedToWorkbench,
         retain_file: false,
     };

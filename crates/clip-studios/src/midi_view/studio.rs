@@ -797,7 +797,7 @@ impl MidiViewerState {
                 }
 
                 // 4. Footer
-                let toast_tuple = self.status_toast.active(now).cloned();
+                let toast_tuple = self.feedback(now);
                 shell.render_footer(ui, &toast_tuple, now);
             });
         if self.export_pending() {

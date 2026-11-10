@@ -8,6 +8,8 @@ impl MidiViewerState {
             return;
         }
 
+        self.playback_status.clear();
+
         self.user_panned_during_playback = false;
 
         if self.wav_cache.is_none() {
@@ -22,8 +24,6 @@ impl MidiViewerState {
                     });
                 self.synth_rx = Some(rx);
                 self.synth_ticket = Some(ticket);
-                let now = crate::ui_ext::feedback_time();
-                self.status_toast.set("Synthesizing audio…", now);
             }
             return;
         }
@@ -49,7 +49,7 @@ impl MidiViewerState {
                             source.try_seek(Duration::from_secs_f32(self.playhead_sec.max(0.0)))
                         {
                             let now = crate::ui_ext::feedback_time();
-                            self.status_toast.set(
+                            self.playback_status.set(
                                 StatusMessage::error(format!("MIDI seek failed: {error}")),
                                 now,
                             );
@@ -69,7 +69,7 @@ impl MidiViewerState {
                     }
                     Err(e) => {
                         let now = crate::ui_ext::feedback_time();
-                        self.status_toast.set(
+                        self.playback_status.set(
                             StatusMessage::error(format!("Audio decode error: {}", e)),
                             now,
                         );
@@ -78,7 +78,7 @@ impl MidiViewerState {
             }
             None => {
                 let now = crate::ui_ext::feedback_time();
-                self.status_toast.set(
+                self.playback_status.set(
                     StatusMessage::error("Audio device error: could not open shared audio output"),
                     now,
                 );
@@ -157,6 +157,7 @@ impl MidiViewerState {
     }
 
     pub fn stop(&mut self) {
+        self.playback_status.clear();
         if let Some(player) = &self.player {
             player.stop();
         }
@@ -196,7 +197,7 @@ impl MidiViewerState {
                     self.synth_rx = None;
                     self.synth_ticket = None;
                     let now = crate::ui_ext::feedback_time();
-                    self.status_toast.set(
+                    self.playback_status.set(
                         StatusMessage::error(format!("MIDI synthesis failed: {error}")),
                         now,
                     );
@@ -207,7 +208,7 @@ impl MidiViewerState {
                     self.synth_rx = None;
                     self.synth_ticket = None;
                     let now = crate::ui_ext::feedback_time();
-                    self.status_toast.set(
+                    self.playback_status.set(
                         StatusMessage::error("MIDI synthesis worker disconnected"),
                         now,
                     );
