@@ -8,8 +8,8 @@ use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::SlotId;
 use little_clip_core::palette::AppPalette;
 
-pub const SCREEN_WIDTH: f32 = 1920.0;
-pub const SCREEN_HEIGHT: f32 = 462.0;
+pub const SCREEN_WIDTH: f32 = little_clip_render::SCREEN_WIDTH as f32;
+pub const SCREEN_HEIGHT: f32 = little_clip_render::SCREEN_HEIGHT as f32;
 
 /// Keep the physical display's aspect ratio while reserving room for workbench content.
 pub fn fitted_mirror_size(available: Vec2) -> Vec2 {
@@ -63,6 +63,7 @@ pub struct ScreenMirrorWidget<'a> {
     pub dragging_slot: &'a mut Option<SlotId>,
     pub selected_slots: &'a [SlotId],
     height_scale: f32,
+    native_data: Option<&'a super::native_mirror::NativeMirrorData>,
 }
 
 impl<'a> ScreenMirrorWidget<'a> {
@@ -78,7 +79,16 @@ impl<'a> ScreenMirrorWidget<'a> {
             dragging_slot,
             selected_slots,
             height_scale: 1.0,
+            native_data: None,
         }
+    }
+
+    pub(crate) fn with_native(
+        mut self,
+        data: Option<&'a super::native_mirror::NativeMirrorData>,
+    ) -> Self {
+        self.native_data = data;
+        self
     }
 
     /// Caps the mirror height relative to the normal screen-adaptive size.
@@ -114,7 +124,19 @@ impl<'a> ScreenMirrorWidget<'a> {
 
     fn paint(&self, ui: &egui::Ui, palette: &AppPalette, rect: Rect, hovered_slot: Option<SlotId>) {
         let painter = ui.painter_at(rect);
-        if let Some(tex) = self.mirror_texture {
+        if let Some(data) = self
+            .native_data
+            .filter(|data| data.is_dark == palette.is_dark)
+        {
+            super::native_mirror::paint(
+                ui,
+                palette,
+                rect,
+                data,
+                self.mirror_texture,
+                self.left_priors,
+            );
+        } else if let Some(tex) = self.mirror_texture {
             painter.image(
                 tex.id(),
                 rect,
@@ -253,5 +275,157 @@ mod tests {
         assert_eq!(slot_at_x(1200.0, 3), SlotId::LeftPrior3);
         assert_eq!(slot_at_x(1400.0, 2), SlotId::RightPrior1);
         assert_eq!(slot_at_x(1700.0, 2), SlotId::RightHand);
+    }
+}
+
+#[cfg(test)]
+mod native_input_tests {
+    use super::super::native_mirror::NativeMirrorData;
+    use super::*;
+
+    fn frame(
+        ctx: &egui::Context,
+        width: f32,
+        events: Vec<egui::Event>,
+        data: Option<&NativeMirrorData>,
+        dragging: &mut Option<SlotId>,
+        left_priors: usize,
+    ) -> Option<MirrorAction> {
+        let mut action = None;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none())
+                    .show(ctx, |ui| {
+                        action = ScreenMirrorWidget::new(None, left_priors, dragging, &[])
+                            .with_native(data)
+                            .show(ui, &crate::ui_appearance::palette(Default::default()));
+                    });
+            },
+        );
+        action
+    }
+
+    #[test]
+    fn native_and_reference_clicks_target_the_same_slots_at_both_layout_widths() {
+        let data = NativeMirrorData::prepare(&Default::default(), Vec::new(), true);
+        for width in [900.0, 1600.0] {
+            for priors in [2, 3] {
+                for (slot, native) in slot_rects(priors) {
+                    for prepared in [None, Some(&data)] {
+                        let ctx = egui::Context::default();
+                        let mut dragging = None;
+                        frame(&ctx, width, Vec::new(), prepared, &mut dragging, priors);
+                        let size = fitted_mirror_size(Vec2::new(width, 600.0));
+                        let point = Pos2::new(
+                            (width - size.x) * 0.5 + native.center().x * size.x / SCREEN_WIDTH,
+                            size.y * 0.5,
+                        );
+                        frame(
+                            &ctx,
+                            width,
+                            vec![
+                                egui::Event::PointerMoved(point),
+                                egui::Event::PointerButton {
+                                    pos: point,
+                                    button: egui::PointerButton::Primary,
+                                    pressed: true,
+                                    modifiers: Default::default(),
+                                },
+                            ],
+                            prepared,
+                            &mut dragging,
+                            priors,
+                        );
+                        let action = frame(
+                            &ctx,
+                            width,
+                            vec![egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed: false,
+                                modifiers: Default::default(),
+                            }],
+                            prepared,
+                            &mut dragging,
+                            priors,
+                        );
+                        assert_eq!(
+                            action,
+                            Some(MirrorAction::Click(slot)),
+                            "width={width}, priors={priors}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn native_and_reference_drags_emit_the_same_swap() {
+        let data = NativeMirrorData::prepare(&Default::default(), Vec::new(), true);
+        for prepared in [None, Some(&data)] {
+            let ctx = egui::Context::default();
+            let mut dragging = None;
+            frame(&ctx, 900.0, Vec::new(), prepared, &mut dragging, 2);
+            let start = Pos2::new(200.0, 100.0);
+            let end = Pos2::new(800.0, 100.0);
+            frame(
+                &ctx,
+                900.0,
+                vec![
+                    egui::Event::PointerMoved(start),
+                    egui::Event::PointerButton {
+                        pos: start,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                ],
+                prepared,
+                &mut dragging,
+                2,
+            );
+            frame(
+                &ctx,
+                900.0,
+                vec![egui::Event::PointerMoved(start + Vec2::new(10.0, 0.0))],
+                prepared,
+                &mut dragging,
+                2,
+            );
+            frame(
+                &ctx,
+                900.0,
+                vec![egui::Event::PointerMoved(end)],
+                prepared,
+                &mut dragging,
+                2,
+            );
+            let action = frame(
+                &ctx,
+                900.0,
+                vec![egui::Event::PointerButton {
+                    pos: end,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                }],
+                prepared,
+                &mut dragging,
+                2,
+            );
+            assert_eq!(
+                action,
+                Some(MirrorAction::DropSwap {
+                    from: SlotId::LeftHand,
+                    to: SlotId::RightHand
+                })
+            );
+        }
     }
 }

@@ -59,7 +59,9 @@ impl ScreenRenderer {
         w: u32,
         h: u32,
         is_hero: bool,
-    ) {
+        collect_previews: bool,
+    ) -> Option<crate::PreparedTextPreview> {
+        let mut text_preview = None;
         let is_cursor = manager.cursor == slot_id;
         let is_selected = manager.selected.contains(&slot_id);
 
@@ -139,6 +141,8 @@ impl ScreenRenderer {
                 rect_h,
                 is_hero,
                 border_color,
+                &mut text_preview,
+                collect_previews,
             );
         } else {
             // Empty placeholder
@@ -153,6 +157,7 @@ impl ScreenRenderer {
                 card_clip_right,
             );
         }
+        text_preview
     }
 
     fn draw_item_content(
@@ -165,6 +170,8 @@ impl ScreenRenderer {
         rh: f32,
         is_hero: bool,
         border_color: Color,
+        text_preview: &mut Option<crate::PreparedTextPreview>,
+        collect_previews: bool,
     ) {
         let (t_r, t_g, t_b, t_a) = parse_hex_color(&self.palette.colors.text_primary);
         let (s_r, s_g, s_b, s_a) = parse_hex_color(&self.palette.colors.text_secondary);
@@ -260,7 +267,7 @@ impl ScreenRenderer {
                     }
                 };
 
-                self.draw_text_preview(
+                *text_preview = self.draw_text_preview(
                     pixmap,
                     &preview_text,
                     effective_hint,
@@ -270,6 +277,7 @@ impl ScreenRenderer {
                     rh,
                     is_hero,
                     elision_color,
+                    collect_previews,
                 );
             }
             ClipPayload::Markdown(content) => {
@@ -516,6 +524,7 @@ impl ScreenRenderer {
                                 rh,
                                 is_hero,
                                 elision_color,
+                                false,
                             );
                             return;
                         }

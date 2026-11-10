@@ -1,6 +1,24 @@
 use super::*;
 
 impl WorkbenchApp {
+    fn render_mirror_presentation_controls(&mut self, ui: &mut egui::Ui) {
+        if self.view == WorkbenchView::Palette
+            && let Some(mode) = &mut self.native_mirror_mode
+        {
+            use shell::native_mirror::MirrorPresentation::{DisplayReference, Native};
+            let tabs = [
+                crate::ui_tabs::Tab::new(Native, "Native"),
+                crate::ui_tabs::Tab::new(DisplayReference, "Display reference"),
+            ];
+            if let Some(next) =
+                crate::ui_tabs::TabBar::new("mirror_presentation", *mode, &tabs, &self.ui_palette)
+                    .show(ui)
+            {
+                *mode = next;
+            }
+        }
+    }
+
     pub(crate) fn render_text_smart_preview_actions(&mut self, ui: &mut egui::Ui) {
         let first_text_item = self.selected_slots.iter().find_map(|s| {
             let item = self.state.get(*s)?;
@@ -134,6 +152,7 @@ impl WorkbenchApp {
                     {
                         self.toggle_appearance(ctx);
                     }
+                    self.render_mirror_presentation_controls(ui);
                     if !self.state_loaded
                         || (self.view == WorkbenchView::Palette
                             && self.mirror_texture.is_none()
@@ -182,6 +201,12 @@ impl WorkbenchApp {
                         self.config.slots.left_priors,
                         &mut self.dragging_slot,
                         &self.selected_slots,
+                    )
+                    .with_native(
+                        (self.native_mirror_mode
+                            == Some(shell::native_mirror::MirrorPresentation::Native))
+                        .then_some(self.native_mirror_data.as_ref())
+                        .flatten(),
                     )
                     .show(ui, &self.ui_palette);
                     self.handle_mirror_action(mirror_action);

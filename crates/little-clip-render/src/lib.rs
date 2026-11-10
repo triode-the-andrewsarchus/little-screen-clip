@@ -13,6 +13,25 @@ use thiserror::Error;
 use tiny_skia::*;
 use tracing::debug;
 
+/// Worker-prepared text actually used by a raster card and its native counterpart.
+/// Structured text cards retain their raster presentation instead.
+#[derive(Debug, Default)]
+pub struct PreparedTextPreview {
+    /// Visible highlighted lines, with each span bounded to 512 characters.
+    pub lines: Vec<Vec<PreparedTextSpan>>,
+    /// Additional lines represented by the raster footer badge.
+    pub more_lines: usize,
+}
+
+/// One highlighted run from the existing card highlighter.
+#[derive(Debug)]
+pub struct PreparedTextSpan {
+    /// Prefix of the highlighted run, bounded to 512 Unicode scalar values.
+    pub text: String,
+    /// Unpremultiplied display RGBA, including the existing contrast adjustment.
+    pub color: [u8; 4],
+}
+
 /// Target width in pixels for the physical secondary display.
 pub const SCREEN_WIDTH: u32 = 1920;
 /// Target height in pixels for the physical secondary display.
@@ -399,6 +418,30 @@ impl ScreenRenderer {
     /// Returns [`RenderError`] if allocating the canvas buffer fails or if rendering
     /// any slot element encounters an unrecoverable graphics error.
     pub fn render_pixmap(&self, manager: &SlotManager) -> Result<Pixmap, RenderError> {
+        self.render_pixmap_inner(manager, false)
+            .map(|(pixmap, _)| pixmap)
+    }
+
+    /// Renders the exact display reference and returns its prepared text runs.
+    ///
+    /// This has the same worker-side content access as [`Self::render_pixmap`].
+    /// Native consumers paint these runs without re-reading or reclassifying files.
+    ///
+    /// # Errors
+    /// Returns the same allocation/rendering errors as [`Self::render_pixmap`].
+    pub fn render_pixmap_with_previews(
+        &self,
+        manager: &SlotManager,
+    ) -> Result<(Pixmap, Vec<(SlotId, PreparedTextPreview)>), RenderError> {
+        self.render_pixmap_inner(manager, true)
+    }
+
+    fn render_pixmap_inner(
+        &self,
+        manager: &SlotManager,
+        collect_previews: bool,
+    ) -> Result<(Pixmap, Vec<(SlotId, PreparedTextPreview)>), RenderError> {
+        let mut text_previews = Vec::new();
         let mut pixmap = Pixmap::new(SCREEN_WIDTH, SCREEN_HEIGHT)
             .ok_or_else(|| RenderError::ImageEncode("Failed to allocate pixmap".to_string()))?;
 
@@ -411,7 +454,7 @@ impl ScreenRenderer {
         scene_preview::retain_visible(self, manager, &layout);
         // Render slots according to canonical layout
         for slot in layout {
-            self.draw_slot_card(
+            let preview = self.draw_slot_card(
                 &mut pixmap,
                 manager,
                 slot.slot_id,
@@ -420,7 +463,11 @@ impl ScreenRenderer {
                 slot.width,
                 slot.height,
                 slot.is_hero,
+                collect_previews,
             );
+            if let Some(preview) = preview {
+                text_previews.push((slot.slot_id, preview));
+            }
         }
 
         // Draw Debug Handler badge in bottom left of screen if enabled
@@ -472,7 +519,7 @@ impl ScreenRenderer {
             }
         }
 
-        Ok(pixmap)
+        Ok((pixmap, text_previews))
     }
 
     /// Renders the complete 1920x462 hotbar layout into a compressed JPEG.
@@ -501,16 +548,7 @@ impl ScreenRenderer {
 
     /// Returns the border color hex string configured for the given slot.
     pub fn slot_border_hex(&self, slot_id: SlotId) -> &str {
-        match slot_id {
-            SlotId::Undo => &self.palette.undo_border,
-            SlotId::LeftHand => &self.palette.left_hand_border,
-            SlotId::LeftPrior1 => &self.palette.left_prior1_border,
-            SlotId::LeftPrior2 => &self.palette.left_prior2_border,
-            SlotId::LeftPrior3 => &self.palette.left_prior3_border,
-            SlotId::RightPrior2 => &self.palette.right_prior2_border,
-            SlotId::RightPrior1 => &self.palette.right_prior1_border,
-            SlotId::RightHand => &self.palette.right_hand_border,
-        }
+        self.palette.slot_border_hex(slot_id)
     }
 
     /// Compresses the tiny-skia Pixmap to a JPEG under the 450 KB hardware ceiling.

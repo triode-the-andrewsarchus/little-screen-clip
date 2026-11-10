@@ -606,6 +606,8 @@ struct WorkbenchApp {
     mirror_job: Option<MirrorJob>,
     mirror_error: Option<String>,
     mirror_animated: bool,
+    native_mirror_mode: Option<shell::native_mirror::MirrorPresentation>,
+    native_mirror_data: Option<shell::native_mirror::NativeMirrorData>,
     palette_ops: Option<(ClipboardSelection, Vec<OpDescriptor>)>,
     palette_ops_job: Option<PaletteOpsJob>,
     ui_palette: AppPalette,

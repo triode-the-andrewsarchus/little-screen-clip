@@ -1018,6 +1018,15 @@ class ChildProcesses:
         for proc in reversed(list(self._processes.values())):
             stop_process(proc)
 
+    def memory_usage_kib(self, name: str) -> dict[str, int]:
+        """Sample bounded memory facts for one owned, still-running child."""
+        proc = self._processes[name]
+        if proc.poll() is not None:
+            return {}
+        with Path(f"/proc/{proc.pid}/status").open() as status:
+            fields = dict(line.split(":", 1) for line in status.read(16384).splitlines() if ":" in line)
+        return {key: int(fields[key].split()[0]) for key in ("VmRSS", "VmHWM") if key in fields}
+
     def exit_statuses(self) -> dict[str, int | None]:
         return {name: proc.returncode for name, proc in self._processes.items()}
 
@@ -1446,6 +1455,7 @@ def capture_workbench(
     capture_pdf_clipboard(args, output, niri_env, report)
     final_windows = own_windows(niri_bin, niri_env, {app.pid})
     report["final_windows"] = final_windows
+    report["workbench_memory_kib"] = children.memory_usage_kib("workbench")
     capture_name = f"image-{args.image_tool}" if args.image_tool else "settled"
     if args.image_action:
         capture_name = f"{capture_name}-{args.image_action}"
@@ -1912,7 +1922,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
     return binary
 
 
-def main() -> int:
+def main(*, fake_text_factory=FakeTextPreviewDaemon) -> int:
     args = create_parser().parse_args()
     repo = Path(__file__).resolve().parent.parent
     binary = validate_cli(args, repo)
@@ -2012,7 +2022,7 @@ def main() -> int:
             or args.fake_image_diff_preview or args.fake_reload_error
             or args.verify_midi_copy_pointer
         ):
-            fake_text_daemon = FakeTextPreviewDaemon(
+            fake_text_daemon = fake_text_factory(
                 config["runtime"], output / "fake-text-daemon-events.json",
                 csv_preview=args.fake_csv_preview,
                 xlsx_preview=args.fake_multisheet_xlsx,

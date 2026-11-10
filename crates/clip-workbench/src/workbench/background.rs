@@ -37,7 +37,11 @@ pub(crate) struct PaletteOpsJob {
     receiver: Receiver<Result<Vec<OpDescriptor>, JobError>>,
 }
 
-type MirrorResult = (ScreenRenderer, Result<egui::ColorImage, String>, bool);
+type MirrorImage = (
+    egui::ColorImage,
+    Option<shell::native_mirror::NativeMirrorData>,
+);
+type MirrorResult = (ScreenRenderer, Result<MirrorImage, String>, bool);
 
 pub(crate) struct MirrorJob {
     key: ClipboardSelection,
@@ -124,7 +128,8 @@ impl WorkbenchApp {
                             {
                                 self.mirror_animated = animated;
                                 match image {
-                                    Ok(image) => {
+                                    Ok((image, native)) => {
+                                        self.native_mirror_data = native;
                                         self.mirror_texture = Some(ctx.load_texture(
                                             "ambient-mirror",
                                             image,
@@ -157,6 +162,7 @@ impl WorkbenchApp {
             let config = self.config.clone();
             let appearance = config.workbench.appearance;
             let renderer = self.renderer.take();
+            let collect_previews = self.native_mirror_mode.is_some();
             let repaint = ctx.clone();
             let (ticket, receiver) =
                 BackgroundJobs::global().submit(Duration::from_secs(30), move || {
@@ -169,12 +175,27 @@ impl WorkbenchApp {
                     let animated = state.has_active_animation();
                     let mut render_state = (*state).clone();
                     render_state.selected = selected;
-                    let image = renderer
-                        .render_pixmap(&render_state)
-                        .map(|pixmap| {
-                            egui::ColorImage::from_rgba_premultiplied(
-                                [SCREEN_WIDTH as usize, SCREEN_HEIGHT as usize],
-                                pixmap.data(),
+                    let rendered = if collect_previews {
+                        renderer.render_pixmap_with_previews(&render_state)
+                    } else {
+                        renderer
+                            .render_pixmap(&render_state)
+                            .map(|pixmap| (pixmap, Vec::new()))
+                    };
+                    let image = rendered
+                        .map(|(pixmap, text)| {
+                            (
+                                egui::ColorImage::from_rgba_premultiplied(
+                                    [SCREEN_WIDTH as usize, SCREEN_HEIGHT as usize],
+                                    pixmap.data(),
+                                ),
+                                collect_previews.then(|| {
+                                    shell::native_mirror::NativeMirrorData::prepare(
+                                        &render_state,
+                                        text,
+                                        renderer.palette.is_dark,
+                                    )
+                                }),
                             )
                         })
                         .map_err(|error| error.to_string());
@@ -262,12 +283,31 @@ mod tests {
     #[test]
     fn mirror_completion_does_not_publish_after_an_appearance_change() {
         let mut app = test_workbench_app(None, VecDeque::new());
+        app.native_mirror_mode = Some(shell::native_mirror::MirrorPresentation::Native);
         let config = app.config.clone();
         let key = ClipboardSelection::new(&app);
         let (_jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
+            let mut stale_state = SlotManager::default();
+            stale_state.push_left(ClipItem::from_text("STALE"));
             (
                 ScreenRenderer::fallback(config),
-                Ok(egui::ColorImage::new([1, 1], egui::Color32::RED)),
+                Ok((
+                    egui::ColorImage::new([1, 1], egui::Color32::RED),
+                    Some(shell::native_mirror::NativeMirrorData::prepare(
+                        &stale_state,
+                        vec![(
+                            SlotId::LeftHand,
+                            little_clip_render::PreparedTextPreview {
+                                lines: vec![vec![little_clip_render::PreparedTextSpan {
+                                    text: "STALE".into(),
+                                    color: [255; 4],
+                                }]],
+                                more_lines: 0,
+                            },
+                        )],
+                        true,
+                    )),
+                )),
                 false,
             )
         });
@@ -285,6 +325,10 @@ mod tests {
         assert_eq!(
             app.renderer.as_ref().unwrap().config.workbench.appearance,
             appearance.toggled()
+        );
+        assert!(
+            app.native_mirror_data.as_ref().unwrap().is_empty_for_test(),
+            "stale native runs must be rejected with the raster result"
         );
     }
 

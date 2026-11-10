@@ -38,6 +38,8 @@ pub(super) fn test_workbench_app(
         mirror_job: None,
         mirror_error: None,
         mirror_animated: false,
+        native_mirror_mode: None,
+        native_mirror_data: None,
         palette_ops: None,
         palette_ops_job: None,
         ui_palette: palette,

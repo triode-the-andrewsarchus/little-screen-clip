@@ -361,6 +361,20 @@ impl Default for AppPalette {
 }
 
 impl AppPalette {
+    /// Returns the canonical accent for a clipboard slot in either presentation.
+    pub fn slot_border_hex(&self, slot: crate::SlotId) -> &str {
+        match slot {
+            crate::SlotId::Undo => &self.undo_border,
+            crate::SlotId::LeftHand => &self.left_hand_border,
+            crate::SlotId::LeftPrior1 => &self.left_prior1_border,
+            crate::SlotId::LeftPrior2 => &self.left_prior2_border,
+            crate::SlotId::LeftPrior3 => &self.left_prior3_border,
+            crate::SlotId::RightPrior2 => &self.right_prior2_border,
+            crate::SlotId::RightPrior1 => &self.right_prior1_border,
+            crate::SlotId::RightHand => &self.right_hand_border,
+        }
+    }
+
     /// Fixed application colors shared by the workbench and little-screen renderer.
     pub fn for_appearance(appearance: WorkbenchAppearance) -> Self {
         let colors = BaseColors::for_appearance(appearance);

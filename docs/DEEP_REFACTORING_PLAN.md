@@ -429,3 +429,105 @@ packaged beside the release executable but absent beside the debug executable.
 Packaging it with the existing `build_multisample_helper.py --skip-build
 --output-dir target/debug/nki-helper` retained corresponding source/licenses;
 no parser code or application linkage changed. About 152 GiB remains free.
+
+### Phase 3a checkpoint: native mirror prototype and findings
+
+An opt-in native Quick Palette mirror now consumes prepared text runs, waveform
+summaries, labels and colors. `LITTLE_CLIP_NATIVE_MIRROR=1` enables Native and
+Display reference tabs on a fresh workbench process. Normal launches retain the
+raster mirror. Hardware rendering and the exact reference remain operational;
+no native default adoption is included. Usage and data contracts are documented
+in [presentation_boundaries.md](presentation_boundaries.md#opt-in-native-mirror-prototype).
+
+The raster worker returns its existing highlighted runs alongside its reference
+pixels; there is no second file probe or syntax pass. Native painting performs
+no content I/O. Structured text, images, Markdown, references and other rich
+cards use that same raster result. Oversized display data also retains its
+raster fallback. Shared core palette policy supplies slot accents, and mirror
+geometry derives from render's screen constants. The existing widget owns all
+pointer routing in both modes.
+
+The native model is prepared on the worker and contains bounded display data,
+not a retained clipboard `Arc`, raw image bytes, paths/handles or PCM. An ownership
+test proves that holding the model does not force clipboard copy-on-write.
+Prepared audio amplitudes/colors are copied without reanalysis or normalization;
+no new decoder, player, cache or queue is introduced. Existing snapshot/selection
+and appearance checks publish raster/native results together. During a mode
+change, an appearance stamp retains the coherent raster view until native colors
+are ready. Tests cover byte-identical reference pixels, structured fallback,
+retained prepared text after source deletion, bounded text, slot clicks across
+both layouts/two widths, equivalent drag swaps, and rejected stale native runs.
+
+Final integration passes: **2616 workspace tests, 30 ignored**
+(`/tmp/deep-native-integration-final.log`). The newly ignored test is the explicit
+CPU comparison, which was also run successfully. Final focused workbench tests
+pass (151 passed, 2 ignored), renderer tests pass (34 passed, 1 ignored), both
+desktop binaries build, workspace/all-target compilation passes, and API docs
+build. Logs include `/tmp/deep-native-bounded-final-tests.log`,
+`/tmp/deep-native-render-accepted.log`, `/tmp/deep-native-desktops-accepted.log`,
+`/tmp/deep-native-bounded-final-build.log`, `/tmp/deep-native-all-targets.log` and
+`/tmp/deep-native-doc.log`. Diagnostic Clippy passes with the known approximate
+constant diagnostic allowed; pre-existing warnings remain
+(`/tmp/deep-native-bounded-final-clippy.log`).
+
+Private Weston/Niri captures verify mixed content, fixed popup/single-instance
+behavior, dark/light modes, HiDPI and mode switching. Current bounded-model
+artifacts are `/tmp/deep-native-bounded-dark/report.json`,
+`/tmp/deep-native-bounded-hidpi/report.json` and
+`/tmp/deep-native-bounded-theme-switch/report.json`. The theme-switch fixture's
+mock daemon deliberately has no ReloadConfig implementation; its expected error
+remains visible while the new light presentation is verified. The async audio
+readiness/hydration check passes (`/tmp/deep-native-audio-transition/report.json`).
+The runner explicitly checks completed mirror content; an earlier capture of a
+still-preparing window no longer counts as visual acceptance. HiDPI OCR tolerates
+whitespace within recognized filenames without weakening the required content.
+
+The reproducible headless comparison uses a 512-bin prepared stereo waveform,
+source text, a color card and raster fallback. These are **debug-profile CPU
+paint/tessellation measurements**, excluding GPU presentation and physical input
+latency (`/tmp/deep-native-bounded-measurements.log`):
+
+| Logical host width / density | Raster median / p95 | Native median / p95 |
+| --- | --- | --- |
+| 900 / 1× | 0.0034 / 0.0035 ms | 0.0948 / 0.1001 ms |
+| 900 / 2× | 0.0035 / 0.0035 ms | 0.1625 / 0.1697 ms |
+| 1800 / 1× | 0.0034 / 0.0034 ms | 0.1323 / 0.1379 ms |
+| 1800 / 2× | 0.0035 / 0.0035 ms | 0.2424 / 0.2513 ms |
+
+Matched reference preparation medians were 13.225 ms without text collection and
+13.223 ms with it: this run establishes no meaningful preparation improvement.
+Native tessellation uses 2860–9168 vertices versus 12 for the cached reference.
+The fixture's text string capacities total 192 bytes, excluding vector/model and
+font-atlas storage; the retained reference remains 3,548,160 RGBA bytes. Sampled
+private-process RSS was roughly 505–507 MiB at 1× for raster/native runs and about
+538 MiB for the current native HiDPI capture; these separate-run samples do not
+prove a memory saving. No physical-input or GPU-latency improvement is claimed.
+The shared handler and event tests establish equivalent application-side input
+routing, not an end-to-end hardware latency bound.
+
+The prototype validates the shared preparation seam and gives a reviewable
+clarity/interaction comparison. It is not a drop-in visual replica: native font
+metrics/wrapping and waveform painting differ, rich cards remain raster, and
+raster diagnostics have not been recreated as native components. The reference
+is still prepared and retained, so startup and memory savings require separate
+work and measurements if native adoption is approved. Search extraction and the
+remaining planned simplification/hygiene work are still outstanding.
+
+The final bounded-model Display reference switch also passes
+(`/tmp/deep-native-bounded-reference-switch/report.json`), as does final
+workspace/all-target compilation (`/tmp/deep-native-all-targets-final.log`).
+Architecture comparison with `deep-native-mirror-start` reports REGRESSION:
+measured NLOC +989, functions +23, total CCN +91; clone groups stay 1511,
+dependency cycles stay 16, and average/max CCN stay 4.06/195. The lower measured
+duplication percentage (4.48→4.46%) includes denominator growth and is not evidence
+of removed clone groups. The localized complexity increases are optional run
+collection in `draw_text_preview` (25→28) and the native/reference worker branch
+in `update_mirror_texture` (14→16). These explicit branches preserve the normal
+raster path without collecting native data; they add no format parser or decoder
+path. The added code implements the approved prototype, its bounded-data/input
+contracts and reproducible acceptance/measurement fixtures; it is not presented
+as an algorithm-complexity reduction. Slot accent policy has one canonical owner.
+No new dependencies, Cargo feature configurations or external runtimes were
+introduced. About 151 GiB remains free. Native default adoption, real GPU/input
+latency measurements and any further visual redesign remain separately
+reviewable; the next structural milestone is search extraction.

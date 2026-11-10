@@ -323,26 +323,27 @@ impl ScreenRenderer {
         rh: f32,
         is_hero: bool,
         _elision_color: Color,
-    ) {
+        collect_previews: bool,
+    ) -> Option<crate::PreparedTextPreview> {
         let clean_text = text.trim_start_matches(is_zero_width_or_bom);
         let trimmed = clean_text.trim();
 
         // 1. Unit conversion preview
         if let Some(conv) = units::detect_unit_conversion(trimmed) {
             self.draw_unit_conversion_card(pixmap, &conv, rx, ry, rw, rh, is_hero);
-            return;
+            return None;
         }
 
         // 2. IP or MAC network preview
         if let Some(net) = network_preview::detect_network_preview(trimmed) {
             self.draw_network_preview_card(pixmap, &net, rx, ry, rw, rh, is_hero);
-            return;
+            return None;
         }
 
         // 3. Timestamp preview
         if let Some(ts) = timestamps::detect_timestamp(trimmed) {
             self.draw_timestamp_card(pixmap, &ts, rx, ry, rw, rh, is_hero);
-            return;
+            return None;
         }
 
         // 4. Spreadsheet preview (CSV text or spreadsheet file)
@@ -371,7 +372,7 @@ impl ScreenRenderer {
                     rh,
                     is_hero,
                 );
-                return;
+                return None;
             }
         }
 
@@ -385,12 +386,12 @@ impl ScreenRenderer {
         {
             if let Ok(midi_data) = midi::MidiData::parse_file(p) {
                 self.draw_midi_card(pixmap, &midi_data, rx, ry, rw, rh, is_hero);
-                return;
+                return None;
             }
         }
 
         if self.draw_scene_file_card(pixmap, p, [rx, ry, rw, rh], is_hero) {
-            return;
+            return None;
         }
 
         let content_x = rx + 14.0;
@@ -424,6 +425,7 @@ impl ScreenRenderer {
             &self.palette.colors.surface_panel
         });
 
+        let mut prepared = collect_previews.then(crate::PreparedTextPreview::default);
         for (idx, line) in lines.iter().enumerate() {
             let is_near_bottom = line_y + line_height > max_y;
             let has_more = idx + 1 < total_lines;
@@ -435,6 +437,9 @@ impl ScreenRenderer {
                     remaining,
                     little_clip_core::syntax::language_display_name(lang_id)
                 );
+                if let Some(prepared) = &mut prepared {
+                    prepared.more_lines = remaining;
+                }
                 self.draw_footer_badge(
                     pixmap,
                     &badge,
@@ -454,6 +459,7 @@ impl ScreenRenderer {
                 .highlight_line(line, &SYNTAX_SET)
                 .unwrap_or_default();
 
+            let mut prepared_line = Vec::new();
             let mut cx = content_x;
             for (style, token_str) in ranges {
                 if cx >= clip_right {
@@ -474,6 +480,13 @@ impl ScreenRenderer {
                 } else {
                     FontStyle::Mono
                 };
+                if collect_previews {
+                    prepared_line.push(crate::PreparedTextSpan {
+                        text: token_str.chars().take(512).collect(),
+                        color: [fg.red(), fg.green(), fg.blue(), fg.alpha()]
+                            .map(|channel| (channel * 255.0).round() as u8),
+                    });
+                }
                 cx = self.draw_text_styled_clipped(
                     pixmap,
                     token_str,
@@ -486,7 +499,11 @@ impl ScreenRenderer {
                 );
             }
 
+            if let Some(prepared) = &mut prepared {
+                prepared.lines.push(prepared_line);
+            }
             line_y += line_height;
         }
+        prepared
     }
 }

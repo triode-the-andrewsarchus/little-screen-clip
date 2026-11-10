@@ -19,6 +19,7 @@ fn code_file_extension_takes_precedence_over_spreadsheet_heuristics() {
         400.0,
         true,
         Color::WHITE,
+        false,
     );
     renderer.draw_text_preview(
         &mut table,
@@ -30,6 +31,7 @@ fn code_file_extension_takes_precedence_over_spreadsheet_heuristics() {
         400.0,
         true,
         Color::WHITE,
+        false,
     );
     assert_ne!(
         code.data(),
@@ -68,6 +70,7 @@ fn text_preview_rasters_have_readable_ink_on_light_and_dark_cards() {
                     200.0,
                     true,
                     Color::WHITE,
+                    false,
                 );
                 // Anti-aliased edges blend into the surface; solid glyph interiors
                 // must still provide enough readable ink in the rendered preview.
@@ -132,6 +135,7 @@ fn text_preview_rasters_render_syntax_highlighted_code() {
             200.0,
             true,
             Color::WHITE,
+            false,
         );
 
         // Collect distinct rendered non-background colors in the pixmap.
@@ -180,6 +184,8 @@ fn office_document_file_batch_renders_page_thumbnail_preview() {
         400.0,
         true,
         Color::WHITE,
+        &mut None,
+        false,
     );
 
     let non_black_count = pixmap
@@ -216,6 +222,8 @@ fn prepared_audio_raster_uses_summary_readiness_without_following_its_source_pat
             400.0,
             true,
             Color::WHITE,
+            &mut None,
+            false,
         );
         raster
     };
@@ -248,4 +256,65 @@ fn prepared_audio_raster_uses_summary_readiness_without_following_its_source_pat
         ready.data(),
         render(Some(waveform), "/dev/zero".into()).data()
     );
+}
+
+#[test]
+fn prepared_text_preserves_exact_raster_and_keeps_structured_cards_as_fallbacks() {
+    use little_clip_core::{SlotId, SlotManager};
+    let renderer = ScreenRenderer::fallback(AppConfig::default());
+    let mut state = SlotManager::default();
+    let mut code = ClipItem::from_text("fn main() {\n    let café = 42;\n}");
+    code.title = "example.rs".into();
+    state.push_left(code);
+    let baseline = renderer.render_pixmap(&state).unwrap();
+    let (reference, text) = renderer.render_pixmap_with_previews(&state).unwrap();
+    assert_eq!(reference.data(), baseline.data());
+    let (_, prepared) = text
+        .iter()
+        .find(|(slot, _)| *slot == SlotId::LeftHand)
+        .unwrap();
+    let first_line: String = prepared.lines[0]
+        .iter()
+        .map(|span| span.text.as_str())
+        .collect();
+    assert_eq!(first_line, "fn main() {");
+    assert!(
+        prepared
+            .lines
+            .iter()
+            .flatten()
+            .all(|span| span.text.chars().count() <= 512)
+    );
+    // A CSV preview is a table, not native unformatted source text.
+    state.push_left(ClipItem::from_text("name,value\nalpha,42\nbeta,84"));
+    let (_, text) = renderer.render_pixmap_with_previews(&state).unwrap();
+    assert!(!text.iter().any(|(slot, _)| *slot == SlotId::LeftHand));
+    state.push_left(ClipItem::from_text("x".repeat(10_000)));
+    let (_, text) = renderer.render_pixmap_with_previews(&state).unwrap();
+    let (_, prepared) = text
+        .iter()
+        .find(|(slot, _)| *slot == SlotId::LeftHand)
+        .unwrap();
+    assert_eq!(prepared.lines[0][0].text.chars().count(), 512);
+}
+
+#[test]
+fn prepared_file_text_is_retained_after_the_original_file_disappears() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("observed.rs");
+    std::fs::write(&path, "fn captured_source() {}\n").unwrap();
+    let mut item = ClipItem::from_text("placeholder");
+    item.payload = ClipPayload::Text(path.to_string_lossy().into_owned());
+    item.title = "observed.rs".into();
+    let mut state = SlotManager::default();
+    state.push_left(item);
+    let renderer = ScreenRenderer::fallback(AppConfig::default());
+    let (_, text) = renderer.render_pixmap_with_previews(&state).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let prepared: String = text
+        .iter()
+        .flat_map(|(_, text)| text.lines.iter().flatten())
+        .map(|span| span.text.as_str())
+        .collect();
+    assert!(prepared.contains("captured_source"));
 }

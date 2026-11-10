@@ -126,3 +126,62 @@ Both applications depend directly on the neutral studio/UI owners.
 Navigation, current-folder assumptions, selection and history stay in the browser;
 these have not been promoted into shared studio APIs. Studio sessions retain
 accepted write completion and document edits while hosts control navigation.
+
+
+## Opt-in native mirror prototype
+
+`LITTLE_CLIP_NATIVE_MIRROR=1 ./launch.sh ui` enables the experimental **Native**
+and **Display reference** tabs in Quick Palette. The normal launch still uses
+the raster mirror. Set the flag when starting a fresh workbench process; a second
+invocation only focuses the existing popup. Neither the hardware renderer nor
+its exact display reference has been replaced. These controls are specific to Quick Palette.
+
+`ScreenRenderer::render_pixmap_with_previews` returns the same reference pixels
+plus bounded visible text runs from the existing classification/highlighting
+pass. The normal raster entry point does not collect these runs. Native text
+uses their existing contrast-adjusted colors; it does not repeat file detection,
+syntax analysis or content reads. Structured text, Markdown, images, file
+references and other specialized cards retain their worker-produced raster
+presentation in the prototype. Audio uses the already prepared peak/color
+summary; no decoder or PCM buffer is introduced. Native text admission allows at
+most 32 prepared lines, 128 spans per line and 2048 UTF-8 bytes per line; larger
+prepared text retains its complete raster fallback. The prototype also paints
+color swatches and empty cards natively. Raster and native slot accents share core's
+palette policy.
+
+The mirror worker prepares bounded display metadata and text runs alongside
+its reference image. Native painting holds bounded labels, text and peak
+summaries rather than a clipboard snapshot, source handles, full image payloads
+or PCM, so it cannot force extra clipboard copy-on-write. Prepared waveform
+summaries up to 8192 entries per channel/color series are copied on the
+worker without reanalysis or renormalization; larger summaries retain the raster
+fallback. Both results publish under the existing state/selection and appearance
+checks. The native model's appearance stamp falls back to the coherent raster
+reference during a color-mode change, until new text colors are ready. This adds
+no independent decoder, thumbnail cache, job queue, player or mutation path. Slot geometry and click/inspection/context/drag handling
+remain in `ScreenMirrorWidget`; changing the presentation does not change input
+routing. The reference image remains retained for comparison and fallback, so
+this prototype is not a memory-saving replacement.
+
+Reproduce the mixed-card private capture with:
+
+```sh
+LITTLE_CLIP_NATIVE_MIRROR=1 TESSDATA_PREFIX=/tmp/little-clip-tessdata \
+  python3 scripts/native_mirror_acceptance.py --binary target/debug/clip-workbench \
+  --appearance dark --settle-ms 12000 --move 1100 760 --output-dir /tmp/native-review-new
+```
+
+Omit the environment flag for the raster baseline; use `--appearance light` or
+`--scale 2` for the other presentation checks. The runner uses a private daemon,
+Weston/Niri instance and owned fixtures. Its content assertion prevents a window
+that is still preparing the preview from passing as a completed visual check.
+The wait is test setup, not a claimed startup latency.
+
+The ignored `shell::native_mirror::tests::compare_native_and_reference_frames`
+test compares warmed headless CPU painting/tessellation at two widths and two
+pixel densities. It reports the actual build profile, preparation timings,
+vertices, text string capacities and reference pixel bytes. It excludes GPU
+presentation, physical input latency and complete process/GPU memory accounting.
+Private captures additionally sample the owned workbench child's RSS/high-water
+RSS. These measurements must not be presented as a guaranteed frame rate or a
+performance win. Native adoption remains a separate user decision.

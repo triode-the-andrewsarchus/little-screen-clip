@@ -112,6 +112,10 @@ impl WorkbenchApp {
             mirror_job: None,
             mirror_error: None,
             mirror_animated: false,
+            native_mirror_mode: std::env::var("LITTLE_CLIP_NATIVE_MIRROR")
+                .is_ok_and(|value| value == "1")
+                .then_some(shell::native_mirror::MirrorPresentation::Native),
+            native_mirror_data: None,
             palette_ops: None,
             palette_ops_job: None,
             ui_palette,
