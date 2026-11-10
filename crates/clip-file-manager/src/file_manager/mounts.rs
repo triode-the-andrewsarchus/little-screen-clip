@@ -269,21 +269,14 @@ pub(crate) fn scan_mounts_sync() -> Vec<MountEntry> {
             }
         });
 
-    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
-    parse_mounts(&proc_mounts, lsblk_json.as_deref(), runtime_dir.as_deref())
+    parse_mounts(&proc_mounts, lsblk_json.as_deref())
 }
 
 /// Core parsing function that filters out snaps, pseudo-filesystems, and system roots,
 /// and returns the combined list of active mounts and unmounted devices.
-pub(crate) fn parse_mounts(
-    proc_mounts: &str,
-    lsblk_json: Option<&str>,
-    runtime_dir: Option<&Path>,
-) -> Vec<MountEntry> {
+pub(crate) fn parse_mounts(proc_mounts: &str, lsblk_json: Option<&str>) -> Vec<MountEntry> {
     let mut entries: Vec<MountEntry> = Vec::new();
     let mut seen_targets: BTreeSet<PathBuf> = BTreeSet::new();
-
-    let binwalk_prefix = runtime_dir.map(|p| p.join("fuse-binwalk"));
 
     // 1. Parse active mounts from /proc/mounts
     for line in proc_mounts.lines() {
@@ -321,11 +314,7 @@ pub(crate) fn parse_mounts(
         }
 
         // Identify fuse-binwalk mounts
-        let is_binwalk = fstype == "fuse.fuse-binwalk"
-            || source_str == "fuse-binwalk"
-            || binwalk_prefix
-                .as_ref()
-                .is_some_and(|prefix| target.starts_with(prefix));
+        let is_binwalk = super::fuse_binwalk::is_binwalk_mount(&source_str, fstype);
 
         if is_binwalk {
             let label = target
@@ -903,7 +892,7 @@ fuse-binwalk /run/user/1001/fuse-binwalk/app-abc1234 fuse.fuse-binwalk rw,nosuid
 /dev/loop10 /mnt/myiso iso9660 ro,relatime 0 0
 "#;
 
-        let entries = parse_mounts(proc_mounts, None, Some(Path::new("/run/user/1001")));
+        let entries = parse_mounts(proc_mounts, None);
 
         // Verify snaps, sysfs, proc, root, and boot/efi are completely excluded
         for entry in &entries {
@@ -968,7 +957,7 @@ fuse-binwalk /run/user/1001/fuse-binwalk/app-abc1234 fuse.fuse-binwalk rw,nosuid
                 {"name": partition, "path": format!("/dev/{partition}"), "type": "part", "pkname": disk, "fstype": "ext4"},
                 {"name": independent, "path": format!("/dev/{independent}"), "type": "disk", "fstype": "ext4"}
             ]});
-            let entries = parse_mounts("", Some(&devices.to_string()), None);
+            let entries = parse_mounts("", Some(&devices.to_string()));
             let paths: Vec<_> = entries
                 .iter()
                 .filter_map(|entry| entry.device_path.clone())
@@ -1018,7 +1007,7 @@ fuse-binwalk /run/user/1001/fuse-binwalk/app-abc1234 fuse.fuse-binwalk rw,nosuid
             ]
         }"#;
 
-        let entries = parse_mounts(proc_mounts, Some(lsblk_json), None);
+        let entries = parse_mounts(proc_mounts, Some(lsblk_json));
         let unmounted_entry = entries
             .iter()
             .find(|e| e.device_path == Some(PathBuf::from("/dev/sdb1")))

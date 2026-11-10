@@ -30,6 +30,12 @@ pub fn refresh_cached_mount_table() -> MountTable {
     fresh
 }
 
+/// Recognizes the reported FUSE subtype or the legacy bare-FUSE source name.
+pub(super) fn is_binwalk_mount(source: &str, filesystem: &str) -> bool {
+    matches!(filesystem, "fuse.binwalk" | "fuse.fuse-binwalk")
+        || (filesystem == "fuse" && source == "fuse-binwalk")
+}
+
 /// Access mode of an active `fuse-binwalk` mount.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MountMode {
@@ -63,7 +69,7 @@ impl MountTable {
             else {
                 continue;
             };
-            if fsname == "fuse-binwalk" || fstype == "fuse.binwalk" || fsname.contains("binwalk") {
+            if is_binwalk_mount(fsname, fstype) {
                 let target = PathBuf::from(unescape_proc_mount_field(raw_target));
                 let mode = if options.split(',').any(|opt| opt == "rw") {
                     MountMode::ReadWrite
@@ -457,6 +463,46 @@ tmpfs /run/user/1000 tmpfs rw,nosuid,nodev,relatime 0 0
             )),
             Some(PathBuf::from("/run/user/1000/fuse-binwalk/rw.bin-abcdef01"))
         );
+    }
+
+    #[test]
+    fn binwalk_classification_requires_a_matching_fuse_identity() {
+        let sample = "\
+fuse-binwalk /mnt/ordinary ext4 rw 0 0
+backup-binwalk /mnt/ssh fuse.sshfs rw 0 0
+/dev/sdb1 /run/user/1000/fuse-binwalk/ordinary ext4 rw 0 0
+fuse-binwalk /mnt/legacy fuse ro 0 0
+other-source /mnt/subtyped fuse.binwalk rw 0 0
+";
+        let table = MountTable::parse_proc_mounts(sample);
+        for path in [
+            "/mnt/ordinary",
+            "/mnt/ssh",
+            "/run/user/1000/fuse-binwalk/ordinary",
+        ] {
+            assert_eq!(table.status(Path::new(path)), None, "misclassified {path}");
+        }
+        assert_eq!(
+            table.status(Path::new("/mnt/legacy")),
+            Some(MountMode::ReadOnly)
+        );
+        assert_eq!(
+            table.status(Path::new("/mnt/subtyped")),
+            Some(MountMode::ReadWrite)
+        );
+        let entries = super::super::mounts::parse_mounts(sample, None);
+        for entry in entries {
+            let is_binwalk = matches!(
+                entry.mount_point.as_deref().and_then(Path::to_str),
+                Some("/mnt/legacy" | "/mnt/subtyped")
+            );
+            assert_eq!(
+                entry.kind == super::super::mounts::MountKind::FuseBinwalk,
+                is_binwalk,
+                "misclassified {:?}",
+                entry.mount_point
+            );
+        }
     }
 
     #[test]
