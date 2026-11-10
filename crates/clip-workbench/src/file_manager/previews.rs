@@ -24,6 +24,7 @@ pub(super) fn strip_slots(count: usize, capacity: usize) -> Vec<Option<usize>> {
 pub(super) struct EntryPreviews {
     context: super::search::PreviewContext,
     cache: Previews,
+    pub(super) multisample: super::multisample::Preview,
     audio_spectrum: bool,
     identities: BTreeMap<std::path::PathBuf, (u64, uuid::Uuid)>,
     gallery_sizes: BTreeMap<std::path::PathBuf, u32>,
@@ -184,6 +185,7 @@ impl EntryPreviews {
         if visible.is_empty() {
             self.text_status.clear();
         }
+        self.multisample.retain(visible);
         self.pdf_pages.retain(visible);
         self.image_hover.retain(visible);
         self.scenes.retain(visible);
@@ -236,6 +238,7 @@ impl EntryPreviews {
     }
     /// Stop hidden preview work without changing this folder's row geometry.
     pub fn retire(&mut self) {
+        self.multisample.clear();
         self.cache.clear();
         self.pdf_pages.clear();
         self.image_hover.clear();
@@ -308,9 +311,17 @@ impl EntryPreviews {
             super::subtitle_strip::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::SubtitleCue)
         } else if self.is_multisample(entry) {
-            super::multisample::show_list(ui, row, entry, columns, self.listing(entry), colors).map(
-                |(instrument, region)| super::DocumentPosition::SampleRegion(instrument, region),
-            )
+            let (document, detail) = self
+                .listing(entry)
+                .map_or((None, "Sample mappings".into()), |r| {
+                    (r.data.multisample.clone(), r.data.detail.clone())
+                });
+            let rect = super::ui::information_strip(ui, row, entry, &detail, Some(columns), colors);
+            self.multisample
+                .show(ui, rect, entry, document.as_deref(), palette)
+                .map(|(instrument, region)| {
+                    super::DocumentPosition::SampleRegion(instrument, region)
+                })
         } else if entry.is_toolpath() {
             super::gcode::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::ToolpathLine)

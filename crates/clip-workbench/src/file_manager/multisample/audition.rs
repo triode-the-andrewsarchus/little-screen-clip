@@ -129,3 +129,54 @@ fn finish(
         seconds,
     })
 }
+
+/// Prepare all chord voices together on the existing cancellable decoder worker.
+/// The shared rodio mixer handles rate/channel conversion; gain reserves headroom.
+pub(super) fn prepare_chord(
+    document: &Document,
+    instrument: usize,
+    indices: &[usize],
+    strikes: &[super::surface::Strike],
+    base: &Path,
+    archive: Option<&super::archive::Archive>,
+    token: &AtomicBool,
+) -> Result<Audio, String> {
+    if indices.len() != strikes.len() || !(2..=8).contains(&indices.len()) {
+        return Err("Chord audition requires two to eight mapped voices".into());
+    }
+    let regions = &document
+        .instruments
+        .get(instrument)
+        .ok_or("Missing instrument")?
+        .regions;
+    let (mixer, source) = rodio::mixer::mixer(2.try_into().unwrap(), 44100.try_into().unwrap());
+    let mut decoded = std::collections::BTreeMap::new();
+    for (&index, strike) in indices.iter().zip(strikes) {
+        let region = regions.get(index).ok_or("Missing sample region")?;
+        if let std::collections::btree_map::Entry::Vacant(entry) = decoded.entry(index) {
+            entry.insert(prepare(document, region, base, archive, token)?);
+        }
+        let speed = 2.0_f32.powf((strike.key as f32 - region.root as f32) / 12.0);
+        mixer.add(
+            decoded[&index]
+                .source
+                .clone()
+                .speed(speed)
+                .amplify(0.8 * velocity_gain(strike.velocity) / indices.len() as f32)
+                .take_duration(Duration::from_secs(10)),
+        );
+    }
+    let mut samples = Vec::new();
+    for (index, value) in source.take(44100 * 2 * 10).enumerate() {
+        if index % 4096 == 0 && token.load(Ordering::Relaxed) {
+            return Err("Chord audition cancelled".into());
+        }
+        samples.push(value.clamp(-1.0, 1.0));
+    }
+    finish(samples, 2, 44100, token)
+}
+
+/// A quadratic amplitude response makes velocity audible even in single-layer banks.
+pub(super) fn velocity_gain(velocity: u8) -> f32 {
+    (f32::from(velocity.min(127)) / 127.0).powi(2)
+}

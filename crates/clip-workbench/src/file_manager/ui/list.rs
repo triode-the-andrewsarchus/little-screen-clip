@@ -74,6 +74,12 @@ impl<'a> ListPreviews<'a> {
                 false,
             );
         }
+        if self.files.is_multisample(entry)
+            && preview_hovered(ui, rect)
+            && ui.input(|i| i.pointer.any_pressed())
+        {
+            self.files.multisample.focus(entry);
+        }
         let is_audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
         let mut response = self.response(ui, rect, entry, marked, colors);
         let mut engaged = false;
@@ -323,11 +329,21 @@ impl FileManager {
         drop(previews);
         self.drop_targets.extend(targets);
         self.finish_listing(ui, actions, output.state.offset.y, &background);
+        self.list_audio(play);
+    }
+
+    fn list_audio(&mut self, play: Option<(PathBuf, f32)>) {
+        if std::mem::take(&mut self.previews.multisample.started) {
+            self.music.stop();
+            self.midi.stop();
+        }
         if let Some((path, revision, document, time)) = self.midi.queued.take() {
+            self.previews.multisample.clear();
             self.music.stop();
             self.midi.play(path, revision, document, time, None);
         }
         if let Some((path, time)) = play {
+            self.previews.multisample.clear();
             self.midi.stop();
             let guard = self.search_source_guard(&path);
             self.music.play(&path, guard);

@@ -1,9 +1,13 @@
 //! Shared key/velocity maps and explicit raw-sample audition for multisample formats.
 mod archive;
 mod audition;
+mod explorer;
+mod midi;
 mod nki;
 mod sfz_source;
-use super::{filesystem::Entry, media::PreviewData, preview_job::Task, shelf::preview::Ready};
+mod strip;
+mod surface;
+use super::{media::PreviewData, preview_job::Task};
 use crate::{
     icons::Icon,
     shell::{StudioPanelLayout, StudioShell},
@@ -22,6 +26,7 @@ use std::{
     },
     time::Duration,
 };
+pub(super) use strip::Preview;
 pub(super) fn known(path: &Path) -> bool {
     super::document_format::Format::for_path(path)
         == Some(super::document_format::Format::Multisample)
@@ -138,6 +143,13 @@ pub(super) struct Viewer {
     audio: Option<audition::Audio>,
     player: Option<rodio::Player>,
     error: Option<String>,
+    strike: Option<surface::Strike>,
+    velocity: u8,
+    pitched: bool,
+    explorer: explorer::Explorer,
+    chord: Vec<surface::Strike>,
+    chord_regions: Vec<usize>,
+    midi: midi::Performance,
 }
 impl Viewer {
     pub fn load(path: &Path, token: &AtomicBool) -> Result<Self, String> {
@@ -153,7 +165,18 @@ impl Viewer {
         )
     }
     fn from_mapping(path: &Path, mapping: Mapping) -> Self {
+        let explorer = explorer::Explorer::new(
+            mapping
+                .document
+                .instruments
+                .first()
+                .map_or(&[], |i| &i.regions),
+        );
         Self {
+            explorer,
+            midi: Default::default(),
+            chord: Vec::new(),
+            chord_regions: Vec::new(),
             document: Arc::new(mapping.document),
             archive: mapping.archive,
             base: path.parent().unwrap_or(Path::new(".")).into(),
@@ -163,6 +186,9 @@ impl Viewer {
             audio: None,
             player: None,
             error: None,
+            strike: None,
+            velocity: 96,
+            pitched: true,
         }
     }
     pub fn relocate_file(&mut self, source: crate::file_source::FileSource) {
@@ -180,9 +206,22 @@ impl Viewer {
             .is_some_and(|i| region < i.regions.len())
         {
             self.stop();
+            self.chord.clear();
+            self.chord_regions.clear();
             self.audio = None;
+            if instrument != self.instrument {
+                self.midi = Default::default();
+                self.explorer =
+                    explorer::Explorer::new(&self.document.instruments[instrument].regions);
+            }
             self.instrument = instrument;
             self.selected = region;
+            let region = self.current().unwrap();
+            self.strike = Some(surface::Strike {
+                key: region.root.clamp(region.key[0], region.key[1]),
+                velocity: 96_u8.clamp(region.velocity[0].max(1), region.velocity[1].max(1)),
+            });
+            self.velocity = self.strike.unwrap().velocity;
             self.error = None;
         }
     }
@@ -194,6 +233,7 @@ impl Viewer {
             .get(self.selected)
     }
     fn stop(&mut self) {
+        self.midi.stop();
         if let Some(player) = self.player.take() {
             player.stop();
         }
@@ -204,7 +244,28 @@ impl Viewer {
         self.error = None;
         if let Some(audio) = &self.audio {
             if let Some(player) = crate::ui_ext::new_shared_audio_player() {
-                player.append(audio.source.clone());
+                use rodio::Source;
+                let speed = if self.pitched && self.chord.len() <= 1 {
+                    self.strike
+                        .zip(self.current())
+                        .map_or(1.0, |(strike, region)| {
+                            2.0_f32.powf((strike.key as f32 - region.root as f32) / 12.0)
+                        })
+                } else {
+                    1.0
+                };
+                player.append(
+                    audio
+                        .source
+                        .clone()
+                        .speed(speed)
+                        .amplify(if self.chord.len() > 1 {
+                            1.0
+                        } else {
+                            audition::velocity_gain(self.velocity)
+                        })
+                        .take_duration(Duration::from_secs(10)),
+                );
                 self.player = Some(player);
             } else {
                 self.error = Some("Cannot open audio output".into());
@@ -213,10 +274,27 @@ impl Viewer {
             let document = self.document.clone();
             let base = self.base.clone();
             let archive = self.archive.clone();
+            let chord = self.chord.clone();
+            let instrument = self.instrument;
+            let indices = self.chord_regions.clone();
             self.task = Some(Task::start(
                 BackgroundJobs::global(),
                 Duration::from_secs(35),
-                move |token| audition::prepare(&document, &region, &base, archive.as_ref(), token),
+                move |token| {
+                    if chord.len() > 1 {
+                        audition::prepare_chord(
+                            &document,
+                            instrument,
+                            &indices,
+                            &chord,
+                            &base,
+                            archive.as_ref(),
+                            token,
+                        )
+                    } else {
+                        audition::prepare(&document, &region, &base, archive.as_ref(), token)
+                    }
+                },
             ));
         }
     }
@@ -239,8 +317,185 @@ impl Viewer {
             ctx.request_repaint_after(Duration::from_millis(40));
         }
     }
+    fn trigger(&mut self, strike: surface::Strike) {
+        if !self.chord.is_empty() {
+            self.stop();
+            self.audio = None;
+            self.chord.clear();
+            self.chord_regions.clear();
+        }
+        let Some(instrument) = self.document.instruments.get(self.instrument) else {
+            return;
+        };
+        let previous = (self.strike == Some(strike)).then_some(self.selected);
+        let chosen = surface::choose(&instrument.regions, strike, previous);
+        self.strike = Some(strike);
+        self.velocity = strike.velocity;
+        if let Some(index) = chosen {
+            if index != self.selected {
+                self.select(self.instrument, index);
+            }
+            self.strike = Some(strike);
+            self.velocity = strike.velocity;
+            if self.task.is_none() {
+                self.play();
+            }
+        } else {
+            self.stop();
+            self.audio = None;
+            self.selected = usize::MAX;
+            self.error = Some(format!(
+                "No recording at {} / velocity {}",
+                surface::note(strike.key),
+                strike.velocity
+            ));
+        }
+    }
+    fn trigger_chord(&mut self, root: surface::Strike) {
+        self.pitched = true;
+        let Some(notes) = self.explorer.chord(root.key) else {
+            self.stop();
+            self.audio = None;
+            self.selected = usize::MAX;
+            self.error = Some("Voicing extends beyond MIDI range".into());
+            return;
+        };
+        if notes.len() == 1 {
+            self.trigger(root);
+            return;
+        }
+        let strikes: Vec<_> = notes
+            .iter()
+            .map(|&key| surface::Strike {
+                key,
+                velocity: root.velocity,
+            })
+            .collect();
+        let document = self.document.clone();
+        let regions = &document.instruments[self.instrument].regions;
+        let indices: Option<Vec<_>> = strikes
+            .iter()
+            .map(|&strike| surface::choose(regions, strike, None))
+            .collect();
+        self.stop();
+        self.audio = None;
+        self.strike = Some(root);
+        self.chord.clear();
+        self.chord_regions.clear();
+        if let Some(indices) = indices {
+            self.selected = indices[0];
+            self.chord_regions = indices;
+            self.chord = strikes;
+            self.play();
+        } else {
+            self.selected = usize::MAX;
+            let missing = strikes
+                .iter()
+                .filter(|&&strike| surface::choose(regions, strike, None).is_none())
+                .map(|s| surface::note(s.key))
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.error = Some(format!(
+                "No recording for {missing} at velocity {}",
+                root.velocity
+            ));
+        }
+    }
+    fn sounding_keys(&self) -> Vec<u8> {
+        let mut keys = self.midi.keys();
+        if self.player.is_none() {
+            return keys;
+        }
+        if self.chord.is_empty() {
+            keys.extend(self.strike.iter().map(|s| s.key));
+            keys
+        } else {
+            keys.extend(self.chord.iter().map(|s| s.key));
+            keys
+        }
+    }
+    fn poll_midi(&mut self, ctx: &egui::Context) {
+        self.midi.poll(
+            ctx,
+            &self.document,
+            self.instrument,
+            &self.base,
+            self.archive.as_ref(),
+        );
+        if let Some((strike, index)) = self.midi.latest.take() {
+            if index != self.selected || !self.chord.is_empty() {
+                self.audio = None;
+            }
+            self.chord.clear();
+            self.chord_regions.clear();
+            self.strike = Some(strike);
+            self.velocity = strike.velocity;
+            self.selected = index;
+        }
+        if self.midi.active() {
+            self.task = None;
+            if let Some(player) = self.player.take() {
+                player.stop();
+            }
+        }
+    }
+    fn layers(&mut self, ui: &mut egui::Ui) {
+        let Some(strike) = self.strike else {
+            return;
+        };
+        ui.strong(format!(
+            "{} · velocity {}",
+            surface::note(strike.key),
+            strike.velocity
+        ));
+        ui.small("Velocity layers · click to hear a recording");
+        let mut chosen = None;
+        if let Some(instrument) = self.document.instruments.get(self.instrument) {
+            egui::ScrollArea::vertical()
+                .id_source("velocity-layers")
+                .max_height(130.0)
+                .show(ui, |ui| {
+                    for (index, region) in instrument
+                        .regions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, r)| (r.key[0]..=r.key[1]).contains(&strike.key))
+                    {
+                        if ui
+                            .selectable_label(
+                                index == self.selected,
+                                format!(
+                                    "{}–{}  {}",
+                                    region.velocity[0],
+                                    region.velocity[1],
+                                    region_label(region)
+                                ),
+                            )
+                            .clicked()
+                        {
+                            chosen = Some((
+                                index,
+                                region.velocity[0]
+                                    .saturating_add((region.velocity[1] - region.velocity[0]) / 2)
+                                    .max(1),
+                            ));
+                        }
+                    }
+                });
+        }
+        if let Some((index, velocity)) = chosen {
+            self.select(self.instrument, index);
+            self.strike = Some(surface::Strike {
+                key: strike.key,
+                velocity,
+            });
+            self.velocity = velocity;
+            self.play();
+        }
+    }
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
         self.poll(ui.ctx());
+        self.poll_midi(ui.ctx());
         StudioShell::new("Multisample", Icon::Midi, palette, close).render_header(ui, |_| {});
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
@@ -252,78 +507,248 @@ impl Viewer {
         ui.allocate_ui_at_rect(layout.center, |ui| {
             ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
             let colors = WorkbenchColors::from_palette(palette);
-            let Some(instrument) = self.document.instruments.get(self.instrument) else {
-                ui.label("No instruments in this file");
-                return;
-            };
-            ui.label("Key / velocity map · click a region to inspect its source");
-            let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(
-                    ui.available_width(),
-                    (ui.available_height() - 125.0).max(40.0),
-                ),
-                egui::Sense::click(),
+            self.explorer_ui(ui, palette);
+            self.playback_ui(ui, colors);
+        });
+    }
+    fn explorer_ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        if self.explorer.tabs(ui, palette) {
+            self.stop();
+            self.audio = None;
+            self.chord.clear();
+            self.chord_regions.clear();
+            self.strike = None;
+        }
+        let document = self.document.clone();
+        let Some(instrument) = document.instruments.get(self.instrument) else {
+            ui.label("No instruments in this file");
+            return;
+        };
+        self.performance_controls(ui);
+        if self.explorer.mode == explorer::Mode::Harmony {
+            let previous = (
+                self.explorer.quality,
+                self.explorer.voicing,
+                self.explorer.center,
+                self.explorer.seventh,
+                self.explorer.lower,
+                self.explorer.upper,
             );
-            let hit = paint(ui, rect, &instrument.regions, Some(self.selected), colors);
-            if response.clicked() {
-                if let Some(region) = hit {
-                    self.select(self.instrument, region);
+            self.explorer.controls(ui);
+            let current = (
+                self.explorer.quality,
+                self.explorer.voicing,
+                self.explorer.center,
+                self.explorer.seventh,
+                self.explorer.lower,
+                self.explorer.upper,
+            );
+            if previous != current
+                && let Some(strike) = self.strike
+            {
+                let key = (i16::from(strike.key) + i16::from(current.2) - i16::from(previous.2))
+                    .clamp(0, 127) as u8;
+                self.trigger_chord(surface::Strike {
+                    key,
+                    velocity: self.velocity,
+                });
+            }
+        }
+        let hint = match self.explorer.mode {
+            explorer::Mode::Harmony => {
+                "Fifths → · major thirds ↘ · click / drag chords · wheel: zoom · right-drag: pan"
+            }
+            explorer::Mode::Pads => "Click a named recording to audition its original pitch",
+            explorer::Mode::Mapping => "Keys → · velocity ↑ · click / drag to hear the mapping",
+        };
+        ui.small(hint);
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(
+                ui.available_width(),
+                (ui.available_height() - 145.0).max(60.0),
+            ),
+            egui::Sense::hover(),
+        );
+        let regions = &instrument.regions;
+        let range = surface::bounds(regions);
+        let sounding = self.sounding_keys();
+        let hit = match self.explorer.mode {
+            explorer::Mode::Harmony => {
+                self.explorer
+                    .harmony(ui, rect, regions, self.velocity, &sounding, palette)
+            }
+            explorer::Mode::Mapping => explorer::mapping(ui, rect, regions, self.strike, palette),
+            explorer::Mode::Pads => {
+                self.pads(ui, rect, palette);
+                None
+            }
+        };
+        if let Some(strike) = hit {
+            if self.explorer.mode == explorer::Mode::Harmony {
+                self.trigger_chord(strike);
+            } else {
+                self.trigger(strike);
+            }
+        }
+        let (piano, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::hover());
+        if let Some(key) = surface::keyboard(ui, piano, range, &sounding, regions, palette) {
+            self.trigger(surface::Strike {
+                key,
+                velocity: self.velocity,
+            });
+        }
+    }
+    fn performance_controls(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            let response = ui.add(egui::Slider::new(&mut self.velocity, 1..=127).text("Velocity"));
+            if (response.drag_stopped()
+                || (response.changed() && !ui.input(|i| i.pointer.primary_down())))
+                && let Some(strike) = self.strike
+            {
+                let strike = surface::Strike {
+                    velocity: self.velocity,
+                    ..strike
+                };
+                if self.chord.len() > 1 {
+                    self.trigger_chord(strike);
+                } else {
+                    self.trigger(strike);
                 }
             }
-            ui.label("MIDI keys 0–127 (C−1 to G9) · velocity increases upwards");
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        self.current().is_some() && self.task.is_none(),
-                        egui::Button::new("Audition raw sample"),
-                    )
-                    .clicked()
-                {
-                    self.play();
-                }
-                if ui
-                    .add_enabled(
-                        self.player.is_some() || self.task.is_some(),
-                        egui::Button::new("Stop"),
-                    )
-                    .clicked()
-                {
-                    self.stop();
-                }
-                if self.task.is_some() {
-                    ui.spinner();
-                }
-                if let Some(audio) = &self.audio {
-                    ui.label(format!(
-                        "{:.2} s · up to 10 s, no pitch/DSP processing",
-                        audio.seconds
-                    ));
-                }
-            });
-            if let Some(error) = &self.error {
-                ui.colored_label(colors.danger, error);
+            if matches!(self.explorer.mode, explorer::Mode::Mapping) {
+                ui.checkbox(&mut self.pitched, "At played pitch");
+            }
+            ui.small(self.explorer.kind.label());
+        });
+    }
+    fn pads(&mut self, ui: &mut egui::Ui, rect: egui::Rect, palette: &AppPalette) {
+        let document = self.document.clone();
+        let regions = &document.instruments[self.instrument].regions;
+        let columns = ((rect.width() / 150.0) as usize).max(1);
+        let mut selected = None;
+        ui.allocate_ui_at_rect(rect, |ui| {
+            ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+            egui::ScrollArea::vertical()
+                .id_source("sampler-pads")
+                .show_rows(ui, 72.0, regions.len().div_ceil(columns), |ui, rows| {
+                    for row in rows {
+                        let width = (ui.available_width()
+                            - ui.spacing().item_spacing.x * (columns - 1) as f32)
+                            / columns as f32;
+                        ui.horizontal(|ui| {
+                            for (index, region) in
+                                regions.iter().enumerate().skip(row * columns).take(columns)
+                            {
+                                let label = format!(
+                                    "{} · {}–{}\n{}",
+                                    surface::note(region.root),
+                                    region.velocity[0],
+                                    region.velocity[1],
+                                    region_label(region).chars().take(32).collect::<String>()
+                                );
+                                let mut layout = egui::text::LayoutJob::simple(
+                                    label,
+                                    egui::TextStyle::Button.resolve(ui.style()),
+                                    egui::Color32::PLACEHOLDER,
+                                    (width - 16.0).max(1.0),
+                                );
+                                layout.wrap.max_rows = 2;
+                                layout.wrap.break_anywhere = true;
+                                let label = ui.fonts(|fonts| fonts.layout_job(layout));
+                                let (r, g, b) = palette.midi_note_color(0, 0, 1, region.root, 100);
+                                if ui
+                                    .add_sized(
+                                        egui::vec2(width, 64.0),
+                                        egui::Button::new(label)
+                                            .fill(
+                                                egui::Color32::from_rgb(r, g, b)
+                                                    .gamma_multiply(0.25),
+                                            )
+                                            .selected(self.selected == index),
+                                    )
+                                    .on_hover_text(&region.name)
+                                    .clicked()
+                                {
+                                    selected = Some(index);
+                                }
+                            }
+                        });
+                    }
+                });
+        });
+        if let Some(index) = selected {
+            self.select(self.instrument, index);
+            self.pitched = false;
+            self.play();
+        }
+    }
+    fn playback_ui(&mut self, ui: &mut egui::Ui, colors: WorkbenchColors) {
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    self.current().is_some_and(|region| {
+                        self.strike
+                            .is_none_or(|strike| surface::matches(region, strike))
+                    }) && self.task.is_none(),
+                    egui::Button::new("Replay sample"),
+                )
+                .clicked()
+            {
+                self.play();
+            }
+            if ui
+                .add_enabled(
+                    self.player.is_some() || self.task.is_some() || self.midi.active(),
+                    egui::Button::new("Stop"),
+                )
+                .clicked()
+            {
+                self.stop();
+            }
+            if self.task.is_some() {
+                ui.spinner();
+            }
+            if let Some(error) = self.midi.error() {
+                ui.colored_label(colors.danger, format!("MIDI: {error}"));
+            }
+            let sounding = self.sounding_keys();
+            if !sounding.is_empty() {
+                ui.strong(
+                    sounding
+                        .into_iter()
+                        .map(surface::note)
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                );
             }
             if let Some(audio) = &self.audio {
-                let (wave, _) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
-                    egui::Sense::hover(),
-                );
-                let painter = ui.painter().with_clip_rect(wave.intersect(ui.clip_rect()));
-                painter.rect_filled(wave, 3.0, colors.recessed);
-                for (index, peak) in audio.peaks.iter().enumerate() {
-                    let x = wave.left()
-                        + wave.width() * (index as f32 + 0.5) / audio.peaks.len() as f32;
-                    let h = peak * wave.height() * 0.45;
-                    painter.line_segment(
-                        [
-                            egui::pos2(x, wave.center().y - h),
-                            egui::pos2(x, wave.center().y + h),
-                        ],
-                        egui::Stroke::new(1.0_f32, colors.accent),
-                    );
-                }
+                ui.label(format!("{:.2} s · effects omitted", audio.seconds));
             }
         });
+        if let Some(error) = &self.error {
+            ui.colored_label(colors.danger, error);
+        }
+        if let Some(audio) = &self.audio {
+            let (wave, _) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), ui.available_height().max(1.0)),
+                egui::Sense::hover(),
+            );
+            let painter = ui.painter().with_clip_rect(wave.intersect(ui.clip_rect()));
+            painter.rect_filled(wave, 3.0, colors.recessed);
+            for (index, peak) in audio.peaks.iter().enumerate() {
+                let x =
+                    wave.left() + wave.width() * (index as f32 + 0.5) / audio.peaks.len() as f32;
+                let h = peak * wave.height() * 0.45;
+                painter.line_segment(
+                    [
+                        egui::pos2(x, wave.center().y - h),
+                        egui::pos2(x, wave.center().y + h),
+                    ],
+                    egui::Stroke::new(1.0_f32, colors.accent),
+                );
+            }
+        }
     }
     fn details(&mut self, ui: &mut egui::Ui) {
         ui.label(format!("{} instruments", self.document.instruments.len()));
@@ -342,10 +767,15 @@ impl Viewer {
                 }
             });
         if instrument != self.instrument {
+            self.midi = Default::default();
             self.stop();
             self.audio = None;
             self.instrument = instrument;
             self.selected = 0;
+            self.chord.clear();
+            self.chord_regions.clear();
+            self.explorer = explorer::Explorer::new(&self.document.instruments[instrument].regions);
+            self.strike = None;
             self.error = None;
         }
         let Some(instrument) = self.document.instruments.get(self.instrument) else {
@@ -362,7 +792,11 @@ impl Viewer {
                 for index in rows {
                     if crate::ui_ext::selectable_text_row(
                         ui,
-                        &instrument.regions[index].name,
+                        format!(
+                            "{} · {}",
+                            surface::note(instrument.regions[index].root),
+                            region_label(&instrument.regions[index])
+                        ),
                         index == selected,
                         height,
                     )
@@ -376,138 +810,75 @@ impl Viewer {
             self.select(self.instrument, selected);
         }
         ui.separator();
+        self.layers(ui);
         egui::ScrollArea::vertical()
             .id_source("multisample-properties")
             .auto_shrink([false, false])
             .min_scrolled_height(0.0)
             .show(ui, |ui| {
                 if let Some(region) = self.current() {
-                    ui.strong(&region.name);
-                    ui.label(format!(
-                        "Keys {}–{} · root {}",
-                        region.key[0], region.key[1], region.root
-                    ));
-                    ui.label(format!(
-                        "Velocity {}–{}",
-                        region.velocity[0], region.velocity[1]
-                    ));
-                    ui.add(egui::Label::new(&region.sample).wrap(true));
-                    ui.label(format!("Sample start {} frames", region.start));
-                    if let Some(end) = region.end {
-                        ui.label(format!("Sample end {end} (exclusive)"));
-                    }
-                    for [start, end] in &region.loops {
-                        ui.label(format!("Loop {start}–{end} (exclusive)"));
-                    }
-                    for (key, value) in &region.properties {
-                        ui.strong(key);
-                        ui.add(egui::Label::new(value).wrap(true));
-                    }
+                    region_details(ui, region);
                 }
-                for note in &self.document.notes {
-                    ui.add(egui::Label::new(note).wrap(true));
+                if !self.document.notes.is_empty() {
+                    ui.collapsing("Format notes", |ui| {
+                        for note in &self.document.notes {
+                            ui.add(egui::Label::new(note).wrap(true));
+                        }
+                    });
                 }
             });
     }
 }
+fn region_label(region: &Region) -> &str {
+    region
+        .name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(&region.name)
+}
+
+fn region_details(ui: &mut egui::Ui, region: &Region) {
+    ui.strong(region_label(region));
+    ui.label(format!(
+        "Keys {}–{} · root {} (MIDI {})",
+        surface::note(region.key[0]),
+        surface::note(region.key[1]),
+        surface::note(region.root),
+        region.root
+    ));
+    ui.label(format!(
+        "Velocity {}–{}",
+        region.velocity[0], region.velocity[1]
+    ));
+    ui.add(egui::Label::new(&region.sample).wrap(true));
+    ui.label(format!("Sample start {} frames", region.start));
+    if let Some(end) = region.end {
+        ui.label(format!("Sample end {end} (exclusive)"));
+    }
+    for [start, end] in &region.loops {
+        ui.label(format!("Loop {start}–{end} (exclusive)"));
+    }
+    for (key, value) in region.properties.iter().filter(|(key, _)| {
+        key.starts_with("sw_")
+            || matches!(
+                key.as_str(),
+                "group" | "Group" | "group.name" | "group_label" | "seq_length" | "seq_position"
+            )
+    }) {
+        ui.label(format!("{key}: {value}"));
+    }
+    ui.collapsing("Source properties", |ui| {
+        for (key, value) in &region.properties {
+            ui.strong(key);
+            ui.add(egui::Label::new(value).wrap(true));
+        }
+    });
+}
+
 impl Drop for Viewer {
     fn drop(&mut self) {
         self.stop();
     }
 }
-fn paint(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    regions: &[Region],
-    selected: Option<usize>,
-    colors: WorkbenchColors,
-) -> Option<usize> {
-    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-    painter.rect_filled(rect, 3.0, colors.recessed);
-    let pointer = super::ui::preview_hovered(ui, rect)
-        .then(|| ui.input(|i| i.pointer.hover_pos()))
-        .flatten();
-    for key in (0..128).step_by(12) {
-        let x = rect.left() + rect.width() * key as f32 / 128.0;
-        painter.line_segment(
-            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-            egui::Stroke::new(1.0_f32, colors.text_muted.gamma_multiply(0.4)),
-        );
-    }
-    let mut hit = None;
-    for (index, region) in regions.iter().enumerate() {
-        let box_rect = egui::Rect::from_min_max(
-            egui::pos2(
-                rect.left() + rect.width() * region.key[0] as f32 / 128.0,
-                rect.bottom() - rect.height() * (region.velocity[1] as f32 + 1.0) / 128.0,
-            ),
-            egui::pos2(
-                rect.left() + rect.width() * (region.key[1] as f32 + 1.0) / 128.0,
-                rect.bottom() - rect.height() * region.velocity[0] as f32 / 128.0,
-            ),
-        );
-        let color = if selected == Some(index) {
-            colors.accent
-        } else {
-            colors.text_secondary
-        };
-        painter.rect_filled(box_rect, 1.0, color.gamma_multiply(0.22));
-        painter.rect_stroke(
-            box_rect,
-            1.0,
-            egui::Stroke::new(
-                if selected == Some(index) {
-                    2.0_f32
-                } else {
-                    1.0_f32
-                },
-                color,
-            ),
-        );
-        if box_rect.width() > 80.0 && box_rect.height() > 24.0 {
-            painter.with_clip_rect(box_rect.intersect(rect)).text(
-                box_rect.left_top() + egui::vec2(4.0, 4.0),
-                egui::Align2::LEFT_TOP,
-                &region.name,
-                egui::TextStyle::Small.resolve(ui.style()),
-                colors.text_primary,
-            );
-        }
-        if pointer.is_some_and(|p| box_rect.contains(p)) {
-            hit = Some(index);
-        }
-    }
-    if let Some(index) = hit {
-        egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("sample-region"), |ui| {
-            ui.label(&regions[index].name);
-            ui.label(format!(
-                "Keys {:?} · velocity {:?}",
-                regions[index].key, regions[index].velocity
-            ));
-        });
-    }
-    hit
-}
-pub(super) fn show_list(
-    ui: &mut egui::Ui,
-    row: egui::Rect,
-    entry: &Entry,
-    columns: super::ui::ListColumns,
-    ready: Option<&Ready>,
-    colors: WorkbenchColors,
-) -> Option<(usize, usize)> {
-    let rect = super::ui::information_strip(
-        ui,
-        row,
-        entry,
-        ready.map_or("Sample mappings", |r| &r.data.detail),
-        Some(columns),
-        colors,
-    );
-    let doc = ready.and_then(|r| r.data.multisample.as_ref())?;
-    let instrument = doc.instruments.first()?;
-    paint(ui, rect, &instrument.regions, None, colors).map(|region| (0, region))
-}
-
 #[cfg(test)]
 mod tests;

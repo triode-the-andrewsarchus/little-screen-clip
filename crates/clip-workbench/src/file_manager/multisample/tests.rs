@@ -180,3 +180,219 @@ fn renoise_slice_aliases_use_the_indexed_primary_and_relative_interval() {
         .is_err()
     );
 }
+
+#[test]
+fn hex_selection_respects_velocity_gaps_and_cycles_overlapping_recordings() {
+    let doc = read(&fixture("harbor.sfz"), &AtomicBool::new(false))
+        .unwrap()
+        .document;
+    let regions = &doc.instruments[0].regions;
+    let soft = surface::Strike {
+        key: 60,
+        velocity: 32,
+    };
+    let hard = surface::Strike {
+        key: 60,
+        velocity: 100,
+    };
+    assert_eq!(surface::choose(regions, soft, None), Some(0));
+    assert_eq!(surface::choose(regions, hard, None), Some(1));
+    for velocity in 1..=127 {
+        let index = surface::choose(regions, surface::Strike { key: 60, velocity }, None).unwrap();
+        let expected = if velocity <= 63 {
+            "soft.wav"
+        } else {
+            "bright.wav"
+        };
+        assert!(
+            regions[index].sample.ends_with(expected),
+            "Wrong recording at velocity {velocity}"
+        );
+    }
+
+    assert_eq!(
+        surface::choose(regions, surface::Strike { key: 100, ..hard }, None),
+        None
+    );
+    let overlap = vec![regions[0].clone(), regions[0].clone()];
+    assert_eq!(surface::choose(&overlap, soft, None), Some(0));
+    assert_eq!(surface::choose(&overlap, soft, Some(0)), Some(1));
+    assert_eq!(surface::choose(&overlap, soft, Some(1)), Some(0));
+    assert_eq!(surface::note(60), "C4");
+    assert_eq!(surface::note(0), "C-1");
+    assert_eq!(surface::note(127), "G9");
+    assert_eq!(surface::bounds(&[]), [48, 71]);
+}
+
+#[test]
+fn harmony_voicings_are_exact_midi_notes_and_never_wrap_at_the_ceiling() {
+    use explorer::{Quality::*, Voicing::*};
+    assert_eq!(explorer::chord(60, Major, Root), Some(vec![60, 64, 67]));
+    assert_eq!(explorer::chord(60, Minor, First), Some(vec![63, 67, 72]));
+    assert_eq!(explorer::chord(60, Major, Second), Some(vec![67, 72, 76]));
+    assert_eq!(explorer::chord(60, Minor, Open), Some(vec![60, 67, 75]));
+    assert_eq!(explorer::chord(120, Major, First), None);
+}
+
+#[test]
+fn automatic_sampler_modes_require_mapping_hints_and_keep_unknowns_conservative() {
+    use explorer::Kind::*;
+    let doc = read(&fixture("harbor.sfz"), &AtomicBool::new(false))
+        .unwrap()
+        .document;
+    let mut regions = doc.instruments[0].regions.clone();
+    assert_eq!(explorer::classify(&regions), Pitched);
+    regions[0]
+        .properties
+        .push(("pitch_keytrack".into(), "0".into()));
+    assert_eq!(explorer::classify(&regions), Hybrid);
+    for region in &mut regions {
+        region
+            .properties
+            .push(("Preset".into(), "Bank 128 · program 0".into()));
+    }
+    assert_eq!(explorer::classify(&regions), Drums);
+    for region in &mut regions {
+        region.properties.clear();
+        region.key = [region.root, region.root];
+    }
+    assert_eq!(explorer::classify(&regions), Unknown);
+    assert_eq!(explorer::classify(&[]), Unknown);
+}
+
+#[test]
+fn chord_audio_contains_all_three_transposed_voices_with_bounded_headroom() {
+    use rodio::Source;
+    let path = fixture("harbor.sfz");
+    let document = read(&path, &AtomicBool::new(false)).unwrap().document;
+    let strikes: Vec<_> = [60, 64, 67]
+        .into_iter()
+        .map(|key| surface::Strike { key, velocity: 32 })
+        .collect();
+    let audio = audition::prepare_chord(
+        &document,
+        0,
+        &[0, 0, 0],
+        &strikes,
+        path.parent().unwrap(),
+        None,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(audio.source.channels().get(), 2);
+    assert!((audio.seconds - 2.0).abs() < 0.02);
+    let mono: Vec<_> = audio.source.clone().step_by(2).take(22050).collect();
+    let energy = |frequency: f64| {
+        let (real, imag) =
+            mono.iter()
+                .enumerate()
+                .fold((0.0, 0.0), |(real, imag), (i, &sample)| {
+                    let angle = std::f64::consts::TAU * frequency * i as f64 / 44100.0;
+                    (
+                        real + sample as f64 * angle.cos(),
+                        imag + sample as f64 * angle.sin(),
+                    )
+                });
+        real.hypot(imag) / mono.len() as f64
+    };
+    for frequency in [261.6256, 329.6276, 391.9954] {
+        assert!(
+            energy(frequency) > 0.025 * f64::from(audition::velocity_gain(32)),
+            "Missing chord frequency {frequency}"
+        );
+    }
+    assert!(energy(300.0) < 0.005);
+    assert!(mono.iter().all(|sample| sample.abs() <= 0.8));
+    assert!(
+        audition::prepare_chord(
+            &document,
+            0,
+            &[0, 0, 0],
+            &strikes,
+            path.parent().unwrap(),
+            None,
+            &AtomicBool::new(true)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn unmapped_strike_cancels_chord_loading_without_replaying_the_previous_source() {
+    let mut viewer = Viewer::load(&fixture("harbor.sfz"), &AtomicBool::new(false)).unwrap();
+    viewer.trigger_chord(surface::Strike {
+        key: 60,
+        velocity: 96,
+    });
+    assert!(viewer.task.is_some());
+    assert_eq!(viewer.chord.len(), 3);
+    viewer.trigger(surface::Strike {
+        key: 127,
+        velocity: 96,
+    });
+    assert!(viewer.task.is_none());
+    assert!(viewer.current().is_none());
+    assert!(viewer.audio.is_none());
+    assert!(viewer.chord.is_empty());
+    // Repeating the unmapped note must not overflow an invalid selection index.
+    viewer.trigger(surface::Strike {
+        key: 127,
+        velocity: 96,
+    });
+    viewer.select(0, 0);
+    assert!(viewer.current().is_some());
+    assert!(viewer.error.is_none());
+}
+
+#[test]
+fn velocity_changes_amplitude_within_one_recording_without_mutating_pcm() {
+    use rodio::Source;
+    let path = fixture("harbor.sfz");
+    let document = read(&path, &AtomicBool::new(false)).unwrap().document;
+    let audio = audition::prepare(
+        &document,
+        &document.instruments[0].regions[0],
+        path.parent().unwrap(),
+        None,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let energy = |velocity| {
+        audio
+            .source
+            .clone()
+            .amplify(audition::velocity_gain(velocity))
+            .map(|v| v * v)
+            .sum::<f32>()
+    };
+    let soft = energy(32);
+    let loud = energy(64);
+    assert!((loud / soft - 16.0).abs() < 0.01);
+    assert_eq!(energy(0), 0.0);
+    assert_eq!(audition::velocity_gain(127), 1.0);
+}
+
+#[test]
+fn crossing_velocity_boundary_cancels_pending_recording_and_selects_new_sample() {
+    let path = fixture("harbor.sfz");
+    let mut viewer = Viewer::load(&path, &AtomicBool::new(false)).unwrap();
+    viewer.trigger(surface::Strike {
+        key: 60,
+        velocity: 63,
+    });
+    assert!(viewer.current().unwrap().sample.ends_with("soft.wav"));
+    let soft_request = viewer.task.as_ref().unwrap().token.clone();
+    viewer.trigger(surface::Strike {
+        key: 60,
+        velocity: 64,
+    });
+    assert!(soft_request.load(Ordering::Relaxed));
+    assert!(viewer.current().unwrap().sample.ends_with("bright.wav"));
+    let bright_request = viewer.task.as_ref().unwrap().token.clone();
+    viewer.trigger(surface::Strike {
+        key: 60,
+        velocity: 63,
+    });
+    assert!(bright_request.load(Ordering::Relaxed));
+    assert!(viewer.current().unwrap().sample.ends_with("soft.wav"));
+}

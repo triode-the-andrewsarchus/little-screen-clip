@@ -23,6 +23,7 @@ mod image_strip;
 mod mail;
 mod material_strip;
 mod media;
+mod midi_input;
 mod midi_strip;
 pub(crate) mod mounts;
 mod multisample;
@@ -401,6 +402,7 @@ impl FileManager {
     }
 
     fn stop_previews(&mut self) {
+        self.previews.multisample.clear();
         self.constellation.stop_playback();
         self.constellation.stop_map_audition = false;
         self.music.stop();

@@ -5,6 +5,48 @@ converter or a complete sampler workstation. Format readers must retain the
 file manager's guarded input handling, cancellation and bounded worker budgets.
 Instrument scripts and external resources are never executed automatically.
 
+## Playing the previews
+
+List rows use equal-width chromatic keys. Pitch-class colors repeat each octave;
+recorded roots are saturated, repitched coverage is muted, and unmapped keys are
+gray. Click or drag high on a key for higher velocity, low for lower velocity.
+Velocity selects the matching recording and applies a quadratic amplitude curve,
+so a single-layer instrument still responds audibly. Escape, Space, navigation,
+hiding the row and studio entry stop inline audition.
+
+Mapping is the default inspector view, plotting key against velocity alongside a
+conventional piano reference. Harmony and Pads remain available; instrument-type
+hints do not override the default. The Keys view has been removed. Pads audition
+named recordings at their original pitch. Clicking a velocity layer auditions its
+midpoint; repeated single notes cycle overlapping recordings in source order.
+This exposes source recordings without reproducing articulation scripts.
+
+Harmony is a pannable fifth/third lattice, drawn only within the viewport. Wheel
+zoom anchors at the pointer; right or middle drag pans. Unmapped pitches and cells
+outside MIDI's range are gray. Hover outlines every exact pitch in the chosen
+chord; the piano highlights sounding notes. Number shortcuts select major (1),
+minor (2), diminished (3), augmented (4), or half-diminished (5). 6 cycles inversions,
+7 adds the quality's seventh, 8 toggles open voicing, 9 adds a lower root octave,
+and 0 adds an upper root octave. Choosing half-diminished enables its minor seventh; 7 can subsequently toggle it.
+Missing mappings are reported rather than silently omitting chord voices.
+
+MIDI input follows the last clicked multisample strip, and disconnects when a
+click lands elsewhere. The open inspector receives MIDI automatically. Controllers
+are connected non-exclusively (an optional `LITTLE_CLIP_MIDI_INPUT_PREFIX` limits
+input to a device-name prefix) and reconciled for hotplug on a worker shared in
+implementation with the constellation. Note-on velocity, note-off, sustain and
+all-notes-off are channel-aware. Each focused instrument has at most 16 voices and
+eight cached decoded regions; pending notes cancel on release or loss of focus.
+Queue overflow or a lost connection retires held voices instead of leaving notes
+stuck. Cold recordings decode on the existing bounded jobs; subsequent strikes
+share the decoded PCM. Audio output reserves headroom for polyphony.
+
+Pitch preview uses playback-rate transposition from the recorded root. Mapping
+can disable it to hear original recordings. Effects, envelopes, loops, fine tuning
+and instrument scripts are not synthesized; related source metadata remains
+inspectable. Decoded input and playback are bounded to ten seconds. Chords reuse
+each distinct decoded region once and mix on the cancellable worker.
+
 ## Implemented readers
 
 | Format | Alternatives examined | Current choice and reason |

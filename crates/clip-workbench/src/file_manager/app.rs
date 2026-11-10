@@ -706,6 +706,7 @@ impl eframe::App for FileManagerApp {
         self.browser.constellation.render_bank_guard(ctx, &folder);
         self.browser.constellation.render_duplicate_warning(ctx);
         self.main_content(ctx);
+        self.browser.previews.multisample.finish_frame(ctx);
         self.native_start(ctx);
         let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q))
             || ctx.input(|input| input.viewport().close_requested());

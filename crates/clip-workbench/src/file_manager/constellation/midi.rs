@@ -112,46 +112,17 @@ fn refresh_inputs(
     ctx: &egui::Context,
     playback: &Arc<Mutex<super::output::Rack>>,
 ) -> Result<(), String> {
-    let inventory =
-        midir::MidiInput::new("Little Clip sample pads").map_err(|error| error.to_string())?;
-    let ports = inventory.ports();
-    let ids: std::collections::HashSet<_> = ports.iter().map(|port| port.id()).collect();
-    connections.retain(|id, _| ids.contains(id));
-    let mut errors = Vec::new();
-    for port in ports {
-        let id = port.id();
-        if connections.contains_key(&id) {
-            continue;
+    let events = events.clone();
+    let gate = gate.clone();
+    let ctx = ctx.clone();
+    let playback = playback.clone();
+    super::super::midi_input::refresh(connections, "Little Clip sample pads", move |message| {
+        if let Some(event) = dispatch_hit(message, &gate.active, &gate.epoch, &playback) {
+            let _ = events.try_send(event);
+            ctx.request_repaint();
         }
-        let mut input =
-            midir::MidiInput::new("Little Clip sample pads").map_err(|error| error.to_string())?;
-        input.ignore(midir::Ignore::All);
-        let events = events.clone();
-        let gate = gate.clone();
-        let ctx = ctx.clone();
-        let playback = playback.clone();
-        match input.connect(
-            &port,
-            "Little Clip drum rack",
-            move |_, message, _| {
-                if let Some(event) = dispatch_hit(message, &gate.active, &gate.epoch, &playback) {
-                    let _ = events.try_send(event);
-                    ctx.request_repaint();
-                }
-            },
-            (),
-        ) {
-            Ok(connection) => {
-                connections.insert(id, connection);
-            }
-            Err(error) => errors.push(error.to_string()),
-        }
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
+    })
+    .map(|_| ())
 }
 
 /// Audio is dispatched before best-effort UI telemetry. The gate is checked
