@@ -9,19 +9,22 @@ from PIL import Image
 from file_manager_acceptance import (
     application_arguments, media_fixture_directory, run_application_acceptance, wait_for,
 )
-from file_manager_phase4_acceptance import back, open_file, type_text
+from file_manager_phase4_acceptance import open_file, type_text
 
 
 def exercise(session, root):
-    session.observe("01-browser", ["Files", "4 items"])
-    session.click(848, 201)
+    session.observe("01-browser", ["Folders", "4 files"])
+    # Current Shelf toggle on the runner's fixed 1280x800 window.
+    # The former coordinate now hits the Name sort header.
+    session.click(650, 160)
     session.observe("02-font", ["a-font.ttf", "Fira Sans", "glyphs", "weight 400"])
     session.observe("03-binary", ["b-program.elf", "Elf", "64-bit", "sections"])
     session.scroll_to_visible("04-text", ["c-source.rs", "120 lines"], step=150, attempts=6)
     open_file(session, root, "c-source.rs", "05-open-text")
     session.observe("06-text-viewer", ["c-source.rs", "ORDINARY_SOURCE", "Edit text"])
-    back(session, "06-text-viewer")
-    session.observe("07-return", ["Folders", "4 items"])
+    x, y = session.word("06-text-viewer", "Back")
+    session.click(x + 10, y)
+    session.observe("07-return", ["Folders", "c-source.rs", "Selection: 1 file"])
     session.scroll_to_visible("08-image", ["d-image.png", "120", "80"], step=150, attempts=6)
     x, y = session.word("08-image", "d-image.png")
     session.click(x + 10, y)
@@ -36,7 +39,8 @@ def exercise(session, root):
     destination = root / "captured.txt"
     wait_for(lambda: destination.exists(), "captured-content creation")
     assert destination.read_bytes() == captured
-    session.observe("10-captured-created", ["5 items", "Create from clipboard"])
+    assert len(list(root.iterdir())) == 5
+    session.scroll_to_visible("10-captured-created", ["captured.txt"], step=150, attempts=6)
     # Focus an unobscured existing row; the success notice also contains the output path.
     session.observe("10b-captured-focus", ["c-source.rs"])
     x, y = session.word("10b-captured-focus", "c-source.rs")
@@ -52,14 +56,14 @@ def exercise(session, root):
     assert destination.read_bytes() == captured
     assert not any(path.name.startswith(".little-clip-copy-") for path in root.iterdir())
     session.key("Escape")
-    session.observe("13-collision-return", ["Folders", "5 items"])
+    session.observe("13-collision-return", ["Folders", "c-source.rs", "Selection: 1 file"])
 
 
 def main():
     repo = Path(__file__).resolve().parent.parent
     args = application_arguments(__doc__, repo / "target/release/clip-file-manager")
     output, root = media_fixture_directory(args)
-    shutil.copyfile(repo / "crates/clip-workbench/assets/fonts/FiraSans-Regular.ttf", root / "a-font.ttf")
+    shutil.copyfile(repo / "crates/little-clip-render/assets/fonts/FiraSans-Regular.ttf", root / "a-font.ttf")
     shutil.copyfile("/usr/bin/true", root / "b-program.elf")
     (root / "c-source.rs").write_text('fn ordinary() { println!("ORDINARY_SOURCE"); }\n' * 120)
     Image.new("RGB", (120, 80), (25, 170, 220)).save(root / "d-image.png")

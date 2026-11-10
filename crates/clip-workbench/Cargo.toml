@@ -7,6 +7,7 @@ license.workspace = true
 default-run = "clip-workbench"
 
 [dependencies]
+clip-ui = { path = "../clip-ui" }
 little-clip-core = { path = "../little-clip-core" }
 little-clip-render = { path = "../little-clip-render" }
 little-clip-scene = { path = "../little-clip-scene" }

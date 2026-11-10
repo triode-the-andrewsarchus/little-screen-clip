@@ -93,3 +93,19 @@ The implementing dispatch is in
 and [raster cards](../crates/little-clip-render/src/cards/mod.rs). Detailed format
 support remains in [file_types.md](file_types.md). These are current source-level
 capabilities, not a claim of end-to-end acceptance for every format combination.
+
+
+## Shared UI ownership
+
+`clip-ui` owns generic controls, navigation tabs, SVG icon adapters, appearance
+and font setup. Its local crate dependency is core, not an application or the
+raster/scene renderer. Core still has broad media/document dependencies; this
+first extraction does not make an isolated UI build independent of those.
+Core's `font_assets` owns fallback byte constants, reexported by render. Fonts
+and icons retain one canonical asset location and their original licenses.
+
+The workbench forwards its old UI module paths during migration. Its `ui_ext`
+facade still owns shared audio-device access and native-dialog availability;
+those services are not generic widgets. Studio/session ownership and the
+file-manager-to-workbench dependency are subsequent extraction work. Neither
+application's lifecycle or internal worker dispatch moves into `clip-ui`.

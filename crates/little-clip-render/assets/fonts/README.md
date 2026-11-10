@@ -1,7 +1,8 @@
 # Shared screen and workbench font fallbacks
 
-These assets live in `little-clip-render` and are exported as font bytes for
-the workbench. The screen renderer uses them only when its selected system
+These canonical assets serve both raster and native desktop presentation.
+Fallback font bytes are owned by `little-clip-core::font_assets` and reexported
+by `little-clip-render`, so `clip-ui` does not depend on the raster/scene renderer. The screen renderer uses them only when its selected system
 font lacks a glyph, with the same selection used for measurement and drawing.
 Parsed fallback fonts are shared across renderers and loaded on first use.
 
@@ -29,3 +30,6 @@ outlines as monochrome; it cannot render Noto Color Emoji's bitmap strikes or
 compose multi-codepoint emoji sequences such as family, flag, or skin-tone
 sequences. Both assets remain last in the fallback chains, preserving Latin
 typography and egui's existing symbol/emoji choices where those fonts suffice.
+
+`FiraSans-Regular.ttf` supplies the shared desktop Latin face. Its original
+license is `FiraSans-OFL.txt`; moving the asset here does not change the font.

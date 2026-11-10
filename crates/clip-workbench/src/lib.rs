@@ -41,7 +41,6 @@ pub mod desktop_ipc;
 mod diff_view;
 pub mod file_manager;
 pub mod file_source;
-pub mod icons;
 pub mod image_preview;
 pub mod midi_view;
 pub mod model3d_view;
@@ -56,21 +55,11 @@ pub mod spreadsheet_view;
 mod state_sync;
 mod subtitle_view;
 pub mod text_preview;
-pub mod ui_appearance;
 pub mod ui_ext;
-pub mod ui_tabs;
 mod workbench;
 pub mod worker_cli;
 
-pub fn hex_to_c32(hex: &str) -> egui::Color32 {
-    let (r, g, b, a) = little_clip_core::color::parse_hex_color_rgba_or_white(hex);
-    egui::Color32::from_rgba_unmultiplied(r, g, b, a)
-}
-
-pub fn hex_to_c32_alpha(hex: &str, alpha: u8) -> egui::Color32 {
-    let (r, g, b, _) = little_clip_core::color::parse_hex_color_rgba_or_white(hex);
-    egui::Color32::from_rgba_unmultiplied(r, g, b, alpha)
-}
+pub use clip_ui::{hex_to_c32, hex_to_c32_alpha, icons, ui_appearance, ui_tabs};
 
 const MAX_INLINE_MARKDOWN_CLASSIFICATION_BYTES: usize = 64 * 1024;
 const MAX_INLINE_TEXT_ROUTING_BYTES: usize = 64 * 1024;

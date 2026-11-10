@@ -4,6 +4,8 @@
 
 This is a Rust 2024 Cargo workspace. Shared clipboard models, configuration, IPC, colors, and media helpers live in `crates/little-clip-core`. Keep hardware and USB-display code in `little-clip-driver`, card/text rendering in `little-clip-render`, native Gaussian scene import and GPU rendering in `little-clip-scene`, and transformations and pipeline operations in `little-clip-ops`. The `little-clipd`, `clipctl`, and `clip-workbench` crates provide the daemon, CLI, and egui workbench binaries.
 
+Shared desktop widgets, SVG icon adapters, tabs, appearance and font setup live in `clip-ui`. Keep audio-device ownership and native-dialog discovery in desktop runtime code, not the widget crate. Workbench compatibility exports preserve existing callers while studio ownership is extracted. Run shared widget/font/tab tests against `clip-ui`; application lifecycle tests remain with their host. Portable fallback font bytes are owned by core's `font_assets` and reexported by render; their assets/licenses remain under render's canonical asset directories.
+
 `little-clip-core::presentation` owns the shared MIDI, model, network, spreadsheet, timestamp and unit sources under `crates/little-clip-core/src/presentation`; run their tests against core. Ops reexports these modules; do not compile sources across crate boundaries with `#[path]`.
 
 Root `scripts/` contains supporting Python tools, `config.toml` holds runtime defaults, and `launch.sh` manages local builds and services.

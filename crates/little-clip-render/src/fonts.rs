@@ -4,10 +4,7 @@ use crate::{FontStyle, ScreenRenderer};
 use fontdue::{Font, FontSettings};
 use std::sync::{LazyLock, OnceLock};
 
-/// Bundled Noto Sans CJK JP regular face (SIL OFL 1.1).
-pub static CJK_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/NotoSansCJK-JP-Regular.ttf");
-/// Bundled Noto Emoji regular monochrome face (SIL OFL 1.1).
-pub static EMOJI_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf");
+pub use little_clip_core::font_assets::{CJK_FONT_BYTES, EMOJI_FONT_BYTES};
 
 // Coverage is cheap to inspect; parse glyph geometry only for a font actually
 // needed by a character. In particular, emoji does not initialize the CJK face.

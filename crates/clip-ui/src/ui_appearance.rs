@@ -1,6 +1,6 @@
 //! Shared Light/Dark appearance roles for workbench chrome.
 
-use eframe::egui::{self, Color32};
+use egui::{self, Color32};
 use little_clip_core::config::WorkbenchAppearance;
 use little_clip_core::palette::AppPalette;
 

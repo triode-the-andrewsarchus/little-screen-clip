@@ -1,0 +1,12 @@
+[package]
+name = "clip-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+little-clip-core = { path = "../little-clip-core" }
+egui = "0.27"
+egui_extras = { version = "0.27", features = ["svg"] }
+tracing.workspace = true
