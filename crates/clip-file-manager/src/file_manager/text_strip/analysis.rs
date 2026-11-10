@@ -14,9 +14,7 @@ use std::{
 use syntect::{easy::HighlightLines, highlighting::Color};
 use unicode_width::UnicodeWidthChar;
 
-pub(in crate::file_manager) use little_clip_core::text_format::{
-    TYPESCRIPT_PROBE_BYTES, is_typescript_source, known_text, typescript_bytes, typescript_suffix,
-};
+pub(in crate::file_manager) use little_clip_core::text_format::{is_typescript_source, known_text};
 
 pub(in crate::file_manager) fn load(
     path: &Path,

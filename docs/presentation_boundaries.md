@@ -185,3 +185,11 @@ presentation, physical input latency and complete process/GPU memory accounting.
 Private captures additionally sample the owned workbench child's RSS/high-water
 RSS. These measurements must not be presented as a guaranteed frame rate or a
 performance win. Native adoption remains a separate user decision.
+
+Shared photo preprocessing now lives in core's
+[`gallery_image`](../crates/little-clip-core/src/gallery_image.rs): header metadata,
+resolution-specific thumbnails and appearance hashes retain the same separate
+caches and guarded source/revision checks. Browser photo rows, Shelf, similarity
+preparation and search readers use those implementations. Cache/layout/job
+ownership in the browser remains distinct from prepared image data; this move
+does not introduce another cache or make decoding a UI-frame operation.

@@ -33,7 +33,7 @@ mod notebook;
 use little_clip_core::path_serde;
 mod pdf_strip;
 mod photo_ratings;
-mod preview_job;
+use little_clip_core::jobs::task as preview_job;
 mod previews;
 mod scene_strip;
 pub(crate) mod search;

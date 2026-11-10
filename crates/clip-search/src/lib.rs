@@ -1,9 +1,9 @@
 //! UI-independent search mechanisms and owned external model processes.
 //!
 //! Browser navigation, presentation and result composition stay with the host.
-//! Query grammar, source admission, transactional storage, bounded ranking and
-//! explanations share one headless owner. Source payload extraction/process
-//! dispatch and the background coordinator remain host-owned for now.
+//! Query grammar, guarded source readers, transactional storage, bounded ranking,
+//! inference and coordinator lifetimes share one headless owner. The host keeps
+//! navigation/UI and explicitly dispatches reader/extraction worker entrypoints.
 pub mod name_match;
 pub mod policy;
 pub mod query;
@@ -27,3 +27,11 @@ pub mod content;
 pub mod explanation;
 pub mod retrieval;
 pub mod store;
+
+pub mod results;
+pub use results::Results;
+pub mod answer;
+mod monitor;
+pub mod reader;
+pub mod service;
+mod walk;

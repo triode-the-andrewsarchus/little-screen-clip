@@ -1,4 +1,9 @@
 //! Select an embedded HEIF preview before decoding the primary image.
+pub mod hash;
+pub mod metadata;
+pub mod thumbnail;
+mod thumbnail_cache;
+
 use crate::ImageThumbnail;
 use std::sync::atomic::{AtomicBool, Ordering};
 

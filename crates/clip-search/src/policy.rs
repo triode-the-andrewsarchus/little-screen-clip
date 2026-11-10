@@ -376,6 +376,47 @@ fn pin_beneath(directory: &File, path: &Path) -> std::io::Result<File> {
     Ok(unsafe { File::from_raw_fd(descriptor as i32) })
 }
 
+/// Validates the existing index limits, exclusions and automatic-search settings.
+///
+/// # Errors
+/// Returns invalid limits, addresses, excluded locations or relevance thresholds.
+pub fn validate_preferences(
+    config: &little_clip_core::config::FileSearchConfig,
+) -> Result<(), String> {
+    exclusions(&config.excluded_paths)?;
+    if !(16..=1_048_576).contains(&config.limits.max_mib)
+        || !(1..=100_000_000).contains(&config.limits.max_vectors)
+    {
+        return Err("Index limits require 16..1048576 MiB and 1..100000000 vectors".into());
+    }
+    if config.always_search.len() > 32 {
+        return Err("Use at most 32 automatic-search locations".into());
+    }
+    for address in &config.always_search {
+        if address.len() > 8192 {
+            return Err("An automatic-search address is too long".into());
+        }
+        let path = little_clip_core::path_address::decode_path(address)?;
+        if !path.is_absolute() {
+            return Err("Automatic-search locations must be absolute folder addresses".into());
+        }
+        if let Some(reason) = excluded(&path) {
+            return Err(format!(
+                "{}: {reason}",
+                little_clip_core::path_address::display_path(&path)
+            ));
+        }
+    }
+    if config
+        .semantic_floors
+        .values()
+        .any(|floor| !floor.is_finite() || !(-1.0..=1.0).contains(floor))
+    {
+        return Err("Semantic relevance thresholds must be finite values from -1 to 1".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

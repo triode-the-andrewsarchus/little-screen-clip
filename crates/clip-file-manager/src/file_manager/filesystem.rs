@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 pub(super) use little_clip_core::file_inventory::{
     Directory, Entry, Identity, check_revision, format_size, identity, read_directory, read_entry,
-    read_pinned_directory,
 };
 
 pub(super) use little_clip_core::path_address::{decode_path, display_path};

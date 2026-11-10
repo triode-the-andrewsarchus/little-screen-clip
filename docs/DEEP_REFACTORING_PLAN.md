@@ -255,7 +255,7 @@ For each approved slice:
 
 ## Execution status
 
-The user authorized completing this plan after the review and future-roadmap additions. Execute the phases incrementally, retaining the specific design and adoption gates above. The initial architecture baseline is `deep-refactor-start`; the working tree began at `4fabcc3`, with 164 GiB available. Phase 1 is complete against its confirmed blocking/lifecycle worklist: mount discovery, USB ownership, retained UI mutations, clipboard routes, studio handoffs, worker isolation and image retirement have been verified. Phase 2 has delivered shared peak-range queries, direct document hints, source/readiness contracts and the presentation inventory. Phase 3 has delivered the first shared UI boundary. Neutral studio ownership, the native mirror prototype/resource comparison, search extraction and remaining phases are outstanding; native mirror adoption retains its separate review gate.
+The user authorized completing this plan after the review and future-roadmap additions. Execute the phases incrementally, retaining the specific design and adoption gates above. The initial architecture baseline is `deep-refactor-start`; the working tree began at `4fabcc3`, with 164 GiB available. Phase 1 is complete against its confirmed blocking/lifecycle worklist: mount discovery, USB ownership, retained UI mutations, clipboard routes, studio handoffs, worker isolation and image retirement have been verified. Phase 2 has delivered shared peak-range queries, direct document hints, source/readiness contracts and the presentation inventory. Phase 3 has delivered shared UI, neutral studios and independent application ownership. Phase 3a has delivered the opt-in native mirror prototype and its measured findings; the raster mirror remains the default. Phase 4 has delivered the headless search backend, including source readers and coordinator. Remaining domain/state-transition audits and phase 6 status/clock/artifact work are outstanding; native mirror adoption retains its separate review gate.
 
 
 ### Implementation ledger
@@ -723,3 +723,86 @@ duplication changes 4.46%→4.45%; no speedup is claimed from these counts.
 `/tmp/deep-search-storage-architecture.json` retains the raw findings. The
 ownership/deletion benefit is separate from its coarse classification. Core's
 broad transitive dependency graph remains; about 147 GiB was free at the check.
+
+### Phase 4 checkpoint: headless coordinator and source readers
+
+`clip-search` now owns the background service, reconciliation monitor, literal
+walk, bounded source readers and typed-answer/data-only extraction cluster. It
+also owns the source-aware `Results` contract and preference validation. The file
+manager keeps navigation, rendering, command editing and session columns, and
+explicitly dispatches the same two internal worker flags to the shared library.
+Those entrypoints retain their existing limits/sandbox and must run only in
+disposable processes. No protocol, request budget, root/revision check, store
+schema, model lifecycle or admission/accepted-maintenance behavior changed.
+The backend's sole local crate dependency is core, with no egui or application
+imports. This completes the search ownership extraction, rather than adding an
+adapter back to browser internals.
+
+Core now owns the existing cancellable `jobs::task` wrapper, shared by browser
+previews and search readers. Response deadlines still do not prove worker/child
+exit; accepted write owners remain retained until completion. Core also owns
+photo metadata/thumbnail/hash preprocessing, keeping the original separate
+caches, source lock, revision/identity checks, orientation and embedded-RAW
+policy. Browser rows, Shelf, similarity preprocessing and search consume that
+single implementation. Source-relative media timing and non-cover video
+selection likewise have one core owner. Dependencies follow code with unchanged
+versions/features; the broad existing core graph remains a build-cost limit.
+Generated audio fixtures moved once to core's explicit test-support API, with
+studio forwarding exports. No parallel cache, decoder or worker protocol was
+introduced.
+
+The two browser-specific service tests remain in file manager: pending progress
+paints only for the current request, and accepted maintenance blocks host close.
+Their queued-service fixture is an explicit search test-support API, independent
+from unit-test modules. Backend tests moved with their implementation. The
+sandbox child's exact test selector and private mount runner now select the
+`clip-search` harness. Native scale provenance includes the relocated core
+preprocessing/task sources.
+
+Validation:
+
+- 2621 serial workspace tests pass, with 30 ignored
+  (`/tmp/deep-search-coordinator-workspace.log`). The executable worker suite
+  subsequently passes all four tests, including a new valid YAML inspect/execute
+  extraction-plan round trip through the application entrypoint, as well as
+  inherited-handle restore and early shared-worker dispatch
+  (`/tmp/deep-search-coordinator-worker-dispatch.log`).
+- Both desktop binaries, workspace/all-target checks and core/search API docs
+  pass (`/tmp/deep-search-coordinator-build.log`,
+  `/tmp/deep-search-coordinator-check-final.log`,
+  `/tmp/deep-search-coordinator-doc.log`). Rendered service, worker, task and
+  photo-hash API docs were inspected. Diagnostic Clippy passes with the existing
+  approximate-constant allowance and existing warnings
+  (`/tmp/deep-search-coordinator-clippy.log`,
+  `/tmp/deep-search-coordinator-worker-clippy.log`); no warning-free claim.
+- The private mount test passes (`/tmp/deep-search-coordinator-mounts.json`).
+  Private real-model search passes content/recursive search, persisted vectors,
+  semantic ranking, stale-source omission, typed answers and return to embedding
+  (`/tmp/deep-search-coordinator-real-search/report.json`). SVG visual preparation
+  and retrieval also pass (`/tmp/deep-search-coordinator-svg/report.json`).
+- Private embedding reuse after move/copy/metadata-only changes, changed-input
+  inference, orphan retirement and replaced-root refusal pass
+  (`/tmp/deep-search-coordinator-previews/report.json`). Separately, ordinary
+  font/binary/text/image rows, studio return and collision-safe captured-content
+  creation pass in light appearance
+  (`/tmp/deep-search-coordinator-ordinary-previews/report.json`). Runs reuse
+  installed models with owned fixtures and private application/compositor state.
+  No model downloads, host input or physical USB access were used.
+
+The source audit matches 425 moved functions after ownership/import, visibility,
+formatting and exact-selector normalization. It additionally matches the full
+original photo-hash block and the moved stream-selection/preference-validation
+bodies (`/tmp/deep-search-coordinator-body-audit.json`). The analyzer incorrectly
+recorded old `parse_dhash` as spanning lines 116–370, swallowing the remaining
+module. Correctly discovering those unchanged functions after the move accounts
+for exactly +7 functions/+28 CCN in the raw metrics; the new executable extraction
+test adds one function/CCN. Raw comparison therefore reports REGRESSION despite
+unchanged production algorithms. Final counts: functions +8, total CCN +29,
+NLOC +37, clone groups 1508→1509, with average/max CCN, duplication percentage and
+cycle totals unchanged. The unmatched clone fragments all describe pre-existing
+WAV fixtures whose bodies were retained; moving their owner changes reported
+clone pairing/grouping (`/tmp/deep-search-coordinator-clone-review.json`). Keep
+the raw findings in `/tmp/deep-search-coordinator-architecture-final.json`; do not
+represent them as algorithm simplification or performance improvement. About
+142 GiB remained free. Remaining domain/state-transition and status/clock/artifact
+requirements still require their own audit before completing the overall plan.

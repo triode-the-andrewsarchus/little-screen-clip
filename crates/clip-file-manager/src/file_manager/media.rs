@@ -3,7 +3,7 @@ use crate::{file_source::FileSource, icons::Icon};
 use little_clip_core::ImageThumbnail;
 use std::time::Duration;
 
-pub(in crate::file_manager) mod timing;
+pub(in crate::file_manager) use little_clip_core::media_stream as timing;
 mod video_details;
 
 #[derive(Default)]
@@ -237,18 +237,7 @@ fn stream_metadata(value: &serde_json::Value) -> Result<(usize, u32, u32, u64), 
     Ok((index, width as u32, height as u32, duration_ms))
 }
 
-pub(in crate::file_manager) fn selected_video_stream(
-    value: &serde_json::Value,
-) -> Result<(usize, &serde_json::Value), String> {
-    value["streams"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|stream| stream["codec_type"].as_str().unwrap_or("video") == "video")
-        .enumerate()
-        .find(|(_, stream)| stream["disposition"]["attached_pic"].as_u64().unwrap_or(0) == 0)
-        .ok_or_else(|| "No ordinary video stream is available".into())
-}
+pub(in crate::file_manager) use little_clip_core::media_stream::selected_video_stream;
 
 #[cfg(test)]
 mod tests {

@@ -4,6 +4,9 @@
 //! spectrogram generation, logarithmic spectral flux for beat/transient onset detection,
 //! YIN algorithm for pitch detection, and Serato/ColorChord harmonic color mapping.
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub mod analysis;
 pub mod decode;
 mod source;

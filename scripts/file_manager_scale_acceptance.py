@@ -173,8 +173,17 @@ def main():
         fixture['requested_profile'] = args.profile
         fixture['desktop_sha256'] = digest(args.binary.resolve(strict=True))
         fixture['test_binary_sha256'] = digest(test_binary)
-        fixture['source_sha256'] = {str(path.relative_to(repo)):digest(path) for path in
-            sorted([*(repo/'crates/clip-file-manager/src/file_manager/search').rglob('*.rs'), *(repo/'crates/clip-search/src').rglob('*.rs'), repo/'crates/little-clip-core/src/file_inventory.rs', repo/'crates/little-clip-core/src/text_format.rs'])}
+        source_paths = [
+            *(repo/'crates/clip-file-manager/src/file_manager/search').rglob('*.rs'),
+            *(repo/'crates/clip-search/src').rglob('*.rs'),
+            *(repo/'crates/little-clip-core/src/gallery_image').rglob('*.rs'),
+            *(repo/'crates/little-clip-core/src/jobs').rglob('*.rs'),
+            repo/'crates/little-clip-core/src/file_inventory.rs',
+            repo/'crates/little-clip-core/src/text_format.rs',
+            repo/'crates/little-clip-core/src/media_stream.rs',
+        ]
+        fixture['source_sha256'] = {str(path.relative_to(repo)):digest(path)
+            for path in sorted(source_paths)}
         (output/'fixture-manifest.json').write_text(json.dumps(fixture, indent=2))
         def environment(env, children):
             env['LITTLE_CLIP_SEARCH_TIMINGS'] = '1'

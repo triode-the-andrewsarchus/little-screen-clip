@@ -10,6 +10,8 @@ test-support = []
 
 [dependencies]
 libc = "0.2"
+imagesize = "0.12"
+kamadak-exif = "0.6.1"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run guarded search mount tests in disposable user/mount namespaces.
 
-Build tests first with `cargo test -p clip-file-manager --lib --no-run`. No mount is
+Build tests first with `cargo test -p clip-search --lib --no-run`. No mount is
 created in the host namespace. Fixtures are removed only after the child and its
 private mounts have exited, including on failure. This script sends no UI input.
 """
@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 from search_retrieval_benchmark import resolve_binary
 
-TEST = 'file_manager::search::reader::tests::bind_mount_boundaries_block_inventory_extraction_and_absence_checks'
+TEST = 'reader::tests::bind_mount_boundaries_block_inventory_extraction_and_absence_checks'
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
-    binary = resolve_binary(argparse.Namespace(binary=args.test_binary, profile='debug'), repo, crate='clip-file-manager')
+    binary = resolve_binary(argparse.Namespace(binary=args.test_binary, profile='debug'), repo, crate='clip-search')
     with tempfile.TemporaryDirectory(prefix='clip-search-private-mount-') as fixture:
         env = dict(os.environ, CLIP_SEARCH_PRIVATE_MOUNT_TEST='1',
                    CLIP_SEARCH_PRIVATE_MOUNT_FIXTURE=fixture)

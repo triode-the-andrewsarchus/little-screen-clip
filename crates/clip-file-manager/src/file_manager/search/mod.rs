@@ -1,25 +1,20 @@
 //! Explicit browser searches share one parsed query and background-only admission.
 mod actions;
-mod answer;
+use clip_search::answer;
 mod columns;
 mod columns_ui;
 mod completion;
-use clip_search::content;
 mod controls;
 use clip_search::explanation;
 mod explanation_ui;
 mod image_order;
-mod monitor;
 use clip_search::policy;
 pub(super) use clip_search::query;
-mod reader;
-use clip_search::retrieval;
-use clip_search::runtime;
-mod service;
+use clip_search::reader;
+use clip_search::service;
 mod settings;
 use clip_search::store;
 mod ui;
-mod walk;
 
 pub(crate) use answer::extraction::run as run_extraction;
 pub(crate) use reader::run as run_reader;
@@ -29,13 +24,7 @@ use query::{Operator, Query, Scope, SortField};
 
 pub(super) use actions::{PreviewContext, SourceGuard};
 
-#[derive(Clone)]
-struct Results {
-    entries: Vec<super::filesystem::Entry>,
-    message: String,
-    sources: Vec<reader::SourceRoot>,
-    explanations: explanation::Explanations,
-}
+use clip_search::results::Results;
 
 #[derive(Default)]
 pub(super) struct Search {
@@ -509,6 +498,58 @@ mod tests {
     use crate::file_manager::{Navigation, filesystem::read_directory};
     use std::sync::atomic::AtomicBool;
 
+    use clip_search::service::{Command, SearchProgress, test_support::queued_service};
+    use std::{
+        path::PathBuf,
+        sync::{Arc, atomic::AtomicU64},
+    };
+    #[test]
+    fn pending_search_paints_progress_only_for_its_current_request() {
+        let (service, _receiver) = queued_service();
+        service.snapshot.lock().unwrap().progress = Some(SearchProgress {
+            id: 7,
+            checked: Arc::new(AtomicU64::new(4500)),
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = crate::file_manager::FileManager::new(directory.path().into());
+        manager.search.service = Some(service);
+        manager.search.open = true;
+        manager.search.draft = ":emb:\"abstract meaning\"".into();
+        let ctx = egui::Context::default();
+        for (request, pending, expected) in [(7, true, true), (8, true, false), (7, false, false)] {
+            manager.search.request_id = request;
+            manager.search.pending = pending;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| manager.search_ui(ui));
+                },
+            );
+            let painted = output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text().contains("4500 indexed parts checked")));
+            assert_eq!(painted, expected, "request {request}, pending {pending}");
+        }
+    }
+
+    #[test]
+    fn accepted_maintenance_blocks_close_before_worker_dispatch() {
+        let (service, _receiver) = queued_service();
+        service
+            .send(Command::Backup(PathBuf::from("/unused/backup.sqlite")))
+            .unwrap();
+        assert!(service.maintenance_busy());
+        assert!(service.send(Command::Clear).is_err());
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = crate::file_manager::FileManager::new(directory.path().into());
+        manager.search.service = Some(service);
+        assert!(manager.filesystem_busy());
+    }
     #[test]
     fn partial_answer_sort_keeps_selection_counts_and_prior_ties_as_cells_complete() {
         let root = tempfile::tempdir().unwrap();

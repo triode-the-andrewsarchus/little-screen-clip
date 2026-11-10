@@ -1,5 +1,7 @@
 //! Bounded background work with revision-aware cancellation and timeouts.
 
+pub mod task;
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, mpsc};
 use std::time::{Duration, Instant};

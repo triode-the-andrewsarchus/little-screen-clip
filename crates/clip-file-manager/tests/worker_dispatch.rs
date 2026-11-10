@@ -164,3 +164,33 @@ fn extracted_store_restores_through_the_application_reader_with_inherited_handle
     assert_eq!(vectors, 1);
     assert_eq!(std::fs::read(backup).unwrap(), backup_bytes);
 }
+
+#[test]
+fn extraction_worker_round_trips_data_only_plans_through_the_application_entrypoint() {
+    use little_clip_core::process::CommandRequest;
+    use serde_json::{Value, json};
+    let call = |request: Value| {
+        let output = CommandRequest::new(env!("CARGO_BIN_EXE_clip-file-manager"))
+            .arg("--internal-file-extraction-plan")
+            .stdin_bytes(serde_json::to_vec(&request).unwrap())
+            .die_with_parent()
+            .own_process_group()
+            .max_output_bytes(64 * 1024)
+            .run()
+            .unwrap();
+        assert!(output.status.success(), "{}", output.stderr_lossy());
+        assert!(!output.stdout_truncated);
+        serde_json::from_slice::<Result<Value, String>>(&output.stdout)
+            .unwrap()
+            .unwrap()
+    };
+    let source = "---\ninvoice:\n  total: 42\n---\nAn owned invoice fixture.";
+    let observed = call(json!({"operation":"inspect", "source":source}));
+    assert_eq!(observed["kind"], "header");
+    assert_eq!(observed["header"]["format"], "YAML");
+    let plan = json!({"operation":"frontmatter_field", "schema":observed["header"]["schema"], "path":["invoice", "total"]});
+    let extracted = call(json!({"operation":"execute", "source":source, "plan":plan}));
+    assert_eq!(extracted["kind"], "field");
+    assert_eq!(extracted["value"]["value"], "42");
+    assert_eq!(extracted["value"]["path"], json!(["invoice", "total"]));
+}

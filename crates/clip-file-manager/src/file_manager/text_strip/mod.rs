@@ -4,10 +4,7 @@ mod raster;
 mod stream;
 #[cfg(test)]
 mod tests;
-pub(super) use analysis::{
-    TYPESCRIPT_PROBE_BYTES, expand_tabs, is_typescript_source, known_text, load, typescript_bytes,
-    typescript_suffix,
-};
+pub(super) use analysis::{expand_tabs, is_typescript_source, known_text, load};
 pub(super) use raster::{palette_colors, render};
 
 use syntect::highlighting::Color;

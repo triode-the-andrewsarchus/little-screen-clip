@@ -12,6 +12,12 @@ test-support = []
 little-clip-core = { path = "../little-clip-core" }
 serde_json.workspace = true
 serde.workspace = true
+tracing.workspace = true
+tiny-skia.workspace = true
+toml.workspace = true
+serde_yaml.workspace = true
+image.workspace = true
+resvg = { version = "0.37", default-features = false, features = ["text", "raster-images"] }
 regex.workspace = true
 uuid.workspace = true
 base64 = "0.22"
@@ -22,3 +28,6 @@ tempfile = "3.10"
 sha2 = "0.10"
 half = "2"
 rusqlite = { version = "0.35", features = ["bundled", "backup", "limits", "hooks", "functions", "serialize"] }
+
+[dev-dependencies]
+little-clip-core = { path = "../little-clip-core", features = ["test-support"] }
