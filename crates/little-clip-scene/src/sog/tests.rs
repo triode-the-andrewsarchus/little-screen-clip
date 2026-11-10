@@ -156,3 +156,38 @@ fn sog_bakes_visible_frames_with_the_native_renderer() {
         orbit.read_frame(crate::ORBIT_FRAME_COUNT / 2).unwrap()
     );
 }
+
+#[test]
+fn sog_rejects_entries_that_inflate_beyond_their_declared_sizes() {
+    let mut atlas = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut atlas)
+        .encode(&[1, 2, 3, 255], 1, 1, image::ExtendedColorType::Rgba8)
+        .unwrap();
+    for (name, payload) in [
+        ("meta.json", serde_json::to_vec(&metadata(2, 0)).unwrap()),
+        ("atlas.webp", atlas),
+    ] {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(
+                name,
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
+            )
+            .unwrap();
+        writer.write_all(&payload).unwrap();
+        let mut bytes = writer.finish().unwrap().into_inner();
+        let central = bytes
+            .windows(4)
+            .position(|bytes| bytes == b"PK\x01\x02")
+            .unwrap();
+        bytes[central + 24..central + 28].copy_from_slice(&1u32.to_le_bytes());
+        bytes[22..26].copy_from_slice(&1u32.to_le_bytes());
+        let mut zip = ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        let result = if name == "meta.json" {
+            read_metadata(&mut zip).map(|_| ())
+        } else {
+            read_atlas(&mut zip, "", name, "means", 1).map(|_| ())
+        };
+        assert!(result.is_err(), "accepted oversized inflated {name}");
+    }
+}

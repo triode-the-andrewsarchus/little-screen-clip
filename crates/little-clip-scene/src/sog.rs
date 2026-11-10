@@ -5,7 +5,7 @@ use spark_lib::decoder::ChunkReceiver;
 use spark_lib::gsplat::GsplatArray;
 use spark_lib::sogs::SogsDecoder;
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 use std::path::Path;
 use wgpu_3dgs_viewer::core::Gaussian;
 use zip::ZipArchive;
@@ -164,10 +164,11 @@ fn read_metadata(zip: &mut ZipArchive<Cursor<&[u8]>>) -> Result<(Value, String),
         check_metadata_entry(entry.name(), entry.size(), &mut metadata_name)?;
     }
     let metadata_name = metadata_name.ok_or_else(|| invalid("SOG has no meta.json"))?;
-    let mut metadata = Vec::new();
-    zip.by_name(&metadata_name)
-        .map_err(|error| invalid(error.to_string()))?
-        .read_to_end(&mut metadata)?;
+    let entry = zip
+        .by_name(&metadata_name)
+        .map_err(|error| invalid(error.to_string()))?;
+    let limit = entry.size().min(1024 * 1024);
+    let metadata = crate::read_bounded(entry, limit, "SOG metadata")?;
     let meta: Value =
         serde_json::from_slice(&metadata).map_err(|error| invalid(error.to_string()))?;
     Ok((meta, metadata_name))
@@ -236,10 +237,11 @@ fn read_atlas(
     } else {
         name
     };
-    let mut encoded = Vec::new();
-    zip.by_name(resolved)
-        .map_err(|error| invalid(error.to_string()))?
-        .read_to_end(&mut encoded)?;
+    let entry = zip
+        .by_name(resolved)
+        .map_err(|error| invalid(error.to_string()))?;
+    let limit = entry.size().min(64 * 1024 * 1024);
+    let encoded = crate::read_bounded(entry, limit, "SOG atlas")?;
     let reader = image::ImageReader::with_format(Cursor::new(&encoded), image::ImageFormat::WebP);
     let (width, height) = reader
         .into_dimensions()
