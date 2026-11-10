@@ -253,7 +253,7 @@ pub(crate) fn scan_mounts_sync() -> Vec<MountEntry> {
             "--list",
             "--json",
             "-o",
-            "NAME,PATH,LABEL,PARTLABEL,FSTYPE,MOUNTPOINT,SIZE,RM,HOTPLUG,MODEL,TYPE",
+            "NAME,PATH,PKNAME,LABEL,PARTLABEL,FSTYPE,MOUNTPOINT,SIZE,RM,HOTPLUG,MODEL,TYPE",
         ])
         .timeout(Duration::from_secs(5))
         .max_output_bytes(2 * 1024 * 1024)
@@ -443,24 +443,13 @@ pub(crate) fn parse_mounts(
         && let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str)
         && let Some(devices) = val.get("blockdevices").and_then(|v| v.as_array())
     {
-        // Find all parent disks that have partitions
-        let mut partitioned_disks = BTreeSet::new();
-        for dev in devices {
-            let name = dev.get("name").and_then(|v| v.as_str()).unwrap_or_default();
-            let dev_type = dev.get("type").and_then(|v| v.as_str()).unwrap_or_default();
-            if dev_type == "part" {
-                // e.g. "nvme0n1p1" -> "nvme0n1", "sdb1" -> "sdb"
-                if let Some((parent, _)) = name.rsplit_once('p')
-                    && (parent.starts_with("nvme") || parent.starts_with("mmcblk"))
-                {
-                    partitioned_disks.insert(parent.to_string());
-                }
-                let letters: String = name.chars().take_while(|c| c.is_alphabetic()).collect();
-                if !letters.is_empty() {
-                    partitioned_disks.insert(letters);
-                }
-            }
-        }
+        // Use the reported relationship; device names are not a parent schema.
+        let partitioned_disks: BTreeSet<&str> = devices
+            .iter()
+            .filter(|dev| dev.get("type").and_then(|value| value.as_str()) == Some("part"))
+            .filter_map(|dev| dev.get("pkname").and_then(|value| value.as_str()))
+            .filter(|parent| !parent.is_empty())
+            .collect();
 
         for dev in devices {
             let name = dev.get("name").and_then(|v| v.as_str()).unwrap_or_default();
@@ -893,6 +882,34 @@ fuse-binwalk /run/user/1001/fuse-binwalk/app-abc1234 fuse.fuse-binwalk rw,nosuid
     }
 
     #[test]
+    fn partition_parents_use_reported_relationships_for_numbered_disks() {
+        for (disk, partition, independent) in [
+            ("nbd0", "nbd0p1", "nbd1"),
+            ("pmem0", "pmem0p1", "pmem1"),
+            ("nvme0n1", "nvme0n1p1", "nvme1n1"),
+            ("sda", "sda1", "sdb"),
+        ] {
+            let devices = serde_json::json!({"blockdevices": [
+                {"name": disk, "path": format!("/dev/{disk}"), "type": "disk", "rm": true},
+                {"name": partition, "path": format!("/dev/{partition}"), "type": "part", "pkname": disk, "fstype": "ext4"},
+                {"name": independent, "path": format!("/dev/{independent}"), "type": "disk", "fstype": "ext4"}
+            ]});
+            let entries = parse_mounts("", Some(&devices.to_string()), None);
+            let paths: Vec<_> = entries
+                .iter()
+                .filter_map(|entry| entry.device_path.clone())
+                .collect();
+            assert!(
+                !paths.contains(&PathBuf::from(format!("/dev/{disk}"))),
+                "offered partitioned whole disk {disk}"
+            );
+            assert!(paths.contains(&PathBuf::from(format!("/dev/{partition}"))));
+            assert!(paths.contains(&PathBuf::from(format!("/dev/{independent}"))));
+            assert_eq!(paths.len(), 2);
+        }
+    }
+
+    #[test]
     fn test_unmounted_devices_from_lsblk_are_included() {
         let proc_mounts = "/dev/nvme0n1p2 / ext4 rw,relatime 0 0\n";
         let lsblk_json = r#"{
@@ -912,6 +929,7 @@ fuse-binwalk /run/user/1001/fuse-binwalk/app-abc1234 fuse.fuse-binwalk rw,nosuid
                 },
                 {
                     "name": "sdb1",
+                    "pkname": "sdb",
                     "path": "/dev/sdb1",
                     "label": "FLASH_DATA",
                     "partlabel": null,
