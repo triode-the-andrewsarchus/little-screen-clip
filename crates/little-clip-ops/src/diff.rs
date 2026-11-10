@@ -10,6 +10,7 @@ use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
+#[cfg(test)]
 use uuid::Uuid;
 
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
@@ -485,11 +486,6 @@ pub fn run_difft(
     mode: DiffDisplayMode,
     width: usize,
 ) -> std::io::Result<DiffResult> {
-    let run_id = Uuid::new_v4();
-    let temp_dir =
-        std::env::temp_dir().join(format!("little_clip_diff_{}", &run_id.to_string()[..8]));
-    std::fs::create_dir_all(&temp_dir)?;
-
     // Determine extension to assist tree-sitter language detection
     let ext_hint = lhs.ext_hint().or_else(|| rhs.ext_hint());
     let ext = little_clip_core::syntax::detect_language(
@@ -501,36 +497,19 @@ pub fn run_difft(
         ext_hint,
     );
 
-    let (lhs_path, lhs_is_temp) = match lhs {
-        DiffTarget::File { path, .. } => (path.clone(), false),
-        DiffTarget::ClipboardText { content, .. } => {
-            let path = temp_dir.join(format!("lhs.{}", ext));
-            std::fs::write(&path, content)?;
-            (path, true)
+    let append_input = |request: little_clip_core::CommandRequest, target: &DiffTarget| {
+        if let Some(path) = target.path() {
+            return request.arg_content_file(path);
         }
-        DiffTarget::Image { path: Some(p), .. } => (p.clone(), false),
-        DiffTarget::Image { bytes, .. } => {
-            let img_ext = lhs.ext_hint().unwrap_or("png");
-            let path = temp_dir.join(format!("lhs.{}", img_ext));
-            std::fs::write(&path, bytes)?;
-            (path, true)
-        }
-    };
 
-    let (rhs_path, rhs_is_temp) = match rhs {
-        DiffTarget::File { path, .. } => (path.clone(), false),
-        DiffTarget::ClipboardText { content, .. } => {
-            let path = temp_dir.join(format!("rhs.{}", ext));
-            std::fs::write(&path, content)?;
-            (path, true)
-        }
-        DiffTarget::Image { path: Some(p), .. } => (p.clone(), false),
-        DiffTarget::Image { bytes, .. } => {
-            let img_ext = rhs.ext_hint().unwrap_or("png");
-            let path = temp_dir.join(format!("rhs.{}", img_ext));
-            std::fs::write(&path, bytes)?;
-            (path, true)
-        }
+        use std::io::Write;
+        let mut snapshot = tempfile::tempfile()?;
+        snapshot.write_all(
+            target
+                .image_bytes()
+                .unwrap_or_else(|| target.content().as_bytes()),
+        )?;
+        request.arg_owned_content_file(snapshot)
     };
 
     let display_label = if lhs.label().ends_with(&format!(".{}", ext))
@@ -547,37 +526,21 @@ pub fn run_difft(
     };
 
     // Invoke difft using GIT_EXTERNAL_DIFF 7-argument format to avoid printing /tmp paths
-    let output = little_clip_core::CommandRequest::new(difft_bin)
+    let request = little_clip_core::CommandRequest::new(difft_bin)
         .arg("--display")
         .arg(display_arg)
         .arg("--color")
         .arg("always")
         .arg("--width")
         .arg(width.to_string())
-        .arg(&display_label)
-        .arg(&lhs_path)
-        .arg(".")
-        .arg(".")
-        .arg(&rhs_path)
+        .arg("--")
+        .arg(&display_label);
+    let request = append_input(request, lhs)?.arg(".").arg(".");
+    let output = append_input(request, rhs)?
         .arg(".")
         .arg(".")
         .run()
-        .map(|out| std::process::Output {
-            status: out.status,
-            stdout: out.stdout,
-            stderr: out.stderr,
-        });
-
-    if lhs_is_temp {
-        let _ = std::fs::remove_file(&lhs_path);
-    }
-    if rhs_is_temp {
-        let _ = std::fs::remove_file(&rhs_path);
-    }
-    let _ = std::fs::remove_dir(&temp_dir);
-
-    let output =
-        output.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(std::io::Error::other)?;
     let raw_ansi = String::from_utf8_lossy(&output.stdout).to_string();
     let is_identical = raw_ansi.trim().contains("No changes.") || raw_ansi.trim().is_empty();
 
@@ -1314,6 +1277,56 @@ pub fn generate_split_diff(lhs: &DiffTarget, rhs: &DiffTarget, width: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn difft_reads_disk_and_clipboard_operands_through_inherited_descriptors() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("difft");
+        std::fs::write(
+            &tool,
+            r#"#!/bin/sh
+shift 7
+case "$2:$5" in
+    /proc/self/fd/*:/proc/self/fd/*) ;;
+    *) exit 2 ;;
+esac
+printf '%s\n' "$1"
+cat "$2" "$5"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.path().join("source.rs");
+        std::fs::write(&path, "fn before() {}\n").unwrap();
+        let disk = DiffTarget::File {
+            label: "--source.rs".into(),
+            path,
+            content: "fn before() {}\n".into(),
+        };
+        let clipboard = DiffTarget::ClipboardText {
+            label: "Clipboard".into(),
+            content: "fn after() {}\n".into(),
+            ext_hint: None,
+        };
+
+        let output = run_difft(&tool, &disk, &clipboard, DiffDisplayMode::Inline, 80).unwrap();
+        assert_eq!(
+            output.raw_ansi,
+            "--source.rs ⟷ Clipboard\nfn before() {}\nfn after() {}\n"
+        );
+
+        let alias = dir.path().join("protected.rs");
+        symlink("/proc/uptime", &alias).unwrap();
+        let protected = DiffTarget::File {
+            label: "Protected".into(),
+            path: alias,
+            content: String::new(),
+        };
+        assert!(run_difft(&tool, &clipboard, &protected, DiffDisplayMode::Inline, 80).is_err());
+    }
 
     #[test]
     fn test_guess_extension() {
