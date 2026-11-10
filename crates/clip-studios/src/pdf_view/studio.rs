@@ -9,10 +9,7 @@ impl PdfEditorState {
         palette: &little_clip_core::palette::AppPalette,
         close: &mut bool,
     ) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs_f64())
-            .unwrap_or(0.0);
+        let now = crate::ui_ext::feedback_time();
         self.poll_existing_ocr(ctx, now);
         self.poll_info_worker(ctx, now);
         self.poll_preview_worker(ctx);

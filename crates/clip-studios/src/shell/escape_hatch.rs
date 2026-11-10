@@ -116,7 +116,7 @@ impl EscapeHatchLauncher {
     ///
     /// 1. Tries spawning the specified `command` with `file_path`.
     /// 2. If launching fails or the executable is missing, attempts `xdg-open` as a fallback.
-    /// 3. Emits a user-facing toast notification via `toast`.
+    /// 3. Keeps failure feedback via `toast`; successful handoff clears old feedback.
     /// 4. Does NOT terminate the workbench window or send `ViewportCommand::Close`.
     pub fn launch(
         app_name: &str,
@@ -126,15 +126,12 @@ impl EscapeHatchLauncher {
         now: f64,
     ) -> bool {
         match Self::spawn_with_fallback(app_name, command, file_path) {
-            Ok(msg) => {
-                toast.set(
-                    crate::ui_ext::StatusMessage::new(Icon::ArrowRight, msg),
-                    now,
-                );
+            Ok(_) => {
+                toast.clear();
                 true
             }
             Err(msg) => {
-                toast.set(crate::ui_ext::StatusMessage::new(Icon::Alert, msg), now);
+                toast.set(crate::ui_ext::StatusMessage::error(msg), now);
                 false
             }
         }

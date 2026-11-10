@@ -960,11 +960,23 @@ impl UiThemedExt for Ui {
     }
 }
 
+/// Returns a process-local monotonic clock for feedback without an egui context.
+///
+/// Use the same clock when setting and rendering a toast. File timestamps and
+/// generated filenames retain wall time; playback/worker deadlines keep their
+/// existing clocks. This value is never persisted or sent over IPC.
+pub fn feedback_time() -> f64 {
+    static START: std::sync::LazyLock<std::time::Instant> =
+        std::sync::LazyLock::new(std::time::Instant::now);
+    START.elapsed().as_secs_f64()
+}
+
 /// Notification text and its SVG icon are kept separate from clipboard content.
 #[derive(Debug, Clone)]
 pub struct StatusMessage {
     pub icon: Icon,
     pub text: String,
+    is_error: bool,
 }
 
 impl StatusMessage {
@@ -975,6 +987,30 @@ impl StatusMessage {
         Self {
             icon,
             text: text.into(),
+            is_error: false,
+        }
+    }
+
+    /// Creates failure feedback retained until it is cleared or replaced.
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            icon: Icon::Alert,
+            text: text.into(),
+            is_error: true,
+        }
+    }
+
+    fn visible(&self, started: f64, duration: f64, now: f64) -> bool {
+        self.is_error || now - started < duration
+    }
+
+    fn schedule_expiry(&self, ui: &egui::Ui, started: f64, duration: f64, now: f64) {
+        let remaining = duration - (now - started);
+        if !self.is_error
+            && remaining > 0.0
+            && let Ok(delay) = std::time::Duration::try_from_secs_f64(remaining)
+        {
+            ui.ctx().request_repaint_after(delay);
         }
     }
 }
@@ -1016,7 +1052,11 @@ impl PartialEq<String> for StatusMessage {
     }
 }
 
-/// Unified status toast manager with automatic time-based dismissal.
+/// Feedback with timed information and persistent, explicitly marked failures.
+///
+/// Renderers schedule the expiry frame even when the host is otherwise idle.
+/// Callers supply one consistent monotonic clock; setting or clearing feedback
+/// replaces the previous state. Progress and unsaved state remain session-owned.
 #[derive(Debug, Clone)]
 pub struct StatusToast {
     toast: Option<(StatusMessage, f64)>,
@@ -1053,23 +1093,17 @@ impl StatusToast {
     }
 
     pub fn is_active(&self, now: f64) -> bool {
-        match &self.toast {
-            Some((_, timestamp)) => now - *timestamp < self.duration,
-            None => false,
-        }
+        self.active(now).is_some()
     }
 
     pub fn active(&self, now: f64) -> Option<&(StatusMessage, f64)> {
         self.toast
             .as_ref()
-            .filter(|(_, timestamp)| now - timestamp < self.duration)
+            .filter(|(msg, timestamp)| msg.visible(*timestamp, self.duration, now))
     }
 
     pub fn message(&self, now: f64) -> Option<&str> {
-        match &self.toast {
-            Some((msg, timestamp)) if now - *timestamp < self.duration => Some(msg.text.as_str()),
-            _ => None,
-        }
+        self.active(now).map(|(msg, _)| msg.text.as_str())
     }
 
     pub fn render_opt(
@@ -1080,8 +1114,14 @@ impl StatusToast {
         now: f64,
     ) {
         if let Some((msg, ts)) = toast {
-            if now - ts < duration {
-                let color = WorkbenchColors::from_palette(palette).success;
+            if msg.visible(*ts, duration, now) {
+                msg.schedule_expiry(ui, *ts, duration, now);
+                let colors = WorkbenchColors::from_palette(palette);
+                let color = if msg.is_error {
+                    colors.danger
+                } else {
+                    colors.success
+                };
                 msg.icon.ui(ui, CONTROL_ICON_SIZE, color);
                 ui.add(
                     egui::Label::new(
@@ -1098,10 +1138,15 @@ impl StatusToast {
     }
 
     pub fn render_pill(&self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
-        if let Some(msg) = self.message(now) {
+        if let Some((message, started)) = self.active(now) {
+            message.schedule_expiry(ui, *started, self.duration, now);
             let colors = WorkbenchColors::from_palette(palette);
             let bg = colors.recessed;
-            let stroke = colors.success;
+            let stroke = if message.is_error {
+                colors.danger
+            } else {
+                colors.success
+            };
             let fg = contrast_text_c32(bg, Some(stroke), palette);
             egui::Frame::none()
                 .fill(bg)
@@ -1109,32 +1154,33 @@ impl StatusToast {
                 .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::symmetric(SPACE_SM, SPACE_XS))
                 .show(ui, |ui| {
-                    if let Some((message, _)) = &self.toast {
-                        ui.horizontal(|ui| {
-                            message.icon.ui(ui, CONTROL_ICON_SIZE, fg);
-                            ui.label(egui::RichText::new(msg).color(fg));
-                        });
-                    }
+                    ui.horizontal(|ui| {
+                        message.icon.ui(ui, CONTROL_ICON_SIZE, fg);
+                        ui.label(egui::RichText::new(&message.text).color(fg));
+                    });
                 });
         }
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, now: f64, palette: &AppPalette) {
-        if let Some(msg) = self.message(now) {
+        if let Some((message, started)) = self.active(now) {
+            message.schedule_expiry(ui, *started, self.duration, now);
             let colors = WorkbenchColors::from_palette(palette);
-            let bg = colors.accent;
+            let bg = if message.is_error {
+                colors.danger
+            } else {
+                colors.accent
+            };
             let fg = contrast_text_c32(bg, Some(colors.text_primary), palette);
             egui::Frame::none()
                 .fill(bg)
                 .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::symmetric(BUTTON_PADDING_X, SPACE_XS))
                 .show(ui, |ui| {
-                    if let Some((message, _)) = &self.toast {
-                        ui.horizontal(|ui| {
-                            message.icon.ui(ui, CONTROL_ICON_SIZE, fg);
-                            ui.label(egui::RichText::new(msg).strong().color(fg));
-                        });
-                    }
+                    ui.horizontal(|ui| {
+                        message.icon.ui(ui, CONTROL_ICON_SIZE, fg);
+                        ui.label(egui::RichText::new(&message.text).strong().color(fg));
+                    });
                 });
         }
     }
@@ -1763,6 +1809,75 @@ mod tests {
         assert!(toast.is_active(20.5));
         toast.clear();
         assert!(!toast.is_active(20.5));
+    }
+
+    #[test]
+    fn explicit_failure_feedback_survives_expiry_until_replaced_or_cleared() {
+        let mut toast = StatusToast::with_duration(1.0);
+        toast.set(StatusMessage::error("controlled failure"), 10.0);
+        assert_eq!(toast.message(1_000_000.0), Some("controlled failure"));
+        assert_eq!(toast.active(1_000_000.0).unwrap().0.icon, Icon::Alert);
+        toast.set("retrying", 20.0);
+        assert_eq!(toast.message(20.5), Some("retrying"));
+        assert_eq!(toast.message(21.0), None);
+        toast.set(StatusMessage::error("another failure"), 30.0);
+        toast.clear();
+        assert!(!toast.is_active(30.0));
+    }
+
+    #[test]
+    fn feedback_renderers_schedule_idle_expiry_without_polling_persistent_failures() {
+        for style in 0..3 {
+            for failure in [false, true] {
+                let ctx = egui::Context::default();
+                let palette = AppPalette::default();
+                let mut toast = StatusToast::new();
+                toast.set(
+                    if failure {
+                        StatusMessage::error("controlled failure")
+                    } else {
+                        StatusMessage::from("temporary feedback")
+                    },
+                    10.0,
+                );
+                let mut delay = std::time::Duration::ZERO;
+                // Let font/icon upload and first-frame layout settle, then inspect
+                // an otherwise idle frame. An initial zero delay cannot prove expiry.
+                for frame in 0..8 {
+                    let output = ctx.run(
+                        egui::RawInput {
+                            time: Some(frame as f64 * 0.016),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| match style {
+                                0 => toast.render(ui, 10.25, &palette),
+                                1 => toast.render_pill(ui, &palette, 10.25),
+                                _ => {
+                                    StatusToast::render_opt(&toast.toast, 4.0, ui, &palette, 10.25)
+                                }
+                            });
+                        },
+                    );
+                    delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+                }
+                if failure {
+                    assert_eq!(delay, std::time::Duration::MAX, "style {style}");
+                } else {
+                    assert!(
+                        delay.as_secs_f64() > 3.6 && delay.as_secs_f64() <= 3.75,
+                        "style {style}: {delay:?}"
+                    );
+                }
+            }
+        }
+        let mut toast = StatusToast::with_duration(f64::MAX);
+        toast.set("unrepresentably distant expiry", 0.0);
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default()
+                .show(ctx, |ui| toast.render(ui, 0.0, &AppPalette::default()));
+        });
     }
 
     #[test]

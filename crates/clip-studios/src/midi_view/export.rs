@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui_ext::StatusMessage;
 
 impl MidiViewerState {
     pub fn export_pending(&self) -> bool {
@@ -91,18 +92,20 @@ impl MidiViewerState {
                     self.export_job = None;
                     return;
                 }
-                self.status_toast.set(error, now);
+                self.status_toast.set(StatusMessage::error(error), now);
                 self.export_job = None;
             }
             Ok(Err(JobError::Cancelled)) => self.export_job = None,
             Ok(Err(error)) => {
-                self.status_toast
-                    .set(format!("Failed to export MIDI: {error}"), now);
+                self.status_toast.set(
+                    StatusMessage::error(format!("Failed to export MIDI: {error}")),
+                    now,
+                );
                 self.export_job = None;
             }
             Err(TryRecvError::Disconnected) => {
                 self.status_toast
-                    .set("MIDI export worker disconnected", now);
+                    .set(StatusMessage::error("MIDI export worker disconnected"), now);
                 self.export_job = None;
             }
             Err(TryRecvError::Empty) => {

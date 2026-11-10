@@ -600,10 +600,9 @@ impl ImagePreviewState {
                 {
                     self.show_toast("Image clipboard copy cancelled")
                 }
-                Err(error) => self.show_toast(crate::ui_ext::StatusMessage::new(
-                    crate::icons::Icon::Close,
-                    format!("Failed to copy image: {error}"),
-                )),
+                Err(error) => self.show_toast(crate::ui_ext::StatusMessage::error(format!(
+                    "Failed to copy image: {error}"
+                ))),
             }
         }
         if restored_now && self.copy_job.is_some() {
@@ -784,10 +783,9 @@ impl ImagePreviewState {
                 Err(error) if error == "job was cancelled" || error == "Image save cancelled" => {
                     self.show_toast("Image save cancelled");
                 }
-                Err(error) => self.show_toast(crate::ui_ext::StatusMessage::new(
-                    crate::icons::Icon::Close,
-                    format!("Failed to save: {error}"),
-                )),
+                Err(error) => self.show_toast(crate::ui_ext::StatusMessage::error(format!(
+                    "Failed to save: {error}"
+                ))),
             }
         }
     }

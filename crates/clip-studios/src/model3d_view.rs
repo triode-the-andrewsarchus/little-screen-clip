@@ -291,10 +291,7 @@ impl Model3dViewerState {
 
         self.poll_loader();
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
+        let now = crate::ui_ext::feedback_time();
 
         let bg = crate::hex_to_c32(&palette.colors.canvas);
         let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);

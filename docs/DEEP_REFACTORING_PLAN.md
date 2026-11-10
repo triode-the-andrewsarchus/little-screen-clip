@@ -806,3 +806,72 @@ the raw findings in `/tmp/deep-search-coordinator-architecture-final.json`; do n
 represent them as algorithm simplification or performance improvement. About
 142 GiB remained free. Remaining domain/state-transition and status/clock/artifact
 requirements still require their own audit before completing the overall plan.
+
+
+### Phase 6 checkpoint: feedback expiry and clock ownership
+
+The shared toast renderers did not request a repaint at expiry. A visible message
+could therefore remain on an idle window until another event caused a frame.
+All three rendering paths now schedule the expiry frame, with no polling loop.
+The common visibility predicate also distinguishes explicitly marked persistent
+errors from transient information. Error feedback uses the alert SVG and danger
+palette role and remains until cleared/replaced. Duration conversion is checked,
+including unrepresentably distant intervals, rather than panicking during paint.
+Existing job-owned progress/close handling and unsaved document state remain
+independent from toast expiry.
+
+Studio feedback timestamps now use the shared process-local monotonic
+`feedback_time` where no egui context is available; matching producers and
+renderers migrated together. Existing context-owned audio/strip feedback may
+continue using egui time. MIDI strip forwarding translates the source timestamp
+to its host clock and preserves the typed message, including persistence,
+rather than flattening failures to transient strings. File timestamps, generated
+export names, playback clocks and worker deadlines retain their existing clocks.
+No generic clock framework or persisted timestamps were introduced.
+
+MIDI playback/synthesis/export failures, image save/copy/OptiPNG failures and
+external-editor launch failures now use explicit persistent error messages.
+Successful external-editor handoff and whole-text copy clear previous feedback
+without redundant success text. Existing partial-delivery/unsaved-snapshot
+messages are retained; they convey effects that need interpretation rather than
+unconditional completion. This checkpoint is a targeted migration, not a claim
+that every existing message in every tool has been reclassified.
+
+The new UI regression settles font/icon/initial-layout frames before checking
+all three renderers: transient information requests the actual remaining expiry
+interval, whereas persistent errors cause no timer polling. Separate tests prove
+errors survive a long interval and clear/replace correctly. Text handoff retains
+content/path/search/scroll state, omits successful-launch feedback and keeps a
+controlled failure visible. Existing 3D host assertions retain their control and
+orientation expectations while querying the same monotonic feedback clock.
+The first integration run exposed those two old wall-clock test reads; they were
+corrected without weakening their assertions.
+
+
+Validation passes: 2624 serial workspace tests (30 ignored), both desktop builds,
+workspace/all-target compilation, the new feedback regressions and the ordinary
+private font/binary/text/image preview/studio-return/collision regression. Logs:
+`/tmp/deep-feedback-workspace-accepted.log`, `/tmp/deep-feedback-check.log`,
+`/tmp/deep-feedback-build.log`, `/tmp/deep-feedback-clippy.log`,
+`/tmp/deep-feedback-doc.log`, `/tmp/deep-feedback-previews/report.json`.
+Diagnostic Clippy retains the existing approximate-constant allowance and
+pre-existing warnings. No hardware or host compositor input was used. The raw
+architecture comparison reports REGRESSION from modified-file clone findings
+and reordered members of unchanged Python cycles. Clone groups decrease by six,
+duplication 4.45%→4.44%, with unchanged average/max CCN and cycle totals. Six added
+functions include the four shared feedback primitives and two regressions;
+total CCN grows by 15, NLOC by 38. This is new lifetime behavior and clock
+consolidation, not an algorithm-speedup claim. Raw evidence:
+`/tmp/deep-feedback-architecture.json`. About 141 GiB remains free.
+
+The parallel domain audit found existing pure `AudioViewport` /
+`AudioSelectionModel` transitions and their real editor consumers, existing
+image history and crop state, and explicit MIDI transport/region handling.
+Those are reuse candidates, not justification for another controller framework.
+Further targeted work remains: short/low-rate audio can make the viewport's
+minimum duration exceed its maximum; pipeline workspace output retention and
+fallback lifetime need a focused check before enabling any artifact cleanup.
+The current age-only artifact cleanup API has no workspace callers; no sweep has
+been enabled. Accepted audio/MIDI exports use retained pinned staging/output
+handles and PDF jobs use owned temporary staging/raster directories. The overall
+plan remains incomplete pending those domain/artifact checks and final audit.

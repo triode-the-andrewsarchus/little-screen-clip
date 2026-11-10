@@ -677,10 +677,7 @@ impl ImagePreviewState {
     }
 
     pub fn show_toast(&mut self, msg: impl Into<crate::ui_ext::StatusMessage>) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
+        let now = crate::ui_ext::feedback_time();
         self.status_toast = Some((msg.into(), now));
     }
 

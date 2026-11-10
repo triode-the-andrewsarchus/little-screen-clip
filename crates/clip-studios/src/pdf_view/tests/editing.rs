@@ -304,10 +304,7 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
     let (sender, receiver) = channel();
     state.edit_rx = Some(receiver);
     state.edit_in_progress = true;
-    let started_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let started_at = crate::ui_ext::feedback_time();
     state.status_toast.set("Rotating page 1…", started_at);
 
     let ctx = egui::Context::default();
@@ -351,10 +348,7 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
         }),
         "busy feedback should be rendered in the viewer footer"
     );
-    let feedback_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let feedback_time = crate::ui_ext::feedback_time();
     assert_eq!(
         state.status_toast.message(feedback_time),
         Some("PDF edit is still running; wait for it to finish")
@@ -384,10 +378,7 @@ fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
     assert!(!state.edit_in_progress);
     assert!(state.edit_rx.is_none());
     assert_eq!(state.path, path, "failed edit keeps the source document");
-    let feedback_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let feedback_time = crate::ui_ext::feedback_time();
     assert_eq!(
         state.status_toast.message(feedback_time),
         Some("Failed to rotate page: synthetic worker failure")

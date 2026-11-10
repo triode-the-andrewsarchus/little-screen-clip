@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui_ext::StatusMessage;
 
 impl TextPreviewState {
     /// Triggers opening the text in the configured external editor (e.g. VS Code).
@@ -41,24 +42,21 @@ impl TextPreviewState {
             );
             let temp_path = std::env::temp_dir().join(temp_name);
             if let Err(e) = std::fs::write(&temp_path, self.content.as_bytes()) {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs_f64())
-                    .unwrap_or(0.0);
-                self.status_toast
-                    .set(format!("Failed to write temporary file: {}", e), now);
+                let now = crate::ui_ext::feedback_time();
+                self.status_toast.set(
+                    StatusMessage::error(format!("Failed to write temporary file: {}", e)),
+                    now,
+                );
                 return;
             }
             temp_path
         };
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
+        let now = crate::ui_ext::feedback_time();
 
         match launch(editor, editor, &target_path) {
-            Ok(message) | Err(message) => self.status_toast.set(message, now),
+            Ok(_) => self.status_toast.clear(),
+            Err(message) => self.status_toast.set(StatusMessage::error(message), now),
         }
     }
 
@@ -69,11 +67,7 @@ impl TextPreviewState {
             tracing::debug!(%error, "failed to copy text preview to system clipboard");
         }
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
-        self.status_toast.set("Copied full text to clipboard!", now);
+        self.status_toast.clear();
     }
 
     /// Renders the complete preview modal UI.
@@ -84,10 +78,7 @@ impl TextPreviewState {
         palette: &AppPalette,
         close: &mut bool,
     ) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
+        let now = crate::ui_ext::feedback_time();
 
         self.handle_shortcuts(ctx, close);
         self.service_search_jobs(ctx, BackgroundJobs::global(), Instant::now());

@@ -175,14 +175,15 @@ fn external_editor_handoff_keeps_text_source_search_and_scroll_state() {
     assert!(state.show_find);
     assert_eq!(state.find_query, "match");
     assert_eq!(state.scroll_to_line, Some(2));
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let now = crate::ui_ext::feedback_time();
+    assert_eq!(state.status_toast.message(now), None);
+    state.trigger_escape_hatch_with(|_, _, _| Err("controlled launch failure".into()));
     assert_eq!(
-        state.status_toast.message(now),
-        Some("Launched test editor")
+        state.status_toast.message(now + 3600.0),
+        Some("controlled launch failure")
     );
+    assert!(Arc::ptr_eq(&state.content, &content));
+    assert_eq!(state.path.as_deref(), Some(path.as_path()));
 }
 
 #[test]

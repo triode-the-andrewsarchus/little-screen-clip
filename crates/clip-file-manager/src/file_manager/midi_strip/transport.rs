@@ -111,10 +111,12 @@ impl Preview {
         let now = ctx.input(|input| input.time);
         if let Some((_, state)) = &mut self.playback {
             state.update_playback();
-            let epoch = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0.0, |time| time.as_secs_f64());
-            if let Some(message) = state.status_toast.message(epoch).map(str::to_owned) {
+            let feedback_now = crate::ui_ext::feedback_time();
+            if let Some(message) = state
+                .status_toast
+                .active(feedback_now)
+                .map(|(message, _)| message.clone())
+            {
                 self.notice.set(message, now);
                 state.status_toast.clear();
             }
@@ -125,8 +127,8 @@ impl Preview {
         if let Some(state) = &mut self.copying {
             state.poll_export(now, ctx);
             if !state.export_pending() {
-                if let Some(message) = state.status_toast.message(now) {
-                    self.notice.set(message, now);
+                if let Some((message, _)) = state.status_toast.active(now) {
+                    self.notice.set(message.clone(), now);
                 }
                 self.copying = None;
             }

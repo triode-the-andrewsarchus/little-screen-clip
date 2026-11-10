@@ -19,9 +19,7 @@ impl MidiViewerState {
         close: &mut bool,
         mut copy_dispatch: impl FnMut(&mut Self, f64),
     ) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0.0, |time| time.as_secs_f64());
+        let now = crate::ui_ext::feedback_time();
         self.poll_export(now, ui.ctx());
         self.update_playback();
         if self.is_playing {

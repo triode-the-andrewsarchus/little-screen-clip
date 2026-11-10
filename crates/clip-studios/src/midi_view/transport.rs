@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui_ext::StatusMessage;
 use rodio::Source;
 
 impl MidiViewerState {
@@ -21,10 +22,7 @@ impl MidiViewerState {
                     });
                 self.synth_rx = Some(rx);
                 self.synth_ticket = Some(ticket);
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs_f64();
+                let now = crate::ui_ext::feedback_time();
                 self.status_toast.set("Synthesizing audio…", now);
             }
             return;
@@ -50,11 +48,11 @@ impl MidiViewerState {
                         if let Err(error) =
                             source.try_seek(Duration::from_secs_f32(self.playhead_sec.max(0.0)))
                         {
-                            let now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map_or(0.0, |time| time.as_secs_f64());
-                            self.status_toast
-                                .set(format!("MIDI seek failed: {error}"), now);
+                            let now = crate::ui_ext::feedback_time();
+                            self.status_toast.set(
+                                StatusMessage::error(format!("MIDI seek failed: {error}")),
+                                now,
+                            );
                             return;
                         }
                         if let Some(end) = self.play_stop_time {
@@ -70,22 +68,18 @@ impl MidiViewerState {
                         self.playback_start_offset = self.playhead_sec;
                     }
                     Err(e) => {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs_f64();
-                        self.status_toast
-                            .set(format!("Audio decode error: {}", e), now);
+                        let now = crate::ui_ext::feedback_time();
+                        self.status_toast.set(
+                            StatusMessage::error(format!("Audio decode error: {}", e)),
+                            now,
+                        );
                     }
                 }
             }
             None => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs_f64();
+                let now = crate::ui_ext::feedback_time();
                 self.status_toast.set(
-                    "Audio device error: could not open shared audio output",
+                    StatusMessage::error("Audio device error: could not open shared audio output"),
                     now,
                 );
             }
@@ -201,24 +195,22 @@ impl MidiViewerState {
                     self.pending_play = false;
                     self.synth_rx = None;
                     self.synth_ticket = None;
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|duration| duration.as_secs_f64())
-                        .unwrap_or(0.0);
-                    self.status_toast
-                        .set(format!("MIDI synthesis failed: {error}"), now);
+                    let now = crate::ui_ext::feedback_time();
+                    self.status_toast.set(
+                        StatusMessage::error(format!("MIDI synthesis failed: {error}")),
+                        now,
+                    );
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.is_synthesizing = false;
                     self.pending_play = false;
                     self.synth_rx = None;
                     self.synth_ticket = None;
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|duration| duration.as_secs_f64())
-                        .unwrap_or(0.0);
-                    self.status_toast
-                        .set("MIDI synthesis worker disconnected", now);
+                    let now = crate::ui_ext::feedback_time();
+                    self.status_toast.set(
+                        StatusMessage::error("MIDI synthesis worker disconnected"),
+                        now,
+                    );
                 }
                 Err(TryRecvError::Empty) => {}
             }

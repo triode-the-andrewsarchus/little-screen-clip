@@ -246,10 +246,7 @@ fn model3d_toolbar_clicks_change_only_their_view_controls() {
     let (before, after) = click_and_snapshot(&ctx, &mut app, "Axis: Y-Up", ChangedControl::UpAxis);
     assert_eq!(before.up_axis, model3d_view::UpAxis::YUp);
     assert_eq!(after.up_axis, model3d_view::UpAxis::ZUp);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let now = crate::ui_ext::feedback_time();
     let Some(ViewerSession::Model3d(state)) = &app.viewer else {
         panic!("3D viewer should remain active after axis toggle");
     };
@@ -261,10 +258,7 @@ fn model3d_toolbar_clicks_change_only_their_view_controls() {
     let (before, after) = click_and_snapshot(&ctx, &mut app, "Axis: Z-Up", ChangedControl::UpAxis);
     assert_eq!(before.up_axis, model3d_view::UpAxis::ZUp);
     assert_eq!(after.up_axis, model3d_view::UpAxis::YUp);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let now = crate::ui_ext::feedback_time();
     let Some(ViewerSession::Model3d(state)) = &app.viewer else {
         panic!("3D viewer should remain active after axis toggle");
     };

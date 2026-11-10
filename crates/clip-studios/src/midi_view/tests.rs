@@ -1171,10 +1171,7 @@ fn midi_export_failure_uses_the_studios_display_clock() {
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| state.render_ui(ui, &palette, &mut false));
     });
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let now = crate::ui_ext::feedback_time();
     assert_eq!(
         state.status_toast.message(now),
         Some("controlled export failure")

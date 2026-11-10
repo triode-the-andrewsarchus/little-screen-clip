@@ -319,10 +319,7 @@ fn pdf_keyboard_page_actions_reach_the_guarded_selected_page_methods() {
     let mut state = action_guard_state(temp.path().join("fixture.pdf"), 1, Some(1));
 
     for key in [egui::Key::Delete, egui::Key::Backspace] {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
+        let now = crate::ui_ext::feedback_time();
         let _ = ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -368,10 +365,7 @@ fn pdf_keyboard_page_actions_reach_the_guarded_selected_page_methods() {
     state.selected_page = Some(2);
     state.edit_rx = Some(receiver);
     state.edit_in_progress = true;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64();
+    let now = crate::ui_ext::feedback_time();
     let _ = ctx.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
