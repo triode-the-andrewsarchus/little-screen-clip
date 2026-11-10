@@ -3,6 +3,8 @@
 //! Provides CLI commands to inspect slots, push text, swap cards, run transformations,
 //! execute pipeline recipes, and simulate capture/paste actions.
 
+mod copy;
+
 use clap::{Parser, Subcommand};
 use colored::*;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
@@ -157,84 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 HandSide::Right
             };
 
-            let route_req = IpcRequest::RouteNextClipboard {
-                hand: hand_side,
-                timeout_ms: 2000,
-                restore_os_clipboard: !no_restore,
-            };
-            let _ = send_ipc_req(&mut writer, &mut lines, &route_req).await?;
-
-            let initial_cb = tokio::process::Command::new("wl-paste")
-                .arg("-n")
-                .output()
-                .await
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .unwrap_or_default();
-
-            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-
-            let _ = tokio::process::Command::new("wtype")
-                .args(["-m", "alt", "-M", "ctrl", "-k", "c", "-m", "ctrl"])
-                .status()
-                .await;
-
-            let mut captured = false;
-            let start = tokio::time::Instant::now();
-            while start.elapsed() < std::time::Duration::from_millis(350) {
-                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                if let Ok(out) = tokio::process::Command::new("wl-paste")
-                    .arg("-n")
-                    .output()
-                    .await
-                {
-                    if out.status.success() && !out.stdout.is_empty() {
-                        if let Ok(text) = String::from_utf8(out.stdout) {
-                            if text != initial_cb {
-                                captured = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if captured {
-                println!(
-                    "{}: Captured selection to {:?}",
-                    "Success".green().bold(),
-                    hand_side
-                );
-                return Ok(());
-            }
-
-            if let Ok(out) = tokio::process::Command::new("wl-paste")
-                .arg("--primary")
-                .arg("-n")
-                .output()
-                .await
-            {
-                if out.status.success() && !out.stdout.is_empty() {
-                    if let Ok(text) = String::from_utf8(out.stdout) {
-                        let push_req = IpcRequest::PushText {
-                            text: text.clone(),
-                            hand: hand_side,
-                        };
-                        let _ = send_ipc_req(&mut writer, &mut lines, &push_req).await?;
-                        println!(
-                            "{}: Captured primary selection to {:?}",
-                            "Success".green().bold(),
-                            hand_side
-                        );
-                        return Ok(());
-                    }
-                }
-            }
-
-            println!(
-                "{}: No selection detected in active window.",
-                "Notice".yellow().bold()
-            );
+            copy::copy_to_hand(&mut writer, &mut lines, hand_side, !no_restore).await?;
             return Ok(());
         }
         Commands::Paste { hand } => {
@@ -376,6 +301,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             IpcResponse::NeedsPrompt { message, .. } => {
                 println!("{}: {}", "Prompt Required".yellow().bold(), message);
             }
+            IpcResponse::ClipboardRoute { status, .. } => println!("Clipboard route: {status:?}"),
             IpcResponse::Success { message } => {
                 println!("{}: {}", "Success".green().bold(), message);
             }

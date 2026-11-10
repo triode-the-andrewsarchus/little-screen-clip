@@ -102,16 +102,33 @@ pub enum IpcRequest {
     GetRollingAudio,
     /// Captures the next OS clipboard change and routes it to the designated hand.
     RouteNextClipboard {
+        #[serde(default)]
+        request_id: Option<uuid::Uuid>,
         hand: HandSide,
         timeout_ms: u64,
         restore_os_clipboard: bool,
     },
+    /// Observes whether this client-owned route remains pending or was claimed.
+    GetClipboardRoute { request_id: uuid::Uuid },
+    /// Cancels only a still-pending route with this identity.
+    CancelClipboardRoute { request_id: uuid::Uuid },
     /// Retrieves the `ClipItem` stored at a specific `SlotId`.
     GetSlotItem(SlotId),
     /// Queries active automatic clipboard action toggles.
     GetAutoActions,
     /// Enables or disables an automatic clipboard action toggle.
     SetAutoAction { key: String, enabled: bool },
+}
+
+/// State of one client-owned route; claimed means the watcher took the override,
+/// not that decoding, clipboard restoration or preview preparation has completed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClipboardRouteStatus {
+    Pending,
+    Claimed,
+    Cancelled,
+    Expired,
+    Superseded,
 }
 
 /// Represents the most recently performed operation or recipe for quick re-execution.
@@ -135,6 +152,11 @@ fn default_left_hand() -> HandSide {
 /// Response messages returned by `little-clipd` across the IPC socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcResponse {
+    /// Identity-scoped acknowledgement or terminal route observation.
+    ClipboardRoute {
+        request_id: uuid::Uuid,
+        status: ClipboardRouteStatus,
+    },
     /// Current full slot state.
     State(SlotManager),
     /// Lightweight slot cards and selection state suitable for frequent polling.
@@ -290,6 +312,18 @@ impl SlotCard {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_clipboard_route_defaults_to_unidentified() {
+        let request: super::IpcRequest = serde_json::from_str(r#"{"RouteNextClipboard":{"hand":"Left","timeout_ms":2000,"restore_os_clipboard":false}}"#).unwrap();
+        assert!(matches!(
+            request,
+            super::IpcRequest::RouteNextClipboard {
+                request_id: None,
+                ..
+            }
+        ));
+    }
+
     use super::*;
 
     #[test]

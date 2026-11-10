@@ -46,6 +46,8 @@ Follow the existing Conventional Commit pattern with a concise scope: `feat(imag
 
 ## Runtime Configuration & Hardware
 
+Clipboard routing overrides have client request identities. Cleanup must compare-and-cancel only its own pending override; a watcher claim prevents duplicate fallback pushes. Keep expiry as crash recovery, and distinguish route acknowledgement from completed decoding or clipboard restoration. Never cancel another client's newer route.
+
 USB enumeration, frame writes, reconnect and driver release belong to the daemon's dedicated display-owner thread. Publish frames through the latest-value channel without awaiting hardware; preserve keepalive/retry pacing and re-read the newest frame after a slow open or send delay. Closing the channel retires the session after any in-flight native call returns; do not join a potentially stalled device thread on the async executor.
 
 Do not commit personal display, compositor, or desktop settings. Keep `config.toml` changes reloadable, and preserve virtual-mode behavior when no supported USB display is attached.

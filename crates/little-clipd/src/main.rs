@@ -20,6 +20,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{RwLock, watch};
 use tracing::{error, info, warn};
 
+mod clipboard_route;
 mod display_worker;
 mod lock_monitor;
 mod rolling_capture;
@@ -83,8 +84,7 @@ pub struct DaemonContext {
     /// Audio capture settings shared with the rolling capture worker.
     pub rolling_capture_config: Arc<std::sync::RwLock<little_clip_core::config::AudioConfig>>,
     /// Temporary routing override for the next incoming system clipboard copy.
-    pub route_next_clipboard:
-        RwLock<Option<(little_clip_core::HandSide, tokio::time::Instant, bool)>>,
+    route_next_clipboard: RwLock<clipboard_route::ClipboardRoute>,
 }
 
 impl DaemonContext {
@@ -173,17 +173,10 @@ impl DaemonContext {
 
     /// Consumes and returns any active routing override (hand destination and clipboard restore flag).
     pub async fn take_route_override(&self) -> (little_clip_core::HandSide, bool) {
-        let mut route_guard = self.route_next_clipboard.write().await;
-        if let Some((hand, expires, restore)) = *route_guard {
-            *route_guard = None;
-            if tokio::time::Instant::now() < expires {
-                (hand, restore)
-            } else {
-                (little_clip_core::HandSide::Left, false)
-            }
-        } else {
-            (little_clip_core::HandSide::Left, false)
-        }
+        self.route_next_clipboard
+            .write()
+            .await
+            .take(tokio::time::Instant::now())
     }
 
     /// Restores the previously active OS clipboard item if a route-with-restore operation was performed.
@@ -297,7 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         is_locked: AtomicBool::new(false),
         rolling_audio: Arc::clone(&rolling_audio),
         rolling_capture_config: Arc::clone(&rolling_capture_config),
-        route_next_clipboard: RwLock::new(None),
+        route_next_clipboard: RwLock::new(clipboard_route::ClipboardRoute::default()),
     });
 
     // Start background rolling audio capture thread
@@ -930,22 +923,41 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 }
             }
             Ok(IpcRequest::RouteNextClipboard {
+                request_id,
                 hand,
                 timeout_ms,
                 restore_os_clipboard,
             }) => {
-                let expires = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
-                {
-                    let mut route = ctx.route_next_clipboard.write().await;
-                    *route = Some((hand, expires, restore_os_clipboard));
-                }
-                IpcResponse::Success {
-                    message: format!(
-                        "Next clipboard event routed to {:?} (timeout {}ms)",
-                        hand, timeout_ms
-                    ),
+                let expires =
+                    tokio::time::Instant::now() + Duration::from_millis(timeout_ms.min(60_000));
+                let mut route = ctx.route_next_clipboard.write().await;
+                route.install(request_id, hand, expires, restore_os_clipboard);
+                match request_id {
+                    Some(request_id) => IpcResponse::ClipboardRoute {
+                        request_id,
+                        status: route.status(request_id, tokio::time::Instant::now()),
+                    },
+                    None => IpcResponse::Success {
+                        message: format!("Next clipboard event routed to {hand:?}"),
+                    },
                 }
             }
+            Ok(IpcRequest::GetClipboardRoute { request_id }) => IpcResponse::ClipboardRoute {
+                request_id,
+                status: ctx
+                    .route_next_clipboard
+                    .read()
+                    .await
+                    .status(request_id, tokio::time::Instant::now()),
+            },
+            Ok(IpcRequest::CancelClipboardRoute { request_id }) => IpcResponse::ClipboardRoute {
+                request_id,
+                status: ctx
+                    .route_next_clipboard
+                    .write()
+                    .await
+                    .cancel(request_id, tokio::time::Instant::now()),
+            },
             Ok(IpcRequest::GetSlotItem(slot)) => {
                 let mgr = ctx.manager.read().await;
                 let item = mgr.get(slot).cloned();
@@ -1376,13 +1388,10 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
 
                     // Check if there is an active override routing to Right Hand
                     let has_active_right_route = {
-                        let route_guard = ctx.route_next_clipboard.read().await;
-                        if let Some((hand, expires, _)) = *route_guard {
-                            hand == little_clip_core::HandSide::Right
-                                && tokio::time::Instant::now() < expires
-                        } else {
-                            false
-                        }
+                        ctx.route_next_clipboard
+                            .read()
+                            .await
+                            .targets_right(tokio::time::Instant::now())
                     };
 
                     // Check if clipboard content matches what is already in Left Hand

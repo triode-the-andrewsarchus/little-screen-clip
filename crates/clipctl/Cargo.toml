@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+uuid.workspace = true
 little-clip-core = { path = "../little-clip-core" }
 tokio.workspace = true
 serde.workspace = true
