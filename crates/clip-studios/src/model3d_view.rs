@@ -393,23 +393,27 @@ impl Model3dViewerState {
                 }
 
                 ui.add_space(20.0);
-                let available_size = ui.available_size();
-                let (rect, _) = ui.allocate_exact_size(available_size, egui::Sense::hover());
-                let painter = ui.painter_at(rect);
-                painter.rect_filled(
-                    rect,
-                    Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
-                    b_low,
-                );
+                let toast = self.status_toast.active(now).cloned();
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    shell.render_footer(ui, &toast, now);
+                    let available_size = ui.available_size();
+                    let (rect, _) = ui.allocate_exact_size(available_size, egui::Sense::hover());
+                    let painter = ui.painter_at(rect);
+                    painter.rect_filled(
+                        rect,
+                        Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+                        b_low,
+                    );
 
-                let text = format!("Unable to load 3D model:\n\n{}", err);
-                painter.text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    text,
-                    egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
-                    f_high,
-                );
+                    let text = format!("Unable to load 3D model:\n\n{}", err);
+                    painter.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        text,
+                        egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
+                        f_high,
+                    );
+                });
             });
     }
 
@@ -1437,6 +1441,39 @@ endsolid test_cache
                     egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 720.0))
                         .contains_rect(*bounds),
                     "{required:?} outside host at {size_name} width {width}: {bounds:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn error_footer_shows_launch_failure_inside_compact_and_wide_hosts() {
+        for (width, height) in [(588.0, 331.0), (736.0, 414.0)] {
+            let mut viewer = Model3dViewerState::from_model(test_mesh(), None);
+            viewer.status = ModelLoadingStatus::Error("Unsupported geometry".to_owned());
+            viewer.status_toast.set(
+                crate::ui_ext::StatusMessage::error("Blender launch failed"),
+                crate::ui_ext::feedback_time(),
+            );
+            let text = render_text_at_size(&mut viewer, width, height);
+            let host = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(width, height));
+            for required in [
+                "Press Esc to close",
+                "Blender launch failed",
+                "Unable to load 3D model:",
+            ] {
+                let (_, bounds, elided, clip) = text
+                    .iter()
+                    .find(|(text, _, _, _)| text.contains(required))
+                    .unwrap_or_else(|| panic!("missing {required:?} at {width}x{height}"));
+                assert!(!elided, "elided {required:?}");
+                assert!(
+                    host.contains_rect(*bounds),
+                    "{required:?} outside host: {bounds:?}"
+                );
+                assert!(
+                    clip.contains_rect(*bounds),
+                    "clipped {required:?}: {bounds:?}"
                 );
             }
         }
