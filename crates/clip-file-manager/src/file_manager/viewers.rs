@@ -41,7 +41,7 @@ enum Loaded {
     Midi(little_clip_core::presentation::midi::MidiData),
     OfficePdf {
         pdf_path: PathBuf,
-        workspace_dir: PathBuf,
+        workspace: little_clip_core::staging::ArtifactLease,
         original_path: PathBuf,
     },
     Path,
@@ -633,10 +633,10 @@ fn load(
         Kind::OfficeDoc => match little_clip_core::document::prepare_office_preview(path)? {
             little_clip_core::document::PreparedOfficePreview::Pdf {
                 pdf_path,
-                workspace_dir,
+                workspace,
             } => Ok(Loaded::OfficePdf {
                 pdf_path,
-                workspace_dir,
+                workspace,
                 original_path: path.to_path_buf(),
             }),
             little_clip_core::document::PreparedOfficePreview::Markdown(md) => {
@@ -687,7 +687,7 @@ fn session(
         Loaded::Midi(data) => ViewerSession::Midi(MidiViewerState::from_parsed_file(path, data)),
         Loaded::OfficePdf {
             pdf_path,
-            workspace_dir,
+            workspace,
             original_path,
         } => {
             let title = original_path
@@ -697,7 +697,7 @@ fn session(
             ViewerSession::Pdf(
                 PdfEditorState::new(pdf_path)
                     .with_title(title)
-                    .with_cleanup_dir(workspace_dir)
+                    .with_office_workspace(workspace)
                     .with_protected_outputs(),
             )
         }

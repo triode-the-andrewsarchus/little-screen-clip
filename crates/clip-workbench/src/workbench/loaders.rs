@@ -194,10 +194,10 @@ impl WorkbenchApp {
                 match little_clip_core::document::prepare_office_preview(&path)? {
                     little_clip_core::document::PreparedOfficePreview::Pdf {
                         pdf_path,
-                        workspace_dir,
+                        workspace,
                     } => Ok(OfficeLoadResult::Pdf {
                         pdf_path,
-                        workspace_dir,
+                        workspace,
                         title,
                     }),
                     little_clip_core::document::PreparedOfficePreview::Markdown(content) => {
@@ -229,12 +229,12 @@ impl WorkbenchApp {
         match result {
             Ok(Ok(OfficeLoadResult::Pdf {
                 pdf_path,
-                workspace_dir,
+                workspace,
                 title,
             })) => {
                 let state = PdfEditorState::new(pdf_path)
                     .with_title(title)
-                    .with_cleanup_dir(workspace_dir)
+                    .with_office_workspace(workspace)
                     .with_protected_outputs();
                 self.replace_viewer(Some(ViewerSession::Pdf(state)));
                 ctx.request_repaint();

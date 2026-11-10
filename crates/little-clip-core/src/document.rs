@@ -296,10 +296,10 @@ pub fn render_to_markdown(input: &Path) -> Result<String, String> {
 
 /// Prepared studio preview payload for an office document.
 pub enum PreparedOfficePreview {
-    /// Paginated PDF staged in a retained temporary workspace.
+    /// Paginated PDF staged in a temporary workspace owned by this result.
     Pdf {
         pdf_path: PathBuf,
-        workspace_dir: PathBuf,
+        workspace: crate::staging::ArtifactLease,
     },
     /// Fallback Markdown text when paginated PDF rendering is unavailable.
     Markdown(String),
@@ -323,10 +323,9 @@ pub fn prepare_office_preview(input: &Path) -> Result<PreparedOfficePreview, Str
             .map(|m| m.len() > 0)
             .unwrap_or(false)
     {
-        let workspace_dir = workspace.retain();
         return Ok(PreparedOfficePreview::Pdf {
             pdf_path,
-            workspace_dir,
+            workspace,
         });
     }
     render_to_markdown(input).map(PreparedOfficePreview::Markdown)
@@ -576,6 +575,33 @@ printf '%%PDF-1.4\nfixture\n' > "$outdir/converted.pdf"
         assert!(res.is_ok(), "render_to_pdf failed: {:?}", res);
         assert!(pdf_path.exists());
         assert!(std::fs::metadata(&pdf_path).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn undelivered_office_preview_reclaims_its_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("cancelled.rtf");
+        std::fs::write(
+            &input,
+            br"{\rtf1\ansi An Office preview that is never opened.}",
+        )
+        .unwrap();
+
+        let preview = prepare_office_preview(&input).unwrap();
+        let PreparedOfficePreview::Pdf {
+            pdf_path,
+            workspace,
+        } = &preview
+        else {
+            panic!("expected a staged PDF");
+        };
+        let workspace_path = workspace.path().to_owned();
+        assert!(pdf_path.is_file());
+        let (send, receive) = std::sync::mpsc::channel();
+        send.send(preview).unwrap();
+        assert!(workspace_path.is_dir());
+        drop(receive);
+        assert!(!workspace_path.exists());
     }
 
     #[test]

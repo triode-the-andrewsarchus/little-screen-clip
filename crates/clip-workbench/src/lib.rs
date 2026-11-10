@@ -376,7 +376,7 @@ type MidiLoadReceiver = Receiver<Result<Result<(MidiData, PathBuf), String>, Job
 pub(crate) enum OfficeLoadResult {
     Pdf {
         pdf_path: PathBuf,
-        workspace_dir: PathBuf,
+        workspace: little_clip_core::staging::ArtifactLease,
         title: String,
     },
     Markdown {
