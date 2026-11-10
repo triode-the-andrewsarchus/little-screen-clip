@@ -489,8 +489,7 @@ fn format_morse_symbol(c: char) -> String {
     }
 }
 
-/// Decodes Morse telegraphy characters from audio using `cwdit-dsp` envelope detection
-/// and `cwdit-morse` timing classification.
+/// Decodes Morse telegraphy using Goertzel envelope detection and `cwdit-morse` timing.
 #[must_use]
 pub fn decode_morse_cw(samples: &[f32], sample_rate: u32) -> Vec<DecodedSymbol> {
     if samples.is_empty() {

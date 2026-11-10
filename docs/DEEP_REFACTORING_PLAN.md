@@ -1090,3 +1090,56 @@ one CCN-1 shared transition and two CCN-1 regression tests, with +68 NLOC / +3
 CCN overall (`/tmp/deep-history-architecture.json`). Source ownership and per-photo
 session behavior remain in the shared studio used by both applications. Disk
 remains about 138 GiB free; no sweep or alternate build profile was needed.
+
+
+### Phase 4 checkpoint: measured DSP dependency decision
+
+The radio/DSP audit finds one existing production decoder owner,
+`little-clip-ops::digital_decode`, consumed by Audio Studio. The test-audio fixture
+binary also uses `yodel`. `cwdit-morse` is used by the Morse timing classifier;
+`yodel` implements the packet/weak-signal decoders. Neither has ordinary direct
+transitive dependencies in the enabled graph. The Morse envelope uses the
+project's own Goertzel calculation, despite a stale comment naming `cwdit-dsp`.
+There are no actual `cwdit-dsp` call sites. Remove that unused direct dependency
+and correct the comment; all decoder implementation bodies remain unchanged.
+
+Current Cargo metadata confirms ops direct dependencies **24→23**, with only
+`cwdit-dsp` removed and no added dependency. The package is absent from the
+current resolved graph. Its already-cached debug rlibs occupy roughly 13.16 MB
+per observed variant; retained `yodel`/`cwdit-morse` debug rlibs are approximately
+6.53 MB / 0.31 MB. These are build-artifact observations, not final binary size,
+runtime memory or a guaranteed clean-build speedup. RustFFT remains needed by
+existing real-FFT audio processing. No cache artifacts were swept or disk savings
+claimed. The metadata snapshots have different platform filters, so their total
+transitive package counts are deliberately not compared. Evidence and explicit
+measurement limits: `/tmp/deep-dsp-dependency-audit.json`.
+
+A separate radio crate or optional feature is not justified for the current
+consumers. Normal desktop builds still expose the same audio tools, and the
+remaining small decoder dependencies have real users. Extracting them now would
+add a crate edge without removing those dependencies from a demonstrated
+consumer's build. Revisit isolation when an actual independently built consumer
+needs it; do not turn tools off to obtain an artificial build reduction. This
+completes the plan's measured consideration, not an authorization for a minimal
+product configuration.
+
+All **15 decoder-focused tests pass** (nine studio, six ops), including protocol
+availability and signal fixtures (`/tmp/deep-dsp-decoder-tests.log`). Workspace
+all-target compilation and daemon/both desktop builds pass
+(`/tmp/deep-dsp-check.log`, `/tmp/deep-dsp-build.log`). The integration run covering
+both this removal and the preceding history change passes **2645 workspace tests,
+zero failures, 30 ignored**, including doctests (`/tmp/deep-domain-workspace.log`).
+Workspace/all-target diagnostic Clippy completes with the previously documented
+approximate-constant allowance and existing warnings (`/tmp/deep-domain-clippy.log`);
+this is not a clean `-D warnings` claim. Studio/ops API documentation builds
+(`/tmp/deep-domain-doc.log`). Formatting/diff checks pass. Cargo work was
+serialized at four jobs; approximately 137 GiB remains free, with no cleanup sweep.
+
+Architecture comparison against `deep-dsp-dependency-start` has unchanged
+function, CCN, clone-group (1501) and cycle (16) totals and NLOC −1. Its raw
+REGRESSION reflects touched existing decoder clone blocks and reordered members
+of an unchanged Python cycle; production code is byte-identical after removing
+doc comments (`/tmp/deep-dsp-architecture.json`). The dependency graph provides
+the relevant improvement, which the source-only vector does not quantify. The
+remaining input/feedback contracts and full requirement-by-requirement acceptance
+review still prevent declaring the entire deep plan complete.
