@@ -19,7 +19,9 @@ impl MidiViewerState {
         close: &mut bool,
         mut copy_dispatch: impl FnMut(&mut Self, f64),
     ) {
-        let now = ui.input(|input| input.time);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |time| time.as_secs_f64());
         self.poll_export(now, ui.ctx());
         self.update_playback();
         if self.is_playing {
@@ -35,15 +37,15 @@ impl MidiViewerState {
                 self.play_stop_time = None;
             } else {
                 self.stop();
-                *close = true;
+                *close = !self.export_pending();
+                if self.export_pending() {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    ui.ctx().request_repaint_after(Duration::from_millis(50));
+                }
                 return;
             }
         }
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
 
         // Handle Space key for Play/Pause
         if ui.input(|i| i.key_pressed(egui::Key::Space)) {
@@ -800,5 +802,11 @@ impl MidiViewerState {
                 let toast_tuple = self.status_toast.active(now).cloned();
                 shell.render_footer(ui, &toast_tuple, now);
             });
+        if self.export_pending() {
+            *close = false;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ui.ctx().request_repaint_after(Duration::from_millis(50));
+        }
     }
 }

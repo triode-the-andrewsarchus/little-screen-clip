@@ -26,6 +26,9 @@ impl MidiViewerState {
         + Send
         + 'static,
     ) -> bool {
+        if self.export_pending() {
+            return false;
+        }
         let (s, e, is_slice) = match self.selected_region {
             Some((a, b)) if (b - a).abs() > 0.0 => (a.min(b), a.max(b), true),
             _ => (0.0, self.data.duration_sec.max(0.1), false),
@@ -34,12 +37,10 @@ impl MidiViewerState {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        self.cancel_export_job();
         let data = Arc::clone(&self.data);
         let solo_track = self.solo_track;
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let job_cancelled = Arc::clone(&cancelled);
-        let (ticket, receiver) = jobs.submit(Duration::from_secs(60), move || {
+        let job_cancelled = Arc::new(AtomicBool::new(false));
+        let (_, receiver) = jobs.submit(Duration::MAX, move || {
             let started = Instant::now();
             let artifact = write_midi_export(
                 &data,
@@ -53,20 +54,9 @@ impl MidiViewerState {
             )?;
             handoff(artifact, &job_cancelled, started)
         });
-        self.export_job = Some(MidiExportJob {
-            ticket,
-            cancelled,
-            receiver,
-        });
+        self.export_job = Some(MidiExportJob { receiver });
         self.status_toast.set("Preparing MIDI export…", now);
         true
-    }
-
-    pub(super) fn cancel_export_job(&mut self) {
-        if let Some(job) = self.export_job.take() {
-            job.cancelled.store(true, Ordering::Release);
-            job.ticket.cancel();
-        }
     }
 
     pub(crate) fn poll_export(&mut self, now: f64, ctx: &egui::Context) {
@@ -259,7 +249,7 @@ pub(super) fn handoff_midi_export(
     if cancelled.load(Ordering::Acquire) {
         return Err("MIDI export cancelled".to_string());
     }
-    // Keep enough of the job deadline for bounded IPC and the clipboard fallback.
+    // Bound preparation before publishing a file reference to another process.
     if started.elapsed() >= Duration::from_secs(45) {
         return Err("MIDI export timed out before handoff".to_string());
     }
@@ -267,8 +257,13 @@ pub(super) fn handoff_midi_export(
         path: artifact.path.clone(),
         hand: HandSide::Left,
     };
-    if crate::send_ipc_request_with_timeout(&request, Some(Duration::from_secs(2))).is_ok() {
-        artifact.retain();
+    // Once a path is handed to the daemon, a lost reply cannot establish that
+    // nobody owns it. Retain it even if transport or fallback later fails.
+    artifact.retain();
+    if matches!(
+        crate::send_ipc_request(&request),
+        Ok(little_clip_core::ipc::IpcResponse::Success { .. })
+    ) {
         return Ok(artifact);
     }
 

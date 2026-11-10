@@ -1109,3 +1109,74 @@ fn test_midi_viewer_render_ui_tracks_and_legend() {
     state.clear_solo();
     assert_eq!(state.solo_track, None);
 }
+
+#[test]
+fn accepted_midi_export_survives_repeat_copy_stop_and_viewer_drop() {
+    let mut state =
+        MidiViewerState::from_shared(inline_midi_data(1), None, "Accepted export".into());
+    let directory = tempfile::tempdir().unwrap();
+    let jobs = BackgroundJobs::new(1, 2);
+    let (entered, waiting) = std::sync::mpsc::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let (finished, completed) = std::sync::mpsc::channel();
+    assert!(state.copy_selection_on(
+        0.0,
+        &jobs,
+        directory.path().to_owned(),
+        move |mut artifact, cancelled, _| {
+            artifact.retain();
+            entered.send(artifact.path.clone()).unwrap();
+            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(!cancelled.load(Ordering::Acquire));
+            finished.send(()).unwrap();
+            Ok(artifact)
+        }
+    ));
+    let path = waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        !state.copy_selection_on(0.1, &jobs, directory.path().to_owned(), |_, _, _| panic!(
+            "duplicate export"
+        ))
+    );
+    state.stop();
+    let ctx = egui::Context::default();
+    let palette = AppPalette::default();
+    let mut close = true;
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| state.render_ui(ui, &palette, &mut close));
+    });
+    assert!(!close);
+    assert!(
+        output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|cmd| matches!(cmd, egui::ViewportCommand::CancelClose))
+    );
+    drop(state);
+    release.send(()).unwrap();
+    completed.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(path.is_file());
+}
+
+#[test]
+fn midi_export_failure_uses_the_studios_display_clock() {
+    let mut state = MidiViewerState::from_shared(inline_midi_data(1), None, "Export error".into());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    sender
+        .send(Ok(Err("controlled export failure".into())))
+        .unwrap();
+    state.export_job = Some(MidiExportJob { receiver });
+    let ctx = egui::Context::default();
+    let palette = AppPalette::default();
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| state.render_ui(ui, &palette, &mut false));
+    });
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    assert_eq!(
+        state.status_toast.message(now),
+        Some("controlled export failure")
+    );
+}

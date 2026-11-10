@@ -935,7 +935,7 @@ pub(super) fn extract_audio_slice_file(
 }
 
 fn send_audio_handoff(request: &IpcRequest) -> Result<(), String> {
-    match crate::send_ipc_request_with_timeout(request, Some(Duration::from_secs(2))) {
+    match crate::send_ipc_request(request) {
         Ok(little_clip_core::ipc::IpcResponse::Success { .. }) => Ok(()),
         Ok(little_clip_core::ipc::IpcResponse::Error { error }) => Err(error),
         Ok(response) => Err(format!("unexpected daemon response: {response:?}")),

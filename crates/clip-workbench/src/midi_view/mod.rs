@@ -228,8 +228,6 @@ pub struct MidiViewerState {
 }
 
 struct MidiExportJob {
-    ticket: JobTicket,
-    cancelled: Arc<AtomicBool>,
     receiver: Receiver<Result<Result<MidiExportArtifact, String>, JobError>>,
 }
 
@@ -392,7 +390,6 @@ impl Drop for MidiViewerState {
         if let Some(ticket) = &self.synth_ticket {
             ticket.cancel();
         }
-        self.cancel_export_job();
     }
 }
 

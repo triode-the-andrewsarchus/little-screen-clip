@@ -1,69 +1,66 @@
 //! Completion and feedback for applying appearance changes to the daemon.
 
-use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 use eframe::egui;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::palette::AppPalette;
-use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 
-use crate::send_ipc_request_with_timeout;
+use crate::desktop_ipc::PendingRequest;
 use crate::ui_appearance::WorkbenchColors;
-
-type ReloadReceiver = Receiver<Result<Result<(), String>, JobError>>;
 
 #[derive(Default)]
 pub(crate) struct AppearanceSync {
-    pending: Option<(JobTicket, ReloadReceiver)>,
+    pending: Option<PendingRequest>,
+    reload_requested: bool,
+    local_error: Option<String>,
     error: Option<String>,
 }
 
 impl AppearanceSync {
     pub(crate) fn clear(&mut self) {
-        if let Some((ticket, _)) = self.pending.take() {
-            ticket.cancel();
-        }
         self.error = None;
+        self.local_error = None;
     }
 
     pub(crate) fn begin(&mut self) {
-        self.pending = Some(BackgroundJobs::global().submit(Duration::from_secs(5), || {
-            send_ipc_request_with_timeout(&IpcRequest::ReloadConfig, Some(Duration::from_secs(4)))
-                .map_err(|error| error.to_string())
-                .and_then(reload_result)
-        }));
-    }
-
-    pub(crate) fn set_error(&mut self, error: String) {
-        self.error = Some(error);
-    }
-
-    pub(crate) fn poll(&mut self, ctx: &egui::Context) {
-        let Some((_, receiver)) = &self.pending else {
-            return;
-        };
-        let result = match receiver.try_recv() {
-            Ok(result) => result,
-            Err(TryRecvError::Empty) => {
-                ctx.request_repaint_after(Duration::from_millis(80));
-                return;
-            }
-            Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
-        };
-        self.pending = None;
-        self.error = match result {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(format!("Could not update little screen: {error}")),
-            Err(error) => Some(format!("Could not update little screen: {error}")),
-        };
-        if self.error.is_some() {
-            ctx.request_repaint();
+        if self.pending.is_some() {
+            self.reload_requested = true;
+        } else {
+            self.pending = Some(PendingRequest::submit(IpcRequest::ReloadConfig));
         }
     }
 
+    pub(crate) fn set_error(&mut self, error: String) {
+        self.local_error = Some(error);
+    }
+
+    pub(crate) fn poll(&mut self, ctx: &egui::Context) {
+        self.poll_with(ctx, || PendingRequest::submit(IpcRequest::ReloadConfig));
+    }
+
+    fn poll_with(&mut self, ctx: &egui::Context, next: impl FnOnce() -> PendingRequest) {
+        let Some(job) = &self.pending else {
+            return;
+        };
+        let Some(result) = job.try_result() else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after(Duration::from_millis(80));
+            return;
+        };
+        self.pending = None;
+        self.error = result
+            .and_then(reload_result)
+            .err()
+            .map(|error| format!("Could not update little screen: {error}"));
+        if std::mem::take(&mut self.reload_requested) {
+            self.pending = Some(next());
+        }
+        ctx.request_repaint();
+    }
+
     pub(crate) fn render(&mut self, ctx: &egui::Context, palette: &AppPalette) {
-        let Some(error) = self.error.as_deref() else {
+        let Some(error) = self.local_error.as_deref().or(self.error.as_deref()) else {
             return;
         };
         let colors = WorkbenchColors::from_palette(palette);
@@ -87,15 +84,7 @@ impl AppearanceSync {
                     });
             });
         if dismiss {
-            self.error = None;
-        }
-    }
-}
-
-impl Drop for AppearanceSync {
-    fn drop(&mut self) {
-        if let Some((ticket, _)) = &self.pending {
-            ticket.cancel();
+            self.clear();
         }
     }
 }
@@ -114,20 +103,46 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
-    fn daemon_error_reaches_visible_feedback_state() {
-        let (sender, receiver) = mpsc::channel();
-        let (ticket, _) = BackgroundJobs::global().submit(Duration::from_secs(1), || ());
+    fn reloads_coalesce_without_discarding_completion_or_local_save_errors() {
+        use little_clip_core::BackgroundJobs;
+        let jobs = BackgroundJobs::new(1, 2);
+        let (release, wait) = mpsc::channel();
         let mut sync = AppearanceSync {
-            pending: Some((ticket, receiver)),
-            error: None,
+            pending: Some(PendingRequest::start(&jobs, move || {
+                wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(IpcResponse::Error {
+                    error: "invalid config".into(),
+                })
+            })),
+            ..Default::default()
         };
-        sender.send(Ok(Err("invalid config".to_owned()))).unwrap();
-        sync.poll(&egui::Context::default());
+        sync.clear();
+        sync.begin();
+        sync.begin();
+        assert!(sync.reload_requested);
+        sync.set_error("Could not save newer appearance".into());
+        release.send(()).unwrap();
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut followups = 0;
+        while sync.pending.is_some() {
+            sync.poll_with(&ctx, || {
+                followups += 1;
+                PendingRequest::start(&jobs, || {
+                    Ok(IpcResponse::Success {
+                        message: "reloaded".into(),
+                    })
+                })
+            });
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(followups, 1);
+        assert!(sync.error.is_none());
         assert_eq!(
-            sync.error.as_deref(),
-            Some("Could not update little screen: invalid config")
+            sync.local_error.as_deref(),
+            Some("Could not save newer appearance")
         );
-        assert!(sync.pending.is_none());
     }
 
     #[test]

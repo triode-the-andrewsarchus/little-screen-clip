@@ -151,7 +151,7 @@ impl ImageCopyJob {
                     fallback_message,
                     || phase.load(Ordering::Acquire) == CANCELLED,
                     |request| {
-                        crate::send_ipc_request_with_timeout(request, Some(Duration::from_secs(2)))
+                        crate::send_ipc_request(request)
                             .map_err(|error| error.to_string())
                             .and_then(|response| match response {
                                 little_clip_core::ipc::IpcResponse::Success { .. } => Ok(()),
@@ -242,7 +242,7 @@ impl ImageCopyJob {
                     hand,
                     || worker_phase.load(Ordering::Acquire) == CANCELLED,
                     |request| {
-                        crate::send_ipc_request_with_timeout(request, Some(Duration::from_secs(2)))
+                        crate::send_ipc_request(request)
                             .map_err(|error| error.to_string())
                             .and_then(|response| match response {
                                 little_clip_core::ipc::IpcResponse::Success { .. } => Ok(()),
