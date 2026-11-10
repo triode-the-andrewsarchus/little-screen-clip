@@ -14,11 +14,10 @@ use little_clip_core::slot::SlotManager;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
 
-const EXTERNAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+use super::EXTERNAL_COMMAND_TIMEOUT;
 
 /// Errors that can occur during graph compilation or node execution.
 #[derive(Debug, Error)]
@@ -442,14 +441,12 @@ else:
                     .unwrap_or("24");
                 let out_path = temp_dir.join(format!("framed_{}.png", Uuid::new_v4()));
 
-                run_magick(&[
-                    path_arg!(in_path),
-                    "-bordercolor",
-                    border_color,
-                    "-border",
-                    border_size,
-                    path_arg!(out_path),
-                ])
+                super::content::magick(
+                    workspace,
+                    &[&in_path],
+                    &["-bordercolor", border_color, "-border", border_size],
+                    &out_path,
+                )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Framed (+{}px)", border_size));
@@ -489,23 +486,26 @@ else:
                     .unwrap_or("24");
                 let out_path = temp_dir.join(format!("titled_{}.png", Uuid::new_v4()));
 
-                run_magick(&[
-                    path_arg!(in_path),
-                    "-background",
-                    bar_color,
-                    "-fill",
-                    text_color,
-                    "-gravity",
-                    "south",
-                    "-splice",
-                    &format!("0x{}", bar_height),
-                    "-pointsize",
-                    font_size,
-                    "-annotate",
-                    "+0+10",
-                    &caption,
-                    path_arg!(out_path),
-                ])
+                super::content::magick(
+                    workspace,
+                    &[&in_path],
+                    &[
+                        "-background",
+                        bar_color,
+                        "-fill",
+                        text_color,
+                        "-gravity",
+                        "south",
+                        "-splice",
+                        &format!("0x{}", bar_height),
+                        "-pointsize",
+                        font_size,
+                        "-annotate",
+                        "+0+10",
+                        &caption,
+                    ],
+                    &out_path,
+                )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Titled: {}", caption));
@@ -520,13 +520,12 @@ else:
                     .unwrap_or("1000x1000+0+0");
                 let out_path = temp_dir.join(format!("cropped_{}.png", Uuid::new_v4()));
 
-                run_magick(&[
-                    path_arg!(in_path),
-                    "-crop",
-                    geom,
-                    "+repage",
-                    path_arg!(out_path),
-                ])
+                super::content::magick(
+                    workspace,
+                    &[&in_path],
+                    &["-crop", geom, "+repage"],
+                    &out_path,
+                )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Crop {}", geom));
@@ -546,12 +545,12 @@ else:
                     .unwrap_or("1080");
                 let out_path = temp_dir.join(format!("resized_{}.png", Uuid::new_v4()));
 
-                run_magick(&[
-                    path_arg!(in_path),
-                    "-resize",
-                    &format!("{}x{}>", max_w, max_h),
-                    path_arg!(out_path),
-                ])
+                super::content::magick(
+                    workspace,
+                    &[&in_path],
+                    &["-resize", &format!("{}x{}>", max_w, max_h)],
+                    &out_path,
+                )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Resize {}x{}", max_w, max_h));
@@ -566,7 +565,7 @@ else:
                     .unwrap_or("90");
                 let out_path = temp_dir.join(format!("{}.webp", Uuid::new_v4()));
 
-                run_magick(&[path_arg!(in_path), "-quality", q, path_arg!(out_path)])
+                super::content::magick(workspace, &[&in_path], &["-quality", q], &out_path)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some("Converted to WebP".to_string());
@@ -581,7 +580,7 @@ else:
                     .unwrap_or("90");
                 let out_path = temp_dir.join(format!("rotated_{}.png", Uuid::new_v4()));
 
-                run_magick(&[path_arg!(in_path), "-rotate", deg, path_arg!(out_path)])
+                super::content::magick(workspace, &[&in_path], &["-rotate", deg], &out_path)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Rotated {}°", deg));
@@ -592,12 +591,12 @@ else:
                 let right_path = self.get_input_file(inputs, &["Right Image", "In 2"])?;
                 let out_path = temp_dir.join(format!("stitched_{}.png", Uuid::new_v4()));
 
-                run_magick(&[
-                    path_arg!(left_path),
-                    path_arg!(right_path),
-                    "+append",
-                    path_arg!(out_path),
-                ])
+                super::content::magick(
+                    workspace,
+                    &[&left_path, &right_path],
+                    &["+append"],
+                    &out_path,
+                )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some("Stitched 2 Images".to_string());
@@ -607,7 +606,7 @@ else:
                 let in_path = self.get_input_file(inputs, &["Image In", "In"])?;
                 let out_path = temp_dir.join(format!("stripped_{}.png", Uuid::new_v4()));
 
-                run_magick(&[path_arg!(in_path), "-strip", path_arg!(out_path)])
+                super::content::magick(workspace, &[&in_path], &["-strip"], &out_path)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some("EXIF stripped".to_string());
@@ -623,28 +622,36 @@ else:
                     .get("threshold")
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0.10);
-                let b1 = std::fs::read(&left_path)
+                let b1 = super::content::image_bytes(&left_path)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
-                let b2 = std::fs::read(&right_path)
+                let b2 = super::content::image_bytes(&right_path)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
                 let opts = crate::image_diff::ImageDiffOptions {
                     threshold,
                     ..Default::default()
                 };
-                let res = crate::image_diff::compare_image_bytes(&b1, &b2, &opts)
-                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+                let res = crate::image_diff::compare_image_bytes_with_mime(
+                    &b1,
+                    Some(&little_clip_core::item::guess_image_mime(&left_path)),
+                    &b2,
+                    Some(&little_clip_core::item::guess_image_mime(&right_path)),
+                    &opts,
+                )
+                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
                 let mask_png = res
                     .encode_mask_png()
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
                 let out_mask = temp_dir.join(format!("diff_mask_{}.png", Uuid::new_v4()));
-                std::fs::write(&out_mask, mask_png)
+                workspace
+                    .write_output(&out_mask, &mask_png)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
 
                 let overlay_png = res
                     .encode_overlay_png()
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
                 let out_overlay = temp_dir.join(format!("diff_overlay_{}.png", Uuid::new_v4()));
-                std::fs::write(&out_overlay, overlay_png)
+                workspace
+                    .write_output(&out_overlay, &overlay_png)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
 
                 preview = Some(format!(
@@ -667,18 +674,8 @@ else:
                 let out_path = temp_dir.join(format!("norm_{}.wav", Uuid::new_v4()));
 
                 let filter = format!("loudnorm=I={}:LRA=11:TP={}", target, tp);
-                run_command(
-                    "ffmpeg",
-                    &[
-                        "-y",
-                        "-i",
-                        path_arg!(in_path),
-                        "-af",
-                        &filter,
-                        path_arg!(out_path),
-                    ],
-                )
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                super::content::audio(workspace, &[&in_path], &["-af", &filter], &out_path)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Normalized ({} LUFS)", target));
                 out.push(("Audio Out".to_string(), PortValue::AudioPath(out_path)));
@@ -696,18 +693,8 @@ else:
                     "silenceremove=start_periods=1:start_duration=0.1:start_threshold={}dB:stop_periods=1:stop_duration=0.1:stop_threshold={}dB",
                     db, db
                 );
-                run_command(
-                    "ffmpeg",
-                    &[
-                        "-y",
-                        "-i",
-                        path_arg!(in_path),
-                        "-af",
-                        &filter,
-                        path_arg!(out_path),
-                    ],
-                )
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                super::content::audio(workspace, &[&in_path], &["-af", &filter], &out_path)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Trimmed Silence ({}dB)", db));
                 out.push(("Audio Out".to_string(), PortValue::AudioPath(out_path)));
@@ -722,18 +709,8 @@ else:
                 let out_path = temp_dir.join(format!("gain_{}.wav", Uuid::new_v4()));
 
                 let filter = format!("volume={}dB", db);
-                run_command(
-                    "ffmpeg",
-                    &[
-                        "-y",
-                        "-i",
-                        path_arg!(in_path),
-                        "-af",
-                        &filter,
-                        path_arg!(out_path),
-                    ],
-                )
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                super::content::audio(workspace, &[&in_path], &["-af", &filter], &out_path)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Gain {}dB", db));
                 out.push(("Audio Out".to_string(), PortValue::AudioPath(out_path)));
@@ -744,20 +721,11 @@ else:
                 let out_path = temp_dir.join(format!("concat_{}.wav", Uuid::new_v4()));
 
                 let filter = "[0:0][1:0]concat=n=2:v=0:a=1[out]";
-                run_command(
-                    "ffmpeg",
-                    &[
-                        "-y",
-                        "-i",
-                        path_arg!(in1),
-                        "-i",
-                        path_arg!(in2),
-                        "-filter_complex",
-                        filter,
-                        "-map",
-                        "[out]",
-                        path_arg!(out_path),
-                    ],
+                super::content::audio(
+                    workspace,
+                    &[&in1, &in2],
+                    &["-filter_complex", filter, "-map", "[out]"],
+                    &out_path,
                 )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -773,20 +741,23 @@ else:
                     .ok_or_else(|| PipelineError::MissingInput("In".to_string()))?;
                 let hash = match in_val {
                     PortValue::FilePath(p) | PortValue::ImagePath(p) | PortValue::AudioPath(p) => {
-                        let out = run_command("sha256sum", &[path_arg!(p)])
-                            .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
-                        out.split_whitespace().next().unwrap_or("").to_string()
+                        super::content::checksum(p)
+                            .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
                     }
                     PortValue::Text(t) => {
                         let out = run_command_with_stdin("sha256sum", &[], t)
                             .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
                         out.split_whitespace().next().unwrap_or("").to_string()
                     }
+                    PortValue::FileBatch(paths) if paths.len() == 1 => {
+                        super::content::checksum(&paths[0])
+                            .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
+                    }
                     PortValue::FileBatch(paths) => {
                         let mut hashes = Vec::new();
                         for p in paths {
-                            let out = run_command("sha256sum", &[path_arg!(p)]).unwrap_or_default();
-                            let h = out.split_whitespace().next().unwrap_or("").to_string();
+                            let h = super::content::checksum(p)
+                                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
                             hashes.push(format!("{}: {}", p.display(), h));
                         }
                         hashes.join("\n")
@@ -1109,19 +1080,50 @@ fn run_python_snippet(code: &str, stdin_data: &str) -> Result<String, String> {
     run_command_with_stdin("python3", &["-c", code], stdin_data)
 }
 
-fn run_magick(args: &[&str]) -> Result<String, String> {
-    // Try 'magick' first (ImageMagick 7), fallback to 'convert' (ImageMagick 6)
-    if let Ok(out) = run_command("magick", args) {
-        return Ok(out);
-    }
-    run_command("convert", args)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pipeline::catalog::{find_template, instantiate_template};
     use crate::pipeline::recipes::{make_clean_and_slugify_recipe, make_pad_and_caption_recipe};
+
+    #[test]
+    fn checksum_batch_reports_protected_input_instead_of_an_empty_digest() {
+        let fixture = tempfile::tempdir().unwrap();
+        let source = fixture.path().join("ordinary.txt");
+        std::fs::write(&source, b"ordinary bytes").unwrap();
+        let node = instantiate_template(find_template("file_sha256").unwrap(), [0.0, 0.0]);
+        let graph = NodeGraph {
+            nodes: vec![node],
+            ..Default::default()
+        };
+        let slots = SlotManager::default();
+        let executor = PipelineExecutor::new(&graph, &slots);
+        let workspace = Workspace::new().unwrap();
+        let single = HashMap::from([("In".into(), PortValue::FileBatch(vec![source.clone()]))]);
+        let (values, _) = executor
+            .execute_node(
+                &graph.nodes[0],
+                &single,
+                &mut PipelineExecutionResult::default(),
+                &workspace,
+            )
+            .unwrap();
+        assert!(matches!(&values[0].1, PortValue::Text(hash) if hash.len() == 64));
+        let inputs = HashMap::from([(
+            "In".into(),
+            PortValue::FileBatch(vec![source, "/proc/version".into()]),
+        )]);
+        let error = executor
+            .execute_node(
+                &graph.nodes[0],
+                &inputs,
+                &mut PipelineExecutionResult::default(),
+                &workspace,
+            )
+            .unwrap_err();
+        assert!(matches!(error, PipelineError::NodeFailed(_, _)));
+        assert!(error.to_string().contains("/proc/version"));
+    }
     use crate::pipeline::types::Connection;
 
     fn save_graph(destination: &Path) -> NodeGraph {

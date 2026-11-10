@@ -1406,3 +1406,74 @@ The rolling caller review is now closed for feedback, playback, source admission
 editor intake and temporary-result lifetime. Remaining acceptance work is pipeline
 content admission, native prototype input-response evidence and the final complete
 requirement review. This checkpoint does not mark the whole refactor complete.
+
+### Pipeline media and checksum admission checkpoint
+
+ImageMagick transforms, FFmpeg audio transforms, image diff and file checksums now
+admit ordinary inputs through the shared guard and retain their opened file and
+revision through processing. Tools receive inherited descriptors, not the original
+input names. Built-in children use bounded output/time and owned process groups;
+failed tool attempts cannot leave a delegate writing into a later attempt's stage.
+ImageMagick's version fallback is retained, including the explicit TGA hint needed
+without a reliable signature. Image diff reuses the MIME-aware shared decoder.
+
+`RenderFiles` groups the inputs and unpublished output for the two media consumers;
+its publication point verifies all source revisions. Successful results are synced
+and installed atomically without overwriting workspace entries. Diff bytes use the
+same staging/installation boundary. Workspace entry-name validation is shared with
+final-output retention, and a replaced workspace cannot redirect installation.
+Hash batches report a failed input rather than inventing an empty digest; single
+file/text checksums retain their existing plain digest presentation. The enum
+node dispatch, node properties/filters, accepted-save completion ledger and script
+execution semantics remain in place.
+
+The audit also found one-file `FileBatch` sources collapsing into content paths.
+Batches now retain reference intent through source/sink conversion, while scalar
+consumers can borrow one path or its text representation. Explicit image/audio
+outputs retain content behavior. Image-output hydration shares guarded revision
+checks and the 128 MiB encoded-input limit; oversized/invalid outputs fall back to
+references without retrying an unbounded read through another constructor. The
+conversion implementation lives with content admission while the public data/API
+surface stays on `PortValue`; no serialized enum variant or registry was added.
+
+Evidence: **2680 workspace tests pass, 0 fail, 30 ignored**
+(`/tmp/deep-pipeline-media-workspace.log`). Final focused pipeline checks pass 41
+tests after removing an introduced needless-return warning
+(`/tmp/deep-pipeline-media-final-ops.log`). The cases exercise actual ImageMagick
+PNG/TGA/WebP operations, non-UTF-8 input names, finalized stereo WAV gain/concat,
+protected input rejection, rebound aliases, in-place revision changes, output
+collisions, replaced workspace cleanup, one-reference round-trips and sparse
+oversized image fallback. Existing graph, script, image-diff, artifact-retention
+and partial-save tests remain included. No protected payload read or audio-device
+playback is used to demonstrate a failure.
+
+All-target compilation, desktop builds, formatting and operations rustdoc pass
+(`/tmp/deep-pipeline-media-all-targets.log`,
+`/tmp/deep-pipeline-media-final-build.log`, `/tmp/deep-pipeline-media-doc.log`).
+Diagnostic workspace Clippy and a final operations Clippy pass with only the
+previously documented approximate-constant allowance and existing warnings
+(`/tmp/deep-pipeline-media-clippy.log`,
+`/tmp/deep-pipeline-media-final-clippy.log`); this is not a global `-D warnings`
+claim. Rendered `PortValue` documentation was checked for its reference, scalar
+path and bounded-hydration contracts. No UI chrome changed; actual tool-output
+and graph tests provide this slice's behavior evidence.
+
+Architecture comparison against `deep-pipeline-input-start` reports raw
+REGRESSION: measured NLOC +370, functions +23 and total CCN growth for guards and
+regressions. Average CCN decreases 4.05 → 4.04, duplicate percentage decreases
+4.41% → 4.40%, and clone groups (1504), cycles (16) and maximum CCN remain
+unchanged. The existing dispatch match grows CCN 100 → 103 to preserve scalar
+batch behavior and propagate real failures. No newly introduced function crosses
+the complexity threshold. Remaining modified clone reports are dispatch/layout
+fragments and the identical media-function signatures/common owner construction;
+the initially duplicated input/output workflow and filename validation were
+consolidated. Raw evidence: `/tmp/deep-pipeline-media-architecture.json`. Builds
+and checks stayed serialized at four jobs; about 135 GiB remained free, without a
+sweep or new dependency.
+
+Recursive ZIP creation still uses raw archive-tool paths and needs its own
+entry-by-entry and output-admission review before the pipeline preservation gate
+closes. Directory recursion, supported filenames and metadata, final output
+retention and completed saves must remain intact. Scripts are explicit execution,
+not a newly promised sandbox. Native prototype input-response evidence and the
+final complete acceptance audit also remain outstanding.

@@ -3,9 +3,12 @@
 //! Provides a visual DAG computation engine with customizable nodes (transforms, sources, sinks),
 //! typed data flow ports (`PortType`, `PortValue`), serializable recipes, and parallel graph execution.
 
+const EXTERNAL_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 mod artifacts;
 pub mod catalog;
 pub mod compiler;
+mod content;
 pub mod executor;
 pub mod recipes;
 mod save;

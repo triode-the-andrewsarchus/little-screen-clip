@@ -104,23 +104,25 @@ impl PortValue {
         }
     }
 
-    /// Returns string slice if this is a text value or path string.
+    /// Returns text or a single path string, including a one-reference batch.
     pub fn as_text(&self) -> Option<&str> {
         match self {
             PortValue::Text(s) => Some(s.as_str()),
             PortValue::FilePath(p) | PortValue::ImagePath(p) | PortValue::AudioPath(p) => {
                 p.to_str()
             }
+            PortValue::FileBatch(paths) if paths.len() == 1 => paths[0].to_str(),
             PortValue::FileBatch(_) => None,
         }
     }
 
-    /// Returns filesystem path reference if this value is a path.
+    /// Returns a filesystem path for a path value or one-reference batch.
     pub fn as_path(&self) -> Option<&Path> {
         match self {
             PortValue::ImagePath(p) | PortValue::AudioPath(p) | PortValue::FilePath(p) => {
                 Some(p.as_path())
             }
+            PortValue::FileBatch(paths) if paths.len() == 1 => Some(&paths[0]),
             _ => None,
         }
     }
@@ -139,13 +141,7 @@ impl PortValue {
             ClipPayload::Color { hex, .. } => PortValue::Text(hex.clone()),
             ClipPayload::AudioRef { path, .. } => PortValue::AudioPath(path.clone()),
             ClipPayload::Animation { path, .. } => PortValue::FilePath(path.clone()),
-            ClipPayload::FileBatch(paths) => {
-                if paths.len() == 1 {
-                    PortValue::FilePath(paths[0].clone())
-                } else {
-                    PortValue::FileBatch(paths.clone())
-                }
-            }
+            ClipPayload::FileBatch(paths) => PortValue::FileBatch(paths.clone()),
             ClipPayload::Directory(p) => PortValue::FilePath(p.clone()),
             ClipPayload::MultiImage { paths, .. } => {
                 if paths.len() == 1 {
@@ -170,41 +166,6 @@ impl PortValue {
                 PortValue::ImagePath(path)
             }
         })
-    }
-
-    /// Materializes the port value into a new `ClipItem`.
-    pub fn into_clip_item(self, title_hint: &str) -> ClipItem {
-        match self {
-            PortValue::Text(text) => ClipItem::from_text(text),
-            PortValue::FilePath(path) if !little_clip_core::item::is_image_path(&path) => {
-                ClipItem::from_single_file(&path)
-            }
-            PortValue::ImagePath(path) | PortValue::FilePath(path) => {
-                if let Ok(bytes) = little_clip_core::kernel_interface::read_content(&path) {
-                    let mime = little_clip_core::item::guess_image_mime(&path);
-                    if let Some(mut item) = ClipItem::from_image_bytes(bytes, mime) {
-                        let file_name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| title_hint.to_string());
-                        item.title = file_name;
-                        return item;
-                    }
-                }
-                ClipItem::from_single_file(&path)
-            }
-            PortValue::AudioPath(path) => ClipItem::from_audio(path.clone())
-                .unwrap_or_else(|| ClipItem::from_single_file(&path)),
-            PortValue::FileBatch(paths) => {
-                if paths.is_empty() {
-                    ClipItem::from_text(title_hint.to_string())
-                } else if paths.len() == 1 {
-                    PortValue::FilePath(paths[0].clone()).into_clip_item(title_hint)
-                } else {
-                    ClipItem::from_files(paths)
-                }
-            }
-        }
     }
 }
 
@@ -439,6 +400,40 @@ fn is_audio_like(item: &ClipItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_image_file_reference_remains_a_reference_until_a_content_node_consumes_it() {
+        let fixture = tempfile::tempdir().unwrap();
+        let path = fixture.path().join("reference.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+        let reference = ClipItem::from_files(vec![path.clone()]);
+        let port = PortValue::from_clip_item(&reference).unwrap();
+        assert_eq!(port, PortValue::FileBatch(vec![path.clone()]));
+        assert_eq!(port.as_path(), Some(path.as_path()));
+        assert_eq!(port.as_text(), path.to_str());
+        assert_eq!(
+            port.into_clip_item("reference").payload,
+            ClipPayload::FileBatch(vec![path])
+        );
+    }
+
+    #[test]
+    fn oversized_explicit_image_output_falls_back_to_a_reference_before_payload_allocation() {
+        let fixture = tempfile::tempdir().unwrap();
+        let path = fixture.path().join("large.png");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(128 * 1024 * 1024 + 1)
+            .unwrap();
+        assert_eq!(
+            PortValue::ImagePath(path.clone())
+                .into_clip_item("large")
+                .payload,
+            ClipPayload::FileBatch(vec![path])
+        );
+    }
 
     #[test]
     fn file_materialization_preserves_image_bytes_and_ordinary_references() {

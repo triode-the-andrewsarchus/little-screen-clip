@@ -70,6 +70,14 @@ not be reinterpreted as implementation of those features.
 
 1. Trace the remaining pipeline built-in content operations through guarded
    source and output mechanisms; fix bypasses without replacing enum dispatch.
+   Media transforms, image diff, checksums and image-output hydration now use
+   guarded inputs with revision checks and owned staging; one-file batches retain
+   reference intent. The ledger records passing integration checks. Recursive ZIP
+   creation still passes names directly to the archive tool. Preserve directory
+   recursion, member names and metadata while validating every consumed entry and
+   owning the output; directory links must not route protected payloads into the
+   archiver. Preserve completed saves and final artifact retention. Scripts remain
+   explicit execution, not a newly promised sandbox.
 2. Resolve the native prototype's input-response comparison with appropriately
    scoped evidence; do not label CPU routing or private capture timing as a
    physical hardware/GPU latency guarantee.

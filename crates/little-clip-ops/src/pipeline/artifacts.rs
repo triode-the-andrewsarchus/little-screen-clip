@@ -54,6 +54,34 @@ impl Workspace {
         &self.path
     }
 
+    pub(super) fn stage_output(&self) -> io::Result<tempfile::NamedTempFile> {
+        tempfile::NamedTempFile::new_in(descriptor_path(&self.root))
+    }
+
+    pub(super) fn install_output(
+        &self,
+        staged: tempfile::NamedTempFile,
+        path: &Path,
+    ) -> io::Result<()> {
+        let name = self.output_name(path)?;
+        let named = pin_content_directory(&self.path)?.metadata()?;
+        let held = self.root.metadata()?;
+        if (named.dev(), named.ino()) != (held.dev(), held.ino()) {
+            return Err(io::Error::other(
+                "Pipeline workspace changed before output installation",
+            ));
+        }
+        staged.as_file().sync_all()?;
+        staged.persist_noclobber(descriptor_path(&self.root).join(name))?;
+        Ok(())
+    }
+
+    pub(super) fn write_output(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        let mut staged = self.stage_output()?;
+        staged.write_all(bytes)?;
+        self.install_output(staged, path)
+    }
+
     pub(super) fn source_value(&self, item: &ClipItem) -> Result<PortValue, StagingError> {
         if let ClipPayload::Image {
             bytes,
@@ -118,15 +146,21 @@ impl Workspace {
         Ok(())
     }
 
+    fn output_name<'p>(&self, path: &'p Path) -> io::Result<&'p std::ffi::OsStr> {
+        let relative = path.strip_prefix(&self.path).map_err(io::Error::other)?;
+        let mut components = relative.components();
+        match (components.next(), components.next()) {
+            (Some(Component::Normal(name)), None) => Ok(name),
+            _ => Err(io::Error::other(
+                "Pipeline output must be a workspace filename",
+            )),
+        }
+    }
+
     // One file publication: no overwrite, no byte copy, and identity checked
     // against the retained source handle. The destination owner rolls back on error.
     fn move_output(&self, path: &Path, destination: &Self) -> io::Result<PathBuf> {
-        let relative = path.strip_prefix(&self.path).map_err(io::Error::other)?;
-        let mut components = relative.components();
-        let name = match (components.next(), components.next()) {
-            (Some(Component::Normal(name)), None) => name,
-            _ => return Err(io::Error::other("Pipeline output is not a workspace file")),
-        };
+        let name = self.output_name(path)?;
         let original = open_regular_file(&descriptor_path(&self.root).join(name), false)?;
         rename_at_noreplace(
             self.root.as_raw_fd(),
@@ -166,6 +200,39 @@ fn descriptor_path(file: &File) -> PathBuf {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn staged_outputs_never_replace_existing_workspace_entries_or_escape() {
+        let fixture = tempfile::tempdir().unwrap();
+        let workspace = Workspace::in_parent(fixture.path()).unwrap();
+        let path = workspace.path().join("output.png");
+        workspace.write_output(&path, b"first output").unwrap();
+        assert!(workspace.write_output(&path, b"replacement").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"first output");
+        assert!(
+            workspace
+                .write_output(&workspace.path().join("../outside"), b"escape")
+                .is_err()
+        );
+        assert!(!fixture.path().join("outside").exists());
+        assert_eq!(fs::read_dir(workspace.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn replaced_workspace_cannot_redirect_tool_output_installation() {
+        let fixture = tempfile::tempdir().unwrap();
+        let workspace = Workspace::in_parent(fixture.path()).unwrap();
+        let path = workspace.path().join("output.png");
+        let mut staged = workspace.stage_output().unwrap();
+        staged.write_all(b"new output").unwrap();
+        let moved = fixture.path().join("moved");
+        fs::rename(workspace.path(), &moved).unwrap();
+        fs::create_dir(workspace.path()).unwrap();
+        fs::write(&path, b"unrelated replacement").unwrap();
+        assert!(workspace.install_output(staged, &path).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"unrelated replacement");
+        assert_eq!(fs::read_dir(&moved).unwrap().count(), 0);
+    }
 
     #[test]
     fn publication_collision_preserves_source_and_existing_destination() {
