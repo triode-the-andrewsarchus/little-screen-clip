@@ -309,7 +309,6 @@ pub fn detect_chord_from_fft(
 
     let num_bins = out_data.len();
     let mut chroma = [0.0f32; BINS_PER_OCTAVE];
-    let mut chroma_octave_mag = [[0.0f32; 9]; BINS_PER_OCTAVE];
     let mut total_note_energy = 0.0f32;
     let mut total_full_energy = 0.0f32;
 
@@ -338,10 +337,6 @@ pub fn detect_chord_from_fft(
 
         chroma[n0] += weighted_mag * (1.0 - frac);
         chroma[n1] += weighted_mag * frac;
-
-        let oct = ((midi / 12.0).floor() as i32 - 1).clamp(0, 8) as usize;
-        chroma_octave_mag[n0][oct] += weighted_mag * (1.0 - frac);
-        chroma_octave_mag[n1][oct] += weighted_mag * frac;
     }
 
     let max_chroma = chroma.iter().cloned().fold(0.0f32, f32::max);
