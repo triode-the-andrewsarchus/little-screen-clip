@@ -68,8 +68,13 @@ not be reinterpreted as implementation of those features.
 
 ## Work that still blocks final completion
 
-1. Complete the rolling-strip feedback caller review and fix any demonstrated
-   mismatch with the shared lifetime contract.
+1. Complete the rolling-strip caller review. Verified feedback fixes separate persistent
+   copy failures from transient playback hints, derive progress from the job and
+   omit refresh-success notices; the plan ledger records integration evidence. The
+   review also found synchronous `slice_wav`, temporary-file creation and decoder
+   initialization in `play_selection`, plus an unguarded snapshot WAV reader.
+   Move playback preparation off the UI thread with retained source identity,
+   bounded range playback and cancellable read ownership before closing this row.
 2. Trace the remaining pipeline built-in content operations through guarded
    source and output mechanisms; fix bypasses without replacing enum dispatch.
 3. Resolve the native prototype's input-response comparison with appropriately

@@ -4,6 +4,7 @@
 //! and routing to left/right slots.
 
 use crate::icons::Icon;
+use crate::ui_ext::{StatusMessage, StatusToast, feedback_time};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use egui::{Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::audio::{PeakBlock, build_peak_pyramid};
@@ -46,7 +47,6 @@ pub struct RollingAudioStripState {
     pub is_loaded: bool,
     pub error_msg: Option<String>,
     snapshot_job: Option<(JobTicket, SnapshotReceiver)>,
-    snapshot_feedback: bool,
     copy_job: Option<crate::desktop_ipc::PendingRequest>,
 
     // Region selection & dragging
@@ -62,8 +62,10 @@ pub struct RollingAudioStripState {
     playback_start_offset_sec: f32,
     play_stop_time: Option<f32>,
 
-    // Feedback
-    pub status_toast: Option<(String, f64)>, // (text, timestamp)
+    // Transport hints may expire or clear on stop; accepted-copy failures remain
+    // independent until another copy is submitted. Progress belongs to copy_job.
+    playback_notice: StatusToast,
+    copy_notice: StatusToast,
 }
 
 /// Actions requested by the rolling strip that must be applied by the workbench host.
@@ -136,38 +138,17 @@ impl RollingAudioStripState {
     }
     /// Creates a new rolling audio strip state and loads the latest daemon snapshot.
     pub fn new() -> Self {
-        let mut state = Self {
-            path: None,
-            duration_sec: 0.0,
-            sample_rate: 48000,
-            channels: 2,
-            mono_samples: Vec::new(),
-            peaks_lvl0: Vec::new(),
-            peaks_lvl1: Vec::new(),
-            peaks_lvl2: Vec::new(),
-            is_loaded: false,
-            error_msg: None,
-            snapshot_job: None,
-            snapshot_feedback: false,
-            copy_job: None,
-            selected_region: None,
-            drag_start_time: None,
-            is_dragging: false,
-            player: None,
-            is_playing: false,
-            playhead_sec: 0.0,
-            playback_start_instant: None,
-            playback_start_offset_sec: 0.0,
-            play_stop_time: None,
-            status_toast: None,
-        };
-
-        state.start_snapshot_load(false);
+        let mut state = Self::unloaded();
+        state.start_snapshot_load();
         state
     }
 
     #[cfg(test)]
     pub(crate) fn empty_test_strip() -> Self {
+        Self::unloaded()
+    }
+
+    fn unloaded() -> Self {
         Self {
             path: None,
             duration_sec: 0.0,
@@ -180,7 +161,6 @@ impl RollingAudioStripState {
             is_loaded: false,
             error_msg: None,
             snapshot_job: None,
-            snapshot_feedback: false,
             copy_job: None,
             selected_region: None,
             drag_start_time: None,
@@ -191,7 +171,8 @@ impl RollingAudioStripState {
             playback_start_instant: None,
             playback_start_offset_sec: 0.0,
             play_stop_time: None,
-            status_toast: None,
+            playback_notice: StatusToast::default(),
+            copy_notice: StatusToast::default(),
         }
     }
 
@@ -244,16 +225,15 @@ impl RollingAudioStripState {
 
     /// Starts fetching a frozen rolling audio snapshot without blocking the UI.
     pub fn load_snapshot(&mut self) {
-        self.start_snapshot_load(true);
+        self.start_snapshot_load();
     }
 
-    fn start_snapshot_load(&mut self, feedback: bool) {
+    fn start_snapshot_load(&mut self) {
         if let Some((ticket, _)) = self.snapshot_job.take() {
             ticket.cancel();
         }
         let job = BackgroundJobs::global().submit(Duration::from_secs(20), fetch_snapshot);
         self.snapshot_job = Some(job);
-        self.snapshot_feedback = feedback;
         self.error_msg = None;
     }
 
@@ -270,8 +250,6 @@ impl RollingAudioStripState {
             Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
         };
         self.snapshot_job = None;
-        let feedback = std::mem::take(&mut self.snapshot_feedback);
-        let now = ctx.input(|input| input.time);
         match result {
             Ok(Ok(snapshot)) => {
                 self.stop();
@@ -289,29 +267,14 @@ impl RollingAudioStripState {
                 self.peaks_lvl2 = snapshot.peaks_lvl2;
                 self.is_loaded = true;
                 self.error_msg = None;
-                if feedback {
-                    let peak = self.max_amplitude();
-                    let message = if peak < 0.001 {
-                        "Snapshot refreshed: buffer is currently silence".to_string()
-                    } else {
-                        format!(
-                            "Snapshot refreshed ({:.1}s, peak: {:.0}%)",
-                            self.duration_sec,
-                            peak * 100.0
-                        )
-                    };
-                    self.status_toast = Some((message, now));
-                }
             }
             Ok(Err(message)) => {
                 error!("Failed to refresh rolling audio snapshot: {message}");
-                self.error_msg = Some(message.clone());
-                self.status_toast = Some((message, now));
+                self.error_msg = Some(message);
             }
             Err(error) => {
                 let message = format!("Rolling audio refresh failed: {error}");
-                self.error_msg = Some(message.clone());
-                self.status_toast = Some((message, now));
+                self.error_msg = Some(message);
             }
         }
     }
@@ -338,26 +301,24 @@ impl RollingAudioStripState {
             _ => return,
         };
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
+        self.playback_notice.clear();
+        let now = feedback_time();
 
         if self.is_silent() {
-            self.status_toast = Some((
+            self.playback_notice.set(
                 "Buffer is currently silence — play audio through speakers first, then click Refresh".to_string(),
                 now,
-            ));
+            );
             return;
         }
 
         let sel_peak = self.selected_region_peak();
         if sel_peak < 0.001 {
-            self.status_toast = Some((
+            self.playback_notice.set(
                 "Selected region is silence — drag over colored waveform peaks to hear audio"
                     .to_string(),
                 now,
-            ));
+            );
         }
 
         let source_path = match &self.path {
@@ -424,6 +385,7 @@ impl RollingAudioStripState {
     }
 
     pub fn stop(&mut self) {
+        self.playback_notice.clear();
         if let Some(ref p) = self.player {
             p.pause();
         }
@@ -450,7 +412,7 @@ impl RollingAudioStripState {
 
     fn copy_selection_on(
         &mut self,
-        now: f64,
+        _now: f64,
         jobs: &BackgroundJobs,
         send: impl FnOnce(IpcRequest) -> Result<IpcResponse, String> + Send + 'static,
     ) -> bool {
@@ -483,7 +445,7 @@ impl RollingAudioStripState {
                 hand: HandSide::Left,
             })
         }));
-        self.status_toast = Some(("Preparing audio slice…".into(), now));
+        self.copy_notice.clear();
         true
     }
 
@@ -496,15 +458,12 @@ impl RollingAudioStripState {
             return;
         };
         self.copy_job = None;
-        self.status_toast = result
-            .and_then(crate::desktop_ipc::action_result)
-            .err()
-            .map(|error| {
-                (
-                    format!("Failed to copy audio slice: {error}"),
-                    ctx.input(|i| i.time),
-                )
-            });
+        if let Err(error) = result.and_then(crate::desktop_ipc::action_result) {
+            self.copy_notice.set(
+                StatusMessage::error(format!("Failed to copy audio slice: {error}")),
+                feedback_time(),
+            );
+        }
         ctx.request_repaint();
     }
 
@@ -518,7 +477,7 @@ impl RollingAudioStripState {
         ))
     }
 
-    fn render_header(&mut self, ui: &mut egui::Ui, palette: &AppPalette, total_dur: f32) {
+    fn render_header(&mut self, ui: &mut egui::Ui, palette: &AppPalette, total_dur: f32, now: f64) {
         // Header Row: Badge & Status / Selection info
         let canvas = hex_to_c32(&palette.colors.canvas);
         ui.scope(|ui| {
@@ -628,20 +587,12 @@ impl RollingAudioStripState {
                     );
                 }
 
-                if let Some((ref msg, _)) = self.status_toast {
-                    if self.error_msg.as_deref() != Some(msg.as_str()) {
-                        ui.label(
-                            egui::RichText::new(msg)
-                                .color(crate::ui_ext::contrast_text_c32_on(
-                                    canvas,
-                                    canvas,
-                                    Some(hex_to_c32(&palette.diff_add)),
-                                    palette,
-                                ))
-                                .strong()
-                                .size(crate::ui_ext::BODY_FONT_SIZE),
-                        );
-                    }
+                if self.copy_pending() {
+                    ui.spinner();
+                    ui.label("Preparing audio slice…");
+                }
+                for notice in [&self.copy_notice, &self.playback_notice] {
+                    StatusToast::render_opt(&notice.active(now).cloned(), 4.0, ui, palette, now);
                 }
             });
         });
@@ -661,18 +612,11 @@ impl RollingAudioStripState {
             ctx.request_repaint();
         }
 
-        let now = ui.input(|i| i.time);
-        if let Some((_, ts)) = self.status_toast {
-            if now - ts > 4.0 {
-                self.status_toast = None;
-            }
-        }
-
         let total_w = ui.available_width();
         let total_dur = self.duration_sec.max(0.1);
 
         ui.vertical(|ui| {
-            self.render_header(ui, palette, total_dur);
+            self.render_header(ui, palette, total_dur, feedback_time());
 
             // Waveform Canvas
             let canvas_h = 44.0;
@@ -1320,7 +1264,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        strip.render_header(ui, &palette, 120.0);
+                        strip.render_header(ui, &palette, 120.0, feedback_time());
                     });
                 },
             );
@@ -1363,7 +1307,6 @@ mod tests {
 
         let connection_error = "IPC connection error: No such file or directory (os error 2)";
         strip.error_msg = Some(connection_error.to_owned());
-        strip.status_toast = Some((connection_error.to_owned(), 0.0));
         let error_toast = rendered_header_text(&mut strip, 520.0);
         assert!(
             error_toast
@@ -1378,36 +1321,24 @@ mod tests {
         );
 
         strip.error_msg = None;
-        strip.status_toast = None;
-        strip.status_toast = Some(("Snapshot refreshed (120.0s, peak: 75%)".into(), 0.0));
-        let narrow_silent_toast = rendered_header_text(&mut strip, 520.0);
+        let narrow_silent = rendered_header_text(&mut strip, 520.0);
         assert!(
-            narrow_silent_toast
+            narrow_silent
                 .iter()
                 .any(|text| text.contains("Buffer is silence"))
         );
-        assert!(
-            narrow_silent_toast
-                .iter()
-                .any(|text| text.contains("Snapshot refreshed"))
-        );
         strip.mono_samples = vec![0.5; 32];
         strip.selected_region = Some((8.0, 45.0));
-        let narrow_selected_toast = rendered_header_text(&mut strip, 520.0);
+        let narrow_selected = rendered_header_text(&mut strip, 520.0);
         assert!(
-            narrow_selected_toast
+            narrow_selected
                 .iter()
                 .any(|text| text.contains("Selected:"))
         );
         assert!(
-            narrow_selected_toast
+            narrow_selected
                 .iter()
                 .any(|text| text.contains("[Space] Play"))
-        );
-        assert!(
-            narrow_selected_toast
-                .iter()
-                .any(|text| text.contains("Snapshot refreshed"))
         );
     }
 
@@ -1418,9 +1349,11 @@ mod tests {
         strip.is_loaded = true;
         strip.mono_samples = vec![0.0; 16];
 
+        strip
+            .copy_notice
+            .set(StatusMessage::error("earlier copy failed"), feedback_time());
         let samples = vec![0.0, 0.5, -0.75, 0.0];
         let (peaks_lvl0, peaks_lvl1, peaks_lvl2) = build_peak_pyramid(&samples, 48000.0);
-        strip.snapshot_feedback = true;
         complete_snapshot(
             &mut strip,
             Ok(RollingSnapshot {
@@ -1443,7 +1376,11 @@ mod tests {
         assert!(strip.selected_region.is_none());
         assert!(strip.snapshot_job.is_none());
         assert!(strip.error_msg.is_none());
-        assert!(strip.status_toast.as_ref().unwrap().0.contains("75%"));
+        assert!(!strip.playback_notice.is_active(feedback_time()));
+        assert_eq!(
+            strip.copy_notice.message(feedback_time() + 60.0),
+            Some("earlier copy failed")
+        );
     }
 
     #[test]
@@ -1463,19 +1400,85 @@ mod tests {
     }
 
     #[test]
-    fn test_rolling_strip_play_selection() {
-        let mut strip = RollingAudioStripState::new();
-        println!("Strip is_loaded: {}", strip.is_loaded);
-        println!("Strip duration: {}", strip.duration_sec);
-        println!("Strip error_msg: {:?}", strip.error_msg);
-        println!("Strip path: {:?}", strip.path);
-        println!("Strip player is_some: {}", strip.player.is_some());
-
-        strip.selected_region = Some((25.0, 28.0));
+    fn silent_playback_hint_uses_render_clock_and_stop_preserves_copy_failure() {
+        let mut strip = empty_test_strip();
+        strip.selected_region = Some((0.0, 1.0));
+        strip
+            .copy_notice
+            .set(StatusMessage::error("copy failed"), feedback_time());
         strip.play_selection();
-        println!("Strip is_playing: {}", strip.is_playing);
-        println!("Strip playhead_sec: {}", strip.playhead_sec);
-        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let now = feedback_time();
+        assert!(
+            strip
+                .playback_notice
+                .message(now)
+                .unwrap()
+                .contains("silence")
+        );
+        assert!(!strip.playback_notice.is_active(now + 4.0));
+        assert_eq!(strip.copy_notice.message(now + 60.0), Some("copy failed"));
+        strip.stop();
+        assert!(!strip.playback_notice.is_active(now));
+        assert_eq!(strip.copy_notice.message(now + 60.0), Some("copy failed"));
+    }
+
+    #[test]
+    fn header_schedules_hint_expiry_and_retains_copy_error_without_extra_height() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut strip = empty_test_strip();
+        strip.mono_samples = vec![0.5; 32];
+        strip.playback_notice.set("Audition hint", 10.0);
+        strip
+            .copy_notice
+            .set(StatusMessage::error("Copy failed"), 10.0);
+        let mut heights = Vec::new();
+        for now in [11.0, 15.0, 70.0] {
+            let output = ctx.run(
+                egui::RawInput {
+                    // A distinct frame clock must not determine feedback age.
+                    time: Some(1000.0 + now),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1600.0, 160.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let top = ui.cursor().top();
+                        strip.render_header(ui, &palette, 120.0, now);
+                        heights.push(ui.cursor().top() - top);
+                    });
+                },
+            );
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::epaint::Shape::Text(text) = &shape.shape {
+                        Some(text.galley.job.text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert!(texts.contains(&"Copy failed"));
+            assert_eq!(texts.contains(&"Audition hint"), now < 14.0);
+            if now == 11.0 {
+                assert!(
+                    output
+                        .viewport_output
+                        .values()
+                        .any(|viewport| { viewport.repaint_delay <= Duration::from_secs(3) }),
+                    "idle hosts must receive an expiry repaint"
+                );
+            }
+        }
+        assert!(
+            heights
+                .iter()
+                .all(|height| (height - heights[0]).abs() < 0.5)
+        );
     }
 
     #[test]
@@ -1590,6 +1593,20 @@ mod tests {
                 .any(|c| matches!(c, egui::ViewportCommand::CancelClose))
         }));
         let artifact = artifact_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                strip.render_header(ui, &palette, 2.0, feedback_time() + 60.0);
+            });
+        });
+        assert!(
+            output.shapes.iter().any(|shape| matches!(
+                &shape.shape,
+                egui::epaint::Shape::Text(text) if text.galley.job.text == "Preparing audio slice…"
+            )),
+            "accepted work owns progress even after a transient notice would expire"
+        );
         release.send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while strip.copy_pending() {
@@ -1599,10 +1616,9 @@ mod tests {
         }
         assert!(
             strip
-                .status_toast
-                .as_ref()
+                .copy_notice
+                .message(feedback_time() + 60.0)
                 .unwrap()
-                .0
                 .contains("controlled handoff failure")
         );
         assert!(

@@ -1222,3 +1222,47 @@ Cargo work was serialized at four jobs and no sweep was needed.
 contracts from the remaining rolling-strip feedback, pipeline built-in content
 admission, native input-response evidence and final requirement review. It keeps
 the full original scope and explicitly does not declare the goal complete.
+
+### Rolling-strip feedback ownership checkpoint
+
+Rolling audio now uses the existing typed feedback lifetime contract. Playback
+hints use the same monotonic clock when set and rendered, request their idle
+expiry frame, and clear on stop/retry. Accepted-copy failures have a separate
+persistent owner, survive stop and snapshot replacement, and clear only when a
+new copy is submitted. Pending-copy progress comes from the retained job rather
+than an expiring message. Snapshot errors keep their existing persistent failure
+label/tooltip; successful refreshes no longer add redundant notifications.
+Production and tests share unloaded-state initialization, and the old live-daemon
+print/sleep test is replaced by a deterministic silence/clock regression check.
+
+Evidence: the serial workspace run passes **2651 tests, 0 failures, 30 ignored**
+(`/tmp/deep-rolling-feedback-workspace.log`). Final focused checks pass 15 tests
+with one explicitly live-snapshot test ignored
+(`/tmp/deep-rolling-feedback-final-focused.log`). These cover actual delayed copy
+handoff/completion, rejection of repeated submission, preserved errors,
+job-owned progress, idle expiry, independent frame/feedback clocks and stable
+header height. All-target compilation, both desktop builds and formatting pass
+(`/tmp/deep-rolling-feedback-check.log`, `/tmp/deep-rolling-feedback-build.log`).
+Diagnostic Clippy completes with only the documented approximate-constant
+allowance and existing warnings (`/tmp/deep-rolling-feedback-clippy.log`); this
+is not a warning-free `-D warnings` claim. The private fake-audio UI report passes
+(`/tmp/deep-rolling-feedback-ui/report.json`); its settled capture shows the
+compact rolling header and silence waveform without extra success feedback.
+This UI run does not exercise audio-device playback or a failed copy handoff;
+those feedback transitions have deterministic caller-level tests.
+
+Architecture comparison against `deep-rolling-feedback-start` reports raw
+REGRESSION: clone groups 1501 → 1502, measured NLOC +15 and functions +2, with
+unchanged average/max CCN and 16 cycles. The additional clone is test shape/text
+inspection shared in form with the studio-shell tests; the other reported
+fragments match pre-existing layout/contrast test setup. The duplicated strip
+initializer was consolidated, and no duplicate production mechanism or new
+complexity threshold crossing was introduced. The raw report is retained at
+`/tmp/deep-rolling-feedback-architecture.json`. About 136 GiB was free before
+verification; builds/checks remained serialized at four jobs, without cleanup.
+
+The caller review also found synchronous slicing, temporary-file creation and
+WAV decoder initialization in rolling `play_selection`, plus an unguarded
+snapshot WAV reader. Those responsiveness/source-identity issues remain explicit
+acceptance work; this feedback checkpoint does not close the rolling lifetime
+row or the overall refactor.
