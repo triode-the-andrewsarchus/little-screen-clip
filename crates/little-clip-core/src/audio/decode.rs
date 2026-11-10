@@ -999,14 +999,14 @@ where
     }
     let t_fft_loop_elapsed = t_fft_loop_start.elapsed();
 
-    println!(
-        "[AUDIO ANALYSIS TIMING] Decode: {:?} | Pyramid: {:?} | Overview: {:?} | Mix: {:?} | Transients: {:?} | Spectrogram/Notes (Rayon): {:?}",
-        t_decode_elapsed,
-        t_pyramid_elapsed,
-        t_overview_elapsed,
-        t_mix_elapsed,
-        t_transients_elapsed,
-        t_fft_loop_elapsed
+    tracing::debug!(
+        decode = ?t_decode_elapsed,
+        pyramid = ?t_pyramid_elapsed,
+        overview = ?t_overview_elapsed,
+        mix = ?t_mix_elapsed,
+        transients = ?t_transients_elapsed,
+        spectrogram_and_notes = ?t_fft_loop_elapsed,
+        "Audio analysis timings"
     );
 
     on_progress(AudioAnalysisProgress::SpectrogramAndNotesReady {
