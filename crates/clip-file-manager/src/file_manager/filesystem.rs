@@ -1,6 +1,6 @@
-use std::ffi::{CString, OsStr, OsString};
+use std::ffi::{CString, OsStr};
 use std::hash::{Hash, Hasher};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -287,77 +287,7 @@ pub(super) fn format_size(bytes: u64) -> String {
     }
 }
 
-// A reversible address representation: valid Unicode is preserved, backslashes
-// are doubled, and invalid bytes/control characters are written as \xHH.
-pub(super) fn display_path(path: &Path) -> String {
-    display_path_cow(path).into_owned()
-}
-
-pub(super) fn display_path_cow(path: &Path) -> std::borrow::Cow<'_, str> {
-    if let Some(text) = path.to_str()
-        && !text.chars().any(|ch| ch == '\\' || ch.is_control())
-    {
-        return std::borrow::Cow::Borrowed(text);
-    }
-    let mut result = String::new();
-    let mut bytes = path.as_os_str().as_bytes();
-    while !bytes.is_empty() {
-        let (valid, invalid) = match std::str::from_utf8(bytes) {
-            Ok(text) => (text, 0),
-            Err(error) => (
-                std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or_default(),
-                error
-                    .error_len()
-                    .unwrap_or(bytes.len() - error.valid_up_to()),
-            ),
-        };
-        for ch in valid.chars() {
-            if ch == '\\' {
-                result.push_str("\\\\");
-            } else if ch.is_control() {
-                let mut encoded = [0; 4];
-                for byte in ch.encode_utf8(&mut encoded).as_bytes() {
-                    result.push_str(&format!("\\x{byte:02X}"));
-                }
-            } else {
-                result.push(ch);
-            }
-        }
-        bytes = &bytes[valid.len()..];
-        for byte in &bytes[..invalid] {
-            result.push_str(&format!("\\x{byte:02X}"));
-        }
-        bytes = &bytes[invalid..];
-    }
-    std::borrow::Cow::Owned(result)
-}
-
-pub(super) fn decode_path(text: &str) -> Result<PathBuf, String> {
-    let mut decoded = Vec::new();
-    let mut bytes = text.as_bytes().iter().copied();
-    while let Some(byte) = bytes.next() {
-        if byte != b'\\' {
-            decoded.push(byte);
-            continue;
-        }
-        match bytes.next() {
-            Some(b'\\') => decoded.push(b'\\'),
-            Some(b'x') => {
-                let hi = bytes.next().and_then(|b| (b as char).to_digit(16));
-                let lo = bytes.next().and_then(|b| (b as char).to_digit(16));
-                let (Some(hi), Some(lo)) = (hi, lo) else {
-                    return Err("Invalid path escape: use \\xHH or \\\\".into());
-                };
-                decoded.push((hi * 16 + lo) as u8);
-            }
-            _ => return Err("Invalid path escape: use \\xHH or \\\\".into()),
-        }
-    }
-    if decoded.contains(&0) {
-        return Err("A path cannot contain a NUL byte".into());
-    }
-    Ok(PathBuf::from(OsString::from_vec(decoded)))
-}
+pub(super) use little_clip_core::path_address::{decode_path, display_path, display_path_cow};
 
 pub(super) fn parse_address(text: &str, current: &Path, home: &Path) -> Result<PathBuf, String> {
     if text.is_empty() {

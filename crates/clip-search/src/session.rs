@@ -1,11 +1,15 @@
 //! Mounted-source continuity, observed only in disposable source-reader helpers.
 use super::policy::Root;
-use crate::file_manager::system::Namespace;
+use little_clip_core::kernel_interface::Namespace;
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::Read, os::fd::AsRawFd};
 
+/// Boot, namespace, mount and filesystem observations for source continuity.
+///
+/// Missing unique mount IDs and unknown/network filesystems restrict persistent
+/// reuse. Capture only on a bounded source-reader worker.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct SourceSession {
+pub struct SourceSession {
     boot: uuid::Uuid,
     namespace: u64,
     mount: u64,
@@ -13,6 +17,7 @@ pub(super) struct SourceSession {
     filesystem: i64,
 }
 impl SourceSession {
+    /// Captures continuity, returning `None` if required identities are unavailable.
     pub fn capture(root: &Root) -> Option<Self> {
         Some(Self {
             boot: boot_id()?,
@@ -22,9 +27,11 @@ impl SourceSession {
             filesystem: filesystem_type(&root.directory)?,
         })
     }
+    /// Returns whether the kernel supplied a mount lifetime ID.
     pub fn unique(&self) -> bool {
         self.unique_mount.is_some()
     }
+    /// Checks that a known mount lifetime belongs to the observed mount ID.
     pub fn unique_on(&self, mount: Option<u64>) -> bool {
         self.unique() && mount == Some(self.mount)
     }

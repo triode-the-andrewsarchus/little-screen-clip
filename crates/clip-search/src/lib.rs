@@ -1,9 +1,13 @@
 //! UI-independent search mechanisms and owned external model processes.
 //!
 //! Browser navigation, presentation and result composition stay with the host.
-//! Guarded source/index orchestration is being extracted incrementally.
+//! Source admission and continuity retain their pinned identity checks. Payload
+//! extraction and index orchestration are being extracted incrementally.
+pub mod policy;
 pub mod range;
 pub mod runtime;
+pub mod session;
+pub mod source;
 
 /// Dimension of the existing embedding protocol and persisted search vectors.
 pub const EMBEDDING_DIMENSION: usize = 768;

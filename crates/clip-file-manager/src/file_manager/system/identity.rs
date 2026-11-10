@@ -1,4 +1,5 @@
 //! Observation keys include namespace view and object lifetime, not just a pathname.
+pub(in crate::file_manager) use little_clip_core::kernel_interface::{MountIdentity, Namespace};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -8,91 +9,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(in crate::file_manager) struct Namespace {
-    pub mount: Option<u64>,
-    pub pid: Option<u64>,
-    pub network: Option<u64>,
-    #[serde(default)]
-    pub cgroup: Option<u64>,
-}
-impl Namespace {
-    pub fn known(&self) -> bool {
-        self.mount.is_some()
-            && self.pid.is_some()
-            && self.network.is_some()
-            && self.cgroup.is_some()
-    }
-    pub fn current() -> Self {
-        use std::os::unix::fs::MetadataExt;
-        let inode = |name: &str| {
-            std::fs::metadata(format!("/proc/self/ns/{name}"))
-                .ok()
-                .map(|m| m.ino())
-        };
-        Self {
-            mount: inode("mnt"),
-            pid: inode("pid"),
-            network: inode("net"),
-            cgroup: inode("cgroup"),
-        }
-    }
-}
-/// Object and mount identity from one pinned metadata handle, without payload I/O.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(in crate::file_manager) struct MountIdentity {
-    pub device: u64,
-    pub inode: u64,
-    pub mount: u64,
-}
-impl MountIdentity {
-    pub fn directory(path: &std::path::Path) -> std::io::Result<Self> {
-        let file = little_clip_core::kernel_interface::pin(path, true)?;
-        let metadata = file.metadata()?;
-        if !metadata.is_dir() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "Not a directory hierarchy object",
-            ));
-        }
-        Self::pinned(&file)
-    }
-    pub fn pinned(file: &std::fs::File) -> std::io::Result<Self> {
-        use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
-        let metadata = file.metadata()?;
-        let mut stats = std::mem::MaybeUninit::<libc::statx>::uninit();
-        // SAFETY: the live O_PATH descriptor is queried using an empty C string;
-        // stats points to writable storage for the complete statx structure.
-        if unsafe {
-            libc::statx(
-                file.as_raw_fd(),
-                c"".as_ptr(),
-                libc::AT_EMPTY_PATH,
-                libc::STATX_MNT_ID,
-                stats.as_mut_ptr(),
-            )
-        } != 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: successful statx initialized the structure.
-        let stats = unsafe { stats.assume_init() };
-        if stats.stx_mask & libc::STATX_MNT_ID == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "Mount identity not supplied by the kernel",
-            ));
-        }
-        Ok(Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            mount: stats.stx_mnt_id,
-        })
-    }
-    pub fn same_hierarchy_mount(self, other: Self) -> bool {
-        self.device == other.device && self.mount == other.mount && self.inode != other.inode
-    }
-}
+
 /// Mounted interface context; a bind remount can preserve the underlying inode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(in crate::file_manager) struct ObjectContext {
@@ -389,39 +306,5 @@ mod tests {
             serde_json::from_str(r#"{"mount":1,"pid":2,"network":3}"#).unwrap();
         assert_eq!(namespace.cgroup, None);
         assert!(!namespace.known());
-    }
-    #[test]
-    fn hierarchy_mount_identity_excludes_bind_boundaries_and_same_object_aliases() {
-        let root = MountIdentity {
-            device: 7,
-            inode: 10,
-            mount: 5,
-        };
-        assert!(root.same_hierarchy_mount(MountIdentity { inode: 11, ..root }));
-        assert!(!root.same_hierarchy_mount(MountIdentity {
-            inode: 11,
-            mount: 6,
-            ..root
-        }));
-        assert!(!root.same_hierarchy_mount(root));
-        assert!(!root.same_hierarchy_mount(MountIdentity {
-            inode: 11,
-            device: 8,
-            ..root
-        }));
-    }
-    #[test]
-    fn pinned_directory_mount_identity_tracks_same_mount_children_and_rejects_files() {
-        let temp = tempfile::tempdir().unwrap();
-        let child = temp.path().join("child");
-        std::fs::create_dir(&child).unwrap();
-        let root = MountIdentity::directory(temp.path()).unwrap();
-        assert!(root.same_hierarchy_mount(MountIdentity::directory(&child).unwrap()));
-        let file = temp.path().join("file");
-        std::fs::write(&file, "not a directory").unwrap();
-        assert_eq!(
-            MountIdentity::directory(&file).unwrap_err().kind(),
-            std::io::ErrorKind::Unsupported
-        );
     }
 }

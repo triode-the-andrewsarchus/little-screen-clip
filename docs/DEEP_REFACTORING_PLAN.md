@@ -588,3 +588,53 @@ ranking or process algorithm changed. The callback closures add an actual
 notification boundary and cache its host adapter; the analyzer's count is not
 represented as a simplification. Core's broad existing dependency graph remains
 a build-cost limit. About 150 GiB remains free.
+
+### Phase 4 checkpoint: guarded source ownership
+
+`clip-search` now owns the existing enrollment policy, pinned `Root`,
+`SourceSession` continuity observation and serializable `SourceRoot`. Its source
+boundary retains device/inode/mount identity, optional boot/namespace/unique-mount
+continuity and lossless path bytes. Legacy records without mount identity remain
+readable but cannot authorize content access. Validation still obtains a current
+admitted root and retains its directory handle. Alias/mount crossings, root
+replacement and sensitive paths retain their original behavior. Decoder requests,
+result availability, row revisions and payload extraction remain in the browser;
+this is not completion of backend extraction.
+
+Core now owns the existing metadata-only `MountIdentity` and `Namespace`
+mechanisms, shared by search continuity and browser system inspection. It also
+owns the existing reversible address codec and lossless path serde adapters.
+UTF-8 paths remain JSON strings and other Unix paths remain byte arrays; optional
+and list forms retain the same representation. Browser navigation still owns
+relative/home resolution. Existing browser module aliases keep serde attributes
+and system consumers on these canonical implementations without copying sources.
+No new identity model, schema migration, protocol, decoder or process was added.
+
+The moved implementation bodies match the originals after normalizing ownership
+imports, visibility, documentation and formatting (`/tmp/deep-source-body-comparison.json`).
+New boundary tests verify exact text/byte/list/optional wire representations and
+source descriptor round trips, missing legacy mount refusal, changed mount refusal
+and root replacement. Existing source-session, protected-path, bind-boundary,
+recovery and browser system tests continue to exercise the same implementation.
+
+Validation passes: 2620 serial workspace tests (30 ignored), workspace/all-target
+compilation (`/tmp/deep-source-foundation-check-final.log`), both desktop builds,
+shared core/search API docs and the private user/mount-namespace bind-boundary
+check. Logs are `/tmp/deep-source-foundation-workspace.log`,
+`/tmp/deep-source-foundation-build.log`, `/tmp/deep-source-foundation-doc.log`
+and `/tmp/deep-source-foundation-mounts.json`. The three additional passing tests
+are two source/wire-boundary regressions and one runnable address API doctest.
+Existing browser source-reader and system identity tests exercise the moved
+implementations through the host's compatibility imports.
+
+The final comparison with `deep-source-foundation-start` is NEUTRAL:
+clone groups remain 1511, cycles 16, duplication 4.46%, average CCN 4.06 and maximum
+CCN 195. Measured NLOC grows by 91, functions by two and total CCN by three from
+the new tests; no production algorithm changed. An earlier comparison labeled
+reordered members of unchanged Python cycles as new/resolved cycles; the final
+comparison reports none (`/tmp/deep-source-foundation-architecture.json`). The
+actual benefit is removing source policy/continuity's browser-system ownership
+and keeping a canonical guarded source descriptor outside the application, not
+an algorithm-speedup or reduced-build-cost claim. About 149 GiB remains free.
+Diagnostic Clippy also passes with the pre-existing approximate-constant diagnostic
+allowed; existing warnings remain (`/tmp/deep-source-foundation-clippy.log`).

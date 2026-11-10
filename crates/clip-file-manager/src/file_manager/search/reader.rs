@@ -4,10 +4,7 @@ mod media;
 mod svg;
 pub(super) mod verification;
 mod video;
-use super::{
-    policy::{self, Root},
-    session::SourceSession,
-};
+use super::policy::{self, Root};
 use crate::file_manager::filesystem::{self, Directory, Entry};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use little_clip_core::process::CommandRequest;
@@ -25,45 +22,7 @@ use std::{
 const AUDIO_DEMUXERS: &str =
     "wav,mp3,flac,ogg,aac,aiff,asf,ape,wv,tta,ac3,eac3,dts,amr,au,caf,mov,mp4,m4a,3gp,3g2,mj2";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(super) struct SourceRoot {
-    #[serde(with = "crate::file_manager::path_serde")]
-    pub path: PathBuf,
-    pub device: u64,
-    pub inode: u64,
-    #[serde(default)]
-    pub mount: Option<u64>,
-    #[serde(default)]
-    pub session: Option<SourceSession>,
-}
-impl SourceRoot {
-    fn capture(path: &Path) -> Result<Self, String> {
-        let root = Root::open(path)?;
-        Ok(Self::from_root(&root))
-    }
-    pub(super) fn from_root(root: &Root) -> Self {
-        Self {
-            path: root.path.clone(),
-            device: root.device,
-            inode: root.inode,
-            mount: Some(root.mount),
-            session: SourceSession::capture(root),
-        }
-    }
-    fn validate(&self) -> Result<Root, String> {
-        let expected_mount = self
-            .mount
-            .ok_or("Indexed source needs a current mount observation before content access")?;
-        let root = Root::open(&self.path)?;
-        if (root.device, root.inode, root.mount) != (self.device, self.inode, expected_mount) {
-            return Err("Indexed root was replaced or remounted".into());
-        }
-        if self.session.is_some() && self.session != SourceSession::capture(&root) {
-            return Err("Indexed source session changed".into());
-        }
-        Ok(root)
-    }
-}
+pub(super) use clip_search::source::SourceRoot;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) enum Request {

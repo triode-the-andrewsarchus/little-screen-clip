@@ -1,4 +1,7 @@
 //! Shared Linux kernel-interface routing, before ordinary content readers run.
+mod identity;
+pub use identity::{MountIdentity, Namespace};
+
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,

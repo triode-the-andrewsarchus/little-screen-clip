@@ -33,6 +33,8 @@ pub mod presentation {
 }
 pub mod natural_sort;
 pub mod palette;
+pub mod path_address;
+pub mod path_serde;
 pub mod pcx_image;
 pub mod pdf;
 pub mod process;

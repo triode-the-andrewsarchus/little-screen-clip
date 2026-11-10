@@ -7,8 +7,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use crate::file_manager::system::MountIdentity;
 use little_clip_core::kernel_interface;
+use little_clip_core::kernel_interface::MountIdentity;
 
 const PRIVATE_DIRECTORIES: &[&str] = &[
     ".ssh",
@@ -61,7 +61,7 @@ const SYSTEM_DIRECTORIES: &[&str] = &[
 ];
 
 /// A path check is useful for UI explanation, but never authorizes a content read.
-pub(super) fn excluded(path: &Path) -> Option<&'static str> {
+pub fn excluded(path: &Path) -> Option<&'static str> {
     // These exclusions are all children of /. Inspect the leading components
     // once rather than reparsing the same path for every protected root.
     let mut parts = path.components();
@@ -86,7 +86,8 @@ pub(super) fn excluded(path: &Path) -> Option<&'static str> {
     None
 }
 
-pub(super) fn secret_file(path: &Path) -> bool {
+/// Returns whether a filename convention identifies credential or key material.
+pub fn secret_file(path: &Path) -> bool {
     let name = path
         .file_name()
         .unwrap_or_default()
@@ -124,7 +125,7 @@ pub(super) fn secret_file(path: &Path) -> bool {
 
 /// Visibility is relative to the chosen root, including non-UTF-8 names.
 /// An explicitly opened/enrolled hidden root does not hide its ordinary children.
-pub(super) fn hidden_descendant(path: &Path, root: &Path) -> bool {
+pub fn hidden_descendant(path: &Path, root: &Path) -> bool {
     path.strip_prefix(root).map_or(true, |relative| {
         relative.components().any(|part| {
             matches!(part,
@@ -134,7 +135,7 @@ pub(super) fn hidden_descendant(path: &Path, root: &Path) -> bool {
 }
 
 /// Parse literal addresses without opening targets or following aliases.
-pub(super) fn exclusions(addresses: &[String]) -> Result<Vec<PathBuf>, String> {
+pub fn exclusions(addresses: &[String]) -> Result<Vec<PathBuf>, String> {
     if addresses.len() > 128 {
         return Err("Use at most 128 excluded file/folder addresses".into());
     }
@@ -143,7 +144,7 @@ pub(super) fn exclusions(addresses: &[String]) -> Result<Vec<PathBuf>, String> {
         if address.len() > 8192 {
             return Err("An excluded address is too long".into());
         }
-        let path = crate::file_manager::filesystem::decode_path(address)?;
+        let path = little_clip_core::path_address::decode_path(address)?;
         if !path.is_absolute()
             || path
                 .components()
@@ -160,11 +161,13 @@ pub(super) fn exclusions(addresses: &[String]) -> Result<Vec<PathBuf>, String> {
     Ok(paths)
 }
 
-pub(super) fn excluded_by_user(path: &Path, exclusions: &[PathBuf]) -> bool {
+/// Checks literal component-prefix exclusions without resolving aliases.
+pub fn excluded_by_user(path: &Path, exclusions: &[PathBuf]) -> bool {
     exclusions.iter().any(|excluded| path.starts_with(excluded))
 }
 
-pub(super) fn excluded_from_root(path: &Path, root: &Path, hidden: bool) -> bool {
+/// Checks scope, sensitive names and root-relative hidden visibility.
+pub fn excluded_from_root(path: &Path, root: &Path, hidden: bool) -> bool {
     !path.starts_with(root)
         || excluded(path).is_some()
         || secret_file(path)
@@ -176,7 +179,7 @@ fn check_path(path: &Path) -> Result<(), String> {
 }
 
 /// Inspect the actual pinned object, including aliases to excluded directories.
-pub(super) fn check_handle(file: &File) -> Result<PathBuf, String> {
+pub fn check_handle(file: &File) -> Result<PathBuf, String> {
     if kernel_interface::classify_handle(file)
         .map_err(|e| e.to_string())?
         .protected()
@@ -197,16 +200,29 @@ pub(super) fn check_handle(file: &File) -> Result<PathBuf, String> {
     Ok(actual)
 }
 
-pub(super) struct Root {
+/// An admitted search directory retained by a metadata-only pin.
+///
+/// Content access must use its guarded methods on a background worker. Public
+/// identity fields are observations, never independent permission to read a path.
+pub struct Root {
+    /// Resolved ordinary directory address.
     pub path: PathBuf,
+    /// Retained metadata-only directory handle.
     pub directory: File,
+    /// Observed filesystem device.
     pub device: u64,
+    /// Observed root inode.
     pub inode: u64,
+    /// Observed mount ID; not a persistent lifetime identifier.
     pub mount: u64,
 }
 
 impl Root {
-    pub(super) fn open(path: &Path) -> Result<Self, String> {
+    /// Admits and pins an ordinary, non-sensitive content root.
+    ///
+    /// # Errors
+    /// Returns an error for excluded or broad roots, unavailable identity, or I/O failure.
+    pub fn open(path: &Path) -> Result<Self, String> {
         check_path(path)?;
         let directory = kernel_interface::pin_content_directory(path).map_err(|e| e.to_string())?;
         Self::from_directory(directory)
@@ -231,7 +247,11 @@ impl Root {
             directory,
         })
     }
-    pub(super) fn child(&self, path: &Path) -> Result<Self, String> {
+    /// Admits a child directory beneath the retained root without crossing mounts.
+    ///
+    /// # Errors
+    /// Returns an error for aliases, mount crossings, changed roots or I/O failure.
+    pub fn child(&self, path: &Path) -> Result<Self, String> {
         Self::from_directory(self.pin(path)?)
     }
     fn relative<'a>(&self, path: &'a Path) -> Result<&'a Path, String> {
@@ -251,7 +271,11 @@ impl Root {
             .ok_or_else(|| "Search does not cross aliases or nested mounts".into())
     }
     /// A mount/alias crossing is an intentional exclusion; I/O errors remain failures.
-    pub(super) fn admit(&self, path: &Path) -> Result<Option<File>, String> {
+    ///
+    /// # Errors
+    /// Returns resolution or identity failures. `Ok(None)` represents an
+    /// intentional alias or mount exclusion, not an unavailable observation.
+    pub fn admit(&self, path: &Path) -> Result<Option<File>, String> {
         let pinned = match pin_beneath(&self.directory, self.relative(path)?) {
             Ok(file) => file,
             Err(error) if matches!(error.raw_os_error(), Some(libc::EXDEV | libc::ELOOP)) => {
@@ -268,14 +292,22 @@ impl Root {
         }
         Ok(Some(pinned))
     }
-    pub(super) fn confirms_absence(&self, path: &Path) -> Result<(), String> {
+    /// Confirms a missing path beneath a still-valid root.
+    ///
+    /// # Errors
+    /// Returns an error unless absence and unchanged root identity are both verified.
+    pub fn confirms_absence(&self, path: &Path) -> Result<(), String> {
         self.revalidate()?;
         match pin_beneath(&self.directory, self.relative(path)?) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => self.revalidate(),
             _ => Err("Path absence was not confirmed within the indexed mount".into()),
         }
     }
-    pub(super) fn open_content(&self, path: &Path) -> Result<File, String> {
+    /// Opens ordinary content beneath the retained root after admission.
+    ///
+    /// # Errors
+    /// Returns an error for sensitive files, aliases, mount crossings, replacement or I/O failure.
+    pub fn open_content(&self, path: &Path) -> Result<File, String> {
         if secret_file(path) {
             return Err("Credential/key material is excluded from search".into());
         }
@@ -290,7 +322,11 @@ impl Root {
         Ok(file)
     }
 
-    pub(super) fn revalidate(&self) -> Result<(), String> {
+    /// Checks the retained root against its original path and mount identity.
+    ///
+    /// # Errors
+    /// Returns an error if the root moved, was replaced or remounted, or cannot be observed.
+    pub fn revalidate(&self) -> Result<(), String> {
         let actual = check_handle(&self.directory)?;
         if actual != self.path {
             return Err("Indexed root moved; choose its new location explicitly".into());
@@ -413,7 +449,7 @@ mod tests {
         let unusual = PathBuf::from(std::ffi::OsString::from_vec(b"/data/private-\xff".to_vec()));
         let addresses = vec![
             "/data/ignore".into(),
-            crate::file_manager::filesystem::display_path(&unusual),
+            little_clip_core::path_address::display_path(&unusual),
         ];
         let paths = exclusions(&addresses).unwrap();
         assert!(excluded_by_user(Path::new("/data/ignore"), &paths));

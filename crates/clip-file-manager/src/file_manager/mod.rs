@@ -30,7 +30,7 @@ mod multisample;
 mod music;
 mod native_drag;
 mod notebook;
-mod path_serde;
+use little_clip_core::path_serde;
 mod pdf_strip;
 mod photo_ratings;
 mod preview_job;

@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 little-clip-core = { path = "../little-clip-core" }
 serde_json.workspace = true
+serde.workspace = true
+uuid.workspace = true
 base64 = "0.22"
 libc = "0.2"
 chrono = "0.4"
