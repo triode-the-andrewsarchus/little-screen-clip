@@ -38,6 +38,7 @@ impl DiffViewerState {
     ) {
         let now = ctx.input(|i| i.time);
         self.poll_handoff(now, ctx);
+        self.poll_copy_job(now);
 
         self.handle_shortcuts(ctx, close_requested);
 
@@ -49,7 +50,7 @@ impl DiffViewerState {
                 if let Some(ref rx) = self.image_receiver {
                     match rx.try_recv() {
                         Ok(Ok(Ok(res))) => {
-                            self.image_result = Some(res);
+                            self.image_result = Some(std::sync::Arc::new(res));
                             self.decode_error = None;
                             self.is_computing = false;
                             self.textures_loaded = false;
@@ -125,7 +126,7 @@ impl DiffViewerState {
 
         if copy_requested {
             if is_img {
-                self.copy_image_diff_to_clipboard(now);
+                self.copy_image_diff_to_clipboard();
             } else {
                 ctx.output_mut(|o| o.copied_text = strip_ansi_codes(&self.result.raw_ansi));
                 self.status_toast = Some(("Diff text copied to clipboard!".into(), now));
@@ -220,7 +221,7 @@ impl DiffViewerState {
                     );
                     if ui.add(copy_btn).clicked() {
                         if is_img {
-                            self.copy_image_diff_to_clipboard(now);
+                            self.copy_image_diff_to_clipboard();
                         } else {
                             ui.output_mut(|o| {
                                 o.copied_text = strip_ansi_codes(&self.result.raw_ansi)
@@ -272,6 +273,11 @@ impl DiffViewerState {
                 // Zone 5: Footer
                 shell.render_footer(ui, &self.status_toast, now);
             });
+        if self.copy_pending() {
+            *close_requested = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
     }
 
     pub(super) fn render_computing_ui(

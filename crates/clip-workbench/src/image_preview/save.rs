@@ -502,6 +502,9 @@ fn write_bytes(
 
 impl ImagePreviewState {
     pub(super) fn start_copy_to_hand_slot(&mut self, hand: HandSide, jobs: &BackgroundJobs) {
+        if self.text_copy_job.is_some() {
+            return;
+        }
         if let Some(job) = self.copy_job.as_ref() {
             if !job.cancel() {
                 self.show_toast("Image clipboard delivery is already in progress");
@@ -528,7 +531,7 @@ impl ImagePreviewState {
         format_label: &str,
         jobs: &BackgroundJobs,
     ) {
-        if self.copy_job.is_some() {
+        if self.copy_delivery_pending() {
             self.show_toast("Image clipboard delivery is already in progress");
             return;
         }
@@ -550,7 +553,7 @@ impl ImagePreviewState {
     }
 
     pub(super) fn copy_delivery_pending(&self) -> bool {
-        self.copy_job.is_some()
+        self.copy_job.is_some() || self.text_copy_job.is_some()
     }
 
     pub(super) fn poll_copy_job(&mut self) {

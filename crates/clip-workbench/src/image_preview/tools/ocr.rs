@@ -338,27 +338,27 @@ impl ImagePreviewState {
     }
 
     pub fn push_text_to_hand_slot(&mut self, hand: HandSide, text: String) {
-        let req = IpcRequest::PushText {
-            text: text.clone(),
-            hand,
-        };
-        let _ = crate::send_ipc_request(&req);
-        let text_for_cmd = text;
-        std::thread::spawn(move || {
-            if let Err(error) = little_clip_core::copy_text_to_system_clipboard(&text_for_cmd) {
-                tracing::debug!(%error, "failed to copy OCR text to system clipboard");
-            }
-        });
-        self.show_toast(crate::ui_ext::StatusMessage::new(
-            crate::icons::Icon::Copy,
-            format!(
-                "Pushed to {} Hand slot",
-                match hand {
-                    HandSide::Left => "Left",
-                    HandSide::Right => "Right",
-                }
-            ),
+        if self.copy_delivery_pending() {
+            return;
+        }
+        // PushText also owns OS clipboard delivery in the daemon. Do not issue
+        // a second independent clipboard write or claim success before its reply.
+        self.text_copy_job = Some(crate::desktop_ipc::PendingRequest::submit(
+            IpcRequest::PushText { text, hand },
         ));
+    }
+
+    pub(in crate::image_preview) fn poll_text_copy_job(&mut self) {
+        let Some(result) = self.text_copy_job.as_ref().and_then(|job| job.try_result()) else {
+            return;
+        };
+        self.text_copy_job = None;
+        if let Err(error) = result.and_then(crate::desktop_ipc::action_result) {
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Alert,
+                format!("Could not copy recognized text: {error}"),
+            ));
+        }
     }
 
     pub(crate) fn render_ocr_toolbar(
@@ -673,7 +673,7 @@ impl ImagePreviewState {
         ui.add_space(10.0);
         let copy = crate::action_button("Copy all text", accent, palette);
         if ui
-            .add_enabled_ui(has_output, |ui| {
+            .add_enabled_ui(has_output && !self.copy_delivery_pending(), |ui| {
                 ui.add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], copy)
             })
             .inner
@@ -689,7 +689,7 @@ impl ImagePreviewState {
         ui.horizontal_wrapped(|ui| {
             let left = crate::secondary_button("Left hand", surface, palette);
             if ui
-                .add_enabled_ui(has_output, |ui| {
+                .add_enabled_ui(has_output && !self.copy_delivery_pending(), |ui| {
                     ui.add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], left)
                 })
                 .inner
@@ -701,7 +701,7 @@ impl ImagePreviewState {
 
             let right = crate::secondary_button("Right hand", surface, palette);
             if ui
-                .add_enabled_ui(has_output, |ui| {
+                .add_enabled_ui(has_output && !self.copy_delivery_pending(), |ui| {
                     ui.add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], right)
                 })
                 .inner
@@ -986,6 +986,49 @@ mod input_stamp_tests {
             &AppConfig::default(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn recognized_text_copy_retains_failure_and_blocks_session_retirement() {
+        let mut state = state();
+        let jobs = BackgroundJobs::new(1, 2);
+        let (release, wait) = mpsc::channel();
+        state.text_copy_job = Some(crate::desktop_ipc::PendingRequest::submit_with(
+            IpcRequest::PushText {
+                text: "recognized".into(),
+                hand: HandSide::Right,
+            },
+            &jobs,
+            move |request| {
+                assert!(
+                    matches!(request, IpcRequest::PushText { text, .. } if text == "recognized")
+                );
+                wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(little_clip_core::ipc::IpcResponse::Error {
+                    error: "controlled rejection".into(),
+                })
+            },
+        ));
+        assert!(!state.poll_session_snapshots());
+        assert!(state.file_write_pending());
+        state.push_text_to_hand_slot(HandSide::Left, "duplicate".into());
+        state.start_copy_to_hand_slot(HandSide::Left, &jobs);
+        assert!(state.copy_job.is_none());
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state.poll_cached_jobs() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(state.poll_session_snapshots());
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("controlled rejection")
+        );
     }
 
     fn write_script(directory: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {

@@ -13,6 +13,15 @@ impl ImagePreviewState {
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
 
+        self.poll_text_copy_job();
+        if self.text_copy_job.is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Copying recognized text…");
+            });
+        }
         self.poll_save_job();
         if self.save_snapshot_pending() && self.render_save_progress(ui, ctx, close) {
             return;

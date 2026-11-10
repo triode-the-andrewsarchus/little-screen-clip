@@ -51,3 +51,61 @@ impl Write for BoundedRequest {
         Ok(())
     }
 }
+
+/// An accepted daemon request whose result survives view changes and has no
+/// post-write deadline. The owning UI must retain it until completion.
+pub(crate) struct PendingRequest {
+    receiver:
+        std::sync::mpsc::Receiver<Result<Result<IpcResponse, String>, little_clip_core::JobError>>,
+}
+
+impl PendingRequest {
+    pub(crate) fn submit(request: IpcRequest) -> Self {
+        Self::submit_with(
+            request,
+            little_clip_core::BackgroundJobs::global(),
+            |request| {
+                self::request(&request, None, u64::MAX, usize::MAX)
+                    .map_err(|error| error.to_string())
+            },
+        )
+    }
+
+    pub(crate) fn submit_with(
+        request: IpcRequest,
+        jobs: &little_clip_core::BackgroundJobs,
+        send: impl FnOnce(IpcRequest) -> Result<IpcResponse, String> + Send + 'static,
+    ) -> Self {
+        Self::start(jobs, move || send(request))
+    }
+
+    pub(crate) fn start(
+        jobs: &little_clip_core::BackgroundJobs,
+        operation: impl FnOnce() -> Result<IpcResponse, String> + Send + 'static,
+    ) -> Self {
+        let (_, receiver) = jobs.submit(Duration::MAX, operation);
+        Self { receiver }
+    }
+
+    pub(crate) fn try_result(&self) -> Option<Result<IpcResponse, String>> {
+        match self.receiver.try_recv() {
+            Ok(result) => Some(
+                result
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result),
+            ),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(
+                "Daemon worker disconnected; operation outcome is unknown".to_owned(),
+            )),
+        }
+    }
+}
+
+pub(crate) fn action_result(response: IpcResponse) -> Result<(), String> {
+    match response {
+        IpcResponse::OpResult { .. } | IpcResponse::Success { .. } => Ok(()),
+        IpcResponse::Error { error } => Err(error),
+        _ => Err("unexpected response from daemon".to_owned()),
+    }
+}

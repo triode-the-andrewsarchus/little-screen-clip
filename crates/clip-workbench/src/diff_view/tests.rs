@@ -402,7 +402,7 @@ fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
     );
     state.wait_for_completion();
     let initial_result = state.image_result.as_ref().expect("image diff result");
-    let result_address = std::ptr::from_ref(initial_result);
+    let result_address = std::sync::Arc::as_ptr(initial_result);
     let compute_started = state.compute_start_time;
 
     for (key, expected_mode) in [
@@ -417,7 +417,7 @@ fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
         assert!(state.image_receiver.is_none());
         assert_eq!(state.compute_start_time, compute_started);
         assert_eq!(
-            std::ptr::from_ref(state.image_result.as_ref().unwrap()),
+            std::sync::Arc::as_ptr(state.image_result.as_ref().unwrap()),
             result_address,
             "presentation change must retain the computed image result"
         );
@@ -1112,5 +1112,59 @@ fn external_handoff_reports_temp_write_failure() {
             .stage()
             .unwrap_err()
             .contains("Failed to stage diff lhs file")
+    );
+}
+
+#[test]
+fn pending_diff_copy_defers_close_and_preserves_worker_error() {
+    let target = || DiffTarget::ClipboardText {
+        label: "fixture".into(),
+        content: "text".into(),
+        ext_hint: None,
+    };
+    let mut state = DiffViewerState::new(target(), target(), DiffDisplayMode::Inline);
+    state.wait_for_completion();
+    let jobs = BackgroundJobs::new(1, 1);
+    let (release, wait) = std::sync::mpsc::channel();
+    state.copy_job = Some(crate::desktop_ipc::PendingRequest::start(
+        &jobs,
+        move || {
+            wait.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            Err("controlled copy failure".into())
+        },
+    ));
+    let ctx = egui::Context::default();
+    let palette = crate::ui_appearance::palette(
+        little_clip_core::config::AppConfig::default()
+            .workbench
+            .appearance,
+    );
+    let mut close = true;
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default()
+            .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut close));
+    });
+    assert!(!close);
+    assert!(
+        output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
+    );
+    release.send(()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while state.copy_pending() {
+        state.poll_copy_job(1.0);
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(
+        state
+            .status_toast
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("controlled copy failure")
     );
 }

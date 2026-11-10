@@ -10,7 +10,6 @@ mod text;
 
 use crate::ansi::ansi_to_layout_job;
 use crate::icons::Icon;
-use crate::send_ipc_request;
 use crate::shell::{EscapeHatch, StudioShell};
 use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
 use eframe::egui::{self, Color32, Rounding, Stroke, Vec2};
@@ -140,7 +139,8 @@ pub struct DiffViewerState {
     pub result: DiffResult,
     pub layout_job: egui::text::LayoutJob,
     // Image diff state
-    pub image_result: Option<ImageDiffResult>,
+    pub image_result: Option<std::sync::Arc<ImageDiffResult>>,
+    copy_job: Option<crate::desktop_ipc::PendingRequest>,
     pub image_options: ImageDiffOptions,
     pub image_mode: ImageDiffViewMode,
     pub base_texture: Option<egui::TextureHandle>,
@@ -301,6 +301,7 @@ impl DiffViewerState {
             result,
             layout_job,
             image_result: None,
+            copy_job: None,
             image_options,
             image_mode: ImageDiffViewMode::ThreeUp,
             base_texture: None,
@@ -326,7 +327,7 @@ impl DiffViewerState {
             if let Ok(res) = rx.recv() {
                 match res {
                     Ok(Ok(r)) => {
-                        self.image_result = Some(r);
+                        self.image_result = Some(std::sync::Arc::new(r));
                         self.decode_error = None;
                     }
                     Ok(Err(e)) => {

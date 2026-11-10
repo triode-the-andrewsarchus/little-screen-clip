@@ -389,13 +389,40 @@ impl DiffViewerState {
         });
     }
 
-    pub(super) fn copy_image_diff_to_clipboard(&mut self, now: f64) {
-        if let Some(res) = &self.image_result {
-            if let Ok(req) = image_mask_push_request(res) {
-                let _ = send_ipc_request(&req);
-                self.status_toast =
-                    Some(("Diff Mask copied to Left Hand & clipboard!".into(), now));
-            }
+    pub(super) fn copy_image_diff_to_clipboard(&mut self) {
+        if self.copy_job.is_some() {
+            return;
+        }
+        let Some(result) = self.image_result.clone() else {
+            return;
+        };
+        self.copy_job = Some(crate::desktop_ipc::PendingRequest::start(
+            BackgroundJobs::global(),
+            move || {
+                let request =
+                    image_mask_push_request(&result).map_err(|error| error.to_string())?;
+                crate::send_ipc_request(&request).map_err(|error| error.to_string())
+            },
+        ));
+    }
+
+    pub(crate) fn copy_pending(&self) -> bool {
+        self.copy_job.is_some()
+    }
+
+    pub(super) fn poll_copy_job(&mut self, now: f64) {
+        let Some(result) = self.copy_job.as_ref().and_then(|job| job.try_result()) else {
+            return;
+        };
+        self.copy_job = None;
+        if let Err(error) = result.and_then(crate::desktop_ipc::action_result) {
+            self.status_toast = Some((
+                crate::ui_ext::StatusMessage::new(
+                    Icon::Alert,
+                    format!("Could not copy diff mask: {error}"),
+                ),
+                now,
+            ));
         }
     }
 }

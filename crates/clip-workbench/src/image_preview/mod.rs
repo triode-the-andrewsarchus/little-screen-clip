@@ -164,6 +164,7 @@ pub struct ImagePreviewState {
 
     // File Dialog & Save-As
     save_job: Option<save::ImageSaveJob>,
+    text_copy_job: Option<crate::desktop_ipc::PendingRequest>,
     file_source: Option<crate::file_source::FileSource>,
     saved_stamp: Option<ImageInputStamp>,
     opened_stamp: Option<ImageInputStamp>,
@@ -485,13 +486,16 @@ impl ImagePreviewState {
     pub fn poll_cached_jobs(&mut self) -> bool {
         self.poll_save_job();
         self.poll_copy_job();
-        self.save_job.is_some() || self.copy_job.is_some()
+        self.poll_text_copy_job();
+        self.file_write_pending()
     }
 
     /// Restore worker-owned pixel snapshots before moving the editor out of the UI.
     pub fn poll_session_snapshots(&mut self) -> bool {
         self.poll_cached_jobs();
-        !self.save_snapshot_pending() && !self.copy_snapshot_pending()
+        !self.save_snapshot_pending()
+            && !self.copy_snapshot_pending()
+            && self.text_copy_job.is_none()
     }
 
     #[cfg(test)]
@@ -594,6 +598,7 @@ impl ImagePreviewState {
             viewer: config.image.viewer.clone(),
             status_toast: None,
             save_job: None,
+            text_copy_job: None,
             file_source: None,
             saved_stamp: None,
             opened_stamp: None,
@@ -782,7 +787,7 @@ impl ImagePreviewState {
     }
 
     pub(crate) fn file_write_pending(&self) -> bool {
-        self.save_job.is_some() || self.copy_job.is_some()
+        self.save_job.is_some() || self.copy_job.is_some() || self.text_copy_job.is_some()
     }
     pub(crate) fn file_source(&self) -> Option<crate::file_source::FileSource> {
         self.file_source.clone()

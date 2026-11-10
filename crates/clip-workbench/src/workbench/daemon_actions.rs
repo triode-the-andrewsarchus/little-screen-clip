@@ -1,6 +1,8 @@
 //! Accepted daemon mutations outlive view changes and retain their completion.
 
 use super::*;
+use crate::desktop_ipc::PendingRequest;
+pub(crate) use crate::desktop_ipc::action_result;
 
 pub(crate) enum DaemonMutationKind {
     Swap,
@@ -11,50 +13,37 @@ pub(crate) enum DaemonMutationKind {
 
 pub(crate) struct DaemonMutation {
     kind: DaemonMutationKind,
-    receiver: Receiver<Result<Result<IpcResponse, String>, JobError>>,
+    request: PendingRequest,
 }
 
 impl DaemonMutation {
     pub(crate) fn submit(request: IpcRequest, kind: DaemonMutationKind) -> Self {
-        Self::submit_with(request, kind, BackgroundJobs::global(), |request| {
-            send_ipc_request(&request).map_err(|error| error.to_string())
-        })
+        Self {
+            kind,
+            request: PendingRequest::submit(request),
+        }
     }
 
+    #[cfg(test)]
     fn submit_with(
         request: IpcRequest,
         kind: DaemonMutationKind,
         jobs: &BackgroundJobs,
         send: impl FnOnce(IpcRequest) -> Result<IpcResponse, String> + Send + 'static,
     ) -> Self {
-        // Accepted writes keep their outcome: never cancel or expire after execution.
-        let (_, receiver) = jobs.submit(Duration::MAX, move || send(request));
-        Self { kind, receiver }
+        Self {
+            kind,
+            request: PendingRequest::submit_with(request, jobs, send),
+        }
     }
 
     pub(crate) fn poll(&self, ctx: &egui::Context) -> Option<IpcResponse> {
-        let result = match self.receiver.try_recv() {
-            Ok(result) => result
-                .map_err(|error| error.to_string())
-                .and_then(|result| result),
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.request_repaint_after(Duration::from_millis(50));
-                return None;
-            }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Err("Daemon worker disconnected; operation outcome is unknown".to_owned())
-            }
+        let Some(result) = self.request.try_result() else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after(Duration::from_millis(50));
+            return None;
         };
         Some(result.unwrap_or_else(|error| IpcResponse::Error { error }))
-    }
-}
-
-pub(crate) fn action_result(response: IpcResponse) -> Result<(), String> {
-    match response {
-        IpcResponse::OpResult { .. } | IpcResponse::Success { .. } => Ok(()),
-        IpcResponse::Error { error } => Err(error),
-        _ => Err("unexpected response from daemon".to_owned()),
     }
 }
 
