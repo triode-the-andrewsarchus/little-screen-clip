@@ -509,29 +509,13 @@ impl RollingAudioStripState {
     }
 
     pub fn query_peaks(&self, frame_start: usize, frame_end: usize) -> (f32, f32, [u8; 3]) {
-        let span = frame_end.saturating_sub(frame_start).max(1);
         if self.peaks_lvl0.is_empty() {
             return (0.0, 0.0, [56, 189, 248]);
         }
-        if span >= 16384 && !self.peaks_lvl2.is_empty() {
-            let b_start = (frame_start / 16384).min(self.peaks_lvl2.len() - 1);
-            let b_end = ((frame_end + 16383) / 16384)
-                .min(self.peaks_lvl2.len())
-                .max(b_start + 1);
-            aggregate_blocks(&self.peaks_lvl2[b_start..b_end])
-        } else if span >= 1024 && !self.peaks_lvl1.is_empty() {
-            let b_start = (frame_start / 1024).min(self.peaks_lvl1.len() - 1);
-            let b_end = ((frame_end + 1023) / 1024)
-                .min(self.peaks_lvl1.len())
-                .max(b_start + 1);
-            aggregate_blocks(&self.peaks_lvl1[b_start..b_end])
-        } else {
-            let b_start = (frame_start / 64).min(self.peaks_lvl0.len() - 1);
-            let b_end = ((frame_end + 63) / 64)
-                .min(self.peaks_lvl0.len())
-                .max(b_start + 1);
-            aggregate_blocks(&self.peaks_lvl0[b_start..b_end])
-        }
+        aggregate_blocks(little_clip_core::audio::peak_blocks_for_range(
+            [&self.peaks_lvl0, &self.peaks_lvl1, &self.peaks_lvl2],
+            frame_start..frame_end,
+        ))
     }
 
     fn render_header(&mut self, ui: &mut egui::Ui, palette: &AppPalette, total_dur: f32) {

@@ -14,6 +14,37 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
+/// Returns prepared peak blocks overlapping a half-open frame range.
+///
+/// `levels` contains the 64-, 1024-, and 16384-frame summaries, in that order.
+/// The coarsest populated level no wider than the requested span is selected,
+/// falling back to 64-frame blocks for short spans. Boundary blocks can include
+/// samples outside the range; callers needing sample precision must use PCM.
+/// Empty, reversed, or unavailable ranges return an empty slice. This borrows
+/// existing summaries without allocating or decoding content.
+#[inline]
+pub fn peak_blocks_for_range(
+    levels: [&[PeakBlock]; 3],
+    frames: std::ops::Range<usize>,
+) -> &[PeakBlock] {
+    let span = frames.end.saturating_sub(frames.start);
+    if span == 0 {
+        return &[];
+    }
+    let (blocks, shift) = if span >= 16384 && !levels[2].is_empty() {
+        (levels[2], 14)
+    } else if span >= 1024 && !levels[1].is_empty() {
+        (levels[1], 10)
+    } else {
+        (levels[0], 6)
+    };
+    // Power-of-two levels let us round outwards without a variable division
+    // or overflowing when the requested end is usize::MAX.
+    let start = (frames.start >> shift).min(blocks.len());
+    let end = (((frames.end - 1) >> shift) + 1).min(blocks.len());
+    &blocks[start..end]
+}
+
 impl FullAudioAnalysis {
     #[inline]
     pub fn query_color_at_time(&self, time_sec: f32) -> [u8; 3] {
@@ -161,117 +192,51 @@ impl FullAudioAnalysis {
             )
         };
 
-        if span >= 16384 && !lvl2.is_empty() {
-            let b_start = (start_frame / 16384).min(lvl2.len().saturating_sub(1));
-            let b_end = ((end + 16383) / 16384).min(lvl2.len());
-            let mut mn = 0.0f32;
-            let mut mx = 0.0f32;
-            let mut r_sum = 0u32;
-            let mut g_sum = 0u32;
-            let mut b_sum = 0u32;
-            let mut count = 0u32;
-            for b in &lvl2[b_start..b_end] {
-                if b.min < mn {
-                    mn = b.min;
-                }
-                if b.max > mx {
-                    mx = b.max;
-                }
-                r_sum += b.rgb[0] as u32;
-                g_sum += b.rgb[1] as u32;
-                b_sum += b.rgb[2] as u32;
-                count += 1;
-            }
-            let col = if count > 0 {
-                [
-                    (r_sum / count) as u8,
-                    (g_sum / count) as u8,
-                    (b_sum / count) as u8,
-                ]
-            } else {
-                [56, 189, 248]
-            };
-            (mn, mx, col)
-        } else if span >= 1024 && !lvl1.is_empty() {
-            let b_start = (start_frame / 1024).min(lvl1.len().saturating_sub(1));
-            let b_end = ((end + 1023) / 1024).min(lvl1.len());
-            let mut mn = 0.0f32;
-            let mut mx = 0.0f32;
-            let mut r_sum = 0u32;
-            let mut g_sum = 0u32;
-            let mut b_sum = 0u32;
-            let mut count = 0u32;
-            for b in &lvl1[b_start..b_end] {
-                if b.min < mn {
-                    mn = b.min;
-                }
-                if b.max > mx {
-                    mx = b.max;
-                }
-                r_sum += b.rgb[0] as u32;
-                g_sum += b.rgb[1] as u32;
-                b_sum += b.rgb[2] as u32;
-                count += 1;
-            }
-            let col = if count > 0 {
-                [
-                    (r_sum / count) as u8,
-                    (g_sum / count) as u8,
-                    (b_sum / count) as u8,
-                ]
-            } else {
-                [56, 189, 248]
-            };
-            (mn, mx, col)
-        } else if span >= 64 && !lvl0.is_empty() {
-            let b_start = (start_frame / 64).min(lvl0.len().saturating_sub(1));
-            let b_end = ((end + 63) / 64).min(lvl0.len());
-            let mut mn = 0.0f32;
-            let mut mx = 0.0f32;
-            let mut r_sum = 0u32;
-            let mut g_sum = 0u32;
-            let mut b_sum = 0u32;
-            let mut count = 0u32;
-            for b in &lvl0[b_start..b_end] {
-                if b.min < mn {
-                    mn = b.min;
-                }
-                if b.max > mx {
-                    mx = b.max;
-                }
-                r_sum += b.rgb[0] as u32;
-                g_sum += b.rgb[1] as u32;
-                b_sum += b.rgb[2] as u32;
-                count += 1;
-            }
-            let col = if count > 0 {
-                [
-                    (r_sum / count) as u8,
-                    (g_sum / count) as u8,
-                    (b_sum / count) as u8,
-                ]
-            } else {
-                [56, 189, 248]
-            };
-            (mn, mx, col)
+        let blocks = if span >= 64 {
+            peak_blocks_for_range([lvl0, lvl1, lvl2], start_frame..end)
         } else {
-            let mut mn = 0.0f32;
-            let mut mx = 0.0f32;
-            for &s in &raw[start_frame..end] {
-                if s < mn {
-                    mn = s;
+            &[]
+        };
+        let mut min = 0.0_f32;
+        let mut max = 0.0_f32;
+        if !blocks.is_empty() {
+            let mut rgb_sum = [0_u32; 3];
+            for block in blocks {
+                if block.min < min {
+                    min = block.min;
                 }
-                if s > mx {
-                    mx = s;
+                if block.max > max {
+                    max = block.max;
+                }
+                rgb_sum[0] += u32::from(block.rgb[0]);
+                rgb_sum[1] += u32::from(block.rgb[1]);
+                rgb_sum[2] += u32::from(block.rgb[2]);
+            }
+            let count = blocks.len() as u32;
+            (
+                min,
+                max,
+                [
+                    (rgb_sum[0] / count) as u8,
+                    (rgb_sum[1] / count) as u8,
+                    (rgb_sum[2] / count) as u8,
+                ],
+            )
+        } else {
+            for &sample in raw.get(start_frame..end).unwrap_or_default() {
+                if sample < min {
+                    min = sample;
+                }
+                if sample > max {
+                    max = sample;
                 }
             }
-            let col = if !lvl0.is_empty() {
-                let b_idx = (start_frame / 64).min(lvl0.len().saturating_sub(1));
-                lvl0[b_idx].rgb
-            } else {
+            let color = if lvl0.is_empty() {
                 [56, 189, 248]
+            } else {
+                lvl0[(start_frame / 64).min(lvl0.len() - 1)].rgb
             };
-            (mn, mx, col)
+            (min, max, color)
         }
     }
 
@@ -1145,6 +1110,90 @@ fn resample_peaks(source: &[f32], target_len: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_peak_ranges_choose_levels_and_clamp_partial_boundaries() {
+        let block = PeakBlock {
+            min: -0.5,
+            max: 0.75,
+            rgb: [10, 20, 30],
+        };
+        let fine = [block; 4];
+        let medium = [block; 32];
+        let coarse = [block; 3];
+        let levels = [&fine[..], &medium[..], &coarse[..]];
+        assert_eq!(peak_blocks_for_range(levels, 63..65).len(), 2);
+        assert!(std::ptr::eq(
+            peak_blocks_for_range(levels, 1024..2048),
+            &medium[1..2]
+        ));
+        assert!(std::ptr::eq(
+            peak_blocks_for_range(levels, 16384..32768),
+            &coarse[1..2]
+        ));
+        assert!(std::ptr::eq(
+            peak_blocks_for_range([&fine, &medium, &[]], 0..32768),
+            &medium[..]
+        ));
+        for (start, end) in [
+            (0, 0),
+            (20, 10),
+            (100000, 100001),
+            (usize::MAX - 1, usize::MAX),
+        ] {
+            assert!(peak_blocks_for_range(levels, start..end).is_empty());
+        }
+        assert!(peak_blocks_for_range([&[], &[], &[]], 0..100000).is_empty());
+    }
+
+    #[test]
+    fn peak_queries_preserve_sample_detail_mean_color_and_partial_readiness() {
+        let analysis = FullAudioAnalysis {
+            total_frames: 32768,
+            ch1_samples: std::sync::Arc::from([0.4, -0.8, 0.2, 0.1]),
+            peaks_lvl0_ch1: vec![
+                PeakBlock {
+                    min: -0.75,
+                    max: 0.9,
+                    rgb: [200, 40, 20],
+                },
+                PeakBlock {
+                    min: -0.5,
+                    max: 0.6,
+                    rgb: [20, 80, 60],
+                },
+            ],
+            peaks_lvl1_ch1: vec![PeakBlock {
+                min: -0.85,
+                max: 0.95,
+                rgb: [10, 120, 30],
+            }],
+            peaks_lvl2_ch1: vec![PeakBlock {
+                min: -1.0,
+                max: 1.0,
+                rgb: [5, 15, 200],
+            }],
+            ..Default::default()
+        };
+        assert_eq!(analysis.query_peaks(0, 0, 2), (-0.8, 0.4, [200, 40, 20]));
+        assert_eq!(analysis.query_peaks(0, 0, 128), (-0.75, 0.9, [110, 60, 40]));
+        assert_eq!(
+            analysis.query_peaks(0, 0, 1024),
+            (-0.85, 0.95, [10, 120, 30])
+        );
+        assert_eq!(analysis.query_peaks(0, 0, 16384), (-1.0, 1.0, [5, 15, 200]));
+        assert_eq!(
+            analysis.query_peaks(1, 0, 128),
+            analysis.query_peaks(0, 0, 128)
+        );
+        assert_eq!(analysis.query_peaks(0, 0, 0), (0.0, 0.0, [56, 189, 248]));
+        assert_eq!(
+            analysis.query_peaks(0, 32768, usize::MAX),
+            (0.0, 0.0, [56, 189, 248])
+        );
+        // Metadata can precede decoded PCM; querying it must not index unavailable data.
+        assert_eq!(analysis.query_peaks(0, 100, 101), (0.0, 0.0, [20, 80, 60]));
+    }
 
     #[test]
     fn preview_waveform_synthetic_stereo_matches_scalar_across_packet_boundaries() {
