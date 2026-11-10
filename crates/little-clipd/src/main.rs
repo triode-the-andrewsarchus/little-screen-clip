@@ -350,9 +350,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )));
     let rolling_capture_config = Arc::new(std::sync::RwLock::new(config.audio.clone()));
 
+    let mut manager = SlotManager::default();
+    manager.apply_config(&config.slots);
     let ctx = Arc::new(DaemonContext {
         config: RwLock::new(config.clone()),
-        manager: RwLock::new(SlotManager::default()),
+        manager: RwLock::new(manager),
         renderer: RwLock::new(renderer),
         display_tx,
         self_copied_text: RwLock::new(Vec::new()),
@@ -888,6 +890,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 let new_config = little_clip_core::config::AppConfig::load();
                 let new_audio_config = new_config.audio.clone();
                 *config = new_config.clone();
+                ctx.manager.write().await.apply_config(&new_config.slots);
                 match ctx.rolling_capture_config.write() {
                     Ok(mut config) => *config = new_audio_config.clone(),
                     Err(_) => warn!("Rolling audio configuration lock was poisoned during reload"),
@@ -1680,8 +1683,9 @@ mod tests {
     const TRACKED_URL: &str = "https://example.com/path?utm_source=newsletter&keep=value";
     const CLEAN_URL: &str = "https://example.com/path?keep=value";
 
-    fn test_context(manager: SlotManager) -> Arc<DaemonContext> {
+    fn test_context(mut manager: SlotManager) -> Arc<DaemonContext> {
         let config = little_clip_core::AppConfig::default();
+        manager.apply_config(&config.slots);
         let (display_tx, _display_rx) = watch::channel(None);
         // An isolated handler: no daemon startup, USB thread, capture thread,
         // external clipboard process or user's socket is involved.
@@ -1752,6 +1756,94 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
             .unwrap()
             .unwrap();
         serde_json::from_str(&response).unwrap()
+    }
+
+    #[tokio::test]
+    async fn reloaded_history_limits_apply_to_later_ipc_pushes_and_snapshots() {
+        if isolated_clipboard_test(
+            "tests::reloaded_history_limits_apply_to_later_ipc_pushes_and_snapshots",
+        ) {
+            return;
+        }
+        let ctx = test_context(SlotManager::default());
+        assert_eq!(
+            ctx.manager.read().await.history_config,
+            little_clip_core::config::SlotsConfig::default()
+        );
+        let (client, server) = UnixStream::pair().unwrap();
+        let handler = tokio::spawn(handle_client(server, Arc::clone(&ctx)));
+        let (reader, mut writer) = client.into_split();
+        let mut lines = BufReader::new(reader).lines();
+        let priors = [
+            SlotId::LeftPrior1,
+            SlotId::LeftPrior2,
+            SlotId::LeftPrior3,
+            SlotId::RightPrior1,
+            SlotId::RightPrior2,
+        ];
+        for (left, right) in [(0, 0), (2, 2), (9, 9), (1, 0)] {
+            std::fs::write(
+                "config.toml",
+                format!("[slots]\nleft_priors = {left}\nright_priors = {right}\n"),
+            )
+            .unwrap();
+            let response =
+                test_ipc_request(&mut writer, &mut lines, IpcRequest::ReloadConfig).await;
+            assert!(
+                matches!(response, IpcResponse::Success { .. }),
+                "{response:?}"
+            );
+            let expected = little_clip_core::config::SlotsConfig {
+                left_priors: left.min(3),
+                right_priors: right.min(2),
+            };
+            let IpcResponse::StateSummary(summary) =
+                test_ipc_request(&mut writer, &mut lines, IpcRequest::GetStateSummary).await
+            else {
+                panic!("expected state summary");
+            };
+            assert_eq!(summary.history_config, expected);
+            let enabled = [left >= 1, left >= 2, left >= 3, right >= 1, right >= 2];
+            for (slot, enabled) in priors.into_iter().zip(enabled) {
+                if !enabled {
+                    assert!(
+                        ctx.manager.read().await.get(slot).is_none(),
+                        "reload retained disabled {slot:?}"
+                    );
+                }
+            }
+            for index in 0..4 {
+                for hand in [HandSide::Left, HandSide::Right] {
+                    let response = test_ipc_request(
+                        &mut writer,
+                        &mut lines,
+                        IpcRequest::PushText {
+                            text: format!("history push {index} {hand:?}"),
+                            hand,
+                        },
+                    )
+                    .await;
+                    assert!(
+                        matches!(response, IpcResponse::Success { .. }),
+                        "{response:?}"
+                    );
+                }
+            }
+            let IpcResponse::State(state) =
+                test_ipc_request(&mut writer, &mut lines, IpcRequest::GetState).await
+            else {
+                panic!("expected full state");
+            };
+            assert_eq!(state.history_config, expected);
+            for (slot, enabled) in priors.into_iter().zip(enabled) {
+                assert_eq!(
+                    state.get(slot).is_some(),
+                    enabled,
+                    "incorrect {slot:?} after reload to {left}/{right}"
+                );
+            }
+        }
+        handler.abort();
     }
 
     #[tokio::test]

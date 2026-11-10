@@ -250,6 +250,9 @@ pub struct SlotStateSummary {
     pub cursor: SlotId,
     /// Currently selected slots.
     pub selected: Vec<SlotId>,
+    /// Applied hand-history retention limits; defaults support older IPC peers.
+    #[serde(default)]
+    pub history_config: crate::config::SlotsConfig,
 }
 
 impl SlotStateSummary {
@@ -267,6 +270,7 @@ impl SlotStateSummary {
             cards,
             cursor: manager.cursor,
             selected: manager.selected.clone(),
+            history_config: manager.history_config.clone(),
         }
     }
 
@@ -312,6 +316,60 @@ impl SlotCard {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn history_limits_survive_state_and_summary_roundtrips() {
+        let manager = crate::SlotManager {
+            history_config: crate::config::SlotsConfig {
+                left_priors: 1,
+                right_priors: 0,
+            },
+            ..Default::default()
+        };
+        let summary = super::SlotStateSummary::from_manager(&manager);
+        let response = super::IpcResponse::State(manager.clone());
+        let super::IpcResponse::State(mut restored) =
+            serde_json::from_str(&serde_json::to_string(&response).unwrap()).unwrap()
+        else {
+            panic!("expected state snapshot");
+        };
+        for index in 0..4 {
+            restored.push_left(crate::ClipItem::from_text(format!("L{index}")));
+            restored.push_right(crate::ClipItem::from_text(format!("R{index}")));
+        }
+        assert_eq!(restored.get(crate::SlotId::LeftPrior1).unwrap().title, "L2");
+        assert!(restored.get(crate::SlotId::LeftPrior2).is_none());
+        assert!(restored.get(crate::SlotId::RightPrior1).is_none());
+        assert_eq!(
+            serde_json::from_str::<super::SlotStateSummary>(
+                &serde_json::to_string(&summary).unwrap()
+            )
+            .unwrap(),
+            summary
+        );
+        let mut legacy_manager = serde_json::to_value(manager).unwrap();
+        legacy_manager
+            .as_object_mut()
+            .unwrap()
+            .remove("history_config");
+        assert_eq!(
+            serde_json::from_value::<crate::SlotManager>(legacy_manager)
+                .unwrap()
+                .history_config,
+            crate::config::SlotsConfig::default()
+        );
+        let mut legacy_summary = serde_json::to_value(summary).unwrap();
+        legacy_summary
+            .as_object_mut()
+            .unwrap()
+            .remove("history_config");
+        assert_eq!(
+            serde_json::from_value::<super::SlotStateSummary>(legacy_summary)
+                .unwrap()
+                .history_config,
+            crate::config::SlotsConfig::default()
+        );
+    }
+
     #[test]
     fn legacy_clipboard_route_defaults_to_unidentified() {
         let request: super::IpcRequest = serde_json::from_str(r#"{"RouteNextClipboard":{"hand":"Left","timeout_ms":2000,"restore_os_clipboard":false}}"#).unwrap();

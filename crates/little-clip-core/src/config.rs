@@ -245,7 +245,7 @@ pub fn save_file_search_roots(roots: &[String]) -> Result<(), Box<dyn std::error
 }
 
 /// Slot depth configuration for the dual-stack model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SlotsConfig {
     /// Number of prior history slots for Left Hand (default: 3).
     #[serde(default = "default_left_priors")]

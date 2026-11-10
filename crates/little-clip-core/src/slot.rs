@@ -124,6 +124,9 @@ pub struct SlotManager {
     pub cursor: SlotId,
     /// List of multi-selected slots for batch operations.
     pub selected: Vec<SlotId>,
+    /// Applied retention limits, also carried in IPC snapshots for local slot operations.
+    #[serde(default)]
+    pub history_config: crate::config::SlotsConfig,
 }
 
 impl Default for SlotManager {
@@ -139,6 +142,7 @@ impl Default for SlotManager {
             right_hand: None,
             cursor: SlotId::LeftHand,
             selected: Vec::new(),
+            history_config: crate::config::SlotsConfig::default(),
         }
     }
 }
@@ -217,6 +221,7 @@ impl SlotManager {
         self.left_prior2 = self.left_prior1.take();
         self.left_prior1 = self.left_hand.take();
         self.left_hand = Some(item);
+        self.clear_disabled_history();
     }
 
     /// Pushes a new item into Right Hand.
@@ -228,6 +233,7 @@ impl SlotManager {
         self.right_prior2 = self.right_prior1.take();
         self.right_prior1 = self.right_hand.take();
         self.right_hand = Some(item);
+        self.clear_disabled_history();
     }
 
     /// Pushes an item to the specified hand side.
@@ -258,8 +264,19 @@ impl SlotManager {
         }
     }
 
-    /// Enforces configured depth limits on prior history slots.
+    /// Clears disabled prior history and retains the limits for subsequent pushes.
+    ///
+    /// Depths above the physical three-left/two-right capacity are clamped.
     pub fn apply_config(&mut self, config: &crate::config::SlotsConfig) {
+        self.history_config = crate::config::SlotsConfig {
+            left_priors: config.left_priors.min(3),
+            right_priors: config.right_priors.min(2),
+        };
+        self.clear_disabled_history();
+    }
+
+    fn clear_disabled_history(&mut self) {
+        let config = &self.history_config;
         if config.left_priors < 3 {
             self.left_prior3 = None;
         }
@@ -653,6 +670,50 @@ mod tests {
             assert_eq!(thumbnails.len(), 1);
         } else {
             panic!("Expected MultiImage payload in LeftPrior3");
+        }
+    }
+
+    #[test]
+    fn configured_history_depth_survives_subsequent_pushes() {
+        for left_priors in 0..=4 {
+            for right_priors in 0..=3 {
+                let mut manager = SlotManager::new();
+                for index in 0..5 {
+                    manager.push_left(ClipItem::from_text(format!("L{index}")));
+                    manager.push_right(ClipItem::from_text(format!("R{index}")));
+                }
+                manager.apply_config(&crate::config::SlotsConfig {
+                    left_priors,
+                    right_priors,
+                });
+                for index in 5..9 {
+                    manager.push_left(ClipItem::from_text(format!("L{index}")));
+                    manager.push_right(ClipItem::from_text(format!("R{index}")));
+                    for (slots, depth, prefix) in [
+                        (
+                            &[SlotId::LeftPrior1, SlotId::LeftPrior2, SlotId::LeftPrior3][..],
+                            left_priors,
+                            "L",
+                        ),
+                        (
+                            &[SlotId::RightPrior1, SlotId::RightPrior2][..],
+                            right_priors,
+                            "R",
+                        ),
+                    ] {
+                        for (prior, slot) in slots.iter().enumerate() {
+                            let expected =
+                                (prior < depth).then(|| format!("{prefix}{}", index - prior - 1));
+                            assert_eq!(
+                                manager.get(*slot).map(|item| item.title.clone()),
+                                expected,
+                                "depth={left_priors}/{right_priors}, slot={slot:?}"
+                            );
+                        }
+                    }
+                    assert!(manager.undo_slot().is_none());
+                }
+            }
         }
     }
 

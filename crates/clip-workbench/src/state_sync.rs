@@ -49,7 +49,10 @@ fn hydrate_changed_slots(
     previous: &SlotStateSummary,
     state: &mut SlotManager,
 ) -> Result<bool, ()> {
-    let mut changed = false;
+    let mut changed = state.history_config != summary.history_config;
+    if changed {
+        state.apply_config(&summary.history_config);
+    }
     for slot in SlotId::all() {
         if !needs_hydration(slot, summary, previous, state) {
             continue;
@@ -131,6 +134,22 @@ pub(crate) fn spawn_state_poller(ctx: egui::Context) -> Receiver<Result<Arc<Slot
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_slot_configuration_change_publishes_a_new_local_snapshot() {
+        let mut state = SlotManager::new();
+        let previous = SlotStateSummary::from_manager(&state);
+        let mut server = state.clone();
+        server.apply_config(&little_clip_core::config::SlotsConfig {
+            left_priors: 0,
+            right_priors: 0,
+        });
+        let summary = SlotStateSummary::from_manager(&server);
+        // Empty unchanged cards require no IPC hydration or host socket access.
+        assert!(hydrate_changed_slots(&summary, &previous, &mut state).unwrap());
+        assert_eq!(state, server);
+        assert!(!hydrate_changed_slots(&summary, &summary, &mut state).unwrap());
+    }
 
     #[test]
     fn old_daemon_card_rehydrates_pending_preview_without_an_identity_change() {
