@@ -1,6 +1,6 @@
-# Deep refactoring plan — reviewed proposal
+# Deep refactoring plan — implementation and evidence
 
-**Status: implementation authorized and in progress. Native mirror adoption remains separately reviewable.**
+**Status: authorized structural refactor complete and verified. Native mirror adoption remains separately reviewable.**
 
 This plan follows the completed work in [REFACTORING_PLAN.md](REFACTORING_PLAN.md), rebased onto `main` at `2f75a97`. It replaces the previous proposal after checking its claims against the combined source tree. It preserves the goal of shared, useful interactive views while removing speculative interfaces, incorrect diagnoses, and unsupported performance promises.
 
@@ -255,11 +255,11 @@ For each approved slice:
 
 ## Execution status
 
-The current requirement/evidence map and remaining completion blockers are in
+The current requirement/evidence map, acceptance results and limitations are in
 [DEEP_REFACTORING_AUDIT.md](DEEP_REFACTORING_AUDIT.md). Historical ledger entries
 below describe their checkpoint, not the current status of every later phase.
 
-The user authorized completing this plan after the review and future-roadmap additions. Execute the phases incrementally, retaining the specific design and adoption gates above. The initial architecture baseline is `deep-refactor-start`; the working tree began at `4fabcc3`, with 164 GiB available. Phase 1 is complete against its confirmed blocking/lifecycle worklist: mount discovery, USB ownership, retained UI mutations, clipboard routes, studio handoffs, worker isolation and image retirement have been verified. Phase 2 has delivered shared peak-range queries, direct document hints, source/readiness contracts and the presentation inventory. Phase 3 has delivered shared UI, neutral studios and independent application ownership. Phase 3a has delivered the opt-in native mirror prototype and its measured findings; the raster mirror remains the default. Phase 4 has delivered the headless search backend, including source readers and coordinator. Phase 6 has delivered targeted feedback lifetimes/clock repairs and per-execution pipeline scratch/output ownership. Remaining domain/state-transition and operation-completion audits, plus the final requirement-by-requirement integration audit, are outstanding; native mirror adoption retains its separate review gate.
+The user authorized completing this plan after the review and future-roadmap additions. Execute the phases incrementally, retaining the specific design and adoption gates above. The initial architecture baseline is `deep-refactor-start`; the working tree began at `4fabcc3`, with 164 GiB available. Phase 1 is complete against its confirmed blocking/lifecycle worklist: mount discovery, USB ownership, retained UI mutations, clipboard routes, studio handoffs, worker isolation and image retirement have been verified. Phase 2 has delivered shared peak-range queries, direct document hints, source/readiness contracts and the presentation inventory. Phase 3 has delivered shared UI, neutral studios and independent application ownership. Phase 3a has delivered the opt-in native mirror prototype and its measured findings; the raster mirror remains the default. Phase 4 has delivered the headless search backend, including source readers and coordinator. Phase 6 has delivered targeted feedback lifetimes/clock repairs and per-execution pipeline scratch/output ownership. The selected domain/state-transition and operation-completion audits are delivered, including retained accepted-write close guards and displayed-source lifetime checks. The final requirement-by-requirement evidence is reconciled in the acceptance audit; formatting, workspace tests, all-target checks, desktop builds and diagnostic Clippy pass. Native mirror adoption retains its separate review gate.
 
 
 ### Implementation ledger
@@ -1702,3 +1702,71 @@ complexity reduction remain useful, but its remaining performance evidence must
 be reconciled before declaring the complete plan achieved. The acceptance audit
 now names that gate explicitly alongside the final requirement reconciliation.
 The goal remains active; the raster mirror remains default.
+
+
+### Representative waveform-frame verification
+
+The remaining phase-2 pilot measurement now exercises the actual rolling strip
+and shared Audio Studio renderer, including egui painting and tessellation.
+[The ignored fixture](../crates/clip-workbench/src/workbench/tests/waveform_cost.rs)
+uses a prepared 1,048,576-frame stereo signal; it performs no content, device,
+MIDI or playback I/O. The strip uses its full snapshot; studio windows cover
+23.777 seconds, two seconds and one millisecond. The last window contains about
+45 samples and reaches the renderer's individual-sample branch at both tested
+widths. The fixture asserts that rendering preserves each requested zoom.
+
+[The comparison driver](../scripts/waveform_frame_comparison.py) builds matched
+before/current development-profile test executables, changing only the two
+original peak-query methods for the baseline. It restores current sources before
+timing, retains original inline annotations, records hashes/compiler/profile,
+alternates process order over seven rounds, and verifies identical paint
+fingerprints and geometry sizes across all runs. Each of the 16 cases measures
+100 frames after ten warm-up frames: widths 900/1800 points, scales 1×/2×,
+and the four views above, totaling 22,400 timed frames. This measures prepared
+CPU frames, not decoding, GPU presentation, physical input or optimized shipping
+build performance.
+
+Results in `/tmp/deep-waveform-frames-sample-detail/report.json`: median frame
+changes range from −0.01992 to +0.01773 ms; p95 changes range from −0.02356 to
++0.01632 ms. The highest current median-of-round p95 is 0.96820 ms. Whole-process
+peak RSS ranges overlap: baseline 73,596–75,400 KiB, current 72,848–75,036 KiB;
+medians are 74,960 and 73,996 KiB respectively. Identical geometry and unchanged
+prepared storage establish that the consolidation adds no retained preview cache;
+RSS is a coarse process observation, not a per-allocation proof. These mixed,
+small frame differences support acceptance of the representative pilot with no
+meaningful observed frame or memory regression. They do not establish a speedup
+or erase the separately measured +6.04% isolated query cost. The earlier
+`/tmp/deep-waveform-frames-verified` run used a 40 ms deepest window and did not
+exercise individual-sample stems; it is superseded for that coverage claim.
+
+The measurement addition changes no production implementation. Architecture
+comparison against `deep-waveform-frame-start` reports raw REGRESSION from the
+new fixture/driver's explicit build, restoration and measurement checks: 11
+functions and 58 total CCN added; average CCN 4.04→4.05, maximum 195 unchanged,
+clone groups 1505 unchanged, dependency cycles 16 unchanged. Its four reported
+modified-file clone fragments point to existing workbench test setup: the only
+change in that module is the new measurement-module declaration, and all four
+paired files are unchanged. No duplicated production algorithm or dependency is
+added. Evidence:
+`/tmp/deep-waveform-frame-architecture.json`. Builds remain serialized at four
+jobs; approximately 132 GiB remains available on the project filesystem.
+
+
+### Final acceptance
+
+The final requirement reconciliation is complete in
+[DEEP_REFACTORING_AUDIT.md](DEEP_REFACTORING_AUDIT.md). The current workspace run
+passes 2690 tests, zero failures and 31 ignored; the new ignored measurement test
+was executed successfully in all 14 comparison processes. Formatting,
+workspace/all-target checks, both desktop builds and diagnostic workspace Clippy
+pass (`/tmp/deep-waveform-final-{workspace,fmt,all-targets,desktops,clippy}.log`).
+The Clippy allowance and existing warnings remain explicit. Production sources
+are unchanged from the verified `f83573c` checkpoint; the last Rust addition is
+the measurement fixture/module declaration. Private acceptance, actual-model
+search, guarded mutation/reader, helper dispatch and packaging evidence remains
+applicable and is mapped in the audit. Local documentation links resolve.
+
+All authorized structural phases are accepted with the recorded measurement and
+dependency limitations. The raster mirror remains default; native adoption and
+future product features retain their separate design/approval gates. No push or
+merge was performed.

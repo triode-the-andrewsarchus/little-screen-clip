@@ -9,6 +9,7 @@ mod splat;
 mod startup;
 mod text_loading;
 mod viewer_lifecycle;
+mod waveform_cost;
 
 pub(super) fn test_workbench_app(
     viewer: Option<ViewerSession>,
