@@ -22,4 +22,5 @@ zbus = "5.19.0"
 futures-util = "0.3.34"
 
 [dev-dependencies]
+tempfile = "3.10"
 tokio = { workspace = true, features = ["test-util"] }

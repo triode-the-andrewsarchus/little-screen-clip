@@ -38,6 +38,28 @@ pub enum PipelineError {
     /// Graph structure does not match the node catalog or has invalid wires.
     #[error("Invalid graph: {0}")]
     InvalidGraph(String),
+    /// Execution stopped after creating these files; completed writes are not rolled back.
+    #[error("{cause}; files already saved: {saved_files:?}")]
+    PartialExecution {
+        /// Original execution or publication failure.
+        #[source]
+        cause: Box<PipelineError>,
+        /// Files installed successfully before the failure.
+        saved_files: Vec<PathBuf>,
+    },
+}
+
+impl PipelineError {
+    fn after_saves(self, saved_files: Vec<PathBuf>) -> Self {
+        if saved_files.is_empty() {
+            self
+        } else {
+            Self::PartialExecution {
+                cause: Box::new(self),
+                saved_files,
+            }
+        }
+    }
 }
 
 pub use super::types::PipelineExecutionResult;
@@ -85,6 +107,8 @@ impl<'a> PipelineExecutor<'a> {
     /// Returns [`PipelineError`] if graph compilation fails, if a required input is missing at
     /// runtime, if an external subprocess exits with an error code, if an artifact cannot be staged,
     /// or if script evaluation fails.
+    /// [`PipelineError::PartialExecution`] retains paths of files already saved if
+    /// a later step fails. Hand assignments and paste are committed only on success.
     pub fn execute(&self) -> Result<PipelineExecutionResult, PipelineError> {
         let compiled = CompiledPipeline::compile(self.graph)?;
         let workspace = Workspace::new()?;
@@ -101,8 +125,9 @@ impl<'a> PipelineExecutor<'a> {
                 }
             }
 
-            let (node_outputs, preview) =
-                self.execute_node(node, &inputs, &mut result, &workspace)?;
+            let (node_outputs, preview) = self
+                .execute_node(node, &inputs, &mut result, &workspace)
+                .map_err(|error| error.after_saves(std::mem::take(&mut result.saved_files)))?;
             if let Some(p) = preview {
                 result.node_previews.insert(node.id, p);
             }
@@ -111,7 +136,9 @@ impl<'a> PipelineExecutor<'a> {
             }
         }
 
-        workspace.retain_outputs(&mut result)?;
+        workspace.retain_outputs(&mut result).map_err(|error| {
+            PipelineError::Io(error).after_saves(std::mem::take(&mut result.saved_files))
+        })?;
         Ok(result)
     }
 
@@ -898,40 +925,11 @@ else:
                     .map(|s| s.as_str())
                     .unwrap_or("~/Downloads");
                 let dest_expanded = shellexpand(dest_str);
-                std::fs::create_dir_all(&dest_expanded)?;
-
-                let saved = match in_val {
-                    PortValue::FilePath(p) | PortValue::ImagePath(p) | PortValue::AudioPath(p) => {
-                        let filename = p.file_name().unwrap_or_default();
-                        let target = dest_expanded.join(filename);
-                        std::fs::copy(p, &target)?;
-                        target
-                    }
-                    PortValue::Text(t) => {
-                        let target = dest_expanded.join(format!("clip_{}.txt", Uuid::new_v4()));
-                        std::fs::write(&target, t)?;
-                        target
-                    }
-                    PortValue::FileBatch(paths) => {
-                        let mut saved_files = Vec::with_capacity(paths.len());
-                        for p in paths {
-                            let filename = p.file_name().unwrap_or_default();
-                            let target = dest_expanded.join(filename);
-                            std::fs::copy(p, &target)?;
-                            saved_files.push(target);
-                        }
-                        if saved_files.is_empty() {
-                            return Err(PipelineError::MissingInput("Files In".to_string()));
-                        }
-                        let saved_preview = format!("Saved {} files", saved_files.len());
-                        result.saved_files.extend(saved_files);
-                        preview = Some(saved_preview);
-                        return Ok((out, preview));
-                    }
-                };
-
-                preview = Some(format!("Saved: {}", saved.display()));
-                result.saved_files.push(saved);
+                let before = result.saved_files.len();
+                super::save::save(in_val, &dest_expanded, &mut result.saved_files).map_err(
+                    |error| PipelineError::NodeFailed(node.title.clone(), error.to_string()),
+                )?;
+                preview = Some(format!("Saved {} files", result.saved_files.len() - before));
             }
             NodeKind::PasteToApp => {
                 let in_val = inputs
@@ -1125,6 +1123,101 @@ mod tests {
     use crate::pipeline::catalog::{find_template, instantiate_template};
     use crate::pipeline::recipes::{make_clean_and_slugify_recipe, make_pad_and_caption_recipe};
     use crate::pipeline::types::Connection;
+
+    fn save_graph(destination: &Path) -> NodeGraph {
+        let source = instantiate_template(find_template("source_lh").unwrap(), [0.0, 0.0]);
+        let mut sink = instantiate_template(find_template("sink_save_disk").unwrap(), [100.0, 0.0]);
+        sink.props
+            .insert("destination".into(), destination.to_str().unwrap().into());
+        NodeGraph {
+            connections: vec![Connection {
+                from_node: source.id,
+                from_pin: "Out".into(),
+                to_node: sink.id,
+                to_pin: "In".into(),
+            }],
+            nodes: vec![source, sink],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn saving_pipeline_files_refuses_to_overwrite_an_existing_destination() {
+        let fixture = tempfile::tempdir().unwrap();
+        let input = fixture.path().join("input.bin");
+        let destination = fixture.path().join("output");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(&input, b"new bytes").unwrap();
+        std::fs::write(destination.join("input.bin"), b"existing bytes").unwrap();
+        let graph = save_graph(&destination);
+        let mut slots = SlotManager::default();
+        slots.push_left(ClipItem::from_files(vec![input]));
+        assert!(PipelineExecutor::new(&graph, &slots).execute().is_err());
+        assert_eq!(
+            std::fs::read(destination.join("input.bin")).unwrap(),
+            b"existing bytes"
+        );
+        assert_eq!(std::fs::read_dir(destination).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn pipeline_failure_reports_files_already_saved_in_the_batch() {
+        let fixture = tempfile::tempdir().unwrap();
+        let input = fixture.path().join("first.bin");
+        std::fs::write(&input, b"completed bytes").unwrap();
+        let destination = fixture.path().join("output");
+        let graph = save_graph(&destination);
+        let mut slots = SlotManager::default();
+        slots.push_left(ClipItem::from_files(vec![
+            input,
+            fixture.path().join("missing.bin"),
+        ]));
+        let error = PipelineExecutor::new(&graph, &slots).execute().unwrap_err();
+        let completed = destination.join("first.bin");
+        assert_eq!(std::fs::read(&completed).unwrap(), b"completed bytes");
+        assert!(
+            error.to_string().contains(completed.to_str().unwrap()),
+            "{error}"
+        );
+        assert!(
+            matches!(error, PipelineError::PartialExecution { saved_files, .. } if saved_files == [completed])
+        );
+    }
+
+    #[test]
+    fn later_node_failure_keeps_previously_completed_save_results() {
+        let fixture = tempfile::tempdir().unwrap();
+        let input = fixture.path().join("input.bin");
+        std::fs::write(&input, b"completed bytes").unwrap();
+        let destination = fixture.path().join("output");
+        let invalid_destination = fixture.path().join("not-a-directory");
+        std::fs::write(&invalid_destination, b"untouched").unwrap();
+        let mut graph = save_graph(&destination);
+        let mut failing_sink = graph.nodes[1].clone();
+        failing_sink.id = Uuid::new_v4();
+        failing_sink.props.insert(
+            "destination".into(),
+            invalid_destination.to_str().unwrap().into(),
+        );
+        graph.connections.push(Connection {
+            from_node: graph.nodes[0].id,
+            from_pin: "Out".into(),
+            to_node: failing_sink.id,
+            to_pin: "In".into(),
+        });
+        graph.nodes.push(failing_sink);
+        let mut slots = SlotManager::default();
+        slots.push_left(ClipItem::from_files(vec![input]));
+        let error = PipelineExecutor::new(&graph, &slots).execute().unwrap_err();
+        assert!(
+            matches!(error, PipelineError::PartialExecution { saved_files, .. } if saved_files == [destination.join("input.bin")])
+        );
+        assert_eq!(
+            std::fs::read(destination.join("input.bin")).unwrap(),
+            b"completed bytes"
+        );
+        assert_eq!(std::fs::read(invalid_destination).unwrap(), b"untouched");
+    }
 
     #[test]
     fn generated_archive_survives_executor_and_result_serialization() {

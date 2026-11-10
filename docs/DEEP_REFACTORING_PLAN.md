@@ -972,3 +972,81 @@ Formatting/diff checks pass. No UI behavior changed or new private UI acceptance
 is claimed; host lifecycle/rendering tests remain in the full suite. Cargo work
 was serialized at four jobs, disk remains about 141 GiB free, and no sweep or
 extra build profile was introduced.
+
+
+### Phase 4/6 checkpoint: safe pipeline saves and authoritative completion
+
+The preceding checkpoint's `SaveToDisk` findings are resolved. Regression tests
+first reproduced silent overwrite and a missing completion list after a partial
+batch failure (`/tmp/deep-pipeline-saves-before.log`). The save node now shares
+one streaming copy and one staged publication path for its file and text inputs.
+It creates missing ordinary output directories through core, retains the output
+directory handle through staging/installation, opens regular inputs through the
+guarded reader, bounds copies to their observed size and checks the retained
+source revision before installation. File permissions and lossless input names
+are preserved. Temporary files sync before no-overwrite publication. Existing
+files, directories and symlink destinations are never replaced. Result paths
+come from retained installed handles; even a subsequent observation failure
+retains the known installed path in the completion list.
+
+`PipelineError::PartialExecution` carries completed paths and the original
+failure. Each successful save is recorded immediately; the executor retains that
+list when any later batch item, node or final artifact publication fails. Earlier
+saves remain files, with no claim of rollback. Hand assignments and paste still
+commit only after the entire graph succeeds. Error text includes the failed
+input and completed paths, so existing IPC/UI error handling can disclose the
+effects without a protocol/schema migration.
+
+Daemon graph execution previously timed out its reply after 65 seconds while
+`spawn_blocking` could keep writing and lose the result. Recipe execution also
+performed synchronous loading/execution in its async handler. Both now submit
+through the existing `BackgroundJobs` mechanism on a dedicated two-worker,
+eight-slot pipeline executor, isolated from preview and async IPC work. Queue
+rejection precedes execution; accepted jobs retain completion without a reply
+deadline. Existing per-command process timeouts/teardown remain. An unwind-safe
+operation boundary reports panics without permanently retiring a fixed worker.
+The existing UI retained-mutation owner and IPC response schema remain unchanged.
+
+Focused evidence passes **31 ops pipeline tests** and **three daemon pipeline/IPC
+tests**, including the two pre-fix regressions, later-node failure, preserved
+permissions/non-UTF-8 filenames, staging failure cleanup, protected input,
+occupied symlink destination and output-parent replacement. A paused-clock test
+advances past 65 seconds while holding an accepted worker, checks unrelated
+async progress and then receives its result. A private socket-pair test runs the
+real IPC handler/graph/save path and verifies the partial error's paths, saved
+bytes and unchanged hand identity. It constructs an isolated daemon context and
+does not start USB, capture, desktop clipboard or host-socket services. Logs:
+`/tmp/deep-pipeline-saves-accepted-focused.log`,
+`/tmp/deep-pipeline-ipc-focused-final.log`.
+
+Architecture comparison against `deep-pipeline-saves-start` reports raw
+REGRESSION: NLOC +412, functions +16, total CCN +51, average CCN 4.06→4.05 and
+unchanged maximum 195 / 16 cycles. `execute_node` drops 106→100 / NLOC 756→729
+through removal of repeated save behavior. New production functions stay at or
+below CCN 11. Clone groups 1502→1503 reflect one new ten-line declarative graph
+fixture shared in shape between the ops and independent IPC tests, not duplicated
+production logic; introducing a cross-crate fixture API just for that declaration
+would add indirection. Other modified clone reports concern existing dispatch
+blocks; Python cycle differences reorder unchanged members. Detailed report and
+source-fragment comparison: `/tmp/deep-pipeline-saves-architecture.json`,
+`/tmp/deep-pipeline-saves-measure.json`. These are ownership/safety improvements,
+not a claim of reduced aggregate complexity. Later transformation/rule planners
+can reuse this save/completion boundary without inheriting silent overwrite or
+post-write timeout behavior; no batch-planning UI or rule engine was added.
+
+
+The full integration gate passes **2643 workspace tests, zero failures, 30
+ignored** (including doctests), all-target workspace compilation, daemon and both
+desktop builds, and ops/daemon API documentation. Rendered documentation includes
+the partial-save variant and its completion contract. Ops/daemon all-target
+Clippy completes with the previously documented `approx_constant` allowance and
+existing warnings; neither new production module has a diagnostic. This is not
+a clean global `-D warnings` result. Logs:
+`/tmp/deep-pipeline-saves-workspace.log`, `/tmp/deep-pipeline-saves-check.log`,
+`/tmp/deep-pipeline-saves-build.log`, `/tmp/deep-pipeline-saves-clippy.log`,
+`/tmp/deep-pipeline-saves-doc.log`. Formatting and diff checks pass. Work was
+serialized at four Cargo jobs, with about 138 GiB free after checks; no cleanup
+sweep was necessary. No new GUI acceptance is claimed for this backend change.
+The full plan remains in progress pending the remaining domain/ownership and
+requirement-by-requirement completion audit, with native mirror adoption still
+separately gated.

@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod compiler;
 pub mod executor;
 pub mod recipes;
+mod save;
 pub mod types;
 
 pub use catalog::*;

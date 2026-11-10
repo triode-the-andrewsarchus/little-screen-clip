@@ -23,6 +23,7 @@ use tracing::{error, info, warn};
 mod clipboard_route;
 mod display_worker;
 mod lock_monitor;
+mod pipeline;
 mod rolling_capture;
 
 const MAX_IPC_REQUEST_BYTES: usize = 1024 * 1024;
@@ -474,29 +475,29 @@ async fn handle_execute_recipe(
     record_action: bool,
     ctx: &Arc<DaemonContext>,
 ) -> IpcResponse {
-    if let Some(recipe) = little_clip_ops::find_recipe_by_name(&recipe_name) {
-        let mgr_snapshot = { ctx.manager.read().await.clone() };
-        let executor = little_clip_ops::PipelineExecutor::new(&recipe.graph, &mgr_snapshot)
-            .with_single_prompt(prompt_text);
-        match executor.execute() {
-            Ok(pipe_res) => {
-                if record_action {
-                    save_last_action(
-                        &little_clip_core::ipc::LastAction::Recipe { recipe_name },
-                        ctx,
-                    )
-                    .await;
-                }
-                apply_pipeline_result(pipe_res, ctx).await
+    let mgr_snapshot = { ctx.manager.read().await.clone() };
+    let requested_name = recipe_name.clone();
+    let result = pipeline::execute(move || {
+        let recipe = little_clip_ops::find_recipe_by_name(&requested_name)
+            .ok_or_else(|| format!("Recipe not found: {requested_name}"))?;
+        little_clip_ops::PipelineExecutor::new(&recipe.graph, &mgr_snapshot)
+            .with_single_prompt(prompt_text)
+            .execute()
+            .map_err(|error| format!("Recipe execution failed: {error}"))
+    })
+    .await;
+    match result {
+        Ok(pipe_res) => {
+            if record_action {
+                save_last_action(
+                    &little_clip_core::ipc::LastAction::Recipe { recipe_name },
+                    ctx,
+                )
+                .await;
             }
-            Err(e) => IpcResponse::Error {
-                error: format!("Recipe execution failed: {}", e),
-            },
+            apply_pipeline_result(pipe_res, ctx).await
         }
-    } else {
-        IpcResponse::Error {
-            error: format!("Recipe not found: {}", recipe_name),
-        }
+        Err(error) => IpcResponse::Error { error },
     }
 }
 
@@ -776,11 +777,14 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     Ok(graph) => {
                         let mgr_snapshot = { ctx.manager.read().await.clone() };
                         let started = std::time::Instant::now();
-                        let execution = tokio::task::spawn_blocking(move || {
-                            little_clip_ops::PipelineExecutor::new(&graph, &mgr_snapshot).execute()
-                        });
-                        match tokio::time::timeout(Duration::from_secs(65), execution).await {
-                            Ok(Ok(Ok(pipe_res))) => {
+                        let execution = pipeline::execute(move || {
+                            little_clip_ops::PipelineExecutor::new(&graph, &mgr_snapshot)
+                                .execute()
+                                .map_err(|error| format!("Graph execution failed: {error}"))
+                        })
+                        .await;
+                        match execution {
+                            Ok(pipe_res) => {
                                 let duration_ms = started.elapsed().as_millis();
                                 let node_previews = pipe_res.node_previews.clone();
                                 let output_title = pipe_res
@@ -798,15 +802,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                                     other => other,
                                 }
                             }
-                            Ok(Ok(Err(e))) => IpcResponse::Error {
-                                error: format!("Graph execution failed: {}", e),
-                            },
-                            Ok(Err(e)) => IpcResponse::Error {
-                                error: format!("Graph worker failed: {e}"),
-                            },
-                            Err(_) => IpcResponse::Error {
-                                error: "Graph execution exceeded the 65 second timeout".to_string(),
-                            },
+                            Err(error) => IpcResponse::Error { error },
                         }
                     }
                     Err(e) => IpcResponse::Error {
@@ -1634,6 +1630,78 @@ mod tests {
 
     const TRACKED_URL: &str = "https://example.com/path?utm_source=newsletter&keep=value";
     const CLEAN_URL: &str = "https://example.com/path?keep=value";
+
+    #[tokio::test]
+    async fn pipeline_ipc_reports_completed_saves_on_failure_without_changing_slots() {
+        use little_clip_ops::pipeline::{
+            Connection, NodeGraph, find_template, instantiate_template,
+        };
+        let fixture = tempfile::tempdir().unwrap();
+        let input = fixture.path().join("first.bin");
+        std::fs::write(&input, b"completed bytes").unwrap();
+        let missing = fixture.path().join("missing.bin");
+        let item = ClipItem::from_files(vec![input, missing.clone()]);
+        let id = item.id;
+        let mut manager = SlotManager::default();
+        manager.push_left(item);
+        let config = little_clip_core::AppConfig::default();
+        let (display_tx, _display_rx) = watch::channel(None);
+        // An isolated handler: no daemon startup, USB thread, capture thread,
+        // external clipboard process or user's socket is involved.
+        let ctx = Arc::new(DaemonContext {
+            config: RwLock::new(config.clone()),
+            manager: RwLock::new(manager),
+            renderer: RwLock::new(ScreenRenderer::fallback(config.clone())),
+            display_tx,
+            self_copied_text: RwLock::new(Vec::new()),
+            self_copied_image_hash: RwLock::new(None),
+            last_action: RwLock::new(None),
+            is_locked: AtomicBool::new(false),
+            rolling_audio: Arc::new(std::sync::RwLock::new(RollingAudioBuffer::new(1, 1, 1))),
+            rolling_capture_config: Arc::new(std::sync::RwLock::new(config.audio)),
+            route_next_clipboard: RwLock::new(clipboard_route::ClipboardRoute::default()),
+        });
+        let source = instantiate_template(find_template("source_lh").unwrap(), [0.0, 0.0]);
+        let mut sink = instantiate_template(find_template("sink_save_disk").unwrap(), [100.0, 0.0]);
+        let destination = fixture.path().join("output");
+        sink.props
+            .insert("destination".into(), destination.to_str().unwrap().into());
+        let graph = NodeGraph {
+            connections: vec![Connection {
+                from_node: source.id,
+                from_pin: "Out".into(),
+                to_node: sink.id,
+                to_pin: "In".into(),
+            }],
+            nodes: vec![source, sink],
+            ..Default::default()
+        };
+        let request = IpcRequest::ExecuteGraphYaml {
+            yaml: serde_yaml::to_string(&graph).unwrap(),
+        };
+        let (client, server) = UnixStream::pair().unwrap();
+        let handler = tokio::spawn(handle_client(server, Arc::clone(&ctx)));
+        let (reader, mut writer) = client.into_split();
+        let mut reader = BufReader::new(reader);
+        let mut encoded = serde_json::to_vec(&request).unwrap();
+        encoded.push(b'\n');
+        writer.write_all(&encoded).await.unwrap();
+        let mut response = String::new();
+        reader.read_line(&mut response).await.unwrap();
+        let completed = destination.join("first.bin");
+        match serde_json::from_str::<IpcResponse>(&response).unwrap() {
+            IpcResponse::Error { error } => {
+                assert!(error.contains(completed.to_str().unwrap()), "{error}");
+                assert!(error.contains(missing.to_str().unwrap()), "{error}");
+            }
+            other => panic!("expected a partial-save failure, got {other:?}"),
+        }
+        assert_eq!(std::fs::read(completed).unwrap(), b"completed bytes");
+        assert_eq!(ctx.manager.read().await.left_hand().unwrap().id, id);
+        drop(writer);
+        drop(reader);
+        handler.await.unwrap();
+    }
 
     #[test]
     fn push_text_cleans_tracking_url_into_requested_hand() {
