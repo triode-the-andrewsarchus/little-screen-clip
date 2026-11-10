@@ -3,7 +3,7 @@
 //! Listens for systemd-logind `PrepareForSleep`, `Session.Lock`, `Session.Unlock`,
 //! and queries Noctalia lock screen state to automatically blank the screen-saver frame.
 
-use crate::DaemonContext;
+use crate::{DaemonContext, LockSource};
 use futures_util::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,8 +63,14 @@ async fn run_dbus_monitor(ctx: Arc<DaemonContext>) {
                 let mgr_proxy_res = Login1ManagerProxy::new(&conn).await;
                 let session_proxy_res = Login1SessionProxy::new(&conn).await;
 
-                match (mgr_proxy_res, session_proxy_res) {
-                    (Ok(mgr_proxy), Ok(session_proxy)) => {
+                // Keep the event proxy's property cache, and use a separate live
+                // reader so resume never relies on a pre-suspend cached hint.
+                let live_session_res = Login1SessionProxy::builder(&conn)
+                    .cache_properties(zbus::proxy::CacheProperties::No)
+                    .build()
+                    .await;
+                match (mgr_proxy_res, session_proxy_res, live_session_res) {
+                    (Ok(mgr_proxy), Ok(session_proxy), Ok(live_session)) => {
                         let mut sleep_stream = match mgr_proxy.receive_prepare_for_sleep().await {
                             Ok(s) => Some(s),
                             Err(e) => {
@@ -92,6 +98,9 @@ async fn run_dbus_monitor(ctx: Arc<DaemonContext>) {
                         let mut locked_hint_stream =
                             session_proxy.receive_locked_hint_changed().await;
 
+                        if let Ok(locked) = live_session.locked_hint().await {
+                            ctx.set_lock_source(LockSource::Session, locked).await;
+                        }
                         loop {
                             tokio::select! {
                                 Some(sig) = async {
@@ -104,10 +113,16 @@ async fn run_dbus_monitor(ctx: Arc<DaemonContext>) {
                                     if let Ok(args) = sig.args() {
                                         info!("D-Bus: PrepareForSleep(start={}) received", args.start);
                                         if args.start {
-                                            ctx.set_locked(true).await;
+                                            ctx.set_lock_source(LockSource::Sleep, true).await;
                                         } else {
-                                            // When resuming, restore if not locked
-                                            ctx.set_locked(false).await;
+                                            let hint = match live_session.locked_hint().await {
+                                                Ok(locked) => Some(locked),
+                                                Err(error) => {
+                                                    warn!(%error, "Session lock state unavailable after resume; retaining blank display");
+                                                    None
+                                                }
+                                            };
+                                            ctx.resume_from_sleep(hint).await;
                                         }
                                     }
                                 }
@@ -119,7 +134,7 @@ async fn run_dbus_monitor(ctx: Arc<DaemonContext>) {
                                     }
                                 } => {
                                     info!("D-Bus: Session.Lock signal received");
-                                    ctx.set_locked(true).await;
+                                    ctx.set_lock_source(LockSource::Session, true).await;
                                 }
                                 Some(_sig) = async {
                                     if let Some(ref mut s) = unlock_stream {
@@ -129,12 +144,12 @@ async fn run_dbus_monitor(ctx: Arc<DaemonContext>) {
                                     }
                                 } => {
                                     info!("D-Bus: Session.Unlock signal received");
-                                    ctx.set_locked(false).await;
+                                    ctx.set_lock_source(LockSource::Session, false).await;
                                 }
                                 Some(prop) = locked_hint_stream.next() => {
                                     if let Ok(val) = prop.get().await {
                                         info!("D-Bus: Session.LockedHint changed to {}", val);
-                                        ctx.set_locked(val).await;
+                                        ctx.set_lock_source(LockSource::Session, val).await;
                                     }
                                 }
                                 else => {
@@ -143,7 +158,7 @@ async fn run_dbus_monitor(ctx: Arc<DaemonContext>) {
                             }
                         }
                     }
-                    (Err(e), _) | (_, Err(e)) => {
+                    (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
                         warn!(
                             "Failed to create systemd-logind proxy: {}. Retrying in 5s...",
                             e
@@ -192,13 +207,13 @@ async fn run_noctalia_watchdog(ctx: Arc<DaemonContext>) {
                                 "Noctalia watchdog: lockScreenActive became true -> Blanking display"
                             );
                             was_noctalia_locked = true;
-                            ctx.set_locked(true).await;
+                            ctx.set_lock_source(LockSource::Shell, true).await;
                         } else if !is_active && was_noctalia_locked {
                             info!(
                                 "Noctalia watchdog: lockScreenActive became false -> Restoring display"
                             );
                             was_noctalia_locked = false;
-                            ctx.set_locked(false).await;
+                            ctx.set_lock_source(LockSource::Shell, false).await;
                         }
                     }
                 }

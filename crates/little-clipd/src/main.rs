@@ -62,6 +62,16 @@ where
     }
 }
 
+/// Independent reasons to blank the display; clearing one never clears another.
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum LockSource {
+    Manual = 1,
+    Sleep = 2,
+    Session = 4,
+    Shell = 8,
+}
+
 /// Shared runtime state across daemon IPC handlers, background workers, and display pipelines.
 pub struct DaemonContext {
     /// Active application configuration.
@@ -80,6 +90,7 @@ pub struct DaemonContext {
     pub last_action: RwLock<Option<little_clip_core::ipc::LastAction>>,
     /// Flag indicating whether the screen is blanked due to session lock or sleep.
     pub is_locked: AtomicBool,
+    lock_sources: tokio::sync::Mutex<u8>,
     /// Continuous PCM audio circular buffer.
     pub rolling_audio: Arc<std::sync::RwLock<RollingAudioBuffer>>,
     /// Audio capture settings shared with the rolling capture worker.
@@ -118,8 +129,36 @@ impl DaemonContext {
         self.is_locked.load(Ordering::SeqCst)
     }
 
-    /// Updates the system locked state and triggers screen blanking or refresh.
+    /// Updates manual blanking without overriding active session/sleep locks.
     pub async fn set_locked(&self, locked: bool) {
+        self.set_lock_source(LockSource::Manual, locked).await;
+    }
+
+    async fn set_lock_source(&self, source: LockSource, locked: bool) {
+        let mut sources = self.lock_sources.lock().await;
+        if locked {
+            *sources |= source as u8;
+        } else {
+            *sources &= !(source as u8);
+        }
+        // Serialize source updates through publication of the resulting transition.
+        self.apply_lock_state(*sources != 0).await;
+    }
+
+    async fn resume_from_sleep(&self, locked_hint: Option<bool>) {
+        let mut sources = self.lock_sources.lock().await;
+        // The caller supplies a fresh logind hint. Unknown state cannot authorize
+        // showing clipboard content; a confirmed unlock retires a missed Lock event.
+        if locked_hint.unwrap_or(true) {
+            *sources |= LockSource::Session as u8;
+        } else {
+            *sources &= !(LockSource::Session as u8);
+        }
+        *sources &= !(LockSource::Sleep as u8);
+        self.apply_lock_state(*sources != 0).await;
+    }
+
+    async fn apply_lock_state(&self, locked: bool) {
         let old = self.is_locked.swap(locked, Ordering::SeqCst);
         if old == locked {
             return;
@@ -289,6 +328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         self_copied_image_hash: RwLock::new(None),
         last_action: RwLock::new(load_last_action_from_disk()),
         is_locked: AtomicBool::new(false),
+        lock_sources: tokio::sync::Mutex::new(0),
         rolling_audio: Arc::clone(&rolling_audio),
         rolling_capture_config: Arc::clone(&rolling_capture_config),
         route_next_clipboard: RwLock::new(clipboard_route::ClipboardRoute::default()),
@@ -842,22 +882,12 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     message: "Configuration reloaded and applied".to_string(),
                 }
             }
-            Ok(IpcRequest::Lock) => {
-                ctx.set_locked(true).await;
+            Ok(request @ (IpcRequest::Lock | IpcRequest::Unlock | IpcRequest::SetLocked(_))) => {
+                let requested = matches!(request, IpcRequest::Lock | IpcRequest::SetLocked(true));
+                ctx.set_locked(requested).await;
+                let effective = ctx.is_locked().await;
                 IpcResponse::Success {
-                    message: "Screen locked (blanked)".to_string(),
-                }
-            }
-            Ok(IpcRequest::Unlock) => {
-                ctx.set_locked(false).await;
-                IpcResponse::Success {
-                    message: "Screen unlocked".to_string(),
-                }
-            }
-            Ok(IpcRequest::SetLocked(locked)) => {
-                ctx.set_locked(locked).await;
-                IpcResponse::Success {
-                    message: if locked {
+                    message: if effective {
                         "Screen locked (blanked)".to_string()
                     } else {
                         "Screen unlocked".to_string()
@@ -1643,6 +1673,7 @@ mod tests {
             self_copied_image_hash: RwLock::new(None),
             last_action: RwLock::new(None),
             is_locked: AtomicBool::new(false),
+            lock_sources: tokio::sync::Mutex::new(0),
             rolling_audio: Arc::new(std::sync::RwLock::new(RollingAudioBuffer::new(1, 1, 1))),
             rolling_capture_config: Arc::new(std::sync::RwLock::new(config.audio)),
             route_next_clipboard: RwLock::new(clipboard_route::ClipboardRoute::default()),
@@ -1681,6 +1712,50 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
             String::from_utf8_lossy(&output.stderr)
         );
         true
+    }
+
+    #[tokio::test]
+    async fn resume_cannot_clear_another_display_lock_source() {
+        for source in [LockSource::Manual, LockSource::Shell] {
+            let ctx = test_context(SlotManager::default());
+            ctx.set_lock_source(source, true).await;
+            ctx.set_lock_source(LockSource::Sleep, true).await;
+            ctx.resume_from_sleep(Some(false)).await;
+            assert!(ctx.is_locked().await, "resume cleared an independent lock");
+            ctx.set_lock_source(source, false).await;
+            assert!(!ctx.is_locked().await);
+        }
+        let ctx = test_context(SlotManager::default());
+        ctx.set_lock_source(LockSource::Session, true).await;
+        ctx.set_lock_source(LockSource::Sleep, true).await;
+        ctx.resume_from_sleep(Some(false)).await;
+        assert!(
+            !ctx.is_locked().await,
+            "a fresh unlocked hint should retire a missed unlock event"
+        );
+        for hint in [Some(true), None] {
+            ctx.set_lock_source(LockSource::Sleep, true).await;
+            ctx.resume_from_sleep(hint).await;
+            assert!(ctx.is_locked().await);
+            ctx.set_lock_source(LockSource::Session, false).await;
+            assert!(!ctx.is_locked().await);
+        }
+    }
+
+    #[tokio::test]
+    async fn clearing_session_or_manual_lock_during_sleep_keeps_display_blank() {
+        let ctx = test_context(SlotManager::default());
+        ctx.set_locked(true).await;
+        ctx.set_lock_source(LockSource::Session, true).await;
+        ctx.set_lock_source(LockSource::Sleep, true).await;
+        ctx.set_locked(false).await;
+        ctx.set_lock_source(LockSource::Session, false).await;
+        assert!(ctx.is_locked().await);
+        ctx.resume_from_sleep(Some(false)).await;
+        assert!(!ctx.is_locked().await);
+        ctx.set_lock_source(LockSource::Shell, true).await;
+        ctx.set_locked(false).await;
+        assert!(ctx.is_locked().await);
     }
 
     #[tokio::test]
