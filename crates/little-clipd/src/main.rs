@@ -560,18 +560,8 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 break;
             }
         }
-        let line = match std::str::from_utf8(&request_bytes) {
-            Ok(line) => line.trim_end_matches(['\r', '\n']),
-            Err(_) => {
-                warn!(
-                    "Rejected non-UTF-8 IPC request ({} bytes)",
-                    request_bytes.len()
-                );
-                continue;
-            }
-        };
         info!("IPC request received ({} bytes)", request_bytes.len());
-        let req: Result<IpcRequest, _> = serde_json::from_str(&line);
+        let req: Result<IpcRequest, _> = serde_json::from_slice(&request_bytes);
         let references_only = matches!(&req, Ok(IpcRequest::PushFileReferences { .. }));
         let resp = match req {
             Ok(IpcRequest::GetState) => {
@@ -1631,6 +1621,63 @@ mod tests {
     const TRACKED_URL: &str = "https://example.com/path?utm_source=newsletter&keep=value";
     const CLEAN_URL: &str = "https://example.com/path?keep=value";
 
+    fn test_context(manager: SlotManager) -> Arc<DaemonContext> {
+        let config = little_clip_core::AppConfig::default();
+        let (display_tx, _display_rx) = watch::channel(None);
+        // An isolated handler: no daemon startup, USB thread, capture thread,
+        // external clipboard process or user's socket is involved.
+        Arc::new(DaemonContext {
+            config: RwLock::new(config.clone()),
+            manager: RwLock::new(manager),
+            renderer: RwLock::new(ScreenRenderer::fallback(config.clone())),
+            display_tx,
+            self_copied_text: RwLock::new(Vec::new()),
+            self_copied_image_hash: RwLock::new(None),
+            last_action: RwLock::new(None),
+            is_locked: AtomicBool::new(false),
+            rolling_audio: Arc::new(std::sync::RwLock::new(RollingAudioBuffer::new(1, 1, 1))),
+            rolling_capture_config: Arc::new(std::sync::RwLock::new(config.audio)),
+            route_next_clipboard: RwLock::new(clipboard_route::ClipboardRoute::default()),
+        })
+    }
+
+    #[tokio::test]
+    async fn non_utf8_ipc_returns_error_and_preserves_next_request() {
+        let ctx = test_context(SlotManager::default());
+        let (client, server) = UnixStream::pair().unwrap();
+        let handler = tokio::spawn(handle_client(server, ctx));
+        let (reader, mut writer) = client.into_split();
+        let mut lines = BufReader::new(reader).lines();
+        writer.write_all(b"\xff\n").await.unwrap();
+        let request = serde_json::to_string(&IpcRequest::GetStateSummary).unwrap();
+        writer
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        for expect_error in [true, false] {
+            let response = tokio::time::timeout(Duration::from_secs(2), lines.next_line())
+                .await
+                .expect("every framed request needs a response")
+                .unwrap()
+                .unwrap();
+            let response = serde_json::from_str::<IpcResponse>(&response).unwrap();
+            if expect_error {
+                assert!(
+                    matches!(response, IpcResponse::Error { .. }),
+                    "{response:?}"
+                );
+            } else {
+                assert!(
+                    matches!(response, IpcResponse::StateSummary(_)),
+                    "{response:?}"
+                );
+            }
+        }
+        drop(writer);
+        drop(lines);
+        handler.await.unwrap();
+    }
+
     #[tokio::test]
     async fn pipeline_ipc_reports_completed_saves_on_failure_without_changing_slots() {
         use little_clip_ops::pipeline::{
@@ -1644,23 +1691,7 @@ mod tests {
         let id = item.id;
         let mut manager = SlotManager::default();
         manager.push_left(item);
-        let config = little_clip_core::AppConfig::default();
-        let (display_tx, _display_rx) = watch::channel(None);
-        // An isolated handler: no daemon startup, USB thread, capture thread,
-        // external clipboard process or user's socket is involved.
-        let ctx = Arc::new(DaemonContext {
-            config: RwLock::new(config.clone()),
-            manager: RwLock::new(manager),
-            renderer: RwLock::new(ScreenRenderer::fallback(config.clone())),
-            display_tx,
-            self_copied_text: RwLock::new(Vec::new()),
-            self_copied_image_hash: RwLock::new(None),
-            last_action: RwLock::new(None),
-            is_locked: AtomicBool::new(false),
-            rolling_audio: Arc::new(std::sync::RwLock::new(RollingAudioBuffer::new(1, 1, 1))),
-            rolling_capture_config: Arc::new(std::sync::RwLock::new(config.audio)),
-            route_next_clipboard: RwLock::new(clipboard_route::ClipboardRoute::default()),
-        });
+        let ctx = test_context(manager);
         let source = instantiate_template(find_template("source_lh").unwrap(), [0.0, 0.0]);
         let mut sink = instantiate_template(find_template("sink_save_disk").unwrap(), [100.0, 0.0]);
         let destination = fixture.path().join("output");
