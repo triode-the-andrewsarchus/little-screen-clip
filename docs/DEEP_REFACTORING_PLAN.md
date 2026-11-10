@@ -1050,3 +1050,43 @@ sweep was necessary. No new GUI acceptance is claimed for this backend change.
 The full plan remains in progress pending the remaining domain/ownership and
 requirement-by-requirement completion audit, with native mirror adoption still
 separately gated.
+
+
+### Phase 4 checkpoint: consistent image history restoration
+
+The domain audit reproduced two failures after real edit transitions: reverting
+from an undone rotation left the abandoned redo branch available, and undoing a
+pixel resize kept the resized target values instead of the restored canvas size.
+The new tests fail on the previous implementation
+(`/tmp/deep-history-before.log`). Undo, redo and revert now share one
+`restore_history_pixels` transition in the existing studio session. It swaps the
+retained pixel `Arc`, uses the existing revision/job invalidation path, marks the
+texture dirty, resets crop bounds, retires the previous crop drag and synchronizes
+resize controls. The redundant decorrelation-result assignment is removed because
+revision invalidation already clears it. Revert records the current revision and
+clears redo before restoring the original, so it remains undoable while creating
+a new branch. No history/controller framework, pixel copy, host API or painter
+ordering was introduced.
+
+All **288 image tests pass, five ignored**, including both new regression cases,
+shared-revision/undo-redo checks and accepted image-save/copy lifetimes
+(`/tmp/deep-history-image-tests.log`). All-target workspace compilation and both
+desktop builds pass (`/tmp/deep-history-check.log`, `/tmp/deep-history-build.log`).
+Studio all-target diagnostic Clippy completes with the previously documented
+approximate-constant allowance and existing warnings; no diagnostic points to the
+restoration helper (`/tmp/deep-history-clippy.log`). Formatting/diff checks pass.
+The private dark photo-collection run passes 15 observations for retained edits,
+next/previous navigation, ratings, rename, export-all, browser return and reopening
+(`/tmp/deep-history-photo-collection/report.json`). It verifies host integration;
+the new exact history/control transitions are covered by the state tests rather
+than claimed as new pointer-level UI assertions. No workspace-wide retest is
+claimed for this small slice; the final plan integration gate remains outstanding.
+
+Architecture comparison against `deep-history-transitions-start` reports raw
+REGRESSION from touched pre-existing test clones and reordered members in an
+unchanged Python cycle. Clone groups decrease **1503→1501**; average/max CCN,
+duplication percentage and 16 cycle totals remain unchanged. Added functions are
+one CCN-1 shared transition and two CCN-1 regression tests, with +68 NLOC / +3
+CCN overall (`/tmp/deep-history-architecture.json`). Source ownership and per-photo
+session behavior remain in the shared studio used by both applications. Disk
+remains about 138 GiB free; no sweep or alternate build profile was needed.

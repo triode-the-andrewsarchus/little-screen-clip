@@ -1,6 +1,81 @@
 use super::*;
 
 #[test]
+fn history_revert_discards_abandoned_redo_and_remains_undoable() {
+    let mut state = image_state_from_png((8, 4), "history branches");
+    let original = Arc::clone(&state.current_rgba);
+    state.rotate_cw();
+    let rotated = Arc::clone(&state.current_rgba);
+    state.rotate_cw();
+    state.undo();
+    assert!(Arc::ptr_eq(&state.current_rgba, &rotated));
+    assert_eq!(state.redo_stack.len(), 1);
+    state.revert_to_original();
+    assert!(Arc::ptr_eq(&state.current_rgba, &original));
+    assert!(state.redo_stack.is_empty());
+    state.redo();
+    assert!(Arc::ptr_eq(&state.current_rgba, &original));
+    state.undo();
+    assert!(Arc::ptr_eq(&state.current_rgba, &rotated));
+    state.redo();
+    assert!(Arc::ptr_eq(&state.current_rgba, &original));
+}
+
+#[test]
+fn history_restores_canvas_controls_and_retires_crop_drag() {
+    let mut state = image_state_from_png((8, 4), "history controls");
+    let original = Arc::clone(&state.current_rgba);
+    state.apply_pixel_resize(4, 2, ResizeFilter::Nearest);
+    wait_for_pixel_resize(&mut state);
+    let resized = Arc::clone(&state.current_rgba);
+    assert_eq!(
+        (
+            state.resize_state.target_width,
+            state.resize_state.target_height
+        ),
+        (4, 2)
+    );
+    let old_stamp = state.input_stamp();
+    state.crop_state.normalized_rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(0.5));
+    state.crop_state.active_drag = Some((
+        CropHandle::MoveBox,
+        Pos2::ZERO,
+        state.crop_state.normalized_rect,
+    ));
+    state.undo();
+    assert!(Arc::ptr_eq(&state.current_rgba, &original));
+    assert_eq!(
+        (
+            state.resize_state.target_width,
+            state.resize_state.target_height
+        ),
+        (8, 4)
+    );
+    assert_eq!(
+        (
+            state.resize_state.width_input.as_str(),
+            state.resize_state.height_input.as_str()
+        ),
+        ("8", "4")
+    );
+    assert_eq!(
+        state.crop_state.normalized_rect,
+        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0))
+    );
+    assert!(state.crop_state.active_drag.is_none());
+    assert_ne!(state.input_stamp(), old_stamp);
+    state.redo();
+    assert!(Arc::ptr_eq(&state.current_rgba, &resized));
+    assert_eq!(
+        (
+            state.resize_state.target_width,
+            state.resize_state.target_height
+        ),
+        (4, 2)
+    );
+}
+
+#[test]
 fn test_load_png_and_meta() {
     let config = AppConfig::default();
     let mut img = RgbaImage::new(640, 360);
