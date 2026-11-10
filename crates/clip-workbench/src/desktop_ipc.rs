@@ -91,6 +91,15 @@ impl PendingRequest {
         Self { receiver }
     }
 
+    pub(crate) fn poll(&self, ctx: &eframe::egui::Context) -> Option<Result<IpcResponse, String>> {
+        let result = self.try_result();
+        if result.is_none() {
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        result
+    }
+
     pub(crate) fn try_result(&self) -> Option<Result<IpcResponse, String>> {
         match self.receiver.try_recv() {
             Ok(result) => Some(

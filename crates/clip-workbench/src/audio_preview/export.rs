@@ -1,5 +1,11 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) enum AudioImageKind {
+    Waveform,
+    Spectrum,
+}
+
 impl AudioPreviewState {
     pub(super) fn session_edit_filter(&self) -> Option<String> {
         let regions = self.region_edits();
@@ -261,65 +267,115 @@ impl AudioPreviewState {
     }
 
     pub fn copy_waveform_image(&mut self, palette: &AppPalette, now: f64) {
-        let Some(ref source_analysis) = self.analysis else {
+        self.copy_analysis_image_on(
+            AudioImageKind::Waveform,
+            palette,
+            now,
+            crate::desktop_ipc::mutation_jobs(),
+            |request| crate::send_ipc_request(&request).map_err(|error| error.to_string()),
+        );
+    }
+
+    pub fn copy_spectrum_image(&mut self, palette: &AppPalette, now: f64) {
+        self.copy_analysis_image_on(
+            AudioImageKind::Spectrum,
+            palette,
+            now,
+            crate::desktop_ipc::mutation_jobs(),
+            |request| crate::send_ipc_request(&request).map_err(|error| error.to_string()),
+        );
+    }
+
+    pub(super) fn copy_analysis_image_on(
+        &mut self,
+        kind: AudioImageKind,
+        palette: &AppPalette,
+        now: f64,
+        jobs: &BackgroundJobs,
+        send: impl FnOnce(IpcRequest) -> Result<little_clip_core::ipc::IpcResponse, String>
+        + Send
+        + 'static,
+    ) {
+        if self.image_copy_job.is_some() {
+            return;
+        }
+        let Some(source_analysis) = self.analysis.clone() else {
             self.status_toast = Some((
                 crate::ui_ext::StatusMessage::new(
                     crate::icons::Icon::Alert,
-                    "Waveform analysis not yet available".to_string(),
+                    "Audio analysis not yet available",
                 ),
                 now,
             ));
             return;
         };
-        let analysis = self.edited_waveform.as_ref().unwrap_or(source_analysis);
-        let region_edits = self.region_edits();
-        match Self::copy_waveform_image_on(
-            analysis,
-            source_analysis,
-            &region_edits,
-            self.view_start_sec,
-            self.view_duration_sec,
-            self.duration_sec,
-            palette,
-            |request| {
-                let _ = crate::send_ipc_request(request);
-            },
-            |bytes, mime| {
-                let bytes_for_cmd = bytes.to_vec();
-                let mime_for_cmd = mime.to_string();
-                std::thread::spawn(move || {
-                    if let Err(error) = little_clip_core::copy_bytes_to_system_clipboard(
-                        &bytes_for_cmd,
-                        &mime_for_cmd,
-                    ) {
-                        tracing::debug!(%error, "failed to copy waveform image to system clipboard");
-                    }
-                });
-            },
-        ) {
-            Ok(()) => {
-                self.status_toast = Some((
-                    crate::ui_ext::StatusMessage::new(
-                        crate::icons::Icon::Copy,
-                        "Waveform image copied to clipboard".to_string(),
-                    ),
-                    now,
-                ));
-            }
-            Err(err) => {
-                tracing::warn!("Failed to render waveform image: {err}");
-                self.status_toast = Some((
-                    crate::ui_ext::StatusMessage::new(
-                        crate::icons::Icon::Alert,
-                        format!("Failed to render waveform: {err}"),
-                    ),
-                    now,
-                ));
-            }
-        }
+        let analysis = self
+            .edited_waveform
+            .clone()
+            .unwrap_or_else(|| source_analysis.clone());
+        let edits = self.region_edits();
+        let start = self.view_start_sec;
+        let duration = self.view_duration_sec;
+        let total = self.duration_sec;
+        let palette = palette.clone();
+        self.image_copy_job = Some(crate::desktop_ipc::PendingRequest::start(jobs, move || {
+            let bytes = match kind {
+                AudioImageKind::Waveform => Self::render_waveform_copy(
+                    &analysis,
+                    &source_analysis,
+                    &edits,
+                    start,
+                    duration,
+                    total,
+                    &palette,
+                )?,
+                AudioImageKind::Spectrum => {
+                    let (font_reg, _, _, font_mono) =
+                        little_clip_render::ScreenRenderer::load_fonts();
+                    tools::render_spectrum_image(
+                        &analysis,
+                        start,
+                        duration,
+                        total,
+                        &palette,
+                        font_mono.as_ref(),
+                        font_reg.as_ref(),
+                    )?
+                }
+            };
+            send(IpcRequest::PushImage {
+                bytes,
+                mime: "image/png".into(),
+                hand: little_clip_core::HandSide::Left,
+            })
+        }));
+        self.status_toast = Some((
+            crate::ui_ext::StatusMessage::new(crate::icons::Icon::Copy, "Preparing audio image…"),
+            now,
+        ));
     }
 
-    pub(super) fn copy_waveform_image_on(
+    pub(super) fn poll_image_copy(&mut self, ctx: &egui::Context, now: f64) {
+        let Some(result) = self.image_copy_job.as_ref().and_then(|job| job.poll(ctx)) else {
+            return;
+        };
+        self.image_copy_job = None;
+        self.status_toast = result
+            .and_then(crate::desktop_ipc::action_result)
+            .err()
+            .map(|error| {
+                (
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Alert,
+                        format!("Could not copy audio image: {error}"),
+                    ),
+                    now,
+                )
+            });
+        ctx.request_repaint();
+    }
+
+    pub(super) fn render_waveform_copy(
         analysis: &FullAudioAnalysis,
         source_analysis: &FullAudioAnalysis,
         region_edits: &[AudioRegionEdit],
@@ -327,11 +383,9 @@ impl AudioPreviewState {
         view_duration_sec: f32,
         duration_sec: f32,
         palette: &AppPalette,
-        mut send: impl FnMut(&IpcRequest),
-        mut copy: impl FnMut(&[u8], &str),
-    ) -> Result<(), String> {
+    ) -> Result<Vec<u8>, String> {
         let (font_reg, _, _, font_mono) = little_clip_render::ScreenRenderer::load_fonts();
-        let png_bytes = tools::render_waveform_image(
+        tools::render_waveform_image(
             analysis,
             source_analysis,
             region_edits,
@@ -341,76 +395,7 @@ impl AudioPreviewState {
             palette,
             font_mono.as_ref(),
             font_reg.as_ref(),
-        )?;
-        send(&IpcRequest::PushImage {
-            bytes: png_bytes.clone(),
-            mime: "image/png".to_string(),
-            hand: little_clip_core::HandSide::Left,
-        });
-        copy(&png_bytes, "image/png");
-        Ok(())
-    }
-
-    pub fn copy_spectrum_image(&mut self, palette: &AppPalette, now: f64) {
-        let Some(ref source_analysis) = self.analysis else {
-            self.status_toast = Some((
-                crate::ui_ext::StatusMessage::new(
-                    crate::icons::Icon::Alert,
-                    "Spectrum analysis not yet available".to_string(),
-                ),
-                now,
-            ));
-            return;
-        };
-        let analysis = self.edited_waveform.as_ref().unwrap_or(source_analysis);
-        let (font_reg, _, _, font_mono) = little_clip_render::ScreenRenderer::load_fonts();
-
-        match tools::render_spectrum_image(
-            analysis,
-            self.view_start_sec,
-            self.view_duration_sec,
-            self.duration_sec,
-            palette,
-            font_mono.as_ref(),
-            font_reg.as_ref(),
-        ) {
-            Ok(png_bytes) => {
-                let req = IpcRequest::PushImage {
-                    bytes: png_bytes.clone(),
-                    mime: "image/png".to_string(),
-                    hand: little_clip_core::HandSide::Left,
-                };
-                let _ = crate::send_ipc_request(&req);
-
-                let bytes_for_cmd = png_bytes;
-                std::thread::spawn(move || {
-                    if let Err(error) = little_clip_core::copy_bytes_to_system_clipboard(
-                        &bytes_for_cmd,
-                        "image/png",
-                    ) {
-                        tracing::debug!(%error, "failed to copy spectrum image to system clipboard");
-                    }
-                });
-
-                self.status_toast = Some((
-                    crate::ui_ext::StatusMessage::new(
-                        crate::icons::Icon::Copy,
-                        "Spectrum image copied to clipboard".to_string(),
-                    ),
-                    now,
-                ));
-            }
-            Err(err) => {
-                tracing::warn!("Failed to render spectrum image: {err}");
-                self.status_toast = Some((
-                    crate::ui_ext::StatusMessage::new(
-                        crate::icons::Icon::Alert,
-                        format!("Failed to render spectrum: {err}"),
-                    ),
-                    now,
-                ));
-            }
-        }
+        )
     }
 
     fn export_ranges(&self) -> Vec<(f32, f32)> {

@@ -204,7 +204,7 @@ fn inline_waveform_column_count_tracks_visible_width() {
 }
 
 #[test]
-fn waveform_image_delivery_captures_identical_left_png_and_clipboard_payloads() {
+fn waveform_image_render_preserves_palette_and_signal() {
     let mut analysis = empty_audio_analysis();
     analysis.sample_rate = 4;
     analysis.duration_ms = 1_000;
@@ -212,30 +212,9 @@ fn waveform_image_delivery_captures_identical_left_png_and_clipboard_payloads() 
     analysis.ch1_samples = Arc::from([0.25, -0.5, 0.75, -0.25]);
     analysis.ch2_samples = Some(Arc::from([-0.25, 0.5, -0.75, 0.25]));
     let palette = AppPalette::default();
-    let mut sent = None;
-    let mut copied = None;
-
-    AudioPreviewState::copy_waveform_image_on(
-        &analysis,
-        &analysis,
-        &[],
-        0.0,
-        1.0,
-        1.0,
-        &palette,
-        |request| sent = Some(request.clone()),
-        |bytes, mime| copied = Some((bytes.to_vec(), mime.to_string())),
-    )
-    .expect("synthetic waveform should render and deliver");
-
-    let IpcRequest::PushImage { bytes, mime, hand } = sent.expect("image request sent") else {
-        panic!("waveform delivery should send an image");
-    };
-    let (copied_bytes, copied_mime) = copied.expect("clipboard callback invoked");
-    assert_eq!(hand, little_clip_core::HandSide::Left);
-    assert_eq!(mime, "image/png");
-    assert_eq!(copied_mime, "image/png");
-    assert_eq!(bytes, copied_bytes);
+    let bytes =
+        AudioPreviewState::render_waveform_copy(&analysis, &analysis, &[], 0.0, 1.0, 1.0, &palette)
+            .expect("synthetic waveform should render");
 
     let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
         .expect("delivered payload is a valid PNG");
@@ -248,8 +227,7 @@ fn waveform_image_delivery_captures_identical_left_png_and_clipboard_payloads() 
     let mut silent_analysis = analysis.clone();
     silent_analysis.ch1_samples = Arc::from([0.0; 4]);
     silent_analysis.ch2_samples = Some(Arc::from([0.0; 4]));
-    let mut silent_png = None;
-    AudioPreviewState::copy_waveform_image_on(
+    let silent_png = AudioPreviewState::render_waveform_copy(
         &silent_analysis,
         &silent_analysis,
         &[],
@@ -257,11 +235,8 @@ fn waveform_image_delivery_captures_identical_left_png_and_clipboard_payloads() 
         1.0,
         1.0,
         &palette,
-        |_| {},
-        |silent_bytes, _| silent_png = Some(silent_bytes.to_vec()),
     )
-    .expect("silent comparison waveform should render");
-    let silent_png = silent_png.expect("comparison copy callback invoked");
+    .expect("silent waveform should render");
     let silent_pixels = image::load_from_memory_with_format(&silent_png, image::ImageFormat::Png)
         .expect("silent comparison payload is a valid PNG")
         .to_rgba8();
@@ -715,5 +690,77 @@ fn checked_audio_analysis_rejects_initial_retries_and_edited_source_reads() {
             .unwrap()
             .unwrap();
         state.cancel_edit_analysis();
+    }
+}
+
+#[test]
+fn audio_image_copies_keep_captured_analysis_and_report_delayed_handoff_failures() {
+    for kind in [AudioImageKind::Waveform, AudioImageKind::Spectrum] {
+        let jobs = BackgroundJobs::new(1, 2);
+        let mut state = AudioPreviewState::new(PathBuf::from("missing.wav"), "test".into());
+        let mut analysis = empty_audio_analysis();
+        analysis.sample_rate = 4;
+        analysis.duration_ms = 1000;
+        analysis.total_frames = 4;
+        analysis.ch1_samples = Arc::from([0.25, -0.5, 0.75, -0.25]);
+        analysis.ch2_samples = Some(Arc::from([-0.25, 0.5, -0.75, 0.25]));
+        state.analysis = Some(Arc::new(analysis));
+        state.duration_sec = 1.0;
+        state.view_duration_sec = 1.0;
+        let (sent, received) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        state.copy_analysis_image_on(kind, &AppPalette::default(), 1.0, &jobs, move |request| {
+            sent.send(request).unwrap();
+            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok(little_clip_core::ipc::IpcResponse::Error {
+                error: "controlled image rejection".into(),
+            })
+        });
+        state.copy_analysis_image_on(kind, &AppPalette::default(), 2.0, &jobs, |_| {
+            panic!("duplicate copy")
+        });
+        state.analysis = None;
+        state.stop();
+        assert!(state.file_write_pending());
+        let IpcRequest::PushImage { bytes, mime, hand } =
+            received.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("expected image handoff");
+        };
+        assert_eq!(mime, "image/png");
+        assert_eq!(hand, little_clip_core::HandSide::Left);
+        let image = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(image.width(), tools::export_image::EXPORT_IMAGE_WIDTH);
+        assert_eq!(
+            image.height(),
+            match kind {
+                AudioImageKind::Waveform => 340,
+                AudioImageKind::Spectrum => 440,
+            }
+        );
+        let ctx = egui::Context::default();
+        let mut close = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![crate::workbench_layout_tests::key_press_event(
+                    egui::Key::Escape,
+                )],
+                ..Default::default()
+            },
+            |ctx| {
+                state.poll_image_copy(ctx, 3.0);
+                state.handle_studio_shortcuts(ctx, &mut close);
+            },
+        );
+        assert!(!close);
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state.image_copy_job.is_some() {
+            state.poll_image_copy(&ctx, 4.0);
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(!state.file_write_pending());
+        assert!(format!("{:?}", state.status_toast).contains("controlled image rejection"));
     }
 }

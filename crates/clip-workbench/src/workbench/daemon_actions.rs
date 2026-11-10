@@ -38,11 +38,7 @@ impl DaemonMutation {
     }
 
     pub(crate) fn poll(&self, ctx: &egui::Context) -> Option<IpcResponse> {
-        let Some(result) = self.request.try_result() else {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.request_repaint_after(Duration::from_millis(50));
-            return None;
-        };
+        let result = self.request.poll(ctx)?;
         Some(result.unwrap_or_else(|error| IpcResponse::Error { error }))
     }
 }

@@ -48,7 +48,7 @@ impl AudioPreviewState {
         if !dialog_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.stop();
             self.stop_group_playback();
-            *close_requested = true;
+            *close_requested = !self.file_write_pending();
             return true;
         }
         let space_pressed = ctx.input(|i| i.key_pressed(egui::Key::Space));
@@ -93,6 +93,7 @@ impl AudioPreviewState {
         self.poll_file_playback(ctx);
         self.poll_session_edit(ctx);
         self.poll_audio_editor(ctx);
+        self.poll_image_copy(ctx, ctx.input(|input| input.time));
         self.poll_slice_copy_job(ctx, ctx.input(|input| input.time));
         self.poll_save_job(ctx, ctx.input(|input| input.time));
         self.poll_digital_decode(ctx);
@@ -133,5 +134,10 @@ impl AudioPreviewState {
                 }
             }
         });
+        if self.file_write_pending() {
+            *close_requested = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
     }
 }

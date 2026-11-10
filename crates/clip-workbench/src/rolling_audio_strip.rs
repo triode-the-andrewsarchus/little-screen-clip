@@ -492,12 +492,7 @@ impl RollingAudioStripState {
     }
 
     pub(crate) fn poll_copy(&mut self, ctx: &egui::Context) {
-        let Some(job) = &self.copy_job else {
-            return;
-        };
-        let Some(result) = job.try_result() else {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.request_repaint_after(Duration::from_millis(50));
+        let Some(result) = self.copy_job.as_ref().and_then(|job| job.poll(ctx)) else {
             return;
         };
         self.copy_job = None;

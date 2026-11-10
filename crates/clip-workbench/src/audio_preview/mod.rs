@@ -753,6 +753,7 @@ pub struct AudioPreviewState {
     read_check: crate::file_source::ReadCheck,
     file_source: Option<crate::file_source::FileSource>,
     slice_copy_job: Option<AudioSliceCopyJob>,
+    image_copy_job: Option<crate::desktop_ipc::PendingRequest>,
 
     // Slice preview limit and looping state (for right-click slice preview and hold-to-loop)
     pub preview_stop_time: Option<f32>,
@@ -1105,6 +1106,7 @@ impl AudioPreviewState {
             read_check,
             file_source: None,
             slice_copy_job: None,
+            image_copy_job: None,
             preview_stop_time: None,
             preview_slice_range: None,
             preview_is_looping: false,
@@ -1139,7 +1141,7 @@ impl AudioPreviewState {
 
     /// Reports an accepted export that must finish before the studio closes.
     pub fn file_write_pending(&self) -> bool {
-        self.save_job.is_some()
+        self.save_job.is_some() || self.image_copy_job.is_some() || self.slice_copy_job.is_some()
     }
     /// Reports temporary channel/region edits, which persist only through export.
     pub fn has_session_edits(&self) -> bool {
