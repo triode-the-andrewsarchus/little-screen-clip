@@ -1453,7 +1453,7 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         if was_cleaned {
                             if let Some(clean_text) = item.to_clipboard_text() {
                                 last_clipboard_text = clean_text.clone();
-                                copy_cleaned_clipboard_text(clean_text).await;
+                                copy_cleaned_clipboard_text(clean_text, &ctx).await;
                             }
                         }
                         ctx.refresh_display().await;
@@ -1496,7 +1496,8 @@ fn extract_clipboard_text(item: &ClipItem) -> Option<String> {
     }
 }
 
-async fn copy_cleaned_clipboard_text(text: String) {
+async fn copy_cleaned_clipboard_text(text: String, ctx: &DaemonContext) {
+    ctx.add_self_copied_text(text.clone()).await;
     match tokio::task::spawn_blocking(move || copy_text_to_system_clipboard(&text)).await {
         Ok(Err(error)) => warn!(%error, "failed to copy cleaned clipboard text"),
         Err(error) => warn!(%error, "clipboard copy worker failed"),
@@ -1680,6 +1681,22 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
             String::from_utf8_lossy(&output.stderr)
         );
         true
+    }
+
+    #[tokio::test]
+    async fn cleaned_url_copy_is_registered_for_echo_suppression() {
+        if isolated_clipboard_test("tests::cleaned_url_copy_is_registered_for_echo_suppression") {
+            return;
+        }
+        let directory = PathBuf::from(std::env::var_os("CLIPD_TEST_CLIPBOARD").unwrap());
+        let ctx = test_context(SlotManager::default());
+        copy_cleaned_clipboard_text(CLEAN_URL.to_owned(), &ctx).await;
+        assert_eq!(
+            std::fs::read(directory.join("bytes")).unwrap(),
+            CLEAN_URL.as_bytes()
+        );
+        assert!(ctx.is_self_copied_text(CLEAN_URL).await);
+        assert!(ctx.is_self_copied_text(&format!("  {CLEAN_URL}\r\n")).await);
     }
 
     #[tokio::test]
