@@ -192,3 +192,60 @@ fn office_document_file_batch_renders_page_thumbnail_preview() {
         "Expected thumbnail preview to be rendered on card"
     );
 }
+
+#[test]
+fn prepared_audio_raster_uses_summary_readiness_without_following_its_source_path() {
+    let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+    let render = |waveform, path| {
+        let mut item = ClipItem::from_text("Prepared audio");
+        item.payload = ClipPayload::AudioRef {
+            path,
+            duration_ms: 1000,
+            sample_rate: 48000,
+            channels: 1,
+            format: "WAV".into(),
+            waveform,
+        };
+        let mut raster = Pixmap::new(600, 400).unwrap();
+        renderer.draw_item_content(
+            &mut raster,
+            &item,
+            0.0,
+            0.0,
+            600.0,
+            400.0,
+            true,
+            Color::WHITE,
+        );
+        raster
+    };
+    let waveform = little_clip_core::AudioWaveform {
+        channels: 1,
+        sample_rate: 48000,
+        duration_ms: 1000,
+        ch1_peaks: vec![0.2, 0.8, 0.3, 0.9],
+        ch2_peaks: None,
+        spectral_colors: Some(vec![[20, 150, 240]; 4]),
+        is_snippet: false,
+        snippet_start_ms: 0,
+        snippet_duration_ms: 0,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.wav");
+    std::fs::write(
+        &source,
+        "Not audio: prepared content must already be sufficient",
+    )
+    .unwrap();
+    let pending = render(None, source.clone());
+    let mut unavailable = waveform.clone();
+    unavailable.ch1_peaks.clear();
+    let unavailable = render(Some(unavailable), source.clone());
+    let ready = render(Some(waveform.clone()), source);
+    assert_ne!(pending.data(), unavailable.data());
+    assert_ne!(unavailable.data(), ready.data());
+    assert_eq!(
+        ready.data(),
+        render(Some(waveform), "/dev/zero".into()).data()
+    );
+}

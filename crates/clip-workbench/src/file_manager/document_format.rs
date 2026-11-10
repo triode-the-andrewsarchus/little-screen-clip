@@ -1,4 +1,9 @@
-//! One classification shared by semantic strips, row admission and studio dispatch.
+//! Cheap format hints shared by strips, row admission and studio dispatch.
+//!
+//! These hints do not establish content identity, readability or edit support.
+//! Workers validate ordinary sources and decode them before publishing prepared
+//! documents. Ambiguous sampler names require positive content identification;
+//! they retain their ordinary routing until a worker supplies that evidence.
 use std::path::Path;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Format {

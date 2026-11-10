@@ -1,4 +1,5 @@
 //! One file-backed studio at a time; closing returns to the untouched browser.
+use super::document_format::Format;
 use crate::{
     audio_preview::AudioPreviewState,
     file_source::FileSource,
@@ -136,7 +137,7 @@ impl Viewers {
         ) || self.loading.as_ref().is_some_and(|l| {
             matches!(
                 kind(&l.path),
-                Kind::Audio | Kind::Midi | Kind::Video | Kind::Multisample
+                Kind::Audio | Kind::Midi | Kind::Video | Kind::Document(Format::Multisample)
             )
         })
     }
@@ -490,17 +491,9 @@ impl Viewers {
         }
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
-    Notebook,
-    Book,
-    Mail,
-    Calendar,
-    Database,
-    Geography,
-    Toolpath,
-    Multisample,
-    Font,
+    Document(Format),
     Image,
     Audio,
     Pdf,
@@ -518,8 +511,10 @@ fn kind(path: &Path) -> Kind {
         || little_clip_core::subtitles::is_subtitle_path(path)
     {
         Kind::Text
-    } else if let Some(kind) = extension_kind(path) {
-        kind
+    } else if let Some(format) = Format::for_path(path) {
+        Kind::Document(format)
+    } else if super::midi_strip::is_midi(path) {
+        Kind::Midi
     } else if little_clip_core::item::is_image_path(path) {
         Kind::Image
     } else if little_clip_core::audio::is_audio_path(path) {
@@ -543,24 +538,6 @@ fn kind(path: &Path) -> Kind {
     } else {
         Kind::External
     }
-}
-fn extension_kind(path: &Path) -> Option<Kind> {
-    use super::document_format::Format;
-    if let Some(format) = Format::for_path(path) {
-        return Some(match format {
-            Format::Font => Kind::Font,
-            Format::Notebook => Kind::Notebook,
-            Format::Book => Kind::Book,
-            Format::Mail => Kind::Mail,
-            Format::Calendar => Kind::Calendar,
-            Format::Database => Kind::Database,
-            Format::Geography => Kind::Geography,
-            Format::Toolpath => Kind::Toolpath,
-            Format::Multisample => Kind::Multisample,
-            Format::Subtitle => Kind::Text,
-        });
-    }
-    super::midi_strip::is_midi(path).then_some(Kind::Midi)
 }
 
 fn load(
@@ -588,7 +565,7 @@ fn load(
     let kind = kind(path);
     let limit = match kind {
         Kind::Image => 64 * 1024 * 1024,
-        Kind::Sheet | Kind::Midi | Kind::Notebook => 32 * 1024 * 1024,
+        Kind::Sheet | Kind::Midi | Kind::Document(Format::Notebook) => 32 * 1024 * 1024,
         _ => u64::MAX,
     };
     if metadata.len() > limit {
@@ -598,17 +575,27 @@ fn load(
         ));
     }
     match kind {
-        Kind::Multisample => {
+        Kind::Document(Format::Multisample) => {
             super::multisample::Viewer::load(path, cancelled).map(Loaded::Multisample)
         }
-        Kind::Toolpath => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
-        Kind::Geography => super::geography::Viewer::load(path).map(Loaded::Geography),
-        Kind::Database => super::database::Viewer::load(path).map(Loaded::Database),
-        Kind::Calendar => super::calendar::Viewer::load(path).map(Loaded::Calendar),
-        Kind::Mail => super::mail::Viewer::load(path).map(Loaded::Mail),
-        Kind::Book => super::ebook::Viewer::load(path).map(Loaded::Book),
-        Kind::Notebook => super::notebook::viewer::Viewer::load(path).map(Loaded::Notebook),
-        Kind::Font => super::font_strip::viewer::Viewer::load(path).map(Loaded::Font),
+        Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
+        Kind::Document(Format::Geography) => {
+            super::geography::Viewer::load(path).map(Loaded::Geography)
+        }
+        Kind::Document(Format::Database) => {
+            super::database::Viewer::load(path).map(Loaded::Database)
+        }
+        Kind::Document(Format::Calendar) => {
+            super::calendar::Viewer::load(path).map(Loaded::Calendar)
+        }
+        Kind::Document(Format::Mail) => super::mail::Viewer::load(path).map(Loaded::Mail),
+        Kind::Document(Format::Book) => super::ebook::Viewer::load(path).map(Loaded::Book),
+        Kind::Document(Format::Notebook) => {
+            super::notebook::viewer::Viewer::load(path).map(Loaded::Notebook)
+        }
+        Kind::Document(Format::Font) => {
+            super::font_strip::viewer::Viewer::load(path).map(Loaded::Font)
+        }
         Kind::Image => {
             let source = FileSource::capture(path)?;
             let decoded = DecodedImageData::from_path_bounded(path, 64 * 1024 * 1024)?;
@@ -643,10 +630,12 @@ fn load(
                 Ok(Loaded::Text(text_session))
             }
         },
-        Kind::Text => super::text_editor::TextSession::load(path, config).map(Loaded::Text),
+        Kind::Text | Kind::Document(Format::Subtitle) => {
+            super::text_editor::TextSession::load(path, config).map(Loaded::Text)
+        }
         Kind::Video => video::prepare(path).map(Loaded::Video),
         Kind::External => Ok(Loaded::External),
-        _ => FileSource::capture(path).map(|_| Loaded::Path),
+        Kind::Pdf | Kind::Scene | Kind::Model => FileSource::capture(path).map(|_| Loaded::Path),
     }
 }
 fn session(
@@ -755,6 +744,37 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn document_hints_share_the_registry_and_ambiguous_multisamples_require_content() {
+        for (name, format) in [
+            ("missing.NKI", Format::Multisample),
+            ("missing.IPYNB", Format::Notebook),
+            ("missing.GCODE", Format::Toolpath),
+            ("missing.OTF", Format::Font),
+        ] {
+            let path = Path::new(name);
+            assert_eq!(Format::for_path(path), Some(format));
+            assert_eq!(kind(path), Kind::Document(format));
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("instrument.xml");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../little-clip-core/tests/fixtures/multisample/harbor.dspreset");
+        std::fs::copy(fixture, &path).unwrap();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        assert_eq!(Format::for_path(&path), None);
+        assert!(!matches!(kind(&path), Kind::Document(Format::Multisample)));
+        assert!(matches!(
+            load(&path, &AppConfig::default(), &cancelled).unwrap(),
+            Loaded::Multisample(_)
+        ));
+        std::fs::write(&path, "<notes><sample>ordinary XML</sample></notes>").unwrap();
+        assert!(matches!(
+            load(&path, &AppConfig::default(), &cancelled).unwrap(),
+            Loaded::Text(_)
+        ));
     }
 
     #[test]

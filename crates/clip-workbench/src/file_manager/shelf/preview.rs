@@ -877,6 +877,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ambiguous_sampler_preview_uses_worker_evidence_and_rejects_protected_aliases() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("instrument.xml");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../little-clip-core/tests/fixtures/multisample/harbor.dspreset"),
+            &path,
+        )
+        .unwrap();
+        let token = AtomicBool::new(false);
+        assert!(
+            Source::Text(path.clone())
+                .load(&token)
+                .multisample
+                .is_some()
+        );
+        std::fs::write(&path, "<notes><sample>ordinary XML</sample></notes>").unwrap();
+        let ordinary = Source::Text(path).load(&token);
+        assert!(ordinary.multisample.is_none());
+        assert!(ordinary.document.is_some());
+        let protected = directory.path().join("protected.xml");
+        std::os::unix::fs::symlink("/dev/zero", &protected).unwrap();
+        let rejected = Source::Text(protected).load(&token);
+        assert!(rejected.multisample.is_none());
+        assert!(rejected.document.is_none());
+    }
+
+    #[test]
     fn row_completion_preserves_retained_fact_provenance_without_cloning_healthy_snapshots() {
         let ctx = egui::Context::default();
         let id = uuid::Uuid::new_v4();
