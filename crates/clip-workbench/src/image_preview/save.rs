@@ -1277,6 +1277,45 @@ mod tests {
     }
 
     #[test]
+    fn workbench_retirement_waits_for_copy_even_without_edits_or_owned_pixels() {
+        let jobs = BackgroundJobs::new(1, 2);
+        let (release, wait) = mpsc::channel();
+        let mut image = state();
+        image.copy_job = Some(ImageCopyJob::start_encoded_with(
+            Arc::new(b"encoded".to_vec()),
+            "image/png".into(),
+            "success".into(),
+            "fallback".into(),
+            &jobs,
+            move |_, _, _, _, _| {
+                wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                Err("controlled delivery failure".into())
+            },
+        ));
+        // Encoded copies never borrow the canvas, so snapshot readiness alone
+        // must not allow the host to discard their completion receiver.
+        assert!(image.poll_session_snapshots());
+        let mut app = crate::workbench_layout_tests::test_workbench_app(
+            Some(crate::ViewerSession::Image(image)),
+            Default::default(),
+        );
+        assert!(!app.retain_current_image_session());
+        let Some(crate::ViewerSession::Image(image)) = &mut app.viewer else {
+            panic!("pending copy lost its owner");
+        };
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while image.poll_cached_jobs() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(format!("{:?}", image.status_toast).contains("controlled delivery failure"));
+        assert!(app.retain_current_image_session());
+        assert!(app.viewer.is_none());
+        assert!(app.retained_image_session.is_none());
+    }
+
+    #[test]
     fn pending_save_defers_session_cache_until_canvas_is_restored() {
         let jobs = BackgroundJobs::new(1, 2);
         let (started_tx, started_rx) = mpsc::channel();
