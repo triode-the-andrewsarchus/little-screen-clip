@@ -809,11 +809,14 @@ mod tests {
         let Some(directory) = std::env::var_os(FIXTURE_ENV).map(PathBuf::from) else {
             use std::os::unix::fs::PermissionsExt;
             let directory = tempfile::tempdir().unwrap();
+            // The fake FUSE command refuses lazy detach, as a busy filesystem should.
+            let fuse = r#"case " $* " in *" -z "*) exit 23;; esac
+printf 'fuse\n' >> "$UNMOUNT_TEST_LOG""#;
             for (program, body) in [
                 ("udisksctl", "exit 1"),
                 ("umount", "printf 'umount\\n' >> \"$UNMOUNT_TEST_LOG\""),
-                ("fusermount3", "printf 'fuse\\n' >> \"$UNMOUNT_TEST_LOG\""),
-                ("fusermount", "printf 'fuse\\n' >> \"$UNMOUNT_TEST_LOG\""),
+                ("fusermount3", fuse),
+                ("fusermount", fuse),
             ] {
                 let path = directory.path().join(program);
                 std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();

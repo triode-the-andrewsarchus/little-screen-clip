@@ -183,12 +183,12 @@ pub fn unmount_fuse_binwalk(mount_point: &Path) -> Result<(), String> {
 /// Unmounts a FUSE filesystem without removing a caller-owned mount directory.
 pub(super) fn unmount_fuse(mount_point: &Path) -> Result<(), String> {
     let status = std::process::Command::new("fusermount3")
-        .args(["-u", "-z"])
+        .arg("-u")
         .arg(mount_point)
         .status()
         .or_else(|_| {
             std::process::Command::new("fusermount")
-                .args(["-u", "-z"])
+                .arg("-u")
                 .arg(mount_point)
                 .status()
         })
