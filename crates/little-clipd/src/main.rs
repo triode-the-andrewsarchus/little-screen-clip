@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, watch};
 use tracing::{error, info, warn};
 
 mod display_worker;
@@ -69,7 +69,7 @@ pub struct DaemonContext {
     /// Frame rasterizer for secondary screen hardware.
     pub renderer: RwLock<ScreenRenderer>,
     /// Frame sender channel connected to the USB display worker.
-    pub display_tx: mpsc::Sender<Vec<u8>>,
+    pub display_tx: watch::Sender<Option<Arc<[u8]>>>,
     /// Circular buffer of recently self-copied text strings to ignore in clipboard watcher.
     pub self_copied_text: RwLock<Vec<String>>,
     /// Hash of recently self-copied image to avoid echo loops.
@@ -145,7 +145,7 @@ impl DaemonContext {
                 }
             }
         };
-        let _ = self.display_tx.send(frame).await;
+        let _ = self.display_tx.send(Some(frame.into()));
     }
 
     /// Rerenders the current slot inventory layout and sends the new frame to the display.
@@ -168,7 +168,7 @@ impl DaemonContext {
         };
 
         // Non-blocking send to display worker
-        let _ = self.display_tx.send(frame).await;
+        let _ = self.display_tx.send(Some(frame.into()));
     }
 
     /// Consumes and returns any active routing override (hand destination and clipboard restore flag).
@@ -269,33 +269,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ScreenRenderer::fallback(config.clone())
     });
 
-    let driver = match TrofeoDriver::open() {
-        Ok(drv) => {
-            info!(
-                "Connected to Trofeo Vision display (PM={}, SUB={}, cmd={})",
-                drv.info.pm, drv.info.sub, drv.info.chunk_cmd
-            );
-            Some(drv)
-        }
-        Err(e) => {
-            warn!(
-                "Trofeo USB display not connected or accessible: {}. Running in virtual mode.",
-                e
-            );
-            None
-        }
-    };
+    let (display_tx, display_rx) = watch::channel(None);
 
-    let (display_tx, display_rx) = mpsc::channel::<Vec<u8>>(16);
-
-    // Keep the volatile LY panel refreshed and retry failed USB sessions.
-    tokio::spawn(async move {
-        display_worker::run(driver, display_rx, TrofeoDriver::open, |driver, frame| {
+    // Hardware enumeration, writes, recovery and release share one dedicated thread.
+    // Frame publication never waits for USB; only the newest frame is retained.
+    let _display_worker =
+        display_worker::spawn(display_rx, TrofeoDriver::open, |driver, frame| {
             driver.check_alive()?;
             driver.send_frame(frame)
-        })
-        .await;
-    });
+        })?;
 
     let rolling_audio = Arc::new(std::sync::RwLock::new(RollingAudioBuffer::new(
         config.audio.rolling_capture_duration_sec,

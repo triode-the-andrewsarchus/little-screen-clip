@@ -46,6 +46,8 @@ Follow the existing Conventional Commit pattern with a concise scope: `feat(imag
 
 ## Runtime Configuration & Hardware
 
+USB enumeration, frame writes, reconnect and driver release belong to the daemon's dedicated display-owner thread. Publish frames through the latest-value channel without awaiting hardware; preserve keepalive/retry pacing and re-read the newest frame after a slow open or send delay. Closing the channel retires the session after any in-flight native call returns; do not join a potentially stalled device thread on the async executor.
+
 Do not commit personal display, compositor, or desktop settings. Keep `config.toml` changes reloadable, and preserve virtual-mode behavior when no supported USB display is attached.
 
 The workbench must remain a non-resizable, centered, single-instance popup for Niri's fixed-size floating behavior. Screen-adaptive sizing must be resolved before the window opens, with fixed-size hints in place at mapping; do not enable window resizing/maximizing or resize a visible window to fit. Internal panels may resize independently. Repeated `launch.sh ui` calls should focus the existing popup without requiring a Niri keybinding change.
