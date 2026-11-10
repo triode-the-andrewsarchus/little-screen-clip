@@ -286,7 +286,7 @@ touches the host clipboard or USB display unless explicitly stated.
   **Current verification — partially resolved:**
 
   - [x] Preview labels now truncate by Unicode characters with a bounded prefix scan. The rendered-card regression covers short Unicode, exact-width ASCII, a mixed string splitting byte 23, and long CJK output. It reproduced the UTF-8 panic before the fix; the canvas tests pass (`/tmp/review-canvas-unicode-after.log`).
-  - [ ] Align painted header geometry with node sizing and socket positions.
+  - [x] Painted headers, node sizing and socket positions now use one header-height constant. The rendered geometry regression verifies header-to-socket spacing at three zoom levels and failed before the fix. Thirteen canvas tests pass (`/tmp/review-canvas-header-after.log`).
   - [ ] Record inline property edits in graph undo history.
 
   - In [`crates/clip-workbench/src/canvas/drawing.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/canvas/drawing.rs#L529-L533), `if preview_str.len() > 24 { format!("{}…", &preview_str[..23]) }` slices `preview_str` at byte index 23 without checking UTF-8 character boundaries, which panics if a multi-byte character straddles byte 23.

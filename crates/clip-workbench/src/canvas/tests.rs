@@ -645,18 +645,59 @@ fn node_preview_badge_truncates_unicode_without_splitting_characters() {
     ] {
         let mut node = instantiate_template(template, [0.0, 0.0]);
         let previews = [(node.id, preview)].into_iter().collect();
-        let ctx = egui::Context::default();
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let rect =
-                    Rect::from_min_size(Pos2::ZERO, Vec2::new(250.0, estimate_node_height(&node)));
-                let painter = ui.painter_at(rect);
-                render_node_card(
-                    1.0, &previews, &mut None, &mut None, &mut None, ui, &painter, &mut node, rect,
-                    false, &mut None, &palette,
-                );
-            });
-        });
+        let (output, _) = node_card_frame(&mut node, 1.0, &previews, &palette);
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == expected)), "missing preview {expected:?}");
+    }
+}
+
+fn node_card_frame(
+    node: &mut NodeInstance,
+    zoom: f32,
+    previews: &HashMap<Uuid, String>,
+    palette: &AppPalette,
+) -> (egui::FullOutput, Rect) {
+    let rect = Rect::from_min_size(
+        Pos2::new(20.0, 20.0),
+        Vec2::new(250.0, estimate_node_height(node)) * zoom,
+    );
+    let output = egui::Context::default().run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let painter = ui.painter_at(rect);
+            render_node_card(
+                zoom, previews, &mut None, &mut None, &mut None, ui, &painter, node, rect, false,
+                &mut None, palette,
+            );
+        });
+    });
+    (output, rect)
+}
+
+#[test]
+fn painted_node_header_matches_socket_layout_at_each_zoom() {
+    let template = little_clip_ops::pipeline::catalog::find_template("source_const_text").unwrap();
+    for zoom in [0.5, 1.0, 2.0] {
+        let mut node = instantiate_template(template, [0.0, 0.0]);
+        let (output, rect) =
+            node_card_frame(&mut node, zoom, &HashMap::new(), &AppPalette::default());
+        let header = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(shape)
+                    if shape.rect.min == rect.min
+                        && shape.rect.width() == rect.width()
+                        && shape.rect.height() < rect.height() =>
+                {
+                    Some(shape.rect)
+                }
+                _ => None,
+            })
+            .expect("painted node header");
+        let first_pin = get_pin_pos_by_idx(rect, node.outputs.len(), 0, true, zoom);
+        assert_eq!(
+            first_pin.y - header.max.y,
+            20.0 * zoom,
+            "painted header/socket layout drift at zoom={zoom}"
+        );
     }
 }

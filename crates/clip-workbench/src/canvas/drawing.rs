@@ -1,5 +1,7 @@
 use super::*;
 
+const NODE_HEADER_HEIGHT: f32 = 28.0;
+
 pub(super) fn render_grid(
     painter: &egui::Painter,
     rect: Rect,
@@ -302,7 +304,7 @@ pub(super) fn render_node_card(
     );
 
     // Category accent edge keeps node types recognizable without a saturated banner.
-    let header_h = 26.0 * zoom;
+    let header_h = NODE_HEADER_HEIGHT * zoom;
     let header_rect = Rect::from_min_size(rect.min, Vec2::new(rect.width(), header_h));
     let cat_color = get_node_category_color(&node.kind, palette);
     painter.rect_filled(
@@ -596,7 +598,7 @@ pub(super) fn screen_to_world(canvas_rect: Rect, pan: [f32; 2], zoom: f32, pt: P
 }
 
 pub(super) fn estimate_node_height(node: &NodeInstance) -> f32 {
-    let header_h = 28.0;
+    let header_h = NODE_HEADER_HEIGHT;
     let pin_row_h = 24.0;
     let max_pins = node.inputs.len().max(node.outputs.len());
     let pins_h = if max_pins > 0 {
@@ -650,7 +652,7 @@ pub(super) fn get_pin_pos_by_idx(
     is_output: bool,
     zoom: f32,
 ) -> Pos2 {
-    let header_h = 28.0 * zoom;
+    let header_h = NODE_HEADER_HEIGHT * zoom;
     let pin_row_h = 24.0 * zoom;
     let y = node_rect.min.y + header_h + 8.0 * zoom + (idx as f32 * pin_row_h) + (pin_row_h * 0.5);
     let x = if is_output {
