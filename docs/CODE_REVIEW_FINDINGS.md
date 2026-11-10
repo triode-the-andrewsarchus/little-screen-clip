@@ -70,7 +70,9 @@ display unless explicitly stated.
 - [ ] **[Dead / Unreachable CLI Features] `IpcRequest` / `IpcResponse` variants handled in `clipctl` with no CLI subcommands**:
   - `IpcResponse::AutoActions` and `IpcResponse::ScenePreviews` have formatting arms in [`crates/clipctl/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/clipctl/src/main.rs#L445-L458), and `IpcResponse::LastAction` has a formatting arm on line 365, yet `Commands` has no subcommand to query `GetAutoActions`, `SetAutoAction`, `GetLastAction`, or `GetScenePreviews`.
   - `Commands::Op` sets `selected_slots: None` (line 313) with no CLI flag to pass `selected_slots` for multi-slot operations.
-- [ ] **[Code Quality / Duplication] Duplicated IPC send/receive logic in `main`**:
+- [x] **[Code Quality / Duplication] Duplicated IPC send/receive logic in `main`**:
+  **Current verification:** Ordinary commands now use the same `send_ipc_req` transport as copy/paste. A closed peer now reports the helper’s explicit error instead of silently succeeding. The socket-pair EOF regression and all four CLI tests pass (`/tmp/review-cli-ipc-tests.log`).
+
   `send_ipc_req` is defined on [`crates/clipctl/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/clipctl/src/main.rs#L96-L112), but lines 332–338 manually inline the exact same JSON serialization, `write_all`, `flush`, `next_line`, and `serde_json::from_str` instead of calling `send_ipc_req(&mut writer, &mut lines, &request).await?`.
 
 ---

@@ -248,138 +248,131 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::RollingAudio => IpcRequest::GetRollingAudio,
     };
 
-    let req_json = serde_json::to_string(&request)?;
-    writer.write_all(req_json.as_bytes()).await?;
-    writer.write_all(b"\n").await?;
-    writer.flush().await?;
-
-    if let Some(line) = lines.next_line().await? {
-        let resp: IpcResponse = serde_json::from_str(&line)?;
-        match resp {
-            IpcResponse::State(mgr) => {
-                println!("{}", "=== LITTLE SCREEN CLIP SLOTS ===".cyan().bold());
-                print_slot(SlotId::Undo, mgr.get(SlotId::Undo));
-                print_slot(SlotId::LeftHand, mgr.get(SlotId::LeftHand));
-                print_slot(SlotId::LeftPrior1, mgr.get(SlotId::LeftPrior1));
-                print_slot(SlotId::LeftPrior2, mgr.get(SlotId::LeftPrior2));
-                print_slot(SlotId::LeftPrior3, mgr.get(SlotId::LeftPrior3));
-                print_slot(SlotId::RightPrior2, mgr.get(SlotId::RightPrior2));
-                print_slot(SlotId::RightPrior1, mgr.get(SlotId::RightPrior1));
-                print_slot(SlotId::RightHand, mgr.get(SlotId::RightHand));
-            }
-            IpcResponse::StateSummary(_) => {
-                eprintln!("Received a polling-only state summary where full state was expected.");
-                std::process::exit(1);
-            }
-            IpcResponse::RecipeList(recipes) => {
-                println!("{}", "=== LITTLE SCREEN CLIP RECIPES ===".cyan().bold());
-                if recipes.is_empty() {
-                    println!("  No recipes found in ~/.config/little-screen-clip/recipes/");
-                } else {
-                    for r in recipes {
-                        println!("  {} {}", "*".magenta(), r.bold());
-                    }
+    let resp = send_ipc_req(&mut writer, &mut lines, &request).await?;
+    match resp {
+        IpcResponse::State(mgr) => {
+            println!("{}", "=== LITTLE SCREEN CLIP SLOTS ===".cyan().bold());
+            print_slot(SlotId::Undo, mgr.get(SlotId::Undo));
+            print_slot(SlotId::LeftHand, mgr.get(SlotId::LeftHand));
+            print_slot(SlotId::LeftPrior1, mgr.get(SlotId::LeftPrior1));
+            print_slot(SlotId::LeftPrior2, mgr.get(SlotId::LeftPrior2));
+            print_slot(SlotId::LeftPrior3, mgr.get(SlotId::LeftPrior3));
+            print_slot(SlotId::RightPrior2, mgr.get(SlotId::RightPrior2));
+            print_slot(SlotId::RightPrior1, mgr.get(SlotId::RightPrior1));
+            print_slot(SlotId::RightHand, mgr.get(SlotId::RightHand));
+        }
+        IpcResponse::StateSummary(_) => {
+            eprintln!("Received a polling-only state summary where full state was expected.");
+            std::process::exit(1);
+        }
+        IpcResponse::RecipeList(recipes) => {
+            println!("{}", "=== LITTLE SCREEN CLIP RECIPES ===".cyan().bold());
+            if recipes.is_empty() {
+                println!("  No recipes found in ~/.config/little-screen-clip/recipes/");
+            } else {
+                for r in recipes {
+                    println!("  {} {}", "*".magenta(), r.bold());
                 }
             }
-            IpcResponse::LastAction(action) => match action {
-                Some(little_clip_core::ipc::LastAction::Op { op_name, .. }) => {
-                    println!("Last action was operation: {}", op_name.bold());
-                }
-                Some(little_clip_core::ipc::LastAction::Recipe { recipe_name }) => {
-                    println!("Last action was recipe: {}", recipe_name.bold());
-                }
-                None => {
-                    println!("No prior action recorded.");
-                }
-            },
-            IpcResponse::NeedsPrompt { message, .. } => {
-                println!("{}: {}", "Prompt Required".yellow().bold(), message);
+        }
+        IpcResponse::LastAction(action) => match action {
+            Some(little_clip_core::ipc::LastAction::Op { op_name, .. }) => {
+                println!("Last action was operation: {}", op_name.bold());
             }
-            IpcResponse::ClipboardRoute { status, .. } => println!("Clipboard route: {status:?}"),
-            IpcResponse::Success { message } => {
-                println!("{}: {}", "Success".green().bold(), message);
+            Some(little_clip_core::ipc::LastAction::Recipe { recipe_name }) => {
+                println!("Last action was recipe: {}", recipe_name.bold());
             }
-            IpcResponse::OpResult { item } => {
-                println!("{}: Transformed -> {}", "Result".green().bold(), item.title);
-                println!("  Subtitle: {}", item.subtitle.dimmed());
+            None => {
+                println!("No prior action recorded.");
             }
-            IpcResponse::PipelineExecuted {
-                node_previews,
-                output_title,
+        },
+        IpcResponse::NeedsPrompt { message, .. } => {
+            println!("{}: {}", "Prompt Required".yellow().bold(), message);
+        }
+        IpcResponse::ClipboardRoute { status, .. } => println!("Clipboard route: {status:?}"),
+        IpcResponse::Success { message } => {
+            println!("{}: {}", "Success".green().bold(), message);
+        }
+        IpcResponse::OpResult { item } => {
+            println!("{}: Transformed -> {}", "Result".green().bold(), item.title);
+            println!("  Subtitle: {}", item.subtitle.dimmed());
+        }
+        IpcResponse::PipelineExecuted {
+            node_previews,
+            output_title,
+            duration_ms,
+        } => {
+            println!(
+                "{} in {}ms{}",
+                "Pipeline executed".green().bold(),
                 duration_ms,
-            } => {
-                println!(
-                    "{} in {}ms{}",
-                    "Pipeline executed".green().bold(),
-                    duration_ms,
-                    output_title
-                        .as_deref()
-                        .map(|title| format!("; output: {title}"))
-                        .unwrap_or_default()
-                );
-                if !node_previews.is_empty() {
-                    println!("  Node previews:");
-                    let mut previews: Vec<_> = node_previews.into_iter().collect();
-                    previews.sort_unstable_by_key(|(id, _)| *id);
-                    for (id, preview) in previews {
-                        let truncated = preview.chars().count() > 120;
-                        let preview = preview.chars().take(120).collect::<String>();
-                        println!(
-                            "    {}: {}{}",
-                            id,
-                            preview,
-                            if truncated { "…" } else { "" }
-                        );
-                    }
+                output_title
+                    .as_deref()
+                    .map(|title| format!("; output: {title}"))
+                    .unwrap_or_default()
+            );
+            if !node_previews.is_empty() {
+                println!("  Node previews:");
+                let mut previews: Vec<_> = node_previews.into_iter().collect();
+                previews.sort_unstable_by_key(|(id, _)| *id);
+                for (id, preview) in previews {
+                    let truncated = preview.chars().count() > 120;
+                    let preview = preview.chars().take(120).collect::<String>();
+                    println!(
+                        "    {}: {}{}",
+                        id,
+                        preview,
+                        if truncated { "…" } else { "" }
+                    );
                 }
             }
-            IpcResponse::LockStatus(locked) => {
-                if locked {
-                    println!("{}", "LOCKED (Screen blanked)".yellow().bold());
-                } else {
-                    println!("{}", "UNLOCKED (Screen active)".green().bold());
-                }
+        }
+        IpcResponse::LockStatus(locked) => {
+            if locked {
+                println!("{}", "LOCKED (Screen blanked)".yellow().bold());
+            } else {
+                println!("{}", "UNLOCKED (Screen active)".green().bold());
             }
-            IpcResponse::RollingAudio {
-                path,
+        }
+        IpcResponse::RollingAudio {
+            path,
+            duration_secs,
+            sample_rate,
+            channels,
+        } => {
+            println!(
+                "{}: {:.2}s ({}Hz, {}ch) -> {}",
+                "Rolling Audio Snapshot".cyan().bold(),
                 duration_secs,
                 sample_rate,
                 channels,
-            } => {
-                println!(
-                    "{}: {:.2}s ({}Hz, {}ch) -> {}",
-                    "Rolling Audio Snapshot".cyan().bold(),
-                    duration_secs,
-                    sample_rate,
-                    channels,
-                    path.display()
-                );
+                path.display()
+            );
+        }
+        IpcResponse::SlotItem(item) => {
+            if let Some(i) = item {
+                println!("Item: {} ({})", i.title.bold(), i.subtitle.dimmed());
+            } else {
+                println!("<EMPTY>");
             }
-            IpcResponse::SlotItem(item) => {
-                if let Some(i) = item {
-                    println!("Item: {} ({})", i.title.bold(), i.subtitle.dimmed());
+        }
+        IpcResponse::AutoActions(actions) => {
+            println!("{}", "=== AUTO-ACTIONS ===".cyan().bold());
+            for (k, v) in actions {
+                let st = if v {
+                    "ENABLED".green().bold()
                 } else {
-                    println!("<EMPTY>");
-                }
+                    "DISABLED".yellow()
+                };
+                println!("  {} : {}", k.bold(), st);
             }
-            IpcResponse::AutoActions(actions) => {
-                println!("{}", "=== AUTO-ACTIONS ===".cyan().bold());
-                for (k, v) in actions {
-                    let st = if v {
-                        "ENABLED".green().bold()
-                    } else {
-                        "DISABLED".yellow()
-                    };
-                    println!("  {} : {}", k.bold(), st);
-                }
-            }
-            IpcResponse::ScenePreviews(previews) => {
-                println!("{} completed scene previews", previews.len());
-            }
-            IpcResponse::Error { error } => {
-                eprintln!("{}: {}", "Error".red().bold(), error);
-                std::process::exit(1);
-            }
+        }
+        IpcResponse::ScenePreviews(previews) => {
+            println!("{} completed scene previews", previews.len());
+        }
+        IpcResponse::Error { error } => {
+            eprintln!("{}: {}", "Error".red().bold(), error);
+            std::process::exit(1);
         }
     }
 
@@ -428,6 +421,34 @@ use little_clip_core::ipc::socket_path as get_socket_path;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ipc_request_reports_peer_closure_instead_of_silent_success() {
+        let (client, server) = UnixStream::pair().unwrap();
+        let (reader, mut writer) = client.into_split();
+        let mut lines = BufReader::new(reader).lines();
+        let peer = tokio::spawn(async move {
+            let mut requests = BufReader::new(server).lines();
+            let request = requests.next_line().await.unwrap().unwrap();
+            assert!(matches!(
+                serde_json::from_str::<IpcRequest>(&request).unwrap(),
+                IpcRequest::GetState
+            ));
+        });
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            send_ipc_req(&mut writer, &mut lines, &IpcRequest::GetState),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("closed connection without responding")
+        );
+        peer.await.unwrap();
+    }
 
     #[tokio::test]
     async fn clipboard_item_copy_preserves_image_bytes_and_mime_for_paste_and_restore() {
