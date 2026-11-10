@@ -875,3 +875,34 @@ The current age-only artifact cleanup API has no workspace callers; no sweep has
 been enabled. Accepted audio/MIDI exports use retained pinned staging/output
 handles and PDF jobs use owned temporary staging/raster directories. The overall
 plan remains incomplete pending those domain/artifact checks and final audit.
+
+
+### Phase 4 checkpoint: viewport bound repair
+
+The existing `AudioViewport` is already the pure transition owner used by audio
+zoom/pan/fit controls. A regression reproduced a panic for short/low-rate inputs:
+the twelve-sample minimum zoom duration could exceed the fitted source duration,
+so `f32::clamp` rejected bounds such as 12.0..0.01. The minimum is now capped by
+the existing fitted full-source window. The clamped duration is strictly positive,
+so the unreachable zero-duration anchor fallback was removed. Normal-rate zoom
+curves, pointer anchoring, pan behavior, event precedence and painter ordering
+are unchanged. No new viewport/controller abstraction was introduced.
+
+The new regression first fails on the old implementation
+(`/tmp/deep-audio-viewport-before.log`) and then passes across zero/low/ordinary
+sample rates, empty/short/ordinary durations and multiple zoom factors. It also
+checks ordinary anchor projection exactly. All 29 audio playback/viewport tests
+pass (`/tmp/deep-audio-viewport-after.log`), including existing zoom, range,
+container decoding/export and playback lifecycle contracts. The raw architecture
+comparison is move/modified-file sensitive and reports REGRESSION for existing
+clone findings; clone groups/cycles/average/max CCN are unchanged, with no new
+high-CCN function. The existing zoom transition loses one branch; the new test
+adds six CCN, making the net +5. One test function and 19 measured NLOC are added
+(`/tmp/deep-audio-viewport-architecture.json`).
+
+Workspace/all-target compilation and diagnostic studio Clippy also pass
+(`/tmp/deep-audio-viewport-check.log`, `/tmp/deep-audio-viewport-clippy.log`),
+with the existing approximate-constant allowance and warnings retained. The
+preceding feedback integration remains the full 2624-test workspace gate; this
+small transition repair has its own 29-test focused gate.
+Both desktop builds pass after the repair (`/tmp/deep-audio-viewport-build.log`).

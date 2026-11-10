@@ -1137,3 +1137,27 @@ fn bridged_audio_playback_seeks_shared_pcm_and_survives_source_rename() {
         assert_eq!(decoder.channels().get(), 2);
     }
 }
+
+#[test]
+fn short_low_rate_viewport_zoom_stays_within_the_observed_duration() {
+    for sample_rate in [0.0, 1.0, 8.0, 8000.0, 44100.0] {
+        for duration in [0.0_f32, 0.001, 0.01, 1.0] {
+            let mut viewport = AudioViewport::new(duration);
+            for factor in [0.5, 0.001, 2.0, 1000.0] {
+                viewport.zoom(factor, duration * 0.5, duration, sample_rate);
+                assert!(viewport.duration_sec.is_finite() && viewport.duration_sec > 0.0);
+                assert!(viewport.start_sec.is_finite() && viewport.start_sec >= 0.0);
+                assert!(viewport.start_sec + viewport.duration_sec <= duration.max(0.01) + 1e-6);
+            }
+        }
+    }
+    let mut viewport = AudioViewport {
+        start_sec: 2.0,
+        duration_sec: 4.0,
+    };
+    let anchor_x = viewport.time_to_x(3.0, 10.0, 400.0);
+    viewport.zoom(0.5, 3.0, 10.0, 44100.0);
+    assert_eq!(viewport.start_sec, 2.5);
+    assert_eq!(viewport.duration_sec, 2.0);
+    assert_eq!(viewport.time_to_x(3.0, 10.0, 400.0), anchor_x);
+}

@@ -183,18 +183,17 @@ impl AudioViewport {
     /// Applies a zoom factor centered around an anchor time point, clamped within bounds.
     pub fn zoom(&mut self, factor: f32, anchor_time: f32, total_duration: f32, sample_rate: f32) {
         let dur = total_duration.max(0.01);
-        let min_dur = (12.0 / sample_rate.max(1.0)).max(0.0002);
+        // A source shorter than twelve samples must still have valid zoom bounds.
+        let min_dur = (12.0 / sample_rate.max(1.0)).max(0.0002).min(dur);
         let max_dur = dur;
 
         let old_dur = self.duration_sec.clamp(min_dur, max_dur);
         let new_dur = (old_dur * factor).clamp(min_dur, max_dur);
 
         let anchor = anchor_time.clamp(0.0, dur);
-        let anchor_ratio = if old_dur > 0.0 {
-            ((anchor - self.start_sec) / old_dur).clamp(0.0, 1.0)
-        } else {
-            0.5
-        };
+        // The clamped duration is strictly positive, including an empty source's
+        // existing minimum fitted window; no fallback anchor branch is needed.
+        let anchor_ratio = ((anchor - self.start_sec) / old_dur).clamp(0.0, 1.0);
 
         let mut new_start = anchor - anchor_ratio * new_dur;
         if new_start + new_dur > dur {
