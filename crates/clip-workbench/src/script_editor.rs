@@ -10,6 +10,8 @@ use little_clip_ops::pipeline::recipes::{create_script_file_scaffold_in_dir, get
 use little_clip_ops::pipeline::types::{NodeInstance, NodeKind};
 use std::path::{Path, PathBuf};
 
+const MAX_SCRIPT_BYTES: usize = 2 * 1024 * 1024;
+
 pub struct ScriptEditor {
     pub text: String,
     saved: String,
@@ -51,7 +53,10 @@ impl ScriptEditor {
         let mut error = None;
         let mut existed = false;
         let text = if let Some(path) = &path {
-            match std::fs::read_to_string(path) {
+            match little_clip_core::kernel_interface::read_content_to_string_bounded(
+                path,
+                MAX_SCRIPT_BYTES,
+            ) {
                 Ok(text) => {
                     existed = true;
                     text
@@ -133,7 +138,10 @@ impl ScriptEditor {
             return Err(error.clone());
         }
         if let Some(path) = &self.path {
-            let disk = std::fs::read_to_string(path);
+            let disk = little_clip_core::kernel_interface::read_content_to_string_bounded(
+                path,
+                MAX_SCRIPT_BYTES,
+            );
             let unchanged = match &disk {
                 Ok(text) => self.existed && text == &self.saved,
                 Err(e) => !self.existed && e.kind() == std::io::ErrorKind::NotFound,
@@ -580,6 +588,45 @@ mod tests {
                 .unwrap(),
             [0.0, 0.0],
         )
+    }
+
+    #[test]
+    fn oversized_script_is_rejected_without_loading_or_replacing_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("oversized.py");
+        let length = 2 * 1024 * 1024 + 1;
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(length)
+            .unwrap();
+        let mut node = script_node(NodeKind::PythonScript);
+        node.props
+            .insert("script_file".to_owned(), path.display().to_string());
+        let mut editor = ScriptEditor::load(&node);
+        assert!(
+            editor.error.is_some(),
+            "oversized source entered the editor"
+        );
+        assert!(editor.text.is_empty());
+        editor.text = "draft".to_owned();
+        assert!(editor.save(&mut node).is_err());
+        assert_eq!(std::fs::metadata(path).unwrap().len(), length);
+    }
+
+    #[test]
+    fn script_alias_to_kernel_content_is_rejected_before_loading() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("alias.py");
+        std::os::unix::fs::symlink("/proc/uptime", &path).unwrap();
+        let mut node = script_node(NodeKind::PythonScript);
+        node.props
+            .insert("script_file".to_owned(), path.display().to_string());
+        let mut editor = ScriptEditor::load(&node);
+        assert!(editor.error.as_ref().unwrap().contains("inspection-only"));
+        assert!(editor.text.is_empty());
+        editor.text = "draft".to_owned();
+        assert!(editor.save(&mut node).is_err());
+        assert_eq!(std::fs::read_link(path).unwrap(), Path::new("/proc/uptime"));
     }
 
     #[test]
