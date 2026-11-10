@@ -561,7 +561,7 @@ impl ImagePreviewState {
             });
         self.rendering_frame = false;
         if let Some(hand) = self.copy_requested.take() {
-            self.start_copy_to_hand_slot(hand, little_clip_core::BackgroundJobs::global());
+            self.start_copy_to_hand_slot(hand, crate::desktop_ipc::mutation_jobs());
         }
     }
 

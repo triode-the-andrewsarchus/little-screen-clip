@@ -52,6 +52,15 @@ impl Write for BoundedRequest {
     }
 }
 
+// Retained handoffs may wait indefinitely for a daemon reply. Keep their fixed
+// worker/queue budget independent of cancellable previews. QueueFull is returned
+// before invoking the operation; admitted writes keep their completion receiver.
+pub(crate) fn mutation_jobs() -> &'static little_clip_core::BackgroundJobs {
+    static JOBS: std::sync::LazyLock<little_clip_core::BackgroundJobs> =
+        std::sync::LazyLock::new(|| little_clip_core::BackgroundJobs::new(2, 16));
+    &JOBS
+}
+
 /// An accepted daemon request whose result survives view changes and has no
 /// post-write deadline. The owning UI must retain it until completion.
 pub(crate) struct PendingRequest {
@@ -61,14 +70,9 @@ pub(crate) struct PendingRequest {
 
 impl PendingRequest {
     pub(crate) fn submit(request: IpcRequest) -> Self {
-        Self::submit_with(
-            request,
-            little_clip_core::BackgroundJobs::global(),
-            |request| {
-                self::request(&request, None, u64::MAX, usize::MAX)
-                    .map_err(|error| error.to_string())
-            },
-        )
+        Self::submit_with(request, mutation_jobs(), |request| {
+            self::request(&request, None, u64::MAX, usize::MAX).map_err(|error| error.to_string())
+        })
     }
 
     pub(crate) fn submit_with(
@@ -107,5 +111,73 @@ pub(crate) fn action_result(response: IpcResponse) -> Result<(), String> {
         IpcResponse::OpResult { .. } | IpcResponse::Success { .. } => Ok(()),
         IpcResponse::Error { error } => Err(error),
         _ => Err("unexpected response from daemon".to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use little_clip_core::{BackgroundJobs, JobError};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
+
+    #[test]
+    fn stalled_mutations_leave_previews_available_and_reject_before_execution() {
+        let (started, starts) = mpsc::channel();
+        let mut releases = Vec::new();
+        let mut pending = Vec::new();
+        for _ in 0..2 {
+            let (release, wait) = mpsc::channel();
+            releases.push(release);
+            let started = started.clone();
+            pending.push(PendingRequest::start(mutation_jobs(), move || {
+                started.send(()).unwrap();
+                wait.recv_timeout(Duration::from_secs(10)).unwrap();
+                Ok(IpcResponse::Success {
+                    message: "completed".into(),
+                })
+            }));
+        }
+        for _ in 0..2 {
+            starts.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        let executions = Arc::new(AtomicUsize::new(0));
+        for _ in 0..16 {
+            let executions = executions.clone();
+            pending.push(PendingRequest::start(mutation_jobs(), move || {
+                executions.fetch_add(1, Ordering::SeqCst);
+                Ok(IpcResponse::Success {
+                    message: "queued completion".into(),
+                })
+            }));
+        }
+        let rejected_counter = executions.clone();
+        let rejected = PendingRequest::start(mutation_jobs(), move || {
+            rejected_counter.fetch_add(1, Ordering::SeqCst);
+            Err("must never run".into())
+        });
+        assert!(matches!(
+            rejected.receiver.recv_timeout(Duration::from_secs(5)),
+            Ok(Err(JobError::QueueFull))
+        ));
+        let (_, preview) = BackgroundJobs::global().submit(Duration::from_secs(5), || 42);
+        assert_eq!(
+            preview.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Ok(42)
+        );
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for request in pending {
+            assert!(matches!(
+                request.receiver.recv_timeout(Duration::from_secs(5)),
+                Ok(Ok(Ok(IpcResponse::Success { .. })))
+            ));
+        }
+        assert_eq!(executions.load(Ordering::SeqCst), 16);
     }
 }

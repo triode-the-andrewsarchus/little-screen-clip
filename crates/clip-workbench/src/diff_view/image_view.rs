@@ -397,7 +397,7 @@ impl DiffViewerState {
             return;
         };
         self.copy_job = Some(crate::desktop_ipc::PendingRequest::start(
-            BackgroundJobs::global(),
+            crate::desktop_ipc::mutation_jobs(),
             move || {
                 let request =
                     image_mask_push_request(&result).map_err(|error| error.to_string())?;

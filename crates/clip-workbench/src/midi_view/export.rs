@@ -7,7 +7,7 @@ impl MidiViewerState {
     pub fn copy_selection(&mut self, now: f64) -> bool {
         self.copy_selection_on(
             now,
-            BackgroundJobs::global(),
+            crate::desktop_ipc::mutation_jobs(),
             midi_export_dir(),
             handoff_midi_export,
         )

@@ -295,7 +295,7 @@ impl ImagePreviewState {
     /// and synchronizes with OS clipboard.
 
     pub fn copy_optimized_to_slot(&mut self) {
-        self.copy_optimized_to_slot_on(BackgroundJobs::global());
+        self.copy_optimized_to_slot_on(crate::desktop_ipc::mutation_jobs());
     }
 
     pub(super) fn copy_optimized_to_slot_on(&mut self, jobs: &BackgroundJobs) {

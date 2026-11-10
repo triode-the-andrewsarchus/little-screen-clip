@@ -130,17 +130,18 @@ impl AudioPreviewState {
         }
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
-        let (ticket, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
-            extract_and_handoff_audio_slice(plan, &worker_cancelled)
-                .map(|delivery| audio_slice_copy_status(mode, start, end, delivery))
-                .map_err(|error| {
-                    format!(
-                        "Failed to copy {} ({:.3}s): {error}",
-                        audio_slice_copy_description(mode),
-                        (end - start).max(0.001)
-                    )
-                })
-        });
+        let (ticket, receiver) =
+            crate::desktop_ipc::mutation_jobs().submit(Duration::MAX, move || {
+                extract_and_handoff_audio_slice(plan, &worker_cancelled)
+                    .map(|delivery| audio_slice_copy_status(mode, start, end, delivery))
+                    .map_err(|error| {
+                        format!(
+                            "Failed to copy {} ({:.3}s): {error}",
+                            audio_slice_copy_description(mode),
+                            (end - start).max(0.001)
+                        )
+                    })
+            });
         self.slice_copy_job = Some(AudioSliceCopyJob {
             ticket,
             cancelled,
@@ -228,19 +229,20 @@ impl AudioPreviewState {
             .collect::<Vec<_>>();
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
-        let (ticket, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
-            run_audio_slice_batch(
-                &plans,
-                mode,
-                &worker_cancelled,
-                extract_audio_slice_file,
-                send_audio_handoff,
-                |paths| {
-                    little_clip_core::copy_file_uris_to_system_clipboard(paths)
-                        .map_err(|error| error.to_string())
-                },
-            )
-        });
+        let (ticket, receiver) =
+            crate::desktop_ipc::mutation_jobs().submit(Duration::MAX, move || {
+                run_audio_slice_batch(
+                    &plans,
+                    mode,
+                    &worker_cancelled,
+                    extract_audio_slice_file,
+                    send_audio_handoff,
+                    |paths| {
+                        little_clip_core::copy_file_uris_to_system_clipboard(paths)
+                            .map_err(|error| error.to_string())
+                    },
+                )
+            });
         self.slice_copy_job = Some(AudioSliceCopyJob {
             ticket,
             cancelled,
