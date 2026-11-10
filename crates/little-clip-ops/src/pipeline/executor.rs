@@ -4,14 +4,15 @@
 //! topological order, handles inter-process communication for CLI tools (FFmpeg, ImageMagick, jq, Python),
 //! manages prompt inputs, and collects output payloads for slot state commitment or file saving.
 
+use super::artifacts::Workspace;
 use super::compiler::CompiledPipeline;
 use super::types::{NodeGraph, NodeInstance, NodeKind, PortValue};
 use base64::Engine;
+use little_clip_core::CommandRequest;
 use little_clip_core::item::{ClipItem, ClipPayload};
 use little_clip_core::slot::SlotManager;
-use little_clip_core::{ArtifactLease, ArtifactStore, CommandRequest};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 use thiserror::Error;
@@ -39,27 +40,12 @@ pub enum PipelineError {
     InvalidGraph(String),
 }
 
-/// Consolidated outputs and side-effects produced by a pipeline graph execution.
-#[derive(Debug, Clone, Default)]
-pub struct PipelineExecutionResult {
-    /// Resulting item to assign to Left Hand if a `SetLeftHand` or `PasteToApp` node fired.
-    pub left_hand_item: Option<ClipItem>,
-    /// Resulting item to assign to Right Hand if a `SetRightHand` node fired.
-    pub right_hand_item: Option<ClipItem>,
-    /// Paths to files saved to disk during execution.
-    pub saved_files: Vec<PathBuf>,
-    /// True if the output item should be simulated pasted into the active application.
-    pub should_paste: bool,
-    /// Per-node intermediate output summary previews.
-    pub node_previews: HashMap<Uuid, String>,
-}
+pub use super::types::PipelineExecutionResult;
 
 /// Evaluator that topologically executes a `NodeGraph` against current slot contents.
 pub struct PipelineExecutor<'a> {
     graph: &'a NodeGraph,
     slot_mgr: &'a SlotManager,
-    temp_dir: PathBuf,
-    _workspace: Option<ArtifactLease>,
     /// Node-specific prompt overrides mapped by node UUID.
     pub prompt_overrides: HashMap<Uuid, String>,
     /// Single prompt override applied to the first interactive prompt node.
@@ -67,24 +53,11 @@ pub struct PipelineExecutor<'a> {
 }
 
 impl<'a> PipelineExecutor<'a> {
-    /// Constructs a new `PipelineExecutor` with an isolated temporary working directory.
+    /// Constructs an evaluator that creates isolated scratch space for each execution.
     pub fn new(graph: &'a NodeGraph, slot_mgr: &'a SlotManager) -> Self {
-        let workspace = ArtifactStore::new()
-            .and_then(|store| store.create_workspace("pipeline", "run"))
-            .ok();
-        let temp_dir = workspace
-            .as_ref()
-            .map(|workspace| workspace.path().to_path_buf())
-            .unwrap_or_else(|| {
-                std::env::temp_dir().join(format!("little_clip_pipeline_runs_{}", Uuid::new_v4()))
-            });
-        let _ = std::fs::create_dir_all(&temp_dir);
-
         Self {
             graph,
             slot_mgr,
-            temp_dir,
-            _workspace: workspace,
             prompt_overrides: HashMap::new(),
             single_prompt_override: None,
         }
@@ -104,6 +77,9 @@ impl<'a> PipelineExecutor<'a> {
 
     /// Topologically sorts the graph nodes and executes all operations in dependency order.
     ///
+    /// Scratch files are removed on return. Files referenced by the final hand items
+    /// are retained independently of the executor and survive serialization.
+    ///
     /// # Errors
     ///
     /// Returns [`PipelineError`] if graph compilation fails, if a required input is missing at
@@ -111,6 +87,7 @@ impl<'a> PipelineExecutor<'a> {
     /// or if script evaluation fails.
     pub fn execute(&self) -> Result<PipelineExecutionResult, PipelineError> {
         let compiled = CompiledPipeline::compile(self.graph)?;
+        let workspace = Workspace::new()?;
         let mut outputs: HashMap<(Uuid, String), PortValue> = HashMap::new();
         let mut result = PipelineExecutionResult::default();
 
@@ -124,7 +101,8 @@ impl<'a> PipelineExecutor<'a> {
                 }
             }
 
-            let (node_outputs, preview) = self.execute_node(node, &inputs, &mut result)?;
+            let (node_outputs, preview) =
+                self.execute_node(node, &inputs, &mut result, &workspace)?;
             if let Some(p) = preview {
                 result.node_previews.insert(node.id, p);
             }
@@ -133,6 +111,7 @@ impl<'a> PipelineExecutor<'a> {
             }
         }
 
+        workspace.retain_outputs(&mut result)?;
         Ok(result)
     }
 
@@ -166,7 +145,9 @@ impl<'a> PipelineExecutor<'a> {
         node: &'a NodeInstance,
         inputs: &HashMap<String, PortValue>,
         result: &mut PipelineExecutionResult,
+        workspace: &Workspace,
     ) -> Result<(Vec<(String, PortValue)>, Option<String>), PipelineError> {
+        let temp_dir = workspace.path();
         let mut out = Vec::new();
         #[allow(unused_assignments)]
         let mut preview = None;
@@ -184,7 +165,7 @@ impl<'a> PipelineExecutor<'a> {
         match &node.kind {
             NodeKind::LeftHandSource => {
                 if let Some(item) = self.slot_mgr.left_hand() {
-                    let val = source_port_value(node, item)?;
+                    let val = source_port_value(node, item, workspace)?;
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
@@ -195,7 +176,7 @@ impl<'a> PipelineExecutor<'a> {
             }
             NodeKind::RightHandSource => {
                 if let Some(item) = self.slot_mgr.right_hand() {
-                    let val = source_port_value(node, item)?;
+                    let val = source_port_value(node, item, workspace)?;
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
@@ -206,7 +187,7 @@ impl<'a> PipelineExecutor<'a> {
             }
             NodeKind::SlotSource(slot_id) => {
                 if let Some(item) = self.slot_mgr.get(*slot_id) {
-                    let val = source_port_value(node, item)?;
+                    let val = source_port_value(node, item, workspace)?;
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
@@ -432,7 +413,7 @@ else:
                     .get("border_size")
                     .map(|s| s.as_str())
                     .unwrap_or("24");
-                let out_path = self.temp_dir.join(format!("framed_{}.png", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("framed_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
                     path_arg!(in_path),
@@ -479,7 +460,7 @@ else:
                     .get("font_size")
                     .map(|s| s.as_str())
                     .unwrap_or("24");
-                let out_path = self.temp_dir.join(format!("titled_{}.png", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("titled_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
                     path_arg!(in_path),
@@ -510,9 +491,7 @@ else:
                     .get("geometry")
                     .map(|s| s.as_str())
                     .unwrap_or("1000x1000+0+0");
-                let out_path = self
-                    .temp_dir
-                    .join(format!("cropped_{}.png", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("cropped_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
                     path_arg!(in_path),
@@ -538,9 +517,7 @@ else:
                     .get("max_height")
                     .map(|s| s.as_str())
                     .unwrap_or("1080");
-                let out_path = self
-                    .temp_dir
-                    .join(format!("resized_{}.png", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("resized_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
                     path_arg!(in_path),
@@ -560,7 +537,7 @@ else:
                     .get("quality")
                     .map(|s| s.as_str())
                     .unwrap_or("90");
-                let out_path = self.temp_dir.join(format!("{}.webp", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("{}.webp", Uuid::new_v4()));
 
                 run_magick(&[path_arg!(in_path), "-quality", q, path_arg!(out_path)])
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -575,9 +552,7 @@ else:
                     .get("degrees")
                     .map(|s| s.as_str())
                     .unwrap_or("90");
-                let out_path = self
-                    .temp_dir
-                    .join(format!("rotated_{}.png", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("rotated_{}.png", Uuid::new_v4()));
 
                 run_magick(&[path_arg!(in_path), "-rotate", deg, path_arg!(out_path)])
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -588,9 +563,7 @@ else:
             NodeKind::ImageStitch => {
                 let left_path = self.get_input_file(inputs, &["Left Image", "In 1", "In"])?;
                 let right_path = self.get_input_file(inputs, &["Right Image", "In 2"])?;
-                let out_path = self
-                    .temp_dir
-                    .join(format!("stitched_{}.png", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("stitched_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
                     path_arg!(left_path),
@@ -605,9 +578,7 @@ else:
             }
             NodeKind::ImageStripExif => {
                 let in_path = self.get_input_file(inputs, &["Image In", "In"])?;
-                let out_path = self
-                    .temp_dir
-                    .join(format!("stripped_{}.png", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("stripped_{}.png", Uuid::new_v4()));
 
                 run_magick(&[path_arg!(in_path), "-strip", path_arg!(out_path)])
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -638,18 +609,14 @@ else:
                 let mask_png = res
                     .encode_mask_png()
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
-                let out_mask = self
-                    .temp_dir
-                    .join(format!("diff_mask_{}.png", Uuid::new_v4()));
+                let out_mask = temp_dir.join(format!("diff_mask_{}.png", Uuid::new_v4()));
                 std::fs::write(&out_mask, mask_png)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
 
                 let overlay_png = res
                     .encode_overlay_png()
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
-                let out_overlay = self
-                    .temp_dir
-                    .join(format!("diff_overlay_{}.png", Uuid::new_v4()));
+                let out_overlay = temp_dir.join(format!("diff_overlay_{}.png", Uuid::new_v4()));
                 std::fs::write(&out_overlay, overlay_png)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
 
@@ -670,7 +637,7 @@ else:
                     .map(|s| s.as_str())
                     .unwrap_or("-14");
                 let tp = node.props.get("tp").map(|s| s.as_str()).unwrap_or("-1.5");
-                let out_path = self.temp_dir.join(format!("norm_{}.wav", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("norm_{}.wav", Uuid::new_v4()));
 
                 let filter = format!("loudnorm=I={}:LRA=11:TP={}", target, tp);
                 run_command(
@@ -696,9 +663,7 @@ else:
                     .get("threshold_db")
                     .map(|s| s.as_str())
                     .unwrap_or("-50");
-                let out_path = self
-                    .temp_dir
-                    .join(format!("trimmed_{}.wav", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("trimmed_{}.wav", Uuid::new_v4()));
 
                 let filter = format!(
                     "silenceremove=start_periods=1:start_duration=0.1:start_threshold={}dB:stop_periods=1:stop_duration=0.1:stop_threshold={}dB",
@@ -727,7 +692,7 @@ else:
                     .get("gain_db")
                     .map(|s| s.as_str())
                     .unwrap_or("3.0");
-                let out_path = self.temp_dir.join(format!("gain_{}.wav", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("gain_{}.wav", Uuid::new_v4()));
 
                 let filter = format!("volume={}dB", db);
                 run_command(
@@ -749,7 +714,7 @@ else:
             NodeKind::AudioConcat => {
                 let in1 = self.get_input_file(inputs, &["Clip 1", "In 1", "In"])?;
                 let in2 = self.get_input_file(inputs, &["Clip 2", "In 2"])?;
-                let out_path = self.temp_dir.join(format!("concat_{}.wav", Uuid::new_v4()));
+                let out_path = temp_dir.join(format!("concat_{}.wav", Uuid::new_v4()));
 
                 let filter = "[0:0][1:0]concat=n=2:v=0:a=1[out]";
                 run_command(
@@ -816,7 +781,17 @@ else:
                     .get("archive_name")
                     .map(|s| s.as_str())
                     .unwrap_or("archive.zip");
-                let out_path = self.temp_dir.join(archive_name);
+                let mut components = Path::new(archive_name).components();
+                if !matches!(
+                    (components.next(), components.next()),
+                    (Some(Component::Normal(_)), None)
+                ) {
+                    return Err(PipelineError::NodeFailed(
+                        node.title.clone(),
+                        "Archive name must be a filename within the workspace".into(),
+                    ));
+                }
+                let out_path = temp_dir.join(archive_name);
 
                 let mut args = vec!["-r", path_arg!(out_path)];
                 for p in &paths {
@@ -1026,8 +1001,13 @@ else:
     }
 }
 
-fn source_port_value(node: &NodeInstance, item: &ClipItem) -> Result<PortValue, PipelineError> {
-    PortValue::from_clip_item(item)
+fn source_port_value(
+    node: &NodeInstance,
+    item: &ClipItem,
+    workspace: &Workspace,
+) -> Result<PortValue, PipelineError> {
+    workspace
+        .source_value(item)
         .map_err(|error| PipelineError::NodeFailed(node.title.clone(), error.to_string()))
 }
 
@@ -1145,6 +1125,77 @@ mod tests {
     use crate::pipeline::catalog::{find_template, instantiate_template};
     use crate::pipeline::recipes::{make_clean_and_slugify_recipe, make_pad_and_caption_recipe};
     use crate::pipeline::types::Connection;
+
+    #[test]
+    fn generated_archive_survives_executor_and_result_serialization() {
+        let fixture = tempfile::tempdir().unwrap();
+        let input = fixture.path().join("notes.txt");
+        std::fs::write(&input, b"pipeline retention fixture").unwrap();
+        let source = instantiate_template(find_template("source_lh").unwrap(), [0.0, 0.0]);
+        let archive = instantiate_template(find_template("file_zip").unwrap(), [100.0, 0.0]);
+        let left = instantiate_template(find_template("sink_lh").unwrap(), [200.0, 0.0]);
+        let right = instantiate_template(find_template("sink_rh").unwrap(), [200.0, 100.0]);
+        let mut graph = NodeGraph {
+            connections: vec![
+                Connection {
+                    from_node: source.id,
+                    from_pin: "Out".into(),
+                    to_node: archive.id,
+                    to_pin: "Files In".into(),
+                },
+                Connection {
+                    from_node: archive.id,
+                    from_pin: "Zip Archive".into(),
+                    to_node: left.id,
+                    to_pin: "In".into(),
+                },
+                Connection {
+                    from_node: archive.id,
+                    from_pin: "Zip Archive".into(),
+                    to_node: right.id,
+                    to_pin: "In".into(),
+                },
+            ],
+            nodes: vec![source, archive, left, right],
+            ..Default::default()
+        };
+        let mut slots = SlotManager::default();
+        slots.push_left(ClipItem::from_files(vec![input]));
+        // Matches the daemon's temporary-executor handoff to another task.
+        let result = PipelineExecutor::new(&graph, &slots).execute().unwrap();
+        let item: ClipItem = serde_json::from_slice(
+            &serde_json::to_vec(result.left_hand_item.as_ref().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let path = item.file_path().unwrap();
+        assert_eq!(
+            result
+                .right_hand_item
+                .as_ref()
+                .unwrap()
+                .file_path()
+                .unwrap(),
+            path
+        );
+        drop(result);
+        assert!(std::fs::read(&path).unwrap().starts_with(b"PK"));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        for invalid in [
+            "../escaped.zip",
+            "nested/file.zip",
+            "/tmp/escaped.zip",
+            "",
+            ".",
+        ] {
+            graph.nodes[1]
+                .props
+                .insert("archive_name".into(), invalid.into());
+            assert!(matches!(
+                PipelineExecutor::new(&graph, &slots).execute(),
+                Err(PipelineError::NodeFailed(_, _))
+            ));
+        }
+    }
 
     #[test]
     fn test_topological_sort_and_cycle_detection() {

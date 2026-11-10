@@ -12,6 +12,21 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// Consolidated outputs and side-effects produced by a pipeline graph execution.
+#[derive(Debug, Clone, Default)]
+pub struct PipelineExecutionResult {
+    /// Resulting item to assign to Left Hand if a `SetLeftHand` or `PasteToApp` node fired.
+    pub left_hand_item: Option<ClipItem>,
+    /// Resulting item to assign to Right Hand if a `SetRightHand` node fired.
+    pub right_hand_item: Option<ClipItem>,
+    /// Paths to files saved to disk during execution.
+    pub saved_files: Vec<PathBuf>,
+    /// True if the output item should be simulated pasted into the active application.
+    pub should_paste: bool,
+    /// Per-node intermediate output summary previews.
+    pub node_previews: HashMap<Uuid, String>,
+}
+
 /// Data type classification for node graph input and output pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PortType {
@@ -161,8 +176,11 @@ impl PortValue {
     pub fn into_clip_item(self, title_hint: &str) -> ClipItem {
         match self {
             PortValue::Text(text) => ClipItem::from_text(text),
-            PortValue::ImagePath(path) => {
-                if let Ok(bytes) = std::fs::read(&path) {
+            PortValue::FilePath(path) if !little_clip_core::item::is_image_path(&path) => {
+                ClipItem::from_single_file(&path)
+            }
+            PortValue::ImagePath(path) | PortValue::FilePath(path) => {
+                if let Ok(bytes) = little_clip_core::kernel_interface::read_content(&path) {
                     let mime = little_clip_core::item::guess_image_mime(&path);
                     if let Some(mut item) = ClipItem::from_image_bytes(bytes, mime) {
                         let file_name = path
@@ -177,22 +195,6 @@ impl PortValue {
             }
             PortValue::AudioPath(path) => ClipItem::from_audio(path.clone())
                 .unwrap_or_else(|| ClipItem::from_single_file(&path)),
-            PortValue::FilePath(path) => {
-                if let Ok(bytes) = std::fs::read(&path) {
-                    if little_clip_core::item::is_image_path(&path) {
-                        let mime = little_clip_core::item::guess_image_mime(&path);
-                        if let Some(mut item) = ClipItem::from_image_bytes(bytes, mime) {
-                            let file_name = path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_else(|| title_hint.to_string());
-                            item.title = file_name;
-                            return item;
-                        }
-                    }
-                }
-                ClipItem::from_single_file(&path)
-            }
             PortValue::FileBatch(paths) => {
                 if paths.is_empty() {
                     ClipItem::from_text(title_hint.to_string())
@@ -432,4 +434,51 @@ fn is_image_like(item: &ClipItem) -> bool {
 
 fn is_audio_like(item: &ClipItem) -> bool {
     matches!(item.payload, ClipPayload::AudioRef { .. })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_materialization_preserves_image_bytes_and_ordinary_references() {
+        let fixture = tempfile::tempdir().unwrap();
+        let image = fixture.path().join("image.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+            .save(&image)
+            .unwrap();
+        for value in [
+            PortValue::ImagePath(image.clone()),
+            PortValue::FilePath(image.clone()),
+        ] {
+            let item = value.into_clip_item("result");
+            assert!(matches!(
+                item.payload,
+                ClipPayload::Image {
+                    width: 2,
+                    height: 2,
+                    ..
+                }
+            ));
+            if let ClipPayload::Image { bytes, path, .. } = item.payload {
+                assert_eq!(bytes, std::fs::read(&image).unwrap());
+                if let Some(path) = path {
+                    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                    std::fs::remove_file(path).unwrap();
+                }
+            }
+        }
+        let binary = fixture.path().join("ordinary.bin");
+        std::fs::copy(&image, &binary).unwrap();
+        let protected = fixture.path().join("protected.png");
+        std::os::unix::fs::symlink("/dev/null", &protected).unwrap();
+        for path in [binary, protected] {
+            assert_eq!(
+                PortValue::FilePath(path.clone())
+                    .into_clip_item("result")
+                    .payload,
+                ClipPayload::FileBatch(vec![path])
+            );
+        }
+    }
 }

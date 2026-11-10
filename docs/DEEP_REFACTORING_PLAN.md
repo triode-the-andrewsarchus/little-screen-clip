@@ -255,7 +255,7 @@ For each approved slice:
 
 ## Execution status
 
-The user authorized completing this plan after the review and future-roadmap additions. Execute the phases incrementally, retaining the specific design and adoption gates above. The initial architecture baseline is `deep-refactor-start`; the working tree began at `4fabcc3`, with 164 GiB available. Phase 1 is complete against its confirmed blocking/lifecycle worklist: mount discovery, USB ownership, retained UI mutations, clipboard routes, studio handoffs, worker isolation and image retirement have been verified. Phase 2 has delivered shared peak-range queries, direct document hints, source/readiness contracts and the presentation inventory. Phase 3 has delivered shared UI, neutral studios and independent application ownership. Phase 3a has delivered the opt-in native mirror prototype and its measured findings; the raster mirror remains the default. Phase 4 has delivered the headless search backend, including source readers and coordinator. Remaining domain/state-transition audits and phase 6 status/clock/artifact work are outstanding; native mirror adoption retains its separate review gate.
+The user authorized completing this plan after the review and future-roadmap additions. Execute the phases incrementally, retaining the specific design and adoption gates above. The initial architecture baseline is `deep-refactor-start`; the working tree began at `4fabcc3`, with 164 GiB available. Phase 1 is complete against its confirmed blocking/lifecycle worklist: mount discovery, USB ownership, retained UI mutations, clipboard routes, studio handoffs, worker isolation and image retirement have been verified. Phase 2 has delivered shared peak-range queries, direct document hints, source/readiness contracts and the presentation inventory. Phase 3 has delivered shared UI, neutral studios and independent application ownership. Phase 3a has delivered the opt-in native mirror prototype and its measured findings; the raster mirror remains the default. Phase 4 has delivered the headless search backend, including source readers and coordinator. Phase 6 has delivered targeted feedback lifetimes/clock repairs and per-execution pipeline scratch/output ownership. Remaining domain/state-transition and operation-completion audits, plus the final requirement-by-requirement integration audit, are outstanding; native mirror adoption retains its separate review gate.
 
 
 ### Implementation ledger
@@ -906,3 +906,69 @@ with the existing approximate-constant allowance and warnings retained. The
 preceding feedback integration remains the full 2624-test workspace gate; this
 small transition repair has its own 29-test focused gate.
 Both desktop builds pass after the repair (`/tmp/deep-audio-viewport-build.log`).
+
+
+### Phase 6 checkpoint: pipeline scratch and retained outputs
+
+A real ZIP pipeline reproduced a dangling final hand reference after its temporary
+executor returned, matching the daemon's blocking-task handoff. Its serialized
+`ClipItem` still named the deleted run workspace
+(`/tmp/deep-pipeline-retention-before.log`). Execution now creates an owned
+workspace after graph validation. Both the normal cache location and fallback
+use a drop-cleaned directory, and creation failures return through `execute`.
+An unused executor no longer allocates scratch space. The existing infallible
+constructor, reusable executor and enum dispatch remain available.
+
+Only generated files referenced by the final hand items move to a retained
+output directory. Duplicate references share one file, with no payload copy;
+source/result inode checks and the existing no-overwrite rename primitive guard
+publication. Working and publication directories retain ordinary parent/root
+handles. Failed publication removes its partial outputs; cleanup refuses a
+substituted workspace and follows the held parent when its pathname changes.
+External input references remain unchanged. Materialized in-memory image inputs
+now belong to the run rather than a permanently retained input artifact. Archive
+names cannot escape the working directory.
+
+`PortValue` image conversion is consolidated and uses core's guarded reader.
+Generic non-image file references no longer read their entire contents before
+classification, avoiding an unnecessary whole-archive allocation. Result data
+lives with pipeline types, with its old executor export preserved. No IPC schema,
+slot history, accepted external output, helper protocol or command lifetime was
+changed. No age-only cleanup sweep was enabled: final path-based outputs must
+remain available to persisted clipboard consumers.
+
+The owned-workspace, single-file publication and batch-retention boundaries have
+separate responsibilities; this is not a registry or generic operation framework.
+Architecture comparison against `deep-pipeline-artifacts-start` reports raw
+REGRESSION: functions +17, NLOC +383, total CCN +48, unchanged average/max CCN and
+16 cycles. Clone groups decrease 1503→1502, duplication 4.44%→4.43%. The remaining
+large enum gains one archive-name safety branch (105→106); modified clone reports
+touch existing dispatch blocks, and the reported Python cycle differences only
+reorder unchanged members. No new production function exceeds CCN 15. These
+are necessary ownership/safety checks and regression tests, not a claim of lower
+aggregate complexity. Evidence: `/tmp/deep-pipeline-architecture-final-source.json`.
+
+The audit also identified outstanding built-in `SaveToDisk` behavior: raw copies
+can overwrite existing destinations, and a later batch failure can hide files
+already written. Trace these through the operation-completion/safety criteria
+before declaring the pipeline or full plan complete. General scripts remain
+explicit execution, not a newly sandboxed rule engine.
+
+Validation for this checkpoint passes 24 focused pipeline tests and **2633
+workspace tests, zero failures, 30 ignored**, including doctests. All-target
+workspace compilation, both desktop builds and ops API documentation pass; the
+rendered executor lifetime contract and result-type page were checked. Ops
+all-target diagnostic Clippy completes with the already documented
+`approx_constant` allowance and existing warnings; no diagnostic points to the
+new workspace module or consolidated conversion. This is not a warning-free
+workspace claim. Logs: `/tmp/deep-pipeline-focused-accepted.log`,
+`/tmp/deep-pipeline-workspace-accepted.log`, `/tmp/deep-pipeline-check.log`,
+`/tmp/deep-pipeline-build.log`, `/tmp/deep-pipeline-clippy.log`,
+`/tmp/deep-pipeline-doc.log`. An earlier final run exposed an incorrect new test
+assumption that clipboard images have no retained path; core intentionally stages
+them. The test now verifies image bytes and cleans its staged fixture; the failed
+run remains `/tmp/deep-pipeline-workspace-final.log` and is not accepted evidence.
+Formatting/diff checks pass. No UI behavior changed or new private UI acceptance
+is claimed; host lifecycle/rendering tests remain in the full suite. Cargo work
+was serialized at four jobs, disk remains about 141 GiB free, and no sweep or
+extra build profile was introduced.

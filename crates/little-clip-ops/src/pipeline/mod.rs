@@ -3,6 +3,7 @@
 //! Provides a visual DAG computation engine with customizable nodes (transforms, sources, sinks),
 //! typed data flow ports (`PortType`, `PortValue`), serializable recipes, and parallel graph execution.
 
+mod artifacts;
 pub mod catalog;
 pub mod compiler;
 pub mod executor;
