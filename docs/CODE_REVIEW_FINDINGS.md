@@ -23,17 +23,30 @@
 
 ---
 
+## Remediation status
+
+The original observations below are historical and include pre-refactor paths.
+Checked findings with a **Current verification** note have been revalidated;
+unchecked findings still require investigation. Cleanup suggestions and missing
+optional features are assessed separately from confirmed behavior bugs. Fixes are
+committed in coherent batches; validation never touches the host clipboard or USB
+display unless explicitly stated.
+
 ## Findings by Section
 
 ### 1. `crates/little-clip-driver`
 
 - [x] **[Dead Dependencies] Unused Cargo dependencies (`little-clip-core`, `tracing-subscriber`)** *(completed in `1e3631f`)*:
   In [`crates/little-clip-driver/Cargo.toml`](file:///home/vcarlson/little-screen-clip/crates/little-clip-driver/Cargo.toml#L12-L13), both `little-clip-core` and `tracing-subscriber` are listed under `[dependencies]`, but neither is referenced anywhere in `src/lib.rs` or `src/device.rs`. Removing `little-clip-core` in particular decouples the hardware driver crate from core domain compilation.
-- [ ] **[Dead Code / Redundant Guard] `do_handshake` bounds check `response.len() > 22`**:
+- [x] **[Dead Code / Redundant Guard] `do_handshake` bounds check `response.len() > 22`**:
+  **Current verification:** Removed both always-true length guards. The successful handshake requires at least 37 received bytes before accessing offset 22. `cargo test -j4 -p little-clip-driver -p clipctl` passes; no hardware I/O was performed.
+
   In [`crates/little-clip-driver/src/device.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-driver/src/device.rs#L161-L188), `response` is allocated as `vec![0u8; 512]` and `read < 37` already returns an error on line 167. The checks `if response.len() > 22` on lines 181 and 186 are always true.
 - [ ] **[Bug / Protocol Correctness] `send_frame` ignores USB ACK payload contents** *(partially addressed on `main` in `94599ac`; `read == 0` is only unchecked on `feat/embedding-and-question-answering`)*:
   In [`crates/little-clip-driver/src/device.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-driver/src/device.rs#L309-L316), `send_frame` reads up to `USB_ACK_SIZE` (512) bytes into `ack` from `EP_IN`. On `feat/embedding-and-question-answering`, it ignores both the byte count returned by `read_bulk` and the contents of `ack`. On `main` (`94599ac`), `read == 0` and short bulk writes now return an error, though the status bytes inside `ack` are still not inspected.
-- [ ] **[Code Quality / Silent Errors] Ignored USB setup results in `TrofeoDriver::open`**:
+- [x] **[Code Quality / Silent Errors] Ignored USB setup results in `TrofeoDriver::open`**:
+  **Current verification:** Detach failures now emit a warning and configuration failures emit a debug diagnostic before the existing interface-claim attempt. This retains recovery through an already usable configuration; claim failures still propagate. Driver tests pass without accessing hardware.
+
   In [`crates/little-clip-driver/src/device.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-driver/src/device.rs#L114-L119), `let _ = handle.detach_kernel_driver(USB_INTERFACE);` and `let _ = handle.set_active_configuration(1);` silently discard errors without logging `debug!` or `warn!` diagnostics when detaching or setting configuration fails prior to `claim_interface`.
 
 ---

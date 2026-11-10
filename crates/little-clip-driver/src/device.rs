@@ -3,7 +3,7 @@
 use rusb::{DeviceHandle, GlobalContext};
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Winbond Vendor ID (0x0416).
 pub const VID_WINBOND: u16 = 0x0416;
@@ -111,12 +111,16 @@ impl TrofeoDriver {
         // Detach kernel driver if active
         if handle.kernel_driver_active(USB_INTERFACE).unwrap_or(false) {
             debug!("Detaching kernel driver on interface {}", USB_INTERFACE);
-            let _ = handle.detach_kernel_driver(USB_INTERFACE);
+            if let Err(error) = handle.detach_kernel_driver(USB_INTERFACE) {
+                warn!(%error, "Could not detach USB kernel driver before claiming interface");
+            }
         }
 
         // Set configuration 1 and claim interface 0
         debug!("Setting active configuration...");
-        let _ = handle.set_active_configuration(1);
+        if let Err(error) = handle.set_active_configuration(1) {
+            debug!(%error, "Could not set USB configuration; trying existing configuration");
+        }
 
         debug!("Claiming interface {}...", USB_INTERFACE);
         handle.claim_interface(USB_INTERFACE)?;
@@ -184,12 +188,12 @@ impl TrofeoDriver {
         let chunk_cmd = response[8];
         let (pm, sub) = if chunk_cmd == 2 {
             let pm = 49 + response[20];
-            let sub = if response.len() > 22 { response[22] } else { 0 };
+            let sub = response[22];
             (pm, sub)
         } else {
             let raw_pm = if response[20] <= 3 { 1 } else { response[20] };
             let pm = 64 + raw_pm;
-            let raw_sub = if response.len() > 22 { response[22] } else { 0 };
+            let raw_sub = response[22];
             (pm, raw_sub + 1)
         };
 
