@@ -28,9 +28,9 @@
 The original observations below are historical and include pre-refactor paths.
 Checked findings with a **Current verification** note have been revalidated;
 unchecked findings still require investigation. Cleanup suggestions and missing
-optional features are assessed separately from confirmed behavior bugs. Fixes are
-committed in coherent batches; validation never touches the host clipboard or USB
-display unless explicitly stated.
+optional features are assessed separately from confirmed behavior bugs. Each confirmed bug fix is
+committed separately with its checklist update and verification. Validation never
+touches the host clipboard or USB display unless explicitly stated.
 
 ## Findings by Section
 
@@ -253,7 +253,8 @@ display unless explicitly stated.
 
 ### 9. `crates/clip-workbench` — Media & Document Studios
 
-- [ ] **[Bug / Mixed Clock Sources Cause Immediate Toast Expiration in `midi_view` and `pdf_view`]**:
+- [x] **[Bug / Mixed Clock Sources Cause Immediate Toast Expiration in `midi_view` and `pdf_view`]**:
+  **Current verification:** MIDI export and both studio renderers already use the shared monotonic `feedback_time`. Fixed the remaining PDF preview-worker completion path to use that same clock. The saturated-queue regression now injects a large independent egui uptime and checks visibility and expiry against the studio clock; it failed before the fix. Verified with the PDF raster tests and existing MIDI export-clock regression.
   - In [`crates/clip-workbench/src/midi_view/studio.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/midi_view/studio.rs#L22-L46) and [`line 800`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/midi_view/studio.rs#L800), line 22 defines `let now = ui.input(|input| input.time);` (egui uptime seconds) and passes it to `self.poll_export(now, ui.ctx())`, which records toast timestamps using `ui.input(|i| i.time)`. Line 43 then shadows `let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64();` (~`1.79e9`), and line 800 checks `self.status_toast.active(now)` against that Unix timestamp. Because `1.79e9 - uptime_secs > 3.0`, **every toast set by `poll_export` (all MIDI slice/export completion and error messages) expires on the same frame and is never rendered**.
   - In [`crates/clip-workbench/src/pdf_view/studio.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/pdf_view/studio.rs#L12-L15) and [`crates/clip-workbench/src/pdf_view/preview_jobs.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/pdf_view/preview_jobs.rs#L186-L188), `studio.rs` uses `SystemTime::now()` for `now` and `self.status_toast.active(now)`, whereas `poll_preview_worker` in `preview_jobs.rs:186` sets `self.status_toast.set(message, ctx.input(|input| input.time))`. Any preview failure toast set by `poll_preview_worker` expires immediately on the same frame.
 - [x] **[Bug / Duplicated & Desynchronized Navigation State in `BinaryDiffViewState`]** *(completed in `d1079f9`)*:

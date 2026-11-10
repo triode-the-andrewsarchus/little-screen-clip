@@ -184,7 +184,7 @@ impl PdfEditorState {
                     }
                 }
                 self.status_toast
-                    .set(message, ctx.input(|input| input.time));
+                    .set(message, crate::ui_ext::feedback_time());
             }
         } else if finished && self.preview_job.is_none() {
             self.previews_loading = false;

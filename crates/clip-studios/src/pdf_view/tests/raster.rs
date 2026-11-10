@@ -129,7 +129,28 @@ fn saturated_preview_queue_reports_an_error_instead_of_loading_forever() {
         page.raster = None;
     }
     state.start_preview_worker_on(&jobs, |_, _, _| panic!("full queue must not render"));
-    state.poll_preview_worker(&egui::Context::default());
+    let ctx = egui::Context::default();
+    let _ = ctx.run(
+        egui::RawInput {
+            time: Some(1_000_000.0),
+            ..Default::default()
+        },
+        |ctx| {
+            state.poll_preview_worker(ctx);
+        },
+    );
+    let now = crate::ui_ext::feedback_time();
+    assert!(
+        state
+            .status_toast
+            .message(now)
+            .unwrap()
+            .contains("background job queue is full")
+    );
+    assert!(
+        state.status_toast.message(now + 5.0).is_none(),
+        "preview feedback must use the studio clock, not egui uptime"
+    );
     assert!(!state.previews_loading);
     assert!(state.preview_job.is_none());
     assert!(state.pages.iter().all(|page| {
