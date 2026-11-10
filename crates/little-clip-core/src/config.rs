@@ -807,6 +807,16 @@ impl AppConfig {
         save_setting_to_file("workbench", "appearance", value)
     }
 
+    /// Saves URL tracking cleanup preference while preserving unrelated settings.
+    ///
+    /// # Errors
+    /// Returns an error if the active configuration cannot be parsed or written.
+    pub fn save_trim_link_tracking_to_file(
+        enabled: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        save_setting_to_file("auto_actions", "trim_link_tracking", enabled)
+    }
+
     /// Save the Files audio-strip preference, preserving unrelated settings.
     pub fn save_file_manager_audio_spectrum_to_file(
         spectrum: bool,

@@ -173,6 +173,37 @@ impl DaemonContext {
         }
     }
 
+    async fn set_auto_action(&self, key: String, enabled: bool) -> IpcResponse {
+        if key != "trim_link_tracking" {
+            return IpcResponse::Error {
+                error: format!("Unknown auto-action: {key}"),
+            };
+        }
+        // Keep reload and other setters behind the same guard through disk and
+        // renderer publication, so an acknowledged preference cannot be rolled back.
+        let mut config = self.config.write().await;
+        let saved = tokio::task::spawn_blocking(move || {
+            little_clip_core::AppConfig::save_trim_link_tracking_to_file(enabled)
+                .map_err(|error| error.to_string())
+        })
+        .await;
+        match saved {
+            Ok(Ok(())) => {
+                config.auto_actions.trim_link_tracking = enabled;
+                self.renderer.write().await.set_config(config.clone());
+                IpcResponse::Success {
+                    message: format!("Auto-action '{key}' set to {enabled}"),
+                }
+            }
+            Ok(Err(error)) => IpcResponse::Error {
+                error: format!("Could not save auto-action: {error}"),
+            },
+            Err(error) => IpcResponse::Error {
+                error: format!("Auto-action save worker failed: {error}"),
+            },
+        }
+    }
+
     /// Renders a blank screen frame and dispatches it to the physical display.
     pub async fn render_and_send_blank(&self) {
         let frame = {
@@ -853,12 +884,10 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
             }
 
             Ok(IpcRequest::ReloadConfig) => {
+                let mut config = ctx.config.write().await;
                 let new_config = little_clip_core::config::AppConfig::load();
                 let new_audio_config = new_config.audio.clone();
-                {
-                    let mut config = ctx.config.write().await;
-                    *config = new_config.clone();
-                }
+                *config = new_config.clone();
                 match ctx.rolling_capture_config.write() {
                     Ok(mut config) => *config = new_audio_config.clone(),
                     Err(_) => warn!("Rolling audio configuration lock was poisoned during reload"),
@@ -877,6 +906,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     let mut r = ctx.renderer.write().await;
                     r.set_config(new_config);
                 }
+                drop(config);
                 ctx.refresh_display().await;
                 IpcResponse::Success {
                     message: "Configuration reloaded and applied".to_string(),
@@ -988,18 +1018,9 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 );
                 IpcResponse::AutoActions(map)
             }
-            Ok(IpcRequest::SetAutoAction { key, enabled }) => match key.as_str() {
-                "trim_link_tracking" => {
-                    let mut cfg = ctx.config.write().await;
-                    cfg.auto_actions.trim_link_tracking = enabled;
-                    IpcResponse::Success {
-                        message: format!("Auto-action '{}' set to {}", key, enabled),
-                    }
-                }
-                _ => IpcResponse::Error {
-                    error: format!("Unknown auto-action: {}", key),
-                },
-            },
+            Ok(IpcRequest::SetAutoAction { key, enabled }) => {
+                ctx.set_auto_action(key, enabled).await
+            }
             Err(e) => IpcResponse::Error {
                 error: format!("Invalid request: {}", e),
             },
@@ -1701,6 +1722,8 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
             .args(["--exact", name, "--test-threads=1"])
             .env("CLIPD_TEST_CLIPBOARD", directory.path())
             .env("PATH", directory.path())
+            .env("XDG_CONFIG_HOME", directory.path().join("config-home"))
+            .current_dir(directory.path())
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("DISPLAY")
             .output()
@@ -1712,6 +1735,141 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
             String::from_utf8_lossy(&output.stderr)
         );
         true
+    }
+
+    async fn test_ipc_request(
+        writer: &mut tokio::net::unix::OwnedWriteHalf,
+        lines: &mut tokio::io::Lines<BufReader<tokio::net::unix::OwnedReadHalf>>,
+        request: IpcRequest,
+    ) -> IpcResponse {
+        writer
+            .write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        serde_json::from_str(&response).unwrap()
+    }
+
+    #[tokio::test]
+    async fn auto_action_setter_persists_before_acknowledging_and_survives_reload() {
+        if isolated_clipboard_test(
+            "tests::auto_action_setter_persists_before_acknowledging_and_survives_reload",
+        ) {
+            return;
+        }
+        let path = PathBuf::from("config.toml");
+        std::fs::write(&path, "# keep this comment\n[workbench]\nappearance = 'light'\n[auto_actions]\ntrim_link_tracking = true\n").unwrap();
+        let ctx = test_context(SlotManager::default());
+        let initial = little_clip_core::AppConfig::load_from_path(&path).unwrap();
+        *ctx.config.write().await = initial.clone();
+        ctx.renderer.write().await.set_config(initial);
+        let (client, server) = UnixStream::pair().unwrap();
+        let handler = tokio::spawn(handle_client(server, Arc::clone(&ctx)));
+        let (reader, mut writer) = client.into_split();
+        let mut lines = BufReader::new(reader).lines();
+        for enabled in [false, true] {
+            let response = test_ipc_request(
+                &mut writer,
+                &mut lines,
+                IpcRequest::SetAutoAction {
+                    key: "trim_link_tracking".into(),
+                    enabled,
+                },
+            )
+            .await;
+            assert!(
+                matches!(response, IpcResponse::Success { .. }),
+                "{response:?}"
+            );
+            assert_eq!(
+                little_clip_core::AppConfig::load_from_path(&path)
+                    .unwrap()
+                    .auto_actions
+                    .trim_link_tracking,
+                enabled
+            );
+            assert_eq!(
+                ctx.config.read().await.auto_actions.trim_link_tracking,
+                enabled
+            );
+            assert_eq!(
+                ctx.renderer
+                    .read()
+                    .await
+                    .config
+                    .auto_actions
+                    .trim_link_tracking,
+                enabled
+            );
+            let response =
+                test_ipc_request(&mut writer, &mut lines, IpcRequest::ReloadConfig).await;
+            assert!(
+                matches!(response, IpcResponse::Success { .. }),
+                "{response:?}"
+            );
+            assert_eq!(
+                ctx.config.read().await.auto_actions.trim_link_tracking,
+                enabled
+            );
+            assert_eq!(
+                ctx.renderer
+                    .read()
+                    .await
+                    .config
+                    .auto_actions
+                    .trim_link_tracking,
+                enabled
+            );
+            assert!(
+                std::fs::read_to_string(&path)
+                    .unwrap()
+                    .contains("# keep this comment")
+            );
+            assert_eq!(
+                ctx.config.read().await.workbench.appearance,
+                little_clip_core::config::WorkbenchAppearance::Light
+            );
+        }
+        // Failed persistence must not publish an optimistic runtime value.
+        std::fs::write(&path, "invalid [ config").unwrap();
+        let response = test_ipc_request(
+            &mut writer,
+            &mut lines,
+            IpcRequest::SetAutoAction {
+                key: "trim_link_tracking".into(),
+                enabled: false,
+            },
+        )
+        .await;
+        assert!(matches!(response, IpcResponse::Error { .. }));
+        assert!(ctx.config.read().await.auto_actions.trim_link_tracking);
+        assert!(
+            ctx.renderer
+                .read()
+                .await
+                .config
+                .auto_actions
+                .trim_link_tracking
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "invalid [ config");
+        let response = test_ipc_request(
+            &mut writer,
+            &mut lines,
+            IpcRequest::SetAutoAction {
+                key: "unknown_action".into(),
+                enabled: false,
+            },
+        )
+        .await;
+        assert!(matches!(response, IpcResponse::Error { .. }));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "invalid [ config");
+        drop(writer);
+        drop(lines);
+        handler.await.unwrap();
     }
 
     #[tokio::test]
