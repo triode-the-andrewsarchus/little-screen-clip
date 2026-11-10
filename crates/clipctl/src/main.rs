@@ -416,7 +416,7 @@ fn print_slot(slot: SlotId, item: Option<&little_clip_core::ClipItem>) {
 fn parse_slot_str(s: &str) -> Result<SlotId, String> {
     SlotId::from_str_loose(s).ok_or_else(|| {
         format!(
-            "Invalid slot identifier: '{}'. Expected 'undo', 'left', 'l1', 'l2', 'r2', 'r1', 'right'",
+            "Invalid slot identifier: '{}'. Expected 'undo', 'left', 'l1', 'l2', 'l3', 'r2', 'r1', 'right'",
             s
         )
     })

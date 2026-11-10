@@ -63,7 +63,9 @@ display unless explicitly stated.
   **Current verification:** Paste and Left Hand restoration now share `clipctl::copy_item_to_os_clipboard`, preserving image bytes and MIME as well as text. The isolated fake-adapter regression test covers PNG, WebP and text without contacting a compositor or sending input. All three `clipctl` tests pass (`/tmp/review-cli-image-tests.log`).
 
   In [`crates/clipctl/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/clipctl/src/main.rs#L264-L274), after pasting from `RightHand`, `clipctl` restores `LeftHand` to the OS clipboard, but only handles `if let Some(left_text) = left_item.to_clipboard_text()`. Unlike lines 250–256 right above it, it omits the `else if let ClipPayload::Image { bytes, mime, .. }` branch, leaving `RightHand`'s pasted content on the OS clipboard whenever `LeftHand` holds an image.
-- [ ] **[Bug / Outdated Error Message] `parse_slot_str` omits `l3` from valid slot list**:
+- [x] **[Bug / Outdated Error Message] `parse_slot_str` omits `l3` from valid slot list**:
+  **Current verification:** The CLI error now includes `l3`, matching the existing `SlotId::LeftPrior3` parser and status output. This changes only the diagnostic text; accepted identifiers are unchanged.
+
   In [`crates/clipctl/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/clipctl/src/main.rs#L496-L503), `Status` prints `SlotId::LeftPrior3` (`l3`), and `SlotId::from_str_loose` accepts `"l3"`, but the error message in `parse_slot_str` says: `Expected 'undo', 'left', 'l1', 'l2', 'r2', 'r1', 'right'` (missing `'l3'`).
 - [ ] **[Dead / Unreachable CLI Features] `IpcRequest` / `IpcResponse` variants handled in `clipctl` with no CLI subcommands**:
   - `IpcResponse::AutoActions` and `IpcResponse::ScenePreviews` have formatting arms in [`crates/clipctl/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/clipctl/src/main.rs#L445-L458), and `IpcResponse::LastAction` has a formatting arm on line 365, yet `Commands` has no subcommand to query `GetAutoActions`, `SetAutoAction`, `GetLastAction`, or `GetScenePreviews`.
