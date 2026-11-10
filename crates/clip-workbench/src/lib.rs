@@ -29,36 +29,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-pub mod ansi;
 mod appearance_sync;
-pub mod audio_preview;
-pub mod barcode_worker;
-mod binary_diff_view;
 mod canvas;
 mod component_gallery;
-pub mod conversion_decode_worker;
-pub mod desktop_ipc;
-mod diff_view;
 pub mod file_manager;
-pub mod file_source;
-pub mod image_preview;
-pub mod midi_view;
-pub mod model3d_view;
-pub mod onnx_runtime;
-pub mod pdf_view;
 mod popup;
 mod rolling_audio_strip;
 mod script_editor;
 pub mod shell;
-pub mod splat_view;
-pub mod spreadsheet_view;
 mod state_sync;
-mod subtitle_view;
-pub mod text_preview;
-pub mod ui_ext;
 mod workbench;
 pub mod worker_cli;
 
+pub use clip_studios::{
+    ansi, audio_preview, barcode_worker, binary_diff_view, conversion_decode_worker, desktop_ipc,
+    diff_view, file_source, image_preview, midi_view, model3d_view, onnx_runtime, pdf_view,
+    splat_view, spreadsheet_view, subtitle_view, text_preview, ui_ext,
+};
 pub use clip_ui::{hex_to_c32, hex_to_c32_alpha, icons, ui_appearance, ui_tabs};
 
 const MAX_INLINE_MARKDOWN_CLASSIFICATION_BYTES: usize = 64 * 1024;
@@ -901,18 +888,7 @@ impl Drop for WorkbenchApp {
     }
 }
 
-pub(crate) fn send_ipc_request(
-    req: &IpcRequest,
-) -> Result<IpcResponse, Box<dyn std::error::Error>> {
-    send_ipc_request_with_timeout(req, None)
-}
-
-pub(crate) fn send_ipc_request_with_timeout(
-    req: &IpcRequest,
-    timeout: Option<Duration>,
-) -> Result<IpcResponse, Box<dyn std::error::Error>> {
-    desktop_ipc::request(req, timeout, u64::MAX, usize::MAX)
-}
+pub(crate) use clip_studios::{send_ipc_request, send_ipc_request_with_timeout};
 
 struct PromptApp {
     title: String,

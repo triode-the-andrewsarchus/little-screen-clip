@@ -7,6 +7,7 @@ license.workspace = true
 default-run = "clip-workbench"
 
 [dependencies]
+clip-studios = { path = "../clip-studios" }
 clip-ui = { path = "../clip-ui" }
 little-clip-core = { path = "../little-clip-core" }
 little-clip-render = { path = "../little-clip-render" }
@@ -32,18 +33,14 @@ image = { workspace = true }
 zip = { version = "7.0", default-features = false, features = ["deflate"] }
 imagesize = "0.12"
 kamadak-exif = "0.6.1"
-png = "0.18.1"
 tiny-skia = { workspace = true }
 resvg = { version = "0.37", default-features = false, features = ["text", "raster-images"] }
-fontdue = { workspace = true }
 ttf-parser = "0.25"
 wuff = "0.2.9"
 udev = "0.9.3"
 syntect = { workspace = true }
 unicode-width = "0.2.2"
 regex = { workspace = true }
-webp = "0.3.1"
-libwebp-sys = "0.9.6"
 tempfile = "3.10"
 libc = "0.2"
 chrono = "0.4"
@@ -51,7 +48,6 @@ trash = "5.2.9"
 url.workspace = true
 raw-window-handle = "0.6"
 wayland-client = { version = "0.31", features = ["system"] }
-filmr = { path = "../../vendor/filmr", default-features = false, features = ["compute-gpu"] }
 
 object = { version = "0.40", default-features = false, features = ["read", "std"] }
 sha2 = "0.10"
@@ -65,8 +61,9 @@ tokenizers = { version = "0.23", default-features = false, features = ["fancy-re
 half = "2"
 
 [dev-dependencies]
+webp = "0.3.1"
 rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
-filmr-pinned = { package = "filmr", git = "https://github.com/W-Mai/filmr", rev = "fee388e213dd77bfe6977b63071b1c136213373a", default-features = false }
+clip-studios = { path = "../clip-studios", features = ["test-support"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 raw-cpuid = "11.6.0"

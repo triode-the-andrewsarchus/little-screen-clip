@@ -1014,7 +1014,8 @@ fn waveform_keyboard_focus_survives_frames_and_routes_clipboard_keys() {
 
 fn exercise_large_directory(extension: &str) {
     let (temp, child) = folder_fixture();
-    let (_audio_dir, audio) = crate::audio_preview::tests::generate_fixture_wav("large", 0.1);
+    let (_audio_dir, audio) =
+        crate::audio_preview::test_support::generate_fixture_wav("large", 0.1);
     for index in 0..10_000 {
         let path = temp.path().join(format!("file-{index:05}.{extension}"));
         if extension == "wav" {
@@ -1588,7 +1589,7 @@ fn status_summary_omits_zero_counts_and_handles_empty_directory() {
 
 #[test]
 fn switching_audio_strips_preserves_range_and_rejects_previous_mode_previews() {
-    let (directory, path) = crate::audio_preview::tests::generate_fixture_wav("mode", 0.2);
+    let (directory, path) = crate::audio_preview::test_support::generate_fixture_wav("mode", 0.2);
     let (mut manager, _jobs) = loaded(directory.path());
     let source = crate::file_source::FileSource::capture(&path).unwrap();
     let range = ui::music::MusicRange {

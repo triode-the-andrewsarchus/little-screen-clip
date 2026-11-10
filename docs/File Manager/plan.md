@@ -511,7 +511,7 @@ These are constraints for future implementation, not a mandate to introduce all 
 
 ### Responsibility boundaries
 
-- The `clip-file-manager` executable owns its application lifecycle. Its browser owns navigation, selection, and view composition. Shared desktop components are exposed through the `clip-workbench` library rather than copied into another implementation.
+- The `clip-file-manager` executable owns its application lifecycle. Its browser owns navigation, selection, and view composition. Shared studios and desktop widgets live in `clip-studios` and `clip-ui`. The browser still uses temporary `clip-workbench` compatibility exports while its application ownership is extracted; shared implementation is not copied.
 - `little-clip-core` owns shared models and domain-neutral services where actual reuse exists, including established file classification, clipboard payloads, configuration, and IPC contracts.
 - `little-clip-ops` owns transformations, pipeline execution, and external-command policy.
 - Existing render and scene crates retain their rendering responsibilities; hardware-specific code stays in the driver.
@@ -554,7 +554,7 @@ Each phase's implementation proposal should name its acceptance cases and known 
 
 | Decision | Needed by | Proposed starting position |
 | --- | --- | --- |
-| Application boundary | Phase 1 | Settled: standalone file manager, shared workbench library, independent resizable window |
+| Application boundary | Phase 1 | Settled: standalone file manager, neutral shared studio/UI libraries, independent resizable window; browser extraction remains in progress |
 | Default start location and restoration | Phase 1 | Home directory initially; no automatic cross-restart history |
 | File-list and tree activation semantics | Phase 1 | Single selection, double-click/Enter navigation, separate expansion control |
 | Trash, undo, and operation journaling | Phase 2 | Explicit recoverability per operation |

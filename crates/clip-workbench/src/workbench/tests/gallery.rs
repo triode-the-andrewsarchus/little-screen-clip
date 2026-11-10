@@ -84,7 +84,7 @@ fn gallery_requests_map_to_each_shared_source_full_viewer() {
             (component_gallery::GalleryPreviewKind::Image, ViewerSession::Image(state)) => {
                 assert_eq!(state.title, "Gallery image");
                 assert_eq!(state.original_rgba.width(), 24);
-                assert!(state.palette_ticket.is_none());
+                assert!(!image_preview::test_support::palette_job_pending(&state));
             }
             (component_gallery::GalleryPreviewKind::Text, ViewerSession::Text(state)) => {
                 assert_eq!(state.title, "Gallery text");

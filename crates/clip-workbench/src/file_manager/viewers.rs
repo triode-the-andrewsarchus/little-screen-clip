@@ -285,7 +285,7 @@ impl Viewers {
             }
             (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::TextLine(line))) => {
                 state.preview.view_mode = crate::text_preview::TextViewMode::Raw;
-                state.preview.center_source_line = Some(line);
+                state.preview.center_on_source_line(line);
             }
             (
                 Some(ViewerSession::Toolpath(state)),
@@ -841,22 +841,22 @@ mod tests {
     fn clicked_document_position_survives_background_loading() {
         for (fixture, position, label) in [
             (
-                "tests/fixtures/subtitles/sample.srt",
+                "../little-clip-core/tests/fixtures/subtitles/sample.srt",
                 super::super::DocumentPosition::SubtitleCue(1),
                 "Cue 2",
             ),
             (
-                "tests/fixtures/subtitles/sample.vtt",
+                "../little-clip-core/tests/fixtures/subtitles/sample.vtt",
                 super::super::DocumentPosition::SubtitleCue(1),
                 "Cue 2",
             ),
             (
-                "tests/fixtures/subtitles/sample.ass",
+                "../little-clip-core/tests/fixtures/subtitles/sample.ass",
                 super::super::DocumentPosition::SubtitleCue(1),
                 "Cue 2",
             ),
             (
-                "tests/fixtures/subtitles/sample.ssa",
+                "../little-clip-core/tests/fixtures/subtitles/sample.ssa",
                 super::super::DocumentPosition::SubtitleCue(1),
                 "Cue 2",
             ),
@@ -1094,7 +1094,7 @@ mod tests {
             &AppConfig::default(),
         )
         .with_file_source(source);
-        state.pixel_revision += 1;
+        state.mark_pixels_changed();
         let mut viewers = Viewers {
             session: Some(ViewerSession::Image(state)),
             path: Some(path.clone()),

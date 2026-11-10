@@ -514,7 +514,7 @@ mod tests {
         let path = viewers.path.clone().unwrap();
         let original = std::fs::read(&path).unwrap();
         if let Some(ViewerSession::Image(state)) = &mut viewers.session {
-            state.pixel_revision += 1;
+            state.mark_pixels_changed();
         }
         viewers.select_photo(1);
         finish_loading(&mut viewers);
@@ -538,7 +538,7 @@ mod rename_tests {
             .unwrap()
             .with_file_source(FileSource::capture(&path).unwrap());
         state.undo_stack.push(state.current_rgba.clone());
-        state.pixel_revision += 1;
+        state.mark_pixels_changed();
         let (destination, source) = super::super::super::edits::rename_file(
             &path,
             "renamed.png",

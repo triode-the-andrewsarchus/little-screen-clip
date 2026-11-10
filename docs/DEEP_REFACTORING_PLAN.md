@@ -36,7 +36,7 @@ This is primarily behavior-preserving work. New views, additional format coverag
 | Delete stale `/tmp` files by process signature | Too broad. Cleanup must use application-owned locations, verified ownership/lifetime and held directory handles. Accepted outputs and other sessions must remain untouched. |
 | Every change must make aggregate metrics monotonically better | A noisy, move-sensitive tool cannot enforce that safely. Review new complexity and duplication in context; verify concrete improvements and record justified tradeoffs. |
 
-Evidence anchors: [entrypoints/library](../crates/clip-workbench/src/lib.rs), [file-manager entrypoint](../crates/clip-file-manager/src/main.rs), [search runtime](../crates/clip-workbench/src/file_manager/search/runtime.rs), [model helper documentation](../scripts/search_model/README.md), [ONNX runtime](../crates/clip-workbench/src/onnx_runtime.rs), [SigLIP](../crates/clip-workbench/src/file_manager/gallery/similarity/siglip.rs), [SVG thumbnails](../crates/little-clip-core/src/item.rs), [screen dimensions](../crates/little-clip-render/src/lib.rs), [shared waveform mechanisms](../crates/little-clip-core/src/audio/waveform.rs).
+Evidence anchors: [entrypoints/library](../crates/clip-workbench/src/lib.rs), [file-manager entrypoint](../crates/clip-file-manager/src/main.rs), [search runtime](../crates/clip-workbench/src/file_manager/search/runtime.rs), [model helper documentation](../scripts/search_model/README.md), [ONNX runtime](../crates/clip-studios/src/onnx_runtime.rs), [SigLIP](../crates/clip-workbench/src/file_manager/gallery/similarity/siglip.rs), [SVG thumbnails](../crates/little-clip-core/src/item.rs), [screen dimensions](../crates/little-clip-render/src/lib.rs), [shared waveform mechanisms](../crates/little-clip-core/src/audio/waveform.rs).
 
 ## Baseline and evidence limits
 
@@ -319,3 +319,47 @@ The classification slice's diagnostic Clippy pass also completes, allowing only 
 
 
 Shared UI private acceptance passes in both appearances from an alternate working directory (`/tmp/deep-ui-dark/report.json`, `/tmp/deep-ui-light/report.json`), retaining fixed centered first/final geometry. The file-manager ordinary-preview regression passes font/binary/text/image rows, studio return with selection preserved, exact captured-content creation and collision rejection (`/tmp/deep-ui-files-verified/report.json`). Its stale total-count labels, Shelf coordinate and back-button coordinate were corrected to current UI evidence; fixture count is checked on disk and existing byte/collision assertions remain. Earlier failed runs are retained in `/tmp/deep-ui-files*` as runner-drift evidence, not counted as passes. A cached UI-library check took 2.16 seconds in this environment (`/tmp/deep-ui-warm-check.log`); this is one warm sample, not a clean-build promise. The dependency inventory is `/tmp/deep-ui-tree.txt`. Disk remains about 160 GiB free. Worker CLI dispatch, helper packaging and application entrypoints are unchanged; canonical asset includes work independently of launch directory. Shared studio/session extraction remains the next substantive application-boundary step.
+
+### Phase 3 checkpoint: neutral studio owner
+
+Shared studios, preview/export sessions, shell controls and barcode/conversion
+workers now live once in `clip-studios`, using egui directly without an eframe or
+application dependency. Workbench forwards existing paths while retaining its
+popup, physical mirror, rolling strip and navigation. Core owns guarded
+`FileSource`/`ReadCheck`; their source and atomic-write logic are unchanged.
+Explicit `test-support` features expose narrowly scoped host fixture helpers;
+normal builds omit them. Film Look compute and ONNX CUDA support remain enabled.
+
+The browser and its search/system/transfer/navigation modules still reside in
+workbench. Removing file-manager's remaining workbench dependency is outstanding;
+this checkpoint does not claim that phase 3 is complete. Current-folder state
+remains browser-owned, preparing later views/Home without introducing a location
+framework. Accepted writes remain session-owned; host retirement tests retain
+pending-copy completion even when the canvas has no edits.
+
+Validation: serial workspace tests pass (2609 passed, 29 ignored), both desktop
+binaries build, and both hosts plus studios pass all-target compilation. The new
+file-manager executable test additionally exercises barcode and conversion
+worker dispatch from another working directory. Logs:
+`/tmp/deep-studios-workspace.log`, `/tmp/deep-studios-build.log`,
+`/tmp/deep-studios-check-accepted.log`, `/tmp/deep-studios-dispatch.log`.
+Studio API documentation builds. Diagnostic all-target Clippy passes with the
+existing approximate-constant diagnostic allowed; existing warnings remain
+(`/tmp/deep-studios-clippy.log`). Private dark file-manager preview/return/Shelf
+collision acceptance and light/dark component galleries pass, including launching
+the galleries from `/tmp` (`/tmp/deep-studios-files/report.json`,
+`/tmp/deep-studios-gallery-{light,dark}/report.json`).
+
+Architecture comparison against `deep-studios-start` reports REGRESSION: clone
+groups 1508→1511, measured NLOC +78, functions +5, total CCN +7; average/max CCN,
+duplication percentage and cycle count are unchanged. Rename-aware source review
+shows no new production algorithm or duplicated implementation: the residual
+changes are boundary visibility, explicit fixture bridges and executable dispatch
+testing, alongside repeated Cargo dependency declarations. The added dispatch
+test uses one table-driven path for both workers. Lizard comparison of 181 moved
+files finds unchanged function complexity except new CCN-1 accessors/fixture
+bridges, a relocated host test and fixture functions, and equivalent signature
+spelling (`/tmp/deep-studios-symbol-comparison.json`). This is an ownership
+improvement, not a claimed reduction of studio algorithm complexity or a clean
+architecture-tool score. Disk remains about 155 GiB free; no cache sweep was
+needed during this extraction.

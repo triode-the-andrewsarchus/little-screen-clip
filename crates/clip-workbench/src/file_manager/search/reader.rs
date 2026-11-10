@@ -1741,7 +1741,7 @@ runpy.run_path(sys.argv[1])['pdf_fixture'](Path(sys.argv[2]),4,'sample.pdf',page
 
     #[test]
     fn guarded_image_and_audio_preparation_produce_bounded_model_inputs() {
-        let (folder, _) = crate::audio_preview::tests::generate_fixture_wav("sample", 0.1);
+        let (folder, _) = crate::audio_preview::test_support::generate_fixture_wav("sample", 0.1);
         image::RgbImage::from_pixel(80, 40, image::Rgb([20, 100, 220]))
             .save(folder.path().join("photo.png"))
             .unwrap();

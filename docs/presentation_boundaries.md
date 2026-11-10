@@ -109,3 +109,21 @@ facade still owns shared audio-device access and native-dialog availability;
 those services are not generic widgets. Studio/session ownership and the
 file-manager-to-workbench dependency are subsequent extraction work. Neither
 application's lifecycle or internal worker dispatch moves into `clip-ui`.
+
+## Shared studio ownership
+
+`clip-studios` owns the existing desktop studios, their preview/export sessions,
+shared shell controls and barcode/conversion workers. It depends on `egui`
+directly rather than a window host. It has no browser or popup lifecycle owner.
+`clip-ui` supplies generic widgets; core owns guarded `FileSource`/`ReadCheck`.
+The physical screen mirror remains workbench-owned.
+
+Both executables retain internal worker dispatch before ordinary argument parsing.
+Host tests opt into explicit fixture helpers through `test-support`; normal
+builds do not enable that feature. Subtitle fixtures are shared from core.
+
+The browser still resides in workbench and the file-manager binary still depends
+on it. Removing that remaining application dependency is the next extraction.
+Navigation, current-folder assumptions, selection and history stay in the browser;
+these have not been promoted into shared studio APIs. Studio sessions retain
+accepted write completion and document edits while hosts control navigation.

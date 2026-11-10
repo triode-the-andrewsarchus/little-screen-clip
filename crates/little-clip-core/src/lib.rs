@@ -11,6 +11,7 @@ pub mod config;
 pub mod document;
 pub mod ebook;
 pub mod email;
+pub mod file_source;
 pub mod font_assets;
 pub mod gallery_image;
 pub mod html_preview;

@@ -1,0 +1,44 @@
+[package]
+name = "clip-studios"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+# Explicit fixtures for hosts' session-lifetime contract tests; absent in normal builds.
+test-support = ["little-clip-core/test-support"]
+
+[dependencies]
+clip-ui = { path = "../clip-ui" }
+little-clip-core = { path = "../little-clip-core" }
+little-clip-render = { path = "../little-clip-render" }
+little-clip-scene = { path = "../little-clip-scene" }
+little-clip-ops = { path = "../little-clip-ops" }
+egui = "0.27"
+egui_extras = { version = "0.27", features = ["svg"] }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+uuid = { workspace = true }
+tracing.workspace = true
+rodio = { version = "0.22.2", features = ["symphonia-mp2", "symphonia-caf", "symphonia-mkv", "symphonia-aiff"] }
+hound = "3.5.1"
+image = { workspace = true }
+png = "0.18.1"
+tiny-skia = { workspace = true }
+fontdue = { workspace = true }
+syntect = { workspace = true }
+regex = { workspace = true }
+webp = "0.3.1"
+libwebp-sys = "0.9.6"
+tempfile = "3.10"
+libc = "0.2"
+filmr = { path = "../../vendor/filmr", default-features = false, features = ["compute-gpu"] }
+ort = { version = "2.0.0-rc.15", features = ["download-binaries", "cuda"] }
+ndarray = "0.17.2"
+
+[dev-dependencies]
+little-clip-core = { path = "../little-clip-core", features = ["test-support"] }
+rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
+filmr-pinned = { package = "filmr", git = "https://github.com/W-Mai/filmr", rev = "fee388e213dd77bfe6977b63071b1c136213373a", default-features = false }

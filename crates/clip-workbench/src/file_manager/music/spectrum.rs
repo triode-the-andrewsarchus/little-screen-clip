@@ -116,7 +116,8 @@ mod tests {
 
     #[test]
     fn strip_matches_studio_fft_and_preserves_time_and_stereo_content() {
-        let (_directory, path) = crate::audio_preview::tests::generate_fixture_wav("spectrum", 0.4);
+        let (_directory, path) =
+            crate::audio_preview::test_support::generate_fixture_wav("spectrum", 0.4);
         let mut bytes = std::fs::read(&path).unwrap();
         // Silence the first half and leave only the right channel in the second.
         let frames = (bytes.len() - 44) / 4;

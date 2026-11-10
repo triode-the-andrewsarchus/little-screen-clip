@@ -72,7 +72,7 @@ def main():
         lambda parser: parser.add_argument("--format", choices=["srt", "vtt", "ass", "ssa"], default="srt"))
     output, root = media_fixture_directory(args)
     filename = f"sample.{args.format}"
-    shutil.copyfile(repo / "crates/clip-workbench/tests/fixtures/subtitles" / filename, root / filename)
+    shutil.copyfile(repo / "crates/little-clip-core/tests/fixtures/subtitles" / filename, root / filename)
     (root / "notes.txt").write_text("A neighboring text file.\n")
     return run_application_acceptance(args, output, root, lambda session, root: exercise(session, root, args.format), "subtitle cue strip, clicked cue, copy, raw source, atomic save, refreshed timeline, rename and reopen")
 

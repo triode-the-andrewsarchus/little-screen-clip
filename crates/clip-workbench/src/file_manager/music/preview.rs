@@ -334,7 +334,8 @@ mod tests {
 
     #[test]
     fn common_compressed_music_formats_decode_to_bounded_waveforms() {
-        let (directory, source) = crate::audio_preview::tests::generate_fixture_wav("formats", 0.3);
+        let (directory, source) =
+            crate::audio_preview::test_support::generate_fixture_wav("formats", 0.3);
         for (extension, codec) in [("mp3", "libmp3lame"), ("ogg", "libvorbis"), ("m4a", "aac")] {
             let path = directory.path().join(format!("track.{extension}"));
             let output = CommandRequest::new("ffmpeg")
@@ -372,7 +373,7 @@ mod tests {
     }
     #[test]
     fn music_waveforms_are_full_length_fixed_size_and_cancellable() {
-        let (_dir, path) = crate::audio_preview::tests::generate_fixture_wav("preview", 2.0);
+        let (_dir, path) = crate::audio_preview::test_support::generate_fixture_wav("preview", 2.0);
         let peaks = waveform(&path, 2.0, 512, None, &AtomicBool::new(false))
             .unwrap()
             .0;
@@ -388,7 +389,8 @@ mod tests {
     }
     #[test]
     fn music_metadata_and_missing_cover_keep_playable_waveform_data() {
-        let (_dir, path) = crate::audio_preview::tests::generate_fixture_wav("metadata", 1.0);
+        let (_dir, path) =
+            crate::audio_preview::test_support::generate_fixture_wav("metadata", 1.0);
         let data = load(&path, false, &AtomicBool::new(false));
         assert_eq!(data.waveform.len(), 512);
         let metadata = data.music.unwrap();

@@ -330,3 +330,36 @@ fn rendered_image_studio_escape_restores_only_the_matching_edited_session() {
     assert!(app.retained_image_session.is_none());
     assert!(matches!(&item.payload, ClipPayload::Image { bytes, .. } if !bytes.is_empty()));
 }
+
+#[test]
+fn workbench_retirement_waits_for_copy_even_without_edits_or_owned_pixels() {
+    let jobs = little_clip_core::BackgroundJobs::new(1, 2);
+    let (release, wait) = std::sync::mpsc::channel();
+    let mut image = test_image_preview_state();
+    clip_studios::image_preview::test_support::install_pending_encoded_copy(
+        &mut image,
+        &jobs,
+        move || {
+            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+            Err("controlled delivery failure".into())
+        },
+    );
+    // Encoded copies never borrow the canvas, so snapshot readiness alone
+    // must not allow the host to discard their completion receiver.
+    assert!(image.poll_session_snapshots());
+    let mut app = test_workbench_app(Some(ViewerSession::Image(image)), Default::default());
+    assert!(!app.retain_current_image_session());
+    let Some(ViewerSession::Image(image)) = &mut app.viewer else {
+        panic!("pending copy lost its owner");
+    };
+    release.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while image.poll_cached_jobs() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(format!("{:?}", image.status_toast).contains("controlled delivery failure"));
+    assert!(app.retain_current_image_session());
+    assert!(app.viewer.is_none());
+    assert!(app.retained_image_session.is_none());
+}
