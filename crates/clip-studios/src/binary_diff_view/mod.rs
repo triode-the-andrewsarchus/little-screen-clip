@@ -9,9 +9,11 @@ use crate::{hex_to_c32, hex_to_c32_alpha};
 use egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
 use little_clip_core::palette::AppPalette;
 use little_clip_core::{BackgroundJobs, JobTicket};
+#[cfg(test)]
+use little_clip_ops::binary_diff::compute_binary_diff;
 use little_clip_ops::binary_diff::{
     AlignedCell, BinaryDiffMode, BinaryDiffResult, DiffKind, byte_to_ascii_char,
-    compute_binary_diff, search_rows,
+    compute_binary_diff_shared, search_rows,
 };
 use std::sync::mpsc::Receiver;
 
@@ -95,19 +97,27 @@ pub struct BinaryDiffNavigation {
 
 impl BinaryDiffNavigation {
     /// Advances forward to the next diff block, wrapping around if at the end.
-    pub fn next_diff(&mut self, diff_blocks: &[little_clip_ops::binary_diff::BinaryDiffBlock]) {
-        if diff_blocks.is_empty() {
+    pub fn next_diff(
+        &mut self,
+        mut diff_blocks: impl ExactSizeIterator<Item = little_clip_ops::binary_diff::BinaryDiffBlock>,
+    ) {
+        if diff_blocks.len() == 0 {
             return;
         }
         self.current_diff_idx = (self.current_diff_idx + 1) % diff_blocks.len();
-        let block = &diff_blocks[self.current_diff_idx];
+        let block = diff_blocks
+            .nth(self.current_diff_idx)
+            .expect("index is within block count");
         self.selected_diff_block = Some(block.id);
         self.scroll_target_row = Some(block.start_row);
     }
 
     /// Moves backward to the previous diff block, wrapping around to the end.
-    pub fn prev_diff(&mut self, diff_blocks: &[little_clip_ops::binary_diff::BinaryDiffBlock]) {
-        if diff_blocks.is_empty() {
+    pub fn prev_diff(
+        &mut self,
+        mut diff_blocks: impl ExactSizeIterator<Item = little_clip_ops::binary_diff::BinaryDiffBlock>,
+    ) {
+        if diff_blocks.len() == 0 {
             return;
         }
         if self.current_diff_idx == 0 {
@@ -115,7 +125,9 @@ impl BinaryDiffNavigation {
         } else {
             self.current_diff_idx -= 1;
         }
-        let block = &diff_blocks[self.current_diff_idx];
+        let block = diff_blocks
+            .nth(self.current_diff_idx)
+            .expect("index is within block count");
         self.selected_diff_block = Some(block.id);
         self.scroll_target_row = Some(block.start_row);
     }
@@ -203,11 +215,11 @@ fn submit_binary_diff(
     Receiver<Result<(u64, BinaryDiffResult), little_clip_core::JobError>>,
 ) {
     jobs.submit(std::time::Duration::MAX, move || {
-        let result = compute_binary_diff(
+        let result = compute_binary_diff_shared(
             &left_label,
-            left_bytes.as_ref(),
+            left_bytes,
             &right_label,
-            right_bytes.as_ref(),
+            right_bytes,
             mode,
             bytes_per_row,
         );
@@ -378,13 +390,13 @@ impl BinaryDiffViewState {
 
     pub fn next_diff(&mut self) {
         if let Some(ref res) = self.result {
-            self.nav.next_diff(&res.diff_blocks);
+            self.nav.next_diff(res.diff_blocks.iter());
         }
     }
 
     pub fn prev_diff(&mut self) {
         if let Some(ref res) = self.result {
-            self.nav.prev_diff(&res.diff_blocks);
+            self.nav.prev_diff(res.diff_blocks.iter());
         }
     }
 

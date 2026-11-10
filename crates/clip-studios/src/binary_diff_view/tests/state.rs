@@ -406,8 +406,14 @@ fn test_global_shortcuts_navigate_diffs_and_switch_widths() {
         state.nav.scroll_target_row = None;
         trigger_global_shortcut(&mut state, key);
         assert_eq!(state.nav.current_diff_idx, 1);
-        assert_eq!(state.nav.selected_diff_block, Some(diff_blocks[1].id));
-        assert_eq!(state.nav.scroll_target_row, Some(diff_blocks[1].start_row));
+        assert_eq!(
+            state.nav.selected_diff_block,
+            Some(diff_blocks.get(1).unwrap().id)
+        );
+        assert_eq!(
+            state.nav.scroll_target_row,
+            Some(diff_blocks.get(1).unwrap().start_row)
+        );
     }
     for key in [egui::Key::K, egui::Key::ArrowLeft, egui::Key::ArrowUp] {
         state.nav.current_diff_idx = 1;
@@ -415,8 +421,14 @@ fn test_global_shortcuts_navigate_diffs_and_switch_widths() {
         state.nav.scroll_target_row = None;
         trigger_global_shortcut(&mut state, key);
         assert_eq!(state.nav.current_diff_idx, 0);
-        assert_eq!(state.nav.selected_diff_block, Some(diff_blocks[0].id));
-        assert_eq!(state.nav.scroll_target_row, Some(diff_blocks[0].start_row));
+        assert_eq!(
+            state.nav.selected_diff_block,
+            Some(diff_blocks.get(0).unwrap().id)
+        );
+        assert_eq!(
+            state.nav.scroll_target_row,
+            Some(diff_blocks.get(0).unwrap().start_row)
+        );
     }
     for (key, expected_width) in [
         (egui::Key::Num0, 8),
@@ -699,7 +711,7 @@ fn test_binary_diff_navigation_cycles_and_bounds() {
     use little_clip_ops::binary_diff::BinaryDiffBlock;
 
     let mut nav = BinaryDiffNavigation::default();
-    let blocks = vec![
+    let blocks = [
         BinaryDiffBlock {
             id: 10,
             start_row: 5,
@@ -736,33 +748,33 @@ fn test_binary_diff_navigation_cycles_and_bounds() {
     ];
 
     // Empty block safeguard
-    nav.next_diff(&[]);
+    nav.next_diff(std::iter::empty());
     assert_eq!(nav.current_diff_idx, 0);
     assert_eq!(nav.selected_diff_block, None);
 
     // Next forward
-    nav.next_diff(&blocks);
+    nav.next_diff(blocks.iter().cloned());
     assert_eq!(nav.current_diff_idx, 1);
     assert_eq!(nav.selected_diff_block, Some(20));
     assert_eq!(nav.scroll_target_row, Some(15));
 
-    nav.next_diff(&blocks);
+    nav.next_diff(blocks.iter().cloned());
     assert_eq!(nav.current_diff_idx, 2);
     assert_eq!(nav.selected_diff_block, Some(30));
     assert_eq!(nav.scroll_target_row, Some(25));
 
     // Wrap forward
-    nav.next_diff(&blocks);
+    nav.next_diff(blocks.iter().cloned());
     assert_eq!(nav.current_diff_idx, 0);
     assert_eq!(nav.selected_diff_block, Some(10));
     assert_eq!(nav.scroll_target_row, Some(5));
 
     // Wrap backward
-    nav.prev_diff(&blocks);
+    nav.prev_diff(blocks.iter().cloned());
     assert_eq!(nav.current_diff_idx, 2);
     assert_eq!(nav.selected_diff_block, Some(30));
 
-    nav.prev_diff(&blocks);
+    nav.prev_diff(blocks.iter().cloned());
     assert_eq!(nav.current_diff_idx, 1);
     assert_eq!(nav.selected_diff_block, Some(20));
 }

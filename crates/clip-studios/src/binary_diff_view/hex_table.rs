@@ -88,11 +88,14 @@ impl BinaryDiffViewState {
         let output = scroll_area.show_rows(ui, row_height, total_rows, |ui, row_range| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for row_idx in row_range {
-                let row = &res.rows[row_idx];
+                let row = res
+                    .rows
+                    .get(row_idx)
+                    .expect("visible row is within row count");
 
                 let is_search_match = self.nav.search_matches.contains(&row_idx);
                 let is_selected_diff = if let Some(sel_id) = self.nav.selected_diff_block {
-                    if let Some(block) = res.diff_blocks.iter().find(|b| b.id == sel_id) {
+                    if let Some(block) = res.diff_blocks.summaries().get(sel_id.saturating_sub(1)) {
                         row_idx >= block.start_row && row_idx <= block.end_row
                     } else {
                         false

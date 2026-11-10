@@ -29,25 +29,40 @@ impl BinaryDiffViewState {
             Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
         );
 
-        // Difference markers
-        for block in &res.diff_blocks {
-            let start_frac = block.start_row as f32 / total_rows as f32;
-            let end_frac = (block.end_row + 1) as f32 / total_rows as f32;
-            let y_start = rect.top() + start_frac * rect.height();
-            let y_end = rect.top() + end_frac * rect.height();
-            let h = (y_end - y_start).max(2.5);
-
-            let marker_rect = egui::Rect::from_min_size(
-                egui::Pos2::new(rect.left() + 2.0, y_start),
-                Vec2::new(width - 4.0, h),
-            );
-
-            let marker_color = match block.kind {
+        // Aggregate into screen-sized bins. Millions of tiny blocks should
+        // neither allocate millions of shapes nor create card display strings.
+        let summaries = res.diff_blocks.summaries();
+        let bins = ((rect.height() / 2.5).ceil() as usize)
+            .max(1)
+            .min(total_rows);
+        for bin in 0..bins {
+            let start_row = bin * total_rows / bins;
+            let end_row = ((bin + 1) * total_rows).div_ceil(bins);
+            let first = summaries.partition_point(|block| block.end_row < start_row);
+            let last = summaries.partition_point(|block| block.start_row < end_row);
+            if first >= last {
+                continue;
+            }
+            let kind = if last == first + 1 {
+                summaries[first].kind()
+            } else {
+                DiffKind::Mismatch
+            };
+            let marker_color = match kind {
                 DiffKind::LeftOnly => hex_to_c32(&palette.diff_del),
                 DiffKind::RightOnly => hex_to_c32(&palette.diff_add),
                 _ => hex_to_c32(&palette.harmonies.warm_attention),
             };
-
+            let marker_rect = egui::Rect::from_min_max(
+                egui::pos2(
+                    rect.left() + 2.0,
+                    rect.top() + bin as f32 * rect.height() / bins as f32,
+                ),
+                egui::pos2(
+                    rect.right() - 2.0,
+                    rect.top() + (bin + 1) as f32 * rect.height() / bins as f32,
+                ),
+            );
             ui.painter()
                 .rect_filled(marker_rect, Rounding::same(1.0), marker_color);
         }
@@ -206,11 +221,25 @@ impl BinaryDiffViewState {
 
                 // Scrollable list of diff cards
                 let rem_h = ui.available_height();
-                egui::ScrollArea::vertical()
+                let card_height = 100.0;
+                ui.spacing_mut().item_spacing.y = 4.0;
+                let mut cards_scroll = egui::ScrollArea::vertical()
                     .id_source("binary_diff_cards_scroll")
                     .auto_shrink([false, false])
-                    .max_height(rem_h)
-                    .show(ui, |ui| {
+                    .max_height(rem_h);
+                if self.last_scrolled_diff_id != self.nav.selected_diff_block
+                    && let Some(id) = self.nav.selected_diff_block
+                {
+                    cards_scroll = cards_scroll.vertical_scroll_offset(
+                        ((id.saturating_sub(1)) as f32 * (card_height + 4.0) - rem_h * 0.5)
+                            .max(0.0),
+                    );
+                }
+                cards_scroll.show_rows(
+                    ui,
+                    card_height,
+                    res.diff_blocks.len(),
+                    |ui, block_range| {
                         ui.spacing_mut().item_spacing.y = 4.0;
                         ui.spacing_mut().scroll.bar_width = 6.0;
                         let card_margin_x = 6.0;
@@ -220,7 +249,11 @@ impl BinaryDiffViewState {
                         let mut clicked_row = None;
                         let mut clicked_id = None;
 
-                        for block in &res.diff_blocks {
+                        for index in block_range {
+                            let block = res
+                                .diff_blocks
+                                .get(index)
+                                .expect("visible block is within count");
                             let is_selected = self.nav.selected_diff_block == Some(block.id);
 
                             let badge_color = match block.kind {
@@ -260,6 +293,7 @@ impl BinaryDiffViewState {
                                 let resp = frame.show(ui, |ui| {
                                     ui.set_width(card_inner_w);
                                     ui.set_max_width(card_inner_w);
+                                    ui.set_min_height(card_height - 8.0);
                                     ui.vertical(|ui| {
                                         // Row 1: ID badge + Kind + byte count
                                         ui.horizontal_wrapped(|ui| {
@@ -333,10 +367,6 @@ impl BinaryDiffViewState {
                                     });
                                 });
 
-                                if is_selected && self.last_scrolled_diff_id != Some(block.id) {
-                                    resp.response.scroll_to_me(Some(egui::Align::Center));
-                                }
-
                                 let interact = ui.interact(
                                     resp.response.rect,
                                     resp.response.id,
@@ -345,16 +375,11 @@ impl BinaryDiffViewState {
                                 if interact.clicked() {
                                     clicked_row = Some(block.start_row);
                                     clicked_id = Some(block.id);
-                                    if let Some(idx) =
-                                        res.diff_blocks.iter().position(|b| b.id == block.id)
-                                    {
-                                        self.nav.current_diff_idx = idx;
-                                    }
+                                    self.nav.current_diff_idx = block.id - 1;
                                 }
                                 if interact.hovered() {
                                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                                 }
-                                ui.add_space(2.0);
                             });
                         }
 
@@ -364,7 +389,8 @@ impl BinaryDiffViewState {
                             ui.ctx().request_repaint();
                         }
                         self.last_scrolled_diff_id = self.nav.selected_diff_block;
-                    });
+                    },
+                );
             },
         );
 

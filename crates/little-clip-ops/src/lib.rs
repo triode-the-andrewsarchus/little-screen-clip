@@ -3,7 +3,8 @@
 //! unit/timestamp conversions, and DAG execution pipelines.
 
 use crate::binary_diff::{
-    BinaryDiffMode, compute_binary_diff, get_item_binary_bytes, resolve_two_files_from_single_item,
+    BinaryDiffMode, compute_binary_diff_shared, get_item_binary_bytes,
+    resolve_two_files_from_single_item,
 };
 use crate::diff::{DiffDisplayMode, compute_diff, resolve_diff_pair, resolve_diff_target};
 use crate::image_diff::{ImageDiffOptions, compare_image_bytes_with_mime};
@@ -649,35 +650,7 @@ fn op_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
 
 fn op_binary_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
     if let Some(((l_lbl, l_bytes), (r_lbl, r_bytes))) = resolve_two_files_from_single_item(item) {
-        let res = compute_binary_diff(
-            &l_lbl,
-            &l_bytes,
-            &r_lbl,
-            &r_bytes,
-            BinaryDiffMode::Aligned,
-            16,
-        );
-        let summary = format!(
-            "Binary Diff: {} ({} B) vs {} ({} B)\nSimilarity: {:.1}%\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B",
-            l_lbl,
-            l_bytes.len(),
-            r_lbl,
-            r_bytes.len(),
-            res.stats.similarity_pct,
-            res.stats.match_count,
-            res.stats.mismatch_count,
-            res.stats.right_only_count,
-            res.stats.left_only_count,
-        );
-        let mut out = ClipItem::from_text(summary);
-        out.title = format!("Binary Diff: {} vs {}", l_lbl, r_lbl);
-        out.subtitle = format!(
-            "{:.1}% match • {} diff rows",
-            res.stats.similarity_pct,
-            res.diff_row_indices.len()
-        );
-        out.handler_tag = "BINARY-DIFF".to_string();
-        Ok(out)
+        Ok(binary_diff_item(l_lbl, l_bytes, r_lbl, r_bytes))
     } else {
         Err(OpError::ExecutionFailed(
             "Item does not contain two files or paths to diff".to_string(),
@@ -714,21 +687,31 @@ pub fn execute_binary_op(
 fn op_binary_diff(a: &ClipItem, b: &ClipItem) -> Result<ClipItem, OpError> {
     let (l_lbl, l_bytes) = get_item_binary_bytes(a);
     let (r_lbl, r_bytes) = get_item_binary_bytes(b);
-    let res = compute_binary_diff(
+    Ok(binary_diff_item(l_lbl, l_bytes, r_lbl, r_bytes))
+}
+
+fn binary_diff_item(l_lbl: String, l_bytes: Vec<u8>, r_lbl: String, r_bytes: Vec<u8>) -> ClipItem {
+    let res = compute_binary_diff_shared(
         &l_lbl,
-        &l_bytes,
+        std::sync::Arc::new(l_bytes),
         &r_lbl,
-        &r_bytes,
+        std::sync::Arc::new(r_bytes),
         BinaryDiffMode::Aligned,
         16,
     );
+    let alignment_note = if res.alignment_limited {
+        " (approximate alignment)"
+    } else {
+        ""
+    };
     let summary = format!(
-        "Binary Diff: {} ({} B) vs {} ({} B)\nSimilarity: {:.1}%\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B",
+        "Binary Diff: {} ({} B) vs {} ({} B)\nSimilarity: {:.1}%{}\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B",
         l_lbl,
-        l_bytes.len(),
+        res.stats.left_total_bytes,
         r_lbl,
-        r_bytes.len(),
+        res.stats.right_total_bytes,
         res.stats.similarity_pct,
+        alignment_note,
         res.stats.match_count,
         res.stats.mismatch_count,
         res.stats.right_only_count,
@@ -737,12 +720,11 @@ fn op_binary_diff(a: &ClipItem, b: &ClipItem) -> Result<ClipItem, OpError> {
     let mut item = ClipItem::from_text(summary);
     item.title = format!("Binary Diff: {} vs {}", l_lbl, r_lbl);
     item.subtitle = format!(
-        "{:.1}% match • {} diff rows",
-        res.stats.similarity_pct,
-        res.diff_row_indices.len()
+        "{:.1}% match{} • {} diff rows",
+        res.stats.similarity_pct, alignment_note, res.diff_row_count
     );
     item.handler_tag = "BINARY-DIFF".to_string();
-    Ok(item)
+    item
 }
 
 /// Executes an operation on a slice of 1, 2, or 3+ selected items.
@@ -1108,6 +1090,21 @@ pub fn read_text_file_preview<P: AsRef<std::path::Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binary_diff_summaries_disclose_coarse_large_alignments() {
+        let len = 2 * 1024 * 1024;
+        let coarse = binary_diff_item("a".into(), vec![0; len], "b".into(), vec![1; len]);
+        assert!(
+            get_item_text(&coarse)
+                .unwrap()
+                .contains("Similarity: 0.0% (approximate alignment)")
+        );
+        assert!(coarse.subtitle.contains("approximate alignment"));
+        let exact = binary_diff_item("a".into(), b"abc".to_vec(), "b".into(), b"axc".to_vec());
+        assert!(!get_item_text(&exact).unwrap().contains("approximate"));
+        assert!(!exact.subtitle.contains("approximate"));
+    }
 
     #[test]
     fn test_trim() {

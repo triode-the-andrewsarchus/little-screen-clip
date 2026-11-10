@@ -425,3 +425,90 @@ fn rendered_binary_diff_summary_button_copies_exact_summary() {
     }
     assert!(!close);
 }
+
+#[test]
+fn fragmented_diffs_bound_draw_work_and_reveal_the_last_card() {
+    let block_count = 8192;
+    let left = vec![0; block_count * 8];
+    let right: Vec<_> = (0..left.len())
+        .map(|i| u8::from((i / 4) % 2 == 0))
+        .collect();
+    let mut state = BinaryDiffViewState::new(
+        "left.bin".into(),
+        left.clone(),
+        "right.bin".into(),
+        right.clone(),
+    );
+    if let Some(ticket) = state.compute_ticket.take() {
+        ticket.cancel();
+    }
+    state.receiver = None;
+    state.result = Some(compute_binary_diff(
+        "left.bin",
+        &left,
+        "right.bin",
+        &right,
+        BinaryDiffMode::Raw,
+        4,
+    ));
+    state.bytes_per_row = 4;
+    state.mode = BinaryDiffMode::Raw;
+    state.is_computing = false;
+    let ctx = egui::Context::default();
+    crate::ui_ext::configure_workbench_style(&ctx);
+    let palette = AppPalette::default();
+    for jump_to_end in [false, true] {
+        if jump_to_end {
+            state.nav.current_diff_idx = block_count - 1;
+            state.nav.selected_diff_block = Some(block_count);
+            state.nav.scroll_target_row = Some(block_count * 2 - 2);
+        }
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1200.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+        assert!(
+            output.shapes.len() < 5000,
+            "drawing must scale with the viewport, not the block count"
+        );
+        let card_labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text().starts_with('#')
+                        && clipped.clip_rect.contains_rect(egui::Rect::from_min_size(
+                            text.pos,
+                            text.galley.size(),
+                        )) =>
+                {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            card_labels.len() <= 12,
+            "only visible cards should be materialized"
+        );
+        let expected = if jump_to_end {
+            format!("#{block_count}")
+        } else {
+            "#1".to_owned()
+        };
+        assert!(
+            card_labels.contains(&expected),
+            "expected {expected}; visible cards: {card_labels:?}"
+        );
+    }
+}

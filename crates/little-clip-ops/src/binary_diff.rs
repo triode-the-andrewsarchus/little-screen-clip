@@ -6,6 +6,12 @@
 
 use little_clip_core::{ClipItem, ClipPayload, SlotId, SlotManager};
 use std::path::Path;
+use std::sync::Arc;
+
+mod blocks;
+mod rows;
+pub use blocks::{BinaryDiffBlockSummary, BinaryDiffBlocks};
+pub use rows::BinaryDiffRows;
 use std::time::{Duration, Instant};
 
 /// Indicates the comparison classification for an aligned byte cell or diff block.
@@ -60,7 +66,7 @@ pub struct AlignedCell {
 }
 
 /// A single row of side-by-side aligned byte cells.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BinaryDiffRow {
     /// Zero-based row index in the rendered diff.
     pub row_index: usize,
@@ -131,17 +137,18 @@ pub struct BinaryDiffResult {
     pub bytes_per_row: usize,
     /// Diff alignment mode used.
     pub mode: BinaryDiffMode,
-    /// Whether the alignment search exhausted its budget and may be approximate.
+    /// Whether a time or workspace limit made the alignment potentially approximate.
+    ///
     /// All source bytes and offsets are still represented.
     pub alignment_limited: bool,
-    /// All computed diff rows.
-    pub rows: Vec<BinaryDiffRow>,
+    /// Source-backed rows, materialized only when requested.
+    pub rows: BinaryDiffRows,
     /// Summary metrics.
     pub stats: BinaryDiffStats,
-    /// List of row indices containing at least one difference.
-    pub diff_row_indices: Vec<usize>,
-    /// Clustered contiguous diff blocks.
-    pub diff_blocks: Vec<BinaryDiffBlock>,
+    /// Number of rows containing at least one difference.
+    pub diff_row_count: usize,
+    /// Compact block summaries; display strings are materialized on request.
+    pub diff_blocks: BinaryDiffBlocks,
 }
 
 // Bound the quadratic alignment search, independently of linear result construction.
@@ -353,127 +360,55 @@ pub fn compute_binary_diff(
     mode: BinaryDiffMode,
     bytes_per_row: usize,
 ) -> BinaryDiffResult {
+    compute_binary_diff_shared(
+        left_label,
+        Arc::new(left_bytes.to_vec()),
+        right_label,
+        Arc::new(right_bytes.to_vec()),
+        mode,
+        bytes_per_row,
+    )
+}
+
+/// Computes a diff while sharing the caller's source buffers with lazy rows.
+pub fn compute_binary_diff_shared(
+    left_label: &str,
+    left_bytes: Arc<Vec<u8>>,
+    right_label: &str,
+    right_bytes: Arc<Vec<u8>>,
+    mode: BinaryDiffMode,
+    bytes_per_row: usize,
+) -> BinaryDiffResult {
     let bpr = bytes_per_row.max(4);
-
-    let (flat_left, flat_right, alignment_limited) = match mode {
-        BinaryDiffMode::Aligned => {
-            compute_aligned_stream(left_bytes, right_bytes, Instant::now() + ALIGNMENT_BUDGET)
-        }
-        BinaryDiffMode::Raw => {
-            let (left, right) = compute_raw_stream(left_bytes, right_bytes);
-            (left, right, false)
-        }
-    };
-
-    let total_cells = flat_left.len().max(flat_right.len());
-    let mut rows = Vec::with_capacity((total_cells / bpr) + 1);
-    let mut diff_row_indices = Vec::new();
-
+    let left_total_bytes = left_bytes.len();
+    let right_total_bytes = right_bytes.len();
+    let (rows, alignment_limited) = BinaryDiffRows::new(
+        left_bytes,
+        right_bytes,
+        mode,
+        bpr,
+        Instant::now() + ALIGNMENT_BUDGET,
+    );
+    let mut diff_row_count = 0;
     let mut match_count = 0;
     let mut mismatch_count = 0;
     let mut left_only_count = 0;
     let mut right_only_count = 0;
-
-    let mut cell_idx = 0;
-    let mut row_idx = 0;
-
-    while cell_idx < total_cells {
-        let mut left_cells = Vec::with_capacity(bpr);
-        let mut right_cells = Vec::with_capacity(bpr);
-        let mut has_diff = false;
-
-        let mut row_has_sub = false;
-        let mut row_has_ins = false;
-        let mut row_has_del = false;
-
-        let mut left_row_offset = None;
-        let mut right_row_offset = None;
-
-        for i in 0..bpr {
-            let idx = cell_idx + i;
-            let l_cell = flat_left.get(idx).copied().unwrap_or(AlignedCell {
-                byte_val: None,
-                offset: None,
-                kind: DiffKind::Match,
-            });
-            let r_cell = flat_right.get(idx).copied().unwrap_or(AlignedCell {
-                byte_val: None,
-                offset: None,
-                kind: DiffKind::Match,
-            });
-
-            if left_row_offset.is_none() && l_cell.offset.is_some() {
-                left_row_offset = l_cell.offset;
+    let mut row = BinaryDiffRow::default();
+    for row_index in 0..rows.len() {
+        rows.write_row(row_index, &mut row);
+        for cell in &row.left_cells {
+            match cell.kind {
+                DiffKind::Match if cell.byte_val.is_some() => match_count += 1,
+                DiffKind::Mismatch => mismatch_count += 1,
+                DiffKind::LeftOnly => left_only_count += 1,
+                DiffKind::RightOnly => right_only_count += 1,
+                DiffKind::Match => {}
             }
-            if right_row_offset.is_none() && r_cell.offset.is_some() {
-                right_row_offset = r_cell.offset;
-            }
-
-            // Determine combined cell diff kind
-            let combined_kind = match (l_cell.byte_val, r_cell.byte_val) {
-                (Some(b1), Some(b2)) => {
-                    if b1 == b2 {
-                        match_count += 1;
-                        DiffKind::Match
-                    } else {
-                        mismatch_count += 1;
-                        has_diff = true;
-                        row_has_sub = true;
-                        DiffKind::Mismatch
-                    }
-                }
-                (Some(_), None) => {
-                    left_only_count += 1;
-                    has_diff = true;
-                    row_has_del = true;
-                    DiffKind::LeftOnly
-                }
-                (None, Some(_)) => {
-                    right_only_count += 1;
-                    has_diff = true;
-                    row_has_ins = true;
-                    DiffKind::RightOnly
-                }
-                (None, None) => DiffKind::Match,
-            };
-
-            let mut l_c = l_cell;
-            let mut r_c = r_cell;
-            l_c.kind = combined_kind;
-            r_c.kind = combined_kind;
-
-            left_cells.push(l_c);
-            right_cells.push(r_c);
         }
-
-        let row_glyph = if !has_diff {
-            "│"
-        } else if row_has_sub && !row_has_ins && !row_has_del {
-            "≠"
-        } else if row_has_ins && !row_has_del {
-            "+"
-        } else if row_has_del && !row_has_ins {
-            "-"
-        } else {
-            "~"
-        };
-
-        if has_diff {
-            diff_row_indices.push(row_idx);
+        if row.has_diff {
+            diff_row_count += 1;
         }
-
-        rows.push(BinaryDiffRow {
-            row_index: row_idx,
-            left_offset: left_row_offset,
-            left_cells,
-            right_offset: right_row_offset,
-            right_cells,
-            has_diff,
-            row_glyph,
-        });
-
-        cell_idx += bpr;
-        row_idx += 1;
     }
 
     let total_compared = match_count + mismatch_count + left_only_count + right_only_count;
@@ -484,8 +419,8 @@ pub fn compute_binary_diff(
     };
 
     let stats = BinaryDiffStats {
-        left_total_bytes: left_bytes.len(),
-        right_total_bytes: right_bytes.len(),
+        left_total_bytes,
+        right_total_bytes,
         match_count,
         mismatch_count,
         left_only_count,
@@ -503,315 +438,14 @@ pub fn compute_binary_diff(
         alignment_limited,
         rows,
         stats,
-        diff_row_indices,
+        diff_row_count,
         diff_blocks,
     }
 }
 
-/// Groups contiguous diff rows into discrete diff blocks for high-level navigation.
-pub fn extract_diff_blocks(rows: &[BinaryDiffRow]) -> Vec<BinaryDiffBlock> {
-    let mut blocks = Vec::new();
-    let mut current_start: Option<usize> = None;
-    let mut current_end = 0;
-
-    for (idx, row) in rows.iter().enumerate() {
-        if row.has_diff {
-            if current_start.is_none() {
-                current_start = Some(idx);
-            }
-            current_end = idx;
-        } else if let Some(start) = current_start {
-            blocks.push(build_diff_block(blocks.len() + 1, start, current_end, rows));
-            current_start = None;
-        }
-    }
-
-    if let Some(start) = current_start {
-        blocks.push(build_diff_block(blocks.len() + 1, start, current_end, rows));
-    }
-
-    blocks
-}
-
-/// Constructs a single `BinaryDiffBlock` from a span of rows.
-fn build_diff_block(
-    id: usize,
-    start_row: usize,
-    end_row: usize,
-    rows: &[BinaryDiffRow],
-) -> BinaryDiffBlock {
-    let left_offset = rows[start_row].left_offset;
-    let right_offset = rows[start_row].right_offset;
-
-    let mut mismatch_count = 0;
-    let mut left_only_count = 0;
-    let mut right_only_count = 0;
-
-    let mut left_preview = Vec::new();
-    let mut right_preview = Vec::new();
-
-    for r in &rows[start_row..=end_row] {
-        for (lc, rc) in r.left_cells.iter().zip(r.right_cells.iter()) {
-            match lc.kind {
-                DiffKind::Mismatch => {
-                    mismatch_count += 1;
-                    if left_preview.len() < 4 {
-                        if let Some(b) = lc.byte_val {
-                            left_preview.push(b);
-                        }
-                    }
-                    if right_preview.len() < 4 {
-                        if let Some(b) = rc.byte_val {
-                            right_preview.push(b);
-                        }
-                    }
-                }
-                DiffKind::LeftOnly => {
-                    left_only_count += 1;
-                    if left_preview.len() < 4 {
-                        if let Some(b) = lc.byte_val {
-                            left_preview.push(b);
-                        }
-                    }
-                }
-                DiffKind::RightOnly => {
-                    right_only_count += 1;
-                    if right_preview.len() < 4 {
-                        if let Some(b) = rc.byte_val {
-                            right_preview.push(b);
-                        }
-                    }
-                }
-                DiffKind::Match => {}
-            }
-        }
-    }
-
-    let byte_count = mismatch_count + left_only_count + right_only_count;
-
-    let (kind_label, kind) = if left_only_count > 0 && right_only_count > 0 {
-        ("Replacement".to_string(), DiffKind::Mismatch)
-    } else if left_only_count > 0 && mismatch_count == 0 {
-        ("Deletion".to_string(), DiffKind::LeftOnly)
-    } else if right_only_count > 0 && mismatch_count == 0 {
-        ("Insertion".to_string(), DiffKind::RightOnly)
-    } else if mismatch_count > 0 && left_only_count == 0 && right_only_count == 0 {
-        ("Mismatch".to_string(), DiffKind::Mismatch)
-    } else {
-        ("Mixed Diff".to_string(), DiffKind::Mismatch)
-    };
-
-    let l_str = if left_preview.is_empty() {
-        "--".to_string()
-    } else if left_preview.iter().all(|&b| b.is_ascii_graphic()) {
-        String::from_utf8_lossy(&left_preview).to_string()
-    } else {
-        left_preview
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-
-    let r_str = if right_preview.is_empty() {
-        "--".to_string()
-    } else if right_preview.iter().all(|&b| b.is_ascii_graphic()) {
-        String::from_utf8_lossy(&right_preview).to_string()
-    } else {
-        right_preview
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-
-    let preview = format!("{} ≠ {}", l_str, r_str);
-
-    BinaryDiffBlock {
-        id,
-        start_row,
-        end_row,
-        left_offset,
-        right_offset,
-        byte_count,
-        kind_label,
-        kind,
-        preview,
-    }
-}
-
-/// Computes Myers-aligned cell streams for left and right byte slices.
-fn compute_aligned_stream(
-    left_bytes: &[u8],
-    right_bytes: &[u8],
-    deadline: Instant,
-) -> (Vec<AlignedCell>, Vec<AlignedCell>, bool) {
-    let diff_ops = similar::capture_diff_slices_deadline(
-        similar::Algorithm::Myers,
-        left_bytes,
-        right_bytes,
-        Some(deadline),
-    );
-    // The library does not expose whether its fallback ran. Conservatively label
-    // any search that returned after the deadline, even if it found an exact diff.
-    let alignment_limited = Instant::now() >= deadline;
-
-    let mut flat_left = Vec::new();
-    let mut flat_right = Vec::new();
-
-    for op in diff_ops {
-        match op {
-            similar::DiffOp::Equal {
-                old_index,
-                new_index,
-                len,
-            } => {
-                for i in 0..len {
-                    flat_left.push(AlignedCell {
-                        byte_val: Some(left_bytes[old_index + i]),
-                        offset: Some(old_index + i),
-                        kind: DiffKind::Match,
-                    });
-                    flat_right.push(AlignedCell {
-                        byte_val: Some(right_bytes[new_index + i]),
-                        offset: Some(new_index + i),
-                        kind: DiffKind::Match,
-                    });
-                }
-            }
-            similar::DiffOp::Replace {
-                old_index,
-                old_len,
-                new_index,
-                new_len,
-            } => {
-                let common = old_len.min(new_len);
-                for i in 0..common {
-                    let b1 = left_bytes[old_index + i];
-                    let b2 = right_bytes[new_index + i];
-                    let kind = if b1 == b2 {
-                        DiffKind::Match
-                    } else {
-                        DiffKind::Mismatch
-                    };
-                    flat_left.push(AlignedCell {
-                        byte_val: Some(b1),
-                        offset: Some(old_index + i),
-                        kind,
-                    });
-                    flat_right.push(AlignedCell {
-                        byte_val: Some(b2),
-                        offset: Some(new_index + i),
-                        kind,
-                    });
-                }
-
-                if old_len > new_len {
-                    for i in common..old_len {
-                        flat_left.push(AlignedCell {
-                            byte_val: Some(left_bytes[old_index + i]),
-                            offset: Some(old_index + i),
-                            kind: DiffKind::LeftOnly,
-                        });
-                        flat_right.push(AlignedCell {
-                            byte_val: None,
-                            offset: None,
-                            kind: DiffKind::LeftOnly,
-                        });
-                    }
-                } else if new_len > old_len {
-                    for i in common..new_len {
-                        flat_left.push(AlignedCell {
-                            byte_val: None,
-                            offset: None,
-                            kind: DiffKind::RightOnly,
-                        });
-                        flat_right.push(AlignedCell {
-                            byte_val: Some(right_bytes[new_index + i]),
-                            offset: Some(new_index + i),
-                            kind: DiffKind::RightOnly,
-                        });
-                    }
-                }
-            }
-            similar::DiffOp::Delete {
-                old_index, old_len, ..
-            } => {
-                for i in 0..old_len {
-                    flat_left.push(AlignedCell {
-                        byte_val: Some(left_bytes[old_index + i]),
-                        offset: Some(old_index + i),
-                        kind: DiffKind::LeftOnly,
-                    });
-                    flat_right.push(AlignedCell {
-                        byte_val: None,
-                        offset: None,
-                        kind: DiffKind::LeftOnly,
-                    });
-                }
-            }
-            similar::DiffOp::Insert {
-                new_index, new_len, ..
-            } => {
-                for i in 0..new_len {
-                    flat_left.push(AlignedCell {
-                        byte_val: None,
-                        offset: None,
-                        kind: DiffKind::RightOnly,
-                    });
-                    flat_right.push(AlignedCell {
-                        byte_val: Some(right_bytes[new_index + i]),
-                        offset: Some(new_index + i),
-                        kind: DiffKind::RightOnly,
-                    });
-                }
-            }
-        }
-    }
-
-    (flat_left, flat_right, alignment_limited)
-}
-
-/// Computes unaligned cell streams for left and right byte slices at identical offsets.
-fn compute_raw_stream(
-    left_bytes: &[u8],
-    right_bytes: &[u8],
-) -> (Vec<AlignedCell>, Vec<AlignedCell>) {
-    let max_len = left_bytes.len().max(right_bytes.len());
-    let mut flat_left = Vec::with_capacity(max_len);
-    let mut flat_right = Vec::with_capacity(max_len);
-
-    for i in 0..max_len {
-        let l_byte = left_bytes.get(i).copied();
-        let r_byte = right_bytes.get(i).copied();
-
-        let kind = match (l_byte, r_byte) {
-            (Some(b1), Some(b2)) => {
-                if b1 == b2 {
-                    DiffKind::Match
-                } else {
-                    DiffKind::Mismatch
-                }
-            }
-            (Some(_), None) => DiffKind::LeftOnly,
-            (None, Some(_)) => DiffKind::RightOnly,
-            (None, None) => DiffKind::Match,
-        };
-
-        flat_left.push(AlignedCell {
-            byte_val: l_byte,
-            offset: if l_byte.is_some() { Some(i) } else { None },
-            kind,
-        });
-
-        flat_right.push(AlignedCell {
-            byte_val: r_byte,
-            offset: if r_byte.is_some() { Some(i) } else { None },
-            kind,
-        });
-    }
-
-    (flat_left, flat_right)
+/// Groups contiguous diff rows into compact blocks for high-level navigation.
+pub fn extract_diff_blocks(rows: &BinaryDiffRows) -> BinaryDiffBlocks {
+    BinaryDiffBlocks::new(rows.clone())
 }
 
 /// Converts a byte into a printable ASCII character or '.'
@@ -872,7 +506,9 @@ pub fn search_rows(result: &BinaryDiffResult, query: &str) -> Vec<usize> {
 
     let mut matching_rows = Vec::new();
 
-    for row in &result.rows {
+    let mut row = BinaryDiffRow::default();
+    for index in 0..result.rows.len() {
+        result.rows.write_row(index, &mut row);
         let left_bytes: Vec<u8> = row.left_cells.iter().filter_map(|c| c.byte_val).collect();
         let right_bytes: Vec<u8> = row.right_cells.iter().filter_map(|c| c.byte_val).collect();
 
@@ -918,8 +554,22 @@ mod tests {
     fn expired_alignment_preserves_every_byte_and_offset() {
         let left = b"prefix:abcbdbebfbgb:tail";
         let right = b"prefix:abxbxbxbxbxbxbxb:tail";
-        let (left_cells, right_cells, limited) =
-            compute_aligned_stream(left, right, Instant::now() - Duration::from_secs(1));
+        let (rows, limited) = BinaryDiffRows::new(
+            Arc::new(left.to_vec()),
+            Arc::new(right.to_vec()),
+            BinaryDiffMode::Aligned,
+            4,
+            Instant::now() - Duration::from_secs(1),
+        );
+        let materialized: Vec<_> = rows.iter().collect();
+        let left_cells: Vec<_> = materialized
+            .iter()
+            .flat_map(|row| row.left_cells.iter().copied())
+            .collect();
+        let right_cells: Vec<_> = materialized
+            .iter()
+            .flat_map(|row| row.right_cells.iter().copied())
+            .collect();
         assert!(limited);
         assert_eq!(left_cells.len(), right_cells.len());
         for (source, cells) in [
@@ -937,7 +587,234 @@ mod tests {
             }
         }
         assert_eq!(left_cells.first().unwrap().kind, DiffKind::Match);
-        assert_eq!(left_cells.last().unwrap().kind, DiffKind::Match);
+        assert_eq!(
+            left_cells
+                .iter()
+                .rev()
+                .find(|cell| cell.byte_val.is_some())
+                .unwrap()
+                .kind,
+            DiffKind::Match
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn large_fragmented_diffs_fit_a_bounded_process_heap() {
+        const CHILD: &str = "LITTLE_CLIP_BINARY_DIFF_MEMORY_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            // Isolate the allocation ceiling from the parallel test runner.
+            // The legacy eager cells need hundreds of MiB for these inputs.
+            let output = std::process::Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "ulimit -c 0; ulimit -d 262144 || exit; exec \"$@\"",
+                    "binary-diff-memory",
+                ])
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "binary_diff::tests::large_fragmented_diffs_fit_a_bounded_process_heap",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let len = 8 * 1024 * 1024;
+        let left = Arc::new(vec![0; len]);
+        let right = Arc::new(
+            (0..len)
+                .map(|i| u8::from((i / 4) % 2 == 0))
+                .collect::<Vec<_>>(),
+        );
+        for mode in [BinaryDiffMode::Raw, BinaryDiffMode::Aligned] {
+            let result = compute_binary_diff_shared(
+                "a",
+                Arc::clone(&left),
+                "b",
+                Arc::clone(&right),
+                mode,
+                4,
+            );
+            assert_eq!(result.rows.len(), len / 4);
+            assert_eq!(result.diff_row_count, len / 8);
+            assert_eq!(result.stats.match_count, len / 2);
+            assert_eq!(result.stats.mismatch_count, len / 2);
+            assert_eq!(result.diff_blocks.len(), len / 8);
+            assert_eq!(result.diff_blocks.get(0).unwrap().byte_count, 4);
+            let last = result
+                .diff_blocks
+                .get(result.diff_blocks.len() - 1)
+                .unwrap();
+            assert_eq!(last.start_row, len / 4 - 2);
+            assert_eq!(last.left_offset, Some(len - 8));
+            assert_eq!(last.preview, "00 00 00 00 ≠ 01 01 01 01");
+            assert!(result.rows.get(result.rows.len()).is_none());
+            assert!(result.diff_blocks.get(result.diff_blocks.len()).is_none());
+            assert_eq!(result.alignment_limited, mode == BinaryDiffMode::Aligned);
+            assert!(
+                Arc::strong_count(&left) > 1,
+                "the result must share its source buffer"
+            );
+        }
+        let (identical, limited) = BinaryDiffRows::new(
+            Arc::clone(&left),
+            Arc::clone(&left),
+            BinaryDiffMode::Aligned,
+            16,
+            Instant::now() - Duration::from_secs(1),
+        );
+        assert!(!limited, "identical inputs require no approximate search");
+        assert_eq!(identical.len(), len / 16);
+        let insertion = compute_binary_diff_shared(
+            "empty",
+            Arc::new(Vec::new()),
+            "full",
+            Arc::clone(&left),
+            BinaryDiffMode::Aligned,
+            16,
+        );
+        assert!(!insertion.alignment_limited);
+        assert_eq!(insertion.stats.right_only_count, len);
+        assert_eq!(
+            insertion.diff_blocks.get(0).unwrap().kind,
+            DiffKind::RightOnly
+        );
+        let mut nearly_equal = left.as_ref().clone();
+        nearly_equal[len / 2] = 1;
+        let result = compute_binary_diff_shared(
+            "a",
+            Arc::clone(&left),
+            "b",
+            Arc::new(nearly_equal),
+            BinaryDiffMode::Aligned,
+            16,
+        );
+        assert_eq!(result.stats.match_count, len - 1);
+        assert_eq!(result.stats.mismatch_count, 1);
+        assert_eq!(result.diff_blocks.len(), 1);
+        assert_eq!(
+            result.diff_blocks.get(0).unwrap().left_offset,
+            Some(len / 2)
+        );
+    }
+
+    #[test]
+    fn lazy_rows_preserve_sources_offsets_and_block_statistics() {
+        let mut seed = 0x12345678_u64;
+        for case in 0..100 {
+            let mut make = |len| -> Vec<u8> {
+                (0..len)
+                    .map(|_| {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        b'a' + (seed % 5) as u8
+                    })
+                    .collect()
+            };
+            let left = make(case % 53);
+            let right = make((case * 13) % 59);
+            for mode in [BinaryDiffMode::Raw, BinaryDiffMode::Aligned] {
+                let result = compute_binary_diff("a", &left, "b", &right, mode, 4 + case % 17);
+                let rows: Vec<_> = result.rows.iter().collect();
+                for (source, is_left) in [(&left, true), (&right, false)] {
+                    let cells: Vec<_> = rows
+                        .iter()
+                        .flat_map(|row| {
+                            if is_left {
+                                &row.left_cells
+                            } else {
+                                &row.right_cells
+                            }
+                        })
+                        .collect();
+                    let bytes: Vec<_> = cells.iter().filter_map(|cell| cell.byte_val).collect();
+                    let offsets: Vec<_> = cells.iter().filter_map(|cell| cell.offset).collect();
+                    assert_eq!(bytes, *source);
+                    assert_eq!(offsets, (0..source.len()).collect::<Vec<_>>());
+                }
+                assert_eq!(
+                    result.diff_row_count,
+                    rows.iter().filter(|row| row.has_diff).count()
+                );
+                assert_eq!(
+                    result.stats.match_count
+                        + result.stats.mismatch_count
+                        + result.stats.left_only_count,
+                    left.len()
+                );
+                assert_eq!(
+                    result.stats.match_count
+                        + result.stats.mismatch_count
+                        + result.stats.right_only_count,
+                    right.len()
+                );
+                let mut block_bytes = 0;
+                let mut block_rows = 0;
+                for block in result.diff_blocks.iter() {
+                    assert!(
+                        rows[block.start_row..=block.end_row]
+                            .iter()
+                            .all(|row| row.has_diff)
+                    );
+                    block_bytes += block.byte_count;
+                    block_rows += block.end_row - block.start_row + 1;
+                }
+                assert_eq!(block_rows, result.diff_row_count);
+                assert_eq!(
+                    block_bytes,
+                    result.stats.mismatch_count
+                        + result.stats.left_only_count
+                        + result.stats.right_only_count
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lazy_blocks_keep_preview_text_and_gap_offsets() {
+        let raw = compute_binary_diff(
+            "a",
+            b"sameOld!sameTAIL",
+            "b",
+            b"sameNew!same",
+            BinaryDiffMode::Raw,
+            4,
+        );
+        assert_eq!(raw.diff_blocks.len(), 2);
+        let mismatch = raw.diff_blocks.get(0).unwrap();
+        assert_eq!(mismatch.start_row, 1);
+        assert_eq!(mismatch.byte_count, 3);
+        assert_eq!(mismatch.kind_label, "Mismatch");
+        assert_eq!(mismatch.preview, "Old ≠ New");
+        let deletion = raw.diff_blocks.get(1).unwrap();
+        assert_eq!(deletion.left_offset, Some(12));
+        assert_eq!(deletion.right_offset, None);
+        assert_eq!(deletion.kind_label, "Deletion");
+        assert_eq!(deletion.preview, "TAIL ≠ --");
+        assert_eq!(search_rows(&raw, "TAIL"), vec![3]);
+        let aligned = compute_binary_diff(
+            "a",
+            b"abcdWXYZefgh",
+            "b",
+            b"abcdefgh",
+            BinaryDiffMode::Aligned,
+            4,
+        );
+        assert_eq!(aligned.stats.match_count, 8);
+        let gap = aligned.diff_blocks.get(0).unwrap();
+        assert_eq!(gap.left_offset, Some(4));
+        assert_eq!(gap.right_offset, None);
+        assert_eq!(gap.preview, "WXYZ ≠ --");
     }
 
     #[test]
@@ -957,7 +834,7 @@ mod tests {
         assert_eq!(res.stats.left_only_count, 0);
         assert_eq!(res.stats.right_only_count, 0);
         assert_eq!(res.stats.similarity_pct, 100.0);
-        assert!(res.diff_row_indices.is_empty());
+        assert!(res.diff_row_count == 0);
     }
 
     #[test]
@@ -970,7 +847,7 @@ mod tests {
         assert_eq!(res.stats.right_only_count, 6); // "Brave "
         assert_eq!(res.stats.match_count, 11); // "Hello World"
         assert_eq!(res.stats.mismatch_count, 0);
-        assert_eq!(res.diff_row_indices.len(), 1);
+        assert_eq!(res.diff_row_count, 1);
     }
 
     #[test]
