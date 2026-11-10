@@ -234,7 +234,11 @@ impl ScreenRenderer {
                 false,
             );
 
-            let badge_text = format!("• 30s PREVIEW OF {} •", dur_text);
+            let badge_text = format!(
+                "• {}s PREVIEW OF {} •",
+                wf.snippet_duration_ms / 1000,
+                dur_text
+            );
             let badge_x = content_x + (content_w / 2.0) - (badge_text.len() as f32 * 3.8);
             self.draw_text(
                 pixmap,
