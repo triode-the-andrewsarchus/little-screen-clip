@@ -214,7 +214,8 @@ fn render_with_libreoffice(input: &Path, output_pdf: &Path) -> Result<(), String
         .arg("--headless")
         .arg("--convert-to")
         .arg("pdf")
-        .arg(input)
+        .arg_content_file(input)
+        .map_err(|error| format!("Cannot open office input: {error}"))?
         .arg("--outdir")
         .arg(out_dir);
 
@@ -230,22 +231,8 @@ fn render_with_libreoffice(input: &Path, output_pdf: &Path) -> Result<(), String
         ));
     }
 
-    // LibreOffice outputs a file with the input's stem and .pdf extension in out_dir
-    let stem = input
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("document");
-    let generated = out_dir.join(format!("{stem}.pdf"));
-
-    if generated.exists() {
-        if let Some(parent) = output_pdf.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        std::fs::copy(&generated, output_pdf).map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
-    // Search out_dir for any generated pdf
+    // Descriptor input names are opaque. This private workspace contains one
+    // conversion, so discover its PDF rather than relying on the source basename.
     if let Ok(entries) = std::fs::read_dir(out_dir) {
         for entry in entries.flatten() {
             let p = entry.path();
@@ -480,6 +467,98 @@ mod tests {
         let md = render_to_markdown(&rtf_path).expect("anydoc should parse RTF");
         assert!(md.contains("Hello"));
         assert!(md.contains("World"));
+    }
+
+    #[test]
+    fn libreoffice_pins_input_before_a_child_can_replace_its_name() {
+        const ENV: &str = "LITTLE_CLIP_OFFICE_PIN_TEST";
+        let Some(root) = std::env::var_os(ENV).map(PathBuf::from) else {
+            use std::os::unix::fs::PermissionsExt;
+            let root = tempfile::tempdir().unwrap();
+            let binary = root.path().join("libreoffice");
+            std::fs::write(
+                &binary,
+                r#"#!/bin/sh
+: > "$LITTLE_CLIP_OFFICE_PIN_TEST/child-ran"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --convert-to) shift ;;
+        --outdir) shift; outdir="$1" ;;
+        --headless|-env:*) ;;
+        *) input="$1" ;;
+    esac
+    shift
+done
+/bin/mv "$LITTLE_CLIP_OFFICE_PIN_TEST/source.rtf" "$LITTLE_CLIP_OFFICE_PIN_TEST/moved.rtf"
+printf 'replacement input' > "$LITTLE_CLIP_OFFICE_PIN_TEST/source.rtf"
+/bin/cat "$input" > "$LITTLE_CLIP_OFFICE_PIN_TEST/observed"
+printf '%%PDF-1.4\nfixture\n' > "$outdir/converted.pdf"
+"#,
+            )
+            .unwrap();
+            std::fs::set_permissions(binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "document::tests::libreoffice_pins_input_before_a_child_can_replace_its_name",
+                    "--nocapture",
+                ])
+                .env(ENV, root.path())
+                .env("PATH", root.path())
+                .env("XDG_CACHE_HOME", root.path().join("cache"))
+                .env_remove("WAYLAND_DISPLAY")
+                .env_remove("DISPLAY")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let input = root.join("source.rtf");
+        let output = root.join("result.pdf");
+        std::fs::write(&input, "original input").unwrap();
+        render_with_libreoffice(&input, &output).unwrap();
+        assert_eq!(
+            std::fs::read(root.join("observed")).unwrap(),
+            b"original input"
+        );
+        assert!(std::fs::read(&output).unwrap().starts_with(b"%PDF-"));
+        std::fs::remove_file(root.join("child-ran")).unwrap();
+        let protected = root.join("protected.rtf");
+        std::os::unix::fs::symlink("/proc/uptime", &protected).unwrap();
+        let rejected = root.join("rejected.pdf");
+        let error = render_with_libreoffice(&protected, &rejected).unwrap_err();
+        assert!(error.contains("inspection-only"), "{error}");
+        assert!(!root.join("child-ran").exists());
+        assert!(!rejected.exists());
+    }
+
+    #[test]
+    fn installed_libreoffice_renders_pinned_rtf_and_docx_without_native_fallback() {
+        if crate::process::command_available("libreoffice").is_none()
+            && crate::process::command_available("soffice").is_none()
+        {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let rtf = root.path().join("example.rtf");
+        std::fs::write(&rtf, b"{\\rtf1\\ansi Pinned RTF input.}").unwrap();
+        let docx = root.path().join("example.docx");
+        let mut document = rdocx::Document::new();
+        document.add_paragraph("Pinned DOCX input");
+        document.save(&docx).unwrap();
+        for input in [rtf, docx] {
+            let output = root.path().join(format!(
+                "{}.pdf",
+                input.extension().unwrap().to_string_lossy()
+            ));
+            render_with_libreoffice(&input, &output).unwrap();
+            assert!(std::fs::read(output).unwrap().starts_with(b"%PDF-"));
+        }
     }
 
     #[test]

@@ -153,11 +153,12 @@ touches the host clipboard or USB display unless explicitly stated.
   - `staging::create_staging_path` in [`crates/little-clip-core/src/staging.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-core/src/staging.rs#L198-L210) is never called anywhere in the workspace.
   - `FullAudioAnalysis::recompute_transients` in [`crates/little-clip-core/src/audio/waveform.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-core/src/audio/waveform.rs#L44-L50) is never called outside its unit test (`transients_with_sensitivity` is used by the workbench instead).
   - In [`crates/little-clip-core/src/audio/analysis.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-core/src/audio/analysis.rs#L312-L345), `detect_chord_from_fft` allocates `let mut chroma_octave_mag = [[0.0f32; 9]; BINS_PER_OCTAVE];` and updates it on every FFT bin (lines 342–344), but **never reads `chroma_octave_mag`** (lines 494–512 re-probe `out_data` instead).
-- [ ] **[Code Quality / Duplication & Stdout Noise]**:
+- [x] **[Code Quality / Duplication & Stdout Noise]**:
   - [x] `compute_audio_analysis_progressive_cancellable_with_options` in [`crates/little-clip-core/src/audio/decode.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-core/src/audio/decode.rs#L975-L983) uses `println!("[AUDIO ANALYSIS TIMING] ...")` unconditionally in library code instead of `tracing::debug!`.
     **Current verification:** Replaced the unconditional stdout write with structured `tracing::debug!` fields. Timing diagnostics are now opt-in through the existing tracing subscriber. The complete-analysis regression passes with generated WAV data and no audio-device access (`cargo test -j4 -p little-clip-core test_compute_full_audio_analysis`).
   - [x] `which_exists` in [`crates/little-clip-core/src/document.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-core/src/document.rs#L353-L363) duplicates `crate::process::command_available` *(completed in `702024c`)*.
-  - [ ] `render_with_libreoffice` (line 217) passes `.arg(input)` as a raw path to `soffice`/`libreoffice` instead of `.arg_content_file(input)`.
+  - [x] `render_with_libreoffice` (line 217) passes `.arg(input)` as a raw path to `soffice`/`libreoffice` instead of `.arg_content_file(input)`.
+    **Current verification:** The LibreOffice backend now passes a guarded inherited descriptor and discovers its PDF in the private conversion workspace. The isolated replacement regression failed before the fix and confirms the original bytes remain pinned; protected aliases fail before child launch. Ten document tests pass, including direct installed-LibreOffice RTF/DOCX conversion without native fallback and formatting (`cargo test -j4 -p little-clip-core document::tests -- --test-threads=1`). Real conversion uses a private headless profile; the adversarial child is a private fake executable.
 
 ---
 
