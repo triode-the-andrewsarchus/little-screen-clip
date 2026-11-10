@@ -5,9 +5,11 @@ use clip_ui::buttons::ButtonRole;
 use egui::text::{CCursor, CCursorRange};
 use egui::{self, Id};
 use little_clip_core::config::AppConfig;
+use little_clip_core::file_source::{FileSource, create_file_in, read_file_snapshot_with_source};
 use little_clip_core::palette::AppPalette;
 use little_clip_ops::pipeline::recipes::{create_script_file_scaffold_in_dir, get_recipes_dir};
 use little_clip_ops::pipeline::types::{NodeInstance, NodeKind};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 const MAX_SCRIPT_BYTES: usize = 2 * 1024 * 1024;
@@ -16,7 +18,7 @@ pub struct ScriptEditor {
     pub text: String,
     saved: String,
     path: Option<PathBuf>,
-    existed: bool,
+    source: Option<FileSource>,
     error: Option<String>,
     status: Option<String>,
     find: String,
@@ -24,6 +26,29 @@ pub struct ScriptEditor {
     search_open: bool,
     focus_find: bool,
     cached: Option<(String, String, egui::text::LayoutJob)>,
+}
+
+fn write_script_file(
+    path: &Path,
+    text: &str,
+    source: Option<&FileSource>,
+) -> Result<FileSource, String> {
+    let directory = little_clip_core::kernel_interface::pin_content_directory(
+        path.parent().unwrap_or(Path::new(".")),
+    )
+    .map_err(|error| format!("Could not open script directory: {error}"))?;
+    let parent = std::fs::read_link(format!("/proc/self/fd/{}", directory.as_raw_fd()))
+        .map_err(|error| error.to_string())?;
+    let destination = parent.join(path.file_name().ok_or("Missing script filename")?);
+    if let Some(source) = source {
+        if destination != source.path() {
+            return Err("Script source or its parent changed; reload before saving.".to_owned());
+        }
+        source.write_in(&destination, text.as_bytes(), &directory)
+    } else {
+        let installed = create_file_in(&destination, text.as_bytes(), &directory)?;
+        FileSource::capture_file(&installed)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -51,14 +76,19 @@ impl ScriptEditor {
             .get("script_file")
             .map(|name| get_recipes_dir().join(name));
         let mut error = None;
-        let mut existed = false;
+        let mut source = None;
         let text = if let Some(path) = &path {
-            match little_clip_core::kernel_interface::read_content_to_string_bounded(
-                path,
-                MAX_SCRIPT_BYTES,
+            match read_file_snapshot_with_source(path, MAX_SCRIPT_BYTES).and_then(
+                |(bytes, observed)| {
+                    String::from_utf8(bytes)
+                        .map(|text| (text, observed))
+                        .map_err(|error| {
+                            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+                        })
+                },
             ) {
-                Ok(text) => {
-                    existed = true;
+                Ok((text, observed)) => {
+                    source = Some(observed);
                     text
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -83,7 +113,7 @@ impl ScriptEditor {
             saved: text.clone(),
             text,
             path,
-            existed,
+            source,
             error,
             status: None,
             find: String::new(),
@@ -123,7 +153,7 @@ impl ScriptEditor {
             self.text = refreshed.text;
             self.saved = refreshed.saved;
             self.path = refreshed.path;
-            self.existed = refreshed.existed;
+            self.source = refreshed.source;
             self.error = refreshed.error;
             self.cached = None;
         }
@@ -138,19 +168,7 @@ impl ScriptEditor {
             return Err(error.clone());
         }
         if let Some(path) = &self.path {
-            let disk = little_clip_core::kernel_interface::read_content_to_string_bounded(
-                path,
-                MAX_SCRIPT_BYTES,
-            );
-            let unchanged = match &disk {
-                Ok(text) => self.existed && text == &self.saved,
-                Err(e) => !self.existed && e.kind() == std::io::ErrorKind::NotFound,
-            };
-            if !unchanged {
-                return Err("Script changed on disk. Reload before saving.".to_owned());
-            }
-            std::fs::write(path, &self.text).map_err(|e| format!("Could not save script: {e}"))?;
-            self.existed = true;
+            self.source = Some(write_script_file(path, &self.text, self.source.as_ref())?);
         } else {
             node.props
                 .insert(Self::inline_key(node).to_owned(), self.text.clone());
@@ -177,13 +195,15 @@ impl ScriptEditor {
             )
             .map_err(|e| format!("Could not create script file: {e}"))?;
             let path = recipes_dir.join(&filename);
-            std::fs::write(&path, &self.text).map_err(|e| format!("Could not save script: {e}"))?;
+            let (_, source) = read_file_snapshot_with_source(&path, MAX_SCRIPT_BYTES)
+                .map_err(|error| format!("Could not read created script: {error}"))?;
+            let installed = write_script_file(&path, &self.text, Some(&source))?;
             node.props.insert("script_file".to_owned(), filename);
             node.props.remove(Self::inline_key(node));
             self.path = Some(path);
-            self.existed = true;
+            self.source = Some(installed);
             self.saved.clone_from(&self.text);
-        } else if self.dirty() || !self.existed {
+        } else if self.dirty() || self.source.is_none() {
             self.save(node)?;
         }
         let path = self
@@ -627,6 +647,73 @@ mod tests {
         editor.text = "draft".to_owned();
         assert!(editor.save(&mut node).is_err());
         assert_eq!(std::fs::read_link(path).unwrap(), Path::new("/proc/uptime"));
+    }
+
+    #[test]
+    fn script_save_rejects_a_replacement_even_with_identical_contents() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("script.py");
+        std::fs::write(&path, "original").unwrap();
+        let mut node = script_node(NodeKind::PythonScript);
+        node.props
+            .insert("script_file".to_owned(), path.display().to_string());
+        let mut editor = ScriptEditor::load(&node);
+        editor.text = "draft".to_owned();
+        let replacement = directory.path().join("replacement.py");
+        std::fs::write(&replacement, "original").unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        assert!(
+            editor.save(&mut node).is_err(),
+            "silently overwrote a replacement file"
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "original");
+        assert!(editor.dirty());
+    }
+
+    #[test]
+    fn script_save_replaces_atomically_preserving_mode_and_other_hard_links() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("script.sh");
+        let link = directory.path().join("prior.sh");
+        std::fs::write(&path, "original").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::hard_link(&path, &link).unwrap();
+        let mut node = script_node(NodeKind::BashCommand);
+        node.props
+            .insert("script_file".to_owned(), path.display().to_string());
+        let mut editor = ScriptEditor::load(&node);
+        editor.text = "changed".to_owned();
+        editor.save(&mut node).unwrap();
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "original");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "changed");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        editor.text = "second save".to_owned();
+        editor.save(&mut node).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second save");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn new_script_save_does_not_clobber_a_competing_creation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("new.py");
+        let mut node = script_node(NodeKind::PythonScript);
+        node.props
+            .insert("script_file".to_owned(), path.display().to_string());
+        let mut first = ScriptEditor::load(&node);
+        let mut second = ScriptEditor::load(&node);
+        assert!(first.error.is_none());
+        first.text = "first".to_owned();
+        second.text = "second".to_owned();
+        first.save(&mut node).unwrap();
+        assert!(second.save(&mut node).is_err());
+        assert!(second.dirty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     #[test]

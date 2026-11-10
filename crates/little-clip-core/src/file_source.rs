@@ -223,38 +223,71 @@ impl FileSource {
         bytes: &[u8],
         directory: &File,
     ) -> Result<Self, String> {
+        if destination != self.path.as_path() {
+            let installed = create_file_in(destination, bytes, directory)?;
+            return Self::capture_file(&installed);
+        }
         let parent = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
         let target = parent.join(destination.file_name().ok_or("Missing filename")?);
-        let mut temporary = tempfile::NamedTempFile::new_in(&parent).map_err(|e| e.to_string())?;
-        temporary.write_all(bytes).map_err(|e| e.to_string())?;
-        let replacing = destination == self.path.as_path();
-        if replacing {
-            temporary
-                .as_file()
-                .set_permissions(std::fs::Permissions::from_mode(self.mode))
-                .map_err(|e| e.to_string())?;
+        let temporary = stage_file_in(directory, bytes, Some(self.mode))?;
+        let current = Self::capture(&target)?;
+        if current != *self
+            || std::fs::symlink_metadata(&target)
+                .map_err(|e| e.to_string())?
+                .file_type()
+                .is_symlink()
+        {
+            return Err(
+                "Source changed outside Files. Reload it or save to a new filename.".into(),
+            );
         }
-        temporary.as_file().sync_all().map_err(|e| e.to_string())?;
-        let installed = if replacing {
-            let current = Self::capture(&target)?;
-            if current != *self
-                || std::fs::symlink_metadata(&target)
-                    .map_err(|e| e.to_string())?
-                    .file_type()
-                    .is_symlink()
-            {
-                return Err(
-                    "Source changed outside Files. Reload it or save to a new filename.".into(),
-                );
-            }
-            temporary.persist(&target).map_err(|e| e.to_string())?
-        } else {
-            temporary
-                .persist_noclobber(&target)
-                .map_err(|e| format!("Choose an unused filename: {e}"))?
-        };
+        let installed = temporary.persist(&target).map_err(|e| e.to_string())?;
         Self::capture_file(&installed)
     }
+}
+
+/// Atomically creates a private file beside an unused destination in a held directory.
+///
+/// The returned handle owns the installed file for identity and metadata operations
+/// without reopening its pathname.
+///
+/// # Errors
+/// Returns an error for protected/non-directory handles, existing destinations,
+/// missing filenames, or staging/installation failures.
+pub fn create_file_in(destination: &Path, bytes: &[u8], directory: &File) -> Result<File, String> {
+    let parent = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let target = parent.join(destination.file_name().ok_or("Missing filename")?);
+    let temporary = stage_file_in(directory, bytes, None)?;
+    crate::kernel_interface::pin_content_directory(&parent).map_err(|e| e.to_string())?;
+    let installed = temporary
+        .persist_noclobber(&target)
+        .map_err(|e| format!("Choose an unused filename: {e}"))?;
+    Ok(installed)
+}
+
+fn stage_file_in(
+    directory: &File,
+    bytes: &[u8],
+    mode: Option<u32>,
+) -> Result<tempfile::NamedTempFile, String> {
+    let parent = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    crate::kernel_interface::pin_content_directory(&parent).map_err(|error| error.to_string())?;
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(&parent).map_err(|error| error.to_string())?;
+    temporary
+        .write_all(bytes)
+        .map_err(|error| error.to_string())?;
+    if let Some(mode) = mode {
+        temporary
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(mode))
+            .map_err(|error| error.to_string())?;
+    }
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
+    Ok(temporary)
 }
 
 /// Opens regular sources without blocking on a FIFO substituted after enumeration.
@@ -283,21 +316,36 @@ pub fn read_file_bytes(
 
 /// Reads a complete bounded snapshot through one guarded handle and checks its identity.
 pub fn read_file_snapshot(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
-    let mut file = open_regular_file(path, true).map_err(|e| e.to_string())?;
-    let source = FileSource::capture_file(&file)?;
+    read_file_snapshot_with_source(path, limit)
+        .map(|(bytes, _)| bytes)
+        .map_err(|error| error.to_string())
+}
+
+/// Reads a complete bounded snapshot and returns its same-handle source identity.
+///
+/// # Errors
+/// Returns an error for protected/non-regular sources, oversized or changed input,
+/// or filesystem failures. Missing inputs preserve `ErrorKind::NotFound`.
+pub fn read_file_snapshot_with_source(
+    path: &Path,
+    limit: usize,
+) -> std::io::Result<(Vec<u8>, FileSource)> {
+    let mut file = open_regular_file(path, true)?;
+    let source = FileSource::capture_file(&file).map_err(std::io::Error::other)?;
     let mut bytes = Vec::new();
     std::io::Read::by_ref(&mut file)
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+        .take((limit as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
     if bytes.len() > limit {
-        return Err("Preview source exceeds its read limit".into());
+        return Err(std::io::Error::other(
+            "Preview source exceeds its read limit",
+        ));
     }
-    if FileSource::capture_file(&file)? != source {
-        return Err("Source changed while reading".into());
+    if FileSource::capture_file(&file).map_err(std::io::Error::other)? != source {
+        return Err(std::io::Error::other("Source changed while reading"));
     }
-    source.check()?;
-    Ok(bytes)
+    source.check().map_err(std::io::Error::other)?;
+    Ok((bytes, source))
 }
 
 #[cfg(test)]
