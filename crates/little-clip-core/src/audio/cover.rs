@@ -12,7 +12,10 @@ use symphonia::core::{
     probe::Hint,
 };
 
-/// Reads a music cover through the native format reader on a background worker.
+/// Reads embedded music artwork through the native format reader.
+///
+/// Call this from a background worker. Raster decoding enforces byte, dimension
+/// and allocation limits before producing a thumbnail of at most 160 × 160 pixels.
 ///
 /// # Errors
 /// Returns an error for unsupported inputs, guarded-open failures or cancellation.

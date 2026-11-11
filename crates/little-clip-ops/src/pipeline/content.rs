@@ -19,10 +19,9 @@ impl Input {
         Ok(Self { file, observed })
     }
     pub(super) fn check(&self) -> io::Result<()> {
-        if FileSource::capture_file(&self.file).map_err(io::Error::other)? != self.observed {
-            return Err(io::Error::other("Pipeline input changed while processing"));
-        }
-        self.observed.check().map_err(io::Error::other)
+        self.observed
+            .check_file(&self.file)
+            .map_err(io::Error::other)
     }
     fn argument(&self, request: CommandRequest) -> io::Result<CommandRequest> {
         request.arg_owned_content_file(self.file.try_clone()?)
@@ -160,6 +159,57 @@ pub(super) fn audio(
     destination: &Path,
 ) -> Result<(), String> {
     let files = RenderFiles::new(workspace, paths).map_err(|error| error.to_string())?;
+    render_audio(&files, arguments)?;
+    files
+        .publish(workspace, destination)
+        .map_err(|error| error.to_string())
+}
+
+pub(super) fn audio_gain(
+    workspace: &Workspace,
+    source: &Path,
+    gain_db: &str,
+    destination: &Path,
+) -> Result<(), String> {
+    let gain_db = gain_db
+        .parse::<f32>()
+        .map_err(|_| "Enter a numeric gain in decibels")?;
+    if gain_db.is_nan() || gain_db == f32::INFINITY {
+        return Err("Enter a valid gain in decibels".into());
+    }
+    let files = RenderFiles::new(workspace, &[source]).map_err(|error| error.to_string())?;
+    let result = little_clip_core::audio::render_wav(
+        files.inputs[0]
+            .file
+            .try_clone()
+            .map_err(|error| error.to_string())?,
+        source,
+        files
+            .output
+            .as_file()
+            .try_clone()
+            .map_err(|error| error.to_string())?,
+        little_clip_core::audio::WavRenderOptions {
+            gain_db,
+            ..Default::default()
+        },
+        &std::sync::atomic::AtomicBool::new(false),
+    );
+    if let Err(error) = result {
+        use std::io::Seek;
+        tracing::debug!(%error, "Native audio gain deferred to the codec backend");
+        files.inputs[0].check().map_err(|error| error.to_string())?;
+        let mut output = files.output.as_file();
+        output.set_len(0).map_err(|error| error.to_string())?;
+        output.rewind().map_err(|error| error.to_string())?;
+        render_audio(&files, &["-af", &format!("volume={gain_db}dB")])?;
+    }
+    files
+        .publish(workspace, destination)
+        .map_err(|error| error.to_string())
+}
+
+fn render_audio(files: &RenderFiles, arguments: &[&str]) -> Result<(), String> {
     let mut request =
         CommandRequest::new("ffmpeg").args(["-nostdin", "-y", "-protocol_whitelist", "file,pipe"]);
     for input in &files.inputs {
@@ -173,9 +223,7 @@ pub(super) fn audio(
         .inherit_handle(files.output.as_file())
         .map_err(|error| error.to_string())?;
     run(request.arg(format!("/proc/self/fd/{fd}")))?;
-    files
-        .publish(workspace, destination)
-        .map_err(|error| error.to_string())
+    Ok(())
 }
 
 impl PortValue {
@@ -261,6 +309,44 @@ mod tests {
     }
 
     #[test]
+    fn native_gain_preserves_stereo_timing_and_scales_pcm() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.wav");
+        let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(1, 8000, 2);
+        buffer.push_samples(&vec![1234; 16_000]);
+        buffer.write_wav(&source).unwrap();
+        let workspace = Workspace::new().unwrap();
+        let output = workspace.path().join("native-gain.wav");
+        audio_gain(&workspace, &source, "-6.0206", &output).unwrap();
+        let metadata = little_clip_core::audio::read_audio_metadata(&output).unwrap();
+        assert_eq!(
+            (
+                metadata.sample_rate,
+                metadata.channels,
+                metadata.duration_ms
+            ),
+            (8000, 2, 1000)
+        );
+        let (peaks, _) = little_clip_core::audio::compute_preview_waveform(
+            File::open(&output).unwrap(),
+            &output,
+            1.0,
+            8,
+            None,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(
+            peaks
+                .iter()
+                .all(|peak| (*peak - 617.0 / 32768.0).abs() <= 1.0 / 32768.0)
+        );
+        let invalid = workspace.path().join("invalid.wav");
+        assert!(audio_gain(&workspace, &source, "NaN", &invalid).is_err());
+        assert!(!invalid.exists());
+    }
+
+    #[test]
     fn ffmpeg_tools_finalize_stereo_wave_outputs_and_concat_inputs() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source.wav");
@@ -304,6 +390,7 @@ mod tests {
             assert!(image_bytes(source).is_err());
             assert!(magick(&workspace, &[source], &[], &destination).is_err());
             assert!(audio(&workspace, &[source], &[], &destination).is_err());
+            assert!(audio_gain(&workspace, source, "0", &destination).is_err());
         }
         assert!(!destination.exists());
     }

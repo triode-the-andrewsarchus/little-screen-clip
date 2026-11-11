@@ -11,6 +11,8 @@ pub mod analysis;
 mod cover;
 pub use cover::read_audio_cover;
 pub mod decode;
+mod render;
+pub use render::{WavEncoding, WavRenderOptions, render_wav};
 mod source;
 pub use source::{
     AudioInput, SeekableAudio, ToolAudioInput, decoder_input_args,

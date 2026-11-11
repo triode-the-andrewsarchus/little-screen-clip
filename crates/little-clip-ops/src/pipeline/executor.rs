@@ -662,7 +662,7 @@ else:
                 out.push(("Overlay".to_string(), PortValue::ImagePath(out_overlay)));
             }
 
-            // --- Audio Transforms (FFmpeg) ---
+            // --- Audio transforms ---
             NodeKind::AudioNormalize => {
                 let in_path = self.get_input_file(inputs, &["Audio In", "In"])?;
                 let target = node
@@ -708,8 +708,7 @@ else:
                     .unwrap_or("3.0");
                 let out_path = temp_dir.join(format!("gain_{}.wav", Uuid::new_v4()));
 
-                let filter = format!("volume={}dB", db);
-                super::content::audio(workspace, &[&in_path], &["-af", &filter], &out_path)
+                super::content::audio_gain(workspace, &in_path, db, &out_path)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Gain {}dB", db));

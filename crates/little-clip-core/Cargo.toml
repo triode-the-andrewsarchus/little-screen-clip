@@ -25,6 +25,7 @@ percent-encoding.workspace = true
 toml.workspace = true
 toml_edit = "0.22"
 symphonia.workspace = true
+hound = "3.5.1"
 rustchord = "0.6.0"
 realfft = "3.5.1"
 rayon.workspace = true

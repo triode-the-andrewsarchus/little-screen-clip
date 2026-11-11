@@ -666,7 +666,8 @@ pub fn compute_preview_waveform(
     cancelled: &AtomicBool,
 ) -> Result<(Vec<f32>, Vec<[u8; 3]>), String> {
     use symphonia::core::errors::Error;
-    let mut format = super::source::format_reader(file, path, cancelled)?;
+    let mut format =
+        super::source::format_reader(file, path, cancelled, symphonia::default::get_probe())?;
     let track = format.default_track().ok_or("No audio track")?;
     let id = track.id;
     let duration_seconds = codec_duration_seconds(&track.codec_params);

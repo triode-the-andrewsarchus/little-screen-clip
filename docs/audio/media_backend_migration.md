@@ -89,9 +89,10 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 - [x] Separate FFmpeg 9 library worker, initial probing and lossy-depth tests.
 - [x] Rewind inherited inputs before probing, with an EOF-position regression test.
 - [x] Keep video dimensions separate from attached cover artwork; regression fixture passes.
-- [ ] Migrate and verify production metadata callers (music, video, format bridge,
+- [x] Migrate and verify production metadata callers (music, video, format bridge,
   search and animation metadata).
-- [ ] Native audio processing and remaining library decode/filter/export jobs.
+- [x] Native streaming WAV ranges and simple gain, with owned staging and retry cleanup.
+- [ ] Remaining library decode/filter/export jobs.
 
 - Established architecture baseline `native-audio-ffmpeg` at `89ccc61`.
 - Confirmed common audio already uses native decoding and DSP; migration must
@@ -136,6 +137,30 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   implementation does not consistently enforce them. Do not treat those options
   as a hard parsing-memory guarantee. Artwork decoding enforces its own byte,
   image-dimension and allocation limits; review parser budgets during migration.
+
+- Added `audio/render.rs` using the existing guarded native reader and sample
+  conversion buffer. Ordinary mono/stereo WAV export and pipeline gain stream
+  packet-sized PCM into owned staging; large RIFF outputs and incompatible
+  layouts/timing defer to the codec backend. Failed attempts clear partial WAV
+  output before retry. Source and directory identities remain checked before
+  publication; the same admitted inputs/staging are retained through fallback.
+- Native selections use source packet clocks, decoder preroll and Opus pre-skip,
+  rather than accumulating decoded frame counts. Explicit generated-fixture
+  checks cover FLAC, MP3, raw AAC, Vorbis and Opus. MP4/M4A native export is
+  intentionally deferred: Symphonia 0.5 parses but does not apply edit-list timing.
+  Recognition uses content, including misleading filename extensions.
+
+- Native rendering verification: six core renderer checks (including the explicit
+  compressed reference test), 106 audio-studio checks, five pipeline content
+  checks and seven file-source checks pass. All seven worker checks also pass
+  after separating converter setup and tail draining from packet delivery.
+- Architecture follow-up removed the new decoder/encoder control-flow hotspots
+  and repeated captured-handle validation. Maximum CCN and dependency cycles are
+  unchanged. The staging orchestration's CCN increases from 15 to 19 because
+  native dispatch and its fallible handle/retry operations are additional paths;
+  retaining those explicit errors is necessary. Remaining clone reports largely
+  touch unchanged waveform/animation/test blocks, plus ordinary renderer test
+  setup. No second decoding cache or application FFmpeg linkage was introduced.
 
 ## Final recommendation
 

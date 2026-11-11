@@ -166,7 +166,7 @@ pub(super) fn render_audio_file(
     cancelled: &AtomicBool,
     directory: Option<std::fs::File>,
 ) -> Result<RenderedSessionFile, String> {
-    use std::os::fd::AsRawFd;
+    use std::{io::Seek, os::fd::AsRawFd};
     if cancelled.load(Ordering::Acquire) {
         return Err("Audio operation cancelled".into());
     }
@@ -185,26 +185,27 @@ pub(super) fn render_audio_file(
         .tempfile_in(anchor)
         .map_err(|error| error.to_string())?;
     let input_path = PathBuf::from(format!("/proc/self/fd/{}", input.as_raw_fd()));
-    let mut command = export::audio_export_command(
-        &input_path,
-        region,
-        staging
-            .as_file()
-            .try_clone()
-            .map_err(|error| error.to_string())?,
-        mode,
-        cancelled,
-    )?;
-    let status = run_audio_command_cancellable(&mut command, cancelled)
-        .map_err(|error| error.to_string())?;
-    if !status.success() {
-        return Err(format!("Audio rendering failed: {status}"));
+    let native = try_native_wav(&input, source, staging.as_file(), region, mode, cancelled)?;
+    if !native {
+        check.validate(cancelled)?;
+        observed.check_file(&input)?;
+        let mut output = staging.as_file();
+        output.set_len(0).map_err(|error| error.to_string())?;
+        output.rewind().map_err(|error| error.to_string())?;
+        let mut command = export::audio_export_command(
+            &input_path,
+            region,
+            output.try_clone().map_err(|error| error.to_string())?,
+            mode,
+            cancelled,
+        )?;
+        let status = run_audio_command_cancellable(&mut command, cancelled)?;
+        if !status.success() {
+            return Err(format!("Audio rendering failed: {status}"));
+        }
     }
     check.validate(cancelled)?;
-    if crate::file_source::FileSource::capture_file(&input)? != observed {
-        return Err("Audio source changed during rendering; reload it.".into());
-    }
-    observed.check()?;
+    observed.check_file(&input)?;
     staging
         .as_file()
         .sync_all()
@@ -215,6 +216,48 @@ pub(super) fn render_audio_file(
         observed,
         _input: input,
     })
+}
+
+fn try_native_wav(
+    input: &std::fs::File,
+    source: &Path,
+    staging: &std::fs::File,
+    region: &AudioSaveRegion,
+    mode: export::AudioRenderMode,
+    cancelled: &AtomicBool,
+) -> Result<bool, String> {
+    let native = region.filter.is_none()
+        && Path::new(&region.filename)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"));
+    if native {
+        let options = little_clip_core::audio::WavRenderOptions {
+            range: (mode == export::AudioRenderMode::Export)
+                .then_some((f64::from(region.start), f64::from(region.end))),
+            encoding: if mode == export::AudioRenderMode::Export {
+                little_clip_core::audio::WavEncoding::Pcm16
+            } else {
+                little_clip_core::audio::WavEncoding::Float32
+            },
+            ..Default::default()
+        };
+        match little_clip_core::audio::render_wav(
+            input.try_clone().map_err(|error| error.to_string())?,
+            source,
+            staging.try_clone().map_err(|error| error.to_string())?,
+            options,
+            cancelled,
+        ) {
+            Ok(()) => Ok(true),
+            Err(_) if cancelled.load(Ordering::Acquire) => Err("Audio rendering cancelled".into()),
+            Err(error) => {
+                tracing::debug!(%error, "Native WAV renderer deferred to the codec backend");
+                Ok(false)
+            }
+        }
+    } else {
+        Ok(false)
+    }
 }
 
 pub(super) fn render_session_edit(

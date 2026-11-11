@@ -218,6 +218,16 @@ impl FileSource {
             Err("Source changed outside Files. Reload it before saving.".into())
         }
     }
+    /// Checks both a retained content handle and this source's named identity.
+    ///
+    /// # Errors
+    /// Returns an error if either identity changed or can no longer be read.
+    pub fn check_file(&self, file: &File) -> Result<(), String> {
+        if Self::capture_file(file)? != *self {
+            return Err("File source changed during processing; reload it.".into());
+        }
+        self.check()
+    }
     /// Writes beside the destination and atomically installs the completed file.
     ///
     /// Replacing this source requires its identity and timestamps to match.
@@ -372,6 +382,22 @@ pub fn read_file_snapshot_with_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_input_check_rejects_changed_content_and_replaced_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input");
+        std::fs::write(&path, b"original").unwrap();
+        let file = File::open(&path).unwrap();
+        let source = FileSource::capture_file(&file).unwrap();
+        source.check_file(&file).unwrap();
+        std::fs::write(&path, b"modified and longer").unwrap();
+        assert!(source.check_file(&file).is_err());
+        let source = FileSource::capture_file(&file).unwrap();
+        std::fs::rename(&path, dir.path().join("moved")).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+        assert!(source.check_file(&file).is_err());
+    }
 
     #[test]
     fn installed_source_metadata_cannot_adopt_a_replaced_path() {

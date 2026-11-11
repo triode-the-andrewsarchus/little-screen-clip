@@ -114,6 +114,7 @@ pub(super) fn format_reader(
     file: std::fs::File,
     path: &Path,
     cancelled: &AtomicBool,
+    probe: &symphonia::core::probe::Probe,
 ) -> Result<Box<dyn symphonia::core::formats::FormatReader>, String> {
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("Audio source is not a regular file".into());
@@ -126,7 +127,7 @@ pub(super) fn format_reader(
         hint.with_extension(extension);
     }
     let input = from_file(file, cancelled)?;
-    let format = symphonia::default::get_probe()
+    let format = probe
         .format(
             &hint,
             MediaSourceStream::new(input.stream, Default::default()),

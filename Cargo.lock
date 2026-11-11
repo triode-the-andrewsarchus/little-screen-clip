@@ -4825,6 +4825,7 @@ dependencies = [
  "flate2",
  "gltf",
  "hayro-jpeg2000",
+ "hound",
  "ical",
  "image 0.25.10",
  "imagesize",
