@@ -145,7 +145,7 @@ pub fn rasterize_markup(base: &RgbaImage, items: &[MarkupShape]) -> RgbaImage {
             } => {
                 let cx = (rect.min.x + rect.width() * 0.5) * w as f32;
                 let cy = (rect.min.y + rect.height() * 0.5) * h as f32;
-                let rad = ((rect.width().min(rect.height()) * 0.5) * w as f32).max(1.0);
+                let rad = (rect.width() * w as f32).min(rect.height() * h as f32) * 0.5;
 
                 let mut pb = tiny_skia::PathBuilder::new();
                 pb.push_circle(cx, cy, rad);

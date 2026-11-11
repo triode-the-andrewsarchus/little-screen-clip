@@ -220,3 +220,27 @@ fn test_step_badge_scale_high_res() {
     let font_size = step_badge_font_size(80.0, 1);
     assert_eq!(font_size, 100.0);
 }
+
+#[test]
+fn burned_circle_fits_preview_bounds_on_non_square_images() {
+    for (width, height) in [(120, 40), (40, 120)] {
+        let canvas = RgbaImage::new(width, height);
+        let result = rasterize_markup(
+            &canvas,
+            &[MarkupShape::Circle {
+                rect: Rect::from_min_max(Pos2::new(0.25, 0.25), Pos2::new(0.75, 0.75)),
+                color: Color32::RED,
+                width: 1.0,
+                filled: true,
+            }],
+        );
+        let (cx, cy) = (width / 2, height / 2);
+        assert_eq!(result.get_pixel(cx, cy)[3], 255);
+        for (x, y) in [(cx - 8, cy), (cx, cy - 8)] {
+            assert_eq!(result.get_pixel(x, y)[3], 255);
+        }
+        for (x, y) in [(cx - 11, cy), (cx, cy - 11)] {
+            assert_eq!(result.get_pixel(x, y)[3], 0);
+        }
+    }
+}
