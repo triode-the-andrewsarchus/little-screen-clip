@@ -101,15 +101,20 @@ impl SplatScene {
     }
 }
 
+const MAX_PLY_BYTES: u64 = 512 * 1024 * 1024;
+
 fn load_ply(path: &Path) -> Result<Vec<Gaussian>, SceneError> {
-    let mut reader = BufReader::new(little_clip_core::kernel_interface::open_content(
-        path, true,
-    )?);
-    if reader.get_ref().metadata()?.len() > 512 * 1024 * 1024 {
+    let file = little_clip_core::kernel_interface::open_content(path, true)?;
+    if file.metadata()?.len() > MAX_PLY_BYTES {
         return Err(SceneError::Invalid(
             "PLY exceeds the 512 MiB import budget".into(),
         ));
     }
+    read_ply(file, MAX_PLY_BYTES)
+}
+
+fn read_ply(input: impl Read + Seek, byte_budget: u64) -> Result<Vec<Gaussian>, SceneError> {
+    let mut reader = BufReader::new(input.take(byte_budget + 1));
     let parser = ply_rs::parser::Parser::<ply_rs::ply::DefaultElement>::new();
     let header = parser.read_header(&mut reader)?;
     let vertex = header
@@ -127,7 +132,7 @@ fn load_ply(path: &Path) -> Result<Vec<Gaussian>, SceneError> {
         ));
     }
     if header.elements.contains_key("chunk") {
-        return load_compressed_ply(reader);
+        return load_compressed_ply(reader.into_inner().into_inner(), byte_budget);
     }
     let coefficients = validate_gaussian_ply_vertex(vertex)?;
     // The upstream 0.6 reader's fast-path detection compares a zipped prefix
@@ -135,6 +140,9 @@ fn load_ply(path: &Path) -> Result<Vec<Gaussian>, SceneError> {
     // general reader or it is read as a full degree-three record.
     let pods = PlyGaussians::read_gaussians(&mut reader, PlyHeader::Custom(header))?
         .collect::<Result<Vec<_>, _>>()?;
+    if reader.get_ref().limit() == 0 {
+        return Err(SceneError::Invalid("PLY exceeds its import budget".into()));
+    }
     let per_channel = coefficients / 3;
     Ok(pods
         .into_iter()
@@ -191,15 +199,13 @@ fn validate_gaussian_ply_vertex(vertex: &ply_rs::ply::ElementDef) -> Result<usiz
     Ok(coefficients)
 }
 
-fn load_compressed_ply(mut reader: BufReader<std::fs::File>) -> Result<Vec<Gaussian>, SceneError> {
+fn load_compressed_ply(
+    mut input: impl Read + Seek,
+    byte_budget: u64,
+) -> Result<Vec<Gaussian>, SceneError> {
     use spark_lib::{decoder::ChunkReceiver, gsplat::GsplatArray, ply::PlyDecoder};
-    const MAX_BYTES: u64 = 512 * 1024 * 1024;
-    if reader.get_ref().metadata()?.len() > MAX_BYTES {
-        return Err(SceneError::Invalid(
-            "Compressed PLY exceeds the 512 MiB import budget".into(),
-        ));
-    }
-    reader.rewind()?;
+    input.rewind()?;
+    let mut reader = input.take(byte_budget + 1);
     let mut decoder = PlyDecoder::new(GsplatArray::new());
     let mut bytes = [0u8; 64 * 1024];
     let mut total = 0u64;
@@ -209,7 +215,7 @@ fn load_compressed_ply(mut reader: BufReader<std::fs::File>) -> Result<Vec<Gauss
             break;
         }
         total += count as u64;
-        if total > MAX_BYTES {
+        if total > byte_budget {
             return Err(SceneError::Invalid(
                 "Compressed PLY changed beyond its import budget".into(),
             ));
@@ -421,6 +427,12 @@ pub(crate) mod tests {
             for (_, value) in properties {
                 bytes.extend(f32::to_le_bytes(value));
             }
+            let exact_budget = bytes.len() as u64;
+            assert!(read_ply(std::io::Cursor::new(&bytes), exact_budget).is_ok());
+            assert!(matches!(
+                read_ply(std::io::Cursor::new(&bytes), exact_budget - 1),
+                Err(SceneError::Invalid(message)) if message.contains("import budget")
+            ));
             let path = directory.path().join("low-degree.ply");
             std::fs::write(&path, bytes).unwrap();
             let decoded = SplatScene::load(&path).unwrap();
