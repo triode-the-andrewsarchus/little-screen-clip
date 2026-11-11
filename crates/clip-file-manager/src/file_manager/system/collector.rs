@@ -34,7 +34,7 @@ impl Reads {
             cache: BTreeMap::new(),
         }
     }
-    fn seed_stable(&mut self, previous: Option<&Document>, sys: &Path) {
+    fn seed_stable(&mut self, previous: Option<&Document>, sys: &Path, context: &Context) {
         self.stable = previous
             .into_iter()
             .flat_map(|document| &document.facts)
@@ -43,6 +43,11 @@ impl Reads {
                     && fact.outcome == Outcome::Observed
                     && fact.origin == "documented sysfs attribute"
                     && fact.source.parent() == Some(sys)
+                    && fact
+                        .source
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| attributes::mostly_static(context, name))
             })
             .map(|fact| (fact.source.clone(), fact.clone()))
             .collect();
@@ -301,12 +306,10 @@ impl Reads {
     }
     pub(super) fn fact(&mut self, root: &Path, rule: &Rule) -> Fact {
         let source = root.join(&rule.name);
-        if let Some(fact) = self.stable.get(&source) {
-            if fact.label == rule.label
-                && attributes::mostly_static(&Context::discover(root), &rule.name)
-            {
-                return fact.clone();
-            }
+        if let Some(fact) = self.stable.get(&source)
+            && fact.label == rule.label
+        {
+            return fact.clone();
         }
         Fact::attribute(
             &rule.label,
@@ -371,7 +374,7 @@ pub(super) fn attributes(
 ) {
     let context = Context::discover(sys);
     let mut reads = Reads::new();
-    reads.seed_stable(previous, sys);
+    reads.seed_stable(previous, sys, &context);
     if matches!(
         document.kind,
         Kind::Kernel {
@@ -871,7 +874,9 @@ mod tests {
             (root.join("idVendor"), b"9999".to_vec()),
             (root.join("bConfigurationValue"), b"0".to_vec()),
         ]));
-        next.seed_stable(Some(&previous), &root);
+        next.seed_stable(Some(&previous), &root, &context);
+        assert!(next.stable.contains_key(&root.join("idVendor")));
+        assert!(!next.stable.contains_key(&root.join("bConfigurationValue")));
         let reused = next.fact(&root, &identity);
         assert_eq!(reused.raw.as_deref(), Some("1234"));
         assert_eq!(reused.observed_ms, 17);
@@ -888,7 +893,8 @@ mod tests {
     fn failed_or_retained_identity_fields_do_not_seed_fresh_observations() {
         let (_temp, root, mut reads, mut previous) =
             registered_fixture("usb", "1-2", &[("idVendor", "1234")]);
-        let rule = attributes::rule(&Context::discover(&root), "idVendor").unwrap();
+        let context = Context::discover(&root);
+        let rule = attributes::rule(&context, "idVendor").unwrap();
         let identity = reads.fact(&root, &rule);
         for retained in [false, true] {
             let mut old = identity.clone();
@@ -900,7 +906,7 @@ mod tests {
             previous.facts = vec![old];
             let mut next =
                 Reads::fixture(BTreeMap::from([(root.join("idVendor"), b"5678".to_vec())]));
-            next.seed_stable(Some(&previous), &root);
+            next.seed_stable(Some(&previous), &root, &context);
             assert_eq!(next.fact(&root, &rule).raw.as_deref(), Some("5678"));
             assert_eq!(next.count, 1);
         }
