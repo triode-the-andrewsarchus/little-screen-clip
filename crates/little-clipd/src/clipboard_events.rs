@@ -351,7 +351,9 @@ async fn write_selection(fd: OwnedFd, mut bytes: &[u8]) -> io::Result<()> {
     {
         return Err(io::Error::last_os_error());
     }
-    let fd = tokio::io::unix::AsyncFd::new(File::from(fd))?;
+    // SAFETY: AsyncFd owns this nonblocking file until registration is removed.
+    // It is never closed or replaced through an alias while registered.
+    let fd = unsafe { tokio::io::unix::AsyncFd::register(File::from(fd))? };
     while !bytes.is_empty() {
         let mut ready = fd.writable().await?;
         if let Ok(result) = ready.try_io(|inner| inner.get_ref().write(bytes)) {
