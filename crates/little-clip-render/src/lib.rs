@@ -190,13 +190,14 @@ pub enum FontStyle {
 }
 
 /// Canvas rasterizer for rendering slot cards, thumbnails, waveforms, and code blocks onto a tiny-skia Pixmap.
+#[derive(Clone)]
 pub struct ScreenRenderer {
-    pub(crate) scene_previews: std::sync::Mutex<scene_preview::PreviewCache>,
+    pub(crate) scene_previews: std::sync::Arc<std::sync::Mutex<scene_preview::PreviewCache>>,
     pub(crate) scene_preview_source: Option<scene_preview::SharedSource>,
-    pub(crate) font_regular: Option<Font>,
-    pub(crate) font_bold: Option<Font>,
-    pub(crate) font_italic: Option<Font>,
-    pub(crate) font_mono: Option<Font>,
+    pub(crate) font_regular: Option<std::sync::Arc<Font>>,
+    pub(crate) font_bold: Option<std::sync::Arc<Font>>,
+    pub(crate) font_italic: Option<std::sync::Arc<Font>>,
+    pub(crate) font_mono: Option<std::sync::Arc<Font>>,
     /// Active display configuration, including the shared appearance mode.
     pub config: AppConfig,
     /// Resolved fixed Light/Dark palette.
@@ -209,10 +210,10 @@ impl ScreenRenderer {
         let (font_regular, font_bold, font_italic, font_mono) = Self::load_fonts();
         let palette = config.resolve_palette();
         Ok(Self {
-            font_regular,
-            font_bold,
-            font_italic,
-            font_mono,
+            font_regular: font_regular.map(std::sync::Arc::new),
+            font_bold: font_bold.map(std::sync::Arc::new),
+            font_italic: font_italic.map(std::sync::Arc::new),
+            font_mono: font_mono.map(std::sync::Arc::new),
             config,
             palette,
             scene_previews: Default::default(),

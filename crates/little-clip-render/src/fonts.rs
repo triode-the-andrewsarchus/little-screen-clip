@@ -32,15 +32,15 @@ static FALLBACK_FONTS: LazyLock<Vec<FallbackFont>> = LazyLock::new(|| {
 impl ScreenRenderer {
     pub(crate) fn font_for_style(&self, style: FontStyle) -> Option<&Font> {
         match style {
-            FontStyle::Regular => self.font_regular.as_ref().or(self.font_bold.as_ref()),
-            FontStyle::Bold => self.font_bold.as_ref().or(self.font_regular.as_ref()),
-            FontStyle::Italic => self.font_italic.as_ref().or(self.font_regular.as_ref()),
+            FontStyle::Regular => self.font_regular.as_deref().or(self.font_bold.as_deref()),
+            FontStyle::Bold => self.font_bold.as_deref().or(self.font_regular.as_deref()),
+            FontStyle::Italic => self.font_italic.as_deref().or(self.font_regular.as_deref()),
             FontStyle::BoldItalic => self
                 .font_bold
-                .as_ref()
-                .or(self.font_italic.as_ref())
-                .or(self.font_regular.as_ref()),
-            FontStyle::Mono => self.font_mono.as_ref().or(self.font_regular.as_ref()),
+                .as_deref()
+                .or(self.font_italic.as_deref())
+                .or(self.font_regular.as_deref()),
+            FontStyle::Mono => self.font_mono.as_deref().or(self.font_regular.as_deref()),
         }
     }
 
@@ -49,10 +49,10 @@ impl ScreenRenderer {
             return primary;
         }
         [
-            self.font_regular.as_ref(),
-            self.font_bold.as_ref(),
-            self.font_italic.as_ref(),
-            self.font_mono.as_ref(),
+            self.font_regular.as_deref(),
+            self.font_bold.as_deref(),
+            self.font_italic.as_deref(),
+            self.font_mono.as_deref(),
         ]
         .into_iter()
         .flatten()

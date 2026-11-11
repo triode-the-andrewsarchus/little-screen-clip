@@ -11,8 +11,7 @@ use little_clip_core::{
 use little_clip_driver::TrofeoDriver;
 use little_clip_render::ScreenRenderer;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -71,6 +70,12 @@ enum LockSource {
     Shell = 8,
 }
 
+#[derive(Default)]
+struct DisplayLock {
+    locked: bool,
+    generation: u64,
+}
+
 /// Shared runtime state across daemon IPC handlers, background workers, and display pipelines.
 pub struct DaemonContext {
     /// Active application configuration.
@@ -87,8 +92,8 @@ pub struct DaemonContext {
     pub self_copied_image_hash: RwLock<Option<u64>>,
     /// Most recently executed IPC action for repeat / replay commands.
     pub last_action: RwLock<Option<little_clip_core::ipc::LastAction>>,
-    /// Flag indicating whether the screen is blanked due to session lock or sleep.
-    pub is_locked: AtomicBool,
+    display_lock: Mutex<DisplayLock>,
+    display_render: Arc<tokio::sync::Mutex<()>>,
     lock_sources: tokio::sync::Mutex<u8>,
     /// Continuous PCM audio circular buffer.
     pub rolling_audio: Arc<std::sync::RwLock<RollingAudioBuffer>>,
@@ -125,7 +130,7 @@ impl DaemonContext {
 
     /// Returns `true` if the display is currently blanked due to system lock or sleep.
     pub async fn is_locked(&self) -> bool {
-        self.is_locked.load(Ordering::SeqCst)
+        self.display_lock.lock().unwrap().locked
     }
 
     /// Updates manual blanking without overriding active session/sleep locks.
@@ -158,14 +163,24 @@ impl DaemonContext {
     }
 
     async fn apply_lock_state(&self, locked: bool) {
-        let old = self.is_locked.swap(locked, Ordering::SeqCst);
-        if old == locked {
-            return;
-        }
+        let generation = {
+            let mut state = self.display_lock.lock().unwrap();
+            if state.locked == locked {
+                return;
+            }
+            state.locked = locked;
+            state.generation = state.generation.wrapping_add(1);
+            state.generation
+        };
 
         if locked {
             info!("Lock state engaged -> Blanking hardware display");
-            self.render_and_send_blank().await;
+            let renderer = self.renderer.read().await.clone();
+            match tokio::task::spawn_blocking(move || renderer.render_blank_frame()).await {
+                Ok(Ok(frame)) => self.publish_display_frame(generation, frame),
+                Ok(Err(error)) => error!(%error, "Could not render blank display frame"),
+                Err(error) => error!(%error, "Blank display worker failed"),
+            }
         } else {
             info!("Lock state cleared -> Restoring display contents");
             self.refresh_display().await;
@@ -203,42 +218,35 @@ impl DaemonContext {
         }
     }
 
-    /// Renders a blank screen frame and dispatches it to the physical display.
-    pub async fn render_and_send_blank(&self) {
-        let frame = {
-            let renderer = self.renderer.read().await;
-            match renderer.render_blank_frame() {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("Render blank error: {}", e);
-                    return;
-                }
-            }
-        };
-        let _ = self.display_tx.send(Some(frame.into()));
+    fn publish_display_frame(&self, generation: u64, frame: Vec<u8>) {
+        // Serialize the final check and publication with lock transitions.
+        let state = self.display_lock.lock().unwrap();
+        if state.generation == generation {
+            let _ = self.display_tx.send(Some(frame.into()));
+        }
     }
 
     /// Rerenders the current slot inventory layout and sends the new frame to the display.
     pub async fn refresh_display(&self) {
-        if self.is_locked.load(Ordering::SeqCst) {
-            self.render_and_send_blank().await;
+        if self.is_locked().await {
             return;
         }
-
-        let frame = {
-            let mgr = self.manager.read().await;
-            let renderer = self.renderer.read().await;
-            match renderer.render_frame(&mgr) {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("Render error: {}", e);
-                    return;
-                }
+        let permit = self.display_render.clone().lock_owned().await;
+        let generation = {
+            let state = self.display_lock.lock().unwrap();
+            if state.locked {
+                return;
             }
+            state.generation
         };
-
-        // Non-blocking send to display worker
-        let _ = self.display_tx.send(Some(frame.into()));
+        let manager = self.manager.read().await.clone();
+        let renderer = self.renderer.read().await.clone();
+        // Keep the render gate through completion even if the caller is cancelled.
+        match tokio::task::spawn_blocking(move || (permit, renderer.render_frame(&manager))).await {
+            Ok((_permit, Ok(frame))) => self.publish_display_frame(generation, frame),
+            Ok((_, Err(error))) => error!(%error, "Could not render display frame"),
+            Err(error) => error!(%error, "Display render worker failed"),
+        }
     }
 
     /// Consumes and returns any active routing override (hand destination and clipboard restore flag).
@@ -359,7 +367,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         self_copied_text: RwLock::new(Vec::new()),
         self_copied_image_hash: RwLock::new(None),
         last_action: RwLock::new(load_last_action_from_disk()),
-        is_locked: AtomicBool::new(false),
+        display_lock: Mutex::default(),
+        display_render: Arc::default(),
         lock_sources: tokio::sync::Mutex::new(0),
         rolling_audio: Arc::clone(&rolling_audio),
         rolling_capture_config: Arc::clone(&rolling_capture_config),
@@ -388,7 +397,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let anim_ctx = Arc::clone(&ctx);
     tokio::spawn(async move {
         loop {
-            if anim_ctx.is_locked.load(Ordering::SeqCst) {
+            if anim_ctx.is_locked().await {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 continue;
             }
@@ -1701,7 +1710,8 @@ mod tests {
             self_copied_text: RwLock::new(Vec::new()),
             self_copied_image_hash: RwLock::new(None),
             last_action: RwLock::new(None),
-            is_locked: AtomicBool::new(false),
+            display_lock: Mutex::default(),
+            display_render: Arc::default(),
             lock_sources: tokio::sync::Mutex::new(0),
             rolling_audio: Arc::new(std::sync::RwLock::new(RollingAudioBuffer::new(1, 1, 1))),
             rolling_capture_config: Arc::new(std::sync::RwLock::new(config.audio)),
@@ -1974,6 +1984,27 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
         drop(writer);
         drop(lines);
         handler.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn blank_frame_bypasses_content_render_and_rejects_stale_publication() {
+        let ctx = test_context(SlotManager::default());
+        let frames = ctx.display_tx.subscribe();
+        let active_render = ctx.display_render.lock().await;
+        let previous_generation = ctx.display_lock.lock().unwrap().generation;
+        tokio::time::timeout(Duration::from_secs(2), ctx.set_locked(true))
+            .await
+            .expect("blanking must bypass the content render gate");
+        let blank = frames.borrow().clone().expect("blank frame published");
+        ctx.publish_display_frame(previous_generation, vec![1, 2, 3]);
+        assert!(Arc::ptr_eq(frames.borrow().as_ref().unwrap(), &blank));
+
+        drop(active_render);
+        ctx.set_locked(false).await;
+        let unlocked = frames.borrow().clone().expect("unlocked frame published");
+        assert!(!Arc::ptr_eq(&unlocked, &blank));
+        ctx.publish_display_frame(previous_generation, vec![1, 2, 3]);
+        assert!(Arc::ptr_eq(frames.borrow().as_ref().unwrap(), &unlocked));
     }
 
     #[tokio::test]
