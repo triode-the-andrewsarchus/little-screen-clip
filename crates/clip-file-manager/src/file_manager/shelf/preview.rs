@@ -29,7 +29,7 @@ pub(in crate::file_manager) enum Source {
         path: PathBuf,
         revision: u64,
         edge: u32,
-        orientation: u8,
+        orientation: Option<u8>,
     },
     StudioPhoto {
         path: PathBuf,
@@ -162,7 +162,15 @@ impl Source {
                         .to_rgba8();
                     Some(ImageThumbnail::from_rgba(image))
                 } else {
-                    super::super::gallery::thumbnail::load(&path, 160, 1, token)
+                    let source = crate::file_source::FileSource::capture(&path).ok();
+                    source.and_then(|source| {
+                        let orientation = super::super::gallery::metadata::probe_current(&path)
+                            .map_or(1, |metadata| metadata.orientation);
+                        let thumbnail =
+                            super::super::gallery::thumbnail::load(&path, 160, orientation, token)?;
+                        (crate::file_source::FileSource::capture(&path).ok()? == source)
+                            .then_some(thumbnail)
+                    })
                 };
                 data
             }
@@ -807,7 +815,7 @@ fn gallery_preview(
     path: &Path,
     revision: u64,
     edge: u32,
-    orientation: u8,
+    orientation: Option<u8>,
     cancelled: &AtomicBool,
 ) -> Data {
     let mut data = Data::new(display_path(path), "Photo".into(), Icon::Image);
@@ -821,6 +829,10 @@ fn gallery_preview(
     if super::super::filesystem::check_revision(path, revision).is_err() {
         return data;
     }
+    let orientation = orientation.unwrap_or_else(|| {
+        super::super::gallery::metadata::probe(path, revision)
+            .map_or(1, |metadata| metadata.orientation)
+    });
     data.image = super::super::gallery::thumbnail::load(path, edge, orientation, cancelled);
     if let Some(ref image) = data.image {
         let (mut w, mut h) = crate::file_source::open_regular_file(path, true)
@@ -1123,6 +1135,71 @@ mod guarded_gallery_tests {
     use super::*;
 
     #[test]
+    fn unknown_orientation_uses_source_exif_for_embedded_previews_and_studio() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("oriented.jpg");
+        let jpeg = |width, height| {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::RgbImage::new(width, height)
+                .write_to(&mut bytes, image::ImageFormat::Jpeg)
+                .unwrap();
+            bytes.into_inner()
+        };
+        let source = jpeg(48, 24);
+        let embedded = jpeg(200, 100);
+        // TIFF IFD0 specifies Orientation=6. IFD1 references an embedded
+        // JPEG with no orientation tag of its own.
+        let mut exif = b"Exif\0\0II".to_vec();
+        exif.extend_from_slice(&[
+            42, 0, 8, 0, 0, 0, 1, 0, 0x12, 1, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 26, 0, 0, 0, 2, 0, 1,
+            2, 4, 0, 1, 0, 0, 0, 56, 0, 0, 0, 2, 2, 4, 0, 1, 0, 0, 0,
+        ]);
+        exif.extend_from_slice(&(embedded.len() as u32).to_le_bytes());
+        exif.extend_from_slice(&[0; 4]);
+        exif.extend_from_slice(&embedded);
+        let mut tagged = vec![0xff, 0xd8, 0xff, 0xe1];
+        tagged.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        tagged.extend_from_slice(&exif);
+        tagged.extend_from_slice(&source[2..]);
+        std::fs::write(&path, tagged).unwrap();
+
+        let cancelled = AtomicBool::new(false);
+        let entry = crate::file_manager::filesystem::read_directory(root.path(), &cancelled)
+            .unwrap()
+            .entries
+            .remove(0);
+        let strip = Source::StudioPhoto {
+            path: path.clone(),
+            snapshot: None,
+        }
+        .load(&cancelled)
+        .image
+        .unwrap();
+        assert_eq!((strip.width, strip.height), (80, 160));
+        let identity =
+            super::super::super::gallery::thumbnail::load(&path, 128, 1, &cancelled).unwrap();
+        assert_eq!((identity.width, identity.height), (128, 64));
+        let preview = Source::Gallery {
+            path: path.clone(),
+            revision: entry.revision,
+            edge: 128,
+            orientation: None,
+        }
+        .load(&cancelled)
+        .image
+        .unwrap();
+        assert_eq!((preview.width, preview.height), (64, 128));
+        let editor = crate::image_preview::DecodedImageData::from_path(&path).unwrap();
+        let editor = crate::image_preview::ImagePreviewState::from_decoded(
+            editor,
+            Some(path),
+            "EXIF fixture".into(),
+            &Default::default(),
+        );
+        assert_eq!(editor.current_rgba.dimensions(), (24, 48));
+    }
+
+    #[test]
     fn gallery_preview_delivers_exif_metadata_without_hilbert_analysis() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("camera.jpg");
@@ -1142,7 +1219,7 @@ mod guarded_gallery_tests {
                 .unwrap()
                 .entries
                 .remove(0);
-        let data = gallery_preview(&path, entry.revision, 128, 1, &AtomicBool::new(false));
+        let data = gallery_preview(&path, entry.revision, 128, None, &AtomicBool::new(false));
         assert_eq!(data.photo_metadata.unwrap().make.as_deref(), Some("XO"));
         assert!(data.photo.is_none());
     }
@@ -1161,7 +1238,7 @@ mod guarded_gallery_tests {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             tx.send(
-                gallery_preview(&path, 0, 128, 1, &AtomicBool::new(false))
+                gallery_preview(&path, 0, 128, None, &AtomicBool::new(false))
                     .image
                     .is_none(),
             )

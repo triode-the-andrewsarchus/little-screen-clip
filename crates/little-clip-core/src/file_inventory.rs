@@ -361,14 +361,18 @@ impl Identity {
 /// # Errors
 /// Returns metadata failures or a changed file/directory-entry fingerprint.
 pub fn check_revision(path: &Path, revision: u64) -> Result<(), String> {
+    if current_revision(path)? != revision {
+        return Err("File changed since enumeration".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn current_revision(path: &Path) -> Result<u64, String> {
     let mut version = std::collections::hash_map::DefaultHasher::new();
     identity(&std::fs::metadata(path).map_err(|e| e.to_string())?).hash(&mut version);
     Some(identity(
         &std::fs::symlink_metadata(path).map_err(|e| e.to_string())?,
     ))
     .hash(&mut version);
-    if version.finish() != revision {
-        return Err("File changed since enumeration".into());
-    }
-    Ok(())
+    Ok(version.finish())
 }

@@ -486,7 +486,8 @@ impl FileManager {
             }
 
             visible_paths.insert(entry.path.clone());
-            self.gallery_previews.request_gallery(entry, target_edge, 1);
+            self.gallery_previews
+                .request_gallery(entry, target_edge, None);
 
             let tile_response = ui.interact(
                 tile_rect,
@@ -691,7 +692,7 @@ fn paint_gallery_tile(
             * crate::file_manager::gallery::hover::HOVER_EDGE_STEP;
 
         let active_texture = if let Some(ref mut hover) = hover {
-            hover.texture_for(&entry.path, entry.revision, needed_edge, 1, texture_info)
+            hover.texture_for(&entry.path, entry.revision, needed_edge, texture_info)
         } else {
             texture_info
         };

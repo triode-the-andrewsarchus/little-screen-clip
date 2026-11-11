@@ -30,6 +30,14 @@ impl Metadata {
     }
 }
 
+/// Probes a photo whose directory-enumeration revision is not available.
+///
+/// # Errors
+/// Returns metadata failures or the same errors as [`probe`].
+pub fn probe_current(path: &Path) -> Result<Metadata, String> {
+    probe(path, crate::file_inventory::current_revision(path)?)
+}
+
 /// Probes ordinary source headers on a worker using the existing revision cache.
 ///
 /// # Errors

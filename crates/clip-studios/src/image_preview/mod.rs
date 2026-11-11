@@ -309,10 +309,25 @@ impl DecodedImageData {
                 &std::sync::atomic::AtomicBool::new(false),
             )?
         } else {
-            little_clip_core::item::image_reader(&bytes, Some(&mime))
-                .and_then(|reader| reader.decode())
-                .map_err(|error| format!("Failed to decode image bytes: {error}"))?
-                .to_rgba8()
+            use image::ImageDecoder;
+            let mut decoder = little_clip_core::item::image_reader(&bytes, Some(&mime))
+                .and_then(|reader| reader.into_decoder())
+                .map_err(|error| format!("Failed to decode image bytes: {error}"))?;
+            let orientation = decoder
+                .orientation()
+                .unwrap_or(image::metadata::Orientation::NoTransforms);
+            // Retain ImageReader::decode's reservation for the output buffer.
+            let mut limits = image::Limits::default();
+            limits
+                .reserve(decoder.total_bytes())
+                .map_err(|error| error.to_string())?;
+            decoder
+                .set_limits(limits)
+                .map_err(|error| error.to_string())?;
+            let mut image = image::DynamicImage::from_decoder(decoder)
+                .map_err(|error| format!("Failed to decode image bytes: {error}"))?;
+            image.apply_orientation(orientation);
+            image.into_rgba8()
         };
 
         drop(svg);

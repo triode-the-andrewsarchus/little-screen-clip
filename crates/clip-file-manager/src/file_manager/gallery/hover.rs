@@ -14,7 +14,7 @@ pub const HOVER_EDGE_STEP: u32 = 128;
 #[derive(Default)]
 pub(in crate::file_manager) struct GalleryHover {
     cache: Previews,
-    key: Option<(PathBuf, u32, uuid::Uuid, u64, u8)>,
+    key: Option<(PathBuf, u32, uuid::Uuid, u64)>,
     unhover_time: Option<std::time::Instant>,
 }
 
@@ -56,7 +56,6 @@ impl GalleryHover {
         path: &Path,
         revision: u64,
         edge: u32,
-        orientation: u8,
         fallback: Option<(egui::TextureId, egui::Vec2)>,
     ) -> Option<(egui::TextureId, egui::Vec2)> {
         self.unhover_time = None;
@@ -64,19 +63,15 @@ impl GalleryHover {
             .clamp(MIN_HOVER_EDGE, MAX_HOVER_EDGE)
             .div_ceil(HOVER_EDGE_STEP)
             * HOVER_EDGE_STEP;
-        if !self.key.as_ref().is_some_and(|key| {
-            key.0 == path && key.1 == edge && key.3 == revision && key.4 == orientation
-        }) {
+        if !self
+            .key
+            .as_ref()
+            .is_some_and(|key| key.0 == path && key.1 == edge && key.3 == revision)
+        {
             self.clear();
-            self.key = Some((
-                path.to_path_buf(),
-                edge,
-                uuid::Uuid::new_v4(),
-                revision,
-                orientation,
-            ));
+            self.key = Some((path.to_path_buf(), edge, uuid::Uuid::new_v4(), revision));
         }
-        let Some((_, _, id, _, _)) = self.key else {
+        let Some((_, _, id, _)) = self.key else {
             return fallback;
         };
         if self.cache.needs(id) {
@@ -86,7 +81,7 @@ impl GalleryHover {
                     path: path.to_path_buf(),
                     revision,
                     edge,
-                    orientation,
+                    orientation: None,
                 },
             );
         }
@@ -106,12 +101,9 @@ mod tests {
     fn replacing_hovered_photo_retires_the_old_texture_identity() {
         let mut hover = GalleryHover::default();
         let path = Path::new("/photos/replaced.png");
-        hover.texture_for(path, 1, 128, 1, None);
+        hover.texture_for(path, 1, 128, None);
         let before = hover.key.as_ref().unwrap().2;
-        hover.texture_for(path, 2, 128, 1, None);
-        assert_ne!(hover.key.as_ref().unwrap().2, before);
-        let before = hover.key.as_ref().unwrap().2;
-        hover.texture_for(path, 2, 128, 6, None);
+        hover.texture_for(path, 2, 128, None);
         assert_ne!(hover.key.as_ref().unwrap().2, before);
     }
 
@@ -123,7 +115,7 @@ mod tests {
 
         // Request native edge 2048 for photo A with fallback
         let fallback = Some((egui::TextureId::Managed(42), egui::vec2(128.0, 128.0)));
-        let result = hover.texture_for(path_a, 1, 2048, 1, fallback);
+        let result = hover.texture_for(path_a, 1, 2048, fallback);
         assert_eq!(result, fallback);
         assert!(hover.key.is_some());
         assert_eq!(hover.key.as_ref().unwrap().0, path_a);

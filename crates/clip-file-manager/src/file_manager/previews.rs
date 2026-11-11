@@ -684,7 +684,7 @@ impl EntryPreviews {
         self.gallery_sizes.get(path).copied().unwrap_or(0)
     }
 
-    pub fn request_gallery(&mut self, entry: &Entry, edge: u32, orientation: u8) {
+    pub fn request_gallery(&mut self, entry: &Entry, edge: u32, orientation: Option<u8>) {
         let id = self.identity(entry);
         let edge = edge
             .clamp(Self::MIN_GALLERY_EDGE, Self::MAX_GALLERY_EDGE)

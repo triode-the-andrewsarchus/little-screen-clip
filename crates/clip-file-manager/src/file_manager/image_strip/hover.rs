@@ -82,7 +82,7 @@ impl Hover {
                     path: entry.path.clone(),
                     revision: entry.revision,
                     edge,
-                    orientation: analysis.orientation,
+                    orientation: Some(analysis.orientation),
                 }
                 .checked(&entry.path, &self.context),
             );

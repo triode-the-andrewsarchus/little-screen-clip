@@ -651,14 +651,14 @@ fn test_deferred_gallery_hq_upgrade_resilience() {
     assert!(!previews.has_pending());
 
     // Initial base thumbnail request
-    previews.request_gallery(&entry, 256, 1);
+    previews.request_gallery(&entry, 256, Some(1));
     // Since job was submitted, gallery_size is recorded as 256 and pending is active
     assert_eq!(previews.gallery_size(&entry.path), 256);
     assert!(previews.has_pending());
 
     // Attempting an HQ upgrade (1024) while the base thumbnail is still pending in the worker
     // must NOT prematurely overwrite gallery_size to 1024 if the refresh job was deferred!
-    previews.request_gallery(&entry, 1024, 1);
+    previews.request_gallery(&entry, 1024, Some(1));
     // gallery_size remains at 256 so the upgrade can be retried once the worker slot is free
     assert_eq!(
         previews.gallery_size(&entry.path),

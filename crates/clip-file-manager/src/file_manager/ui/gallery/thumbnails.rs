@@ -31,7 +31,7 @@ pub(super) fn schedule(
     seconds_since_scroll: f64,
 ) {
     for request in visible {
-        previews.request_gallery(request.entry, request.edge, request.orientation);
+        previews.request_gallery(request.entry, request.edge, Some(request.orientation));
     }
     if !visible
         .iter()
@@ -41,7 +41,7 @@ pub(super) fn schedule(
         return;
     }
     for request in neighbors {
-        previews.request_gallery(request.entry, request.edge, request.orientation);
+        previews.request_gallery(request.entry, request.edge, Some(request.orientation));
     }
     if seconds_since_scroll < SCROLL_SETTLE_SECONDS {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(
@@ -52,7 +52,7 @@ pub(super) fn schedule(
     let mut upgrading = false;
     for request in visible {
         upgrading |= previews.gallery_size(&request.entry.path) < 1024;
-        previews.request_gallery(request.entry, 1024, request.orientation);
+        previews.request_gallery(request.entry, 1024, Some(request.orientation));
     }
     if upgrading || previews.has_pending() {
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
