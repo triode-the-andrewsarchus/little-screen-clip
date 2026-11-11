@@ -403,8 +403,7 @@ impl ScreenRenderer {
         // accidentally switched back to `text` here. A clipboard/file payload with
         // a leading newline or space therefore produced a visibly indented first
         // glyph in the tiny preview.
-        let lines: Vec<&str> = trimmed.lines().collect();
-        let total_lines = lines.len();
+        let mut lines = trimmed.lines().peekable();
         let max_y = ry + rh - 22.0;
         let mut line_y = ry + 124.0;
 
@@ -426,12 +425,10 @@ impl ScreenRenderer {
         });
 
         let mut prepared = collect_previews.then(crate::PreparedTextPreview::default);
-        for (idx, line) in lines.iter().enumerate() {
+        while let Some(line) = lines.next() {
             let is_near_bottom = line_y + line_height > max_y;
-            let has_more = idx + 1 < total_lines;
-
-            if is_near_bottom && has_more {
-                let remaining = total_lines - idx;
+            if is_near_bottom && lines.peek().is_some() {
+                let remaining = 1 + lines.count();
                 let badge = format!(
                     "▼ +{} more lines ({})",
                     remaining,

@@ -296,6 +296,18 @@ fn prepared_text_preserves_exact_raster_and_keeps_structured_cards_as_fallbacks(
         .find(|(slot, _)| *slot == SlotId::LeftHand)
         .unwrap();
     assert_eq!(prepared.lines[0][0].text.chars().count(), 512);
+
+    let source = "let café = 42;\r\n".repeat(10_000);
+    let mut code = ClipItem::from_text(source);
+    code.title = "many-lines.rs".into();
+    state.push_left(code);
+    let (_, text) = renderer.render_pixmap_with_previews(&state).unwrap();
+    let (_, prepared) = text
+        .iter()
+        .find(|(slot, _)| *slot == SlotId::LeftHand)
+        .unwrap();
+    assert!(prepared.more_lines > 0);
+    assert_eq!(prepared.lines.len() + prepared.more_lines, 10_000);
 }
 
 #[test]
