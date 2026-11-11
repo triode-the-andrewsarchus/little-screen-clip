@@ -498,13 +498,25 @@ fn library_frame_rotation_matches_reference_pixels() {
             .unwrap();
         assert!(reference.status.success());
         let decoded = reference_rgba(frame.png);
-        let expected = if rotation == 90 || rotation == 270 { (80,160) } else { (160,80) };
+        let expected = if rotation == 90 || rotation == 270 {
+            (80, 160)
+        } else {
+            (160, 80)
+        };
         assert_eq!((frame.info.width, frame.info.height), expected);
         assert_eq!(decoded.len(), reference.stdout.len());
         // Rotating subsampled chroma before RGB conversion differs slightly
         // from the CLI conversion path; the bound still rejects wrong rotation.
-        let error = decoded.iter().zip(&reference.stdout).map(|(a,b)| u64::from(a.abs_diff(*b))).sum::<u64>() as f64 / decoded.len() as f64;
-        assert!(error < 2.0, "snapshot rotation {rotation}: mean RGBA error {error}");
+        let error = decoded
+            .iter()
+            .zip(&reference.stdout)
+            .map(|(a, b)| u64::from(a.abs_diff(*b)))
+            .sum::<u64>() as f64
+            / decoded.len() as f64;
+        assert!(
+            error < 2.0,
+            "snapshot rotation {rotation}: mean RGBA error {error}"
+        );
         assert_eq!(frame.info.seconds, 0.0);
         let (playing, pixels) = playback::first_frame(&path);
         let expected = if rotation == 90 || rotation == 270 {
@@ -858,7 +870,9 @@ mod playback {
         assert!((1200..1400).contains(&start.position_ms), "{start:?}");
         assert!(
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|pixel| pixel[1] > 80 && pixel[0] < 10 && pixel[2] < 10)
         );
         let clock = Instant::now();
@@ -876,14 +890,18 @@ mod playback {
         assert!((2200..2300).contains(&seek.position_ms), "{seek:?}");
         assert!(
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|pixel| pixel[2] > 200 && pixel[0] < 10)
         );
         player.control(2, Some(200), true);
         let (_, pixels) = player.until(|packet| packet.epoch == 2 && packet.bytes > 0);
         assert!(
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|pixel| pixel[0] > 200 && pixel[2] < 10)
         );
         let (end, _) = player.until(|packet| packet.epoch == 2 && packet.ended);

@@ -84,3 +84,7 @@ the backend extraction; the host check remains warning-free.
   snapshot comparison bounds mean channel error below two levels, accounting
   for chroma conversion ordering; the actual direction is also checked. All
   24 worker/protocol tests pass, including the expanded reference test.
+
+- [x] Keep new pixel assertions clean under the current strict Clippy checks
+  by using fixed-array chunks. Worker/protocol all-target Clippy passes with
+  warnings denied.
