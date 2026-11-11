@@ -88,3 +88,8 @@ the backend extraction; the host check remains warning-free.
 - [x] Keep new pixel assertions clean under the current strict Clippy checks
   by using fixed-array chunks. Worker/protocol all-target Clippy passes with
   warnings denied.
+
+- [x] Verify fullscreen on the light private runtime: F grows the embedded
+  window to the 1280×800 output; Escape restores its original size without
+  restarting or closing playback. The full light-theme hover/audio/cleanup
+  acceptance scenario passes as well as the earlier dark run.

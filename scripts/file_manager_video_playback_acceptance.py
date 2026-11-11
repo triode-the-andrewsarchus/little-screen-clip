@@ -7,7 +7,6 @@ import subprocess
 import time
 from PIL import Image, ImageChops
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for, preserve_file_clipboard
-from file_manager_phase4_acceptance import click_word
 from file_manager_media_audio import start_private_audio, audio_tail
 import ui_acceptance_capture as private
 
@@ -59,6 +58,16 @@ def exercise_full(session, root):
     session.key('Right')
     time.sleep(0.2)
     assert changed(first, capture(session, 'paused-seek')) > 1000
+    def size():
+        window = next(w for w in windows(session) if w['app_id']=='little-clip-file-manager')
+        return private.layout_size(window)
+    normal_size = size()
+    session.key('f')
+    wait_for(lambda: size()==(1280,800), 'embedded fullscreen fills the private output')
+    session.observe('fullscreen-player', [filename, 'Back to folder'])
+    session.key('Escape')
+    wait_for(lambda: size()==normal_size, 'Escape restores the embedded window')
+    assert players(session)==owned, 'Escape from fullscreen must retain playback'
     session.key('space')
     session.observe('resumed-player', [filename, 'Back to folder'])
     session.click(1120, 72)  # Back to folder in the observed fixed-output main bar.
