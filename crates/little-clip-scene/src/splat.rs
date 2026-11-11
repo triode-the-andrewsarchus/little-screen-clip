@@ -16,6 +16,9 @@ pub struct SplatScene {
 impl SplatScene {
     /// Loads Gaussian PLY/GLB, SPZ v1–v4, SPLAT or bundled SOG v1/v2 data.
     ///
+    /// PLY-family source axes are converted to the same Y-up world frame as GLB,
+    /// including Gaussian orientations and directional color coefficients.
+    ///
     /// # Errors
     /// Returns an error for unreadable, empty, invalid or unsupported data.
     pub fn load(path: &Path) -> Result<Self, SceneError> {
@@ -27,7 +30,7 @@ impl SplatScene {
         if extension == "glb" {
             return crate::glb::load(path);
         }
-        let gaussians = match extension.as_str() {
+        let mut gaussians = match extension.as_str() {
             "ply" => load_ply(path)?,
             "spz" => crate::spz::load(path)?,
             "splat" => decode_splat(&crate::read_bounded(
@@ -42,6 +45,20 @@ impl SplatScene {
                 )));
             }
         };
+        // PLY-family imports use a half-turn about Z to reach the viewer's
+        // Y-up frame. Gaussian GLB already contains that conversion in its
+        // world-space attributes and must not be rotated a second time.
+        let rotation = Quat::from_xyzw(0.0, 0.0, 1.0, 0.0);
+        for gaussian in &mut gaussians {
+            gaussian.pos = Vec3::new(-gaussian.pos.x, -gaussian.pos.y, gaussian.pos.z);
+            gaussian.rot = rotation * gaussian.rot;
+            // A Z half-turn multiplies SH order m by (-1)^m. In the stored
+            // band/order layout these are exactly the even coefficient indices.
+            // Use sign changes instead of a dense SH matrix for large scenes.
+            for coefficient in gaussian.sh.iter_mut().step_by(2) {
+                *coefficient = -*coefficient;
+            }
+        }
         Self::from_gaussians(gaussians)
     }
 
@@ -283,7 +300,7 @@ pub(crate) mod tests {
     use wgpu_3dgs_viewer::core::{Gaussians, GaussiansSource};
 
     #[test]
-    fn compressed_ply_preserves_exported_records_and_rejects_truncation() {
+    fn compressed_ply_normalizes_exported_records_and_rejects_truncation() {
         let bytes = include_bytes!("../tests/fixtures/packed.compressed.ply");
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("packed.ply");
@@ -297,7 +314,12 @@ pub(crate) mod tests {
                 0.0002
             ));
             assert!(gaussian.color.x > 190 && gaussian.color.w > 230);
-            assert!(gaussian.rot.angle_between(Quat::IDENTITY) < 0.003);
+            assert!(
+                gaussian
+                    .rot
+                    .angle_between(Quat::from_xyzw(0.0, 0.0, 1.0, 0.0))
+                    < 0.003
+            );
         }
         std::fs::write(&path, &bytes[..bytes.len() - 2]).unwrap();
         assert!(SplatScene::load(&path).is_err());
@@ -324,7 +346,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn ply_and_spz_roundtrip_preserve_scene_bounds_and_opacity() {
+    fn ply_and_spz_imports_normalize_framing_and_preserve_radius_and_opacity() {
         let original = scene();
         let directory = tempfile::tempdir().unwrap();
         for (extension, source) in [("ply", GaussiansSource::Ply), ("spz", GaussiansSource::Spz)] {
@@ -334,7 +356,9 @@ pub(crate) mod tests {
                 .unwrap();
             let decoded = SplatScene::load(&path).unwrap();
             assert_eq!(decoded.len(), original.len());
-            assert!((decoded.center - original.center).length() < 0.04);
+            let expected_center =
+                Vec3::new(-original.center.x, -original.center.y, original.center.z);
+            assert!((decoded.center - expected_center).length() < 0.04);
             assert!((decoded.radius - original.radius).abs() < 0.04);
             assert_eq!(decoded.gaussians[0].color.w, 240);
         }
@@ -435,9 +459,9 @@ pub(crate) mod tests {
             ));
             let path = directory.path().join("low-degree.ply");
             std::fs::write(&path, bytes).unwrap();
-            let decoded = SplatScene::load(&path).unwrap();
+            let decoded = load_ply(&path).unwrap();
             assert_eq!(decoded.len(), 1);
-            let gaussian = &decoded.gaussians[0];
+            let gaussian = &decoded[0];
             assert_eq!(gaussian.pos, Vec3::new(1.0, 2.0, 3.0));
             for (index, coefficient) in gaussian.sh.iter().enumerate() {
                 let expected = if index < per_channel {

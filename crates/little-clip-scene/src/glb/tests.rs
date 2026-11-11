@@ -241,3 +241,61 @@ fn glb_loads_from_file_and_bakes_visible_orbit_in_both_color_spaces() {
         );
     }
 }
+
+#[test]
+fn ply_family_imports_match_gltf_world_positions_covariance_and_directional_color() {
+    use wgpu_3dgs_viewer::core::{Gaussians, GaussiansSource};
+    let (mut root, binary) = fixture(false, 3);
+    root["nodes"][0]["rotation"] =
+        json!((Quat::from_rotation_x(0.37) * Quat::from_rotation_y(0.63)).to_array());
+    let expected = decode_fixture(&root, &binary).unwrap();
+    let basis = Mat3::from_diagonal(Vec3::new(-1.0, -1.0, 1.0));
+    let rotation = Quat::from_mat3(&basis);
+    let sh = ShRotation::new(basis);
+    let native: Vec<_> = expected
+        .gaussians
+        .iter()
+        .copied()
+        .map(|mut gaussian| {
+            gaussian.pos = basis * gaussian.pos;
+            gaussian.rot = rotation * gaussian.rot;
+            gaussian.sh = sh.apply(&gaussian.sh);
+            gaussian
+        })
+        .collect();
+    let directory = tempfile::tempdir().unwrap();
+    for (extension, format, tolerance) in [
+        ("ply", GaussiansSource::Ply, 1e-5),
+        ("spz", GaussiansSource::Spz, 0.02),
+    ] {
+        let path = directory.path().join(format!("same-scene.{extension}"));
+        Gaussians::from_gaussians_iter(native.iter().copied(), format)
+            .write_to_file(&path)
+            .unwrap();
+        let actual = SplatScene::load(&path).unwrap();
+        assert!(
+            actual.center.abs_diff_eq(expected.center, tolerance),
+            "{extension}: framing differs"
+        );
+        for (a, b) in actual.gaussians.iter().zip(&expected.gaussians) {
+            assert!(
+                a.pos.abs_diff_eq(b.pos, tolerance),
+                "{extension}: position differs"
+            );
+            let covariance = |g: &Gaussian| {
+                let axes = Mat3::from_quat(g.rot) * Mat3::from_diagonal(g.scale);
+                axes * axes.transpose()
+            };
+            assert!(
+                covariance(a).abs_diff_eq(covariance(b), tolerance),
+                "{extension}: covariance differs"
+            );
+            for (a, b) in a.sh.iter().zip(b.sh) {
+                assert!(
+                    a.abs_diff_eq(b, tolerance),
+                    "{extension}: directional color differs"
+                );
+            }
+        }
+    }
+}

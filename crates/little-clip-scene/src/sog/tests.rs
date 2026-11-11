@@ -63,7 +63,7 @@ fn archive(meta: Value, label: [u8; 4]) -> Vec<u8> {
 }
 
 #[test]
-fn bundled_sog_versions_preserve_position_scale_rotation_color_and_sh() {
+fn bundled_sog_versions_normalize_preview_frame_and_preserve_scale_and_color() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("fixture.sog");
     for version in [1, 2] {
@@ -71,9 +71,9 @@ fn bundled_sog_versions_preserve_position_scale_rotation_color_and_sh() {
             std::fs::write(&path, archive(metadata(version, bands), [0, 0, 0, 255])).unwrap();
             let scene = crate::SplatScene::load(&path).unwrap();
             let gaussian = &scene.gaussians[0];
-            assert!((gaussian.pos - Vec3::ONE).length() < 1e-5);
+            assert!((gaussian.pos - Vec3::new(-1.0, -1.0, 1.0)).length() < 1e-5);
             assert!((gaussian.scale - Vec3::splat((-2.0f32).exp())).length() < 1e-4);
-            assert!(gaussian.rot.w > 0.99);
+            assert!(gaussian.rot.z.abs() > 0.99);
             assert!((i16::from(gaussian.color.x) - 135).abs() <= 1);
             assert!((i16::from(gaussian.color.y) - 142).abs() <= 1);
             assert!((i16::from(gaussian.color.z) - 149).abs() <= 1);
@@ -85,6 +85,7 @@ fn bundled_sog_versions_preserve_position_scale_rotation_color_and_sh() {
                 } else {
                     Vec3::ZERO
                 };
+                let expected = if index % 2 == 0 { -expected } else { expected };
                 assert!(
                     (*coefficient - expected).length() < 1e-3,
                     "version={version}, bands={bands}, index={index}"
