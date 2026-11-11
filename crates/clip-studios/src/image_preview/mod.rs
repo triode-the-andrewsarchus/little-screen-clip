@@ -164,6 +164,7 @@ pub struct ImagePreviewState {
 
     // File Dialog & Save-As
     save_job: Option<save::ImageSaveJob>,
+    image_handoff_job: Option<handoff::ImageHandoffJob>,
     text_copy_job: Option<crate::desktop_ipc::PendingRequest>,
     file_source: Option<crate::file_source::FileSource>,
     saved_stamp: Option<ImageInputStamp>,
@@ -598,6 +599,7 @@ impl ImagePreviewState {
             viewer: config.image.viewer.clone(),
             status_toast: None,
             save_job: None,
+            image_handoff_job: None,
             text_copy_job: None,
             file_source: None,
             saved_stamp: None,

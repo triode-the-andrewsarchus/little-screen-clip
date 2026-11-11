@@ -2,6 +2,7 @@ use super::super::*;
 
 impl ImagePreviewState {
     pub fn suspend_pending_work(&mut self) {
+        self.image_handoff_job = None;
         self.cancel_pixel_resize();
         if let Some(ticket) = self.palette_ticket.take() {
             ticket.cancel();

@@ -91,8 +91,6 @@ fn test_load_png_and_meta() {
     assert_eq!(state.current_rgba.height(), 360);
     assert!(!state.is_svg);
     assert_eq!(format_aspect_ratio(640, 360), "16:9");
-    let disk_path = state.ensure_disk_path().expect("ensure_disk_path failed");
-    assert!(disk_path.exists());
     let _ = std::fs::remove_file(temp_file);
 }
 
@@ -143,8 +141,6 @@ fn test_load_item_in_memory() {
     let state = ImagePreviewState::from_item(&item, &config).expect("Failed to load from ClipItem");
     assert_eq!(state.current_rgba.width(), 320);
     assert_eq!(state.current_rgba.height(), 240);
-    let disk_path = state.ensure_disk_path().expect("ensure_disk_path failed");
-    assert!(disk_path.exists());
 }
 
 #[test]

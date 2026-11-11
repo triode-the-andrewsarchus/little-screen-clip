@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 mod effects;
 mod handoff;
@@ -86,6 +87,10 @@ pub(super) fn assert_configured_app_receives_source_image(
         _ => state.viewer.clone(),
     };
     state.launch_external_app(&app, &ctx, &mut close);
+    wait_for_image_handoff(
+        &mut state,
+        crate::shell::EscapeHatchLauncher::spawn_with_fallback,
+    );
 
     assert!(matches!(
         state.status_toast.as_ref(),
@@ -126,16 +131,15 @@ pub(super) fn assert_external_handoff_keeps_edited_session(
     let undo_len = state.undo_stack.len();
     let command = command(&config);
 
-    state.launch_external_app_with_path(
-        &command,
-        Ok(source_path.clone()),
-        |app_name, target, path| {
-            assert_eq!(app_name, app);
-            assert_eq!(target, command);
-            assert_eq!(path, source_path);
-            Ok("Launched test editor".to_owned())
-        },
-    );
+    state.start_image_handoff(&command, BackgroundJobs::global());
+    wait_for_image_handoff(&mut state, |app_name, target, path| {
+        assert_eq!(app_name, app);
+        assert_eq!(target, command);
+        assert_ne!(path, source_path);
+        assert_eq!(image::open(path).unwrap().to_rgba8(), *edited_pixels);
+        std::fs::remove_file(path).unwrap();
+        Ok("Launched test editor".to_owned())
+    });
 
     assert!(Arc::ptr_eq(&state.current_rgba, &edited_pixels));
     assert_eq!(
@@ -169,7 +173,8 @@ pub(super) fn assert_unavailable_configured_app_sets_failure_toast(
         "inkscape" => state.svg_editor.clone(),
         _ => state.viewer.clone(),
     };
-    state.launch_external_app_with(&app, |app_name, command, path| {
+    state.start_image_handoff(&app, BackgroundJobs::global());
+    wait_for_image_handoff(&mut state, |app_name, command, path| {
         crate::shell::EscapeHatchLauncher::spawn_with_fallback_command(
             app_name,
             command,
@@ -186,4 +191,20 @@ pub(super) fn assert_unavailable_configured_app_sets_failure_toast(
         state.status_toast.as_ref(),
         Some((message, _)) if message == &expected
     ));
+}
+
+fn wait_for_image_handoff(
+    state: &mut ImagePreviewState,
+    launch: impl FnOnce(&str, &str, &std::path::Path) -> Result<String, String>,
+) {
+    let ctx = egui::Context::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut launch = Some(launch);
+    while state.image_handoff_job.is_some() {
+        state.poll_image_handoff_with(&ctx, |app, command, path| {
+            launch.take().unwrap()(app, command, path)
+        });
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }

@@ -10,6 +10,7 @@ impl ImagePreviewState {
     ) {
         let now = crate::ui_ext::feedback_time();
 
+        self.poll_image_handoff_with(ctx, crate::shell::EscapeHatchLauncher::spawn_with_fallback);
         self.poll_text_copy_job();
         if self.text_copy_job.is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
