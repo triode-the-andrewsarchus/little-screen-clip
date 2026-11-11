@@ -147,10 +147,12 @@ impl VideoSource {
             job.max_source_pixels,
         )?;
         let mut context = codec::Context::from_parameters(parameters).map_err(message)?;
-        context.set_threading(codec::threading::Config {
-            count: 2,
-            ..Default::default()
-        });
+        // SAFETY: context is exclusively owned before codec opening. Set only
+        // the count: Config::default() would also disable libav's default frame/
+        // slice threading, defeating the requested decoder parallelism.
+        unsafe {
+            (*context.as_mut_ptr()).thread_count = 2;
+        }
         let mut decoder = context.decoder();
         decoder.set_packet_time_base(time_base);
         decoder.skip_frame(discard);
@@ -437,4 +439,31 @@ fn encode_image(image: &mut frame::Video, id: codec::Id, quality: Option<i32>) -
 
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bounded_decoder_threads_remain_active_and_drain_delayed_frames() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../little-clip-core/tests/fixtures/video/with-cover.mp4");
+        let mut source = VideoSource::open(
+            File::open(path).unwrap(),
+            &VideoFrame::new("mov", 160, 160),
+            ffmpeg::Discard::Default,
+            std::time::Duration::from_secs(30),
+        )
+        .unwrap();
+        assert_eq!(source.decoder.threading().count, 2);
+        assert_ne!(
+            source.decoder.threading().kind,
+            codec::threading::Type::None
+        );
+        let mut frames = 0;
+        while source.next_frame().unwrap().is_some() {
+            frames += 1;
+        }
+        assert_eq!(frames, 2);
+    }
 }

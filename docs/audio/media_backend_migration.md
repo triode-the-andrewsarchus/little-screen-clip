@@ -301,6 +301,14 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   lifecycles. Distribution and final workspace verification still remain before
   the completion audit and recommendation.
 
+- [x] Retain the requested decoder parallelism. Deployment review found that
+  `threading::Config` defaults to `Type::None`, so setting only its count through
+  that wrapper also disabled frame/slice threading. The worker now changes only
+  libav's thread count, retaining its default supported threading selection.
+  A native MPEG4 test verifies two active decoder threads and both delayed frames
+  draining at EOF; all eight worker unit and thirteen executable checks pass,
+  including the three explicit independent reference comparisons.
+
 ## Final recommendation
 
 Pending implementation and verification. This section must be reviewed after
