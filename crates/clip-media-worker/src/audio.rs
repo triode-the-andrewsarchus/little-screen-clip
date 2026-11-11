@@ -21,24 +21,7 @@ pub(super) fn decode(file: File, formats: &str, output: &mut impl Write) -> Resu
     let mut decoder = context.decoder();
     decoder.set_packet_time_base(stream.time_base());
     let mut decoder = decoder.audio().map_err(|error| error.to_string())?;
-    if !(1..=8).contains(&decoder.channels()) || !(1..=384_000).contains(&decoder.rate()) {
-        return Err("Unsupported audio channel count or sample rate".into());
-    }
-    let layout = if decoder.channel_layout().bits() == 0 {
-        ffmpeg::ChannelLayout::default(i32::from(decoder.channels()))
-    } else {
-        decoder.channel_layout()
-    };
-    decoder.set_channel_layout(layout);
-    let mut converter = ffmpeg::software::resampling::Context::get(
-        decoder.format(),
-        layout,
-        decoder.rate(),
-        ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-        layout,
-        decoder.rate(),
-    )
-    .map_err(|error| error.to_string())?;
+    let mut converter = float_converter(&mut decoder)?;
     let mut written = 0;
     loop {
         let mut packet = ffmpeg::Packet::empty();
@@ -56,6 +39,41 @@ pub(super) fn decode(file: File, formats: &str, output: &mut impl Write) -> Resu
     }
     decoder.send_eof().map_err(|error| error.to_string())?;
     drain(&mut decoder, &mut converter, output, &mut written)?;
+    flush_converter(&mut converter, output, &mut written)?;
+    if written == 0 {
+        return Err("No decoded audio samples".into());
+    }
+    output.flush().map_err(|error| error.to_string())
+}
+
+fn float_converter(
+    decoder: &mut ffmpeg::codec::decoder::Audio,
+) -> Result<ffmpeg::software::resampling::Context, String> {
+    if !(1..=8).contains(&decoder.channels()) || !(1..=384_000).contains(&decoder.rate()) {
+        return Err("Unsupported audio channel count or sample rate".into());
+    }
+    let layout = if decoder.channel_layout().bits() == 0 {
+        ffmpeg::ChannelLayout::default(i32::from(decoder.channels()))
+    } else {
+        decoder.channel_layout()
+    };
+    decoder.set_channel_layout(layout);
+    ffmpeg::software::resampling::Context::get(
+        decoder.format(),
+        layout,
+        decoder.rate(),
+        ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+        layout,
+        decoder.rate(),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn flush_converter(
+    converter: &mut ffmpeg::software::resampling::Context,
+    output: &mut impl Write,
+    written: &mut usize,
+) -> Result<(), String> {
     // Same-rate format conversion normally has no delay; preserve buffered
     // samples if a decoder/converter combination does retain a tail.
     while converter.delay().is_some() {
@@ -70,12 +88,9 @@ pub(super) fn decode(file: File, formats: &str, output: &mut impl Write) -> Resu
         if tail.samples() == 0 && converter.delay().is_some() {
             return Err("Audio converter could not drain its remaining samples".into());
         }
-        write_frame(&tail, output, &mut written)?;
+        write_frame(&tail, output, written)?;
     }
-    if written == 0 {
-        return Err("No decoded audio samples".into());
-    }
-    output.flush().map_err(|error| error.to_string())
+    Ok(())
 }
 
 fn drain(
