@@ -1,7 +1,7 @@
 //! Guarded built-in content inputs and tool outputs; scripts keep their explicit execution policy.
 use super::{EXTERNAL_COMMAND_TIMEOUT, artifacts::Workspace, types::PortValue};
 use little_clip_core::item::ClipItem;
-use little_clip_core::{CommandRequest, file_source::FileSource};
+use little_clip_core::{CommandRequest, file_source::FileSource, media_backend::AudioFilter};
 use std::{
     fs::File,
     io::{self, Read},
@@ -155,11 +155,11 @@ pub(super) fn magick(
 pub(super) fn audio(
     workspace: &Workspace,
     paths: &[&Path],
-    arguments: &[&str],
+    filter: AudioFilter,
     destination: &Path,
 ) -> Result<(), String> {
     let files = RenderFiles::new(workspace, paths).map_err(|error| error.to_string())?;
-    render_audio(&files, arguments)?;
+    render_audio(&files, filter)?;
     files
         .publish(workspace, destination)
         .map_err(|error| error.to_string())
@@ -202,27 +202,36 @@ pub(super) fn audio_gain(
         let mut output = files.output.as_file();
         output.set_len(0).map_err(|error| error.to_string())?;
         output.rewind().map_err(|error| error.to_string())?;
-        render_audio(&files, &["-af", &format!("volume={gain_db}dB")])?;
+        render_audio(&files, AudioFilter::Chain(format!("volume={gain_db}dB")))?;
     }
     files
         .publish(workspace, destination)
         .map_err(|error| error.to_string())
 }
 
-fn render_audio(files: &RenderFiles, arguments: &[&str]) -> Result<(), String> {
-    let mut request =
-        CommandRequest::new("ffmpeg").args(["-nostdin", "-y", "-protocol_whitelist", "file,pipe"]);
+fn render_audio(files: &RenderFiles, filter: AudioFilter) -> Result<(), String> {
+    use little_clip_core::media_backend::{AudioInput, AudioRender};
+    let mut settings = AudioRender::new(
+        files
+            .inputs
+            .iter()
+            .map(|_| AudioInput {
+                formats: little_clip_core::media_backend::AUDIO_FORMATS.into(),
+                stream: None,
+            })
+            .collect(),
+        "wav",
+    );
+    settings.codec = Some("pcm_s16le".into());
+    settings.filter = Some(filter);
+    let mut request = little_clip_core::media_backend::render_audio_to_request(
+        &settings,
+        files.output.as_file(),
+    )?;
     for input in &files.inputs {
-        request = input
-            .argument(request.arg("-i"))
-            .map_err(|error| error.to_string())?;
+        request = input.argument(request).map_err(|error| error.to_string())?;
     }
-    let (request, fd) = request
-        .args(arguments.iter().copied())
-        .args(["-f", "wav"])
-        .inherit_handle(files.output.as_file())
-        .map_err(|error| error.to_string())?;
-    run(request.arg(format!("/proc/self/fd/{fd}")))?;
+    run(request)?;
     Ok(())
 }
 
@@ -355,7 +364,13 @@ mod tests {
         buffer.write_wav(&source).unwrap();
         let workspace = Workspace::new().unwrap();
         let adjusted = workspace.path().join("adjusted.wav");
-        audio(&workspace, &[&source], &["-af", "volume=0.5"], &adjusted).unwrap();
+        audio(
+            &workspace,
+            &[&source],
+            AudioFilter::Chain("volume=0.5".into()),
+            &adjusted,
+        )
+        .unwrap();
         let metadata = little_clip_core::audio::read_audio_metadata(&adjusted).unwrap();
         assert_eq!(metadata.sample_rate, 8000);
         assert_eq!(metadata.channels, 2);
@@ -364,12 +379,10 @@ mod tests {
         audio(
             &workspace,
             &[&source, &source],
-            &[
-                "-filter_complex",
-                "[0:0][1:0]concat=n=2:v=0:a=1[out]",
-                "-map",
-                "[out]",
-            ],
+            AudioFilter::Graph {
+                spec: "[0:a][1:a]concat=n=2:v=0:a=1[out]".into(),
+                output: "out".into(),
+            },
             &joined,
         )
         .unwrap();
@@ -389,7 +402,15 @@ mod tests {
             assert!(checksum(source).is_err());
             assert!(image_bytes(source).is_err());
             assert!(magick(&workspace, &[source], &[], &destination).is_err());
-            assert!(audio(&workspace, &[source], &[], &destination).is_err());
+            assert!(
+                audio(
+                    &workspace,
+                    &[source],
+                    AudioFilter::Chain("anull".into()),
+                    &destination
+                )
+                .is_err()
+            );
             assert!(audio_gain(&workspace, source, "0", &destination).is_err());
         }
         assert!(!destination.exists());

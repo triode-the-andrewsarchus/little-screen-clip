@@ -6,19 +6,21 @@ use std::{
     process::Command,
 };
 
-fn command(input: &File, mode: &str, formats: &str) -> Command {
-    let descriptor = input.as_raw_fd();
+fn command(inputs: &[&File], mode: &str, formats: &str) -> Command {
+    let descriptors: Vec<_> = inputs.iter().map(|input| input.as_raw_fd()).collect();
     let mut command = Command::new(env!("CARGO_BIN_EXE_clip-media-worker"));
-    command.args([mode, formats, &format!("/proc/self/fd/{descriptor}")]);
+    command.args([mode, formats]);
+    command.args(descriptors.iter().map(|fd| format!("/proc/self/fd/{fd}")));
     // SAFETY: only the child descriptor table changes. fcntl is async-signal-safe,
     // and the parent test retains the live File through command completion.
     unsafe {
         command.pre_exec(move || {
-            if libc::fcntl(descriptor, libc::F_SETFD, 0) < 0 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(())
+            for descriptor in &descriptors {
+                if libc::fcntl(*descriptor, libc::F_SETFD, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
+            Ok(())
         });
     }
     command
@@ -30,7 +32,7 @@ fn executable_probes_and_decodes_a_retained_descriptor_from_eof() {
     input
         .write_all(include_bytes!("fixtures/silence.aac"))
         .unwrap();
-    let probe = command(&input, "probe", "aac").output().unwrap();
+    let probe = command(&[&input], "probe", "aac").output().unwrap();
     assert!(
         probe.status.success(),
         "{}",
@@ -38,7 +40,7 @@ fn executable_probes_and_decodes_a_retained_descriptor_from_eof() {
     );
     let value: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
     assert_eq!(value["streams"][0]["codec_name"], "aac");
-    let decoded = command(&input, "decode-audio", "aac").output().unwrap();
+    let decoded = command(&[&input], "decode-audio", "aac").output().unwrap();
     assert!(
         decoded.status.success(),
         "{}",
@@ -49,8 +51,10 @@ fn executable_probes_and_decodes_a_retained_descriptor_from_eof() {
     assert!(
         decoded
             .stdout
-            .chunks_exact(4)
-            .all(|sample| f32::from_le_bytes(sample.try_into().unwrap()).is_finite())
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|sample| f32::from_le_bytes(*sample).is_finite())
     );
 }
 
@@ -66,10 +70,268 @@ fn executable_denies_secondary_files_even_when_they_exist() {
     playlist
         .write_all(b"ffconcat version 1.0\nfile audio.aac\n")
         .unwrap();
-    let result = command(&playlist, "probe", "concat")
+    let result = command(&[&playlist], "probe", "concat")
         .current_dir(directory.path())
         .output()
         .unwrap();
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("whitelist"));
+}
+
+fn render_settings(count: usize) -> clip_media_protocol::AudioRender {
+    let mut job = clip_media_protocol::AudioRender::new(
+        (0..count)
+            .map(|_| clip_media_protocol::AudioInput {
+                formats: "wav".into(),
+                stream: None,
+            })
+            .collect(),
+        "wav",
+    );
+    job.codec = Some("pcm_s16le".into());
+    job
+}
+
+fn constant_wav(frames: usize, values: [i16; 2]) -> File {
+    let file = tempfile::tempfile().unwrap();
+    let mut writer = hound::WavWriter::new(
+        file.try_clone().unwrap(),
+        hound::WavSpec {
+            channels: 2,
+            sample_rate: 8000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        },
+    )
+    .unwrap();
+    for _ in 0..frames {
+        for value in values {
+            writer.write_sample(value).unwrap();
+        }
+    }
+    writer.finalize().unwrap();
+    file
+}
+
+fn render(inputs: &[&File], job: &clip_media_protocol::AudioRender) -> File {
+    let output = tempfile::tempfile().unwrap();
+    let result = command(inputs, "render-audio", &serde_json::to_string(job).unwrap())
+        .stdout(output.try_clone().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    output
+}
+
+fn wav_samples(mut file: File) -> (hound::WavSpec, Vec<i16>) {
+    use std::io::Seek;
+    file.rewind().unwrap();
+    let mut reader = hound::WavReader::new(file).unwrap();
+    (
+        reader.spec(),
+        reader.samples::<i16>().map(Result::unwrap).collect(),
+    )
+}
+
+#[test]
+fn executable_filters_selected_frames_and_preserves_mono_channel_selection() {
+    let input = constant_wav(16000, [1234, -2468]);
+    let mut job = render_settings(1);
+    job.range = Some((1.25, 1.5));
+    job.filter = Some(clip_media_protocol::AudioFilter::Chain(
+        "pan=mono|c0=c1,volume=0.5".into(),
+    ));
+    let (spec, samples) = wav_samples(render(&[&input], &job));
+    assert_eq!(spec.channels, 1);
+    assert_eq!(spec.sample_rate, 8000);
+    assert_eq!(samples.len(), 2000);
+    assert!(samples.iter().all(|sample| *sample == -1234));
+}
+
+#[test]
+fn executable_concatenates_inputs_and_flushes_the_graph_and_encoder() {
+    let first = constant_wav(800, [1000, -1000]);
+    let second = constant_wav(400, [2000, -2000]);
+    let mut job = render_settings(2);
+    job.filter = Some(clip_media_protocol::AudioFilter::Graph {
+        spec: "[0:a][1:a]concat=n=2:v=0:a=1[out]".into(),
+        output: "out".into(),
+    });
+    let (spec, samples) = wav_samples(render(&[&first, &second], &job));
+    assert_eq!(spec.channels, 2);
+    assert_eq!(samples.len(), 2400);
+    assert!(
+        samples[..1600]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|frame| *frame == [1000, -1000])
+    );
+    assert!(
+        samples[1600..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|frame| *frame == [2000, -2000])
+    );
+}
+
+#[test]
+fn executable_writes_seekable_lossless_and_lossy_containers() {
+    let input = constant_wav(4000, [1234, -2468]);
+    for (format, codec) in [
+        ("flac", "flac"),
+        ("mp3", "libmp3lame"),
+        ("ipod", "aac"),
+        ("ogg", "libvorbis"),
+        ("opus", "libopus"),
+        ("asf", "wmav2"),
+        ("aiff", "pcm_s16be"),
+    ] {
+        let mut job = render_settings(1);
+        job.format = format.into();
+        job.codec = Some(codec.into());
+        let output = render(&[&input], &job);
+        let result = command(&[&output], "probe", "flac,mp3,mov,ogg,asf,aiff")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{format}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(value["streams"][0]["codec_type"], "audio");
+        let decoded = command(&[&output], "decode-audio", "flac,mp3,mov,ogg,asf,aiff")
+            .output()
+            .unwrap();
+        assert!(
+            decoded.status.success(),
+            "{format}: {}",
+            String::from_utf8_lossy(&decoded.stderr)
+        );
+        assert!(!decoded.stdout.is_empty());
+    }
+}
+
+#[test]
+fn executable_rejects_non_seekable_outputs_and_file_opening_audio_filters() {
+    let input = constant_wav(800, [1234, -2468]);
+    let mut job = render_settings(1);
+    let result = command(
+        &[&input],
+        "render-audio",
+        &serde_json::to_string(&job).unwrap(),
+    )
+    .output()
+    .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("seekable staging"));
+    let output = tempfile::tempfile().unwrap();
+    job.filter = Some(clip_media_protocol::AudioFilter::Graph {
+        spec: "amovie=/etc/passwd[out]".into(),
+        output: "out".into(),
+    });
+    let result = command(
+        &[&input],
+        "render-audio",
+        &serde_json::to_string(&job).unwrap(),
+    )
+    .stdout(output)
+    .output()
+    .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("Unsupported audio filter: amovie"));
+}
+
+#[test]
+#[ignore = "requires FFmpeg CLI only to generate and reference compressed fixtures"]
+fn library_ranges_match_cli_priming_and_container_timing() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.wav");
+    let mut writer = hound::WavWriter::create(
+        &source,
+        hound::WavSpec {
+            channels: 2,
+            sample_rate: 44100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        },
+    )
+    .unwrap();
+    for index in 0..88200 {
+        let value = ((index as f64 * 0.063).sin() * 6000.0) as i16;
+        writer.write_sample(value).unwrap();
+        writer.write_sample(-value).unwrap();
+    }
+    writer.finalize().unwrap();
+    for (extension, codec) in [
+        ("flac", "flac"),
+        ("mp3", "libmp3lame"),
+        ("m4a", "aac"),
+        ("ogg", "libvorbis"),
+        ("opus", "libopus"),
+    ] {
+        let path = dir.path().join(format!("source.{extension}"));
+        assert!(
+            Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&source)
+                .args(["-c:a", codec])
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        for (first, last) in [(0.025, 0.075), (1.25, 1.5)] {
+            let mut job = render_settings(1);
+            job.inputs[0].formats = "flac,mp3,mov,ogg".into();
+            job.range = Some((first, last));
+            job.sample_rate = Some(44100);
+            let (_, actual) = wav_samples(render(&[&File::open(&path).unwrap()], &job));
+            // Compare with a full-decode trim. CLI input seeking near MP3's
+            // priming interval can emit decoder warm-up silence instead.
+            let reference = Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&path)
+                .args([
+                    "-af",
+                    &format!("atrim=start={first}:end={last},asetpts=PTS-STARTPTS"),
+                    "-ar",
+                    "44100",
+                    "-c:a",
+                    "pcm_s16le",
+                    "-f",
+                    "s16le",
+                    "pipe:1",
+                ])
+                .output()
+                .unwrap();
+            assert!(reference.status.success());
+            let expected: Vec<_> = reference
+                .stdout
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| i16::from_le_bytes(*pair))
+                .collect();
+            assert_eq!(actual.len(), expected.len(), "{extension} at {first}");
+            let max = actual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
+                .max()
+                .unwrap();
+            // Independent seeks can restart perceptual-noise synthesis. Reject
+            // timing shifts while allowing a small fraction of full scale.
+            assert!(
+                max < 40,
+                "{extension} at {first}: maximum PCM difference {max}"
+            );
+        }
+    }
 }

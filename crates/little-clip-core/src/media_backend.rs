@@ -1,6 +1,7 @@
 //! Requests to the separately linked FFmpeg library worker.
 
 use crate::process::CommandRequest;
+pub use clip_media_protocol::{AudioFilter, AudioInput, AudioRender};
 use std::path::PathBuf;
 
 /// Audio containers admitted by browser metadata inspection.
@@ -28,6 +29,41 @@ pub fn decode_audio_request(formats: &str) -> CommandRequest {
         .args(["decode-audio", formats])
         .die_with_parent()
         .max_output_bytes(256 * 1024 * 1024)
+}
+
+/// Builds a library audio render request without opening input or output paths.
+///
+/// Append owned content handles in input order and direct stdout to an owned
+/// seekable staging file. Accepted-write callers use `build_command` and retain
+/// their existing cancellation/reaping lifetime, without a preview timeout.
+///
+/// # Errors
+/// Returns an error if settings cannot be serialized or exceed the wire budget.
+pub fn render_audio_request(settings: &AudioRender) -> Result<CommandRequest, String> {
+    let settings = serde_json::to_string(settings).map_err(|error| error.to_string())?;
+    if settings.len() > clip_media_protocol::MAX_SETTINGS_BYTES {
+        return Err("Audio render settings exceed their budget".into());
+    }
+    Ok(CommandRequest::new(worker_path())
+        .args(["render-audio", &settings])
+        .die_with_parent())
+}
+
+/// Builds a render request retaining an explicit staging descriptor.
+///
+/// This variant leaves stdout available for bounded command supervision.
+/// Append owned input descriptors after this request's output argument.
+///
+/// # Errors
+/// Returns settings serialization or staging-handle inheritance errors.
+pub fn render_audio_to_request(
+    settings: &AudioRender,
+    output: &std::fs::File,
+) -> Result<CommandRequest, String> {
+    let (request, descriptor) = render_audio_request(settings)?
+        .inherit_handle(output)
+        .map_err(|error| error.to_string())?;
+    Ok(request.arg(format!("--output=/proc/self/fd/{descriptor}")))
 }
 
 fn worker_path() -> PathBuf {

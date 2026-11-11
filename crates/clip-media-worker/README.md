@@ -14,6 +14,7 @@ The current commands are:
 ```text
 clip-media-worker probe FORMAT_WHITELIST /proc/self/fd/N
 clip-media-worker decode-audio FORMAT_WHITELIST /proc/self/fd/N
+clip-media-worker render-audio SETTINGS_JSON [--output=/proc/self/fd/M] /proc/self/fd/N ...
 ```
 
 The parent must inherit a pinned ordinary input descriptor and retain child
@@ -23,6 +24,22 @@ emits at most 64 KiB of JSON metadata. Audio decoding emits interleaved
 little-endian float PCM at the source rate and channel count, capped at 256 MiB.
 Its decoder and converter drain before successful completion. Parent-side cancellation and deadlines
 remain mandatory; the library interrupt callback is additional protection.
+
+Audio rendering uses the data-only `clip-media-protocol::AudioRender` settings.
+It reads up to eight inherited inputs and writes one owned regular staging
+handle, using stdout when the explicit output argument is absent. It never
+resolves an output pathname. Settings are capped at 64 KiB. Filter descriptions
+are parsed without initialization and restricted to the application's audio
+processing filters before any graph is instantiated; movie, command and other
+external-source filters are rejected. Demand-driven input feeding avoids
+reading an entire concatenation's later inputs into graph queues in advance.
+
+Render jobs have no internal preview deadline: accepted studio writes retain
+parent-side cancellation, kill/reap ownership and completion delivery. Bounded
+pipeline jobs retain their existing `CommandRequest` supervision. Containers
+and encoders are finalized only after decoder, filter and encoder draining.
+The protocol crate has no native media or desktop dependencies; sharing request
+data does not link FFmpeg into application libraries.
 
 `cargo test -p clip-media-worker` includes real executable/descriptor tests.
 Those integration tests also make the helper executable available before a

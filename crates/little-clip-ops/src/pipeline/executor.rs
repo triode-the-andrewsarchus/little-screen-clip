@@ -8,9 +8,9 @@ use super::artifacts::Workspace;
 use super::compiler::CompiledPipeline;
 use super::types::{NodeGraph, NodeInstance, NodeKind, PortValue};
 use base64::Engine;
-use little_clip_core::CommandRequest;
 use little_clip_core::item::{ClipItem, ClipPayload};
 use little_clip_core::slot::SlotManager;
+use little_clip_core::{CommandRequest, media_backend::AudioFilter};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
@@ -674,8 +674,13 @@ else:
                 let out_path = temp_dir.join(format!("norm_{}.wav", Uuid::new_v4()));
 
                 let filter = format!("loudnorm=I={}:LRA=11:TP={}", target, tp);
-                super::content::audio(workspace, &[&in_path], &["-af", &filter], &out_path)
-                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                super::content::audio(
+                    workspace,
+                    &[&in_path],
+                    AudioFilter::Chain(filter),
+                    &out_path,
+                )
+                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Normalized ({} LUFS)", target));
                 out.push(("Audio Out".to_string(), PortValue::AudioPath(out_path)));
@@ -693,8 +698,13 @@ else:
                     "silenceremove=start_periods=1:start_duration=0.1:start_threshold={}dB:stop_periods=1:stop_duration=0.1:stop_threshold={}dB",
                     db, db
                 );
-                super::content::audio(workspace, &[&in_path], &["-af", &filter], &out_path)
-                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                super::content::audio(
+                    workspace,
+                    &[&in_path],
+                    AudioFilter::Chain(filter),
+                    &out_path,
+                )
+                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Trimmed Silence ({}dB)", db));
                 out.push(("Audio Out".to_string(), PortValue::AudioPath(out_path)));
@@ -719,14 +729,12 @@ else:
                 let in2 = self.get_input_file(inputs, &["Clip 2", "In 2"])?;
                 let out_path = temp_dir.join(format!("concat_{}.wav", Uuid::new_v4()));
 
-                let filter = "[0:0][1:0]concat=n=2:v=0:a=1[out]";
-                super::content::audio(
-                    workspace,
-                    &[&in1, &in2],
-                    &["-filter_complex", filter, "-map", "[out]"],
-                    &out_path,
-                )
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                let filter = AudioFilter::Graph {
+                    spec: "[0:a][1:a]concat=n=2:v=0:a=1[out]".into(),
+                    output: "out".into(),
+                };
+                super::content::audio(workspace, &[&in1, &in2], filter, &out_path)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some("Concatenated Audio".to_string());
                 out.push(("Audio Out".to_string(), PortValue::AudioPath(out_path)));

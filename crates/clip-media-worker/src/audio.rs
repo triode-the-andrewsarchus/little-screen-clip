@@ -145,8 +145,8 @@ fn write_frame(
     #[cfg(target_endian = "little")]
     output.write_all(bytes).map_err(|error| error.to_string())?;
     #[cfg(target_endian = "big")]
-    for sample in bytes.chunks_exact(4) {
-        let value = f32::from_ne_bytes(sample.try_into().map_err(|_| "Invalid float sample")?);
+    for sample in bytes.as_chunks::<4>().0.iter() {
+        let value = f32::from_ne_bytes(*sample);
         output
             .write_all(&value.to_le_bytes())
             .map_err(|error| error.to_string())?;
@@ -169,8 +169,10 @@ mod tests {
         assert_eq!(output.len() % 8, 0);
         assert!(
             output
-                .chunks_exact(4)
-                .all(|sample| f32::from_le_bytes(sample.try_into().unwrap()).is_finite())
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|sample| f32::from_le_bytes(*sample).is_finite())
         );
     }
 }

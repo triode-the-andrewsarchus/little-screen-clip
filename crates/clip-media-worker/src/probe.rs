@@ -27,8 +27,20 @@ pub(super) fn probe(file: File, formats: &str) -> Result<serde_json::Value, Stri
 }
 
 pub(super) fn open_input(
+    file: File,
+    formats: &str,
+) -> Result<ffmpeg::format::context::Input, String> {
+    open_input_with_deadline(
+        file,
+        formats,
+        Some(Instant::now() + Duration::from_secs(30)),
+    )
+}
+
+pub(super) fn open_input_with_deadline(
     mut file: File,
     formats: &str,
+    deadline: Option<Instant>,
 ) -> Result<ffmpeg::format::context::Input, String> {
     if !file
         .metadata()
@@ -59,10 +71,9 @@ pub(super) fn open_input(
     options.set("probesize", "8388608");
     options.set("analyzeduration", "3000000");
     options.set("max_streams", "128");
-    let deadline = Instant::now() + Duration::from_secs(30);
     let input =
         ffmpeg::format::input_from_stream_with_interrupt(io, None, Some(options), move || {
-            Instant::now() >= deadline
+            deadline.is_some_and(|deadline| Instant::now() >= deadline)
         })
         .map_err(|error| error.to_string())?;
     Ok(input)

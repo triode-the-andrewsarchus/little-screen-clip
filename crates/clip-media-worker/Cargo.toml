@@ -7,9 +7,11 @@ license = "GPL-2.0-or-later"
 publish = false
 
 [dependencies]
+clip-media-protocol = { path = "../clip-media-protocol" }
 ffmpeg-next = { version = "9.0.0", default-features = false, features = ["format", "codec", "filter", "software-resampling", "software-scaling"] }
 serde_json.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
+hound = "3.5.1"
 tempfile = "3.27"

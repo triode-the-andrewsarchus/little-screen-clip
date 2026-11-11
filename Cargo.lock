@@ -1288,10 +1288,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "clip-media-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "clip-media-worker"
 version = "0.1.0"
 dependencies = [
+ "clip-media-protocol",
  "ffmpeg-next",
+ "hound",
  "libc",
  "serde_json",
  "tempfile",
@@ -4820,6 +4829,7 @@ dependencies = [
  "base64 0.22.1",
  "calamine",
  "chrono",
+ "clip-media-protocol",
  "fearless_simd 1.2.0",
  "fearless_simd_macros",
  "flate2",

@@ -92,7 +92,8 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 - [x] Migrate and verify production metadata callers (music, video, format bridge,
   search and animation metadata).
 - [x] Native streaming WAV ranges and simple gain, with owned staging and retry cleanup.
-- [ ] Remaining library decode/filter/export jobs.
+- [x] Studio exports/session graphs and pipeline audio filters through library jobs.
+- [ ] Search audio windows and remaining video/frame library jobs.
 
 - Established architecture baseline `native-audio-ffmpeg` at `89ccc61`.
 - Confirmed common audio already uses native decoding and DSP; migration must
@@ -161,6 +162,42 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   retaining those explicit errors is necessary. Remaining clone reports largely
   touch unchanged waveform/animation/test blocks, plus ordinary renderer test
   setup. No second decoding cache or application FFmpeg linkage was introduced.
+
+- Added `clip-media-protocol` for shared, data-only render settings. Core owns
+  process requests; `clip-media-worker/src/audio_render.rs` owns FFmpeg decoder,
+  filter and encoder contexts. This keeps the separately licensed worker from
+  depending on core, and prevents request-schema duplication or native library
+  linkage into the applications.
+- Migrated `clip-studios/src/audio_preview/export.rs` and pipeline content audio
+  operations from CLI option lists to structured library requests. Studio jobs
+  keep their accepted-write cancellation/reaping lifetime, seekable staging and
+  pinned inputs. Pipeline jobs keep their bounded `CommandRequest` supervision,
+  process-group handling and source checks before publication.
+- Graphs retain gain, pan, clipping, low/high-pass, crossfade/mix, deletion/concat,
+  loudness and silence-removal behavior. `audio_filter.rs` inspects parsed filter
+  names before initialization, rejecting secondary file-opening/source filters;
+  demuxer protocol restrictions alone do not cover graph sources.
+- Executable checks cover exact stereo selection and mono pan/gain, concatenated
+  inputs, graph/encoder draining, regular staging requirements, rejected graph
+  sources, and re-opened FLAC/MP3/M4A/Vorbis/Opus/WMA/AIFF exports. A manual
+  compressed-fixture check compares source-relative selections against full-decode
+  CLI trims for FLAC, MP3, M4A, Vorbis and Opus. Near MP3 priming, CLI input seeks
+  can emit warm-up silence; a full-decode trim is the timing reference instead.
+- The broad host container/export check caught a missing MP2 output allowlist
+  entry, which is restored. It now passes across all its existing format/codec
+  combinations; five pipeline content checks also pass through the library worker.
+
+- Library export verification after final negotiation changes: all 106 audio-studio
+  tests and five pipeline content tests pass. All 13 worker unit/integration
+  checks pass with the manual compressed-reference test explicitly included.
+  Worker/protocol all-target Clippy passes with warnings denied; workspace
+  doctests and formatting also pass. Disk free space remains about 158 GiB.
+- Architecture follow-up separates command parsing and muxer setup from decode
+  delivery. No new worker function exceeds the CCN threshold; maximum workspace
+  CCN and cycle counts stay unchanged. The report still counts two additional
+  clone groups, including fixture setup and typed export request construction;
+  shared wire defaults now have one protocol constructor. Existing studio
+  staging orchestration retains the previously documented necessary error paths.
 
 ## Final recommendation
 

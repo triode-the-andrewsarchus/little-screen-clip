@@ -1310,50 +1310,46 @@ pub(super) fn audio_export_command(
         value => value,
     };
     let input = little_clip_core::audio::open_tool_audio_input(source, cancelled)?;
-    let input_args: &[&str] = if input.prepared_wav {
-        &["-f", "wav"]
-    } else {
-        little_clip_core::audio::decoder_input_args(source)
+    use little_clip_core::media_backend::{AudioFilter, AudioInput, AudioRender};
+    let codec = match (format, mode) {
+        ("wav", AudioRenderMode::Session | AudioRenderMode::SessionGraph) => Some("pcm_f32le"),
+        ("wav", _) => Some("pcm_s16le"),
+        ("flac", _) => Some("flac"),
+        ("aiff", _) if extension == "aifc" => Some("pcm_f32be"),
+        _ => None,
     };
-    let mut request = little_clip_core::process::CommandRequest::new("ffmpeg").args([
-        "-nostdin",
-        "-protocol_whitelist",
-        "file,pipe",
-        "-y",
-    ]);
-    if mode == AudioRenderMode::Export {
-        request = request
-            .arg("-ss")
-            .arg(format!("{:.4}", region.start))
-            .arg("-to")
-            .arg(format!("{:.4}", region.end));
-    }
-    request = request
-        .args(input_args)
-        .arg("-i")
+    let filter = region.filter.as_ref().map(|filter| {
+        if mode == AudioRenderMode::SessionGraph {
+            AudioFilter::Graph {
+                spec: filter.clone(),
+                output: "out".into(),
+            }
+        } else {
+            AudioFilter::Chain(filter.clone())
+        }
+    });
+    let mut settings = AudioRender::new(
+        vec![AudioInput {
+            formats: if input.prepared_wav {
+                "wav"
+            } else {
+                little_clip_core::media_backend::AUDIO_FORMATS
+            }
+            .into(),
+            stream: None,
+        }],
+        format,
+    );
+    settings.codec = codec.map(str::to_owned);
+    settings.range = (mode == AudioRenderMode::Export)
+        .then_some((f64::from(region.start), f64::from(region.end)));
+    settings.filter = filter;
+    let request = little_clip_core::media_backend::render_audio_request(&settings)?
         .arg_owned_content_file(input.file)
         .map_err(|error| error.to_string())?;
-    if let Some(filter) = &region.filter {
-        request = if mode == AudioRenderMode::SessionGraph {
-            request.args(["-filter_complex", filter, "-map", "[out]"])
-        } else {
-            request.arg("-af").arg(filter)
-        };
-    }
-    request = match (format, mode) {
-        ("wav", AudioRenderMode::Session | AudioRenderMode::SessionGraph) => {
-            request.args(["-c:a", "pcm_f32le"])
-        }
-        ("wav", _) => request.args(["-c:a", "pcm_s16le"]),
-        ("flac", _) => request.args(["-c:a", "flac"]),
-        ("aiff", _) if extension == "aifc" => request.args(["-c:a", "pcm_f32be"]),
-        _ => request,
-    };
-    // stdout is the owned regular staging file, so FFmpeg can seek to finalize
-    // container headers without resolving an output pathname in the child.
-    let mut command = request
-        .args(["-f", format, "/proc/self/fd/1"])
-        .build_command();
+    // The worker owns custom seekable AVIO over stdout, finalizing container
+    // headers without resolving an output pathname in the child.
+    let mut command = request.build_command();
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(output))

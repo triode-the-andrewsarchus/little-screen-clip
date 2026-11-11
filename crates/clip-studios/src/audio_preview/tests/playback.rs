@@ -1073,7 +1073,11 @@ fn audio_containers_decode_waveforms_and_export_without_overwriting() {
             .collect(),
         })
         .unwrap();
-        assert_eq!(saved.saved_count, 2);
+        assert_eq!(
+            saved.saved_count, 2,
+            "{extension}/{codec}: {:?}",
+            saved.failures
+        );
         assert_eq!(saved.failures.len(), 1);
         assert_eq!(std::fs::read(existing).unwrap(), b"preserved audio");
         assert_eq!(std::fs::read(path).unwrap(), source_bytes);

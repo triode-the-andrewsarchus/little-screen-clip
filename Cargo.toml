@@ -15,6 +15,7 @@ members = [
     "crates/clipctl",
     "crates/little-clip-nki",
     "crates/clip-media-worker",
+    "crates/clip-media-protocol",
 ]
 
 [workspace.package]

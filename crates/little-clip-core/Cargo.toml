@@ -9,6 +9,7 @@ license.workspace = true
 test-support = []
 
 [dependencies]
+clip-media-protocol = { path = "../clip-media-protocol" }
 libc = "0.2"
 imagesize = "0.12"
 kamadak-exif = "0.6.2"
