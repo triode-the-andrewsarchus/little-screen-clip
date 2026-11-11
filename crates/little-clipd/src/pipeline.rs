@@ -1,16 +1,12 @@
 //! Retained pipeline execution, isolated from async IPC and preview workers.
 
 use little_clip_core::BackgroundJobs;
-use little_clip_ops::PipelineExecutionResult;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-pub(super) async fn execute(
-    operation: impl FnOnce() -> Result<PipelineExecutionResult, String>
-    + Send
-    + std::panic::UnwindSafe
-    + 'static,
-) -> Result<PipelineExecutionResult, String> {
+pub(super) async fn execute<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, String> + Send + std::panic::UnwindSafe + 'static,
+) -> Result<T, String> {
     // Admission is bounded; accepted writes have no post-submission deadline.
     // Preview work and daemon IPC must remain available during a long save.
     static JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 8));
@@ -32,11 +28,12 @@ pub(super) async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use little_clip_ops::PipelineExecutionResult;
 
     #[tokio::test]
     async fn panicking_pipeline_reports_failure_without_losing_the_worker() {
         assert!(
-            execute(|| panic!("controlled graph panic"))
+            execute::<PipelineExecutionResult>(|| panic!("controlled graph panic"))
                 .await
                 .unwrap_err()
                 .contains("panicked")

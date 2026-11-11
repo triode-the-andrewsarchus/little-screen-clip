@@ -508,36 +508,33 @@ async fn handle_execute_op(
     record_action: bool,
     ctx: &Arc<DaemonContext>,
 ) -> IpcResponse {
-    let result = {
-        let mgr = ctx.manager.read().await;
+    let action = record_action.then(|| little_clip_core::ipc::LastAction::Op {
+        op_name: op_name.clone(),
+        selected_slots: selected_slots.clone(),
+        secondary_slot,
+        separator: separator.clone(),
+    });
+    let snapshot = ctx.manager.read().await.clone();
+    let result = pipeline::execute(move || {
         evaluate_op(
-            &mgr,
+            &snapshot,
             &op_name,
             selected_slots.as_deref(),
             secondary_slot,
             separator.as_deref(),
         )
-    };
+        .map_err(|error| error.to_string())
+    })
+    .await;
 
     match result {
         Ok(new_item) => {
-            if record_action {
-                save_last_action(
-                    &little_clip_core::ipc::LastAction::Op {
-                        op_name,
-                        selected_slots,
-                        secondary_slot,
-                        separator,
-                    },
-                    ctx,
-                )
-                .await;
+            if let Some(action) = action {
+                save_last_action(&action, ctx).await;
             }
             apply_op_result_and_respond(new_item, ctx).await
         }
-        Err(e) => IpcResponse::Error {
-            error: e.to_string(),
-        },
+        Err(error) => IpcResponse::Error { error },
     }
 }
 
@@ -2037,6 +2034,54 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
         );
         assert!(ctx.is_self_copied_text(CLEAN_URL).await);
         assert!(ctx.is_self_copied_text(&format!("  {CLEAN_URL}\r\n")).await);
+    }
+
+    #[tokio::test]
+    async fn execute_op_publishes_worker_result_to_left_hand_and_clipboard() {
+        if isolated_clipboard_test(
+            "tests::execute_op_publishes_worker_result_to_left_hand_and_clipboard",
+        ) {
+            return;
+        }
+        let mut manager = SlotManager::default();
+        manager.push_to_hand(ClipItem::from_text("mixed Case"), HandSide::Left);
+        let ctx = test_context(manager);
+        let (client, server) = UnixStream::pair().unwrap();
+        let handler = tokio::spawn(handle_client(server, Arc::clone(&ctx)));
+        let (reader, mut writer) = client.into_split();
+        let mut lines = BufReader::new(reader).lines();
+        let response = test_ipc_request(
+            &mut writer,
+            &mut lines,
+            IpcRequest::ExecuteOp {
+                op_name: "uppercase".into(),
+                selected_slots: None,
+                secondary_slot: None,
+                separator: None,
+            },
+        )
+        .await;
+        let IpcResponse::OpResult { item } = response else {
+            panic!("Unexpected operation response: {response:?}");
+        };
+        assert_eq!(extract_clipboard_text(&item).as_deref(), Some("MIXED CASE"));
+        assert_eq!(
+            ctx.manager
+                .read()
+                .await
+                .left_hand()
+                .and_then(extract_clipboard_text)
+                .as_deref(),
+            Some("MIXED CASE")
+        );
+        let directory = PathBuf::from(std::env::var_os("CLIPD_TEST_CLIPBOARD").unwrap());
+        assert_eq!(
+            std::fs::read(directory.join("bytes")).unwrap(),
+            b"MIXED CASE"
+        );
+        drop(writer);
+        drop(lines);
+        handler.await.unwrap();
     }
 
     #[tokio::test]
