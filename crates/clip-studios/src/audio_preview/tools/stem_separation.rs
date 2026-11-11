@@ -145,6 +145,7 @@ pub(crate) struct StemSeparationState {
     pub(crate) stems: Vec<SeparatedStem>,
     pub(crate) selected_stem: usize,
     pub(crate) solo_stem: Option<usize>,
+    #[cfg(test)]
     pub(crate) workspace: Option<PathBuf>,
     pub(crate) save_dialog_open: bool,
     pub(crate) save_destination_dir: String,
@@ -168,26 +169,25 @@ impl AudioPreviewState {
         self.pause();
         let source = self.edit_snapshot();
         let filter = self.editor_render_filter();
-        let workspace = self.stem_separation.workspace.clone().unwrap_or_else(|| {
-            little_clip_core::ArtifactStore::new()
-                .and_then(|store| store.create_workspace("stems", "separation"))
-                .map(|workspace| workspace.retain())
-                .unwrap_or_else(|_| {
-                    std::env::temp_dir()
-                        .join(format!("little-screen-clip-stems-{}", uuid::Uuid::new_v4()))
-                })
-        });
+        #[cfg(test)]
+        let workspace = self.stem_separation.workspace.clone();
         let process_control = Arc::new(crate::image_preview::ImageToolProcessControl::new());
         let worker_control = Arc::clone(&process_control);
         let command = worker.clone();
-        let worker_workspace = workspace.clone();
         let (ticket, rx) = jobs.submit(Duration::MAX, move || {
-            run_stem_worker(command, source, filter, &worker_workspace, &worker_control)
+            #[cfg(not(test))]
+            let workspace = None;
+            let workspace = match workspace {
+                Some(path) => path,
+                None => little_clip_core::staging::get_staging_dir()
+                    .map_err(|error| format!("Could not open stem staging directory: {error}"))?
+                    .join("stems"),
+            };
+            run_stem_worker(command, source, filter, &workspace, &worker_control)
         });
         self.stem_separation.in_progress = true;
         self.stem_separation.status = Some("Starting local HTDemucs v4 separation…".to_string());
         self.stem_separation.error = None;
-        self.stem_separation.workspace = Some(workspace.clone());
         self.stem_separation.result_rx = Some(rx);
         self.stem_separation.job_ticket = Some(ticket);
         self.stem_separation.process_control = Some(process_control);
@@ -813,33 +813,44 @@ printf '{"vocals":"vocals.wav","drums":"drums.wav","bass":"bass.wav","other":"ot
         let input = directory.join("input.wav");
         let state = test_state(&input);
         let control = crate::image_preview::ImageToolProcessControl::new();
-        let outputs = run_stem_worker(
-            manifest_worker(&directory),
-            state.edit_snapshot(),
-            state.editor_render_filter(),
-            state.stem_separation.workspace.as_ref().unwrap(),
-            &control,
-        )
-        .unwrap();
-        let identity = outputs[0].identity.clone();
-        let check = outputs[0].check.clone();
-        let output = identity.path().to_owned();
-        let job = output.parent().unwrap().to_owned();
-        assert_eq!(
-            std::fs::metadata(&job).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        std::fs::remove_file(&input).unwrap();
-        drop(outputs);
-        check
-            .open(&output, Some(&identity), &AtomicBool::new(false))
+        for attempt in 0..2 {
+            let outputs = run_stem_worker(
+                manifest_worker(&directory),
+                state.edit_snapshot(),
+                state.editor_render_filter(),
+                state.stem_separation.workspace.as_ref().unwrap(),
+                &control,
+            )
             .unwrap();
-        assert!(job.is_dir());
-        drop(check);
-        assert!(
-            !job.exists(),
-            "the final read-context owner must release the private job"
-        );
+            let identity = outputs[0].identity.clone();
+            let check = outputs[0].check.clone();
+            let output = identity.path().to_owned();
+            let job = output.parent().unwrap().to_owned();
+            assert_eq!(
+                std::fs::metadata(&job).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            if attempt == 1 {
+                std::fs::remove_file(&input).unwrap();
+            }
+            drop(outputs);
+            check
+                .open(&output, Some(&identity), &AtomicBool::new(false))
+                .unwrap();
+            assert!(job.is_dir());
+            drop(check);
+            assert!(
+                !job.exists(),
+                "the final read-context owner must release the private job"
+            );
+            assert_eq!(
+                std::fs::read_dir(state.stem_separation.workspace.as_ref().unwrap())
+                    .unwrap()
+                    .count(),
+                0,
+                "repeated jobs leave the shared parent empty"
+            );
+        }
         drop(state);
         let state = test_state(&input);
         let malformed = fake_worker(
