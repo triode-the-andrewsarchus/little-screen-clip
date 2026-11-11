@@ -1,6 +1,7 @@
 //! Synchronized GStreamer playback with a bounded, clocked application video sink.
 use clip_media_protocol::playback::{Control, Settings, Update};
 use gstreamer::{self as gst, prelude::*};
+use gstreamer_video::VideoFrameExt;
 use std::{
     fs::File,
     io::{Read, Seek, Write},
@@ -45,9 +46,28 @@ pub(crate) fn run(mut file: File, settings: Settings) -> Result<()> {
     }
     file.rewind().map_err(message)?;
     gst::init().map_err(message)?;
-    let mut engine = Engine::new(&file, &settings)?;
+    let number = |value: &serde_json::Value| {
+        value
+            .as_str()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && value.abs() < 9.0e9)
+    };
+    let container_start = number(&metadata["format"]["start_time"]).unwrap_or(0.0);
+    let start_ms = ((number(&stream["start_time"]).unwrap_or(container_start) - container_start)
+        .max(0.0)
+        * 1000.0) as u64;
+    let software = stream["codec_name"] == "h264" && width * height <= 1920 * 1080;
+    let mut engine = Engine::new(&file, &settings, software, start_ms)?;
     let mut output = std::io::BufWriter::new(std::io::stdout().lock());
-    let result = engine.pump(&settings, &mut output);
+    let mut result = engine.pump(&settings, &mut output);
+    if result.is_err() && !software && engine.frames_sent == 0 {
+        // A hardware decoder that cannot preroll must not prevent CPU playback.
+        // No control commands are consumed until the first frame is delivered.
+        drop(engine);
+        file.rewind().map_err(message)?;
+        engine = Engine::new(&file, &settings, true, start_ms)?;
+        result = engine.pump(&settings, &mut output);
+    }
     if let Err(error) = &result {
         let mut update = engine.update(None, false);
         update.error = Some(error.chars().take(1000).collect());
@@ -65,6 +85,7 @@ fn validate(settings: &Settings) -> Result<()> {
         || !(1..=60).contains(&settings.fps)
         || settings.stream > 64
         || settings.start_ms > 9_000_000_000_000
+        || settings.duration_ms > 9_000_000_000_000
     {
         return Err("Invalid playback settings".into());
     }
@@ -77,10 +98,15 @@ struct Engine {
     epoch: u64,
     playing: bool,
     ended: bool,
+    frames_sent: u64,
+    origin_ms: i64,
+    position_ms: u64,
+    duration_ms: u64,
+    stream_start_ms: u64,
 }
 
 impl Engine {
-    fn new(file: &File, settings: &Settings) -> Result<Self> {
+    fn new(file: &File, settings: &Settings, software: bool, stream_start_ms: u64) -> Result<Self> {
         let sink = gstreamer_app::AppSink::builder()
             .caps(
                 &gst::Caps::builder("video/x-raw")
@@ -128,14 +154,23 @@ impl Engine {
             .map_err(message)?;
         player.set_property("uri", format!("fd://{}", file.as_raw_fd()));
         player.set_property("video-sink", &video);
-        player.set_property_from_str(
-            "flags",
-            if settings.silent {
-                "video+deinterlace"
-            } else {
-                "video+audio+soft-volume+deinterlace"
-            },
-        );
+        let mut flags = if settings.silent {
+            "video+deinterlace".to_owned()
+        } else {
+            "video+audio+soft-volume+deinterlace".to_owned()
+        };
+        if software {
+            flags.push_str("+force-sw-decoders");
+        }
+        player.set_property_from_str("flags", &flags);
+        player.connect("element-setup", false, |values| {
+            if let Ok(element) = values[1].get::<gst::Element>()
+                && element.find_property("max-threads").is_some()
+            {
+                element.set_property_from_str("max-threads", "2");
+            }
+            None
+        });
         if settings.silent {
             let audio = gst::ElementFactory::make("fakesink")
                 .property("sync", true)
@@ -149,12 +184,23 @@ impl Engine {
             epoch: 0,
             playing: false,
             ended: false,
+            frames_sent: 0,
+            origin_ms: 0,
+            position_ms: settings.start_ms,
+            duration_ms: settings.duration_ms,
+            stream_start_ms,
         })
     }
 
     fn pump(&mut self, settings: &Settings, output: &mut impl Write) -> Result<()> {
         self.player.set_state(gst::State::Paused).map_err(message)?;
         self.wait_ready()?;
+        let first = self
+            .sink
+            .try_pull_preroll(gst::ClockTime::from_seconds(5))
+            .ok_or("No initial video preroll")?;
+        self.origin_ms = stream_time(&first).ok_or("Initial video timestamp unavailable")? as i64
+            - self.stream_start_ms as i64;
         if settings.stream as i32 >= self.player.property::<i32>("n-video") {
             return Err("Selected video stream unavailable".into());
         }
@@ -261,15 +307,8 @@ impl Engine {
     fn update(&self, time: Option<u64>, ended: bool) -> Update {
         Update {
             epoch: self.epoch,
-            position_ms: time.unwrap_or_else(|| {
-                self.player
-                    .query_position::<gst::ClockTime>()
-                    .map_or(0, |time| time.mseconds())
-            }),
-            duration_ms: self
-                .player
-                .query_duration::<gst::ClockTime>()
-                .map_or(0, |time| time.mseconds()),
+            position_ms: time.unwrap_or(self.position_ms),
+            duration_ms: self.duration_ms,
             playing: self.playing,
             ended,
             width: 0,
@@ -279,7 +318,7 @@ impl Engine {
         }
     }
 
-    fn frame(&self, sample: gst::Sample, output: &mut impl Write) -> Result<()> {
+    fn frame(&mut self, sample: gst::Sample, output: &mut impl Write) -> Result<()> {
         let buffer = sample.buffer().ok_or("Missing video buffer")?;
         let info =
             gstreamer_video::VideoInfo::from_caps(sample.caps().ok_or("Missing video caps")?)
@@ -292,7 +331,7 @@ impl Engine {
         if size > clip_media_protocol::playback::MAX_FRAME_BYTES {
             return Err("Playback frame exceeds budget".into());
         }
-        let stride = usize::try_from(info.stride()[0]).map_err(message)?;
+        let stride = usize::try_from(frame.plane_stride()[0]).map_err(message)?;
         let plane = frame.plane_data(0).map_err(message)?;
         let mut pixels = Vec::with_capacity(size);
         for row in 0..height as usize {
@@ -302,21 +341,27 @@ impl Engine {
                     .ok_or("Incomplete video plane")?,
             );
         }
-        let time = buffer
-            .pts()
-            .and_then(|pts| {
-                sample
-                    .segment()?
-                    .downcast_ref::<gst::ClockTime>()?
-                    .to_stream_time(pts)
-            })
-            .map(|time| time.mseconds());
+        let time = stream_time(&sample).map(|time| (time as i64 - self.origin_ms).max(0) as u64);
+        if let Some(time) = time {
+            self.position_ms = time;
+        }
         let mut update = self.update(time, false);
         update.width = width;
         update.height = height;
         update.bytes = pixels.len();
-        update.write(&pixels, output).map_err(message)
+        update.write(&pixels, output).map_err(message)?;
+        self.frames_sent += 1;
+        Ok(())
     }
+}
+
+fn stream_time(sample: &gst::Sample) -> Option<u64> {
+    let pts = sample.buffer()?.pts()?;
+    sample
+        .segment()?
+        .downcast_ref::<gst::ClockTime>()?
+        .to_stream_time(pts)
+        .map(|time| time.mseconds())
 }
 
 impl Drop for Engine {

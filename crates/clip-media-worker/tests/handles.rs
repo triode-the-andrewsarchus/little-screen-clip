@@ -712,6 +712,7 @@ mod playback {
                 height: 180,
                 fps: 20,
                 start_ms: 1200,
+                duration_ms: 3000,
                 silent: true,
             };
             let mut child = command(
