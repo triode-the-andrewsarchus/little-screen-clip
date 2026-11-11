@@ -9,6 +9,7 @@ Usage:
 
 import os
 import sys
+import tempfile
 import time
 
 # Auto-reexec inside little-screen-clip venv if onnxruntime is not in current environment
@@ -63,38 +64,53 @@ def ensure_model_path(model_arg: str | None, model_url: str | None = None) -> st
             target_urls.append(default_url)
 
     for url in target_urls:
+        temporary_path = None
+        deadline = time.monotonic() + 600
         try:
             req = urllib.request.Request(
                 url,
                 headers={"User-Agent": "little-screen-clip/1.0"},
             )
-            with urllib.request.urlopen(req) as resp, open(model_path + ".tmp", "wb") as out_file:
+            with (
+                urllib.request.urlopen(req, timeout=30) as resp,
+                tempfile.NamedTemporaryFile(
+                    dir=MODEL_CACHE_DIR, prefix=DEFAULT_MODEL_NAME + ".", suffix=".tmp", delete=False
+                ) as out_file,
+            ):
+                temporary_path = out_file.name
                 total_bytes = int(resp.headers.get("Content-Length", 0))
                 downloaded = 0
-                last_report = time.time()
+                last_report = time.monotonic()
                 while True:
-                    chunk = resp.read(65536)
+                    chunk = resp.read1(65536)
+                    now = time.monotonic()
+                    if now >= deadline:
+                        raise TimeoutError("LaMa model download exceeded ten minutes")
                     if not chunk:
                         break
                     out_file.write(chunk)
                     downloaded += len(chunk)
-                    now = time.time()
                     if total_bytes > 0 and now - last_report > 1.0:
                         pct = (downloaded / total_bytes) * 100.0
                         sys.stderr.write(f"Downloading: {pct:.1f}% ({downloaded // (1024*1024)}MB / {total_bytes // (1024*1024)}MB)\n")
                         sys.stderr.flush()
                         last_report = now
 
-            os.replace(model_path + ".tmp", model_path)
+                if total_bytes and downloaded != total_bytes:
+                    raise OSError(f"Incomplete LaMa download: {downloaded} of {total_bytes} bytes")
+
+            os.replace(temporary_path, model_path)
+            temporary_path = None
             sys.stderr.write("Model download complete.\n")
             sys.stderr.flush()
             return model_path
         except Exception as err:
             sys.stderr.write(f"Warning: Failed downloading from {url}: {err}\n")
             sys.stderr.flush()
-            if os.path.exists(model_path + ".tmp"):
+        finally:
+            if temporary_path is not None:
                 try:
-                    os.remove(model_path + ".tmp")
+                    os.unlink(temporary_path)
                 except OSError:
                     pass
 
