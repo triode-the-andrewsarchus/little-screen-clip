@@ -68,3 +68,11 @@ construction, initial preroll and bus handling. The embedded UI likewise separat
 keyboard shortcuts and transport controls. These are phases of the shared player,
 not parallel playback backends. The existing worker/reference suite passes after
 the backend extraction; the host check remains warning-free.
+
+- [x] Preserve preview-sized GPU transfer for supported HEVC/large H.264.
+  The GStreamer CUDA graph reduces/converts before download; a real HEVC
+  fixture negotiated NV12 1280×720 to RGBA 320×180 on CUDA and delivered the
+  expected source frame. Unknown/non-4:2:0 source formats select software
+  before CUDA elements are built. Hiding CUDA devices exposed a factory-load
+  failure before preroll; initialization now retries software as well as
+  preroll failures, and the same fixture still delivers a valid frame.

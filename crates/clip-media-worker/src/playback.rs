@@ -18,6 +18,7 @@ struct Source {
     file: File,
     start_ms: u64,
     software: bool,
+    gpu_scale: bool,
 }
 impl Source {
     fn open(mut file: File, settings: &Settings) -> Result<Self> {
@@ -61,11 +62,16 @@ impl Source {
         let start_ms =
             ((number(&stream["start_time"]).unwrap_or(container_start) - container_start).max(0.0)
                 * 1000.0) as u64;
-        let software = stream["codec_name"] == "h264" && width * height <= 1920 * 1080;
+        let cuda_codec = matches!(stream["codec_name"].as_str(), Some("h264" | "hevc"));
+        let cuda_format = stream["cuda_420"].as_bool().unwrap_or(false);
+        let small_h264 = stream["codec_name"] == "h264" && width * height <= 1920 * 1080;
+        let software = small_h264 || (cuda_codec && !cuda_format);
+        let gpu_scale = cuda_codec && cuda_format && !software;
         Ok(Self {
             file,
             start_ms,
             software,
+            gpu_scale,
         })
     }
 }
@@ -74,15 +80,23 @@ pub(crate) fn run(file: File, settings: Settings) -> Result<()> {
     validate(&settings)?;
     let mut source = Source::open(file, &settings)?;
     gst::init().map_err(message)?;
-    let mut engine = Engine::new(&source.file, &settings, source.software, source.start_ms)?;
+    let mut software = source.software;
+    let mut engine = Engine::new(&source, &settings, software).or_else(|error| {
+        if software {
+            Err(error)
+        } else {
+            software = true;
+            Engine::new(&source, &settings, true)
+        }
+    })?;
     let mut output = std::io::BufWriter::new(std::io::stdout().lock());
     let mut result = engine.pump(&settings, &mut output);
-    if result.is_err() && !source.software && engine.frames_sent == 0 {
+    if result.is_err() && !software && engine.frames_sent == 0 {
         // A hardware decoder that cannot preroll must not prevent CPU playback.
         // No control commands are consumed until the first frame is delivered.
         drop(engine);
         source.file.rewind().map_err(message)?;
-        engine = Engine::new(&source.file, &settings, true, source.start_ms)?;
+        engine = Engine::new(&source, &settings, true)?;
         result = engine.pump(&settings, &mut output);
     }
     if let Err(error) = &result {
@@ -123,15 +137,18 @@ struct Engine {
 }
 
 impl Engine {
-    fn new(file: &File, settings: &Settings, software: bool, stream_start_ms: u64) -> Result<Self> {
-        let (video, sink) = video_sink(settings)?;
+    fn new(source: &Source, settings: &Settings, software: bool) -> Result<Self> {
+        let (video, sink) = video_sink(settings, source.gpu_scale && !software)?;
         let player = gst::ElementFactory::make("playbin")
             .build()
             .map_err(message)?;
         // filesrc supports pull-mode indexing needed by MXF and other seek-heavy
         // demuxers. The descriptor-backed view still names this retained inode,
         // never the original pathname; fdsrc only supplies push-mode reads.
-        player.set_property("uri", format!("file:///proc/self/fd/{}", file.as_raw_fd()));
+        player.set_property(
+            "uri",
+            format!("file:///proc/self/fd/{}", source.file.as_raw_fd()),
+        );
         player.set_property("video-sink", &video);
         let mut flags = if settings.silent {
             "video+deinterlace".to_owned()
@@ -167,7 +184,7 @@ impl Engine {
             origin_ms: 0,
             position_ms: settings.start_ms,
             duration_ms: settings.duration_ms,
-            stream_start_ms,
+            stream_start_ms: source.start_ms,
         })
     }
 
@@ -342,7 +359,7 @@ impl Engine {
     }
 }
 
-fn video_sink(settings: &Settings) -> Result<(gst::Bin, gstreamer_app::AppSink)> {
+fn video_sink(settings: &Settings, gpu: bool) -> Result<(gst::Bin, gstreamer_app::AppSink)> {
     let sink = gstreamer_app::AppSink::builder()
         .caps(
             &gst::Caps::builder("video/x-raw")
@@ -374,18 +391,55 @@ fn video_sink(settings: &Settings) -> Result<(gst::Bin, gstreamer_app::AppSink)>
         .collect::<Result<Vec<_>>>()?;
     filters[0].set_property_from_str("video-direction", "auto");
     filters[3].set_property("drop-only", true);
-    video.add_many(&filters).map_err(message)?;
+    let mut pipeline = gpu_filters(settings, gpu)?;
+    pipeline.extend(filters);
+    video.add_many(&pipeline).map_err(message)?;
     video.add(&sink).map_err(message)?;
-    gst::Element::link_many(&filters).map_err(message)?;
-    filters[3].link(&sink).map_err(message)?;
+    gst::Element::link_many(&pipeline).map_err(message)?;
+    pipeline
+        .last()
+        .ok_or("Missing video filters")?
+        .link(&sink)
+        .map_err(message)?;
     let pad = gst::GhostPad::with_target(
-        &filters[0]
+        &pipeline[0]
             .static_pad("sink")
             .ok_or("Missing video sink pad")?,
     )
     .map_err(message)?;
     video.add_pad(&pad).map_err(message)?;
     Ok((video, sink))
+}
+
+fn gpu_filters(settings: &Settings, enabled: bool) -> Result<Vec<gst::Element>> {
+    let factories = ["cudaupload", "cudaconvertscale", "cudadownload"];
+    if !enabled
+        || !factories
+            .iter()
+            .all(|name| gst::ElementFactory::find(name).is_some())
+    {
+        return Ok(Vec::new());
+    }
+    let mut filters = factories
+        .map(|name| gst::ElementFactory::make(name).build().map_err(message))
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    let caps = gst::Caps::builder("video/x-raw")
+        .features(["memory:CUDAMemory"])
+        .field("format", "RGBA")
+        .field("width", gst::IntRange::<i32>::new(1, settings.width as i32))
+        .field(
+            "height",
+            gst::IntRange::<i32>::new(1, settings.height as i32),
+        )
+        .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
+        .build();
+    let cap = gst::ElementFactory::make("capsfilter")
+        .property("caps", caps)
+        .build()
+        .map_err(message)?;
+    filters.insert(2, cap);
+    Ok(filters)
 }
 
 fn stream_time(sample: &gst::Sample) -> Option<u64> {

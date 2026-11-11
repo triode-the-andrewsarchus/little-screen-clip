@@ -162,6 +162,16 @@ fn stream_metadata(stream: ffmpeg::Stream<'_>) -> serde_json::Value {
     } else if medium == "video" {
         value["width"] = raw.width.into();
         value["height"] = raw.height.into();
+        // Conservative formats accepted before initializing CUDA playback.
+        // Unknown/4:2:2/4:4:4 formats retain the software path.
+        value["cuda_420"] = [
+            ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P as i32,
+            ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_NV12 as i32,
+            ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P10LE as i32,
+            ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_P010LE as i32,
+        ]
+        .contains(&raw.format)
+        .into();
     }
     value
 }
