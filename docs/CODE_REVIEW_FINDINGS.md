@@ -399,8 +399,8 @@ touches the host clipboard or USB display unless explicitly stated.
   2. `urllib.request.urlopen(req)` (line 71) has no `timeout=` argument and writes to a fixed `model_path + ".tmp"` path without a PID/unique suffix.
 - [ ] **[Bug / Advertised Flag Not Implemented in `scripts/depth_estimation.py`]**:
   [`scripts/depth_estimation.py`](file:///home/vcarlson/little-screen-clip/scripts/depth_estimation.py#L7) documents `[--colormap {gray,inferno,turbo}]` in its usage docstring, but [`main()`](file:///home/vcarlson/little-screen-clip/scripts/depth_estimation.py#L37-L44) never registers `--colormap` on `ArgumentParser`.
-- [ ] **[Code Quality / Minor Issues in `launch.sh` and `scripts/`]**:
-  - [ ] In [`launch.sh`](file:///home/vcarlson/little-screen-clip/launch.sh#L13-L17), `BIN_DIR` selects `target/release` if *either* `little-clipd` *or* `clip-workbench` exists in `target/release` (e.g. after a partial `cargo build --release --bin clip-file-manager` in `run_file_manager` on line 367), which leaves `DAEMON_BIN` or `CLIPCTL_BIN` pointing to non-existent release binaries during `./launch.sh reload` or `./launch.sh status`.
+- [x] **[Code Quality / Minor Issues in `launch.sh` and `scripts/`]**:
+  - [x] `launch.sh` now selects an executable release or debug build separately for each binary. An isolated launcher test verified that `reload` and `status` use debug `clipctl` when only the workbench has a release build, prefer release `clipctl` when executable, and that `reload` still reports a missing build when neither copy is executable.
   - [x] [`scripts/ocr.py`](file:///home/vcarlson/little-screen-clip/scripts/ocr.py) unused imports `import types` and `import importlib.machinery` *(removed in `1e3631f`)*.
   - [x] Orphaned bytecode file `scripts/__pycache__/download_raw_samples.cpython-314.pyc` in `scripts/__pycache__/` *(deleted in `1e3631f`)*.
 

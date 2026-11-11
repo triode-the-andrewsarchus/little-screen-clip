@@ -9,16 +9,20 @@ cd "$SCRIPT_DIR"
 
 PID_FILE="$SCRIPT_DIR/.little-clipd.pid"
 LOG_FILE="$SCRIPT_DIR/little-clipd.log"
-# Prefer release build if available, otherwise fallback to debug
-if [ -x "$SCRIPT_DIR/target/release/little-clipd" ] || [ -x "$SCRIPT_DIR/target/release/clip-workbench" ]; then
-    BIN_DIR="$SCRIPT_DIR/target/release"
-else
-    BIN_DIR="$SCRIPT_DIR/target/debug"
-fi
-DAEMON_BIN="$BIN_DIR/little-clipd"
-CLIPCTL_BIN="$BIN_DIR/clipctl"
-WORKBENCH_BIN="$BIN_DIR/clip-workbench"
-TEST_BIN="$BIN_DIR/test_screen"
+# Partial builds can leave different binaries available in different profiles.
+function workspace_binary() {
+    local binary="$1"
+    local release="$SCRIPT_DIR/target/release/$binary"
+    if [ -x "$release" ]; then
+        printf '%s\n' "$release"
+    else
+        printf '%s\n' "$SCRIPT_DIR/target/debug/$binary"
+    fi
+}
+
+DAEMON_BIN=$(workspace_binary little-clipd)
+CLIPCTL_BIN=$(workspace_binary clipctl)
+WORKBENCH_BIN=$(workspace_binary clip-workbench)
 
 SOCKET_PATH="${XDG_RUNTIME_DIR:-/tmp}/little-screen-clip.sock"
 SYSTEMD_SERVICE_NAME="little-screen-clip.service"
@@ -230,11 +234,9 @@ function build_if_needed() {
         ensure_dependencies
         echo -e "${BLUE}Building workspace binaries (release mode)...${NC}"
         python3 "$SCRIPT_DIR/scripts/build_workspace.py"
-        BIN_DIR="$SCRIPT_DIR/target/release"
-        DAEMON_BIN="$BIN_DIR/little-clipd"
-        CLIPCTL_BIN="$BIN_DIR/clipctl"
-        WORKBENCH_BIN="$BIN_DIR/clip-workbench"
-        TEST_BIN="$BIN_DIR/test_screen"
+        DAEMON_BIN=$(workspace_binary little-clipd)
+        CLIPCTL_BIN=$(workspace_binary clipctl)
+        WORKBENCH_BIN=$(workspace_binary clip-workbench)
     fi
 }
 
@@ -359,10 +361,8 @@ function run_file_manager() {
     ensure_dependencies
     "$SCRIPT_DIR/scripts/build_timelens.sh"
     "$SCRIPT_DIR/scripts/build_video_strip.sh"
-    local file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
-    if [ ! -x "$file_manager_bin" ]; then
-        file_manager_bin="$SCRIPT_DIR/target/debug/clip-file-manager"
-    fi
+    local file_manager_bin
+    file_manager_bin=$(workspace_binary clip-file-manager)
     if [ ! -x "$file_manager_bin" ]; then
         cargo build --release --bin clip-file-manager
         file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
