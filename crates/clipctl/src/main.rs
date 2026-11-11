@@ -39,11 +39,15 @@ enum Commands {
     Undo,
     /// Clear a slot
     Clear { slot: String },
-    /// Execute an operation on Left Hand (and optional secondary slot, e.g. Right Hand)
+    /// Execute an operation on the Left Hand or on explicitly selected slots
     Op {
         name: String,
-        #[arg(short, long)]
-        slot: Option<String>,
+        /// Secondary operand when the Left Hand is the primary operand
+        #[arg(short, long, value_parser = parse_slot_str, conflicts_with = "slots")]
+        slot: Option<SlotId>,
+        /// Comma-separated input slots, in the order the operation should use them
+        #[arg(long, value_delimiter = ',', value_parser = parse_slot_str)]
+        slots: Vec<SlotId>,
         #[arg(long)]
         sep: Option<String>,
     },
@@ -221,18 +225,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let s = parse_slot_str(&slot)?;
             IpcRequest::Clear(s)
         }
-        Commands::Op { name, slot, sep } => {
-            let secondary_slot = match slot {
-                Some(ref s) => Some(parse_slot_str(s)?),
-                None => None,
-            };
-            IpcRequest::ExecuteOp {
-                op_name: name,
-                secondary_slot,
-                selected_slots: None,
-                separator: sep,
-            }
-        }
+        Commands::Op {
+            name,
+            slot,
+            slots,
+            sep,
+        } => IpcRequest::ExecuteOp {
+            op_name: name,
+            secondary_slot: slot,
+            selected_slots: (!slots.is_empty()).then_some(slots),
+            separator: sep,
+        },
         Commands::Recipe { action } => match action {
             RecipeAction::List => IpcRequest::ListRecipes,
             RecipeAction::Run { name } => IpcRequest::ExecuteRecipe { recipe_name: name },
@@ -421,6 +424,26 @@ use little_clip_core::ipc::socket_path as get_socket_path;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn op_accepts_ordered_slots_and_rejects_ambiguous_operands() {
+        let cli =
+            Cli::try_parse_from(["clipctl", "op", "concat", "--slots", "l3,right,left"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Op { slot: None, slots, .. }
+                if slots == [SlotId::LeftPrior3, SlotId::RightHand, SlotId::LeftHand]
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "clipctl", "op", "concat", "--slot", "right", "--slots", "left,l1",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["clipctl", "op", "concat", "--slots", "left,unknown"]).is_err()
+        );
+    }
 
     #[tokio::test]
     async fn ipc_request_reports_peer_closure_instead_of_silent_success() {
