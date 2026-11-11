@@ -196,7 +196,7 @@ impl WorkbenchApp {
             .palette_ops
             .as_ref()
             .filter(|(key, _)| key.matches(self))
-            .map(|(_, ops)| ops.as_slice())
+            .map(|(_, discovery)| discovery.operations.as_slice())
             .unwrap_or_default();
         for op in ops {
             if q.is_empty()

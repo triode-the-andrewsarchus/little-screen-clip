@@ -746,7 +746,7 @@ fn palette_mouse_click_dispatches_the_rendered_operation_or_recipe() {
 
     for label in [operation.label(), recipe_name] {
         let ctx = egui::Context::default();
-        let mut frame = |events| {
+        let frame = |events| {
             let mut clicked = None;
             let output = ctx.run(
                 egui::RawInput {

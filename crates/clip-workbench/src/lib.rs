@@ -81,7 +81,10 @@ pub use shell::*;
 use spreadsheet_view::SpreadsheetViewerState;
 use text_preview::{TextPreviewData, TextPreviewState};
 pub use ui_ext::*;
-use workbench::{ClipboardSelection, DaemonMutation, DaemonMutationKind, MirrorJob, PaletteOpsJob};
+use workbench::{
+    ClipboardSelection, DaemonMutation, DaemonMutationKind, MirrorJob, PaletteDiscovery,
+    PaletteOpsJob,
+};
 
 /// Primary navigation view tabs in the desktop workbench.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -596,7 +599,7 @@ struct WorkbenchApp {
     mirror_animated: bool,
     native_mirror_mode: Option<shell::native_mirror::MirrorPresentation>,
     native_mirror_data: Option<shell::native_mirror::NativeMirrorData>,
-    palette_ops: Option<(ClipboardSelection, Vec<OpDescriptor>)>,
+    palette_ops: Option<(ClipboardSelection, PaletteDiscovery)>,
     palette_ops_job: Option<PaletteOpsJob>,
     ui_palette: AppPalette,
     mirror_texture: Option<egui::TextureHandle>,

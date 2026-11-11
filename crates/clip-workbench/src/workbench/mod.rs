@@ -6,7 +6,7 @@ mod actions;
 mod daemon_actions;
 pub(super) use daemon_actions::{DaemonMutation, DaemonMutationKind, action_result};
 mod background;
-pub(super) use background::{ClipboardSelection, MirrorJob, PaletteOpsJob};
+pub(super) use background::{ClipboardSelection, MirrorJob, PaletteDiscovery, PaletteOpsJob};
 mod appearance;
 mod header;
 mod image_sessions;

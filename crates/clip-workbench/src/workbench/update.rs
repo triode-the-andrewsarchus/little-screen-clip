@@ -189,34 +189,7 @@ impl eframe::App for WorkbenchApp {
                             }
                         }
 
-                        let has_two_images = if self.selected_slots.len() >= 2 {
-                            let img_count = self
-                                .selected_slots
-                                .iter()
-                                .filter_map(|s| self.state.get(*s))
-                                .filter(|it| !is_large_text_payload(it))
-                                .filter(|it| resolve_diff_target(it).map(|t| t.is_image()).unwrap_or(false))
-                                .count();
-                            img_count >= 2
-                                || self.selected_slots.iter().any(|s| {
-                                    self.state
-                                        .get(*s)
-                                        .filter(|it| !is_large_text_payload(it))
-                                        .and_then(|it| resolve_diff_pair(it))
-                                        .map(|(t1, t2)| t1.is_image() && t2.is_image())
-                                        .unwrap_or(false)
-                                  })
-                        } else if self.selected_slots.len() == 1 {
-                            self.state
-                                .get(self.selected_slots[0])
-                                .filter(|it| !is_large_text_payload(it))
-                                .and_then(|it| resolve_diff_pair(it))
-                                .map(|(t1, t2)| t1.is_image() && t2.is_image())
-                                .unwrap_or(false)
-                        } else {
-                            false
-                        };
-                        if has_two_images {
+                        if self.can_compare_selected_images() {
                             ui.add_space(crate::ui_ext::SPACE_SM);
                             let diff_btn = contextual_palette_action_button(
                                 Some(Icon::Diff),

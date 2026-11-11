@@ -34,7 +34,37 @@ impl ClipboardSelection {
 pub(crate) struct PaletteOpsJob {
     key: ClipboardSelection,
     pub(super) ticket: JobTicket,
-    receiver: Receiver<Result<Vec<OpDescriptor>, JobError>>,
+    receiver: Receiver<Result<PaletteDiscovery, JobError>>,
+}
+
+#[derive(Default)]
+pub(crate) struct PaletteDiscovery {
+    pub(super) operations: Vec<OpDescriptor>,
+    pub(super) can_compare_images: bool,
+}
+
+impl PaletteDiscovery {
+    fn from_items(items: &[&ClipItem]) -> Self {
+        let mut eligible = items
+            .iter()
+            .copied()
+            .filter(|item| !is_large_text_payload(item));
+        let can_compare_images = (items.len() >= 2
+            && eligible
+                .clone()
+                .filter(|item| resolve_diff_target(item).is_some_and(|target| target.is_image()))
+                .take(2)
+                .count()
+                == 2)
+            || eligible.any(|item| {
+                resolve_diff_pair(item)
+                    .is_some_and(|(left, right)| left.is_image() && right.is_image())
+            });
+        Self {
+            operations: get_applicable_ops(items),
+            can_compare_images,
+        }
+    }
 }
 
 type MirrorImage = (
@@ -72,7 +102,7 @@ impl WorkbenchApp {
                         Err(JobError::QueueFull) => {}
                         Err(error) => {
                             self.set_status_message(format!("Could not prepare actions: {error}"));
-                            self.palette_ops = Some((job.key.clone(), Vec::new()));
+                            self.palette_ops = Some((job.key.clone(), PaletteDiscovery::default()));
                         }
                     }
                     ctx.request_repaint();
@@ -102,7 +132,7 @@ impl WorkbenchApp {
                         .iter()
                         .filter_map(|slot| state.get(*slot))
                         .collect::<Vec<_>>();
-                    let result = get_applicable_ops(&items);
+                    let result = PaletteDiscovery::from_items(&items);
                     repaint.request_repaint();
                     result
                 });
@@ -113,6 +143,12 @@ impl WorkbenchApp {
             });
         }
         ctx.request_repaint_after(Duration::from_millis(40));
+    }
+
+    pub(crate) fn can_compare_selected_images(&self) -> bool {
+        self.palette_ops
+            .as_ref()
+            .is_some_and(|(key, result)| key.matches(self) && result.can_compare_images)
     }
 
     pub(crate) fn update_mirror_texture(&mut self, ctx: &egui::Context) {
@@ -243,7 +279,11 @@ mod tests {
         ready_palette_actions(&mut app);
         let (key, actual) = app.palette_ops.as_ref().unwrap();
         assert_eq!(
-            actual.iter().map(|op| op.name).collect::<Vec<_>>(),
+            actual
+                .operations
+                .iter()
+                .map(|op| op.name)
+                .collect::<Vec<_>>(),
             expected.iter().map(|op| op.name).collect::<Vec<_>>()
         );
         let snapshot = Arc::clone(&key.state);
@@ -259,11 +299,43 @@ mod tests {
     }
 
     #[test]
+    fn image_comparison_availability_reuses_discovery_until_selection_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let left = dir.path().join("left.png");
+        let right = dir.path().join("right.png");
+        let image = image::RgbaImage::new(1, 1);
+        image.save(&left).unwrap();
+        image.save(&right).unwrap();
+
+        let mut app = test_workbench_app(None, VecDeque::new());
+        Arc::make_mut(&mut app.state).push_left(ClipItem::from_text(format!(
+            "{}\n{}",
+            left.display(),
+            right.display()
+        )));
+        assert!(!app.can_compare_selected_images());
+        ready_palette_actions(&mut app);
+        assert!(app.can_compare_selected_images());
+
+        // Changing search text or drawing another frame does not reopen either file.
+        std::fs::remove_file(&right).unwrap();
+        app.search_query = "no matching actions".into();
+        ready_palette_actions(&mut app);
+        assert!(app.can_compare_selected_images());
+
+        app.selected_slots = vec![SlotId::RightHand];
+        assert!(!app.can_compare_selected_images());
+        ready_palette_actions(&mut app);
+        assert!(!app.can_compare_selected_images());
+    }
+
+    #[test]
     fn selection_change_discards_a_queued_action_result() {
         let mut app = test_workbench_app(None, VecDeque::new());
         Arc::make_mut(&mut app.state).push_left(ClipItem::from_text("text"));
         let key = ClipboardSelection::new(&app);
-        let (_jobs, release, ticket, receiver) = queued_job_behind_blocker(Vec::new);
+        let (_jobs, release, ticket, receiver) =
+            queued_job_behind_blocker(PaletteDiscovery::default);
         app.palette_ops_job = Some(PaletteOpsJob {
             key,
             ticket,
@@ -273,7 +345,7 @@ mod tests {
         app.poll_palette_ops(&egui::Context::default());
         release.send(()).unwrap();
         ready_palette_actions(&mut app);
-        assert!(app.palette_ops.as_ref().unwrap().1.is_empty());
+        assert!(app.palette_ops.as_ref().unwrap().1.operations.is_empty());
         assert_eq!(
             app.palette_ops.as_ref().unwrap().0.selected,
             [SlotId::RightHand]
