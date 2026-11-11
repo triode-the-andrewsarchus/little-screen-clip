@@ -32,6 +32,16 @@ optional features are assessed separately from confirmed behavior bugs. Each con
 committed separately with its checklist update and verification. Validation never
 touches the host clipboard or USB display unless explicitly stated.
 
+### Final verification
+
+All listed findings now have a fix, verification of an earlier fix, or a documented disposition where the report did not establish a behavior bug. Deliberately retained path-backed outputs keep their existing lifetime contract; disposable caches and unpublished work have separate cleanup.
+
+- `cargo test --offline -j 2 --workspace -- --test-threads=1`: **2,792 passed, zero failed, 31 ignored**, including doctests. Ignored cases are explicit GPU/model, private-namespace, fixture, integration or benchmark checks; this run does not claim those were exercised.
+- `cargo fmt --all --check` and `git diff --check`: passed.
+- Isolated script checks passed for truncated-download retry, socket timeout retry, the per-source download deadline, preservation of another writer's staging file, partial-profile launcher selection and depth CLI help. These used fake network responses, model-import stubs and copied launchers with fake binaries; no model download, host clipboard publication or USB operation was performed.
+
+Earlier `/tmp/review-*.log` references below record historical verification and may no longer exist after temporary-directory cleanup. The final workspace run re-exercised the current default Rust suites; historical opt-in/model observations remain identified separately.
+
 ## Findings by Section
 
 ### 1. `crates/little-clip-driver`
@@ -368,7 +378,7 @@ touches the host clipboard or USB display unless explicitly stated.
 - [x] **[Bug / Redundant LibreOffice/Pandoc Invocation & Leaked `workspace_dir` on Cancelled Office Document Load (`viewers.rs`)]**:
   In [`crates/clip-file-manager/src/file_manager/viewers.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-file-manager/src/file_manager/viewers.rs#L755-L775), `load()` for `Kind::OfficeDoc` had the same two issues found in `workbench/loaders.rs`:
   - [x] 1. Redundant second `render_to_pdf` call eliminated via shared `little_clip_core::document::prepare_office_preview` *(completed in `d1079f9`)*.
-  - [x] 2. Both desktop hosts now move the shared `ArtifactLease` from conversion through the worker result into the PDF viewer. Dropping an undelivered result or closing an accepted viewer releases the staged directory. A real RTF-to-PDF regression verifies that dropping the receiver with a queued preview deletes the workspace. All 11 core document tests, the Office viewer test in each desktop host, and the workspace all-targets check passed.
+  - [x] 2. Both desktop hosts now move the shared `TemporaryWorkspace` from conversion through the worker result into the PDF viewer. Dropping an undelivered result or closing an accepted viewer releases the staged directory. A real RTF-to-PDF regression verifies that dropping the receiver with a queued preview deletes the workspace. All 11 core document tests, the Office viewer test in each desktop host, and the workspace all-targets check passed.
 - [x] **[Bug / Missing Search `PreviewContext` Guard on Gallery Cache Re-Request and Hover]**:
   - [x] Gallery cache retries previously skipped the published search source check at an already-requested resolution. Initial requests, upgrades, and retries now share one checked source. The regression invalidates the cached preview while retaining its requested size and verifies that the retry still rejects an unpublished path.
   - [x] Gallery hover uses the same published search source check and retires pending and cached previews on a result-set transition. The regression verifies retirement and rejection of an unpublished path. The gallery test run passed 81 tests with three opt-in model/GPU tests skipped.
