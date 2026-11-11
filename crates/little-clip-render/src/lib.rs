@@ -251,15 +251,13 @@ impl ScreenRenderer {
     /// Converts a hex string into tiny-skia `Color`.
     #[inline]
     pub fn color_from_hex(&self, hex: &str) -> Color {
-        let (r, g, b, a) = parse_hex_color(hex);
-        Color::from_rgba8(r, g, b, a)
+        Self::hex_to_color(hex)
     }
 
     /// Converts a hex string into tiny-skia `Color` with custom alpha channel.
     #[inline]
     pub fn color_from_hex_alpha(&self, hex: &str, alpha: u8) -> Color {
-        let (r, g, b, _) = parse_hex_color(hex);
-        Color::from_rgba8(r, g, b, alpha)
+        Self::hex_to_color_alpha(hex, alpha)
     }
 
     /// Converts a hex string into tiny-skia `Color`.

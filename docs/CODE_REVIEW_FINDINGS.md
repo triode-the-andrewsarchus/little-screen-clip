@@ -178,8 +178,8 @@ touches the host clipboard or USB display unless explicitly stated.
 - [x] **[Bug / Hardcoded Snippet Duration Label] `draw_audio_waveform` hardcodes `"• 30s PREVIEW OF {} •"`**:
   **Current verification:** Fixed: the existing footer now derives its seconds from `wf.snippet_duration_ms`, the same value used for the displayed range end and populated by the configured preview duration. Verified by source inspection and `cargo check -j4 -p little-clip-render`.
   In [`crates/little-clip-render/src/cards/audio.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-render/src/cards/audio.rs#L237), when `wf.is_snippet` is true, the footer badge hardcodes `"• 30s PREVIEW OF {} •"` instead of using `wf.snippet_duration_ms / 1000` (which is controlled by `config.audio.snippet_duration_sec`).
-- [ ] **[Code Quality / Duplication] Duplicate hex color methods on `ScreenRenderer`**:
-  In [`crates/little-clip-render/src/lib.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-render/src/lib.rs#L233-L257), `color_from_hex(&self, hex: &str)` and `color_from_hex_alpha(&self, hex: &str, alpha: u8)` do not use `self` and are exact duplicates of `ScreenRenderer::hex_to_color` and `ScreenRenderer::hex_to_color_alpha`.
+- [x] **[Code Quality / Duplication] Duplicate hex color methods on `ScreenRenderer`**:
+  **Current verification:** Both public call forms now use the same conversion functions, preserving parsed alpha and explicit alpha overrides. Renderer tests passed 34 with one ignored.
 
 ---
 
