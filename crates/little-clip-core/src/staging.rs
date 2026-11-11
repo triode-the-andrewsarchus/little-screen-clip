@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub(crate) mod cache;
 mod workspace;
 pub use workspace::TemporaryWorkspace;
 pub(crate) use workspace::retain_source_workspace;

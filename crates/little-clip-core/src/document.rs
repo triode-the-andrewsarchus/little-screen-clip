@@ -4,10 +4,8 @@
 //! for DOCX, DOC, ODT, RTF, and related document formats.
 
 use crate::process::CommandRequest;
-use crate::staging::{ArtifactStore, dirs_or_fallback_cache};
-use sha2::{Digest, Sha256};
+use crate::staging::ArtifactStore;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
 /// Returns `true` if the path has a supported office document extension.
 pub fn is_office_document(path: &Path) -> bool {
@@ -97,80 +95,8 @@ pub fn is_office_mime(mime: &str) -> bool {
     )
 }
 
-/// Ensures an office document has been converted to a cached PDF, returning the cached PDF path.
-///
-/// Conversion results are cached based on the input path, size, and modification timestamp.
-/// Subsequent requests for an unchanged document return the cached PDF immediately.
-pub fn ensure_rendered_pdf(input: &Path) -> Result<PathBuf, String> {
-    crate::kernel_interface::require_content(input).map_err(|e| e.to_string())?;
-    let metadata =
-        std::fs::metadata(input).map_err(|e| format!("Could not read document metadata: {e}"))?;
-    if !metadata.is_file() {
-        return Err("Office document path is not a regular file".to_string());
-    }
-
-    let path_str = input
-        .canonicalize()
-        .unwrap_or_else(|_| input.to_path_buf())
-        .to_string_lossy()
-        .to_string();
-    let mtime = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let size = metadata.len();
-
-    let mut hasher = Sha256::new();
-    hasher.update(path_str.as_bytes());
-    hasher.update(&mtime.to_le_bytes());
-    hasher.update(&size.to_le_bytes());
-    let hash_hex = format!("{:x}", hasher.finalize());
-
-    let cache_dir = dirs_or_fallback_cache()
-        .join("little-screen-clip")
-        .join("office_previews");
-    let _ = std::fs::create_dir_all(&cache_dir);
-
-    let cached_pdf = cache_dir.join(format!("{hash_hex}.pdf"));
-    if cached_pdf.exists()
-        && std::fs::metadata(&cached_pdf)
-            .map(|m| m.len() > 0)
-            .unwrap_or(false)
-    {
-        return Ok(cached_pdf);
-    }
-
-    // Render to a temporary file in the cache directory, then atomically rename
-    let tmp_pdf = cache_dir.join(format!("{hash_hex}_{}.tmp", Uuid::new_v4()));
-    if let Err(e) = render_to_pdf(input, &tmp_pdf) {
-        let _ = std::fs::remove_file(&tmp_pdf);
-        return Err(e);
-    }
-
-    if !tmp_pdf.exists()
-        || std::fs::metadata(&tmp_pdf)
-            .map(|m| m.len() == 0)
-            .unwrap_or(true)
-    {
-        let _ = std::fs::remove_file(&tmp_pdf);
-        return Err("PDF rendering produced an empty or missing output file".to_string());
-    }
-
-    let _ = std::fs::rename(&tmp_pdf, &cached_pdf);
-    if cached_pdf.exists()
-        && std::fs::metadata(&cached_pdf)
-            .map(|m| m.len() > 0)
-            .unwrap_or(false)
-    {
-        Ok(cached_pdf)
-    } else if tmp_pdf.exists() {
-        Ok(tmp_pdf)
-    } else {
-        Err("Failed to install rendered PDF into cache".to_string())
-    }
-}
+mod cache;
+pub use cache::{RenderedPdf, ensure_rendered_pdf};
 
 /// Attempts to render an office document into a paginated PDF.
 ///
@@ -654,6 +580,6 @@ printf '%%PDF-1.4\nfixture\n' > "$outdir/converted.pdf"
 
         // A second call should return the exact same cached path without re-rendering
         let second_call = ensure_rendered_pdf(&docx_path).expect("ensure_rendered_pdf second call");
-        assert_eq!(cached_pdf, second_call);
+        assert_eq!(cached_pdf.as_path(), second_call.as_path());
     }
 }

@@ -4,14 +4,11 @@ use crate::file_source::FileSource;
 use std::{
     hash::{Hash, Hasher},
     io::Cursor,
-    os::fd::AsRawFd,
-    path::{Path, PathBuf},
-    sync::Mutex,
+    path::PathBuf,
 };
 
-const CACHE_BYTES: u64 = 512 * 1024 * 1024;
-const SWEEP_AFTER_BYTES: u64 = 32 * 1024 * 1024;
-static BYTES_SINCE_SWEEP: Mutex<Option<u64>> = Mutex::new(None);
+static BUDGET: crate::staging::cache::CacheBudget =
+    crate::staging::cache::CacheBudget::new(512 * 1024 * 1024);
 
 pub(super) fn path(source: &FileSource, edge: u32, orientation: u8) -> Option<PathBuf> {
     let store = crate::staging::ArtifactStore::new().ok()?;
@@ -20,7 +17,7 @@ pub(super) fn path(source: &FileSource, edge: u32, orientation: u8) -> Option<Pa
     edge.hash(&mut hash);
     orientation.hash(&mut hash);
     let directory = store.base_dir().join("gallery-thumbnails-v1");
-    sweep_if_needed(&directory, 0);
+    BUDGET.maintain(&directory, 0, cache_filename);
     Some(directory.join(format!("{:016x}.png", hash.finish())))
 }
 pub(super) fn load(path: &std::path::Path) -> Option<ImageThumbnail> {
@@ -57,64 +54,16 @@ pub(super) fn save(path: &std::path::Path, thumbnail: &ImageThumbnail) {
         {
             let bytes = temporary.as_file().metadata().map_or(0, |meta| meta.len());
             if temporary.persist(path).is_ok() {
-                sweep_if_needed(parent, bytes);
+                BUDGET.maintain(parent, bytes, cache_filename);
             }
         }
     }
 }
 
-fn sweep_if_needed(directory: &Path, written: u64) {
-    let mut counter = BYTES_SINCE_SWEEP
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let written = counter.map_or(SWEEP_AFTER_BYTES, |bytes| bytes.saturating_add(written));
-    if written >= SWEEP_AFTER_BYTES {
-        let _ = sweep(directory, CACHE_BYTES);
-        *counter = Some(0);
-    } else {
-        *counter = Some(written);
-    }
-}
-
-fn sweep(directory: &Path, budget: u64) -> std::io::Result<()> {
-    let directory = crate::kernel_interface::pin_content_directory(directory)?;
-    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-    let mut candidates = Vec::new();
-    let mut total = 0u64;
-    for entry in std::fs::read_dir(&anchor)?.flatten() {
-        let name = entry.file_name();
-        let Some(key) = name.to_str().and_then(|name| name.strip_suffix(".png")) else {
-            continue;
-        };
-        if key.len() != 16 || !key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            continue;
-        }
-        // DirEntry metadata does not follow symlinks. Only committed cache
-        // images participate, so a concurrent writer's temp file is excluded.
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.is_file() {
-            total = total.saturating_add(metadata.len());
-            candidates.push((metadata.modified().ok(), name, metadata.len()));
-        }
-    }
-    if total > budget {
-        candidates.sort_unstable();
-        for (_, name, bytes) in candidates {
-            if total <= budget {
-                break;
-            }
-            match std::fs::remove_file(anchor.join(name)) {
-                Ok(()) => total = total.saturating_sub(bytes),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    total = total.saturating_sub(bytes);
-                }
-                Err(_) => {}
-            }
-        }
-    }
-    Ok(())
+fn cache_filename(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_suffix(".png"))
+        .is_some_and(|key| key.len() == 16 && key.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 #[cfg(test)]
@@ -140,7 +89,7 @@ mod tests {
         let alias = cache.join("0000000000000003.png");
         std::os::unix::fs::symlink(&other, &alias).unwrap();
 
-        sweep(&cache, 5).unwrap();
+        crate::staging::cache::sweep(&cache, 5, cache_filename).unwrap();
 
         assert!(!old.exists());
         assert!(new.exists());
