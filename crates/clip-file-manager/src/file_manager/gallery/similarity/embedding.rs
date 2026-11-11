@@ -15,7 +15,6 @@ const JITTER_FREQUENCY: f32 = 0.0001;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A generalized feature vector representation for similarity clustering.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum FeatureVector {
     /// 64-bit difference hash expanded into 64 zero-centered float coordinates.
@@ -40,7 +39,7 @@ impl FeatureVector {
     }
 
     /// Returns the dimensionality of this feature representation.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn dimension(&self) -> usize {
         match self {
             Self::DHash(_) => DHASH_DIMENSION,
@@ -137,7 +136,7 @@ pub fn project_features_to_2d(features: &[Vec<f32>], cancelled: &AtomicBool) -> 
 }
 
 /// Projects 64-bit difference hashes into continuous 2D coordinates.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn project_hashes_to_2d(hashes: &[u64]) -> Vec<(f32, f32)> {
     let features: Vec<Vec<f32>> = hashes
         .iter()

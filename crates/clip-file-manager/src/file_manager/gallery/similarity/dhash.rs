@@ -77,7 +77,7 @@ pub fn compute_dhash_from_path(path: &Path, cancelled: &AtomicBool) -> Option<u6
 }
 
 /// Computes the Hamming distance (number of differing bits) between two 64-bit hashes.
-#[allow(dead_code)]
+#[cfg(test)]
 #[inline]
 pub fn hamming_distance(a: u64, b: u64) -> u32 {
     (a ^ b).count_ones()

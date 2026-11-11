@@ -52,8 +52,6 @@ const GRID_PAN_LEFT_MARGIN: f32 = 40.0;
 pub struct CanvasGrid {
     pub id: usize,
     pub title: String,
-    #[allow(dead_code)]
-    pub query: Option<String>,
     pub reference_photo: Option<PathBuf>,
     pub is_inverted: bool,
     pub candidate_indices: Vec<usize>,
@@ -91,7 +89,7 @@ impl CanvasGrid {
     }
 
     /// Converts an internal cosine threshold to a user-facing match allowance `[0.05, 0.95]`.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn threshold_to_allowance(threshold: f32, is_inverted: bool) -> f32 {
         let t = threshold.clamp(0.01, 0.40);
         let ratio = ((t - 0.01) / 0.39).clamp(0.0, 1.0);
@@ -265,8 +263,6 @@ impl CanvasGrid {
 
 pub struct PendingSearchMeta {
     pub query: String,
-    #[allow(dead_code)]
-    pub prompt: String,
     pub is_inverted: bool,
     pub candidate_indices: Vec<usize>,
 }
@@ -383,8 +379,8 @@ impl SimilarityCanvas {
         self.clear_pending_search();
     }
 
-    /// Stores a feature vector for a path (used in tests and internal cache updates).
-    #[allow(dead_code)]
+    /// Stores a fixture feature vector for a path.
+    #[cfg(test)]
     pub fn insert_hash(&mut self, path: PathBuf, feat: FeatureVector, rev: u64) {
         self.hashes.insert(path, (feat, rev));
         self.base_placements.clear();
@@ -446,7 +442,6 @@ impl SimilarityCanvas {
 
         self.pending_search = Some(PendingSearchMeta {
             query: q,
-            prompt: prompt.clone(),
             is_inverted,
             candidate_indices,
         });
@@ -481,12 +476,6 @@ impl SimilarityCanvas {
         self.recompute_layout();
     }
 
-    /// Alias for clear_all_searches.
-    #[allow(dead_code)]
-    pub fn clear_search(&mut self) {
-        self.clear_all_searches();
-    }
-
     /// Removes a search grid by ID. Base grid (id 0) cannot be removed.
     pub fn remove_grid(&mut self, id: usize) {
         if id == 0 {
@@ -499,15 +488,6 @@ impl SimilarityCanvas {
             base.selected_for_search = true;
         }
         self.recompute_layout();
-    }
-
-    #[allow(dead_code)]
-    pub fn adjust_global_allowance(&mut self, delta: f32) {
-        self.allowance = (self.allowance + delta).clamp(MIN_ALLOWANCE, MAX_ALLOWANCE);
-        self.similarity_threshold = CanvasGrid::allowance_to_threshold(self.allowance, false);
-        for g in self.grids.iter_mut().skip(1) {
-            g.set_allowance(self.allowance);
-        }
     }
 
     pub fn can_decrease_grid_allowance(&self, grid_id: usize) -> bool {
@@ -614,7 +594,6 @@ impl SimilarityCanvas {
         let mut grid = CanvasGrid {
             id,
             title: format!("Similar to {file_name}"),
-            query: None,
             reference_photo: Some(entry_path.to_path_buf()),
             is_inverted: false,
             candidate_indices,
@@ -654,7 +633,6 @@ impl SimilarityCanvas {
         let mut grid = CanvasGrid {
             id,
             title: query.to_string(),
-            query: Some(query.to_string()),
             reference_photo: None,
             is_inverted,
             candidate_indices,
@@ -759,7 +737,6 @@ impl SimilarityCanvas {
         self.grids = vec![CanvasGrid {
             id: 0,
             title: "All photos".to_string(),
-            query: None,
             reference_photo: None,
             is_inverted: false,
             candidate_indices: (0..n).collect(),
@@ -937,8 +914,7 @@ impl SimilarityCanvas {
                 let threshold = CanvasGrid::allowance_to_threshold(allowance, meta.is_inverted);
                 let mut new_grid = CanvasGrid {
                     id: self.next_grid_id,
-                    title: meta.query.clone(),
-                    query: Some(meta.query),
+                    title: meta.query,
                     reference_photo: None,
                     is_inverted: meta.is_inverted,
                     candidate_indices: meta.candidate_indices,
@@ -979,7 +955,6 @@ impl SimilarityCanvas {
             self.grids.push(CanvasGrid {
                 id: 0,
                 title: "All photos".to_string(),
-                query: None,
                 reference_photo: None,
                 is_inverted: false,
                 candidate_indices: (0..n).collect(),
@@ -1402,7 +1377,6 @@ mod lifecycle_tests {
         canvas.search_job = Some(task);
         canvas.pending_search = Some(PendingSearchMeta {
             query: "old folder".into(),
-            prompt: "old folder".into(),
             is_inverted: false,
             candidate_indices: vec![0, 1],
         });
