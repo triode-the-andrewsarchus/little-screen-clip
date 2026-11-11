@@ -49,39 +49,24 @@ pub(super) fn audio_window(
     }
     let start = track.start + offset;
     let length = (limit - offset).min(30.0);
-    let output = command("ffmpeg", demuxers)
-        .args([
-            "-v",
-            "error",
-            "-nostdin",
-            "-threads",
-            "2",
-            "-filter_threads",
-            "1",
-            "-ss",
-        ])
-        .arg(start.to_string())
-        .arg("-i")
+    use little_clip_core::media_backend::{AudioFilter, AudioInput, AudioRender};
+    let mut settings = AudioRender::new(
+        vec![AudioInput {
+            formats: demuxers.into(),
+            stream: Some(track.index),
+        }],
+        "s16le",
+    );
+    settings.codec = Some("pcm_s16le".into());
+    settings.range = Some((start, start + length));
+    settings.sample_rate = Some(16000);
+    settings.channels = Some(1);
+    settings.filter = Some(AudioFilter::Chain(
+        "aresample=16000:async=1:min_hard_comp=0:first_pts=0".into(),
+    ));
+    let output = little_clip_core::media_backend::render_audio_request(&settings)?
         .arg_content_file(path)
-        .map_err(|e| e.to_string())?
-        .args([
-            "-map",
-            &format!("0:{}", track.index),
-            "-t",
-            &length.to_string(),
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-af",
-            "aresample=16000:async=1:min_hard_comp=0:first_pts=0",
-            "-c:a",
-            "pcm_s16le",
-            "-f",
-            "s16le",
-            "pipe:1",
-        ])
+        .map_err(|error| error.to_string())?
         .timeout(Duration::from_secs(60))
         .max_output_bytes(2 * 1024 * 1024)
         .run()

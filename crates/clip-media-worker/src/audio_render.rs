@@ -2,7 +2,11 @@
 use clip_media_protocol::{AudioFilter, AudioInput, AudioRender};
 use ffmpeg::{Rescale, codec, filter, format, frame, media};
 use ffmpeg_next as ffmpeg;
-use std::{fs::File, io::Seek};
+use std::{
+    fs::File,
+    io::{self, Seek, Write},
+    os::unix::fs::FileTypeExt,
+};
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -43,12 +47,18 @@ fn open_output(
     job: &AudioRender,
     mut output: File,
 ) -> Result<(format::context::Output, ffmpeg::codec::Audio)> {
-    if !output.metadata().map_err(message)?.is_file() {
-        return Err("Audio output must be an owned seekable staging file".into());
-    }
-    output.set_len(0).map_err(message)?;
-    output.rewind().map_err(message)?;
-    let io = format::context::StreamIo::from_write_seek(output).map_err(message)?;
+    let metadata = output.metadata().map_err(message)?;
+    let io = if metadata.is_file() {
+        output.set_len(0).map_err(message)?;
+        output.rewind().map_err(message)?;
+        format::context::StreamIo::from_write_seek(output).map_err(message)?
+    } else if metadata.file_type().is_fifo() && matches!(job.format.as_str(), "s16le" | "f32le") {
+        bounded_pcm_stream(job, output)?
+    } else {
+        return Err(
+            "Audio output must be an owned seekable staging file or bounded raw PCM pipe".into(),
+        );
+    };
     let output = format::output_to_stream(io, None, Some(&job.format)).map_err(message)?;
     let codec = match &job.codec {
         Some(name) => ffmpeg::encoder::find_by_name(name),
@@ -58,6 +68,42 @@ fn open_output(
     .audio()
     .map_err(message)?;
     Ok((output, codec))
+}
+
+fn bounded_pcm_stream(job: &AudioRender, output: File) -> Result<format::context::StreamIo> {
+    if !job.range.is_some_and(|(start, end)| end - start <= 60.0)
+        || !job.sample_rate.is_some_and(|rate| rate <= 48_000)
+        || !job.channels.is_some_and(|channels| channels <= 2)
+    {
+        return Err("Raw PCM pipes require a bounded range, rate and channel count".into());
+    }
+    format::context::StreamIo::from_write(PcmPipe {
+        output,
+        remaining: 32 * 1024 * 1024,
+    })
+    .map_err(message)
+}
+
+// A second bound independent of filter duration (a graph could repeat/mix its
+// source). The parent still owns its smaller capture budget and deadline.
+struct PcmPipe {
+    output: File,
+    remaining: usize,
+}
+impl Write for PcmPipe {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > self.remaining {
+            return Err(io::Error::other(
+                "Raw PCM pipe exceeds its 32 MiB output budget",
+            ));
+        }
+        let written = self.output.write(bytes)?;
+        self.remaining -= written;
+        Ok(written)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()
+    }
 }
 
 fn validate(job: &AudioRender, inputs: usize) -> Result<()> {
@@ -527,4 +573,24 @@ fn exhausted(error: ffmpeg::Error) -> bool {
 }
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_pipe_budget_rejects_an_overflow_without_writing_partial_data() {
+        let output = tempfile::tempfile().unwrap();
+        let mut pipe = PcmPipe {
+            output: output.try_clone().unwrap(),
+            remaining: 3,
+        };
+        assert!(pipe.write_all(&[0; 4]).is_err());
+        assert_eq!(output.metadata().unwrap().len(), 0);
+        pipe.write_all(&[1, 2]).unwrap();
+        assert_eq!(pipe.remaining, 1);
+        assert!(pipe.write_all(&[0; 2]).is_err());
+        assert_eq!(output.metadata().unwrap().len(), 2);
+    }
 }

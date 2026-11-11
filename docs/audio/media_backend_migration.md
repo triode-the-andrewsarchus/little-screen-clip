@@ -93,7 +93,8 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   search and animation metadata).
 - [x] Native streaming WAV ranges and simple gain, with owned staging and retry cleanup.
 - [x] Studio exports/session graphs and pipeline audio filters through library jobs.
-- [ ] Search audio windows and remaining video/frame library jobs.
+- [x] Search audio windows through bounded library PCM streaming.
+- [ ] Remaining video/frame library jobs.
 
 - Established architecture baseline `native-audio-ffmpeg` at `89ccc61`.
 - Confirmed common audio already uses native decoding and DSP; migration must
@@ -212,6 +213,22 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   Strengthened the search packet-gap fixture to include a gap across the second
   window's start. All seven search video/source-clock tests and all 13 worker
   checks (including the explicit compressed reference) pass with this fix.
+
+- Migrated `clip-search/src/reader/media.rs::audio_window` to the existing
+  library render worker. It retains the selected global stream index, container
+  origin, 30-second windows, five-second overlap, two-hour horizon, mono 16 kHz
+  PCM/WAV contract, 2 MiB capture limit and 60-second supervised process deadline.
+  It creates no staging path inside the disposable reader.
+- Raw PCM pipe output is restricted to explicit short ranges and bounded
+  rate/channel settings, with a separate 32 MiB writer cap. Ordinary container
+  exports still require owned regular staging handles. The pipe test verifies
+  exact frame count and channel/gain selection after resampling; a writer-budget
+  test verifies rejection without partial overflow writes. Seven worker unit and
+  seven ordinary integration checks pass; the compressed reference check also
+  passed explicitly before adding the writer-budget test. Search's quiet/tail/
+  horizon check and all seven video/source-clock checks pass. Worker all-target
+  Clippy is clean. Architecture comparison reports no new complexity hotspot;
+  its additional clone is test request setup rather than a parallel media path.
 
 ## Final recommendation
 

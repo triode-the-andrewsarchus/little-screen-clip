@@ -28,7 +28,11 @@ remain mandatory; the library interrupt callback is additional protection.
 Audio rendering uses the data-only `clip-media-protocol::AudioRender` settings.
 It reads up to eight inherited inputs and writes one owned regular staging
 handle, using stdout when the explicit output argument is absent. It never
-resolves an output pathname. Settings are capped at 64 KiB. Filter descriptions
+resolves an output pathname. The sole pipe-output exception is raw `s16le` or
+`f32le` PCM with an explicit range of at most 60 seconds, sample rate at most
+48 kHz and at most two channels; an independent 32 MiB writer cap rejects
+unexpected expansion. Search retains its smaller 2 MiB capture budget and
+60-second deadline. Settings are capped at 64 KiB. Filter descriptions
 are parsed without initialization and restricted to the application's audio
 processing filters before any graph is instantiated; movie, command and other
 external-source filters are rejected. Demand-driven input feeding avoids

@@ -249,6 +249,50 @@ fn executable_rejects_non_seekable_outputs_and_file_opening_audio_filters() {
 }
 
 #[test]
+fn executable_streams_only_bounded_raw_pcm_windows() {
+    let input = constant_wav(16000, [1234, -2468]);
+    let mut job = render_settings(1);
+    job.format = "s16le".into();
+    job.range = Some((1.25, 1.5));
+    job.sample_rate = Some(16000);
+    job.channels = Some(1);
+    job.filter = Some(clip_media_protocol::AudioFilter::Chain(
+        "pan=mono|c0=c1,volume=0.5".into(),
+    ));
+    let result = command(
+        &[&input],
+        "render-audio",
+        &serde_json::to_string(&job).unwrap(),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(result.stdout.len(), 8000);
+    assert!(
+        result
+            .stdout
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|sample| (i32::from(i16::from_le_bytes(*sample)) + 1234).abs() <= 2)
+    );
+    job.range = None;
+    let result = command(
+        &[&input],
+        "render-audio",
+        &serde_json::to_string(&job).unwrap(),
+    )
+    .output()
+    .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("bounded range"));
+}
+
+#[test]
 #[ignore = "requires FFmpeg CLI only to generate and reference compressed fixtures"]
 fn library_ranges_match_cli_priming_and_container_timing() {
     let dir = tempfile::tempdir().unwrap();
