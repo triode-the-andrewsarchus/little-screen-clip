@@ -13,7 +13,7 @@ existing specialized FFmpeg paths.
 - [x] Share one file-manager session/transport between full and hover playback.
 - [x] Replace the external video window with an embedded picture and controls.
 - [x] Start muted playback from thumbnail start or the hovered timeline position.
-- [ ] Verify playback progression, pause, seeks, EOF, source/stream/orientation,
+- [x] Verify playback progression, pause, seeks, EOF, source/stream/orientation,
   cancellation and stale-seek rejection using actual decoded frames.
 - [x] Verify UI controls, hover behavior and cleanup on navigation/studio entry.
 - [ ] Update distribution dependencies and the worker's source bundle.
@@ -76,3 +76,11 @@ the backend extraction; the host check remains warning-free.
   before CUDA elements are built. Hiding CUDA devices exposed a factory-load
   failure before preroll; initialization now retries software as well as
   preroll failures, and the same fixture still delivers a valid frame.
+
+- [x] Correct rotation reference fixtures for FFmpeg 9. The old `rotate` tag
+  command produced no display matrix. `-display_rotation` now generates real
+  0/90/180/270-degree fixtures, with explicit geometry checks and independent
+  RGBA comparisons for both library snapshots and GStreamer playback. The
+  snapshot comparison bounds mean channel error below two levels, accounting
+  for chroma conversion ordering; the actual direction is also checked. All
+  24 worker/protocol tests pass, including the expanded reference test.

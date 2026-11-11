@@ -450,14 +450,15 @@ fn library_frame_rotation_matches_reference_pixels() {
         let path = dir.path().join(format!("rotation-{rotation}.mp4"));
         assert!(
             Command::new("ffmpeg")
-                .args(["-v", "error", "-i"])
-                .arg(&original)
                 .args([
-                    "-c",
-                    "copy",
-                    "-metadata:s:v:0",
-                    &format!("rotate={rotation}")
+                    "-v",
+                    "error",
+                    "-display_rotation",
+                    &rotation.to_string(),
+                    "-i"
                 ])
+                .arg(&original)
+                .args(["-c", "copy"])
                 .arg(&path)
                 .status()
                 .unwrap()
@@ -497,8 +498,51 @@ fn library_frame_rotation_matches_reference_pixels() {
             .unwrap();
         assert!(reference.status.success());
         let decoded = reference_rgba(frame.png);
-        assert_eq!(decoded, reference.stdout, "rotation {rotation}");
+        let expected = if rotation == 90 || rotation == 270 { (80,160) } else { (160,80) };
+        assert_eq!((frame.info.width, frame.info.height), expected);
+        assert_eq!(decoded.len(), reference.stdout.len());
+        // Rotating subsampled chroma before RGB conversion differs slightly
+        // from the CLI conversion path; the bound still rejects wrong rotation.
+        let error = decoded.iter().zip(&reference.stdout).map(|(a,b)| u64::from(a.abs_diff(*b))).sum::<u64>() as f64 / decoded.len() as f64;
+        assert!(error < 2.0, "snapshot rotation {rotation}: mean RGBA error {error}");
         assert_eq!(frame.info.seconds, 0.0);
+        let (playing, pixels) = playback::first_frame(&path);
+        let expected = if rotation == 90 || rotation == 270 {
+            (40, 80)
+        } else {
+            (80, 40)
+        };
+        assert_eq!(
+            (playing.width, playing.height),
+            expected,
+            "playback rotation {rotation}"
+        );
+        let reference = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&path)
+            .args([
+                "-frames:v",
+                "1",
+                "-pix_fmt",
+                "rgba",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(reference.status.success());
+        assert_eq!(pixels.len(), reference.stdout.len());
+        let mean_error = pixels
+            .iter()
+            .zip(&reference.stdout)
+            .map(|(a, b)| u64::from(a.abs_diff(*b)))
+            .sum::<u64>() as f64
+            / pixels.len() as f64;
+        assert!(
+            mean_error < 2.0,
+            "playback rotation {rotation}: mean RGBA error {mean_error}"
+        );
     }
 }
 
@@ -701,11 +745,6 @@ mod playback {
     }
     impl Player {
         fn open() -> Self {
-            let input = File::open(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../little-clip-core/tests/fixtures/video/playback-colors.mp4"
-            ))
-            .unwrap();
             let settings = Settings {
                 stream: 0,
                 width: 320,
@@ -715,6 +754,16 @@ mod playback {
                 duration_ms: 3000,
                 silent: true,
             };
+            Self::source(
+                std::path::Path::new(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../little-clip-core/tests/fixtures/video/playback-colors.mp4"
+                )),
+                settings,
+            )
+        }
+        fn source(path: &std::path::Path, settings: Settings) -> Self {
+            let input = File::open(path).unwrap();
             let mut child = command(
                 &[&input],
                 "playback",
@@ -786,6 +835,21 @@ mod playback {
                 }
             }
         }
+    }
+    pub(super) fn first_frame(path: &std::path::Path) -> (Update, Vec<u8>) {
+        let mut player = Player::source(
+            path,
+            Settings {
+                stream: 0,
+                width: 160,
+                height: 160,
+                fps: 20,
+                start_ms: 0,
+                duration_ms: 1000,
+                silent: true,
+            },
+        );
+        player.until(|packet| packet.bytes > 0)
     }
     #[test]
     fn player_clocks_frames_pauses_seeks_with_epochs_and_reports_eof_without_a_window() {
