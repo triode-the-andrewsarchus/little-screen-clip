@@ -41,7 +41,7 @@ enum Loaded {
     Midi(little_clip_core::presentation::midi::MidiData),
     OfficePdf {
         pdf_path: PathBuf,
-        workspace: little_clip_core::staging::ArtifactLease,
+        workspace: little_clip_core::staging::TemporaryWorkspace,
         original_path: PathBuf,
     },
     Path,

@@ -429,11 +429,13 @@ fn rebuild_pages(
 ) -> Result<(), String> {
     let page_count = get_pdf_info(input)?.page_count;
     let workspace = ArtifactStore::new()
-        .and_then(|store| store.create_workspace("pdf", "rebuild"))
+        .and_then(|store| store.create_temporary_workspace("pdf", "rebuild"))
         .map_err(|error| format!("could not create PDF rebuild workspace: {error}"))?;
     let temp = workspace.path();
     let pattern = temp.join("page-%d.pdf");
-    let separated = CommandRequest::new("pdfseparate")
+    let separated = workspace
+        .guard_command(CommandRequest::new("pdfseparate"))
+        .map_err(|error| error.to_string())?
         .arg_content_file(input)
         .map_err(|error| error.to_string())?
         .arg_content_output(&pattern)
@@ -452,7 +454,7 @@ fn rebuild_pages(
         match rotation {
             Some((target, degrees)) if target == page => {
                 let rotated = temp.join(format!("rotated-{page}.pdf"));
-                rotate_staged_page(&source, &rotated, degrees)?;
+                rotate_staged_page(&workspace, &source, &rotated, degrees)?;
                 inputs.push(rotated);
             }
             _ => inputs.push(source),
@@ -461,7 +463,9 @@ fn rebuild_pages(
     if inputs.is_empty() {
         return Err("Cannot delete all pages".into());
     }
-    let mut unite = CommandRequest::new("pdfunite");
+    let mut unite = workspace
+        .guard_command(CommandRequest::new("pdfunite"))
+        .map_err(|error| error.to_string())?;
     for input_file in &inputs {
         unite = unite
             .arg_content_file(input_file)
@@ -480,14 +484,21 @@ fn rebuild_pages(
 }
 
 /// Rotates one privately staged page for the rebuild fallback.
-fn rotate_staged_page(source: &Path, output: &Path, degrees: u32) -> Result<(), String> {
+fn rotate_staged_page(
+    workspace: &crate::TemporaryWorkspace,
+    source: &Path,
+    output: &Path,
+    degrees: u32,
+) -> Result<(), String> {
     let orientation = match degrees {
         90 => 3,
         180 => 2,
         270 => 1,
         _ => 0,
     };
-    let status = CommandRequest::new("gs")
+    let status = workspace
+        .guard_command(CommandRequest::new("gs"))
+        .map_err(|error| error.to_string())?
         .args([
             "-q",
             "-dNOPAUSE",

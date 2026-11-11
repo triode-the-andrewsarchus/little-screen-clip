@@ -196,7 +196,7 @@ pub fn render_to_pdf(input: &Path, output_pdf: &Path) -> Result<(), String> {
 fn render_with_libreoffice(input: &Path, output_pdf: &Path) -> Result<(), String> {
     let store = ArtifactStore::new().map_err(|e| e.to_string())?;
     let workspace = store
-        .create_workspace("document_preview", "libreoffice_out")
+        .create_temporary_workspace("document_preview", "libreoffice_out")
         .map_err(|e| e.to_string())?;
     let out_dir = workspace.path();
 
@@ -209,7 +209,9 @@ fn render_with_libreoffice(input: &Path, output_pdf: &Path) -> Result<(), String
     };
 
     let user_install = format!("-env:UserInstallation=file://{}/user", out_dir.display());
-    let request = CommandRequest::new(binary)
+    let request = workspace
+        .guard_command(CommandRequest::new(binary))
+        .map_err(|error| error.to_string())?
         .arg(user_install)
         .arg("--headless")
         .arg("--convert-to")
@@ -299,7 +301,7 @@ pub enum PreparedOfficePreview {
     /// Paginated PDF staged in a temporary workspace owned by this result.
     Pdf {
         pdf_path: PathBuf,
-        workspace: crate::staging::ArtifactLease,
+        workspace: crate::staging::TemporaryWorkspace,
     },
     /// Fallback Markdown text when paginated PDF rendering is unavailable.
     Markdown(String),
@@ -310,7 +312,7 @@ pub enum PreparedOfficePreview {
 pub fn prepare_office_preview(input: &Path) -> Result<PreparedOfficePreview, String> {
     let store = crate::staging::ArtifactStore::new().map_err(|e| e.to_string())?;
     let workspace = store
-        .create_workspace("office_preview", "pdf_render")
+        .create_temporary_workspace("office_preview", "pdf_render")
         .map_err(|e| e.to_string())?;
     let stem = input
         .file_stem()

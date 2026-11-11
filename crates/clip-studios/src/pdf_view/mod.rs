@@ -557,7 +557,7 @@ pub struct PdfEditorState {
     viewport: PdfPageViewport,
     navigation: navigation::PdfNavigation,
     document_tools: document_tools::PdfDocumentTools,
-    _office_workspace: Option<little_clip_core::staging::ArtifactLease>,
+    _office_workspace: Option<little_clip_core::staging::TemporaryWorkspace>,
 }
 
 impl PdfEditorState {
@@ -606,7 +606,7 @@ impl PdfEditorState {
     /// Keeps the temporary Office conversion workspace alive for this viewer.
     pub fn with_office_workspace(
         mut self,
-        workspace: little_clip_core::staging::ArtifactLease,
+        workspace: little_clip_core::staging::TemporaryWorkspace,
     ) -> Self {
         self._office_workspace = Some(workspace);
         self

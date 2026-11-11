@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod workspace;
+pub use workspace::TemporaryWorkspace;
+
+const TEMPORARY_WORKSPACES: &str = "transient-workspaces-v1";
+
 /// Error returned while creating, writing, or reclaiming temporary artifacts.
 #[derive(Debug, Error)]
 pub enum StagingError {
@@ -113,7 +118,13 @@ impl ArtifactStore {
     pub fn cleanup_old_items(&self, max_age_seconds: u64) -> Result<usize, StagingError> {
         let now = std::time::SystemTime::now();
         let mut removed = 0;
-        cleanup_directory(&self.base_dir, now, max_age_seconds, &mut removed)?;
+        for entry in fs::read_dir(&self.base_dir)? {
+            let entry = entry?;
+            // Temporary owners use their own lock-aware recovery path.
+            if entry.file_name() != TEMPORARY_WORKSPACES {
+                cleanup_entry(&entry, now, max_age_seconds, &mut removed)?;
+            }
+        }
         Ok(removed)
     }
 

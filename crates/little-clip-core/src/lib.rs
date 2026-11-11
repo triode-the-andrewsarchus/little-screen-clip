@@ -75,7 +75,7 @@ pub use presentation::{midi, model3d, network_preview, spreadsheet, timestamps, 
 pub use process::{CommandError, CommandOutput, CommandRequest, command_available};
 pub use rolling_audio::{RollingAudioBuffer, slice_wav};
 pub use slot::{HandSide, SlotId, SlotManager};
-pub use staging::{ArtifactLease, ArtifactStore, StagingManager};
+pub use staging::{ArtifactLease, ArtifactStore, StagingManager, TemporaryWorkspace};
 
 pub mod gcode;
 pub mod geography;
