@@ -192,6 +192,7 @@ pub enum FontStyle {
 /// Canvas rasterizer for rendering slot cards, thumbnails, waveforms, and code blocks onto a tiny-skia Pixmap.
 #[derive(Clone)]
 pub struct ScreenRenderer {
+    pub(crate) document_previews: std::sync::Arc<std::sync::Mutex<document_preview::Cache>>,
     pub(crate) scene_previews: std::sync::Arc<std::sync::Mutex<scene_preview::PreviewCache>>,
     pub(crate) scene_preview_source: Option<scene_preview::SharedSource>,
     pub(crate) font_regular: Option<std::sync::Arc<Font>>,
@@ -216,6 +217,7 @@ impl ScreenRenderer {
             font_mono: font_mono.map(std::sync::Arc::new),
             config,
             palette,
+            document_previews: Default::default(),
             scene_previews: Default::default(),
             scene_preview_source: None,
         })
@@ -231,6 +233,7 @@ impl ScreenRenderer {
             font_mono: None,
             config,
             palette,
+            document_previews: Default::default(),
             scene_previews: Default::default(),
             scene_preview_source: None,
         }
@@ -400,6 +403,7 @@ impl ScreenRenderer {
 }
 
 mod cards;
+mod document_preview;
 mod fonts;
 pub mod primitives;
 
@@ -440,6 +444,17 @@ impl ScreenRenderer {
         manager: &SlotManager,
         collect_previews: bool,
     ) -> Result<(Pixmap, Vec<(SlotId, PreparedTextPreview)>), RenderError> {
+        let layout = compute_slot_layout(self.config.slots.left_priors);
+        scene_preview::retain_visible(self, manager, &layout);
+        let document_previews: Vec<_> = layout
+            .iter()
+            .map(|slot| {
+                manager
+                    .get(slot.slot_id)
+                    .and_then(|item| self.document_preview(item))
+            })
+            .collect();
+
         let mut text_previews = Vec::new();
         let mut pixmap = Pixmap::new(SCREEN_WIDTH, SCREEN_HEIGHT)
             .ok_or_else(|| RenderError::ImageEncode("Failed to allocate pixmap".to_string()))?;
@@ -448,11 +463,7 @@ impl ScreenRenderer {
         let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(&self.palette.colors.canvas);
         pixmap.fill(Color::from_rgba8(bg_r, bg_g, bg_b, bg_a));
 
-        // Retire scene jobs/files that no longer occur in the visible layout.
-        let layout = compute_slot_layout(self.config.slots.left_priors);
-        scene_preview::retain_visible(self, manager, &layout);
-        // Render slots according to canonical layout
-        for slot in layout {
+        for (slot, document) in layout.into_iter().zip(document_previews) {
             let preview = self.draw_slot_card(
                 &mut pixmap,
                 manager,
@@ -463,6 +474,7 @@ impl ScreenRenderer {
                 slot.height,
                 slot.is_hero,
                 collect_previews,
+                document.as_deref(),
             );
             if let Some(preview) = preview {
                 text_previews.push((slot.slot_id, preview));

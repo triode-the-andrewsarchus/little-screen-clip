@@ -60,6 +60,7 @@ impl ScreenRenderer {
         h: u32,
         is_hero: bool,
         collect_previews: bool,
+        document: Option<&crate::document_preview::Page>,
     ) -> Option<crate::PreparedTextPreview> {
         let mut text_preview = None;
         let is_cursor = manager.cursor == slot_id;
@@ -143,6 +144,7 @@ impl ScreenRenderer {
                 border_color,
                 &mut text_preview,
                 collect_previews,
+                document,
             );
         } else {
             // Empty placeholder
@@ -172,6 +174,7 @@ impl ScreenRenderer {
         border_color: Color,
         text_preview: &mut Option<crate::PreparedTextPreview>,
         collect_previews: bool,
+        document: Option<&crate::document_preview::Page>,
     ) {
         let (t_r, t_g, t_b, t_a) = parse_hex_color(&self.palette.colors.text_primary);
         let (s_r, s_g, s_b, s_a) = parse_hex_color(&self.palette.colors.text_secondary);
@@ -458,50 +461,19 @@ impl ScreenRenderer {
                     if self.draw_scene_file_card(pixmap, p, [rx, ry, rw, rh], is_hero) {
                         return;
                     }
-                    if p.is_file() && little_clip_core::document::is_office_document(p) {
-                        if let Ok(pdf_path) = little_clip_core::document::ensure_rendered_pdf(p) {
-                            if let Ok((page1_bytes, w, h)) =
-                                little_clip_core::pdf::render_pdf_page_preview(&pdf_path, 1, 800)
-                            {
-                                let thumb = little_clip_core::ImageThumbnail::generate(
-                                    &page1_bytes,
-                                    320,
-                                    220,
-                                );
-                                self.draw_image_thumbnail(
-                                    pixmap,
-                                    w,
-                                    h,
-                                    thumb.as_ref(),
-                                    rx,
-                                    ry,
-                                    rw,
-                                    rh,
-                                    is_hero,
-                                );
-                                return;
-                            }
-                        }
-                    }
-                    if p.is_file() && little_clip_core::pdf::is_pdf_path(p) {
-                        if let Ok((page1_bytes, w, h)) =
-                            little_clip_core::pdf::render_pdf_page_preview(p, 1, 800)
-                        {
-                            let thumb =
-                                little_clip_core::ImageThumbnail::generate(&page1_bytes, 320, 220);
-                            self.draw_image_thumbnail(
-                                pixmap,
-                                w,
-                                h,
-                                thumb.as_ref(),
-                                rx,
-                                ry,
-                                rw,
-                                rh,
-                                is_hero,
-                            );
-                            return;
-                        }
+                    if let Some(page) = document {
+                        self.draw_image_thumbnail(
+                            pixmap,
+                            page.width,
+                            page.height,
+                            Some(&page.thumbnail),
+                            rx,
+                            ry,
+                            rw,
+                            rh,
+                            is_hero,
+                        );
+                        return;
                     }
                     if p.is_file() && little_clip_core::syntax::is_code_file(p) {
                         if let Ok(file_content) =

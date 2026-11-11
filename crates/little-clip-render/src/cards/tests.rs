@@ -173,6 +173,14 @@ fn office_document_file_batch_renders_page_thumbnail_preview() {
     item.details = vec!["1 pages".to_string(), "RTF".to_string()];
     item.handler_tag = "RTF (DOCUMENT)".to_string();
 
+    let page = renderer.document_preview(&item).expect("prepared page");
+    let reused = renderer
+        .clone()
+        .document_preview(&item)
+        .expect("cached page");
+    assert!(std::sync::Arc::ptr_eq(&page, &reused));
+    std::fs::remove_file(rtf_path).unwrap();
+    assert!(renderer.document_preview(&item).is_none());
     let mut pixmap = Pixmap::new(500, 400).unwrap();
     pixmap.fill(Color::BLACK);
     renderer.draw_item_content(
@@ -186,6 +194,7 @@ fn office_document_file_batch_renders_page_thumbnail_preview() {
         Color::WHITE,
         &mut None,
         false,
+        Some(&page),
     );
 
     let non_black_count = pixmap
@@ -224,6 +233,7 @@ fn prepared_audio_raster_uses_summary_readiness_without_following_its_source_pat
             Color::WHITE,
             &mut None,
             false,
+            None,
         );
         raster
     };
