@@ -6,9 +6,22 @@
 
 use egui::{self, Color32, Response, Ui, Vec2};
 
-/// Enumeration of all vector SVG icons used across the desktop applications.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Icon {
+macro_rules! define_icons {
+    ($($icon:ident),+ $(,)?) => {
+        /// Enumeration of all vector SVG icons used across the desktop applications.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum Icon {
+            $($icon),+
+        }
+
+        impl Icon {
+            /// Slice of all available icon variants for testing and validation.
+            pub const ALL: &[Self] = &[$(Self::$icon),+];
+        }
+    };
+}
+
+define_icons! {
     Audio,
     AudioWav,
     AudioFlac,
@@ -594,107 +607,6 @@ impl Icon {
             .inner
         }
     }
-
-    /// Slice of all available icon variants for testing and validation.
-    pub const ALL: &[Icon] = &[
-        Self::Audio,
-        Self::Image,
-        Self::Diff,
-        Self::BinaryDiff,
-        Self::Text,
-        Self::Pdf,
-        Self::Spreadsheet,
-        Self::Midi,
-        Self::Model3d,
-        Self::Microphone,
-        Self::NodeTree,
-        Self::Palette,
-        Self::Settings,
-        Self::Search,
-        Self::Book,
-        Self::Code,
-        Self::Play,
-        Self::Pause,
-        Self::Stop,
-        Self::Repeat,
-        Self::Volume,
-        Self::Save,
-        Self::Trash,
-        Self::Undo,
-        Self::Redo,
-        Self::Copy,
-        Self::Scissors,
-        Self::Crop,
-        Self::Pencil,
-        Self::Eye,
-        Self::Barcode,
-        Self::Wand,
-        Self::Sparkles,
-        Self::Film,
-        Self::Droplet,
-        Self::Shield,
-        Self::Brush,
-        Self::Eyedropper,
-        Self::Camera,
-        Self::Zap,
-        Self::Crosshair,
-        Self::Layers,
-        Self::Waves,
-        Self::ZoomIn,
-        Self::ZoomOut,
-        Self::ZoomFit,
-        Self::RotateCw,
-        Self::RotateCcw,
-        Self::FlipHorizontal,
-        Self::FlipVertical,
-        Self::Swap,
-        Self::ArrowUp,
-        Self::ArrowDown,
-        Self::Plus,
-        Self::Minus,
-        Self::Check,
-        Self::Close,
-        Self::Alert,
-        Self::Info,
-        Self::Folder,
-        Self::Lock,
-        Self::Unlock,
-        Self::Wrap,
-        Self::Link,
-        Self::Calendar,
-        Self::Pin,
-        Self::Map,
-        Self::Tv,
-        Self::Star,
-        Self::Grid,
-        Self::Flame,
-        Self::Resize,
-        Self::ArrowRight,
-        Self::ShapeCircle,
-        Self::ShapeRect,
-        Self::ShapeLine,
-        Self::Highlight,
-        Self::Badge,
-        Self::ArrowLeft,
-        Self::Bat,
-        Self::Teapot,
-        Self::Plug,
-        Self::Clipboard,
-        Self::Chart,
-        Self::Contrast,
-        Self::Tag,
-        Self::Dice,
-        Self::Tape,
-        Self::Snowflake,
-        Self::Signal,
-        Self::Clock,
-        Self::Globe,
-        Self::Mouse,
-        Self::Hourglass,
-        Self::Drive,
-        Self::Eject,
-        Self::Usb,
-    ];
 }
 
 /// A parameter label with an optional SVG icon.
