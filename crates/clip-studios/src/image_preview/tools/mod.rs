@@ -199,8 +199,8 @@ mod pick_color;
 pub(super) use pick_color::{PickColorState, schedule_system_clipboard_copy_on};
 mod redact;
 pub(super) use redact::{
-    InpaintSelectionMode, LamaInpaintMsg, RedactToolType, RedactionBox, RedactionDrag,
-    RedactionState, RedactionStyle,
+    InpaintJob, InpaintSelectionMode, RedactToolType, RedactionBox, RedactionDrag, RedactionState,
+    RedactionStyle,
 };
 pub(crate) use redact::{compose_redactions_only, compute_box_average_color};
 pub mod sam;

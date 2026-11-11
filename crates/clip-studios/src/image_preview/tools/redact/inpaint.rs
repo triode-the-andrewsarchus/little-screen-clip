@@ -1,16 +1,36 @@
 use super::*;
+use little_clip_core::CommandRequest;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::{Duration, Instant};
+
+type InpaintResult = Result<(RgbaImage, Duration), String>;
+
+pub(crate) struct InpaintJob {
+    revision: u64,
+    cancel: Arc<AtomicBool>,
+    ticket: JobTicket,
+    progress: Receiver<String>,
+    completion: Receiver<Result<InpaintResult, JobError>>,
+}
+
+impl Drop for InpaintJob {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+        self.ticket.cancel();
+    }
+}
 
 impl ImagePreviewState {
-    /// Triggers LaMa inpainting on background worker.
+    /// Triggers LaMa inpainting on a background worker.
     pub fn run_lama_inpaint(&mut self) {
         self.run_lama_inpaint_on(BackgroundJobs::global());
     }
 
     pub fn run_lama_inpaint_on(&mut self, jobs: &BackgroundJobs) {
-        if self.redaction_state.inpaint_in_progress {
+        if self.inpaint_job.is_some() {
             return;
         }
-
         if !self.inpaint_has_mask() {
             self.show_toast(crate::ui_ext::StatusMessage::new(
                 crate::icons::Icon::Alert,
@@ -18,249 +38,160 @@ impl ImagePreviewState {
             ));
             return;
         }
-
         if !self.redaction_state.boxes.is_empty() {
             self.apply_redactions();
         }
-
-        let current_image = self.current_rgba.as_ref().clone();
-        let mask_image = match self.redaction_state.inpaint_mask {
-            Some(ref m) => m.clone(),
-            None => return,
+        let Some(mask) = self.redaction_state.inpaint_mask.clone() else {
+            return;
         };
-
+        let pixels = Arc::clone(&self.current_rgba);
+        let revision = self.pixel_revision;
         let (cmd, args) = little_clip_core::process::resolve_python_script_command(
             self.inpaint_cmd.as_deref(),
             "inpaint_lama.py",
         );
-
-        let (tx, rx) = std::sync::mpsc::channel::<LamaInpaintMsg>();
-        self.inpaint_rx = Some(rx);
-        self.redaction_state.inpaint_in_progress = true;
-        self.redaction_state.inpaint_status = Some("Starting LaMa inpainting...".to_string());
-        self.redaction_state.inpaint_error = None;
-
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        self.inpaint_cancel = Some(cancel.clone());
-        self.inpaint_child_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let child_pid = self.inpaint_child_pid.clone();
-        let lama_url = self.lama_model_url.clone();
-
-        let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
-            let start = std::time::Instant::now();
-            let _ = tx.send(LamaInpaintMsg::Progress(
-                "Running LaMa inpainting neural network...".to_string(),
-            ));
-
-            // Priority 1: Native Rust ORT inference if model is available
+        let request = CommandRequest::new(cmd).args(args);
+        let model_url = self.lama_model_url.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let (tx, progress) = std::sync::mpsc::channel();
+        let (ticket, completion) = jobs.submit(Duration::MAX, move || {
+            let start = Instant::now();
             let model_path = crate::onnx_runtime::ensure_model_cancellable(
                 crate::onnx_runtime::BIG_LAMA_MODEL_NAME,
-                lama_url.as_deref(),
-                &cancel,
+                model_url.as_deref(),
+                &worker_cancel,
                 |_, _| {},
             )
             .ok();
-
-            if let Some(ref model_path) = model_path {
-                match run_native_lama_inpaint(&current_image, &mask_image, model_path) {
-                    Ok(result_rgba) => {
-                        let _ = tx.send(LamaInpaintMsg::Success {
-                            result_rgba,
-                            duration_ms: start.elapsed().as_millis(),
-                        });
-                        return;
-                    }
-                    Err(native_err) => {
-                        let _ = tx.send(LamaInpaintMsg::Progress(format!(
-                            "Native ORT failed ({native_err}), trying fallback..."
-                        )));
+            if worker_cancel.load(Ordering::Acquire) {
+                return Err("Inpainting cancelled".into());
+            }
+            if let Some(path) = &model_path {
+                let _ = tx.send("Running LaMa inpainting neural network…".to_owned());
+                match run_native_lama_inpaint(&pixels, &mask, path) {
+                    Ok(result) => return Ok((result, start.elapsed())),
+                    Err(error) => {
+                        let _ = tx.send(format!("Native ORT failed ({error}), trying fallback…"));
                     }
                 }
             }
-
-            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                return;
-            }
-
-            // Priority 2: Fallback to scripts/inpaint_lama.py
-            let temp_in =
-                std::env::temp_dir().join(format!("clip_inpaint_in_{}.png", uuid::Uuid::new_v4()));
-            let temp_mask = std::env::temp_dir()
-                .join(format!("clip_inpaint_mask_{}.png", uuid::Uuid::new_v4()));
-            let temp_out =
-                std::env::temp_dir().join(format!("clip_inpaint_out_{}.png", uuid::Uuid::new_v4()));
-
-            if let Err(err) = current_image.save_with_format(&temp_in, image::ImageFormat::Png) {
-                let _ = tx.send(LamaInpaintMsg::Error(format!(
-                    "Failed to save temp image: {err}"
-                )));
-                return;
-            }
-
-            if let Err(err) = mask_image.save_with_format(&temp_mask, image::ImageFormat::Png) {
-                let _ = std::fs::remove_file(&temp_in);
-                let _ = tx.send(LamaInpaintMsg::Error(format!(
-                    "Failed to save temp mask: {err}"
-                )));
-                return;
-            }
-
-            let mut process_cmd = Command::new(&cmd);
-            process_cmd.args(&args);
-            if let Some(ref path) = model_path {
-                process_cmd.arg("--model").arg(path);
-            } else if let Some(ref url) = lama_url {
-                process_cmd.arg("--model-url").arg(url);
-                process_cmd.env("LAMA_MODEL_URL", url);
-            }
-            process_cmd.arg(&temp_in);
-            process_cmd.arg(&temp_mask);
-            process_cmd.arg(&temp_out);
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                process_cmd.process_group(0);
-            }
-
-            let mut child = match process_cmd
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-            {
-                Ok(child) => child,
-                Err(err) => {
-                    let _ = std::fs::remove_file(&temp_in);
-                    let _ = std::fs::remove_file(&temp_mask);
-                    let _ = std::fs::remove_file(&temp_out);
-                    let _ = tx.send(LamaInpaintMsg::Error(format!(
-                        "Failed to launch inpainting process '{cmd}': {err}"
-                    )));
-                    return;
-                }
-            };
-
-            let pid = child.id();
-            child_pid.store(pid, std::sync::atomic::Ordering::SeqCst);
-
-            let status = child.wait();
-            let _ = std::fs::remove_file(&temp_in);
-            let _ = std::fs::remove_file(&temp_mask);
-
-            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                let _ = std::fs::remove_file(&temp_out);
-                let _ = tx.send(LamaInpaintMsg::Error("Inpainting cancelled".to_string()));
-                return;
-            }
-
-            match status {
-                Ok(st) if st.success() => {
-                    match decode_inpaint_output(&temp_out, current_image.dimensions()) {
-                        Ok(dyn_img) => {
-                            let _ = std::fs::remove_file(&temp_out);
-                            let _ = tx.send(LamaInpaintMsg::Success {
-                                result_rgba: dyn_img,
-                                duration_ms: start.elapsed().as_millis(),
-                            });
-                        }
-                        Err(err) => {
-                            let _ = std::fs::remove_file(&temp_out);
-                            let _ = tx.send(LamaInpaintMsg::Error(format!(
-                                "Failed to read inpaint output: {err}"
-                            )));
-                        }
-                    }
-                }
-                Ok(st) => {
-                    let mut stderr_msg = String::new();
-                    if let Some(mut err_pipe) = child.stderr.take() {
-                        use std::io::Read;
-                        let _ = err_pipe.read_to_string(&mut stderr_msg);
-                    }
-                    let _ = std::fs::remove_file(&temp_out);
-                    let _ = tx.send(LamaInpaintMsg::Error(format!(
-                        "LaMa process exited with code {:?}: {}",
-                        st.code(),
-                        stderr_msg.trim()
-                    )));
-                }
-                Err(err) => {
-                    let _ = std::fs::remove_file(&temp_out);
-                    let _ = tx.send(LamaInpaintMsg::Error(format!("Worker failed: {err}")));
-                }
-            }
+            run_inpaint_helper(
+                request,
+                &pixels,
+                &mask,
+                model_path.as_deref(),
+                model_url.as_deref(),
+                &worker_cancel,
+            )
+            .map(|result| (result, start.elapsed()))
         });
 
-        self.inpaint_ticket = Some(ticket);
-        self.inpaint_job_rx = Some(job_rx);
+        self.inpaint_job = Some(InpaintJob {
+            revision,
+            cancel,
+            ticket,
+            progress,
+            completion,
+        });
+        self.redaction_state.inpaint_in_progress = true;
+        self.redaction_state.inpaint_status = Some("Starting LaMa inpainting…".into());
+        self.redaction_state.inpaint_error = None;
+    }
+
+    pub(crate) fn cancel_lama_inpaint(&mut self) {
+        self.inpaint_job = None;
+        self.redaction_state.inpaint_in_progress = false;
+        self.redaction_state.inpaint_status = None;
     }
 
     pub fn poll_lama_inpaint(&mut self) {
-        self.poll_lama_inpaint_on(BackgroundJobs::global());
-    }
-
-    pub fn poll_lama_inpaint_on(&mut self, _jobs: &BackgroundJobs) {
-        let mut success = None;
-        let mut error = None;
-
-        if let Some(rx) = &self.inpaint_rx {
-            loop {
-                match rx.try_recv() {
-                    Ok(LamaInpaintMsg::Progress(st)) => {
-                        self.redaction_state.inpaint_status = Some(st);
-                    }
-                    Ok(LamaInpaintMsg::Success {
-                        result_rgba,
-                        duration_ms,
-                    }) => {
-                        success = Some((result_rgba, duration_ms));
-                        break;
-                    }
-                    Ok(LamaInpaintMsg::Error(err)) => {
-                        error = Some(err);
-                        break;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
-                }
+        let Some(job) = &self.inpaint_job else {
+            return;
+        };
+        for status in job.progress.try_iter() {
+            self.redaction_state.inpaint_status = Some(status);
+        }
+        let result = match job.completion.try_recv() {
+            Ok(result) => result
+                .map_err(|error| error.to_string())
+                .and_then(|result| result),
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("Inpainting worker disconnected".into()),
+        };
+        let current = job.revision == self.pixel_revision;
+        self.cancel_lama_inpaint();
+        match result {
+            Ok((pixels, elapsed)) if current => {
+                self.undo_stack.push(Arc::clone(&self.current_rgba));
+                self.redo_stack.clear();
+                self.current_rgba = Arc::new(pixels);
+                self.mark_pixels_changed();
+                self.dirty_texture = true;
+                self.clear_inpaint_mask();
+                self.redaction_state.inpaint_error = None;
+                self.show_toast(format!(
+                    "LaMa inpainting complete ({:.2}s)",
+                    elapsed.as_secs_f64()
+                ));
+            }
+            Ok(_) => {
+                self.show_toast("Image changed while inpainting. The old result was discarded.")
+            }
+            Err(error) => {
+                self.redaction_state.inpaint_error = Some(error.clone());
+                self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Alert,
+                    format!("Inpainting failed: {error}"),
+                ));
             }
         }
-
-        if let Some((result_rgba, duration_ms)) = success {
-            self.undo_stack.push(self.current_rgba.clone());
-            self.redo_stack.clear();
-            self.current_rgba = Arc::new(result_rgba);
-            self.mark_pixels_changed();
-            self.dirty_texture = true;
-            if let Some(mask) = self.redaction_state.inpaint_mask.as_mut() {
-                mask.fill(0);
-            }
-            self.inpaint_mask_texture = None;
-            self.redaction_state.inpaint_in_progress = false;
-            self.redaction_state.inpaint_status = None;
-            self.redaction_state.inpaint_error = None;
-            self.inpaint_rx = None;
-            self.inpaint_job_rx = None;
-            self.inpaint_ticket = None;
-            self.inpaint_cancel = None;
-            self.show_toast(format!(
-                "✦ LaMa inpainting complete ({:.2}s)",
-                duration_ms as f64 / 1000.0
-            ));
-        } else if let Some(err) = error {
-            self.redaction_state.inpaint_in_progress = false;
-            self.redaction_state.inpaint_status = None;
-            self.redaction_state.inpaint_error = Some(err.clone());
-            self.inpaint_rx = None;
-            self.inpaint_job_rx = None;
-            self.inpaint_ticket = None;
-            self.inpaint_cancel = None;
-            self.show_toast(crate::ui_ext::StatusMessage::new(
-                crate::icons::Icon::Alert,
-                format!("Inpainting failed: {err}"),
-            ));
-        }
     }
+}
+
+fn run_inpaint_helper(
+    mut request: CommandRequest,
+    pixels: &RgbaImage,
+    mask: &image::GrayImage,
+    model_path: Option<&std::path::Path>,
+    model_url: Option<&str>,
+    cancelled: &AtomicBool,
+) -> Result<RgbaImage, String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Inpainting cancelled".into());
+    }
+    let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let input = dir.path().join("input.png");
+    let mask_path = dir.path().join("mask.png");
+    let output = dir.path().join("output.png");
+    pixels.save(&input).map_err(|error| error.to_string())?;
+    mask.save(&mask_path).map_err(|error| error.to_string())?;
+    if let Some(path) = model_path {
+        request = request
+            .arg("--model")
+            .arg_content_file(path)
+            .map_err(|error| error.to_string())?;
+    } else if let Some(url) = model_url {
+        request = request.args(["--model-url", url]);
+    }
+    let result = request
+        .arg_content_file(&input)
+        .and_then(|request| request.arg_content_file(&mask_path))
+        .and_then(|request| request.arg_content_output(&output))
+        .map_err(|error| error.to_string())?
+        .timeout(Duration::from_secs(30 * 60))
+        .own_process_group()
+        .die_with_parent()
+        .run_cancellable(cancelled)
+        .map_err(|error| error.to_string())?;
+    if !result.status.success() {
+        return Err(format!(
+            "LaMa process exited with {}: {}",
+            result.status,
+            result.stderr_lossy()
+        ));
+    }
+    decode_inpaint_output(&output, pixels.dimensions())
 }
 
 fn decode_inpaint_output(
@@ -295,6 +226,10 @@ pub fn run_native_lama_inpaint(
     let (orig_w, orig_h) = image.dimensions();
     if orig_w == 0 || orig_h == 0 {
         return Err("Image has zero dimension".to_string());
+    }
+
+    if mask.dimensions() != image.dimensions() {
+        return Err("Inpainting mask dimensions do not match the source image".into());
     }
 
     let pad_h = (8 - orig_h % 8) % 8;
@@ -343,6 +278,13 @@ pub fn run_native_lama_inpaint(
         .try_extract_array::<f32>()
         .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
 
+    if out_tensor.shape() != [1, 3, padded_h as usize, padded_w as usize] {
+        return Err(format!(
+            "Unexpected LaMa output tensor dimensions: {:?}",
+            out_tensor.shape()
+        ));
+    }
+
     let mut result = image.clone();
     for y in 0..orig_h {
         for x in 0..orig_w {
@@ -366,6 +308,103 @@ pub fn run_native_lama_inpaint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inpaint_queue_rejection_clears_busy_state_without_touching_pixels_or_mask() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started, ready) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let _blocker = jobs.submit(Duration::MAX, move || {
+            started.send(()).unwrap();
+            let _ = blocked.recv();
+        });
+        ready.recv_timeout(Duration::from_secs(3)).unwrap();
+        let _queued = jobs.submit(Duration::MAX, || ());
+        let mut state = crate::image_preview::tests::image_state_from_png((8, 8), "queue test");
+        state.ensure_inpaint_mask().fill(255);
+        let original = Arc::clone(&state.current_rgba);
+
+        state.run_lama_inpaint_on(&jobs);
+        assert!(state.redaction_state.inpaint_in_progress);
+        state.poll_lama_inpaint();
+        release.send(()).unwrap();
+
+        assert!(!state.redaction_state.inpaint_in_progress);
+        assert!(state.inpaint_job.is_none());
+        assert!(
+            state
+                .redaction_state
+                .inpaint_error
+                .as_deref()
+                .unwrap()
+                .contains("queue is full")
+        );
+        assert!(Arc::ptr_eq(&state.current_rgba, &original));
+        assert!(state.inpaint_has_mask());
+    }
+
+    #[test]
+    fn stale_inpaint_completion_preserves_newer_pixels_and_mask() {
+        let mut state = crate::image_preview::tests::image_state_from_png((8, 8), "revision test");
+        let jobs = BackgroundJobs::new(1, 1);
+        let (_, progress) = std::sync::mpsc::channel();
+        let (ticket, completion) = jobs.submit(Duration::MAX, || {
+            Ok((
+                RgbaImage::from_pixel(8, 8, image::Rgba([255, 0, 0, 255])),
+                Duration::ZERO,
+            ))
+        });
+        state.inpaint_job = Some(InpaintJob {
+            revision: state.pixel_revision,
+            cancel: Arc::new(AtomicBool::new(false)),
+            ticket,
+            progress,
+            completion,
+        });
+        state.redaction_state.inpaint_in_progress = true;
+        state.mark_pixels_changed();
+        state.ensure_inpaint_mask().fill(255);
+        let current = Arc::clone(&state.current_rgba);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while state.inpaint_job.is_some() {
+            state.poll_lama_inpaint();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        assert!(!state.redaction_state.inpaint_in_progress);
+        assert!(Arc::ptr_eq(&state.current_rgba, &current));
+        assert!(state.inpaint_has_mask());
+        assert!(state.undo_stack.is_empty());
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("old result was discarded")
+        );
+    }
+
+    #[test]
+    fn helper_drains_diagnostics_and_uses_pinned_operands() {
+        let pixels = RgbaImage::from_pixel(4, 3, image::Rgba([20, 40, 60, 255]));
+        let mask = image::GrayImage::new(4, 3);
+        let request = CommandRequest::new("/bin/sh").args([
+            "-c",
+            r#"case "$1:$2:$3" in
+                /proc/self/fd/*:/proc/self/fd/*:/proc/self/fd/*) ;;
+                *) exit 2 ;;
+            esac
+            printf '%300000s' '' >&2
+            cat "$1" > "$3""#,
+            "inpaint-fixture",
+        ]);
+        let result =
+            run_inpaint_helper(request, &pixels, &mask, None, None, &AtomicBool::new(false))
+                .unwrap();
+        assert_eq!(result, pixels);
+    }
 
     #[test]
     fn inpaint_output_requires_a_bounded_png_at_the_source_dimensions() {

@@ -1,5 +1,4 @@
 use super::super::*;
-use std::process::Command;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -84,16 +83,6 @@ impl Default for RedactionState {
             inpaint_error: None,
         }
     }
-}
-
-#[derive(Debug)]
-pub enum LamaInpaintMsg {
-    Progress(String),
-    Success {
-        result_rgba: RgbaImage,
-        duration_ms: u128,
-    },
-    Error(String),
 }
 
 const BAYER_4X4: [[f32; 4]; 4] = [
@@ -781,6 +770,7 @@ pub(crate) fn compose_redactions_only(source: &RgbaImage, boxes: &[RedactionBox]
 }
 
 mod inpaint;
+pub(crate) use inpaint::InpaintJob;
 pub use inpaint::run_native_lama_inpaint;
 mod ui;
 

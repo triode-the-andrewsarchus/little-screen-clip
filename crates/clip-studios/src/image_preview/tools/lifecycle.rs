@@ -16,6 +16,7 @@ impl ImagePreviewState {
         self.cancel_barcode_scan();
         self.cancel_decorrelation_stretch();
         self.cancel_image_tool_process();
+        self.cancel_lama_inpaint();
         self.film_sim_state.cancel_thumbnail_batch();
         self.cancel_creative_fx_thumbnail_batch();
         if let Some(control) = self.creative_fx_state.depth_process_control.take() {
