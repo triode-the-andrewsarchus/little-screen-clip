@@ -1,5 +1,8 @@
 use super::*;
 
+// Stored in image pixels, like markup stroke widths.
+const RECTANGLE_CORNER_RADIUS: f32 = 3.0;
+
 impl ImagePreviewState {
     /// Burns all vector markup layers into `current_rgba` permanently, pushing to undo stack.
     pub fn apply_flatten_markup(&mut self) {
@@ -40,8 +43,8 @@ impl ImagePreviewState {
         let to_screen_rect = |norm_r: Rect| -> Rect {
             Rect::from_min_max(to_screen(norm_r.min), to_screen(norm_r.max))
         };
-        let zoom_scale =
-            (img_rect.width() / self.current_rgba.width().max(1) as f32).clamp(0.1_f32, 10.0_f32);
+        let image_scale = img_rect.width() / self.current_rgba.width().max(1) as f32;
+        let zoom_scale = image_scale.clamp(0.1, 10.0);
 
         for shape in &self.markup_state.items {
             match shape {
@@ -77,11 +80,15 @@ impl ImagePreviewState {
                     let s_rect = to_screen_rect(*rect);
                     let sw = (*width * zoom_scale).max(1.5_f32);
                     if *filled {
-                        painter.rect_filled(s_rect, Rounding::same(*rounding), *color);
+                        painter.rect_filled(
+                            s_rect,
+                            Rounding::same(*rounding * image_scale),
+                            *color,
+                        );
                     } else {
                         painter.rect_stroke(
                             s_rect,
-                            Rounding::same(*rounding),
+                            Rounding::same(*rounding * image_scale),
                             Stroke::new(sw, *color),
                         );
                     }
@@ -207,7 +214,8 @@ impl ImagePreviewState {
 
         let img_w = self.current_rgba.width().max(1) as f32;
         let img_h = self.current_rgba.height().max(1) as f32;
-        let zoom_scale = (img_rect.width() / img_w).clamp(0.1, 10.0);
+        let image_scale = img_rect.width() / img_w;
+        let zoom_scale = image_scale.clamp(0.1, 10.0);
         let base_accent = hex_to_c32(&palette.harmonies.base);
         let handle_radius = 5.0;
         let hit_dist = 12.0;
@@ -259,11 +267,15 @@ impl ImagePreviewState {
                     let s_rect = to_screen_rect(*rect);
                     let sw = (*width * zoom_scale).max(1.5);
                     if *filled {
-                        painter.rect_filled(s_rect, Rounding::same(*rounding), *color);
+                        painter.rect_filled(
+                            s_rect,
+                            Rounding::same(*rounding * image_scale),
+                            *color,
+                        );
                     } else {
                         painter.rect_stroke(
                             s_rect,
-                            Rounding::same(*rounding),
+                            Rounding::same(*rounding * image_scale),
                             Stroke::new(sw, *color),
                         );
                     }
@@ -466,9 +478,17 @@ impl ImagePreviewState {
                 MarkupToolType::Rectangle => {
                     let r = Rect::from_two_pos(s_screen, c_screen);
                     if self.markup_state.active_filled {
-                        painter.rect_filled(r, Rounding::same(3.0), active_col);
+                        painter.rect_filled(
+                            r,
+                            Rounding::same(RECTANGLE_CORNER_RADIUS * image_scale),
+                            active_col,
+                        );
                     } else {
-                        painter.rect_stroke(r, Rounding::same(3.0), Stroke::new(sw, active_col));
+                        painter.rect_stroke(
+                            r,
+                            Rounding::same(RECTANGLE_CORNER_RADIUS * image_scale),
+                            Stroke::new(sw, active_col),
+                        );
                     }
                 }
                 MarkupToolType::Circle => {
@@ -878,7 +898,7 @@ impl ImagePreviewState {
                         color: active_col,
                         width: stroke_w,
                         filled,
-                        rounding: 3.0,
+                        rounding: RECTANGLE_CORNER_RADIUS,
                     }),
                     MarkupToolType::Circle => Some(MarkupShape::Circle {
                         rect,

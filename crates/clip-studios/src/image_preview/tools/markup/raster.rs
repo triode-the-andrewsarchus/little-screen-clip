@@ -111,22 +111,43 @@ pub fn rasterize_markup(base: &RgbaImage, items: &[MarkupShape]) -> RgbaImage {
                 color,
                 width,
                 filled,
-                ..
+                rounding,
             } => {
-                let rx = rect.min.x * w as f32;
-                let ry = rect.min.y * h as f32;
-                let rw = (rect.width() * w as f32).max(1.0);
-                let rh = (rect.height() * h as f32).max(1.0);
-
-                if let Some(skia_rect) = tiny_skia::Rect::from_xywh(rx, ry, rw, rh) {
+                let image_rect = Rect::from_min_size(
+                    Pos2::new(rect.min.x * w as f32, rect.min.y * h as f32),
+                    Vec2::new(rect.width() * w as f32, rect.height() * h as f32),
+                );
+                let mut points = Vec::new();
+                egui::epaint::tessellator::path::rounded_rectangle(
+                    &mut points,
+                    image_rect,
+                    Rounding::same(*rounding),
+                );
+                let Some((first, rest)) = points.split_first() else {
+                    continue;
+                };
+                let mut builder = tiny_skia::PathBuilder::new();
+                builder.move_to(first.x, first.y);
+                for point in rest {
+                    builder.line_to(point.x, point.y);
+                }
+                builder.close();
+                if let Some(path) = builder.finish() {
                     let mut paint = tiny_skia::Paint::default();
                     paint.set_color_rgba8(color.r(), color.g(), color.b(), color.a());
                     if *filled {
-                        pixmap.fill_rect(skia_rect, &paint, tiny_skia::Transform::identity(), None);
+                        pixmap.fill_path(
+                            &path,
+                            &paint,
+                            tiny_skia::FillRule::Winding,
+                            tiny_skia::Transform::identity(),
+                            None,
+                        );
                     } else {
-                        let mut stroke = tiny_skia::Stroke::default();
-                        stroke.width = *width;
-                        let path = tiny_skia::PathBuilder::from_rect(skia_rect);
+                        let stroke = tiny_skia::Stroke {
+                            width: *width,
+                            ..Default::default()
+                        };
                         pixmap.stroke_path(
                             &path,
                             &paint,

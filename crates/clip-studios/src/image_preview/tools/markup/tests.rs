@@ -244,3 +244,61 @@ fn burned_circle_fits_preview_bounds_on_non_square_images() {
         }
     }
 }
+
+#[test]
+fn burned_rectangles_preserve_rounded_corners_for_fill_and_outline() {
+    let canvas = RgbaImage::new(40, 40);
+    for filled in [true, false] {
+        let rect = Rect::from_min_max(Pos2::new(0.25, 0.25), Pos2::new(0.75, 0.75));
+        let render = |rounding| {
+            rasterize_markup(
+                &canvas,
+                &[MarkupShape::Rectangle {
+                    rect,
+                    color: Color32::RED,
+                    width: 2.0,
+                    filled,
+                    rounding,
+                }],
+            )
+        };
+        let rounded = render(8.0);
+        let square = render(0.0);
+        assert_eq!(rounded.get_pixel(10, 10)[3], 0);
+        assert_eq!(square.get_pixel(10, 10)[3], 255);
+        assert_eq!(rounded.get_pixel(20, 10)[3], 255);
+        assert_eq!(rounded.get_pixel(20, 20)[3], if filled { 255 } else { 0 });
+    }
+}
+
+#[test]
+fn rectangle_preview_scales_image_space_rounding_with_zoom() {
+    let mut state = crate::image_preview::tests::image_state_from_png((40, 40), "markup");
+    state.markup_state.items.push(MarkupShape::Rectangle {
+        rect: Rect::from_min_max(Pos2::new(0.25, 0.25), Pos2::new(0.75, 0.75)),
+        color: Color32::RED,
+        width: 1.0,
+        filled: true,
+        rounding: 8.0,
+    });
+    let ctx = egui::Context::default();
+    for (viewport_size, expected_radius) in [(20.0, 4.0), (80.0, 16.0)] {
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                state.render_markup_passive(
+                    ui.painter(),
+                    Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(viewport_size)),
+                );
+            });
+        });
+        let rect = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == Color32::RED => Some(rect),
+                _ => None,
+            })
+            .expect("markup rectangle painted");
+        assert_eq!(rect.rounding, Rounding::same(expected_radius));
+    }
+}
