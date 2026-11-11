@@ -19,16 +19,22 @@ fn run() -> Result<(), String> {
     if arguments.first().is_some_and(|mode| mode == "render-audio") {
         return render_command(&arguments);
     }
-    if arguments.first().is_some_and(|mode| mode == "video-frame") {
+    if arguments
+        .first()
+        .is_some_and(|mode| matches!(mode.as_str(), "video-frame" | "video-preview"))
+    {
         if arguments.len() != 3 || arguments[1].len() > clip_media_protocol::MAX_SETTINGS_BYTES {
             return Err("Invalid video frame request".into());
         }
-        let job = serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?;
-        return video::snapshot(
-            inherited_input(&arguments[2])?,
-            &job,
-            &mut std::io::BufWriter::new(std::io::stdout().lock()),
-        );
+        let input = inherited_input(&arguments[2])?;
+        let mut output = std::io::BufWriter::new(std::io::stdout().lock());
+        return if arguments[0] == "video-frame" {
+            let job = serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?;
+            video::snapshot(input, &job, &mut output)
+        } else {
+            let job = serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?;
+            video::preview(input, &job, &mut output)
+        };
     }
     if arguments.len() != 3 || !matches!(arguments[0].as_str(), "probe" | "decode-audio") {
         return Err(

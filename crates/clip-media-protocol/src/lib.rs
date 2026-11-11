@@ -215,3 +215,18 @@ mod tests {
         assert!(parse_video_frame(&[], 80, 40).unwrap().is_none());
     }
 }
+
+/// A bounded fixed-rate MJPEG preview decoded in one worker session.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VideoPreview {
+    /// Input selection, start time, orientation and output bounds.
+    /// Sampling always follows the requested interval, regardless of `accurate`.
+    pub frame: VideoFrame,
+    /// Output frames per second (one through sixty).
+    pub fps: u32,
+    /// Maximum output frame count (one through 512).
+    pub frames: u32,
+    /// Optional source interval length, at most sixty seconds.
+    pub duration: Option<f64>,
+}

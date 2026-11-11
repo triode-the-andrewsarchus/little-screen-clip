@@ -1,6 +1,6 @@
 //! Animation and video preview frame extraction, JPEG thumbnail sequences, and timing calculations.
 //!
-//! Provides decoders for animated GIF, animated WebP, and common video formats (via `ffmpeg`/`ffprobe`),
+//! Provides native image decoders and isolated FFmpeg-library video/animation previews,
 //! compiling them into compact MJPEG frame sequences for display playback.
 
 use serde::{Deserialize, Serialize};
@@ -134,69 +134,30 @@ pub fn decode_animated_gif_or_webp(
     decode_animated_bytes(&bytes, max_w, max_h, max_frames)
 }
 
-/// Extracts animated frames from a GIF or WebP file using ffmpeg for high performance
+/// Streams sampled GIF/WebP frames through the isolated FFmpeg library worker.
 pub fn extract_animated_frames_via_ffmpeg(
     path: &Path,
     max_w: u32,
     max_h: u32,
     target_frames: usize,
 ) -> Option<AnimationThumbnail> {
-    let scale_filter = format!(
-        "fps=8,scale={}:{}:force_original_aspect_ratio=decrease",
-        max_w, max_h
-    );
-
-    let output = crate::process::CommandRequest::new("ffmpeg")
-        .arg("-y")
-        .arg("-i")
+    use crate::media_backend::{VideoFrame, VideoPreview};
+    let request = VideoPreview {
+        frame: VideoFrame::new(crate::media_backend::VIDEO_FORMATS, max_w, max_h),
+        fps: 8,
+        frames: target_frames.try_into().ok()?,
+        duration: None,
+    };
+    let output = crate::media_backend::video_preview_request(&request)
+        .ok()?
         .arg_content_file(path)
         .ok()?
-        .arg("-vf")
-        .arg(&scale_filter)
-        .arg("-frames:v")
-        .arg(&target_frames.to_string())
-        .arg("-c:v")
-        .arg("mjpeg")
-        .arg("-q:v")
-        .arg("6")
-        .arg("-f")
-        .arg("image2pipe")
-        .arg("-")
-        .max_output_bytes(32 * 1024 * 1024)
         .run()
         .ok()?;
-
-    if !output.status.success() {
+    if !output.status.success() || output.stdout_truncated {
         return None;
     }
-
-    let frames_jpeg = extract_mjpeg_frames_from_bytes(&output.stdout);
-    if frames_jpeg.is_empty() {
-        return None;
-    }
-
-    let (tw, th) = if let Ok(reader) =
-        image::ImageReader::new(Cursor::new(&frames_jpeg[0])).with_guessed_format()
-    {
-        reader.into_dimensions().unwrap_or((max_w, max_h))
-    } else {
-        (max_w, max_h)
-    };
-
-    let frame_count = frames_jpeg.len();
-    let frame_delay_ms = 125; // 8 fps
-    let frame_delays_ms = vec![frame_delay_ms; frame_count];
-    let loop_duration_ms = (frame_count as u64 * frame_delay_ms as u64).max(100);
-
-    Some(AnimationThumbnail {
-        width: tw,
-        height: th,
-        frame_count,
-        fps: 8.0,
-        frames_jpeg,
-        frame_delays_ms,
-        loop_duration_ms,
-    })
+    thumbnail_from_mjpeg(&output.stdout, max_w, max_h, 8)
 }
 
 /// Decodes animated GIF or animated WebP from in-memory bytes into an AnimationThumbnail
@@ -326,7 +287,7 @@ fn process_image_frames(
     })
 }
 
-/// Extracts a looping animated preview from a video file using ffmpeg
+/// Extracts a bounded looping preview through the FFmpeg library worker.
 pub fn extract_video_preview_frames(
     path: &Path,
     max_w: u32,
@@ -335,6 +296,9 @@ pub fn extract_video_preview_frames(
     sample_duration_sec: f32,
     sample_from_middle: bool,
 ) -> Option<AnimationThumbnail> {
+    if target_frames == 0 || !sample_duration_sec.is_finite() || sample_duration_sec <= 0.0 {
+        return None;
+    }
     let (_orig_w, _orig_h, duration_ms) = read_video_metadata(path).unwrap_or((640, 360, 0));
     let duration_sec = duration_ms as f64 / 1000.0;
 
@@ -345,64 +309,53 @@ pub fn extract_video_preview_frames(
     };
 
     let target_fps = ((target_frames as f32 / sample_duration_sec).round() as u32).clamp(5, 20);
-    let scale_filter = format!(
-        "fps={},scale={}:{}:force_original_aspect_ratio=decrease",
-        target_fps, max_w, max_h
-    );
-
-    let output = crate::process::CommandRequest::new("ffmpeg")
-        .arg("-y")
-        .arg("-ss")
-        .arg(format!("{:.2}", start_sec))
-        .arg("-t")
-        .arg(format!("{:.2}", sample_duration_sec))
-        .arg("-i")
+    use crate::media_backend::{VideoFrame, VideoPreview};
+    let mut frame = VideoFrame::new(crate::media_backend::VIDEO_FORMATS, max_w, max_h);
+    frame.seconds = start_sec;
+    let request = VideoPreview {
+        frame,
+        fps: target_fps,
+        frames: target_frames.try_into().ok()?,
+        duration: Some(f64::from(sample_duration_sec)),
+    };
+    let output = crate::media_backend::video_preview_request(&request)
+        .ok()?
         .arg_content_file(path)
         .ok()?
-        .arg("-vf")
-        .arg(&scale_filter)
-        .arg("-c:v")
-        .arg("mjpeg")
-        .arg("-q:v")
-        .arg("6")
-        .arg("-f")
-        .arg("image2pipe")
-        .arg("-")
-        .max_output_bytes(32 * 1024 * 1024)
         .run()
         .ok()?;
-
-    if !output.status.success() {
+    if !output.status.success() || output.stdout_truncated {
         return None;
     }
+    thumbnail_from_mjpeg(&output.stdout, max_w, max_h, target_fps)
+}
 
-    let frames_jpeg = extract_mjpeg_frames_from_bytes(&output.stdout);
-    if frames_jpeg.is_empty() {
+fn thumbnail_from_mjpeg(
+    bytes: &[u8],
+    max_w: u32,
+    max_h: u32,
+    fps: u32,
+) -> Option<AnimationThumbnail> {
+    let frames_jpeg = extract_mjpeg_frames_from_bytes(bytes);
+    let first = frames_jpeg.first()?;
+    let (width, height) = image::ImageReader::new(Cursor::new(first))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
+    if width == 0 || height == 0 || width > max_w || height > max_h {
         return None;
     }
-
-    // Determine actual thumbnail dimensions from first JPEG frame
-    let (tw, th) = if let Ok(reader) =
-        image::ImageReader::new(Cursor::new(&frames_jpeg[0])).with_guessed_format()
-    {
-        reader.into_dimensions().unwrap_or((max_w, max_h))
-    } else {
-        (max_w, max_h)
-    };
-
     let frame_count = frames_jpeg.len();
-    let frame_delay_ms = (1000.0 / target_fps as f32).round() as u32;
-    let frame_delays_ms = vec![frame_delay_ms; frame_count];
-    let loop_duration_ms = (frame_count as u64 * frame_delay_ms as u64).max(100);
-
+    let frame_delay_ms = (1000.0 / fps as f32).round() as u32;
     Some(AnimationThumbnail {
-        width: tw,
-        height: th,
+        width,
+        height,
         frame_count,
-        fps: target_fps as f32,
+        fps: fps as f32,
         frames_jpeg,
-        frame_delays_ms,
-        loop_duration_ms,
+        frame_delays_ms: vec![frame_delay_ms; frame_count],
+        loop_duration_ms: (frame_count as u64 * u64::from(frame_delay_ms)).max(100),
     })
 }
 
@@ -448,6 +401,47 @@ pub fn extract_mjpeg_frames_from_bytes(data: &[u8]) -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_animation_preview_preserves_holds_and_caps_frame_count() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/timed-colors.gif");
+        for (limit, expected) in [(25, 8), (3, 3)] {
+            let preview = extract_animated_frames_via_ffmpeg(&fixture, 80, 80, limit).unwrap();
+            assert_eq!((preview.width, preview.height), (80, 40));
+            assert_eq!(preview.frame_count, expected);
+            assert_eq!(preview.loop_duration_ms, expected as u64 * 125);
+            for (index, bytes) in preview.frames_jpeg.iter().enumerate() {
+                let image = image::load_from_memory(bytes).unwrap().to_rgb8();
+                let pixel = image.get_pixel(40, 20);
+                let channel = if index == 0 {
+                    0
+                } else if index < 4 {
+                    1
+                } else {
+                    2
+                };
+                assert!(pixel[channel] > 200, "frame {index}: {pixel:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn library_video_preview_ends_at_the_real_video_end_and_obeys_its_budget() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/with-cover.mp4");
+        for (limit, expected) in [(25, 4), (1, 1)] {
+            let preview = extract_video_preview_frames(&path, 160, 160, limit, 1.0, false).unwrap();
+            // 25fps is clamped to 20fps: a 0.2s movie supplies four frames.
+            assert_eq!(preview.frame_count, expected);
+            assert_eq!((preview.width, preview.height), (160, 90));
+            let image = image::load_from_memory(&preview.frames_jpeg[0])
+                .unwrap()
+                .to_rgb8();
+            assert!(image.get_pixel(0, 0)[0] > 200);
+        }
+        assert!(extract_video_preview_frames(&path, 160, 160, 0, 1.0, false).is_none());
+    }
 
     #[test]
     fn test_animation_thumbnail_timing() {

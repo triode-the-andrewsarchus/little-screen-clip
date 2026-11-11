@@ -95,7 +95,8 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 - [x] Studio exports/session graphs and pipeline audio filters through library jobs.
 - [x] Search audio windows through bounded library PCM streaming.
 - [x] Browser thumbnail/cover fallback and search still-frame library jobs.
-- [ ] Animated/video preview batches and timeline fallback migration.
+- [x] Animated/video preview batches through one library decode session.
+- [ ] Remaining timeline fallback migration.
 
 - Established architecture baseline `native-audio-ffmpeg` at `89ccc61`.
 - Confirmed common audio already uses native decoding and DSP; migration must
@@ -258,6 +259,25 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   stream, bounds and failure checks; those checks remain together rather than
   being scattered solely to reduce a metric. New clone reports include fixture
   request setup; shared response/request owners avoid a parallel preview stack.
+
+- Migrated both remaining core animation/video-preview CLI jobs to typed
+  `VideoPreview` requests. Snapshot and batch jobs share a pull-based source
+  decoder, stream admission, timestamp interpretation and orientation. Batches
+  retain one decoder, sampler graph and JPEG encoder rather than restarting a
+  decoder for every sampled frame. Native GIF/WebP fallback remains available.
+- Sampling closes the graph with the observed final frame end; it does not
+  stretch a short movie to the requested duration. Requests cap fps, frame count,
+  interval and total encoded bytes, and core rejects truncated capture. Shared
+  MJPEG-to-thumbnail construction replaces the duplicated animation/video tail.
+- A generated variable-delay GIF fixture is owned by core's video fixtures and
+  shared with worker tests. Eight core animation tests pass, including sampled
+  color/hold timing, real movie EOF and frame limits. Seven worker unit and eleven
+  executable checks pass with both manual reference checks enabled; six search
+  video regressions also pass after the source decoder refactor. Worker/protocol
+  all-target Clippy passes with warnings denied.
+- Architecture review separates preview validation, sampling-graph construction
+  and frame delivery. The source setup still has explicit stream/pixel/clock
+  checks; source ownership is shared rather than duplicated for batch previews.
 
 ## Final recommendation
 

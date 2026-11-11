@@ -1,32 +1,49 @@
-//! Bounded still-frame decoding with actual source clocks and display orientation.
+//! Bounded video decoding with actual source clocks and display orientation.
+mod preview;
 use clip_media_protocol::{VideoFrame, VideoFrameInfo, VideoStream};
 use ffmpeg::{Rescale, codec, filter, format, frame, media};
 use ffmpeg_next as ffmpeg;
+pub(super) use preview::render as preview;
 use std::{fs::File, io::Write};
 
 type Result<T> = std::result::Result<T, String>;
-const MAX_PNG: usize = 32 * 1024 * 1024;
+const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 
 pub(super) fn snapshot(file: File, job: &VideoFrame, output: &mut impl Write) -> Result<()> {
     validate(job)?;
     let mut source = VideoSource::open(file, job)?;
-    loop {
-        let mut packet = ffmpeg::Packet::empty();
-        match packet.read(&mut source.input) {
-            Ok(()) if packet.stream() != source.stream => continue,
-            Ok(()) => source.decoder.send_packet(&packet).map_err(message)?,
-            Err(ffmpeg::Error::Eof) => break,
-            Err(error) => return Err(message(error)),
+    while let Some(decoded) = source.next_frame()? {
+        if job.accurate && decoded.seconds + 0.000001 < job.seconds {
+            continue;
         }
-        if source.drain(job, output)? {
-            return Ok(());
-        }
+        let spec = scale_spec(decoded.matrix.as_ref(), job, "rgba")?;
+        let mut graph = FrameFilter::new(&decoded.image, source.time_base, &spec)?;
+        graph.source.source().add(&decoded.image).map_err(message)?;
+        let mut filtered = frame::Video::empty();
+        graph.sink.sink().frame(&mut filtered).map_err(message)?;
+        filtered.remove_side_data(ffmpeg::util::frame::side_data::Type::DisplayMatrix);
+        return write_snapshot(&filtered, decoded.seconds, output);
     }
-    source.decoder.send_eof().map_err(message)?;
-    source.drain(job, output)?;
     // Empty success permits the caller's preceding-seek-point retry for sparse
     // clips; it must never label a guessed frame with the requested timestamp.
     Ok(())
+}
+
+fn write_snapshot(image: &frame::Video, seconds: f64, output: &mut impl Write) -> Result<()> {
+    let png = encode_png(image)?;
+    let info = VideoFrameInfo {
+        seconds,
+        width: image.width(),
+        height: image.height(),
+        encoded_bytes: png.len() as u32,
+    };
+    let header = serde_json::to_vec(&info).map_err(message)?;
+    output
+        .write_all(&(header.len() as u32).to_le_bytes())
+        .map_err(message)?;
+    output.write_all(&header).map_err(message)?;
+    output.write_all(&png).map_err(message)?;
+    output.flush().map_err(message)
 }
 
 fn validate(job: &VideoFrame) -> Result<()> {
@@ -52,6 +69,16 @@ struct VideoSource {
     origin: i64,
     matrix: Option<[i32; 9]>,
     attached: bool,
+    eof_sent: bool,
+    max_source_pixels: u64,
+    default_frame_duration: i64,
+    last_end: Option<i64>,
+}
+
+struct DecodedVideoFrame {
+    image: frame::Video,
+    seconds: f64,
+    matrix: Option<[i32; 9]>,
 }
 impl VideoSource {
     fn open(file: File, job: &VideoFrame) -> Result<Self> {
@@ -78,6 +105,13 @@ impl VideoSource {
         .ok_or("No selected video stream")?;
         let index = stream.index();
         let time_base = stream.time_base();
+        let rate = [stream.avg_frame_rate(), stream.rate()]
+            .into_iter()
+            .find(|rate| rate.numerator() > 0 && rate.denominator() > 0)
+            .unwrap_or(ffmpeg::Rational(25, 1));
+        let default_frame_duration = 1_i64
+            .rescale((rate.denominator(), rate.numerator()), time_base)
+            .max(1);
         let attached = stream
             .disposition()
             .contains(format::stream::Disposition::ATTACHED_PIC);
@@ -124,55 +158,88 @@ impl VideoSource {
             origin,
             matrix,
             attached,
+            eof_sent: false,
+            max_source_pixels: job.max_source_pixels,
+            default_frame_duration,
+            last_end: None,
         })
     }
 
-    fn drain(&mut self, job: &VideoFrame, output: &mut impl Write) -> Result<bool> {
+    fn next_frame(&mut self) -> Result<Option<DecodedVideoFrame>> {
         loop {
-            let mut decoded = frame::Video::empty();
-            match self.decoder.receive_frame(&mut decoded) {
-                Ok(()) => {}
-                Err(ffmpeg::Error::Eof) => return Ok(false),
-                Err(ffmpeg::Error::Other { errno }) if errno == libc::EAGAIN => return Ok(false),
+            let mut image = frame::Video::empty();
+            match self.decoder.receive_frame(&mut image) {
+                Ok(()) => return self.describe_frame(image).map(Some),
+                Err(ffmpeg::Error::Eof) => return Ok(None),
+                Err(ffmpeg::Error::Other { errno }) if errno == libc::EAGAIN => {}
                 Err(error) => return Err(message(error)),
             }
-            check_dimensions(decoded.width(), decoded.height(), job.max_source_pixels)?;
-            let seconds = if self.attached {
-                0.0
-            } else {
-                let timestamp = decoded
-                    .timestamp()
-                    .ok_or("Decoded video timestamp unavailable")?;
-                timestamp
-                    .rescale(self.time_base, ffmpeg::rescale::TIME_BASE)
-                    .saturating_sub(self.origin) as f64
-                    / 1_000_000.0
-            };
-            if job.accurate && seconds + 0.000001 < job.seconds {
-                continue;
+            if self.eof_sent {
+                return Err("Video decoder requested packets after EOF".into());
             }
-            let matrix = decoded
-                .side_data(ffmpeg::util::frame::side_data::Type::DisplayMatrix)
-                .map(|side| display_matrix(side.data()))
-                .transpose()?
-                .or(self.matrix);
-            let filtered = orient_scale(&decoded, self.time_base, matrix.as_ref(), job)?;
-            let png = encode_png(&filtered)?;
-            let info = VideoFrameInfo {
-                seconds,
-                width: filtered.width(),
-                height: filtered.height(),
-                encoded_bytes: png.len() as u32,
-            };
-            let header = serde_json::to_vec(&info).map_err(message)?;
-            output
-                .write_all(&(header.len() as u32).to_le_bytes())
-                .map_err(message)?;
-            output.write_all(&header).map_err(message)?;
-            output.write_all(&png).map_err(message)?;
-            output.flush().map_err(message)?;
-            return Ok(true);
+            match self.next_packet()? {
+                Some(packet) => self.decoder.send_packet(&packet).map_err(message)?,
+                None => {
+                    self.decoder.send_eof().map_err(message)?;
+                    self.eof_sent = true;
+                }
+            }
         }
+    }
+
+    fn next_packet(&mut self) -> Result<Option<ffmpeg::Packet>> {
+        loop {
+            let mut packet = ffmpeg::Packet::empty();
+            match packet.read(&mut self.input) {
+                Ok(()) if packet.stream() == self.stream => return Ok(Some(packet)),
+                Ok(()) => {}
+                Err(ffmpeg::Error::Eof) => return Ok(None),
+                Err(error) => return Err(message(error)),
+            }
+        }
+    }
+
+    fn describe_frame(&mut self, mut image: frame::Video) -> Result<DecodedVideoFrame> {
+        check_dimensions(image.width(), image.height(), self.max_source_pixels)?;
+        let timestamp = if self.attached {
+            self.origin
+                .rescale(ffmpeg::rescale::TIME_BASE, self.time_base)
+        } else {
+            image
+                .timestamp()
+                .ok_or("Decoded video timestamp unavailable")?
+        };
+        image.set_pts(Some(timestamp));
+        let duration = image.packet().duration;
+        self.last_end = Some(timestamp.saturating_add(if duration > 0 {
+            duration
+        } else {
+            self.default_frame_duration
+        }));
+        let seconds = if self.attached {
+            0.0
+        } else {
+            timestamp
+                .rescale(self.time_base, ffmpeg::rescale::TIME_BASE)
+                .saturating_sub(self.origin) as f64
+                / 1_000_000.0
+        };
+        let matrix = image
+            .side_data(ffmpeg::util::frame::side_data::Type::DisplayMatrix)
+            .map(|side| display_matrix(side.data()))
+            .transpose()?
+            .or(self.matrix);
+        Ok(DecodedVideoFrame {
+            image,
+            seconds,
+            matrix,
+        })
+    }
+
+    fn timestamp(&self, seconds: f64) -> i64 {
+        ((seconds * 1_000_000.0).round() as i64)
+            .saturating_add(self.origin)
+            .rescale(ffmpeg::rescale::TIME_BASE, self.time_base)
     }
 }
 
@@ -232,77 +299,94 @@ fn orientation(matrix: Option<&[i32; 9]>) -> Result<String> {
     Ok(filters)
 }
 
-fn orient_scale(
-    decoded: &frame::Video,
-    time_base: ffmpeg::Rational,
-    matrix: Option<&[i32; 9]>,
-    job: &VideoFrame,
-) -> Result<frame::Video> {
-    let mut graph = filter::Graph::new();
-    // SAFETY: this new graph is exclusively owned and not yet configured.
-    unsafe {
-        (*graph.as_mut_ptr()).nb_threads = 1;
-    }
-    let aspect = decoded.aspect_ratio();
-    let aspect = if aspect.numerator() > 0 && aspect.denominator() > 0 {
-        aspect
-    } else {
-        ffmpeg::Rational(1, 1)
-    };
-    let args = format!(
-        "video_size={}x{}:pix_fmt={}:time_base={}:pixel_aspect={}",
-        decoded.width(),
-        decoded.height(),
-        decoded.format() as i32,
-        time_base,
-        aspect
-    );
-    let mut source = graph
-        .add(
-            &filter::find("buffer").ok_or("Video buffer unavailable")?,
-            "in",
-            &args,
-        )
-        .map_err(message)?;
-    let mut sink = graph
-        .add(
-            &filter::find("buffersink").ok_or("Video sink unavailable")?,
-            "out",
-            "",
-        )
-        .map_err(message)?;
-    let spec = format!(
-        "{}scale={}:{}:force_original_aspect_ratio=decrease,format=pix_fmts=rgba",
+fn scale_spec(matrix: Option<&[i32; 9]>, job: &VideoFrame, pixel: &str) -> Result<String> {
+    Ok(format!(
+        "{}scale={}:{}:force_original_aspect_ratio=decrease,format=pix_fmts={pixel}",
         orientation(matrix)?,
         job.width,
         job.height
-    );
-    graph
-        .output("in", 0)
-        .map_err(message)?
-        .input("out", 0)
-        .map_err(message)?
-        .parse(&spec)
-        .map_err(message)?;
-    graph.validate().map_err(message)?;
-    source.source().add(decoded).map_err(message)?;
-    let mut filtered = frame::Video::empty();
-    sink.sink().frame(&mut filtered).map_err(message)?;
-    filtered.remove_side_data(ffmpeg::util::frame::side_data::Type::DisplayMatrix);
-    Ok(filtered)
+    ))
 }
 
-fn encode_png(image: &frame::Video) -> Result<Vec<u8>> {
-    let codec = ffmpeg::encoder::find(codec::Id::PNG).ok_or("PNG encoder unavailable")?;
+struct FrameFilter {
+    _graph: filter::Graph,
+    source: filter::Context,
+    sink: filter::Context,
+}
+impl FrameFilter {
+    fn new(decoded: &frame::Video, time_base: ffmpeg::Rational, spec: &str) -> Result<Self> {
+        let mut graph = filter::Graph::new();
+        // SAFETY: this new graph is exclusively owned and not yet configured.
+        unsafe {
+            (*graph.as_mut_ptr()).nb_threads = 1;
+        }
+        let aspect = decoded.aspect_ratio();
+        let aspect = if aspect.numerator() > 0 && aspect.denominator() > 0 {
+            aspect
+        } else {
+            ffmpeg::Rational(1, 1)
+        };
+        let args = format!(
+            "video_size={}x{}:pix_fmt={}:time_base={}:pixel_aspect={}",
+            decoded.width(),
+            decoded.height(),
+            decoded.format() as i32,
+            time_base,
+            aspect
+        );
+        let source = graph
+            .add(
+                &filter::find("buffer").ok_or("Video buffer unavailable")?,
+                "in",
+                &args,
+            )
+            .map_err(message)?;
+        let sink = graph
+            .add(
+                &filter::find("buffersink").ok_or("Video sink unavailable")?,
+                "out",
+                "",
+            )
+            .map_err(message)?;
+        graph
+            .output("in", 0)
+            .map_err(message)?
+            .input("out", 0)
+            .map_err(message)?
+            .parse(spec)
+            .map_err(message)?;
+        graph.validate().map_err(message)?;
+        Ok(Self {
+            _graph: graph,
+            source,
+            sink,
+        })
+    }
+}
+
+fn image_encoder(
+    image: &frame::Video,
+    id: codec::Id,
+    quality: Option<i32>,
+) -> Result<codec::encoder::video::Encoder> {
+    let codec = ffmpeg::encoder::find(id).ok_or("Image encoder unavailable")?;
     let mut encoder = codec::Context::new_with_codec(codec)
         .encoder()
         .video()
         .map_err(message)?;
     encoder.set_width(image.width());
     encoder.set_height(image.height());
-    encoder.set_format(format::Pixel::RGBA);
+    encoder.set_format(image.format());
     encoder.set_time_base((1, 1000));
-    let mut encoder = encoder.open_as(codec).map_err(message)?;
+    if let Some(quality) = quality {
+        encoder.set_flags(codec::Flags::QSCALE);
+        encoder.set_global_quality(quality);
+    }
+    encoder.open_as(codec).map_err(message)
+}
+
+fn encode_png(image: &frame::Video) -> Result<Vec<u8>> {
+    let mut encoder = image_encoder(image, codec::Id::PNG, None)?;
     encoder.send_frame(image).map_err(message)?;
     encoder.send_eof().map_err(message)?;
     let mut bytes = Vec::new();
@@ -314,7 +398,7 @@ fn encode_png(image: &frame::Video) -> Result<Vec<u8>> {
             Err(error) => return Err(message(error)),
         }
         let data = packet.data().ok_or("Empty encoded PNG")?;
-        if bytes.len().saturating_add(data.len()) > MAX_PNG {
+        if bytes.len().saturating_add(data.len()) > MAX_IMAGE_BYTES {
             return Err("PNG frame exceeds the output budget".into());
         }
         bytes.extend_from_slice(data);

@@ -523,3 +523,43 @@ fn library_frame_rotation_matches_reference_pixels() {
         assert_eq!(frame.info.seconds, 0.0);
     }
 }
+
+#[test]
+fn executable_preview_samples_variable_holds_and_respects_its_frame_limit() {
+    use clip_media_protocol::{VideoFrame, VideoPreview};
+    let mut input = tempfile::tempfile().unwrap();
+    input
+        .write_all(include_bytes!(
+            "../../little-clip-core/tests/fixtures/video/timed-colors.gif"
+        ))
+        .unwrap();
+    for (limit, expected) in [(25, 8), (3, 3)] {
+        let settings = VideoPreview {
+            frame: VideoFrame::new("gif", 80, 80),
+            fps: 8,
+            frames: limit,
+            duration: None,
+        };
+        let result = command(
+            &[&input],
+            "video-preview",
+            &serde_json::to_string(&settings).unwrap(),
+        )
+        .output()
+        .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            result
+                .stdout
+                .windows(2)
+                .filter(|bytes| *bytes == [0xff, 0xd8])
+                .count(),
+            expected
+        );
+        assert!(result.stdout.ends_with(&[0xff, 0xd9]));
+    }
+}

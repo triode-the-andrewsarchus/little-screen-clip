@@ -16,6 +16,7 @@ clip-media-worker probe FORMAT_WHITELIST /proc/self/fd/N
 clip-media-worker decode-audio FORMAT_WHITELIST /proc/self/fd/N
 clip-media-worker render-audio SETTINGS_JSON [--output=/proc/self/fd/M] /proc/self/fd/N ...
 clip-media-worker video-frame SETTINGS_JSON /proc/self/fd/N
+clip-media-worker video-preview SETTINGS_JSON /proc/self/fd/N
 ```
 
 The parent must inherit a pinned ordinary input descriptor and retain child
@@ -58,6 +59,13 @@ Output bounds are at most 4096 × 4096, PNG data at most 32 MiB, and header data
 at most 1 KiB. Display matrices are applied before scaling; callers retain their
 smaller dimension, capture and process-time budgets. Parsing the response does
 not decode untrusted PNG pixels; host image readers retain their own limits.
+
+`VideoPreview` streams a bounded MJPEG sequence using one source decoder,
+one fixed-rate filter graph and one JPEG encoder. It accepts at most 512 frames,
+1–60 fps and an optional source interval of at most 60 seconds. The output cap
+is 32 MiB. EOF closure uses the observed source end, preserving a final held
+image without extending a short movie to the requested interval. Snapshot and
+batch jobs share source admission, packet draining, clocks and orientation.
 
 `cargo test -p clip-media-worker` includes real executable/descriptor tests.
 Those integration tests also make the helper executable available before a

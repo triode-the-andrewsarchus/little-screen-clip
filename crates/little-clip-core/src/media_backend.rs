@@ -2,7 +2,7 @@
 
 use crate::process::CommandRequest;
 pub use clip_media_protocol::{
-    AudioFilter, AudioInput, AudioRender, EncodedVideoFrame, VideoFrame, VideoStream,
+    AudioFilter, AudioInput, AudioRender, EncodedVideoFrame, VideoFrame, VideoPreview, VideoStream,
 };
 use std::path::PathBuf;
 
@@ -68,6 +68,14 @@ pub fn render_audio_to_request(
 /// Returns a serialization or request-budget error.
 pub fn video_frame_request(settings: &VideoFrame) -> Result<CommandRequest, String> {
     Ok(settings_request("video-frame", settings)?.max_output_bytes(32 * 1024 * 1024 + 1028))
+}
+
+/// Builds a sampled MJPEG preview request retaining one source decoder.
+///
+/// # Errors
+/// Returns settings serialization or request-budget errors.
+pub fn video_preview_request(settings: &VideoPreview) -> Result<CommandRequest, String> {
+    Ok(settings_request("video-preview", settings)?.max_output_bytes(32 * 1024 * 1024))
 }
 
 /// Checks process completion and parses the actual decoded frame record.
