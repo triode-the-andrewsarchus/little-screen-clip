@@ -6,7 +6,7 @@
 //! paths already lost by older versions require re-indexing their source folders.
 
 use super::generated_model::SampleCategory;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -227,29 +227,6 @@ impl ConstellationDb {
         Ok(())
     }
 
-    /// Returns the last recorded count for an explicitly indexed root.
-    ///
-    /// Counts describe that root's indexing transaction, not a fresh filesystem
-    /// inventory or a recomputed total after independent subtree re-indexing.
-    ///
-    /// # Errors
-    /// Returns an error if SQLite cannot open or query the cache.
-    #[allow(dead_code)]
-    pub fn is_folder_indexed(&self, folder: &Path) -> Result<Option<usize>, String> {
-        let conn = self.open()?;
-        let folder_key = folder.as_os_str().as_bytes();
-        let mut stmt = conn
-            .prepare("SELECT sample_count FROM indexed_folders WHERE folder_path = ?1")
-            .map_err(|e| e.to_string())?;
-
-        let count: Option<i64> = stmt
-            .query_row(params![folder_key], |row| row.get(0))
-            .optional()
-            .map_err(|e| e.to_string())?;
-
-        Ok(count.map(|c| c.max(0) as usize))
-    }
-
     /// Loads a folder and its descendants with byte-exact subtree boundaries.
     ///
     /// Results are ordered by stored path bytes and do not revalidate audio files.
@@ -397,6 +374,20 @@ impl ConstellationDb {
 mod tests {
     use super::*;
 
+    use rusqlite::OptionalExtension;
+
+    fn stored_folder_count(db: &ConstellationDb, folder: &Path) -> Option<i64> {
+        db.open()
+            .unwrap()
+            .query_row(
+                "SELECT sample_count FROM indexed_folders WHERE folder_path = ?1",
+                params![folder.as_os_str().as_bytes()],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap()
+    }
+
     #[test]
     fn test_constellation_db_roundtrip() {
         let temp_dir =
@@ -408,7 +399,7 @@ mod tests {
         let db = ConstellationDb::open_path(db_path.clone()).expect("Failed to create test db");
 
         let test_folder = PathBuf::from("/samples/drums");
-        assert_eq!(db.is_folder_indexed(&test_folder).unwrap(), None);
+        assert_eq!(stored_folder_count(&db, &test_folder), None);
 
         let samples = vec![
             ConstellationSample {
@@ -454,7 +445,7 @@ mod tests {
         db.save_samples(&test_folder, &samples)
             .expect("Failed to save samples");
 
-        assert_eq!(db.is_folder_indexed(&test_folder).unwrap(), Some(2));
+        assert_eq!(stored_folder_count(&db, &test_folder), Some(2));
 
         let mut loaded = db
             .load_samples(&test_folder)
@@ -498,8 +489,7 @@ mod tests {
         db.save_samples(&test_folder, &[]).unwrap();
         assert!(db.load_samples(&test_folder).unwrap().is_empty());
         assert_eq!(
-            db.is_folder_indexed(Path::new("/samples/drums-extra"))
-                .unwrap(),
+            stored_folder_count(&db, Path::new("/samples/drums-extra")),
             Some(1)
         );
         assert_eq!(db.load_samples(Path::new("/")).unwrap().len(), 3);
@@ -535,7 +525,7 @@ mod tests {
             raw_sample.file_path
         );
         assert!(db.load_samples(&visible_folder).unwrap().is_empty());
-        assert_eq!(db.is_folder_indexed(&raw_folder).unwrap(), Some(1));
+        assert_eq!(stored_folder_count(&db, &raw_folder), Some(1));
         db.save_samples(&visible_folder, &[]).unwrap();
         assert_eq!(db.load_samples(&raw_folder).unwrap().len(), 1);
 
