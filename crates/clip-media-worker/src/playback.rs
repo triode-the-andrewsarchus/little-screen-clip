@@ -152,7 +152,10 @@ impl Engine {
         let player = gst::ElementFactory::make("playbin")
             .build()
             .map_err(message)?;
-        player.set_property("uri", format!("fd://{}", file.as_raw_fd()));
+        // filesrc supports pull-mode indexing needed by MXF and other seek-heavy
+        // demuxers. The descriptor-backed view still names this retained inode,
+        // never the original pathname; fdsrc only supplies push-mode reads.
+        player.set_property("uri", format!("file:///proc/self/fd/{}", file.as_raw_fd()));
         player.set_property("video-sink", &video);
         let mut flags = if settings.silent {
             "video+deinterlace".to_owned()

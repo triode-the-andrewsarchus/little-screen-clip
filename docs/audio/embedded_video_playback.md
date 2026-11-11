@@ -41,3 +41,8 @@ a frame-rate range, avoiding an impossible upsample when drop-only is enabled.
   correct two-second duration. All 24 worker/protocol tests pass afterward.
 - The expanded host format matrix currently exposes an MXF preroll failure;
   this is still being fixed rather than dropping that format from coverage.
+
+- [x] Restore MXF random-access preroll using a descriptor-backed `filesrc`
+  view. The retained `/proc/self/fd` inode remains pinned; the push-only fd
+  source could not load MXF indexes. The full eleven-format playback, poster
+  and timeline matrix now passes, including actual MXF frames at 500 ms.
