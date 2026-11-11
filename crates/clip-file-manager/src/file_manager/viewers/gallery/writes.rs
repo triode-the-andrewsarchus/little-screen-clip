@@ -22,6 +22,18 @@ impl Collection {
     pub(super) fn writes_pending(&self) -> bool {
         self.export.is_some() || self.ratings.busy()
     }
+    fn export_snapshots_ready(&self, active: Option<&ImagePreviewState>) -> bool {
+        !self.writes_pending()
+            && active
+                .into_iter()
+                .chain(
+                    self.photos
+                        .iter()
+                        .filter_map(|photo| photo.session.as_deref()),
+                )
+                .all(|state| !state.file_write_pending() && !state.current_rgba.is_empty())
+    }
+
     pub(super) fn export_ui(
         &mut self,
         ui: &mut Ui,
@@ -31,6 +43,9 @@ impl Collection {
         if !self.export_open {
             return;
         }
+        // Gallery controls poll the active and retained editors before this
+        // confirmation. Do not snapshot pixels while a worker owns the canvas.
+        let ready = self.export_snapshots_ready(active.as_deref());
         let mut start = false;
         egui::Window::new("Export all edits")
             .collapsible(false)
@@ -41,11 +56,18 @@ impl Collection {
                 ui.label(
                     "Existing files are kept. Each successful export clears its Unsaved badge.",
                 );
+                if !ready {
+                    ui.label("Waiting for pending image work…");
+                    ui.ctx().request_repaint_after(Duration::from_millis(40));
+                }
                 ui.label("Output folder:");
                 ui.add(egui::TextEdit::singleline(&mut self.export_directory).desired_width(420.0));
                 ui.horizontal(|ui| {
                     start = ui
-                        .add(ButtonRole::Primary.button("Export PNG copies", palette))
+                        .add_enabled(
+                            ready,
+                            ButtonRole::Primary.button("Export PNG copies", palette),
+                        )
                         .clicked();
                     if ui
                         .add(ButtonRole::Secondary.button("Cancel", palette))
@@ -55,7 +77,7 @@ impl Collection {
                     }
                 });
             });
-        if start {
+        if start && ready {
             let mut inputs = VecDeque::new();
             for (index, photo) in self.photos.iter().enumerate() {
                 let state = if index == self.index {
@@ -162,6 +184,36 @@ fn export(mut inputs: VecDeque<ExportInput>, directory: PathBuf) -> ExportResult
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn export_waits_for_active_and_retained_save_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("photo.png");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([40, 80, 120, 255]))
+            .save(&original)
+            .unwrap();
+        let mut state = ImagePreviewState::from_path(original.clone(), &AppConfig::default())
+            .unwrap()
+            .with_file_source(FileSource::capture(&original).unwrap());
+        state.keep_source_on_save_as();
+        let mut collection = Collection::new(vec![original], Default::default(), 0);
+        assert!(collection.export_snapshots_ready(Some(&state)));
+
+        let copy = dir.path().join("copy.png");
+        state.save_image_to_path(&copy);
+        assert!(state.file_write_pending());
+        assert!(!collection.export_snapshots_ready(Some(&state)));
+        collection.photos[0].session = Some(Box::new(state));
+        assert!(!collection.export_snapshots_ready(None));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while collection.pending() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(collection.export_snapshots_ready(None));
+        assert!(copy.is_file());
+    }
+
     #[test]
     fn export_reports_each_result_keeps_collisions_and_preserves_originals() {
         let dir = tempfile::tempdir().unwrap();
