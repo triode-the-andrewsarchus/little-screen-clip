@@ -205,6 +205,14 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   deferred preparation. Six source/cache checks pass; the external-reference
   fixture check remains explicitly ignored until its optional path is supplied.
 
+- [x] Preserve gaps at a selected range's beginning and bound resampler tails.
+  The library renderer subtracts the requested source start rather than the
+  first decoded sample's timestamp. It trims the negotiated output duration
+  after processing so resampler flush samples cannot overrun the selection.
+  Strengthened the search packet-gap fixture to include a gap across the second
+  window's start. All seven search video/source-clock tests and all 13 worker
+  checks (including the explicit compressed reference) pass with this fix.
+
 ## Final recommendation
 
 Pending implementation and verification. This section must be reviewed after

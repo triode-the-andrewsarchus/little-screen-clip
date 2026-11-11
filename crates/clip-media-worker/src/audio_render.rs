@@ -305,7 +305,21 @@ impl RenderGraph {
                 "",
             )
             .map_err(message)?;
-        conversion.link(0, &mut sink, 0);
+        if let Some((start, end)) = job.range {
+            // Resamplers/effects may flush a few samples beyond the source
+            // trim. Bound the negotiated output clock as well as its input.
+            let mut trim = graph
+                .add(
+                    &filter::find("atrim").ok_or("Audio trim filter unavailable")?,
+                    "bounded_output",
+                    &format!("duration={:.9}", end - start),
+                )
+                .map_err(message)?;
+            conversion.link(0, &mut trim, 0);
+            trim.link(0, &mut sink, 0);
+        } else {
+            conversion.link(0, &mut sink, 0);
+        }
         let mut parser = filter::graph::Parser::new(&mut graph)
             .input(&output, 0)
             .map_err(message)?;
@@ -346,7 +360,7 @@ fn graph_spec(job: &AudioRender) -> (String, String) {
     };
     if let Some((start, end)) = job.range {
         spec = format!(
-            "[0:a]atrim=start={start:.9}:end={end:.9},asetpts=PTS-STARTPTS[range];{}",
+            "[0:a]atrim=start={start:.9}:end={end:.9},asetpts=PTS-{start:.9}/TB[range];{}",
             spec.replace("[0:a]", "[range]")
         );
     }

@@ -356,7 +356,7 @@ mod tests {
             let mut command = std::process::Command::new("ffmpeg");
             command.args(["-v", "error", "-i"]).arg(&original).args([
                 "-af",
-                r"aselect=not(between(t\,10\,12))",
+                r"aselect=not(between(t\,10\,12)+between(t\,24\,27))",
                 "-c:v",
                 "copy",
                 "-c:a",
