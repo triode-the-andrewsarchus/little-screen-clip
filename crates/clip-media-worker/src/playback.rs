@@ -359,26 +359,12 @@ impl Engine {
     }
 }
 
-fn video_sink(settings: &Settings, gpu: bool) -> Result<(gst::Bin, gstreamer_app::AppSink)> {
+fn video_sink(
+    settings: &Settings,
+    gpu: bool,
+) -> Result<(gst::Bin, gstreamer_app::AppSink)> {
     let sink = gstreamer_app::AppSink::builder()
-        .caps(
-            &gst::Caps::builder("video/x-raw")
-                .field("format", "RGBA")
-                .field("width", gst::IntRange::<i32>::new(1, settings.width as i32))
-                .field(
-                    "height",
-                    gst::IntRange::<i32>::new(1, settings.height as i32),
-                )
-                .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
-                .field(
-                    "framerate",
-                    gst::FractionRange::new(
-                        gst::Fraction::new(0, 1),
-                        gst::Fraction::new(settings.fps as i32, 1),
-                    ),
-                )
-                .build(),
-        )
+        .caps(&output_caps(settings, false))
         .max_buffers(1)
         .drop(true)
         .sync(true)
@@ -424,22 +410,36 @@ fn gpu_filters(settings: &Settings, enabled: bool) -> Result<Vec<gst::Element>> 
         .map(|name| gst::ElementFactory::make(name).build().map_err(message))
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
-    let caps = gst::Caps::builder("video/x-raw")
-        .features(["memory:CUDAMemory"])
-        .field("format", "RGBA")
-        .field("width", gst::IntRange::<i32>::new(1, settings.width as i32))
-        .field(
-            "height",
-            gst::IntRange::<i32>::new(1, settings.height as i32),
-        )
-        .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
-        .build();
+    let caps = output_caps(settings, true);
     let cap = gst::ElementFactory::make("capsfilter")
         .property("caps", caps)
         .build()
         .map_err(message)?;
     filters.insert(2, cap);
     Ok(filters)
+}
+
+fn output_caps(settings: &Settings, gpu: bool) -> gst::Caps {
+    let caps = gst::Caps::builder("video/x-raw")
+        .field("format", "RGBA")
+        .field("width", gst::IntRange::<i32>::new(1, settings.width as i32))
+        .field(
+            "height",
+            gst::IntRange::<i32>::new(1, settings.height as i32),
+        )
+        .field("pixel-aspect-ratio", gst::Fraction::new(1, 1));
+    if gpu {
+        caps.features(["memory:CUDAMemory"]).build()
+    } else {
+        caps.field(
+            "framerate",
+            gst::FractionRange::new(
+                gst::Fraction::new(0, 1),
+                gst::Fraction::new(settings.fps as i32, 1),
+            ),
+        )
+        .build()
+    }
 }
 
 fn stream_time(sample: &gst::Sample) -> Option<u64> {
