@@ -2,12 +2,15 @@
 use super::*;
 use crate::image_preview::ImageInputStamp;
 use clip_ui::buttons::ButtonRole;
-use std::{collections::VecDeque, os::fd::AsRawFd};
+use std::{
+    collections::{HashMap, VecDeque},
+    os::fd::AsRawFd,
+};
 
 type ExportResult = Vec<(usize, ImageInputStamp, Result<PathBuf, String>)>;
 struct ExportInput {
     index: usize,
-    name: std::ffi::OsString,
+    stem: std::ffi::OsString,
     source: FileSource,
     snapshot: crate::image_preview::DisplayImageSnapshotRequest,
     stamp: ImageInputStamp,
@@ -64,11 +67,9 @@ impl Collection {
                     let Some(source) = state.file_source() else {
                         continue;
                     };
-                    let mut name = photo.path.file_stem().unwrap_or_default().to_os_string();
-                    name.push("_edit.png");
                     inputs.push_back(ExportInput {
                         index,
-                        name,
+                        stem: photo.path.file_stem().unwrap_or_default().to_os_string(),
                         source,
                         snapshot: state.display_image_snapshot_request(),
                         stamp: state.input_stamp(),
@@ -134,12 +135,21 @@ fn export(mut inputs: VecDeque<ExportInput>, directory: PathBuf) -> ExportResult
     let pinned = little_clip_core::kernel_interface::create_content_directory(&directory)
         .map_err(|e| e.to_string());
     let mut results = Vec::new();
+    let mut occurrences = HashMap::<std::ffi::OsString, usize>::new();
     while let Some(input) = inputs.pop_front() {
+        let count = occurrences.entry(input.stem.clone()).or_default();
+        *count += 1;
+        let mut name = input.stem;
+        if *count == 1 {
+            name.push("_edit.png");
+        } else {
+            name.push(format!("_edit_{count}.png"));
+        }
         let result = (|| {
             let directory = pinned.as_ref().map_err(Clone::clone)?;
             let parent = std::fs::read_link(format!("/proc/self/fd/{}", directory.as_raw_fd()))
                 .map_err(|e| e.to_string())?;
-            let destination = parent.join(input.name);
+            let destination = parent.join(name);
             let bytes = input.snapshot.compose_png().map_err(|e| e.to_string())?;
             input.source.write_in(&destination, &bytes, directory)?;
             Ok(destination)
@@ -159,9 +169,9 @@ mod tests {
         std::fs::create_dir(&output).unwrap();
         std::fs::write(output.join("a_edit.png"), b"existing").unwrap();
         let mut inputs = VecDeque::new();
-        for (index, name) in ["a", "b"].into_iter().enumerate() {
-            let path = dir.path().join(format!("{name}.png"));
-            image::RgbaImage::from_pixel(4, 4, image::Rgba([40, 80, 120, 255]))
+        for (index, name) in ["a.png", "b.png", "b.jpg"].into_iter().enumerate() {
+            let path = dir.path().join(name);
+            image::RgbImage::from_pixel(4, 4, image::Rgb([40, 80, 120]))
                 .save(&path)
                 .unwrap();
             let mut state = ImagePreviewState::from_path(path.clone(), &AppConfig::default())
@@ -175,7 +185,7 @@ mod tests {
             state.mark_pixels_changed();
             inputs.push_back(ExportInput {
                 index,
-                name: format!("{name}_edit.png").into(),
+                stem: path.file_stem().unwrap().to_os_string(),
                 source: state.file_source().unwrap(),
                 snapshot: state.display_image_snapshot_request(),
                 stamp: state.input_stamp(),
@@ -183,7 +193,16 @@ mod tests {
         }
         let results = export(inputs, output.clone());
         assert!(results[0].2.is_err());
-        assert!(results[1].2.is_ok());
+        assert_eq!(results[1].2.as_ref().unwrap(), &output.join("b_edit.png"));
+        assert_eq!(results[2].2.as_ref().unwrap(), &output.join("b_edit_2.png"));
+        assert_eq!(
+            image::open(output.join("b_edit_2.png"))
+                .unwrap()
+                .to_rgba8()
+                .get_pixel(0, 0)
+                .0,
+            [255, 0, 0, 255]
+        );
         assert_eq!(
             std::fs::read(output.join("a_edit.png")).unwrap(),
             b"existing"
