@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use little_clip_core::process::CommandRequest;
+use little_clip_core::process::{CommandError, CommandRequest};
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 
 use crate::icons::Icon;
@@ -137,8 +137,7 @@ impl Mounts {
         let label = entry.label.clone();
         self.status = Some(format!("Mounting '{label}'…"));
         let target = device_path.clone();
-        let (ticket, receiver) =
-            jobs.submit(Duration::from_secs(30), move || mount_block_device(&target));
+        let (ticket, receiver) = jobs.submit(Duration::MAX, move || mount_block_device(&target));
         self.pending = Some(PendingJob {
             action: PendingAction::Mount,
             _ticket: ticket,
@@ -160,7 +159,7 @@ impl Mounts {
         let label = entry.label.clone();
         self.status = Some(format!("Unmounting '{label}'…"));
         let mp = mount_point.clone();
-        let (ticket, receiver) = jobs.submit(Duration::from_secs(30), move || {
+        let (ticket, receiver) = jobs.submit(Duration::MAX, move || {
             unmount_target(&mp, device_path.as_deref(), filesystem.as_deref(), kind).map(|()| mp)
         });
         self.pending = Some(PendingJob {
@@ -675,12 +674,19 @@ fn is_desktop_internal_mount(target: &Path) -> bool {
     s.starts_with("/run/user/") && (s.ends_with("/doc") || s.ends_with("/gvfs"))
 }
 
+pub(super) fn mount_command(program: &str) -> CommandRequest {
+    CommandRequest::new(program)
+        .timeout(Duration::from_secs(20))
+        .max_output_bytes(64 * 1024)
+        .own_process_group()
+}
+
 /// Mounts an unmounted block device using `udisksctl mount -b`.
 pub(crate) fn mount_block_device(device_path: &Path) -> Result<PathBuf, String> {
-    let output = std::process::Command::new("udisksctl")
+    let output = mount_command("udisksctl")
         .args(["mount", "--no-user-interaction", "-b"])
         .arg(device_path)
-        .output()
+        .run()
         .map_err(|e| format!("Failed to run udisksctl: {e}"))?;
 
     if !output.status.success() {
@@ -724,32 +730,31 @@ pub(crate) fn unmount_target(
     }
 
     // Try udisksctl unmount
-    let mut udisks_cmd = std::process::Command::new("udisksctl");
-    udisks_cmd.args(["unmount", "--no-user-interaction", "-b"]);
-    if let Some(dev) = device_path {
-        udisks_cmd.arg(dev);
-    } else {
-        udisks_cmd.arg(mount_point);
-    }
-
-    if let Ok(output) = udisks_cmd.output()
-        && output.status.success()
-    {
-        return Ok(());
+    let udisks_cmd = mount_command("udisksctl")
+        .args(["unmount", "--no-user-interaction", "-b"])
+        .arg(device_path.unwrap_or(mount_point));
+    match udisks_cmd.run() {
+        Ok(output) if output.status.success() => return Ok(()),
+        Ok(_) | Err(CommandError::Spawn { .. }) => {}
+        Err(error) => return Err(format!("Could not confirm UDisks unmount: {error}")),
     }
 
     if filesystem.is_some_and(|filesystem| {
         filesystem == "fuse" || filesystem == "fuseblk" || filesystem.starts_with("fuse.")
-    }) && super::fuse_binwalk::unmount_fuse(mount_point).is_ok()
-    {
-        return Ok(());
+    }) {
+        match super::fuse_binwalk::run_fusermount(mount_point) {
+            Ok(output) if output.status.success() => return Ok(()),
+            Ok(_) | Err(CommandError::Spawn { .. }) => {}
+            Err(error) => return Err(format!("Could not confirm FUSE unmount: {error}")),
+        }
     }
 
     // Fallback: standard umount
-    let status = std::process::Command::new("umount")
+    let status = mount_command("umount")
         .arg(mount_point)
-        .status()
-        .map_err(|e| format!("Failed to run umount: {e}"))?;
+        .run()
+        .map_err(|e| format!("Failed to run umount: {e}"))?
+        .status;
 
     if status.success() {
         Ok(())

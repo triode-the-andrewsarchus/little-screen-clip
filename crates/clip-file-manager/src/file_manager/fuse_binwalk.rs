@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use little_clip_core::{BackgroundJobs, JobError, JobTicket};
+use little_clip_core::{
+    BackgroundJobs, JobError, JobTicket,
+    process::{CommandError, CommandOutput, CommandRequest},
+};
 use sha2::{Digest, Sha256};
 
 static CACHED_MOUNTS: std::sync::OnceLock<std::sync::RwLock<MountTable>> =
@@ -186,19 +189,23 @@ pub fn unmount_fuse_binwalk(mount_point: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Unmounts a FUSE filesystem without removing a caller-owned mount directory.
-pub(super) fn unmount_fuse(mount_point: &Path) -> Result<(), String> {
-    let status = std::process::Command::new("fusermount3")
-        .arg("-u")
-        .arg(mount_point)
-        .status()
-        .or_else(|_| {
-            std::process::Command::new("fusermount")
-                .arg("-u")
-                .arg(mount_point)
-                .status()
-        })
-        .map_err(|e| format!("Failed to run fusermount: {e}"))?;
+pub(super) fn run_fusermount(mount_point: &Path) -> Result<CommandOutput, CommandError> {
+    let run = |program| {
+        super::mounts::mount_command(program)
+            .arg("-u")
+            .arg(mount_point)
+            .run()
+    };
+    match run("fusermount3") {
+        Err(CommandError::Spawn { .. }) => run("fusermount"),
+        result => result,
+    }
+}
+
+fn unmount_fuse(mount_point: &Path) -> Result<(), String> {
+    let status = run_fusermount(mount_point)
+        .map_err(|error| format!("Failed to run fusermount: {error}"))?
+        .status;
 
     if status.success() {
         Ok(())
@@ -219,7 +226,7 @@ pub fn mount_fuse_binwalk(binary_path: &Path, writable: bool) -> Result<PathBuf,
 
     let mount_point = mount_point_for_binary(binary_path);
     if is_fuse_binwalk_mounted(&mount_point) {
-        let _ = unmount_fuse_binwalk(&mount_point);
+        unmount_fuse_binwalk(&mount_point)?;
     }
 
     std::fs::create_dir_all(&mount_point).map_err(|e| {
@@ -231,16 +238,21 @@ pub fn mount_fuse_binwalk(binary_path: &Path, writable: bool) -> Result<PathBuf,
 
     let current_exe =
         std::env::current_exe().map_err(|e| format!("Failed to locate current executable: {e}"))?;
-    let mut cmd = std::process::Command::new(current_exe);
-    cmd.arg("--internal-fuse-binwalk-daemon");
+    // The launcher scans before it forks. Its service daemon enters a
+    // separate session and redirects its pipes when daemonizing.
+    let mut cmd = CommandRequest::new(current_exe)
+        .arg("--internal-fuse-binwalk-daemon")
+        .timeout(Duration::from_secs(90))
+        .max_output_bytes(64 * 1024)
+        .own_process_group();
     if writable {
-        cmd.arg("-w");
+        cmd = cmd.arg("-w");
     }
-    cmd.arg(binary_path);
-    cmd.arg(&mount_point);
 
     let output = cmd
-        .output()
+        .arg(binary_path)
+        .arg(&mount_point)
+        .run()
         .map_err(|e| format!("Failed to execute mount worker: {e}"))?;
 
     if !output.status.success() {
@@ -349,9 +361,8 @@ impl MountManager {
             return;
         }
         let target = binary_path.clone();
-        let (ticket, receiver) = jobs.submit(Duration::from_secs(120), move || {
-            mount_fuse_binwalk(&target, writable)
-        });
+        let (ticket, receiver) =
+            jobs.submit(Duration::MAX, move || mount_fuse_binwalk(&target, writable));
         self.pending = Some(PendingMountJob {
             kind: PendingKind::Mount {
                 binary_path,
@@ -367,7 +378,7 @@ impl MountManager {
             return;
         }
         let target = mount_point.clone();
-        let (ticket, receiver) = jobs.submit(Duration::from_secs(30), move || {
+        let (ticket, receiver) = jobs.submit(Duration::MAX, move || {
             unmount_fuse_binwalk(&target).map(|()| target)
         });
         self.pending = Some(PendingMountJob {
