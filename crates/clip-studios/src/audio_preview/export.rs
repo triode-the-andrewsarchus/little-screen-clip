@@ -1,4 +1,6 @@
+mod artifact;
 use super::*;
+pub(super) use artifact::AudioSliceArtifact;
 
 #[derive(Clone, Copy)]
 pub(super) enum AudioImageKind {
@@ -243,7 +245,7 @@ impl AudioPreviewState {
                     &plans,
                     mode,
                     &worker_cancelled,
-                    extract_audio_slice_file,
+                    extract_audio_slice_owned,
                     send_audio_handoff,
                     |paths| {
                         little_clip_core::copy_file_uris_to_system_clipboard(paths)
@@ -890,6 +892,13 @@ pub fn extract_audio_slice_file(
     plan: &AudioSliceCopyPlan,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    extract_audio_slice_owned(plan, cancelled).map(AudioSliceArtifact::retain)
+}
+
+pub(super) fn extract_audio_slice_owned(
+    plan: &AudioSliceCopyPlan,
+    cancelled: &AtomicBool,
+) -> Result<AudioSliceArtifact, String> {
     use std::os::fd::AsRawFd;
     if cancelled.load(Ordering::Acquire) {
         return Err("Audio slice copy cancelled".to_owned());
@@ -939,12 +948,22 @@ pub(super) fn extract_and_handoff_audio_slice(
     plan: AudioSliceCopyPlan,
     cancelled: &AtomicBool,
 ) -> Result<AudioSliceDelivery, String> {
-    let output = extract_audio_slice_file(&plan, cancelled)?;
-    handoff_audio_slice(&output, cancelled, send_audio_handoff, |path| {
-        let path = path.to_path_buf();
-        little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&path))
-            .map_err(|error| error.to_string())
-    })
+    let mut artifact = extract_audio_slice_owned(&plan, cancelled)?;
+    let output = artifact.path.clone();
+    handoff_audio_slice(
+        &output,
+        cancelled,
+        |request| {
+            // Sending can expose the path even if its acknowledgement is lost.
+            artifact.preserve();
+            send_audio_handoff(request)
+        },
+        |path| {
+            let path = path.to_path_buf();
+            little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&path))
+                .map_err(|error| error.to_string())
+        },
+    )
 }
 
 /// Copies a file-backed selection through the shared slice exporter and desktop clipboard.
@@ -973,12 +992,25 @@ pub fn copy_file_audio_segment(
     }
     let plan = audio_slice_copy_plan(path, start, end, ChannelCopyMode::Native, None)
         .with_file_source(source.clone());
-    let output = extract_audio_slice_file(&plan, cancelled)?;
+    let mut artifact = extract_audio_slice_owned(&plan, cancelled)?;
+    let output = artifact.path.clone();
     if crate::file_source::FileSource::capture(path)? != *source {
         return Err("Audio source changed while copying; copy it again.".into());
     }
-    little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&output))
-        .map_err(|e| e.to_string())?;
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Audio slice copy cancelled".into());
+    }
+    let copied =
+        little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&output));
+    if copied.is_ok()
+        || matches!(
+            &copied,
+            Err(little_clip_core::clipboard::ClipboardError::Failed(_))
+        )
+    {
+        artifact.preserve();
+    }
+    copied.map_err(|error| error.to_string())?;
     let delivery = handoff_audio_slice(&output, cancelled, send_audio_handoff, |_| Ok(()))?;
     Ok(format!(
         "{}; desktop clipboard contains the audio file.",
@@ -990,10 +1022,11 @@ pub(super) fn run_audio_slice_batch(
     plans: &[AudioSliceCopyPlan],
     mode: ChannelCopyMode,
     cancelled: &AtomicBool,
-    mut extract: impl FnMut(&AudioSliceCopyPlan, &AtomicBool) -> Result<PathBuf, String>,
-    send_to_daemon: impl FnMut(&IpcRequest) -> Result<(), String>,
+    mut extract: impl FnMut(&AudioSliceCopyPlan, &AtomicBool) -> Result<AudioSliceArtifact, String>,
+    mut send_to_daemon: impl FnMut(&IpcRequest) -> Result<(), String>,
     copy_to_system: impl FnMut(&[PathBuf]) -> Result<(), String>,
 ) -> Result<String, String> {
+    let mut artifacts = Vec::with_capacity(plans.len());
     let mut paths = Vec::with_capacity(plans.len());
     let mut completed = Vec::with_capacity(plans.len());
     let mut failures = Vec::new();
@@ -1008,8 +1041,9 @@ pub(super) fn run_audio_slice_batch(
             .unwrap_or("audio slice")
             .to_owned();
         match extract(plan, cancelled) {
-            Ok(path) => {
-                paths.push(path);
+            Ok(artifact) => {
+                paths.push(artifact.path.clone());
+                artifacts.push(artifact);
                 completed.push(name);
             }
             Err(error) => failures.push(format!("{name}: {error}")),
@@ -1027,15 +1061,24 @@ pub(super) fn run_audio_slice_batch(
     } else {
         format!("; failed: {}", failures.join("; "))
     };
-    let delivery = handoff_audio_files(&paths, cancelled, send_to_daemon, copy_to_system).map_err(
-        |error| {
-            format!(
-                "Failed to hand off {} extracted slice(s) ({}): {error}{partial_failures}",
-                paths.len(),
-                completed.join(", ")
-            )
+    let delivery = handoff_audio_files(
+        &paths,
+        cancelled,
+        |request| {
+            for artifact in &mut artifacts {
+                artifact.preserve();
+            }
+            send_to_daemon(request)
         },
-    )?;
+        copy_to_system,
+    )
+    .map_err(|error| {
+        format!(
+            "Failed to hand off {} extracted slice(s) ({}): {error}{partial_failures}",
+            paths.len(),
+            completed.join(", ")
+        )
+    })?;
     let delivery = match delivery {
         AudioSliceDelivery::Daemon => "Left Hand",
         AudioSliceDelivery::SystemClipboard => "system clipboard fallback",
@@ -1156,13 +1199,14 @@ pub(super) fn save_audio_region(
     directory: &std::fs::File,
 ) -> Result<PathBuf, String> {
     save_audio_region_cancellable(plan, region, directory, &AtomicBool::new(false))
+        .map(AudioSliceArtifact::retain)
 }
 fn save_audio_region_cancellable(
     plan: &AudioSavePlan,
     region: &AudioSaveRegion,
     directory: &std::fs::File,
     cancelled: &AtomicBool,
-) -> Result<PathBuf, String> {
+) -> Result<AudioSliceArtifact, String> {
     use std::os::fd::AsRawFd;
     if Path::new(&region.filename).file_name() != Some(std::ffi::OsStr::new(&region.filename)) {
         return Err("Enter one audio export filename".into());
@@ -1178,10 +1222,12 @@ fn save_audio_region_cancellable(
     )?;
     let anchor = PathBuf::from(format!("/proc/self/fd/{}", rendered.directory.as_raw_fd()));
     let parent = std::fs::read_link(&anchor).map_err(|error| error.to_string())?;
-    let out_path = install_audio_output(rendered.staging, &anchor, plan, &region.filename)?;
-    Ok(std::fs::read_link(&anchor)
+    let (out_path, installed) =
+        install_audio_output(rendered.staging, &anchor, plan, &region.filename)?;
+    let path = std::fs::read_link(&anchor)
         .unwrap_or(parent)
-        .join(out_path.file_name().ok_or("Missing output name")?))
+        .join(out_path.file_name().ok_or("Missing output name")?);
+    Ok(AudioSliceArtifact::new(path, rendered.directory, installed))
 }
 
 /// Checks source identity and applies the session's installation policy.
@@ -1190,22 +1236,22 @@ fn install_audio_output(
     anchor: &Path,
     plan: &AudioSavePlan,
     filename: &str,
-) -> Result<PathBuf, String> {
-    let mut out_path = anchor.join(filename);
+) -> Result<(PathBuf, std::fs::File), String> {
+    let out_path = anchor.join(filename);
     if let Some(source) = &plan.file_source {
         source.check()?;
-        out_path = install_saved_audio(staging, anchor, filename, plan.versioned)?;
+        install_saved_audio(staging, anchor, filename, plan.versioned)
     } else {
         match little_clip_core::kernel_interface::require_content(&out_path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.to_string()),
         }
-        staging
+        let installed = staging
             .persist(&out_path)
             .map_err(|error| error.to_string())?;
+        Ok((out_path, installed))
     }
-    Ok(out_path)
 }
 
 /// Installs a staged file once, retrying only atomic name collisions for sibling edits.
@@ -1214,7 +1260,7 @@ fn install_saved_audio(
     directory: &Path,
     filename: &str,
     versioned: bool,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, std::fs::File), String> {
     let name = Path::new(filename);
     let stem = name.file_stem().unwrap_or_default().to_string_lossy();
     let extension = name.extension().unwrap_or_default().to_string_lossy();
@@ -1225,7 +1271,7 @@ fn install_saved_audio(
             format!("{stem}-{version}.{extension}")
         });
         match staged.persist_noclobber(&output) {
-            Ok(_) => return Ok(output),
+            Ok(file) => return Ok((output, file)),
             Err(error) if versioned && error.error.kind() == std::io::ErrorKind::AlreadyExists => {
                 staged = error.file;
             }

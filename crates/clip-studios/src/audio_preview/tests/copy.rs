@@ -1,5 +1,32 @@
 use super::*;
 
+fn fake_slice_artifact(
+    plan: &AudioSliceCopyPlan,
+    _: &AtomicBool,
+) -> Result<AudioSliceArtifact, String> {
+    let directory =
+        little_clip_core::kernel_interface::create_content_directory(plan.output.parent().unwrap())
+            .map_err(|error| error.to_string())?;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&plan.output)
+        .map_err(|error| error.to_string())?;
+    Ok(AudioSliceArtifact::new(
+        plan.output.clone(),
+        directory,
+        file,
+    ))
+}
+
+fn place_slice_plans(plans: &mut [AudioSliceCopyPlan], root: &Path) {
+    for (index, plan) in plans.iter_mut().enumerate() {
+        plan.output = root
+            .join(index.to_string())
+            .join(plan.output.file_name().unwrap());
+    }
+}
+
 #[test]
 fn single_slice_copy_plan_keeps_range_active_filter_and_name() {
     let region = AudioRegionEdit {
@@ -110,7 +137,8 @@ fn cancelled_single_slice_copy_does_not_publish() {
 
 #[test]
 fn audio_batch_copy_preserves_selection_order_and_pushes_ordered_files() {
-    let plans = [(0.8, 1.2), (0.1, 0.4), (2.0, 3.0)]
+    let root = tempfile::tempdir().unwrap();
+    let mut plans = [(0.8, 1.2), (0.1, 0.4), (2.0, 3.0)]
         .into_iter()
         .map(|(start, end)| {
             audio_slice_copy_plan(
@@ -122,6 +150,7 @@ fn audio_batch_copy_preserves_selection_order_and_pushes_ordered_files() {
             )
         })
         .collect::<Vec<_>>();
+    place_slice_plans(&mut plans, root.path());
     let expected = plans
         .iter()
         .map(|plan| plan.output.clone())
@@ -131,7 +160,7 @@ fn audio_batch_copy_preserves_selection_order_and_pushes_ordered_files() {
         &plans,
         ChannelCopyMode::LeftOnly,
         &AtomicBool::new(false),
-        |plan, _| Ok(plan.output.clone()),
+        fake_slice_artifact,
         |request| {
             match request {
                 IpcRequest::PushFiles { paths, hand } => {
@@ -184,7 +213,7 @@ fn audio_inspect_left_copy_extracts_exact_mono_payload_for_left_hand() {
         &[plan],
         ChannelCopyMode::LeftOnly,
         &AtomicBool::new(false),
-        extract_audio_slice_file,
+        extract_audio_slice_owned,
         |request| match request {
             IpcRequest::PushFile { path, hand } => {
                 assert_eq!(*hand, little_clip_core::HandSide::Left);
@@ -208,7 +237,8 @@ fn audio_inspect_left_copy_extracts_exact_mono_payload_for_left_hand() {
 
 #[test]
 fn audio_batch_copy_reports_mixed_and_total_failures() {
-    let plans = [(0.0, 0.5), (1.0, 1.5), (2.0, 2.5)]
+    let root = tempfile::tempdir().unwrap();
+    let mut plans = [(0.0, 0.5), (1.0, 1.5), (2.0, 2.5)]
         .into_iter()
         .map(|(start, end)| {
             audio_slice_copy_plan(
@@ -220,6 +250,7 @@ fn audio_batch_copy_reports_mixed_and_total_failures() {
             )
         })
         .collect::<Vec<_>>();
+    place_slice_plans(&mut plans, root.path());
     let result = run_audio_slice_batch(
         &plans,
         ChannelCopyMode::Native,
@@ -228,7 +259,7 @@ fn audio_batch_copy_reports_mixed_and_total_failures() {
             if plan.start == 1.0 {
                 Err("ffmpeg exit status: 1".to_owned())
             } else {
-                Ok(plan.output.clone())
+                fake_slice_artifact(plan, &AtomicBool::new(false))
             }
         },
         |request| {
@@ -334,4 +365,78 @@ fn slice_copy_rejects_changed_displayed_revision_before_output_admission() {
     let error = extract_audio_slice_file(&plan, &AtomicBool::new(false)).unwrap_err();
     assert!(error.contains("changed"));
     assert!(!plan.output.parent().unwrap().exists());
+}
+
+#[test]
+fn cancellation_during_audio_batch_preparation_removes_unpublished_slices() {
+    for cancel_after in [0, 1] {
+        let root = tempfile::tempdir().unwrap();
+        let mut plans = [0.0, 1.0]
+            .into_iter()
+            .map(|start| {
+                audio_slice_copy_plan(
+                    Path::new("source.wav"),
+                    start,
+                    start + 0.5,
+                    ChannelCopyMode::Native,
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        place_slice_plans(&mut plans, root.path());
+        let cancelled = AtomicBool::new(false);
+        let mut extracted = 0;
+        let result = run_audio_slice_batch(
+            &plans,
+            ChannelCopyMode::Native,
+            &cancelled,
+            |plan, cancel| {
+                let artifact = fake_slice_artifact(plan, cancel)?;
+                if extracted == cancel_after {
+                    cancelled.store(true, Ordering::Release);
+                }
+                extracted += 1;
+                Ok(artifact)
+            },
+            |_| panic!("cancelled preparation must not reach the daemon"),
+            |_| panic!("cancelled preparation must not reach the clipboard"),
+        );
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert_eq!(extracted, cancel_after + 1);
+        for plan in &plans {
+            assert!(!plan.output.exists());
+        }
+    }
+}
+
+#[test]
+fn unpublished_audio_cleanup_uses_the_held_parent_and_checks_file_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let mut plan = audio_slice_copy_plan(
+        Path::new("source.wav"),
+        0.0,
+        0.5,
+        ChannelCopyMode::Native,
+        None,
+    );
+    plan.output = root.path().join("original/slice.wav");
+    let artifact = fake_slice_artifact(&plan, &AtomicBool::new(false)).unwrap();
+    let moved = root.path().join("moved");
+    std::fs::rename(plan.output.parent().unwrap(), &moved).unwrap();
+    std::fs::create_dir(plan.output.parent().unwrap()).unwrap();
+    std::fs::write(&plan.output, b"replacement directory").unwrap();
+    drop(artifact);
+    assert!(!moved.join("slice.wav").exists());
+    assert_eq!(
+        std::fs::read(&plan.output).unwrap(),
+        b"replacement directory"
+    );
+
+    plan.output = root.path().join("original/another.wav");
+    let artifact = fake_slice_artifact(&plan, &AtomicBool::new(false)).unwrap();
+    std::fs::rename(&plan.output, root.path().join("relocated.wav")).unwrap();
+    std::fs::write(&plan.output, b"replacement file").unwrap();
+    drop(artifact);
+    assert_eq!(std::fs::read(&plan.output).unwrap(), b"replacement file");
+    assert!(root.path().join("relocated.wav").exists());
 }
