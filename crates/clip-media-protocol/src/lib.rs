@@ -3,6 +3,13 @@
 //! No codec, process or desktop dependencies belong in this crate.
 use serde::{Deserialize, Serialize};
 
+/// Audio containers admitted by browser metadata inspection.
+pub const AUDIO_FORMATS: &str = "wav,aiff,flac,mp3,ogg,mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,caf,aac,asf,xwma,ape,wv,tta,ac3,eac3,dts,amr,au";
+
+/// Video containers recognized by the desktop browser, plus animated images.
+pub const VIDEO_FORMATS: &str =
+    "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpeg,mpegts,ogg,flv,asf,mxf,gif,webp,webp_pipe,apng";
+
 /// Maximum serialized render settings accepted by the worker.
 pub const MAX_SETTINGS_BYTES: usize = 64 * 1024;
 
@@ -242,3 +249,5 @@ pub struct VideoTimeline {
     /// Source duration used for column sampling, in milliseconds.
     pub duration_ms: u64,
 }
+
+pub mod playback;

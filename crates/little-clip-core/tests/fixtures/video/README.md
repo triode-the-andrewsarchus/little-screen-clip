@@ -13,3 +13,9 @@ ffmpeg -i video.mp4 -i cover.jpg -map 0:v -map 1:v -c copy -disposition:v:1 atta
 frames lasting 100, 400 and 500 ms respectively. It exercises fixed-rate
 sampling and the final frame's hold duration without external media/tools.
 Generated with Pillow's GIF writer (RGB solid-color frames, loop=0, disposal=2).
+
+`playback-colors.mp4` is a generated three-second 64 × 48 H.264/AAC movie:
+red, green and blue each last one second at 10 fps; a 440 Hz sine supplies audio.
+It verifies clocked playback, pause, precise seeks, EOF and silent hover mode.
+Generated with FFmpeg lavfi `color` inputs joined with `concat`, and `sine` at
+16 kHz; video uses libx264/yuv420p with a one-second GOP, audio AAC at 32 kbps.

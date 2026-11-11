@@ -3,6 +3,7 @@
 mod audio;
 mod audio_filter;
 mod audio_render;
+mod playback;
 mod probe;
 mod video;
 use std::{fs::File, os::fd::FromRawFd};
@@ -16,6 +17,15 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments.first().is_some_and(|mode| mode == "playback") {
+        if arguments.len() != 3 || arguments[1].len() > clip_media_protocol::MAX_SETTINGS_BYTES {
+            return Err("Invalid playback request".into());
+        }
+        return playback::run(
+            inherited_input(&arguments[2])?,
+            serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?,
+        );
+    }
     if arguments.first().is_some_and(|mode| mode == "render-audio") {
         return render_command(&arguments);
     }

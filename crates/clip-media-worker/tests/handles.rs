@@ -684,3 +684,154 @@ fn library_av1_timeline_matches_the_existing_sequential_reference() {
         .unwrap();
     assert_eq!(maximum, 0, "AV1 timeline reference pixel difference");
 }
+
+mod playback {
+    use super::*;
+    use clip_media_protocol::playback::{Control, Settings, Update};
+    use std::{
+        io::Read,
+        process::{Child, ChildStdin, ChildStdout, Stdio},
+        time::{Duration, Instant},
+    };
+
+    struct Player {
+        child: Child,
+        input: Option<ChildStdin>,
+        output: ChildStdout,
+    }
+    impl Player {
+        fn open() -> Self {
+            let input = File::open(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../little-clip-core/tests/fixtures/video/playback-colors.mp4"
+            ))
+            .unwrap();
+            let settings = Settings {
+                stream: 0,
+                width: 320,
+                height: 180,
+                fps: 20,
+                start_ms: 1200,
+                silent: true,
+            };
+            let mut child = command(
+                &[&input],
+                "playback",
+                &serde_json::to_string(&settings).unwrap(),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+            Self {
+                input: child.stdin.take(),
+                output: child.stdout.take().unwrap(),
+                child,
+            }
+        }
+        fn control(&mut self, epoch: u64, seek_ms: Option<u64>, playing: bool) {
+            let bytes = serde_json::to_string(&Control {
+                epoch,
+                seek_ms,
+                playing,
+                volume: 0.5,
+            })
+            .unwrap();
+            writeln!(self.input.as_mut().unwrap(), "{bytes}").unwrap();
+        }
+        fn until(&mut self, accept: impl Fn(&Update) -> bool) -> (Update, Vec<u8>) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let packet = Update::read(&mut Timed {
+                    output: &mut self.output,
+                    deadline,
+                })
+                .unwrap();
+                assert!(packet.0.error.is_none(), "{:?}", packet.0);
+                if accept(&packet.0) {
+                    return packet;
+                }
+            }
+        }
+    }
+    impl Drop for Player {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+    struct Timed<'a> {
+        output: &'a mut ChildStdout,
+        deadline: Instant,
+    }
+    impl Read for Timed<'_> {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            loop {
+                if Instant::now() >= self.deadline {
+                    return Err(std::io::Error::other("Playback test timed out"));
+                }
+                let mut fd = libc::pollfd {
+                    fd: self.output.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: poll borrows the test's live child stdout descriptor.
+                let ready = unsafe { libc::poll(&mut fd, 1, 25) };
+                if ready < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if ready > 0 {
+                    return self.output.read(bytes);
+                }
+            }
+        }
+    }
+    #[test]
+    fn player_clocks_frames_pauses_seeks_with_epochs_and_reports_eof_without_a_window() {
+        let mut player = Player::open();
+        let (start, pixels) = player.until(|packet| packet.bytes > 0);
+        assert!((1200..1400).contains(&start.position_ms), "{start:?}");
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .all(|pixel| pixel[1] > 80 && pixel[0] < 10 && pixel[2] < 10)
+        );
+        let clock = Instant::now();
+        player.until(|packet| packet.position_ms >= 1600 && packet.bytes > 0);
+        assert!(
+            clock.elapsed() >= Duration::from_millis(250),
+            "frames must be clocked, not decoded as fast as possible"
+        );
+        player.control(0, None, false);
+        let (paused, _) = player.until(|packet| !packet.playing && packet.bytes == 0);
+        let (still, _) = player.until(|packet| !packet.playing && packet.bytes == 0);
+        assert!(paused.position_ms.abs_diff(still.position_ms) <= 20);
+        player.control(1, Some(2200), false);
+        let (seek, pixels) = player.until(|packet| packet.epoch == 1 && packet.bytes > 0);
+        assert!((2200..2300).contains(&seek.position_ms), "{seek:?}");
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .all(|pixel| pixel[2] > 200 && pixel[0] < 10)
+        );
+        player.control(2, Some(200), true);
+        let (_, pixels) = player.until(|packet| packet.epoch == 2 && packet.bytes > 0);
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .all(|pixel| pixel[0] > 200 && pixel[2] < 10)
+        );
+        let (end, _) = player.until(|packet| packet.epoch == 2 && packet.ended);
+        assert!(!end.playing);
+        assert_eq!(end.duration_ms, 3000);
+        drop(player.input.take());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while player.child.try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "closing controls must retire playback"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}

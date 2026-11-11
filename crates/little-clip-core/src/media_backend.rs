@@ -1,18 +1,12 @@
 //! Requests to the separately linked FFmpeg library worker.
 
 use crate::process::CommandRequest;
+pub use clip_media_protocol::playback;
 pub use clip_media_protocol::{
-    AudioFilter, AudioInput, AudioRender, EncodedVideoFrame, VideoFrame, VideoPreview, VideoStream,
-    VideoTimeline,
+    AUDIO_FORMATS, AudioFilter, AudioInput, AudioRender, EncodedVideoFrame, VIDEO_FORMATS,
+    VideoFrame, VideoPreview, VideoStream, VideoTimeline,
 };
 use std::path::PathBuf;
-
-/// Audio containers admitted by browser metadata inspection.
-pub const AUDIO_FORMATS: &str = "wav,aiff,flac,mp3,ogg,mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,caf,aac,asf,xwma,ape,wv,tta,ac3,eac3,dts,amr,au";
-
-/// Video containers recognized by the desktop browser, plus animated images.
-pub const VIDEO_FORMATS: &str =
-    "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpeg,mpegts,ogg,flv,asf,mxf,gif,webp,webp_pipe,apng";
 
 /// Builds a metadata request. The caller supplies a pinned content input and
 /// retains its existing timeout, cancellation and output-size policy.
@@ -99,6 +93,15 @@ pub fn decode_video_frame<'a>(
         return Err("Video frame decode failed or exceeded its output budget".into());
     }
     clip_media_protocol::parse_video_frame(&output.stdout, settings.width, settings.height)
+}
+
+/// Builds an owned streaming playback request. The caller supplies a pinned input,
+/// pumps the bounded protocol off the UI thread, and kills/reaps the child on stop.
+///
+/// # Errors
+/// Returns serialization or settings-budget errors.
+pub fn playback_request(settings: &playback::Settings) -> Result<CommandRequest, String> {
+    settings_request("playback", settings)
 }
 
 fn settings_request(

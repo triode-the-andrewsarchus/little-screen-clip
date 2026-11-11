@@ -11,6 +11,9 @@ clip-media-protocol = { path = "../clip-media-protocol" }
 ffmpeg-next = { version = "9.0.0", default-features = false, features = ["format", "codec", "filter", "software-resampling", "software-scaling"] }
 serde_json.workspace = true
 libc = "0.2"
+gstreamer = { version = "0.25", features = ["v1_24"] }
+gstreamer-app = { version = "0.25", features = ["v1_24"] }
+gstreamer-video = { version = "0.25", features = ["v1_24"] }
 
 [dev-dependencies]
 hound = "3.5.1"
