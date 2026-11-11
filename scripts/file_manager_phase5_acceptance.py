@@ -5,7 +5,7 @@ from PIL import Image, ImageChops
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance
 from file_manager_phase4_acceptance import click_word, back
 import ui_acceptance_capture as private
-from file_manager_media_audio import start_private_audio
+from file_manager_media_audio import start_private_audio, audio_tail
 from file_manager_acceptance import wait_for
 import os
 import struct
@@ -15,17 +15,6 @@ import time
 import subprocess
 
 
-def audio_tail(session):
-    path = session.output / "audio-output.pcm"
-    if not path.exists():
-        return (), 0
-    with path.open("rb") as source:
-        size = source.seek(0, 2)
-        source.seek(max(0, size - 32000))
-        data = source.read(32000)
-    count = len(data) // 2
-    return struct.unpack("<" + "h" * count, data[:count * 2]), size
-
 
 def unavailable_video(session, root):
     filename = next(root.glob("movie.*")).name
@@ -33,20 +22,21 @@ def unavailable_video(session, root):
     x, y = session.word("01-video-tools", filename, minimum_y=240)
     session.click(x, y)
     session.key("Return")
-    session.observe("02-unavailable-player", ["install the FFmpeg player package", "Open externally", "Back to folder"])
+    session.observe("02-unavailable-player", ["Playback decoder closed", "Back to folder"])
     windows = json.loads(private.run_checked([str(session.niri), "msg", "--json", "windows"], env=session.env))
     assert not any(window["title"] == "Files video" for window in windows)
     click_word(session, "02-unavailable-player", "Back", minimum_y=50, maximum_y=95)
     session.observe("03-tools-return", [filename, "notes.txt"])
 
 
-def unavailable_environment(output, env, children):
+def unavailable_environment(output, env, children, binary):
     tools = output / "tools"
     tools.mkdir()
-    unavailable = tools / "ffplay"
-    unavailable.write_text("#!/bin/sh\nexit 127\n")
+    unavailable = tools / "clip-media-worker"
+    unavailable.write_text('#!/usr/bin/env python3\nimport os,sys\nif sys.argv[1]=="playback": sys.exit(127)\nos.execv(os.environ["CLIP_TEST_REAL_WORKER"],["clip-media-worker",*sys.argv[1:]])\n')
     unavailable.chmod(0o700)
-    env["PATH"] = str(tools) + os.pathsep + env["PATH"]
+    env["CLIP_TEST_REAL_WORKER"] = str(binary.resolve().with_name("clip-media-worker"))
+    env["LITTLE_CLIP_MEDIA_WORKER"] = str(unavailable)
     return env
 
 
@@ -187,58 +177,8 @@ def music(session, root):
 
 
 def video(session, root):
-    filename = next(root.glob("movie.*")).name
-    session.observe("01-video-folder", [filename, "notes.txt", "subfolder"])
-    x, y = session.word("01-video-folder", filename, minimum_y=240)
-    session.click(x, y)
-    session.key("Return")
-    def windows():
-        return json.loads(private.run_checked([str(session.niri), "msg", "--json", "windows"], env=session.env))
-    def player_window():
-        return next((window for window in windows() if window["title"] == "Files video"), None)
-    wait_for(player_window, "owned video window")
-    window = player_window()
-    private.run_checked([str(session.niri), "msg", "action", "focus-window", "--id", str(window["id"])], env=session.env)
-    if not window.get("is_floating"):
-        private.run_checked([str(session.niri), "msg", "action", "toggle-window-floating"], env=session.env)
-    def capture(name):
-        path = session.output / f"{name}.png"
-        path.unlink(missing_ok=True)
-        private.screenshot(session.niri, session.env, path)
-        return Image.open(path).convert("RGB")
-    def changed(a, b):
-        return sum(pixel != (0, 0, 0) for pixel in ImageChops.difference(a, b).get_flattened_data())
-    first = capture("02-video-frame")
-    time.sleep(0.5)
-    second = capture("03-video-advanced")
-    assert changed(first, second) > 1000, "video must display advancing frames"
-    session.key("space")
-    time.sleep(0.3)
-    paused = capture("04-video-paused")
-    time.sleep(0.5)
-    assert changed(paused, capture("05-video-still")) < 100, "Space must pause video frames"
-    session.key("Right")
-    session.key("space")
-    session.key("q")
-    wait_for(lambda: player_window() is None, "closed video window")
-    files = next(window for window in windows() if window["app_id"] == "little-clip-file-manager")
-    private.run_checked([str(session.niri), "msg", "action", "focus-window", "--id", str(files["id"])], env=session.env)
-    session.observe("06-video-closed", [filename, "Video finished or closed", "Replay video"])
-    click_word(session, "06-video-closed", "Replay")
-    wait_for(player_window, "replayed video window")
-    child_pid = int(subprocess.check_output(["pgrep", "-P", str(session.process.pid), "ffplay"]).strip())
-    private.run_checked([str(session.niri), "msg", "action", "focus-window", "--id", str(files["id"])], env=session.env)
-    session.observe("07-video-replayed", ["Playing in the Files video window", "Back to folder"])
-    click_word(session, "07-video-replayed", "Back", minimum_y=50, maximum_y=95)
-    wait_for(lambda: not Path(f"/proc/{child_pid}").exists(), "returning to folder reaps FFplay")
-    session.observe("08-return-folder", [filename, "notes.txt", "subfolder"])
-    x, y = session.word("08-return-folder", filename, minimum_y=240)
-    session.click(x, y)
-    session.key("Return")
-    wait_for(player_window, "video session for application-close ownership check")
-    pid = int(subprocess.check_output(["pgrep", "-P", str(session.process.pid), "ffplay"]).strip())
-    session.required_closed_processes = [pid]
-    private.run_checked([str(session.niri), "msg", "action", "focus-window", "--id", str(files["id"])], env=session.env)
+    from file_manager_video_playback_acceptance import exercise_full
+    exercise_full(session, root)
 
 
 def video_arguments(parser):
@@ -272,7 +212,7 @@ def main():
             audio = ["-f", "lavfi", "-i", "sine=sample_rate=48000:duration=60", "-c:a", "pcm_s16le", "-timecode", "01:02:03:04"] if extension == "mxf" else ["-an"]
             private.run_checked(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=60", *audio, "-c:v", codec, "-threads", "2", "-f", muxer, *options, str(root / f"movie.{extension}")], env=os.environ, timeout=30)
         if args.scenario == "video-unavailable":
-            return run_application_acceptance(args, output, root, unavailable_video, "video-unavailable", lambda env, children: unavailable_environment(output, env, children))
+            return run_application_acceptance(args, output, root, unavailable_video, "video-unavailable", lambda env, children: unavailable_environment(output, env, children, args.binary))
         return run_application_acceptance(args, output, root, video, "video", lambda env, children: start_private_audio(output, env, children))
     for name, color in [("a.png", "red"), ("b.png", "blue")]:
         Image.new("RGB", (300, 180), color).save(root / name)

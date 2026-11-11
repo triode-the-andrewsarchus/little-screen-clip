@@ -1,5 +1,6 @@
 """Private, hardware-free PipeWire output for media acceptance."""
 from pathlib import Path
+import struct
 import ui_acceptance_capture as private
 from file_manager_acceptance import wait_for
 
@@ -27,3 +28,16 @@ def start_private_audio(output, env, children):
                    "--format=s16le", "--rate=8000", "--channels=1", str(output / "audio-output.pcm")],
                    env=env, cwd=output, log_path=output / "audio-capture.log")
     return env
+
+
+def audio_tail(session):
+    path = session.output / "audio-output.pcm"
+    if not path.exists():
+        return (), 0
+    with path.open("rb") as source:
+        size = source.seek(0, 2)
+        source.seek(max(0, size - 32000))
+        data = source.read(32000)
+    count = len(data) // 2
+    return struct.unpack("<" + "h" * count, data[:count * 2]), size
+

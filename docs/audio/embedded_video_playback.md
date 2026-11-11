@@ -15,7 +15,7 @@ existing specialized FFmpeg paths.
 - [x] Start muted playback from thumbnail start or the hovered timeline position.
 - [ ] Verify playback progression, pause, seeks, EOF, source/stream/orientation,
   cancellation and stale-seek rejection using actual decoded frames.
-- [ ] Verify UI controls, hover behavior and cleanup on navigation/studio entry.
+- [x] Verify UI controls, hover behavior and cleanup on navigation/studio entry.
 - [ ] Update distribution dependencies and the worker's source bundle.
 - [ ] Complete workspace tests/build, architecture review and runtime inspection.
 
@@ -52,3 +52,13 @@ a frame-rate range, avoiding an impossible upsample when drop-only is enabled.
   despite a wider allocation, plus a clipped information line. Explicit scoped
   slider widths now fill the control row and the complete footer remains visible
   at the private runner’s 1280×800 output.
+
+Private runtime verification passes in dark appearance using
+`file_manager_video_playback_acceptance.py`: stationary thumbnail and timeline
+hover frames advance, thumbnail requests start at zero, timeline requests start
+later, motion reuses the same decoder, hover audio stays silent, and leaving
+hover reaps the child. Embedded playback produces changing frames and actual
+private-sink audio; Space pauses both, seeking changes paused pixels, resuming
+works, Back to folder reaps the player, and application close reaps a reopened
+player. Niri reports one Files window and no separate video window. The runner
+uses private compositor/audio sockets and synthetic files only.
