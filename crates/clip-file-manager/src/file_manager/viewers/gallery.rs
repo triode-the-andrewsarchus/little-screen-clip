@@ -168,13 +168,6 @@ impl Viewers {
             _ => None,
         };
         let mut active = active;
-        if let Some(path) = active.as_ref().and_then(|state| state.path.as_ref()) {
-            let photo = &mut collection.photos[collection.index];
-            if photo.path != *path {
-                collection.ratings.relocate(&photo.path, path);
-                photo.path = path.clone();
-            }
-        }
         collection.poll_export(ui.ctx(), active.as_deref_mut());
         let active_pending = active
             .as_deref_mut()
@@ -467,6 +460,62 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
+    #[test]
+    fn save_as_keeps_collection_identity_and_unsaved_edits_on_the_original() {
+        let (dir, fixture) = ready_collection();
+        let original = dir.path().join("a.png");
+        let second = dir.path().join("b.png");
+        let output_dir = tempfile::tempdir().unwrap();
+        let copy = output_dir.path().join("copy.png");
+        drop(fixture);
+        let mut viewers = Viewers::default();
+        viewers.open_collection(
+            original.clone(),
+            vec![original.clone(), second],
+            Default::default(),
+        );
+        finish_loading(&mut viewers);
+
+        let Some(ViewerSession::Image(state)) = &mut viewers.session else {
+            panic!("expected image editor");
+        };
+        let revision = state.file_source().unwrap();
+        std::sync::Arc::make_mut(&mut state.current_rgba).put_pixel(
+            0,
+            0,
+            image::Rgba([255, 0, 0, 255]),
+        );
+        state.mark_pixels_changed();
+        state.save_image_to_path(&copy);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while state.poll_cached_jobs() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert_eq!(
+            image::open(&copy).unwrap().to_rgba8().get_pixel(0, 0).0,
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            image::open(&original).unwrap().to_rgba8().get_pixel(0, 0).0,
+            [40, 80, 120, 255]
+        );
+        assert_eq!(state.path.as_ref(), Some(&original));
+        assert_eq!(state.file_source().unwrap(), revision);
+        assert!(state.has_unsaved_changes());
+        assert_eq!(viewers.gallery.as_ref().unwrap().photos[0].path, original);
+
+        viewers.select_photo(1);
+        finish_loading(&mut viewers);
+        viewers.select_photo(0);
+        let Some(ViewerSession::Image(state)) = &viewers.session else {
+            panic!("expected retained editor");
+        };
+        assert_eq!(state.path.as_ref(), Some(&original));
+        assert!(state.has_unsaved_changes());
+    }
+
     #[test]
     fn switching_photos_retains_unsaved_pixels_and_independent_undo_history() {
         let (_dir, mut viewers) = ready_collection();

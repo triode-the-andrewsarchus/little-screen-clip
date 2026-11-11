@@ -168,6 +168,7 @@ pub struct ImagePreviewState {
     text_copy_job: Option<crate::desktop_ipc::PendingRequest>,
     file_source: Option<crate::file_source::FileSource>,
     saved_stamp: Option<ImageInputStamp>,
+    keep_source_on_save_as: bool,
     opened_stamp: Option<ImageInputStamp>,
     copy_job: Option<save::ImageCopyJob>,
     copy_requested: Option<HandSide>,
@@ -599,6 +600,7 @@ impl ImagePreviewState {
             text_copy_job: None,
             file_source: None,
             saved_stamp: None,
+            keep_source_on_save_as: false,
             opened_stamp: None,
             copy_job: None,
             copy_requested: None,
@@ -768,6 +770,11 @@ impl ImagePreviewState {
         self.saved_stamp = Some(self.input_stamp());
         self.opened_stamp = self.saved_stamp.clone();
         self
+    }
+
+    /// Keeps this editor attached to its collection photo when saving a separate copy.
+    pub fn keep_source_on_save_as(&mut self) {
+        self.keep_source_on_save_as = true;
     }
 
     /// Reports edits made since this file-backed session's last successful save.

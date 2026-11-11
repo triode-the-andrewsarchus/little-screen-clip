@@ -762,10 +762,24 @@ impl ImagePreviewState {
             self.save_job = None;
             match completion {
                 Ok(result) => {
+                    if self.keep_source_on_save_as
+                        && self
+                            .file_source
+                            .as_ref()
+                            .zip(result.source.as_ref())
+                            .is_none_or(|(current, saved)| current.path() != saved.path())
+                    {
+                        // The new file is a copy. The collection source and its
+                        // saved revision still refer to the original photo.
+                        self.status_toast = None;
+                        return;
+                    }
                     if let Some(source) = result.source {
                         self.file_source = Some(source);
                         self.saved_stamp = Some(stamp.clone());
-                        self.path = Some(result.path.clone());
+                        if !self.keep_source_on_save_as {
+                            self.path = Some(result.path.clone());
+                        }
                     }
                     let name = result
                         .path
@@ -774,8 +788,10 @@ impl ImagePreviewState {
                         .to_string_lossy()
                         .to_string();
                     if self.input_stamp() == stamp {
-                        self.path = Some(result.path.clone());
-                        self.title = name.clone();
+                        if !self.keep_source_on_save_as {
+                            self.path = Some(result.path.clone());
+                            self.title = name.clone();
+                        }
                         self.file_size_bytes = result.file_size;
                         self.mime = little_clip_core::item::guess_image_mime(&result.path);
                         self.status_toast = None;

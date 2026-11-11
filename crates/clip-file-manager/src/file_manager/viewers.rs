@@ -242,7 +242,7 @@ impl Viewers {
                 }
             }
             Ok(loaded) => {
-                self.session = Some(session(
+                let mut opened = session(
                     loaded,
                     path,
                     &self.config,
@@ -251,7 +251,13 @@ impl Viewers {
                         .as_ref()
                         .map(super::search::SourceGuard::read_check)
                         .unwrap_or_default(),
-                ))
+                );
+                if self.gallery.is_some()
+                    && let ViewerSession::Image(state) = &mut opened
+                {
+                    state.keep_source_on_save_as();
+                }
+                self.session = Some(opened);
             }
             Err(error) => self.error = Some(error),
         }
