@@ -38,6 +38,7 @@ import onnxruntime as ort
 MODEL_CACHE_DIR = os.path.expanduser("~/.cache/little-screen-clip/models")
 DEFAULT_MODEL_NAME = "big-lama.onnx"
 DEFAULT_MODEL_URL = "https://huggingface.co/smile-forge/big-lama-onnx/resolve/main/inpainter/inpainter.onnx"
+FALLBACK_MODEL_NAME = "carve-lama-fp32.onnx"
 FALLBACK_MODEL_URL = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"
 
 
@@ -46,12 +47,10 @@ def ensure_model_path(model_arg: str | None, model_url: str | None = None) -> st
         return model_arg
 
     os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
-    model_path = os.path.join(MODEL_CACHE_DIR, DEFAULT_MODEL_NAME)
-    if os.path.exists(model_path) and os.path.getsize(model_path) > 1_000_000:
-        return model_path
-
-    sys.stderr.write(f"Downloading LaMa model to {model_path}...\n")
-    sys.stderr.flush()
+    for model_name in (DEFAULT_MODEL_NAME, FALLBACK_MODEL_NAME):
+        model_path = os.path.join(MODEL_CACHE_DIR, model_name)
+        if os.path.exists(model_path) and os.path.getsize(model_path) > 1_000_000:
+            return model_path
 
     env_url = os.environ.get("LAMA_MODEL_URL") or os.environ.get("BIG_LAMA_MODEL_URL")
     target_urls = []
@@ -64,6 +63,10 @@ def ensure_model_path(model_arg: str | None, model_url: str | None = None) -> st
             target_urls.append(default_url)
 
     for url in target_urls:
+        model_name = FALLBACK_MODEL_NAME if url == FALLBACK_MODEL_URL else DEFAULT_MODEL_NAME
+        model_path = os.path.join(MODEL_CACHE_DIR, model_name)
+        sys.stderr.write(f"Downloading LaMa model to {model_path}...\n")
+        sys.stderr.flush()
         temporary_path = None
         deadline = time.monotonic() + 600
         try:
@@ -74,7 +77,7 @@ def ensure_model_path(model_arg: str | None, model_url: str | None = None) -> st
             with (
                 urllib.request.urlopen(req, timeout=30) as resp,
                 tempfile.NamedTemporaryFile(
-                    dir=MODEL_CACHE_DIR, prefix=DEFAULT_MODEL_NAME + ".", suffix=".tmp", delete=False
+                    dir=MODEL_CACHE_DIR, prefix=model_name + ".", suffix=".tmp", delete=False
                 ) as out_file,
             ):
                 temporary_path = out_file.name
@@ -161,27 +164,43 @@ def inpaint(
         mask_pil = mask_pil.resize((orig_w, orig_h), Image.Resampling.NEAREST)
     mask_arr = np.array(mask_pil)
 
-    # Normalize inputs for model:
-    # Image: [1, 3, H, W] in [0.0, 1.0]
-    img_tensor = (rgb_np.astype(np.float32) / 255.0).transpose((2, 0, 1))[np.newaxis, ...]
-
-    # Mask: [1, 1, H, W] in {0.0, 1.0}
-    mask_bool = (mask_arr > 0).astype(np.float32)
-    mask_tensor = mask_bool[np.newaxis, np.newaxis, ...]
-
-    # Handle padding to multiple of 8 (required by LaMa's Fourier convolutions)
-    pad_h = (8 - orig_h % 8) % 8
-    pad_w = (8 - orig_w % 8) % 8
-    if pad_h > 0 or pad_w > 0:
-        img_tensor = np.pad(img_tensor, ((0, 0), (0, 0), (0, pad_h), (0, pad_w)), mode="reflect")
-        mask_tensor = np.pad(mask_tensor, ((0, 0), (0, 0), (0, pad_h), (0, pad_w)), mode="reflect")
-
-    # Match input names
     inputs = session.get_inputs()
-    feed_dict = {
-        inputs[0].name: img_tensor,
-        inputs[1].name: mask_tensor,
-    }
+    model_h, model_w = (None, None)
+    for model_input in inputs[:2]:
+        if len(model_input.shape) != 4:
+            raise ValueError("LaMa expects rank-four image and mask inputs")
+        height, width = model_input.shape[2:]
+        if isinstance(height, int) and height > 0:
+            if model_h is not None and model_h != height:
+                raise ValueError("LaMa image and mask heights disagree")
+            model_h = height
+        if isinstance(width, int) and width > 0:
+            if model_w is not None and model_w != width:
+                raise ValueError("LaMa image and mask widths disagree")
+            model_w = width
+
+    # Fixed dimensions are resized for inference. Dynamic dimensions keep
+    # their original resolution and are padded for the Fourier convolutions.
+    infer_w = model_w or orig_w
+    infer_h = model_h or orig_h
+    infer_size = (infer_w, infer_h)
+    if infer_size != (orig_w, orig_h):
+        infer_rgb = np.asarray(orig_rgba.convert("RGB").resize(infer_size, Image.Resampling.BICUBIC))
+        infer_mask = np.asarray(mask_pil.resize(infer_size, Image.Resampling.NEAREST))
+    else:
+        infer_rgb = rgb_np
+        infer_mask = mask_arr
+    img_tensor = (infer_rgb.astype(np.float32) / 255.0).transpose((2, 0, 1))[np.newaxis, ...]
+    mask_tensor = (infer_mask > 0).astype(np.float32)[np.newaxis, np.newaxis, ...]
+
+    pad_h = 0 if model_h else (-infer_h % 8)
+    pad_w = 0 if model_w else (-infer_w % 8)
+    if pad_h or pad_w:
+        padding = ((0, 0), (0, 0), (0, pad_h), (0, pad_w))
+        img_tensor = np.pad(img_tensor, padding, mode="reflect")
+        mask_tensor = np.pad(mask_tensor, padding, mode="reflect")
+
+    feed_dict = {inputs[0].name: img_tensor, inputs[1].name: mask_tensor}
 
     sys.stderr.write(f"Running LaMa inpainting on {orig_w}x{orig_h} image...\n")
     sys.stderr.flush()
@@ -192,9 +211,15 @@ def inpaint(
     sys.stderr.flush()
 
     out_tensor = outputs[0]
-    # Crop away padding
-    out_tensor = out_tensor[:, :, :orig_h, :orig_w]
-    out_rgb = np.clip(out_tensor[0].transpose((1, 2, 0)) * 255.0, 0, 255).astype(np.uint8)
+    if out_tensor.shape != img_tensor.shape:
+        raise ValueError(f"Unexpected LaMa output dimensions: {out_tensor.shape}")
+    out_rgb = out_tensor[0, :, :infer_h, :infer_w].transpose((1, 2, 0))
+    # The bundled fallback emits byte-scale RGB, including on very dark
+    # images. Use the observed range for older cached and custom models.
+    byte_scale = os.path.basename(model_file) == FALLBACK_MODEL_NAME or np.any(out_rgb > 2.0)
+    out_rgb = np.clip(out_rgb if byte_scale else out_rgb * 255.0, 0, 255).astype(np.uint8)
+    if infer_size != (orig_w, orig_h):
+        out_rgb = np.asarray(Image.fromarray(out_rgb).resize((orig_w, orig_h), Image.Resampling.BICUBIC))
 
     # Composite: keep unmasked pixels exactly as original to avoid any loss/drift
     mask_3d = mask_arr[:, :, np.newaxis] > 0
