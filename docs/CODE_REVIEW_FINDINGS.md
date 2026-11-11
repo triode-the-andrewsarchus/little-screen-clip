@@ -196,7 +196,8 @@ touches the host clipboard or USB display unless explicitly stated.
 - [x] **[Code Quality / Missing Stream Cap] `splat::load_ply` checks initial `metadata().len()` without wrapping reader in `.take()`**:
   **Current verification:** Both PLY decoding paths now cap reads from the pinned file to the 512 MiB budget plus one byte for overflow detection. The binary PLY regression accepts files exactly at the test budget and rejects the same files one byte over across the four supported SH layouts. The compressed PLY fixture still decodes and rejects truncation. Scene library tests passed 18 tests with three GPU tests skipped.
   In [`crates/little-clip-scene/src/splat.rs`](file:///home/vcarlson/little-screen-clip/crates/little-clip-scene/src/splat.rs#L104-L137), unlike `spz::load` (which wraps `file.take(MAX_BYTES + 1)`) and `load_compressed_ply` (which tracks `total > MAX_BYTES`), `load_ply` only checks `reader.get_ref().metadata()?.len() > 512 * 1024 * 1024` before passing `reader` to `PlyGaussians::read_gaussians`.
-- [ ] **[Dead Code] `OrbitLoop::from_frames` is never called**:
+- [x] **[Dead Code] `OrbitLoop::from_frames` is never called**:
+  **Disposition:** The workspace uses the bake and shared-directory constructors. The public constructor also supports callers that already have decoded frames in memory, so keep it as a library API. No runtime defect identified.
   [`OrbitLoop::from_frames`](file:///home/vcarlson/little-screen-clip/crates/little-clip-scene/src/orbit.rs#L132-L146) is unused across the entire workspace (`OrbitLoop::bake_frames` and `OrbitLoop::from_shared_directory` are used instead).
 
 ---
