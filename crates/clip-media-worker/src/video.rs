@@ -4,33 +4,40 @@ use clip_media_protocol::{VideoFrame, VideoFrameInfo, VideoStream};
 use ffmpeg::{Rescale, codec, filter, format, frame, media};
 use ffmpeg_next as ffmpeg;
 pub(super) use preview::render as preview;
+mod timeline;
 use std::{fs::File, io::Write};
+pub(super) use timeline::render as timeline;
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 
 pub(super) fn snapshot(file: File, job: &VideoFrame, output: &mut impl Write) -> Result<()> {
     validate(job)?;
-    let mut source = VideoSource::open(file, job)?;
+    let mut source = VideoSource::open(
+        file,
+        job,
+        ffmpeg::Discard::Default,
+        std::time::Duration::from_secs(30),
+    )?;
     while let Some(decoded) = source.next_frame()? {
         if job.accurate && decoded.seconds + 0.000001 < job.seconds {
             continue;
         }
         let spec = scale_spec(decoded.matrix.as_ref(), job, "rgba")?;
-        let mut graph = FrameFilter::new(&decoded.image, source.time_base, &spec)?;
+        let mut graph = FrameFilter::new(&decoded.image, &source, &spec)?;
         graph.source.source().add(&decoded.image).map_err(message)?;
         let mut filtered = frame::Video::empty();
         graph.sink.sink().frame(&mut filtered).map_err(message)?;
         filtered.remove_side_data(ffmpeg::util::frame::side_data::Type::DisplayMatrix);
-        return write_snapshot(&filtered, decoded.seconds, output);
+        return write_snapshot(&mut filtered, decoded.seconds, output);
     }
     // Empty success permits the caller's preceding-seek-point retry for sparse
     // clips; it must never label a guessed frame with the requested timestamp.
     Ok(())
 }
 
-fn write_snapshot(image: &frame::Video, seconds: f64, output: &mut impl Write) -> Result<()> {
-    let png = encode_png(image)?;
+fn write_snapshot(image: &mut frame::Video, seconds: f64, output: &mut impl Write) -> Result<()> {
+    let png = encode_image(image, codec::Id::PNG, None)?;
     let info = VideoFrameInfo {
         seconds,
         width: image.width(),
@@ -72,6 +79,7 @@ struct VideoSource {
     eof_sent: bool,
     max_source_pixels: u64,
     default_frame_duration: i64,
+    rate: ffmpeg::Rational,
     last_end: Option<i64>,
 }
 
@@ -81,8 +89,17 @@ struct DecodedVideoFrame {
     matrix: Option<[i32; 9]>,
 }
 impl VideoSource {
-    fn open(file: File, job: &VideoFrame) -> Result<Self> {
-        let mut input = crate::probe::open_input(file, &job.formats)?;
+    fn open(
+        file: File,
+        job: &VideoFrame,
+        discard: ffmpeg::Discard,
+        timeout: std::time::Duration,
+    ) -> Result<Self> {
+        let mut input = crate::probe::open_input_with_deadline(
+            file,
+            &job.formats,
+            Some(std::time::Instant::now() + timeout),
+        )?;
         // SAFETY: this dedicated process has finished its one-time library init.
         // Still/video frames may need larger planes than audio/probing jobs.
         unsafe {
@@ -136,6 +153,7 @@ impl VideoSource {
         });
         let mut decoder = context.decoder();
         decoder.set_packet_time_base(time_base);
+        decoder.skip_frame(discard);
         let decoder = decoder.video().map_err(message)?;
         check_dimensions(decoder.width(), decoder.height(), job.max_source_pixels)?;
         // SAFETY: input owns this live format context throughout the read.
@@ -161,6 +179,7 @@ impl VideoSource {
             eof_sent: false,
             max_source_pixels: job.max_source_pixels,
             default_frame_duration,
+            rate,
             last_end: None,
         })
     }
@@ -314,7 +333,7 @@ struct FrameFilter {
     sink: filter::Context,
 }
 impl FrameFilter {
-    fn new(decoded: &frame::Video, time_base: ffmpeg::Rational, spec: &str) -> Result<Self> {
+    fn new(decoded: &frame::Video, source_info: &VideoSource, spec: &str) -> Result<Self> {
         let mut graph = filter::Graph::new();
         // SAFETY: this new graph is exclusively owned and not yet configured.
         unsafe {
@@ -327,12 +346,13 @@ impl FrameFilter {
             ffmpeg::Rational(1, 1)
         };
         let args = format!(
-            "video_size={}x{}:pix_fmt={}:time_base={}:pixel_aspect={}",
+            "video_size={}x{}:pix_fmt={}:time_base={}:pixel_aspect={}:frame_rate={}",
             decoded.width(),
             decoded.height(),
             decoded.format() as i32,
-            time_base,
-            aspect
+            source_info.time_base,
+            aspect,
+            source_info.rate
         );
         let source = graph
             .add(
@@ -385,8 +405,14 @@ fn image_encoder(
     encoder.open_as(codec).map_err(message)
 }
 
-fn encode_png(image: &frame::Video) -> Result<Vec<u8>> {
-    let mut encoder = image_encoder(image, codec::Id::PNG, None)?;
+fn encode_image(image: &mut frame::Video, id: codec::Id, quality: Option<i32>) -> Result<Vec<u8>> {
+    let mut encoder = image_encoder(image, id, quality)?;
+    if let Some(quality) = quality {
+        // SAFETY: this exclusively borrowed frame owns its encoder metadata.
+        unsafe {
+            (*image.as_mut_ptr()).quality = quality;
+        }
+    }
     encoder.send_frame(image).map_err(message)?;
     encoder.send_eof().map_err(message)?;
     let mut bytes = Vec::new();
@@ -397,14 +423,14 @@ fn encode_png(image: &frame::Video) -> Result<Vec<u8>> {
             Err(ffmpeg::Error::Eof) => break,
             Err(error) => return Err(message(error)),
         }
-        let data = packet.data().ok_or("Empty encoded PNG")?;
+        let data = packet.data().ok_or("Empty encoded image")?;
         if bytes.len().saturating_add(data.len()) > MAX_IMAGE_BYTES {
-            return Err("PNG frame exceeds the output budget".into());
+            return Err("Image frame exceeds the output budget".into());
         }
         bytes.extend_from_slice(data);
     }
     if bytes.is_empty() {
-        return Err("PNG encoder produced no image".into());
+        return Err("Image encoder produced no image".into());
     }
     Ok(bytes)
 }

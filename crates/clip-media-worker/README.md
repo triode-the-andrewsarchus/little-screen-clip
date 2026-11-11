@@ -17,6 +17,7 @@ clip-media-worker decode-audio FORMAT_WHITELIST /proc/self/fd/N
 clip-media-worker render-audio SETTINGS_JSON [--output=/proc/self/fd/M] /proc/self/fd/N ...
 clip-media-worker video-frame SETTINGS_JSON /proc/self/fd/N
 clip-media-worker video-preview SETTINGS_JSON /proc/self/fd/N
+clip-media-worker video-timeline SETTINGS_JSON /proc/self/fd/N
 ```
 
 The parent must inherit a pinned ordinary input descriptor and retain child
@@ -66,6 +67,14 @@ one fixed-rate filter graph and one JPEG encoder. It accepts at most 512 frames,
 is 32 MiB. EOF closure uses the observed source end, preserving a final held
 image without extending a short movie to the requested interval. Snapshot and
 batch jobs share source admission, packet draining, clocks and orientation.
+
+`VideoTimeline` preserves the long-AV1 sequential fallback: decode only
+keyframes, reduce each once to a column, hold columns across their source time,
+and tile exactly the requested 1–16384 columns. The output is one JPEG, with
+a 4 MiB parent capture budget and 240-second parent/library deadline. It shares
+the existing decoder/filter/image encoder; it does not replace the primary
+indexed C/GPU helper. Source frame rate is passed into the buffer filter so
+final-column padding follows the same clock as the former CLI path.
 
 `cargo test -p clip-media-worker` includes real executable/descriptor tests.
 Those integration tests also make the helper executable available before a

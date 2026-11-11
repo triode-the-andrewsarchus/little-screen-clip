@@ -3,6 +3,7 @@
 use crate::process::CommandRequest;
 pub use clip_media_protocol::{
     AudioFilter, AudioInput, AudioRender, EncodedVideoFrame, VideoFrame, VideoPreview, VideoStream,
+    VideoTimeline,
 };
 use std::path::PathBuf;
 
@@ -76,6 +77,14 @@ pub fn video_frame_request(settings: &VideoFrame) -> Result<CommandRequest, Stri
 /// Returns settings serialization or request-budget errors.
 pub fn video_preview_request(settings: &VideoPreview) -> Result<CommandRequest, String> {
     Ok(settings_request("video-preview", settings)?.max_output_bytes(32 * 1024 * 1024))
+}
+
+/// Builds a sequential keyframe-column timeline fallback request.
+///
+/// # Errors
+/// Returns settings serialization or request-budget errors.
+pub fn video_timeline_request(settings: &VideoTimeline) -> Result<CommandRequest, String> {
+    Ok(settings_request("video-timeline", settings)?.max_output_bytes(4 * 1024 * 1024))
 }
 
 /// Checks process completion and parses the actual decoded frame record.

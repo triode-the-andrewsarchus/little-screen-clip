@@ -19,21 +19,33 @@ fn run() -> Result<(), String> {
     if arguments.first().is_some_and(|mode| mode == "render-audio") {
         return render_command(&arguments);
     }
-    if arguments
-        .first()
-        .is_some_and(|mode| matches!(mode.as_str(), "video-frame" | "video-preview"))
-    {
+    if arguments.first().is_some_and(|mode| {
+        matches!(
+            mode.as_str(),
+            "video-frame" | "video-preview" | "video-timeline"
+        )
+    }) {
         if arguments.len() != 3 || arguments[1].len() > clip_media_protocol::MAX_SETTINGS_BYTES {
             return Err("Invalid video frame request".into());
         }
         let input = inherited_input(&arguments[2])?;
         let mut output = std::io::BufWriter::new(std::io::stdout().lock());
-        return if arguments[0] == "video-frame" {
-            let job = serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?;
-            video::snapshot(input, &job, &mut output)
-        } else {
-            let job = serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?;
-            video::preview(input, &job, &mut output)
+        return match arguments[0].as_str() {
+            "video-frame" => video::snapshot(
+                input,
+                &serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?,
+                &mut output,
+            ),
+            "video-preview" => video::preview(
+                input,
+                &serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?,
+                &mut output,
+            ),
+            _ => video::timeline(
+                input,
+                &serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?,
+                &mut output,
+            ),
         };
     }
     if arguments.len() != 3 || !matches!(arguments[0].as_str(), "probe" | "decode-audio") {

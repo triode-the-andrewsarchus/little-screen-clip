@@ -96,7 +96,7 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 - [x] Search audio windows through bounded library PCM streaming.
 - [x] Browser thumbnail/cover fallback and search still-frame library jobs.
 - [x] Animated/video preview batches through one library decode session.
-- [ ] Remaining timeline fallback migration.
+- [x] Long-AV1 sequential timeline fallback through FFmpeg library jobs.
 
 - Established architecture baseline `native-audio-ffmpeg` at `89ccc61`.
 - Confirmed common audio already uses native decoding and DSP; migration must
@@ -278,6 +278,28 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 - Architecture review separates preview validation, sampling-graph construction
   and frame delivery. The source setup still has explicit stream/pixel/clock
   checks; source ownership is shared rather than duplicated for batch previews.
+
+- Replaced the final production FFmpeg CLI processing call: long-AV1 timeline
+  fallback now uses `VideoTimeline`. The primary indexed C/GPU path remains
+  unchanged. The fallback keeps sequential non-keyframe discard, one reduction
+  per decoded keyframe, source-time holds, exact physical column count, final
+  padding and the existing 240-second supervision. It returns one bounded JPEG
+  to the parent rather than resolving an output pathname inside the worker.
+- Timeline output retains its private ordinary directory handle from creation
+  across decoder attempts. Installation discards only the unpublished prior
+  attempt and uses core's guarded no-overwrite staging creator. A parent-path
+  replacement test verifies that library installation stays in the held directory.
+- An actual AV1 fixture comparison caught missing frame-rate metadata on the
+  filter input, which shortened final padding. Passing the source rate fixes it:
+  decoded timeline RGBA now exactly matches the sequential CLI reference. All
+  seven worker unit and thirteen executable checks pass with all three manual
+  reference checks explicitly enabled. Nine host timeline tests and eight core
+  animation tests pass; worker/protocol all-target Clippy is clean.
+- Production-call inventory now finds FFmpeg/FFprobe CLI use only in test and
+  fixture/reference code. FFplay remains the explicit external video player;
+  indexed native C/GPU and existing Timelens helpers retain their separate
+  lifecycles. Distribution and final workspace verification still remain before
+  the completion audit and recommendation.
 
 ## Final recommendation
 

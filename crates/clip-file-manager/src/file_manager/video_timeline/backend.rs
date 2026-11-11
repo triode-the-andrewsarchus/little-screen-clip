@@ -18,6 +18,31 @@ pub(super) struct Rendered {
     pub timeline: Result<ImageThumbnail, String>,
 }
 
+// Retain the private output directory across all decoder attempts. Library
+// output installation must not follow a replaced temporary-directory path.
+struct TimelineOutput {
+    path: PathBuf,
+    directory: std::fs::File,
+}
+impl TimelineOutput {
+    fn install(&self, bytes: &[u8]) -> Result<(), String> {
+        use std::os::fd::AsRawFd;
+        let parent = PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd()));
+        little_clip_core::kernel_interface::pin_content_directory(&parent)
+            .map_err(|error| error.to_string())?;
+        let target = parent.join(self.path.file_name().ok_or("Missing timeline filename")?);
+        // Discard only an unpublished prior decoder attempt in this private
+        // directory. The shared creator stages and installs without overwrite.
+        match std::fs::remove_file(target) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        little_clip_core::file_source::create_file_in(&self.path, bytes, &self.directory)?;
+        Ok(())
+    }
+}
+
 /// Verify intermediate snapshots before they enter the UI's progress channel.
 pub(super) struct Progress<'a> {
     pub sender: mpsc::SyncSender<ImageThumbnail>,
@@ -120,11 +145,15 @@ fn timeline(
         return Ok(image);
     }
     let temporary = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let output = temporary.path().join("timeline.jpg");
+    let output = TimelineOutput {
+        path: temporary.path().join("timeline.jpg"),
+        directory: little_clip_core::kernel_interface::pin_content_directory(temporary.path())
+            .map_err(|error| error.to_string())?,
+    };
     generate(path, metadata, width, &output, policy, token, progress)?;
 
     metadata.source.check()?;
-    let bytes = crate::file_source::read_file_bytes(&output, 4 * 1024 * 1024, true, false)
+    let bytes = crate::file_source::read_file_bytes(&output.path, 4 * 1024 * 1024, true, false)
         .map_err(|e| e.to_string())?;
     let image = decode(&bytes, width, 64)?;
     if let Some(cache) = cached {
@@ -146,17 +175,28 @@ fn generate(
     path: &Path,
     metadata: &media::VideoMetadata,
     width: u32,
-    output: &Path,
+    output: &TimelineOutput,
     policy: super::dispatch::Policy,
     token: &AtomicBool,
     progress: &Progress<'_>,
 ) -> Result<(), String> {
+    if generate_indexed(path, metadata, width, &output.path, policy, token, progress) {
+        return Ok(());
+    }
+    if token.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("Video preview cancelled".into());
+    }
+    // Preserve the measured sequential keyframe path for long AV1 files;
+    // thousands of per-column decoder flushes were substantially slower.
+    if metadata.codec == "av1" && metadata.duration_ms > 600_000 {
+        return generate_library_timeline(path, metadata, width, output, token);
+    }
     let mut command = CommandRequest::new(helper().into_os_string())
         .arg_content_file(path)
         .map_err(|error| error.to_string())?
         .arg("--fast")
         .arg("--timeline")
-        .arg(output.as_os_str())
+        .arg(output.path.as_os_str())
         .args([
             "--width",
             &width.to_string(),
@@ -176,61 +216,58 @@ fn generate(
     if metadata.codec == "hevc" {
         command = command.arg("--gpu");
     }
-    // AV1 keyframe streaming avoids thousands of decoder flushes. Real Shows
-    // measurements favored this path over per-column seeks by more than 10x.
-    if metadata.codec == "av1" && metadata.duration_ms > 600_000 {
-        let filter = format!(
-            "scale=1:64:flags=area,tpad=stop_mode=clone:stop_duration={},fps={}000/{},tile={}x1",
-            metadata.duration_ms as f64 / 1000.0,
-            width,
-            metadata.duration_ms,
-            width,
-        );
-        command = CommandRequest::new("ffmpeg")
-            .args(["-v", "error", "-skip_frame", "nokey", "-threads", "2", "-i"])
-            .arg_content_file(path)
-            .map_err(|error| error.to_string())?
-            .args([
-                "-map",
-                &format!("0:v:{}", metadata.stream),
-                "-an",
-                "-sn",
-                "-dn",
-                "-vf",
-                &filter,
-                "-frames:v",
-                "1",
-                "-q:v",
-                "2",
-                "-y",
-            ])
-            .arg(output.as_os_str());
-    }
-    let generated = generate_indexed(path, metadata, width, output, policy, token, progress);
-    if !generated {
-        if token.load(std::sync::atomic::Ordering::Acquire) {
-            return Err("Video preview cancelled".into());
-        }
-        let preview = output.with_extension("progress.ppm");
-        let snapshots = metadata.codec != "av1" || metadata.duration_ms <= 600_000;
-        let result = run_progressive(
-            command.timeout(Duration::from_secs(240)),
-            &preview,
-            metadata,
-            width,
-            token,
-            progress,
-            snapshots,
-        )
-        .map_err(|e| format!("Video preview unavailable: {e}. Build it with launch.sh build."))?;
-        if !result.status.success() {
-            return Err(format!(
-                "Video decoder failed: {}",
-                result.stderr_lossy().trim()
-            ));
-        }
+    let preview = output.path.with_extension("progress.ppm");
+    let result = run_progressive(
+        command.timeout(Duration::from_secs(240)),
+        &preview,
+        metadata,
+        width,
+        token,
+        progress,
+        true,
+    )
+    .map_err(|error| {
+        format!("Video preview unavailable: {error}. Build it with launch.sh build.")
+    })?;
+    if !result.status.success() {
+        return Err(format!(
+            "Video decoder failed: {}",
+            result.stderr_lossy().trim()
+        ));
     }
     Ok(())
+}
+
+fn generate_library_timeline(
+    path: &Path,
+    metadata: &media::VideoMetadata,
+    width: u32,
+    output: &TimelineOutput,
+    token: &AtomicBool,
+) -> Result<(), String> {
+    use little_clip_core::media_backend::{VideoFrame, VideoStream, VideoTimeline};
+    let mut frame = VideoFrame::new(little_clip_core::media_backend::VIDEO_FORMATS, 1, 64);
+    frame.stream = VideoStream::Ordinal(metadata.stream);
+    frame.max_source_pixels = 4096 * 2160;
+    let settings = VideoTimeline {
+        frame,
+        columns: width,
+        duration_ms: metadata.duration_ms,
+    };
+    let result = little_clip_core::media_backend::video_timeline_request(&settings)?
+        .arg_content_file(path)
+        .map_err(|error| error.to_string())?
+        .timeout(Duration::from_secs(240))
+        .run_cancellable(token)
+        .map_err(|error| error.to_string())?;
+    if !result.status.success() || result.stdout_truncated || result.stdout.is_empty() {
+        return Err(format!(
+            "Video timeline decode failed: {}",
+            result.stderr_lossy().trim()
+        ));
+    }
+    metadata.source.check()?;
+    output.install(&result.stdout)
 }
 
 fn generate_indexed(
@@ -341,6 +378,46 @@ fn poll_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_timeline_preserves_keyframe_color_holds_and_column_resolution() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../little-clip-core/tests/fixtures/video/timed-colors.gif");
+        let metadata = media::inspect_video(&path).unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let output = TimelineOutput {
+            path: temporary.path().join("timeline.jpg"),
+            directory: little_clip_core::kernel_interface::pin_content_directory(temporary.path())
+                .unwrap(),
+        };
+        generate_library_timeline(&path, &metadata, 16, &output, &AtomicBool::new(false)).unwrap();
+        let image = image::load_from_memory(&std::fs::read(&output.path).unwrap())
+            .unwrap()
+            .to_rgb8();
+        assert_eq!((image.width(), image.height()), (16, 64));
+        for (column, channel) in [(0, 0), (3, 1), (12, 2)] {
+            assert!(image.get_pixel(column, 32)[channel] > 200);
+        }
+    }
+
+    #[test]
+    fn library_timeline_installation_retains_the_original_private_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("output");
+        std::fs::create_dir(&parent).unwrap();
+        let output = TimelineOutput {
+            path: parent.join("timeline.jpg"),
+            directory: little_clip_core::kernel_interface::pin_content_directory(&parent).unwrap(),
+        };
+        let moved = root.path().join("moved");
+        std::fs::rename(&parent, &moved).unwrap();
+        std::os::unix::fs::symlink("/proc", &parent).unwrap();
+        output.install(b"generated timeline").unwrap();
+        assert_eq!(
+            std::fs::read(moved.join("timeline.jpg")).unwrap(),
+            b"generated timeline"
+        );
+    }
 
     #[test]
     fn lossless_indexed_strip_uses_the_bounded_shared_image_reader() {

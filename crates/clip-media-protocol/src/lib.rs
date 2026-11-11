@@ -230,3 +230,15 @@ pub struct VideoPreview {
     /// Optional source interval length, at most sixty seconds.
     pub duration: Option<f64>,
 }
+
+/// Sequential keyframe-column fallback for a long video timeline.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VideoTimeline {
+    /// Source selection and column height; start time must be zero.
+    pub frame: VideoFrame,
+    /// Exact number of output columns, one through 16384.
+    pub columns: u32,
+    /// Source duration used for column sampling, in milliseconds.
+    pub duration_ms: u64,
+}

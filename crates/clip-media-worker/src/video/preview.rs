@@ -4,7 +4,12 @@ use clip_media_protocol::VideoPreview;
 
 pub(crate) fn render(file: File, job: &VideoPreview, output: &mut impl Write) -> Result<()> {
     validate_preview(job)?;
-    let mut source = VideoSource::open(file, &job.frame)?;
+    let mut source = VideoSource::open(
+        file,
+        &job.frame,
+        ffmpeg::Discard::Default,
+        std::time::Duration::from_secs(30),
+    )?;
     let Some(first) = source.next_frame()? else {
         return Err("No video preview frames".into());
     };
@@ -74,7 +79,7 @@ fn preview_filter(
         job.fps,
         scale_spec(matrix, &job.frame, "yuvj444p")?
     );
-    FrameFilter::new(first, source.time_base, &spec)
+    FrameFilter::new(first, source, &spec)
 }
 
 #[derive(Default)]

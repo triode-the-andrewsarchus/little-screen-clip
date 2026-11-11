@@ -427,7 +427,6 @@ fn executable_selects_video_and_cover_frames_from_the_same_pinned_input() {
 #[ignore = "requires FFmpeg CLI to generate and independently decode rotated video fixtures"]
 fn library_frame_rotation_matches_reference_pixels() {
     use clip_media_protocol::{VideoFrame, parse_video_frame};
-    use std::process::Stdio;
     let dir = tempfile::tempdir().unwrap();
     let original = dir.path().join("original.mp4");
     assert!(
@@ -497,29 +496,8 @@ fn library_frame_rotation_matches_reference_pixels() {
             .output()
             .unwrap();
         assert!(reference.status.success());
-        let mut decode = Command::new("ffmpeg")
-            .args([
-                "-v",
-                "error",
-                "-f",
-                "image2pipe",
-                "-i",
-                "pipe:0",
-                "-pix_fmt",
-                "rgba",
-                "-f",
-                "rawvideo",
-                "pipe:1",
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        decode.stdin.take().unwrap().write_all(frame.png).unwrap();
-        let decoded = decode.wait_with_output().unwrap();
-        assert!(decoded.status.success());
-        assert_eq!(decoded.stdout, reference.stdout, "rotation {rotation}");
+        let decoded = reference_rgba(frame.png);
+        assert_eq!(decoded, reference.stdout, "rotation {rotation}");
         assert_eq!(frame.info.seconds, 0.0);
     }
 }
@@ -562,4 +540,147 @@ fn executable_preview_samples_variable_holds_and_respects_its_frame_limit() {
         );
         assert!(result.stdout.ends_with(&[0xff, 0xd9]));
     }
+}
+
+#[test]
+fn executable_timeline_reduces_each_column_at_the_requested_resolution() {
+    use clip_media_protocol::{VideoFrame, VideoTimeline};
+    let mut input = tempfile::tempfile().unwrap();
+    input
+        .write_all(include_bytes!(
+            "../../little-clip-core/tests/fixtures/video/timed-colors.gif"
+        ))
+        .unwrap();
+    let settings = VideoTimeline {
+        frame: VideoFrame::new("gif", 1, 64),
+        columns: 16,
+        duration_ms: 1000,
+    };
+    let result = command(
+        &[&input],
+        "video-timeline",
+        &serde_json::to_string(&settings).unwrap(),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(result.stdout.starts_with(&[0xff, 0xd8]));
+    assert!(result.stdout.ends_with(&[0xff, 0xd9]));
+}
+
+fn reference_rgba(bytes: &[u8]) -> Vec<u8> {
+    use std::process::Stdio;
+    let mut decode = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "image2pipe",
+            "-i",
+            "pipe:0",
+            "-pix_fmt",
+            "rgba",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    decode.stdin.take().unwrap().write_all(bytes).unwrap();
+    let decoded = decode.wait_with_output().unwrap();
+    assert!(
+        decoded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&decoded.stderr)
+    );
+    decoded.stdout
+}
+
+#[test]
+#[ignore = "requires FFmpeg CLI to generate and independently compare an AV1 keyframe timeline"]
+fn library_av1_timeline_matches_the_existing_sequential_reference() {
+    use clip_media_protocol::{VideoFrame, VideoTimeline};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keyframes.mkv");
+    assert!(
+        Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=80x40:rate=10:duration=3",
+                "-c:v",
+                "libaom-av1",
+                "-cpu-used",
+                "8",
+                "-g",
+                "10",
+                "-threads",
+                "2"
+            ])
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let settings = VideoTimeline {
+        frame: VideoFrame::new("matroska", 1, 16),
+        columns: 48,
+        duration_ms: 3000,
+    };
+    let result = command(
+        &[&File::open(&path).unwrap()],
+        "video-timeline",
+        &serde_json::to_string(&settings).unwrap(),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let reference = Command::new("ffmpeg")
+        .args(["-v", "error", "-skip_frame", "nokey", "-threads", "2", "-i"])
+        .arg(&path)
+        .args([
+            "-vf",
+            "scale=1:16:flags=area,tpad=stop_mode=clone:stop_duration=3,fps=48000/3000,tile=48x1",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            "-pix_fmt",
+            "yuvj444p",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        reference.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reference.stderr)
+    );
+    let actual = reference_rgba(&result.stdout);
+    let expected = reference_rgba(&reference.stdout);
+    assert_eq!(actual.len(), 48 * 16 * 4);
+    assert_eq!(actual.len(), expected.len());
+    let maximum = actual
+        .iter()
+        .zip(&expected)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap();
+    assert_eq!(maximum, 0, "AV1 timeline reference pixel difference");
 }
