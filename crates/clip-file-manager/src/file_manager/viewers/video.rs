@@ -113,7 +113,7 @@ impl Video {
         }
         let size = egui::vec2(
             ui.available_width().max(1.0),
-            (ui.available_height() - 62.0).max(1.0),
+            (ui.available_height() - 76.0).max(1.0),
         );
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
@@ -163,10 +163,16 @@ impl Video {
                 .seek_preview
                 .unwrap_or(player.position_ms as f64 / 1000.0);
             let duration = player.duration_ms as f64 / 1000.0;
-            let slider = ui.add_sized(
-                [(ui.available_width() - 190.0).max(40.0), 22.0],
-                egui::Slider::new(&mut seconds, 0.0..=duration.max(0.001)).show_value(false),
-            );
+            let seek_width = (ui.available_width() - 210.0).max(40.0);
+            let slider = ui
+                .scope(|ui| {
+                    ui.spacing_mut().slider_width = seek_width;
+                    ui.add(
+                        egui::Slider::new(&mut seconds, 0.0..=duration.max(0.001))
+                            .show_value(false),
+                    )
+                })
+                .inner;
             if slider.dragged() {
                 self.seek_preview = Some(seconds);
             }
@@ -181,10 +187,11 @@ impl Video {
             ));
             let mut volume = player.volume();
             if ui
-                .add_sized(
-                    [72.0, 22.0],
-                    egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false),
-                )
+                .scope(|ui| {
+                    ui.spacing_mut().slider_width = 72.0;
+                    ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
+                })
+                .inner
                 .on_hover_text("Volume")
                 .changed()
             {
@@ -212,7 +219,9 @@ impl Video {
 }
 impl Drop for Video {
     fn drop(&mut self) {
-        if self.fullscreen && let Some(context) = &self.context {
+        if self.fullscreen
+            && let Some(context) = &self.context
+        {
             context.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
         }
     }

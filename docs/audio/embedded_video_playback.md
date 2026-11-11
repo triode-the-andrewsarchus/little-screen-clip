@@ -46,3 +46,9 @@ a frame-rate range, avoiding an impossible upsample when drop-only is enabled.
   view. The retained `/proc/self/fd` inode remains pinned; the push-only fd
   source could not load MXF indexes. The full eleven-format playback, poster
   and timeline matrix now passes, including actual MXF frames at 500 ms.
+
+- [x] Correct embedded control sizing and reserve the footer height. Runtime
+  screenshots exposed a seek widget retaining its default 100-point slider
+  despite a wider allocation, plus a clipped information line. Explicit scoped
+  slider widths now fill the control row and the complete footer remains visible
+  at the private runner’s 1280×800 output.
