@@ -56,11 +56,19 @@ enum Commands {
         #[command(subcommand)]
         action: RecipeAction,
     },
-    /// Re-run the last executed operation or recipe
+    /// Re-run or inspect the last executed operation or recipe
     Last {
-        /// Optional prompt text to pass if the recipe or action requests input
+        /// Show the recorded action without running it
+        #[arg(long, conflicts_with = "prompt")]
+        show: bool,
+        /// Optional prompt text to pass when re-running the action
         #[arg(short, long)]
         prompt: Option<String>,
+    },
+    /// Inspect and configure automatic clipboard actions
+    AutoActions {
+        #[command(subcommand)]
+        action: AutoActionCommand,
     },
     /// Force screen redraw
     Refresh,
@@ -96,6 +104,19 @@ enum RecipeAction {
     List,
     /// Run a recipe by name
     Run { name: String },
+}
+
+/// Subcommands for the daemon's automatic clipboard actions.
+#[derive(Subcommand)]
+enum AutoActionCommand {
+    /// List available actions and their current settings
+    List,
+    /// Enable or disable one action
+    Set {
+        key: String,
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
 }
 
 /// Sends a JSON-serialized IPC request over Unix domain socket and reads the daemon's response.
@@ -240,8 +261,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             RecipeAction::List => IpcRequest::ListRecipes,
             RecipeAction::Run { name } => IpcRequest::ExecuteRecipe { recipe_name: name },
         },
-        Commands::Last { prompt } => IpcRequest::ExecuteLastAction {
+        Commands::Last { show: true, .. } => IpcRequest::GetLastAction,
+        Commands::Last { prompt, .. } => IpcRequest::ExecuteLastAction {
             prompt_text: prompt,
+        },
+        Commands::AutoActions { action } => match action {
+            AutoActionCommand::List => IpcRequest::GetAutoActions,
+            AutoActionCommand::Set { key, enabled } => IpcRequest::SetAutoAction { key, enabled },
         },
         Commands::Refresh => IpcRequest::ForceRefreshDisplay,
         Commands::Reload => IpcRequest::ReloadConfig,
@@ -370,9 +396,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  {} : {}", k.bold(), st);
             }
         }
-        IpcResponse::ScenePreviews(previews) => {
-            println!("{} completed scene previews", previews.len());
-        }
+        IpcResponse::ScenePreviews(_) => return Err("Unexpected scene preview response".into()),
         IpcResponse::Error { error } => {
             eprintln!("{}: {}", "Error".red().bold(), error);
             std::process::exit(1);
