@@ -32,7 +32,7 @@ syntect = { workspace = true }
 regex = { workspace = true }
 webp = "0.3.1"
 libwebp-sys = "0.9.6"
-tempfile = "3.10"
+tempfile = "3.27"
 libc = "0.2"
 filmr = { path = "../../vendor/filmr", default-features = false, features = ["compute-gpu"] }
 ort = { version = "2.0.0-rc.15", features = ["download-binaries", "cuda"] }
@@ -40,5 +40,5 @@ ndarray = "0.17.2"
 
 [dev-dependencies]
 little-clip-core = { path = "../little-clip-core", features = ["test-support"] }
-rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
+rxing = { version = "0.9.4", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
 filmr-pinned = { package = "filmr", git = "https://github.com/W-Mai/filmr", rev = "fee388e213dd77bfe6977b63071b1c136213373a", default-features = false }

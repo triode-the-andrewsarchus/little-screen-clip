@@ -20,7 +20,7 @@ thiserror.workspace = true
 uuid.workspace = true
 zbus = "5.19.0"
 futures-util = "0.3.34"
-tempfile = "3.10"
+tempfile = "3.27"
 libc = "0.2"
 wayland-client = { version = "0.31", features = ["system"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }

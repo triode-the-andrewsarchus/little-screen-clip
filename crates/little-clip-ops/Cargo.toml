@@ -14,23 +14,23 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml = { workspace = true }
 uuid = { workspace = true }
-regex = "1.10"
+regex = "1.13"
 base64 = "0.22"
-similar = { version = "2.6", features = ["inline"] }
+similar = { version = "2.7", features = ["inline"] }
 syntect.workspace = true
 image = { workspace = true }
-rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
-kamadak-exif = "0.6.1"
+rxing = { version = "0.9.4", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
+kamadak-exif = "0.6.2"
 rayon = { workspace = true }
 ntsc-rs = { path = "../../vendor/ntsc-rs", default-features = false, features = ["std", "rayon"] }
-tempfile = "3.10"
+tempfile = "3.27"
 yodel = { version = "0.2.0", default-features = false, features = ["alloc", "std", "tnc", "aprs", "micE", "kiss", "fx25", "il2p", "wspr", "ft8", "m17"] }
 cwdit-morse = { git = "https://github.com/swilcox/cw-dit", package = "cwdit-morse" }
-realfft = "3.5.0"
+realfft = "3.5.1"
 
 # Synchronous ZIP writing with byte-exact Unix member names.
 rawzip = "0.5.2"
-flate2 = "1.0"
+flate2 = "1.1"
 
 [dev-dependencies]
-zip = { version = "7.0", default-features = false, features = ["deflate"] }
+zip = { version = "7.4", default-features = false, features = ["deflate"] }

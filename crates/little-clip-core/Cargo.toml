@@ -11,7 +11,7 @@ test-support = []
 [dependencies]
 libc = "0.2"
 imagesize = "0.12"
-kamadak-exif = "0.6.1"
+kamadak-exif = "0.6.2"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -26,22 +26,22 @@ toml.workspace = true
 toml_edit = "0.22"
 symphonia.workspace = true
 rustchord = "0.6.0"
-realfft = "3.5.0"
+realfft = "3.5.1"
 rayon.workspace = true
-fearless_simd = "1.0"
+fearless_simd = "1.2"
 fearless_simd_macros = "0.1"
 lopdf = "0.38"
 chrono = "0.4"
 calamine = "0.36.1"
 midly = "0.5"
-scenix-loader = "1.5.0"
+scenix-loader = "1.10.0"
 gltf = "1.4"
-scenix-mesh = "1.5.0"
+scenix-mesh = "1.10.0"
 ufbx = "0.11.5"
 tobj = "4.0"
-tempfile = "3.10"
+tempfile = "3.27"
 regex.workspace = true
-flate2 = "1.0"
+flate2 = "1.1"
 quick-xml = "0.41"
 roxmltree = "0.20"
 ncw = "=0.4.0"
@@ -54,7 +54,7 @@ jxl-oxide = { version = "0.12.6", default-features = false, features = ["image",
 hayro-jpeg2000 = "0.5.0"
 tinypsd = "0.1.0"
 oxideav-pcx = { version = "0.1.2", default-features = false }
-zip = { version = "7.0", default-features = false, features = ["deflate"] }
+zip = { version = "7.4", default-features = false, features = ["deflate"] }
 anydoc = "0.2"
 rdocx = "0.16"
 

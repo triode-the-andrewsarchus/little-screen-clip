@@ -28,20 +28,20 @@ serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1.0"
-tokio = { version = "1.38", features = ["full"] }
+tokio = { version = "1.54", features = ["full"] }
 rusb = "0.9"
 image = { version = "0.25", default-features = false, features = ["default-formats", "rayon"] }
 tiny-skia = "0.11"
 fontdue = "0.9"
 url = { version = "2.5", features = ["serde"] }
-uuid = { version = "1.9", features = ["v4", "serde"] }
+uuid = { version = "1.29", features = ["v4", "serde"] }
 percent-encoding = "2.3"
 toml = "0.8"
 symphonia = { version = "=0.5.5", default-features = false, features = ["mp2", "mp3", "wav", "flac", "ogg", "vorbis", "isomp4", "alac", "aac", "pcm", "caf", "mkv", "aiff", "opus"] }
 serde_yaml = "0.9"
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
-rayon = "1.10"
-regex = "1.10"
+rayon = "1.12"
+regex = "1.13"
 
 
 # Keep local builds bounded: this workspace's incremental cache can exceed the

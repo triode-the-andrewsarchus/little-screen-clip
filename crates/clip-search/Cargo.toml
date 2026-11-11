@@ -24,7 +24,7 @@ base64 = "0.22"
 libc = "0.2"
 chrono = "0.4"
 
-tempfile = "3.10"
+tempfile = "3.27"
 sha2 = "0.10"
 half = "2"
 rusqlite = { version = "0.35", features = ["bundled", "backup", "limits", "hooks", "functions", "serialize"] }

@@ -24,10 +24,10 @@ tracing.workspace = true
 rodio = { version = "0.22.2", features = ["symphonia-mp2", "symphonia-caf", "symphonia-mkv", "symphonia-aiff"] }
 hound = "3.5.1"
 image = { workspace = true }
-tempfile = "3.10"
+tempfile = "3.27"
 libc = "0.2"
 
 [dev-dependencies]
 webp = "0.3.1"
-rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
+rxing = { version = "0.9.4", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
 clip-studios = { path = "../clip-studios", features = ["test-support"] }

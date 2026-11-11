@@ -8,5 +8,5 @@ description = "Isolated read-only Kontakt mapping helper"
 
 [dependencies]
 serde_json.workspace = true
-flate2 = "1.0"
+flate2 = "1.1"
 roxmltree = "0.20"
