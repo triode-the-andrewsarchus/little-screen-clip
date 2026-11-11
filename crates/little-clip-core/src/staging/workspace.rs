@@ -8,6 +8,7 @@ use std::{
         unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, Weak},
     time::{Duration, SystemTime},
 };
 
@@ -19,8 +20,13 @@ const OWNER_FILE: &str = ".owner-lock";
 /// Dropping the owner removes the workspace through its pinned parent. After a
 /// process crash, another creator in the same scope can reclaim the unlocked
 /// workspace. Filesystems without advisory locks retain normal-drop cleanup. This type does not offer retention for external path consumers.
+#[derive(Clone, Debug)]
+pub struct TemporaryWorkspace(Arc<WorkspaceOwner>);
+
+static LIVE_WORKSPACES: Mutex<Vec<(PathBuf, Weak<WorkspaceOwner>)>> = Mutex::new(Vec::new());
+
 #[derive(Debug)]
-pub struct TemporaryWorkspace {
+struct WorkspaceOwner {
     // Field order keeps both the lock and parent alive during directory cleanup.
     _temporary: tempfile::TempDir,
     _owner_lock: Option<File>,
@@ -32,7 +38,7 @@ pub struct TemporaryWorkspace {
 impl TemporaryWorkspace {
     /// Returns the ordinary filesystem path used by this workspace's consumers.
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.0.path
     }
     /// Extends workspace ownership through an internal helper's inherited handle.
     ///
@@ -43,14 +49,14 @@ impl TemporaryWorkspace {
         request: crate::CommandRequest,
     ) -> io::Result<crate::CommandRequest> {
         let request = request.die_with_parent().own_process_group();
-        match &self._owner_lock {
+        match &self.0._owner_lock {
             Some(lock) => Ok(request.inherit_handle(lock)?.0),
             None => Ok(request),
         }
     }
 }
 
-impl Drop for TemporaryWorkspace {
+impl Drop for WorkspaceOwner {
     fn drop(&mut self) {
         if let Some(owner) = self._owner_lock.take() {
             let probe = OpenOptions::new()
@@ -135,14 +141,47 @@ impl ArtifactStore {
         };
         let directory = crate::kernel_interface::pin_content_directory(temporary.path())?;
         let path = fs::read_link(descriptor_path(&directory))?;
-        Ok(TemporaryWorkspace {
+        let owner = Arc::new(WorkspaceOwner {
             _temporary: temporary,
             _owner_lock: owner_lock,
             directory,
             _parent: parent,
             path,
-        })
+        });
+        let mut live = LIVE_WORKSPACES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        live.retain(|(_, owner)| owner.strong_count() > 0);
+        live.push((owner.path.clone(), Arc::downgrade(&owner)));
+        Ok(TemporaryWorkspace(owner))
     }
+}
+
+/// Retains the original cleanup owner for a source captured inside a live workspace.
+/// The registry holds only weak references, so it cannot extend artifact lifetimes.
+pub(crate) fn retain_source_workspace(path: &Path) -> io::Result<Option<TemporaryWorkspace>> {
+    let owners: Vec<_> = LIVE_WORKSPACES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .filter(|(directory, _)| path.starts_with(directory))
+        .filter_map(|(_, owner)| owner.upgrade())
+        .collect();
+    for owner in owners {
+        let Ok(directory_path) = fs::read_link(descriptor_path(&owner.directory)) else {
+            continue;
+        };
+        if !path.starts_with(&directory_path) {
+            continue;
+        }
+        let directory = crate::kernel_interface::pin_content_directory(&directory_path)?;
+        let named = directory.metadata()?;
+        let held = owner.directory.metadata()?;
+        if (named.dev(), named.ino()) == (held.dev(), held.ino()) {
+            return Ok(Some(TemporaryWorkspace(owner)));
+        }
+    }
+    Ok(None)
 }
 
 fn descriptor_path(directory: &File) -> PathBuf {
@@ -243,6 +282,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn captured_sources_keep_workspace_payloads_until_the_last_clone_is_released() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ArtifactStore {
+            base_dir: root.path().to_owned(),
+        };
+        let workspace = store.create_temporary_workspace("pdf", "source").unwrap();
+        let path = workspace.path().to_owned();
+        let payload = path.join("page.pdf");
+        fs::write(&payload, b"queued source").unwrap();
+        let source = crate::file_source::FileSource::capture(&payload).unwrap();
+        let independent = crate::file_source::FileSource::capture(&payload).unwrap();
+        assert_eq!(source, independent);
+        assert_eq!(source.revision_key(), independent.revision_key());
+        assert_eq!(format!("{source:?}"), format!("{independent:?}"));
+        assert!(!format!("{source:?}").contains("WorkspaceOwner"));
+        let queued = source.clone();
+        drop(independent);
+        drop(source);
+        drop(workspace);
+        let _next = store.create_temporary_workspace("pdf", "next").unwrap();
+        assert_eq!(fs::read(&payload).unwrap(), b"queued source");
+        queued.check().unwrap();
+        drop(queued);
+        assert!(
+            !path.exists(),
+            "the final source releases cleanup ownership"
+        );
+    }
+
+    #[test]
     fn abandoned_workspaces_are_reclaimed_while_live_and_recent_workspaces_survive() {
         let root = tempfile::tempdir().unwrap();
         let store = ArtifactStore {
@@ -250,6 +319,7 @@ mod tests {
         };
         let active = store.create_temporary_workspace("pdf", "active").unwrap();
         active
+            .0
             ._owner_lock
             .as_ref()
             .unwrap()
@@ -265,6 +335,7 @@ mod tests {
         let orphan = store.create_temporary_workspace("pdf", "orphan").unwrap();
         fs::write(orphan.path().join("partial.pdf"), b"abandoned bytes").unwrap();
         orphan
+            .0
             ._owner_lock
             .as_ref()
             .unwrap()
@@ -339,6 +410,7 @@ mod tests {
         };
         let workspace = store.create_temporary_workspace("pdf", "helper").unwrap();
         workspace
+            .0
             ._owner_lock
             .as_ref()
             .unwrap()

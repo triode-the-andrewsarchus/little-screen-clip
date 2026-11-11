@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 mod workspace;
 pub use workspace::TemporaryWorkspace;
+pub(crate) use workspace::retain_source_workspace;
 
 const TEMPORARY_WORKSPACES: &str = "transient-workspaces-v1";
 

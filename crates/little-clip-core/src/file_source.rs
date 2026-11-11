@@ -125,11 +125,29 @@ pub mod read_check_tests {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct FileSource {
     path: PathBuf,
     version: [u64; 7],
     mode: u32,
+    _workspace: Option<crate::staging::TemporaryWorkspace>,
+}
+// Runtime ownership must not change source identity or cache keys derived from Debug.
+impl PartialEq for FileSource {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.version == other.version && self.mode == other.mode
+    }
+}
+impl Eq for FileSource {}
+impl std::fmt::Debug for FileSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FileSource")
+            .field("path", &self.path)
+            .field("version", &self.version)
+            .field("mode", &self.mode)
+            .finish()
+    }
 }
 impl FileSource {
     /// The pathname retained with this observed or successfully saved revision.
@@ -165,7 +183,10 @@ impl FileSource {
         }
         let path = std::fs::read_link(format!("/proc/self/fd/{}", source.as_raw_fd()))
             .map_err(|e| e.to_string())?;
+        let workspace =
+            crate::staging::retain_source_workspace(&path).map_err(|error| error.to_string())?;
         Ok(Self {
+            _workspace: workspace,
             path,
             version: [
                 metadata.dev(),
