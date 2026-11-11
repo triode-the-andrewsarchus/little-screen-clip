@@ -266,7 +266,7 @@ touches the host clipboard or USB display unless explicitly stated.
 - [ ] **[Code Quality / Incomplete Test Constant & Dead Code]**:
   - [x] The shared `clip-ui` enum and `Icon::ALL` now come from the same list. The SVG loader test covers all 108 icons, including the previously omitted audio variants and clefs. All 31 UI unit tests and the doctest passed.
   - `Icon::Star` is used in the studio footer and gallery rating badge. `Icon::Brush`, `Icon::Pin`, and `Icon::Map` in [`crates/clip-workbench/src/icons.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/icons.rs#L59-L90) are never used outside `icons.rs`.
-  - `CommonShortcut::Close` (never constructed) and `Save`/`Copy`/`ZoomIn`/`ZoomOut`/`ZoomFit`/`ZoomActual` (never matched) in [`crates/clip-workbench/src/shell/shortcuts.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/shell/shortcuts.rs#L5-L15) are unused (`ShortcutDispatcher::check_common` is only used for `Undo`/`Redo` in `audio_preview`).
+  - [x] Removed unused `CommonShortcut` variants and their detection branches. The shared dispatcher now detects undo and redo, the only actions its audio editor caller consumes. All 176 audio-preview tests passed.
   - `PanelState` collapse fields and methods (`left_collapsed`, `right_collapsed`, `bottom_collapsed`, `effective_*`, `toggle_*`) in [`crates/clip-workbench/src/shell/panel.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/shell/panel.rs#L20-L89) are unused outside unit tests (`StudioPanelLayout::with_panel_sizes` ignores them).
 
 ---

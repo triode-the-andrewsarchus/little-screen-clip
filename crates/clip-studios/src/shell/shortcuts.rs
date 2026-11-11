@@ -1,66 +1,35 @@
 use egui::{self, Key};
 
-/// High-level shortcut actions detected by the dispatcher.
+/// Undo and redo actions detected by the shared studio shortcut dispatcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommonShortcut {
-    Save,
-    Copy,
     Undo,
     Redo,
-    ZoomIn,
-    ZoomOut,
-    ZoomFit,
-    ZoomActual,
-    Close,
 }
 
 pub struct ShortcutDispatcher;
 
 impl ShortcutDispatcher {
-    /// Evaluates common global studio shortcuts when keyboard focus is not inside a text field.
+    /// Detects undo and redo when keyboard focus is outside text fields.
     pub fn check_common(ctx: &egui::Context) -> Option<CommonShortcut> {
         if ctx.wants_keyboard_input() {
             return None;
         }
 
-        let cmd = ctx.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd);
-        let shift = ctx.input(|i| i.modifiers.shift);
+        ctx.input(|input| {
+            let modifiers = input.modifiers;
+            if !(modifiers.command || modifiers.ctrl || modifiers.mac_cmd) {
+                return None;
+            }
 
-        if cmd {
-            if ctx.input(|i| i.key_pressed(Key::S)) {
-                return Some(CommonShortcut::Save);
-            }
-            if ctx.input(|i| i.key_pressed(Key::C)) {
-                return Some(CommonShortcut::Copy);
-            }
-            if ctx.input(|i| i.key_pressed(Key::Z)) {
-                if shift {
-                    return Some(CommonShortcut::Redo);
+            if input.key_pressed(Key::Z) {
+                return Some(if modifiers.shift {
+                    CommonShortcut::Redo
                 } else {
-                    return Some(CommonShortcut::Undo);
-                }
+                    CommonShortcut::Undo
+                });
             }
-            if ctx.input(|i| i.key_pressed(Key::Y)) {
-                return Some(CommonShortcut::Redo);
-            }
-            if ctx.input(|i| i.key_pressed(Key::Num0)) {
-                return Some(CommonShortcut::ZoomFit);
-            }
-        } else {
-            if ctx.input(|i| i.key_pressed(Key::Num0)) {
-                return Some(CommonShortcut::ZoomFit);
-            }
-            if ctx.input(|i| i.key_pressed(Key::Num1)) {
-                return Some(CommonShortcut::ZoomActual);
-            }
-            if ctx.input(|i| i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals)) {
-                return Some(CommonShortcut::ZoomIn);
-            }
-            if ctx.input(|i| i.key_pressed(Key::Minus)) {
-                return Some(CommonShortcut::ZoomOut);
-            }
-        }
-
-        None
+            input.key_pressed(Key::Y).then_some(CommonShortcut::Redo)
+        })
     }
 }
