@@ -321,7 +321,15 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   missing `aeval` entry in the processing-only filter allowlist. Allow that
   expression filter, while retaining rejection of file/command sources. The
   existing six-operation/range PCM test now exercises the real session worker
-  rather than the CLI; it and the undo/source-guard/shortcut regressions pass.
+  rather than the CLI. This exposed a separate unspecified-layout rejection;
+  verification continues below.
+
+- [x] Accept negotiated unspecified channel counts for PCM encoding. `aeval`
+  produces an unspecified two-channel layout; unlike custom maps it owns no
+  allocation and is safe in the binding's value wrapper. Preserve that count
+  without guessing speaker positions. All twelve channel-tool tests now pass,
+  including the real-worker six-operation/range PCM check and all four failures
+  observed during the full workspace run.
 
 ## Final recommendation
 

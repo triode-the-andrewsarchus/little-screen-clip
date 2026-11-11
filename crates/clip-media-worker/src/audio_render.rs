@@ -465,9 +465,14 @@ fn make_encoder(
         if result < 0 {
             return Err(message(ffmpeg::Error::from(result)));
         }
-        // Only native masks have value semantics in ffmpeg-next's Copy layout
-        // wrapper; do not leak or shallow-copy custom allocated channel maps.
-        if layout.order != ffmpeg::ffi::AVChannelOrder::AV_CHANNEL_ORDER_NATIVE {
+        // Native masks and unspecified channel counts have value semantics in
+        // ffmpeg-next's Copy wrapper. aeval can negotiate an unspecified count;
+        // retain it rather than inventing positions. Custom maps own allocations.
+        if !matches!(
+            layout.order,
+            ffmpeg::ffi::AVChannelOrder::AV_CHANNEL_ORDER_NATIVE
+                | ffmpeg::ffi::AVChannelOrder::AV_CHANNEL_ORDER_UNSPEC
+        ) {
             ffmpeg::ffi::av_channel_layout_uninit(&mut layout);
             return Err("Custom encoded channel maps are unsupported".into());
         }
