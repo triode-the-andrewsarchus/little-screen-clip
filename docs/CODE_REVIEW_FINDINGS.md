@@ -53,10 +53,10 @@ touches the host clipboard or USB display unless explicitly stated.
 
 ### 2. `crates/clipctl`
 
-- [ ] **[Bug / Race & State Leak] `clipctl copy` leaves `RouteNextClipboard` armed in the daemon when falling back to primary selection or failing**:
+- [x] **[Bug / Race & State Leak] `clipctl copy` leaves `RouteNextClipboard` armed in the daemon when falling back to primary selection or failing**:
   - [x] The identity-scoped route API and CLI cancellation tests prevent a claimed route from being followed by a duplicate primary-selection push and prevent ordinary fallback from leaving its route armed.
   - [x] A pending Right Hand route no longer treats previously observed text as a new copy. A fake Wayland clipboard regression verifies repeated polls leave the route pending and a subsequent changed value reaches the Right Hand. All 26 daemon tests and four CLI tests passed.
-  - [ ] The polling adapter still cannot distinguish a new clipboard offer containing identical text or image bytes. The active route needs offer identity and correct echo suppression before this finding can be closed.
+  - [x] The daemon now observes native Wayland selection events on a dedicated connection. Every offer has its own observation identity, so equal text and image bytes can claim a new route. Daemon publications carry a source-specific MIME marker that retires with the source, allowing later clipboard-manager replay. Route admission synchronizes earlier events, decoding rejects superseded offers, and connection loss cancels pending routes and rejects new ones. The external polling fallback continues ordinary clipboard capture while selection events are unavailable. Isolated compositor regressions exercise equal offers, text/image routing, self-publication, source transfers, replay, and connection loss. All 32 daemon tests and five CLI tests passed. Package-only Clippy completed with existing warnings; the broader command stops at the existing approximate-square-root constant lint in CMYK halftone code.
 
   In [`crates/clipctl/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/clipctl/src/main.rs#L160-L238):
   1. `clipctl copy` first sends `IpcRequest::RouteNextClipboard { hand, timeout_ms: 2000, restore_os_clipboard: !no_restore }` to the daemon.

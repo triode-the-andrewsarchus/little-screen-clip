@@ -13,6 +13,7 @@ struct Route {
     id: Option<Uuid>,
     hand: HandSide,
     expires: Instant,
+    installed: Instant,
     restore: bool,
     status: ClipboardRouteStatus,
 }
@@ -29,6 +30,7 @@ impl ClipboardRoute {
             id,
             hand,
             expires,
+            installed: Instant::now(),
             restore,
             status: ClipboardRouteStatus::Pending,
         });
@@ -58,6 +60,25 @@ impl ClipboardRoute {
             }
         }
         (HandSide::Left, false)
+    }
+
+    pub(super) fn take_observed(&mut self, observed: Instant, now: Instant) -> (HandSide, bool) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|route| observed < route.installed)
+        {
+            return (HandSide::Left, false);
+        }
+        self.take(now)
+    }
+
+    pub(super) fn retire(&mut self) {
+        if let Some(route) = &mut self.current
+            && route.status(Instant::now()) == ClipboardRouteStatus::Pending
+        {
+            route.status = ClipboardRouteStatus::Cancelled;
+        }
     }
 
     pub(super) fn targets_right(&self, now: Instant) -> bool {
@@ -105,6 +126,34 @@ mod tests {
         assert_eq!(route.take(now), (HandSide::Right, true));
         assert_eq!(route.cancel(new, now), ClipboardRouteStatus::Claimed);
         assert_eq!(route.take(now), (HandSide::Left, false));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn older_offers_and_connection_loss_cannot_claim_a_new_route() {
+        let mut route = ClipboardRoute::default();
+        let observed = Instant::now();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let now = Instant::now();
+        let id = Uuid::new_v4();
+        route.install(
+            Some(id),
+            HandSide::Right,
+            now + Duration::from_secs(2),
+            false,
+        );
+        assert_eq!(route.take_observed(observed, now), (HandSide::Left, false));
+        assert_eq!(route.status(id, now), ClipboardRouteStatus::Pending);
+        route.retire();
+        assert_eq!(route.status(id, now), ClipboardRouteStatus::Cancelled);
+        route.install(
+            Some(id),
+            HandSide::Right,
+            now + Duration::from_secs(2),
+            false,
+        );
+        assert_eq!(route.take_observed(now, now), (HandSide::Right, false));
+        route.retire();
+        assert_eq!(route.status(id, now), ClipboardRouteStatus::Claimed);
     }
 
     #[test]

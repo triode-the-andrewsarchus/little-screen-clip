@@ -18,6 +18,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{RwLock, watch};
 use tracing::{error, info, warn};
 
+mod clipboard_events;
 mod clipboard_route;
 mod display_worker;
 mod lock_monitor;
@@ -91,6 +92,7 @@ pub struct DaemonContext {
     pub self_copied_text: RwLock<Vec<String>>,
     /// Hash of recently self-copied image to avoid echo loops.
     pub self_copied_image_hash: RwLock<Option<u64>>,
+    clipboard: Option<clipboard_events::Clipboard>,
     /// Most recently executed IPC action for repeat / replay commands.
     pub last_action: RwLock<Option<little_clip_core::ipc::LastAction>>,
     display_lock: Mutex<DisplayLock>,
@@ -250,12 +252,40 @@ impl DaemonContext {
         }
     }
 
-    /// Consumes and returns any active routing override (hand destination and clipboard restore flag).
-    pub async fn take_route_override(&self) -> (little_clip_core::HandSide, bool) {
-        self.route_next_clipboard
-            .write()
-            .await
-            .take(tokio::time::Instant::now())
+    async fn arm_clipboard_route(
+        &self,
+        request_id: Option<uuid::Uuid>,
+        hand: HandSide,
+        timeout_ms: u64,
+        restore_os_clipboard: bool,
+    ) -> IpcResponse {
+        // Observe queued selection events before acknowledging the request that
+        // the CLI uses to issue its copy shortcut.
+        let barrier = match &self.clipboard {
+            Some(clipboard) => match clipboard.barrier().await {
+                Ok(true) => Ok(()),
+                Ok(false) => Err("Clipboard selection events are unavailable".into()),
+                Err(error) => Err(error),
+            },
+            None => Ok(()),
+        };
+        if let Err(error) = barrier {
+            IpcResponse::Error { error }
+        } else {
+            let expires =
+                tokio::time::Instant::now() + Duration::from_millis(timeout_ms.min(60_000));
+            let mut route = self.route_next_clipboard.write().await;
+            route.install(request_id, hand, expires, restore_os_clipboard);
+            match request_id {
+                Some(request_id) => IpcResponse::ClipboardRoute {
+                    request_id,
+                    status: route.status(request_id, tokio::time::Instant::now()),
+                },
+                None => IpcResponse::Success {
+                    message: format!("Next clipboard event routed to {hand:?}"),
+                },
+            }
+        }
     }
 
     /// Restores the previously active OS clipboard item if a route-with-restore operation was performed.
@@ -358,6 +388,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )));
     let rolling_capture_config = Arc::new(std::sync::RwLock::new(config.audio.clone()));
 
+    let clipboard = clipboard_events::Clipboard::spawn()?;
+    let (clipboard, selections) = clipboard;
     let mut manager = SlotManager::default();
     manager.apply_config(&config.slots);
     let ctx = Arc::new(DaemonContext {
@@ -367,6 +399,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         display_tx,
         self_copied_text: RwLock::new(Vec::new()),
         self_copied_image_hash: RwLock::new(None),
+        clipboard: Some(clipboard),
         last_action: RwLock::new(load_last_action_from_disk()),
         display_lock: Mutex::default(),
         display_render: Arc::default(),
@@ -391,7 +424,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let clipboard_ctx = Arc::clone(&ctx);
     tokio::spawn(async move {
-        run_clipboard_poller(clipboard_ctx).await;
+        watch_clipboard_events(clipboard_ctx, selections).await;
     });
 
     // Start animation ticker loop (paced to protect embedded MCU from hardware watchdog/overrun)
@@ -980,19 +1013,8 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 timeout_ms,
                 restore_os_clipboard,
             }) => {
-                let expires =
-                    tokio::time::Instant::now() + Duration::from_millis(timeout_ms.min(60_000));
-                let mut route = ctx.route_next_clipboard.write().await;
-                route.install(request_id, hand, expires, restore_os_clipboard);
-                match request_id {
-                    Some(request_id) => IpcResponse::ClipboardRoute {
-                        request_id,
-                        status: route.status(request_id, tokio::time::Instant::now()),
-                    },
-                    None => IpcResponse::Success {
-                        message: format!("Next clipboard event routed to {hand:?}"),
-                    },
-                }
+                ctx.arm_clipboard_route(request_id, hand, timeout_ms, restore_os_clipboard)
+                    .await
             }
             Ok(IpcRequest::GetClipboardRoute { request_id }) => IpcResponse::ClipboardRoute {
                 request_id,
@@ -1330,6 +1352,95 @@ fn schedule_async_previews(item: &ClipItem, ctx: Arc<DaemonContext>) {
     schedule_multi_image_thumbnail_generation(item, ctx);
 }
 
+async fn watch_clipboard_events(
+    ctx: Arc<DaemonContext>,
+    mut selections: watch::Receiver<Option<Arc<clipboard_events::Incoming>>>,
+) {
+    while selections.changed().await.is_ok() {
+        let Some(incoming) = selections.borrow_and_update().clone() else {
+            continue;
+        };
+        match incoming.read().await {
+            Ok((bytes, mime)) => {
+                capture_clipboard_selection(
+                    &ctx,
+                    bytes,
+                    mime,
+                    (!incoming.initial).then_some(incoming.observed),
+                    Some(incoming.serial),
+                )
+                .await;
+            }
+            Err(error) => warn!(%error, "failed to read clipboard selection"),
+        }
+    }
+    ctx.route_next_clipboard.write().await.retire();
+    warn!("Clipboard selection events unavailable; using external clipboard adapter");
+    run_clipboard_poller(ctx).await;
+}
+
+async fn capture_clipboard_selection(
+    ctx: &Arc<DaemonContext>,
+    bytes: Vec<u8>,
+    mime: String,
+    observed: Option<tokio::time::Instant>,
+    serial: Option<u64>,
+) {
+    let trim_tracking = ctx.config.read().await.auto_actions.trim_link_tracking;
+    let prepared = tokio::task::spawn_blocking(move || {
+        if little_clip_core::item::image_extension_for_mime(&mime).is_some() {
+            return ClipItem::from_image_bytes(bytes, &mime).map(|item| (item, None));
+        }
+        let text = String::from_utf8(bytes).ok()?;
+        if text.is_empty() {
+            return None;
+        }
+        if trim_tracking && let Some(cleaned) = little_clip_ops::clean_url_tracking(&text) {
+            return Some((
+                ClipItem::from_text(cleaned),
+                Some(ClipItem::from_text(text)),
+            ));
+        }
+        Some((ClipItem::from_text(text), None))
+    })
+    .await;
+    let Ok(Some((item, original_untracked))) = prepared else {
+        return;
+    };
+    let was_cleaned = original_untracked.is_some();
+    let (prior_left, target_hand, restore_os) = {
+        let mut manager = ctx.manager.write().await;
+        // Decoder completion cannot publish an offer superseded in the meantime.
+        if serial.is_some_and(|serial| {
+            ctx.clipboard
+                .as_ref()
+                .is_none_or(|clipboard| !clipboard.is_current(serial))
+        }) {
+            return;
+        }
+        let (hand, restore) = match observed {
+            Some(observed) => ctx
+                .route_next_clipboard
+                .write()
+                .await
+                .take_observed(observed, tokio::time::Instant::now()),
+            None => (HandSide::Left, false),
+        };
+        let prior = manager.left_hand().cloned();
+        if let Some(original) = original_untracked {
+            manager.undo = Some(original);
+        }
+        manager.push_to_hand(item.clone(), hand);
+        (prior, hand, restore)
+    };
+    schedule_async_previews(&item, Arc::clone(ctx));
+    if was_cleaned && let Some(text) = item.to_clipboard_text() {
+        copy_cleaned_clipboard_text(text, ctx).await;
+    }
+    ctx.refresh_display().await;
+    ctx.maybe_restore_os_clipboard_after_route(restore_os, target_hand, prior_left);
+}
+
 async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
     use std::hash::{Hash, Hasher};
 
@@ -1385,29 +1496,15 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         last_image_hash = Some(hash);
                         last_clipboard_text.clear();
 
-                        let (target_hand, restore_os) = ctx.take_route_override().await;
-
-                        if let Some(item) = ClipItem::from_image_bytes(img_out.stdout, &image_mime)
-                        {
-                            info!(
-                                "Captured clipboard image to {:?}: {} ({})",
-                                target_hand, item.title, item.subtitle
-                            );
-                            schedule_async_previews(&item, Arc::clone(&ctx));
-                            let prior_left = {
-                                let mut mgr = ctx.manager.write().await;
-                                let old_left = mgr.left_hand().cloned();
-                                mgr.push_to_hand(item, target_hand);
-                                old_left
-                            };
-                            ctx.refresh_display().await;
-                            ctx.maybe_restore_os_clipboard_after_route(
-                                restore_os,
-                                target_hand,
-                                prior_left,
-                            );
-                            continue;
-                        }
+                        capture_clipboard_selection(
+                            &ctx,
+                            img_out.stdout,
+                            image_mime,
+                            Some(tokio::time::Instant::now()),
+                            None,
+                        )
+                        .await;
+                        continue;
                     } else {
                         // Same image as last tick, no update needed
                         continue;
@@ -1471,56 +1568,14 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         last_clipboard_text = text.clone();
                         last_image_hash = None;
 
-                        let (target_hand, restore_os) = ctx.take_route_override().await;
-
-                        let (item, original_untracked) = if ctx
-                            .config
-                            .read()
-                            .await
-                            .auto_actions
-                            .trim_link_tracking
-                        {
-                            if let Some(cleaned) = little_clip_ops::clean_url_tracking(&text) {
-                                info!(
-                                    "Auto-Action: Trimmed link tracking from URL (original saved to Undo)"
-                                );
-                                (
-                                    ClipItem::from_text(cleaned),
-                                    Some(ClipItem::from_text(text.clone())),
-                                )
-                            } else {
-                                (ClipItem::from_text(text.clone()), None)
-                            }
-                        } else {
-                            (ClipItem::from_text(text.clone()), None)
-                        };
-                        let was_cleaned = original_untracked.is_some();
-                        info!(
-                            "Captured clipboard item to {:?}: [{}] {}",
-                            target_hand, item.handler_tag, item.title
-                        );
-                        schedule_async_previews(&item, Arc::clone(&ctx));
-                        let prior_left = {
-                            let mut mgr = ctx.manager.write().await;
-                            let old_left = mgr.left_hand().cloned();
-                            if let Some(orig) = original_untracked {
-                                mgr.undo = Some(orig);
-                            }
-                            mgr.push_to_hand(item.clone(), target_hand);
-                            old_left
-                        };
-                        if was_cleaned {
-                            if let Some(clean_text) = item.to_clipboard_text() {
-                                last_clipboard_text = clean_text.clone();
-                                copy_cleaned_clipboard_text(clean_text, &ctx).await;
-                            }
-                        }
-                        ctx.refresh_display().await;
-                        ctx.maybe_restore_os_clipboard_after_route(
-                            restore_os,
-                            target_hand,
-                            prior_left,
-                        );
+                        capture_clipboard_selection(
+                            &ctx,
+                            text.into_bytes(),
+                            "text/plain;charset=utf-8".into(),
+                            Some(tokio::time::Instant::now()),
+                            None,
+                        )
+                        .await;
                     }
                 }
             }
@@ -1561,6 +1616,7 @@ async fn copy_cleaned_clipboard_text(text: String, ctx: &DaemonContext) {
         text.into_bytes(),
         "text/plain;charset=utf-8",
         "cleaned text",
+        ctx,
     )
     .await;
 }
@@ -1599,8 +1655,24 @@ async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
     }
 }
 
-async fn write_os_clipboard(bytes: Vec<u8>, mime: impl Into<String>, description: &str) {
+async fn write_os_clipboard(
+    bytes: Vec<u8>,
+    mime: impl Into<String>,
+    description: &str,
+    ctx: &DaemonContext,
+) {
     let mime = mime.into();
+    let bytes: Arc<[u8]> = bytes.into();
+    if let Some(clipboard) = &ctx.clipboard {
+        match clipboard.publish(bytes.clone(), mime.clone()).await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => {
+                warn!(%error, %description, "failed to publish clipboard selection");
+                return;
+            }
+        }
+    }
     match tokio::task::spawn_blocking(move || copy_bytes_to_system_clipboard(&bytes, &mime)).await {
         Ok(Err(error)) => warn!(%error, %description, "failed to copy to system clipboard"),
         Err(error) => warn!(%error, %description, "clipboard copy worker failed"),
@@ -1614,7 +1686,7 @@ async fn copy_image(bytes: Vec<u8>, mime: String, ctx: &DaemonContext) {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     *ctx.self_copied_image_hash.write().await = Some(hasher.finish());
-    write_os_clipboard(bytes, mime, "image").await;
+    write_os_clipboard(bytes, mime, "image", ctx).await;
 }
 
 async fn copy_image_file(path: &std::path::Path, ctx: &DaemonContext) {
@@ -1633,6 +1705,7 @@ async fn copy_text(text: &str, description: &str, ctx: &DaemonContext) {
         text.as_bytes().to_vec(),
         "text/plain;charset=utf-8",
         description,
+        ctx,
     )
     .await;
 }
@@ -1660,7 +1733,7 @@ async fn copy_file_batch(files: &[PathBuf], ctx: &DaemonContext) {
             .join("\n"),
     )
     .await;
-    write_os_clipboard(uri_list.into_bytes(), "text/uri-list", "files").await;
+    write_os_clipboard(uri_list.into_bytes(), "text/uri-list", "files", ctx).await;
 }
 
 async fn copy_audio_path(path: &std::path::Path, ctx: &DaemonContext) {
@@ -1671,7 +1744,7 @@ async fn copy_audio_path(path: &std::path::Path, ctx: &DaemonContext) {
     ctx.add_self_copied_text(uri.clone()).await;
     ctx.add_self_copied_text(path.to_string_lossy().into_owned())
         .await;
-    write_os_clipboard(uri.into_bytes(), "text/uri-list", "audio path").await;
+    write_os_clipboard(uri.into_bytes(), "text/uri-list", "audio path", ctx).await;
 }
 
 /// Returns the Unix domain socket path used for IPC communication (`$XDG_RUNTIME_DIR/little-screen-clip.sock`).
@@ -1696,7 +1769,7 @@ mod tests {
     const TRACKED_URL: &str = "https://example.com/path?utm_source=newsletter&keep=value";
     const CLEAN_URL: &str = "https://example.com/path?keep=value";
 
-    fn test_context(mut manager: SlotManager) -> Arc<DaemonContext> {
+    pub(super) fn test_context(mut manager: SlotManager) -> Arc<DaemonContext> {
         let config = little_clip_core::AppConfig::default();
         manager.apply_config(&config.slots);
         let (display_tx, _display_rx) = watch::channel(None);
@@ -1709,6 +1782,7 @@ mod tests {
             display_tx,
             self_copied_text: RwLock::new(Vec::new()),
             self_copied_image_hash: RwLock::new(None),
+            clipboard: None,
             last_action: RwLock::new(None),
             display_lock: Mutex::default(),
             display_render: Arc::default(),

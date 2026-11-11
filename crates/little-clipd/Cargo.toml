@@ -21,6 +21,11 @@ uuid.workspace = true
 zbus = "5.19.0"
 futures-util = "0.3.34"
 tempfile = "3.10"
+libc = "0.2"
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [dev-dependencies]
+wayland-server = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["server"] }
 tokio = { workspace = true, features = ["test-util"] }
