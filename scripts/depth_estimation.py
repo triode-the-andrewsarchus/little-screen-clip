@@ -3,8 +3,7 @@
 AI Depth Estimation Worker for little-screen-clip.
 Extracts high-resolution depth maps from images using Depth-Anything / MiDaS via transformers.
 
-Usage:
-    python3 depth_estimation.py <input_path|-> <output_path|-> [--invert] [--colormap {gray,inferno,turbo}]
+Writes a grayscale PNG. Run python3 depth_estimation.py --help for options.
 """
 
 import os
