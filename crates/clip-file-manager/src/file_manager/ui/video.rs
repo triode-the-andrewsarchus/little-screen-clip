@@ -168,7 +168,8 @@ fn video_hover(
     let point = ui.ctx().pointer_hover_pos()?;
     let time = if thumbnail.is_some_and(|rect| super::preview_hovered(ui, rect)) {
         0
-    } else if let Some(timeline) = timeline.filter(|rect| super::preview_hovered(ui, *rect)) {
+    } else {
+        let timeline = timeline.filter(|rect| super::preview_hovered(ui, *rect))?;
         let fraction = ((point.x - timeline.left()) / timeline.width()).clamp(0.0, 1.0);
         ui.painter().line_segment(
             [
@@ -179,8 +180,6 @@ fn video_hover(
         );
         ((fraction as f64 * metadata.duration_ms as f64).round() as u64)
             .min(metadata.duration_ms.saturating_sub(1))
-    } else {
-        return None;
     };
     previews.hover(ui.ctx(), entry, metadata, time);
     // Scrubbing must bypass the ordinary tooltip's stationary-pointer delay.

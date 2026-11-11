@@ -93,3 +93,9 @@ the backend extraction; the host check remains warning-free.
   window to the 1280×800 output; Escape restores its original size without
   restarting or closing playback. The full light-theme hover/audio/cleanup
   acceptance scenario passes as well as the earlier dark run.
+
+- [x] Review all-target workspace lints against the pre-feature revision. The
+  only new warning was a redundant optional timeline branch; using `?` keeps
+  the same hit-testing behavior and removes it. The complete command-local
+  warning inventory now reports no diagnostics on changed repository primary
+  spans or their macro expansion sites. Existing workspace lint debt remains.
