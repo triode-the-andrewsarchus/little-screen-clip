@@ -28,19 +28,37 @@ Automatic Music activation counts audio files among visible regular-file entries
 
 ## Video backend
 
-Video paths open an owned FFplay window from a Files viewer session. This reuses the installed FFmpeg stack for synchronized audio/video decoding and ordinary playback controls instead of introducing a second decoder and audio clock. In the video window, Space pauses/resumes, Left/Right seek ten seconds, Up/Down seek one minute, right-click seeks proportionally, F toggles fullscreen, and Q closes playback. The Files session offers replay, stop and return to folder.
+Video paths open an embedded Files player. A separate media worker uses
+GStreamer for synchronized video/audio playback; it sends bounded RGBA frames
+to the existing egui surface and never opens another window. Space pauses or
+resumes, Left/Right seek five seconds, the slider seeks precisely, F or a double
+click toggles fullscreen, and Escape exits fullscreen before returning to the
+folder. Playback volume and stop controls are available beside the timeline.
 
-One session owns at most one child. Stop, returning to the folder, replacing playback and closing Files kill and reap it. On Linux the child also receives SIGKILL if Files dies abruptly. Music remains stopped after leaving the video session. Video is read-only; image/audio edits and exports use the existing protected studios and source guards.
+Thumbnail hover starts a small muted video at the beginning. Timeline hover
+starts it at the pointer’s position; leaving the pointer stationary allows it
+to keep playing. Moving to another point coalesces seeks in the same decoder,
+with epochs rejecting stale responses. Actual displayed-frame time is retained
+while a newer seek completes. Hover never acquires an audio device.
 
-Preflight uses core's bounded process runner for FFprobe off the UI thread, selects the first non-cover video stream, and checks FFplay availability with a three-second timeout and 4 KiB retained output. Source identity is checked after preparation and before every launch. Missing tools, invalid streams and failed player exits produce visible errors with the external-opening option.
+One bounded player owner retains its inherited ordinary-file descriptor, source
+identity/search guards and child admission through cancellation and kill/reap.
+Returning to the folder, scrolling away, entering a studio, switching sources
+and closing Files retire playback. Linux parent-death signaling also retires the
+helper if Files dies. Music remains stopped after leaving the video session.
+Video remains read-only; shared file naming still applies.
 
-Listing previews reuse the bounded music-cover extractor for one aspect-fitted video poster, with the same stream selection and pixel check as playback. They do not require FFplay.
-
-The local stream pixel budget is 4096×2160 pixels, with either dimension at most 4096. FFplay uses two decoder threads, one filter thread, finite input buffering, frame dropping on slow machines and a 256 MiB **single-allocation** cap; this cap is not a total-process memory limit. Frames and audio stream through the player; Files retains no video-sized frame array. Larger streams use Open externally. Playback codecs depend on the installed FFmpeg build. The local inventory includes H.264, HEVC, VP9, AV1, MPEG-4, AAC, FLAC, Opus and Vorbis; rendered acceptance currently proves H.264/AAC, not every listed codec.
+Preflight uses the bounded FFmpeg library metadata worker off the UI thread and
+selects the first non-cover video stream. The source budget remains 4096×2160
+pixels with either dimension at most 4096. Display transport is bounded to
+full-HD pixel count, with one newest frame retained, and hover requests a small
+preview. Playback codecs depend on installed GStreamer plugins; processing and
+exports retain FFmpeg libraries. FFplay is no longer required. See
+[implementation and verification](../audio/embedded_video_playback.md).
 
 ## Music resource and format expectations
 
-Metadata and cover extraction use bounded FFprobe/FFmpeg requests (three seconds each, 64 KiB metadata and 256 KiB encoded cover output). Cover rasters are at most 160×160 with a 4 MiB allocation cap. Waveforms share core's streaming `WaveformColor` crossover with the workbench: warm bass, green mids and blue highs, with the shared accent for selected ranges. Each channel retains independent filter history and previews average channel colors without phase-cancelling downmixes. Listing and Shelf excerpts use the same calculation. Full-length waveforms keep 512 peaks and colors per visible track and decode Symphonia planar packets rather than retaining PCM or dispatching individual interleaved samples. Decoding has a ten-second budget and cancellation checks. At most eight music previews run concurrently (bounded by available CPUs) on a dedicated executor, leaving the shared job executor available for other work. Each music job overlaps its bounded metadata/cover helper with decoding; at most eight such helpers exist. Ordinary listing and Shelf previews retain single-job admission; gallery decoding uses its separate four-worker queue. At most 128 visible identities are retained, and retired work is cancelled. Unavailable waveforms retain the file, metadata and a visible fallback with error details on hover.
+Metadata and fallback cover extraction use bounded media-library requests (three seconds each, 64 KiB metadata and 256 KiB encoded cover output). Cover rasters are at most 160×160 with a 4 MiB allocation cap. Waveforms share core's streaming `WaveformColor` crossover with the workbench: warm bass, green mids and blue highs, with the shared accent for selected ranges. Each channel retains independent filter history and previews average channel colors without phase-cancelling downmixes. Listing and Shelf excerpts use the same calculation. Full-length waveforms keep 512 peaks and colors per visible track and decode Symphonia planar packets rather than retaining PCM or dispatching individual interleaved samples. Decoding has a ten-second budget and cancellation checks. At most eight music previews run concurrently (bounded by available CPUs) on a dedicated executor, leaving the shared job executor available for other work. Each music job overlaps its bounded metadata/cover helper with decoding; at most eight such helpers exist. Ordinary listing and Shelf previews retain single-job admission; gallery decoding uses its separate four-worker queue. At most 128 visible identities are retained, and retired work is cancelled. Unavailable waveforms retain the file, metadata and a visible fallback with error details on hover.
 
 Native music playback uses the existing rodio/Symphonia feature set. WAV, FLAC and the workspace's enabled compressed formats are supported according to that decoder; classifying a file as audio does not guarantee decoding. Decoder failures are displayed and ordinary next-track/external-opening controls remain available. Clipboard slice extraction uses FFmpeg and the existing guarded export model. The automatic threshold can be configured in `[file_manager]` as `music_threshold_percent`; the view's slider changes it for the current application session.
 
@@ -56,7 +74,7 @@ Native music playback uses the existing rodio/Symphonia feature set. WAV, FLAC a
 | Direct waveform selection/copy/paste | Rendered playhead seek and range selection; Ctrl+C exports a guarded slice and Ctrl+V imports it. The pasted duration matches the selected interval and the original SHA-256 is unchanged. |
 | Large folders and bounded previews | Two 10,000-entry fixtures exercise List, Photos and Music. Visible text shape counts stay below 200, the last entry is not laid out, and history restores selection/scroll. Gallery caches retain only viewport/overscan identities; other preview caches retain at most 128 visible identities; gallery admits four thumbnail jobs; List/Shelf admit one job and Music admits at most eight on a dedicated executor. |
 | Navigation and close ownership | Current music policy stops on navigation and audio/video studio entry; earlier rendered music navigation results are historical. Video return/app-close tests verify child reaping. Source checks reject changed video replay. |
-| Assessed video backend and expectations | Owned FFplay child, bounded FFprobe inspection and bounded posters in shared `media.rs`. H.264/AAC moving frames and pause are verified in both appearances; codec dependencies and allocation/dimension limits are documented above. Missing-player errors retain external opening. |
+| Assessed video backend and expectations | Owned GStreamer media worker, bounded library inspection and bounded posters in shared `media.rs`. H.264/AAC moving frames and pause are verified in both appearances; codec dependencies and allocation/dimension limits are documented above. Missing-player errors retain external opening. |
 | Subfolders/non-media remain accessible | Both views use the ordinary browser entries/actions. Gallery acceptance opens a text file and returns; Music retains folders and text entries. |
 | Shared media edits and protected exports | Existing Image/Audio Studios remain file-backed. Photo edits block slideshow changes; waveform export validates source identity and writes a separate slice. Existing source replacement, save conflict and undo tests run in the workspace suite. Video remains read-only. |
 
@@ -122,7 +140,10 @@ Long-video timelines approximate changes between keyframes. There is **no fixed 
 
 ### Hover and lifecycle
 
-Hover owns one persistent Timelens decoder on an independent bounded queue. Pointer requests coalesce immediately without a hover pause; metadata is published before timeline completion. Recent keyframes are cached, raw frame transport avoids PNG round trips, and the latest completed picture stays visible with its actual timestamp while the next decodes. Supported HEVC hover uses GPU decode/scale and preview-sized downloads. Replaced source/revision/resolution results are rejected. Navigation, studio entry and scrolling retire read-only jobs and textures. Playback remains the existing owned FFplay session, using the same probed non-cover stream and killing/reaping its child on exit.
+Hover now uses the shared clocked GStreamer player described above. The earlier
+Timelens still-frame client has been removed; Timelens remains a timeline
+generation fallback. The benchmark tables below describe the previous
+keyframe-only hover implementation, not the new playback path.
 
 ### Measurements
 
@@ -141,7 +162,7 @@ The requested Music reference on `/home/vega/Documents/type_testing/Ashes Agains
 
 ### Build, licensing and validation
 
-`launch.sh build` and `launch.sh files` build both helpers as separate GPL-2.0-or-later executables. Timelens is pinned to commit `988c9f4773b25916aa404801c9e0f468f8052321`; its first build needs GitHub, Rust, GStreamer/GStreamer App development packages and suitable runtime codec plugins. The indexed helper requires a C compiler, pthreads, `pkg-config` and FFmpeg development libraries (`libavformat`, `libavcodec`, `libavutil`, `libswscale`); missing development libraries retain the fallback. FFprobe supplies metadata and FFplay playback. Overrides are `LITTLE_CLIP_TIMELENS` and `LITTLE_CLIP_VIDEO_STRIP`.
+`launch.sh build` and `launch.sh files` build both helpers as separate GPL-2.0-or-later executables. Timelens is pinned to commit `988c9f4773b25916aa404801c9e0f468f8052321`; its first build needs GitHub, Rust, GStreamer/GStreamer App development packages and suitable runtime codec plugins. The indexed helper requires a C compiler, pthreads, `pkg-config` and FFmpeg development libraries (`libavformat`, `libavcodec`, `libavutil`, `libswscale`); missing development libraries retain the fallback. The media worker supplies library metadata and embedded GStreamer playback. Overrides are `LITTLE_CLIP_TIMELENS` and `LITTLE_CLIP_VIDEO_STRIP`.
 
 `scripts/README.timelens.md` beside the build script and patch explains the GPL v2-or-later licensing boundary. The installed Timelens directory retains complete modified source, patch, README and license. `scripts/video_strip/README.md` explains the independent helper's license, corresponding source and rebuild instructions; these are copied beside its binary. Neither helper links into the application library.
 
@@ -155,7 +176,7 @@ Compared the low-level [`io-uring`](https://github.com/tokio-rs/io-uring), [`tok
 
 `--io-uring` enables this experiment directly; `LITTLE_CLIP_VIDEO_IO=uring` enables it for uncached Files strips. **Default remains synchronous** because trials did not show a consistent improvement. Buffered local caching and CIFS/SMB2 direct reads retain their existing storage-specific behavior.
 
-After FFprobe, dispatch uses codec, decoded pixel count, file bytes, duration, visible file count and available CPU parallelism. At most four file jobs are admitted, fewer on low-core machines. CPU workers divide a target budget capped at 16 cores, with a maximum of eight per heavy file or four per lighter file. Heavy means at least 512 MiB, 30 minutes or two million pixels. Large H.264 (at least two million pixels) and HEVC (at least four million pixels) prefer GPU decode. Pixel count includes cropped/portrait 4K inputs previously missed by a width-only check. Single GPU files use four contexts; concurrent GPU files use two each, bounded further by CPU availability. CPU fallback retains its independently chosen worker count. Short videos retain ordinary-frame Timelens streaming.
+After library metadata probing, dispatch uses codec, decoded pixel count, file bytes, duration, visible file count and available CPU parallelism. At most four file jobs are admitted, fewer on low-core machines. CPU workers divide a target budget capped at 16 cores, with a maximum of eight per heavy file or four per lighter file. Heavy means at least 512 MiB, 30 minutes or two million pixels. Large H.264 (at least two million pixels) and HEVC (at least four million pixels) prefer GPU decode. Pixel count includes cropped/portrait 4K inputs previously missed by a width-only check. Single GPU files use four contexts; concurrent GPU files use two each, bounded further by CPU availability. CPU fallback retains its independently chosen worker count. Short videos retain ordinary-frame Timelens streaming.
 
 Local fixtures are in `/home/vega/Videos/video-preview-tests-20261008/`: 11 complete files in six workload folders, **18,808,224,779 bytes**, below the 20,000,000,000-byte limit. They cover short H.264, two H.264 episodes, two HEVC episodes, mixed AV1 MKV/HEVC MP4, cropped 2862×2158 HEVC and full 3840×2160 HEVC. All local file SHA-256 values were reread and verified against the copy manifest. Source files were not modified. `scripts/copy_video_test_fixtures.py` provides budgeted, grouped, atomic no-overwrite copies and a manifest for future experiments.
 

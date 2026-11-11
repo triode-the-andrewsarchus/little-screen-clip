@@ -359,10 +359,7 @@ impl Engine {
     }
 }
 
-fn video_sink(
-    settings: &Settings,
-    gpu: bool,
-) -> Result<(gst::Bin, gstreamer_app::AppSink)> {
+fn video_sink(settings: &Settings, gpu: bool) -> Result<(gst::Bin, gstreamer_app::AppSink)> {
     let sink = gstreamer_app::AppSink::builder()
         .caps(&output_caps(settings, false))
         .max_buffers(1)

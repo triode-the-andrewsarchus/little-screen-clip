@@ -16,8 +16,8 @@ existing specialized FFmpeg paths.
 - [x] Verify playback progression, pause, seeks, EOF, source/stream/orientation,
   cancellation and stale-seek rejection using actual decoded frames.
 - [x] Verify UI controls, hover behavior and cleanup on navigation/studio entry.
-- [ ] Update distribution dependencies and the worker's source bundle.
-- [ ] Complete workspace tests/build, architecture review and runtime inspection.
+- [x] Update distribution dependencies and the worker's source bundle.
+- [x] Complete workspace tests/build, architecture review and runtime inspection.
 
 The parent owns its latest frame and latest desired control only. The worker
 uses a clock-synchronized bounded appsink; hover disables audio decoding/device
@@ -39,8 +39,8 @@ a frame-rate range, avoiding an impossible upsample when drop-only is enabled.
   540 ms timestamp origin and an incorrect GStreamer duration estimate. Its
   requested 500 ms frame now reports its actual 480 ms source time and the
   correct two-second duration. All 24 worker/protocol tests pass afterward.
-- The expanded host format matrix currently exposes an MXF preroll failure;
-  this is still being fixed rather than dropping that format from coverage.
+- The expanded host format matrix exposed an MXF preroll failure, fixed by
+  the descriptor-backed random-access source described below.
 
 - [x] Restore MXF random-access preroll using a descriptor-backed `filesrc`
   view. The retained `/proc/self/fd` inode remains pinned; the push-only fd
@@ -65,8 +65,7 @@ uses private compositor/audio sockets and synthetic files only.
 
 Architecture follow-up separates command dispatch, source admission, video-sink
 construction, initial preroll and bus handling. The embedded UI likewise separates
-keyboard shortcuts and transport controls. These are phases of the shared player,
-not parallel playback backends. The existing worker/reference suite passes after
+keyboard shortcuts and transport controls. These phases share the same player. The existing worker/reference suite passes after
 the backend extraction; the host check remains warning-free.
 
 - [x] Preserve preview-sized GPU transfer for supported HEVC/large H.264.
@@ -99,3 +98,32 @@ the backend extraction; the host check remains warning-free.
   the same hit-testing behavior and removes it. The complete command-local
   warning inventory now reports no diagnostics on changed repository primary
   spans or their macro expansion sites. Existing workspace lint debt remains.
+
+## Final verification and delivery
+
+| Check | Result |
+| --- | --- |
+| Full workspace tests, one test thread | 2,829 passed; zero failed; 35 ignored across 43 suites, including doctests. |
+| Worker/protocol tests with manual references enabled | All 24 passed; genuine quarter-turn rotation geometry/RGBA, compressed-audio timing and AV1 timeline references included. |
+| Eleven-format host matrix | Playback frames, posters and timeline strips pass, including MXF and MPEG timestamp origins. |
+| Debug and optimized workspace builds | Passed with zero compiler warnings. The optimized build also packaged both helpers and safely pruned 393 obsolete release-cache entries. |
+| Private Wayland/audio acceptance | Dark and light pass. The optimized executable also passes the complete dark hover/playback/fullscreen/cleanup scenario. |
+| Delivered-source offline rebuild | All 24 tests pass from the vendored minimal worker workspace with `--offline --locked`, including manual references. |
+| Packaging tests / formatting | Three packaging tests, Python compilation and Rust formatting pass. |
+| Lints | Worker/protocol all-target strict Clippy passes. The full workspace inventory reports no diagnostics on changed lines or macro expansion sites; existing workspace lint debt prevents a blanket strict-Clippy claim. |
+| Linkage | Desktop binaries link neither FFmpeg nor GStreamer. The worker links the expected FFmpeg 9 and GStreamer App/Video libraries. |
+
+The default launcher’s optimized binaries and `media-helper` companion are
+rebuilt. Deployment requires matching FFmpeg shared libraries and GStreamer
+1.24+ with playback/codec plugins; the companion includes current source,
+vendored Rust dependencies, fixtures, notices and both migration documents.
+
+Architecture review removed the new oversized UI/command/pump functions and
+shared GPU/CPU output-cap construction. The CLI dispatcher falls from CCN 17 to
+3. One source-admission function remains at CCN 20 because it keeps ordinary-file,
+container/stream, dimensions, finite timing and decoder eligibility checks
+together. Maximum repository CCN remains 195, duplication percentage decreases
+slightly, and one additional clone group remains (including standard pipe setup
+and fixture patterns); modified-file reports also include unchanged row code.
+This is a reviewed feature cost, with one shared player and no application-level
+GStreamer linkage.

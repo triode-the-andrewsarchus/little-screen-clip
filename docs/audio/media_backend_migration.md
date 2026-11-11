@@ -333,6 +333,12 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 
 ## Final verification
 
+The subsequent embedded-playback work corrected rotation fixture creation for
+FFmpeg 9: the older `rotate` tag command did not write a display matrix. Earlier
+rotation-comparison claims below did not exercise genuine rotated inputs. The
+current explicit geometry and bounded RGBA reference checks are recorded in
+[embedded playback verification](embedded_video_playback.md).
+
 | Check | Result |
 | --- | --- |
 | `cargo test -j4 --workspace --no-fail-fast -- --test-threads=1` | 2,827 passed, zero failed, 35 ignored across 43 suites, including doctests. No compiler warnings. |
@@ -375,6 +381,11 @@ tests.
 Worker/protocol all-target Clippy passes with `-D warnings`.
 
 ## Final recommendation
+
+Subsequent approved work makes embedded synchronized playback a concrete
+requirement. Its implementation and current verification are tracked in
+[Embedded video playback](embedded_video_playback.md); the recommendation below
+records the decision at the end of this processing migration.
 
 Do not add a new `gstreamer-rs` integration now. Keep the native Rust audio paths,
 FFmpeg library worker, optimized indexed C/GPU timeline helper and existing

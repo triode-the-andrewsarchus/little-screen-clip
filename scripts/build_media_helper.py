@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build/package the isolated FFmpeg worker and its minimal rebuildable workspace."""
+"""Build/package the isolated media worker and its minimal rebuildable workspace."""
 import argparse
 import json
 from pathlib import Path
@@ -55,7 +55,7 @@ def build(output=None, skip_build=False, profile='release'):
         config.parent.mkdir()
         # Vendor emits an absolute staging path; keep the delivered bundle movable.
         config.write_text(vendor_config.replace(str(source / 'vendor'), 'vendor'))
-        for relative in ['scripts/timelens-GPL-2.0.txt', 'docs/audio/media_backend_migration.md']:
+        for relative in ['scripts/timelens-GPL-2.0.txt', 'docs/audio/media_backend_migration.md', 'docs/audio/embedded_video_playback.md']:
             destination = source / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(repo / relative, destination)
@@ -65,8 +65,8 @@ def build(output=None, skip_build=False, profile='release'):
         readme = readme.replace('../../docs/audio/media_backend_migration.md', 'source/docs/audio/media_backend_migration.md')
         (stage / 'README.md').write_text(readme)
         (stage / 'build.json').write_text(json.dumps({
-            'implementation': 'rust-ffmpeg-next', 'license': 'GPL-2.0-or-later',
-            'profile': profile, 'native_libraries': 'FFmpeg 9 shared libraries required',
+            'implementation': 'rust-ffmpeg-next-gstreamer', 'license': 'GPL-2.0-or-later',
+            'profile': profile, 'native_libraries': 'FFmpeg 9 and GStreamer 1.24+ shared libraries/plugins required',
             'source_build': 'cd source && cargo build --release --locked --offline -p clip-media-worker',
         }, indent=2) + '\n')
 

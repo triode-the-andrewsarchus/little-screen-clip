@@ -1,13 +1,15 @@
-# FFmpeg library worker
+# Media library worker
 
-This executable hosts `ffmpeg-next` independently from the desktop binaries.
+This executable hosts `ffmpeg-next` processing and GStreamer playback independently from the desktop binaries.
 It does not spawn the FFmpeg CLI. The other workspace crates must communicate
 with it through owned child processes rather than depend on this package.
 
 Build with `cargo build -p clip-media-worker`. Development requires FFmpeg
-development libraries, pkg-config and the Clang tooling needed by the bindings.
+development libraries, GStreamer 1.24+ App/Video development libraries, pkg-config
+and the Clang tooling needed by the bindings.
 The initial dependency line is `ffmpeg-next` 9.x. Runtime deployment must include
-compatible FFmpeg shared libraries or declare the appropriate system packages.
+compatible FFmpeg/GStreamer shared libraries and GStreamer codec/playback plugins,
+or declare the appropriate system packages.
 
 The default workspace build packages `media-helper` beside the release binaries.
 A standalone package can be made with `python3 scripts/build_media_helper.py`;
@@ -23,9 +25,9 @@ cd media-helper/source
 cargo build --release --locked --offline -p clip-media-worker
 ```
 
-FFmpeg development headers/libraries, pkg-config and Clang are still required
+FFmpeg and GStreamer App/Video development headers/libraries, pkg-config and Clang are still required
 for that rebuild; compatible shared libraries are required to run the result.
-The bundle does not contain the native FFmpeg libraries. Distributors supplying
+The bundle does not contain native FFmpeg/GStreamer libraries or codec plugins. Distributors supplying
 those libraries must also preserve their selected build's source/license
 requirements. Set `LITTLE_CLIP_MEDIA_WORKER` to an independently rebuilt helper
 to retain the override across normal application builds.
@@ -39,6 +41,7 @@ clip-media-worker render-audio SETTINGS_JSON [--output=/proc/self/fd/M] /proc/se
 clip-media-worker video-frame SETTINGS_JSON /proc/self/fd/N
 clip-media-worker video-preview SETTINGS_JSON /proc/self/fd/N
 clip-media-worker video-timeline SETTINGS_JSON /proc/self/fd/N
+clip-media-worker playback SETTINGS_JSON /proc/self/fd/N
 ```
 
 The parent must inherit a pinned ordinary input descriptor and retain child
@@ -110,3 +113,23 @@ workspace's default MIT/Apache license is not this helper's license.
 
 Migration status and the eventual playback-framework recommendation live in
 [`media_backend_migration.md`](../../docs/audio/media_backend_migration.md).
+
+## Streaming playback
+
+`playback` uses GStreamer `playbin` with an application video sink, never a native
+window sink. The worker owns the playback clock/audio output; hover disables
+audio decoding and device acquisition. Source preflight shares the existing
+format allowlist and pixel budget. Small H.264 uses software decoding; other
+inputs allow GStreamer's ranked hardware decoders and retry software if initial
+preroll fails before any frame is delivered. Decoder max-thread properties are
+bounded where available. Supported HEVC/large H.264 uses CUDA conversion/scaling
+before downloading preview-sized RGBA when the plugins/device are available;
+unknown/non-4:2:0 source formats select software before CUDA element creation.
+
+Stdin carries newline-delimited `playback::Control` JSON, at most 1 KiB per
+command. Stdout carries length-prefixed bounded `playback::Update` JSON and
+exactly its declared tightly packed RGBA bytes. Frames are bounded to full-HD
+pixel count, sinks retain one newest frame, and seek epochs reject stale frames
+in the parent. Pause, EOF, duration and failures also produce state updates.
+The parent must pump control/output off its UI thread, retain source guards and
+kill/reap on cancellation; closing stdin also retires the worker.
