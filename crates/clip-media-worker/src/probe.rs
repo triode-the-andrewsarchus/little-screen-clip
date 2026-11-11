@@ -3,15 +3,41 @@
 use ffmpeg_next as ffmpeg;
 use std::{
     fs::File,
+    io::Seek,
     sync::OnceLock,
     time::{Duration, Instant},
 };
 
 pub(super) fn probe(file: File, formats: &str) -> Result<serde_json::Value, String> {
     let metadata = file.metadata().map_err(|error| error.to_string())?;
-    if !metadata.is_file() {
+    let input = open_input(file, formats)?;
+    let streams: Vec<_> = input.streams().map(stream_metadata).collect();
+    // SAFETY: input owns this live format context for the duration of the read.
+    let start_time = unsafe { (*input.as_ptr()).start_time };
+    Ok(serde_json::json!({
+        "streams": streams,
+        "format": {
+            "start_time": (start_time != ffmpeg::ffi::AV_NOPTS_VALUE).then(|| (start_time as f64 / 1_000_000.0).to_string()),
+            "duration": (input.duration() != ffmpeg::ffi::AV_NOPTS_VALUE).then(|| (input.duration() as f64 / 1_000_000.0).to_string()),
+            "bit_rate": input.bit_rate().to_string(),
+            "size": metadata.len().to_string(),
+            "tags": tags(input.metadata()),
+        },
+    }))
+}
+
+pub(super) fn open_input(
+    mut file: File,
+    formats: &str,
+) -> Result<ffmpeg::format::context::Input, String> {
+    if !file
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .is_file()
+    {
         return Err("Media input must be ordinary file content".into());
     }
+    file.rewind().map_err(|error| error.to_string())?;
     static INITIALIZED: OnceLock<Result<(), String>> = OnceLock::new();
     INITIALIZED
         .get_or_init(|| {
@@ -39,19 +65,7 @@ pub(super) fn probe(file: File, formats: &str) -> Result<serde_json::Value, Stri
             Instant::now() >= deadline
         })
         .map_err(|error| error.to_string())?;
-    let streams: Vec<_> = input.streams().map(stream_metadata).collect();
-    // SAFETY: input owns this live format context for the duration of the read.
-    let start_time = unsafe { (*input.as_ptr()).start_time };
-    Ok(serde_json::json!({
-        "streams": streams,
-        "format": {
-            "start_time": (start_time != ffmpeg::ffi::AV_NOPTS_VALUE).then(|| (start_time as f64 / 1_000_000.0).to_string()),
-            "duration": (input.duration() != ffmpeg::ffi::AV_NOPTS_VALUE).then(|| (input.duration() as f64 / 1_000_000.0).to_string()),
-            "bit_rate": input.bit_rate().to_string(),
-            "size": metadata.len().to_string(),
-            "tags": tags(input.metadata()),
-        },
-    }))
+    Ok(input)
 }
 
 fn stream_metadata(stream: ffmpeg::Stream<'_>) -> serde_json::Value {
@@ -178,7 +192,7 @@ mod tests {
         wav.extend((samples.len() as u32).to_le_bytes());
         wav.extend(samples);
         file.write_all(&wav).unwrap();
-        file.rewind().unwrap();
+        file.seek(std::io::SeekFrom::End(0)).unwrap();
         let value = probe(file, "wav").unwrap();
         assert_eq!(value["streams"][0]["codec_name"], "pcm_s16le");
         assert_eq!(value["streams"][0]["duration"], "0.1");
