@@ -92,10 +92,17 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   music cards to it. Unsupported readers retain the old fallback temporarily.
   All three targeted core artwork tests pass: embedded ID3 artwork, front-cover
   preference/image bounds, and missing-artwork/cancelled requests.
-- Preparing a separate `clip-media-worker` executable using FFmpeg 9 custom
+- Added a separate `clip-media-worker` executable using FFmpeg 9 custom
   stream I/O. It must remain an independently linked process, rather than a
   dependency of the desktop binaries. Its initial probe implementation is not
-  yet connected to production callers; filter/render/export migration remains.
+  not yet fully connected to production callers; filter/render/export migration
+  remains. Four worker tests pass against the installed FFmpeg 9.0.2 libraries,
+  including ordinary-handle probing and compressed bit-depth regression coverage.
+- Compared worker metadata with FFprobe on generated WAV, FLAC, MP3, AAC/M4A,
+  Ogg/Vorbis and WMA: codec, rate, channels, sample format, layout, bit depths
+  and profile match. Verified MP4 dimensions and rejection of secondary file
+  opens through a concat input. CLI tools were used only to generate/reference
+  the smoke fixtures; the worker itself calls FFmpeg libraries directly.
 - Initial architecture comparison: duplicate groups remain 1515, maximum CCN
   remains 195 and cycle count remains 16. The reported regression attributes
   existing clones to the two-line module export addition and identifies the

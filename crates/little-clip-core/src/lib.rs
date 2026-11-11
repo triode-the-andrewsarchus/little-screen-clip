@@ -34,6 +34,7 @@ pub mod presentation {
     pub mod timestamps;
     pub mod units;
 }
+pub mod media_backend;
 pub mod media_stream;
 pub mod natural_sort;
 pub mod palette;
