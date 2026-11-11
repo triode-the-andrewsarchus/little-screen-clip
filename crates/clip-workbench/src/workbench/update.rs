@@ -134,7 +134,6 @@ impl eframe::App for WorkbenchApp {
 
             match self.view {
                 WorkbenchView::Palette => {
-                    let filtered = self.filtered_actions();
                     if self.palette_ops_job.is_some() { ui.horizontal(|ui| { ui.spinner(); ui.label("Preparing actions…"); }); }
                     let text_preview_action = self.check_inspector_text_preview();
 
@@ -426,74 +425,10 @@ impl eframe::App for WorkbenchApp {
 
                     ui.add_space(crate::ui_ext::SPACE_SM);
 
-                    // Filtered Action List filling available vertical height
-                    let avail_h = ui.available_height().max(0.0);
-                    egui::ScrollArea::vertical().max_height(avail_h).show(ui, |ui| {
-                        if filtered.is_empty() {
-                            ui.add_space(10.0);
-                            ui.label(
-                                egui::RichText::new(if !self.state_loaded { "Loading clipboard…" } else if self.palette_ops_job.is_some() { "Preparing actions…" } else { "No matching actions or recipes found." })
-                                    .color(hex_to_c32(&self.ui_palette.colors.text_muted))
-                                    .italics(),
-                            );
-                        } else {
-                            for (idx, act) in filtered.iter().enumerate() {
-                                let is_selected = idx == self.selected_action_index;
-                                let bg = if is_selected {
-                                    hex_to_c32(&self.ui_palette.colors.surface_panel)
-                                } else {
-                                    hex_to_c32(&self.ui_palette.colors.surface_recessed)
-                                };
-
-                                let frame = egui::Frame::none()
-                                    .fill(bg)
-                                    .inner_margin(egui::Margin::symmetric(
-                                        crate::ui_ext::BUTTON_PADDING_X,
-                                        crate::ui_ext::BUTTON_PADDING_Y,
-                                    ))
-                                    .rounding(crate::ui_ext::CONTROL_CORNER_RADIUS)
-                                    .stroke(egui::Stroke::new(1.0_f32, if is_selected {
-                                        hex_to_c32(&self.ui_palette.harmonies.base)
-                                    } else { egui::Color32::TRANSPARENT }));
-
-                                frame.show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        if is_selected {
-                                            Icon::Play.ui(ui, ui_ext::CONTROL_ICON_SIZE,
-                                                hex_to_c32(&self.ui_palette.harmonies.base));
-                                        }
-                                        let preferred_fg = if is_selected {
-                                            hex_to_c32(&self.ui_palette.colors.text_primary)
-                                        } else {
-                                            hex_to_c32(&self.ui_palette.colors.text_secondary)
-                                        };
-                                        let label_color = contrast_text_c32(bg, Some(preferred_fg), &self.ui_palette);
-
-                                        ui.label(egui::RichText::new(act.label()).color(label_color).strong());
-                                        let cat_color = if act.category() == "Recipe" {
-                                            hex_to_c32(&self.ui_palette.harmonies.triadic_1)
-                                        } else {
-                                            hex_to_c32(&self.ui_palette.colors.text_secondary)
-                                        };
-                                        ui.label(
-                                            egui::RichText::new(format!("[{}]", act.category()))
-                                                .color(cat_color)
-                                                .size(BODY_FONT_SIZE)
-                                                .strong(),
-                                        );
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            ui.label(
-                                                egui::RichText::new(act.description())
-                                                    .color(hex_to_c32(&self.ui_palette.colors.text_muted))
-                                                    .size(BODY_FONT_SIZE),
-                                            );
-                                        });
-                                    });
-                                });
-                                ui.add_space(2.0);
-                            }
-                        }
-                    });
+                    if let Some(index) = self.render_palette_action_list(ui) {
+                        self.selected_action_index = index;
+                        self.execute_current_action(ctx);
+                    }
 
                 }
                 WorkbenchView::NodeMachine => {
@@ -521,5 +456,119 @@ impl eframe::App for WorkbenchApp {
             }
         });
         self.retire_hidden_rolling_audio();
+    }
+}
+
+impl WorkbenchApp {
+    pub(crate) fn render_palette_action_list(&self, ui: &mut egui::Ui) -> Option<usize> {
+        let filtered = self.filtered_actions();
+        let mut clicked = None;
+        let avail_h = ui.available_height().max(0.0);
+        egui::ScrollArea::vertical()
+            .max_height(avail_h)
+            .show(ui, |ui| {
+                if filtered.is_empty() {
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(if !self.state_loaded {
+                            "Loading clipboard…"
+                        } else if self.palette_ops_job.is_some() {
+                            "Preparing actions…"
+                        } else {
+                            "No matching actions or recipes found."
+                        })
+                        .color(hex_to_c32(&self.ui_palette.colors.text_muted))
+                        .italics(),
+                    );
+                } else {
+                    for (idx, act) in filtered.iter().enumerate() {
+                        let is_selected = idx == self.selected_action_index;
+                        let bg = if is_selected {
+                            hex_to_c32(&self.ui_palette.colors.surface_panel)
+                        } else {
+                            hex_to_c32(&self.ui_palette.colors.surface_recessed)
+                        };
+
+                        let frame = egui::Frame::none()
+                            .fill(bg)
+                            .inner_margin(egui::Margin::symmetric(
+                                crate::ui_ext::BUTTON_PADDING_X,
+                                crate::ui_ext::BUTTON_PADDING_Y,
+                            ))
+                            .rounding(crate::ui_ext::CONTROL_CORNER_RADIUS)
+                            .stroke(egui::Stroke::new(
+                                1.0_f32,
+                                if is_selected {
+                                    hex_to_c32(&self.ui_palette.harmonies.base)
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                },
+                            ));
+
+                        let row = frame.show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                if is_selected {
+                                    Icon::Play.ui(
+                                        ui,
+                                        ui_ext::CONTROL_ICON_SIZE,
+                                        hex_to_c32(&self.ui_palette.harmonies.base),
+                                    );
+                                }
+                                let preferred_fg = if is_selected {
+                                    hex_to_c32(&self.ui_palette.colors.text_primary)
+                                } else {
+                                    hex_to_c32(&self.ui_palette.colors.text_secondary)
+                                };
+                                let label_color =
+                                    contrast_text_c32(bg, Some(preferred_fg), &self.ui_palette);
+
+                                ui.label(
+                                    egui::RichText::new(act.label()).color(label_color).strong(),
+                                );
+                                let cat_color = if act.category() == "Recipe" {
+                                    hex_to_c32(&self.ui_palette.harmonies.triadic_1)
+                                } else {
+                                    hex_to_c32(&self.ui_palette.colors.text_secondary)
+                                };
+                                ui.label(
+                                    egui::RichText::new(format!("[{}]", act.category()))
+                                        .color(cat_color)
+                                        .size(BODY_FONT_SIZE)
+                                        .strong(),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(act.description())
+                                                .color(hex_to_c32(
+                                                    &self.ui_palette.colors.text_muted,
+                                                ))
+                                                .size(BODY_FONT_SIZE),
+                                        );
+                                    },
+                                );
+                            });
+                        });
+                        if self.daemon_mutation.is_none() {
+                            // Keyboard navigation remains owned by the palette.
+                            let sense = egui::Sense {
+                                focusable: false,
+                                ..egui::Sense::click()
+                            };
+                            let id = ui.id().with((idx, act.category(), act.label()));
+                            if ui
+                                .interact(row.response.rect, id, sense)
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked_by(egui::PointerButton::Primary)
+                            {
+                                clicked = Some(idx);
+                            }
+                        }
+                        ui.add_space(2.0);
+                    }
+                }
+            });
+        clicked
     }
 }

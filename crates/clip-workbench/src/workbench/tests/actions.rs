@@ -721,3 +721,86 @@ fn standalone_prompt_keeps_input_on_failure_and_closes_after_confirmed_retry() {
         }
     }
 }
+
+#[test]
+fn palette_mouse_click_dispatches_the_rendered_operation_or_recipe() {
+    let mut app = test_workbench_app(None, VecDeque::new());
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::LeftHand)
+        .unwrap() = Some(ClipItem::from_text("fixture text"));
+    app.selected_slots = vec![SlotId::LeftHand];
+    let recipe_name = "Uppercase Fixture Recipe";
+    app.recipes.push(Recipe {
+        name: recipe_name.to_owned(),
+        description: String::new(),
+        input_type: little_clip_ops::pipeline::types::RecipeInputType::None,
+        tags: Vec::new(),
+        graph: little_clip_ops::pipeline::types::NodeGraph::default(),
+    });
+    app.search_query = "uppercase".into();
+    let actions = ready_palette_actions(&mut app);
+    let operation = actions
+        .iter()
+        .find(|action| matches!(action, PaletteAction::Op(op) if op.name == "uppercase"))
+        .expect("uppercase is available");
+
+    for label in [operation.label(), recipe_name] {
+        let ctx = egui::Context::default();
+        let mut frame = |events| {
+            let mut clicked = None;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        clicked = app.render_palette_action_list(ui);
+                    });
+                },
+            );
+            (output, clicked)
+        };
+        let (rendered, _) = frame(Vec::new());
+        let pos = rendered
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                let egui::epaint::Shape::Text(text) = &shape.shape else {
+                    return None;
+                };
+                (text.galley.job.text == label)
+                    .then(|| text.galley.rect.translate(text.pos.to_vec2()).center())
+            })
+            .expect("action row rendered");
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        assert!(
+            frame(vec![egui::Event::PointerMoved(pos), button(true)])
+                .1
+                .is_none()
+        );
+        app.selected_action_index = frame(vec![button(false)]).1.expect("row handled click");
+        let mut request = None;
+        app.dispatch_current_action(|_, sent| request = Some(sent));
+        match request {
+            Some(IpcRequest::ExecuteOp { op_name, .. }) => {
+                assert_eq!(label, operation.label());
+                assert_eq!(op_name, "uppercase");
+            }
+            Some(IpcRequest::ExecuteRecipe { recipe_name: sent }) => {
+                assert_eq!(label, recipe_name);
+                assert_eq!(sent, recipe_name);
+            }
+            unexpected => panic!("unexpected action: {unexpected:?}"),
+        }
+    }
+}
