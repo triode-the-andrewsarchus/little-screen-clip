@@ -62,3 +62,9 @@ private-sink audio; Space pauses both, seeking changes paused pixels, resuming
 works, Back to folder reaps the player, and application close reaps a reopened
 player. Niri reports one Files window and no separate video window. The runner
 uses private compositor/audio sockets and synthetic files only.
+
+Architecture follow-up separates command dispatch, source admission, video-sink
+construction, initial preroll and bus handling. The embedded UI likewise separates
+keyboard shortcuts and transport controls. These are phases of the shared player,
+not parallel playback backends. The existing worker/reference suite passes after
+the backend extraction; the host check remains warning-free.

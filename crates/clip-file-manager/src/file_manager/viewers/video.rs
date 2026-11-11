@@ -94,22 +94,7 @@ impl Video {
             crate::shell::StudioShell::new("Video", crate::icons::Icon::Film, palette, close);
         shell.render_header(ui, |_| {});
         if ui.is_enabled() && !ui.ctx().wants_keyboard_input() {
-            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
-                player.set_playing(!player.playing());
-            }
-            for (key, offset) in [
-                (egui::Key::ArrowLeft, -5000_i64),
-                (egui::Key::ArrowRight, 5000),
-            ] {
-                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
-                    player.seek(player.position_ms.saturating_add_signed(offset));
-                }
-            }
-            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F)) {
-                self.fullscreen = !self.fullscreen;
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
-            }
+            shortcuts(ui, player, &mut self.fullscreen);
         }
         let size = egui::vec2(
             ui.available_width().max(1.0),
@@ -142,62 +127,7 @@ impl Video {
         } else if response.clicked() {
             player.set_playing(!player.playing());
         }
-        ui.horizontal(|ui| {
-            if ui
-                .add(
-                    ButtonRole::Primary
-                        .button(if player.playing() { "Pause" } else { "Play" }, palette),
-                )
-                .clicked()
-            {
-                player.set_playing(!player.playing());
-            }
-            if ui
-                .add(ButtonRole::Secondary.button("Stop", palette))
-                .clicked()
-            {
-                player.set_playing(false);
-                player.seek(0);
-            }
-            let mut seconds = self
-                .seek_preview
-                .unwrap_or(player.position_ms as f64 / 1000.0);
-            let duration = player.duration_ms as f64 / 1000.0;
-            let seek_width = (ui.available_width() - 210.0).max(40.0);
-            let slider = ui
-                .scope(|ui| {
-                    ui.spacing_mut().slider_width = seek_width;
-                    ui.add(
-                        egui::Slider::new(&mut seconds, 0.0..=duration.max(0.001))
-                            .show_value(false),
-                    )
-                })
-                .inner;
-            if slider.dragged() {
-                self.seek_preview = Some(seconds);
-            }
-            if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
-                player.seek((seconds * 1000.0) as u64);
-                self.seek_preview = None;
-            }
-            ui.label(format!(
-                "{} / {}",
-                clock((seconds * 1000.0) as u64),
-                clock(player.duration_ms)
-            ));
-            let mut volume = player.volume();
-            if ui
-                .scope(|ui| {
-                    ui.spacing_mut().slider_width = 72.0;
-                    ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
-                })
-                .inner
-                .on_hover_text("Volume")
-                .changed()
-            {
-                player.set_volume(volume);
-            }
-        });
+        controls(ui, player, &mut self.seek_preview, palette);
         if let Some(error) = &player.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         } else {
@@ -217,6 +147,84 @@ impl Video {
         }
     }
 }
+fn shortcuts(ui: &mut Ui, player: &mut Session, fullscreen: &mut bool) {
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
+        player.set_playing(!player.playing());
+    }
+    for (key, offset) in [
+        (egui::Key::ArrowLeft, -5000_i64),
+        (egui::Key::ArrowRight, 5000),
+    ] {
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
+            player.seek(player.position_ms.saturating_add_signed(offset));
+        }
+    }
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F)) {
+        *fullscreen = !*fullscreen;
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::Fullscreen(*fullscreen));
+    }
+}
+
+fn controls(
+    ui: &mut Ui,
+    player: &mut Session,
+    seek_preview: &mut Option<f64>,
+    palette: &little_clip_core::palette::AppPalette,
+) {
+    ui.horizontal(|ui| {
+        if ui
+            .add(
+                ButtonRole::Primary
+                    .button(if player.playing() { "Pause" } else { "Play" }, palette),
+            )
+            .clicked()
+        {
+            player.set_playing(!player.playing());
+        }
+        if ui
+            .add(ButtonRole::Secondary.button("Stop", palette))
+            .clicked()
+        {
+            player.set_playing(false);
+            player.seek(0);
+        }
+        let mut seconds = (*seek_preview).unwrap_or(player.position_ms as f64 / 1000.0);
+        let duration = player.duration_ms as f64 / 1000.0;
+        let seek_width = (ui.available_width() - 210.0).max(40.0);
+        let slider = ui
+            .scope(|ui| {
+                ui.spacing_mut().slider_width = seek_width;
+                ui.add(egui::Slider::new(&mut seconds, 0.0..=duration.max(0.001)).show_value(false))
+            })
+            .inner;
+        if slider.dragged() {
+            *seek_preview = Some(seconds);
+        }
+        if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
+            player.seek((seconds * 1000.0) as u64);
+            *seek_preview = None;
+        }
+        ui.label(format!(
+            "{} / {}",
+            clock((seconds * 1000.0) as u64),
+            clock(player.duration_ms)
+        ));
+        let mut volume = player.volume();
+        if ui
+            .scope(|ui| {
+                ui.spacing_mut().slider_width = 72.0;
+                ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
+            })
+            .inner
+            .on_hover_text("Volume")
+            .changed()
+        {
+            player.set_volume(volume);
+        }
+    });
+}
+
 impl Drop for Video {
     fn drop(&mut self) {
         if self.fullscreen

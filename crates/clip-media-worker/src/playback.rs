@@ -14,58 +14,75 @@ fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-pub(crate) fn run(mut file: File, settings: Settings) -> Result<()> {
-    validate(&settings)?;
-    if !file.metadata().map_err(message)?.is_file() {
-        return Err("Playback requires an ordinary seekable file".into());
-    }
-    let metadata = crate::probe::probe(
-        file.try_clone().map_err(message)?,
-        clip_media_protocol::VIDEO_FORMATS,
-    )?;
-    let stream = metadata["streams"]
-        .as_array()
-        .ok_or("Missing video metadata")?
-        .iter()
-        .filter(|stream| {
-            stream["codec_type"] == "video"
-                && stream["disposition"]["attached_pic"].as_u64() != Some(1)
+struct Source {
+    file: File,
+    start_ms: u64,
+    software: bool,
+}
+impl Source {
+    fn open(mut file: File, settings: &Settings) -> Result<Self> {
+        if !file.metadata().map_err(message)?.is_file() {
+            return Err("Playback requires an ordinary seekable file".into());
+        }
+        let metadata = crate::probe::probe(
+            file.try_clone().map_err(message)?,
+            clip_media_protocol::VIDEO_FORMATS,
+        )?;
+        let stream = metadata["streams"]
+            .as_array()
+            .ok_or("Missing video metadata")?
+            .iter()
+            .filter(|stream| {
+                stream["codec_type"] == "video"
+                    && stream["disposition"]["attached_pic"].as_u64() != Some(1)
+            })
+            .nth(settings.stream as usize)
+            .ok_or("Video stream unavailable")?;
+        let width = stream["width"].as_u64().unwrap_or(0);
+        let height = stream["height"].as_u64().unwrap_or(0);
+        if width == 0
+            || height == 0
+            || width > 4096
+            || height > 4096
+            || width * height > 4096 * 2160
+        {
+            return Err(
+                "Playback requires an ordinary video within the source pixel budget".into(),
+            );
+        }
+        file.rewind().map_err(message)?;
+        let number = |value: &serde_json::Value| {
+            value
+                .as_str()
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && value.abs() < 9.0e9)
+        };
+        let container_start = number(&metadata["format"]["start_time"]).unwrap_or(0.0);
+        let start_ms =
+            ((number(&stream["start_time"]).unwrap_or(container_start) - container_start).max(0.0)
+                * 1000.0) as u64;
+        let software = stream["codec_name"] == "h264" && width * height <= 1920 * 1080;
+        Ok(Self {
+            file,
+            start_ms,
+            software,
         })
-        .nth(settings.stream as usize)
-        .ok_or("Video stream unavailable")?;
-    let width = stream["width"].as_u64().unwrap_or(0);
-    let height = stream["height"].as_u64().unwrap_or(0);
-    if width == 0
-        || height == 0
-        || width > 4096
-        || height > 4096
-        || width * height > 4096 * 2160
-        || stream["disposition"]["attached_pic"].as_u64() == Some(1)
-    {
-        return Err("Playback requires an ordinary video within the source pixel budget".into());
     }
-    file.rewind().map_err(message)?;
+}
+
+pub(crate) fn run(file: File, settings: Settings) -> Result<()> {
+    validate(&settings)?;
+    let mut source = Source::open(file, &settings)?;
     gst::init().map_err(message)?;
-    let number = |value: &serde_json::Value| {
-        value
-            .as_str()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && value.abs() < 9.0e9)
-    };
-    let container_start = number(&metadata["format"]["start_time"]).unwrap_or(0.0);
-    let start_ms = ((number(&stream["start_time"]).unwrap_or(container_start) - container_start)
-        .max(0.0)
-        * 1000.0) as u64;
-    let software = stream["codec_name"] == "h264" && width * height <= 1920 * 1080;
-    let mut engine = Engine::new(&file, &settings, software, start_ms)?;
+    let mut engine = Engine::new(&source.file, &settings, source.software, source.start_ms)?;
     let mut output = std::io::BufWriter::new(std::io::stdout().lock());
     let mut result = engine.pump(&settings, &mut output);
-    if result.is_err() && !software && engine.frames_sent == 0 {
+    if result.is_err() && !source.software && engine.frames_sent == 0 {
         // A hardware decoder that cannot preroll must not prevent CPU playback.
         // No control commands are consumed until the first frame is delivered.
         drop(engine);
-        file.rewind().map_err(message)?;
-        engine = Engine::new(&file, &settings, true, start_ms)?;
+        source.file.rewind().map_err(message)?;
+        engine = Engine::new(&source.file, &settings, true, source.start_ms)?;
         result = engine.pump(&settings, &mut output);
     }
     if let Err(error) = &result {
@@ -107,48 +124,7 @@ struct Engine {
 
 impl Engine {
     fn new(file: &File, settings: &Settings, software: bool, stream_start_ms: u64) -> Result<Self> {
-        let sink = gstreamer_app::AppSink::builder()
-            .caps(
-                &gst::Caps::builder("video/x-raw")
-                    .field("format", "RGBA")
-                    .field("width", gst::IntRange::<i32>::new(1, settings.width as i32))
-                    .field(
-                        "height",
-                        gst::IntRange::<i32>::new(1, settings.height as i32),
-                    )
-                    .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
-                    .field(
-                        "framerate",
-                        gst::FractionRange::new(
-                            gst::Fraction::new(0, 1),
-                            gst::Fraction::new(settings.fps as i32, 1),
-                        ),
-                    )
-                    .build(),
-            )
-            .max_buffers(1)
-            .drop(true)
-            .sync(true)
-            .wait_on_eos(false)
-            .build();
-        let video = gst::Bin::new();
-        let filters = ["videoflip", "videoconvert", "videoscale", "videorate"]
-            .map(|name| gst::ElementFactory::make(name).build().map_err(message))
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
-        filters[0].set_property_from_str("video-direction", "auto");
-        filters[3].set_property("drop-only", true);
-        video.add_many(&filters).map_err(message)?;
-        video.add(&sink).map_err(message)?;
-        gst::Element::link_many(&filters).map_err(message)?;
-        filters[3].link(&sink).map_err(message)?;
-        let pad = gst::GhostPad::with_target(
-            &filters[0]
-                .static_pad("sink")
-                .ok_or("Missing video sink pad")?,
-        )
-        .map_err(message)?;
-        video.add_pad(&pad).map_err(message)?;
+        let (video, sink) = video_sink(settings)?;
         let player = gst::ElementFactory::make("playbin")
             .build()
             .map_err(message)?;
@@ -196,6 +172,33 @@ impl Engine {
     }
 
     fn pump(&mut self, settings: &Settings, output: &mut impl Write) -> Result<()> {
+        self.start(settings, output)?;
+        let mut commands = Commands::new()?;
+        let mut last_status = Instant::now();
+        loop {
+            match commands.poll()? {
+                Input::Closed => return Ok(()),
+                Input::Control(control) => self.control(control, output)?,
+                Input::Idle => {}
+            }
+            self.events(output)?;
+            if self.playing {
+                if let Some(sample) = self.sink.try_pull_sample(gst::ClockTime::from_mseconds(10)) {
+                    self.frame(sample, output)?;
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if last_status.elapsed() >= Duration::from_millis(250) {
+                self.update(None, self.ended)
+                    .write(&[], output)
+                    .map_err(message)?;
+                last_status = Instant::now();
+            }
+        }
+    }
+
+    fn start(&mut self, settings: &Settings, output: &mut impl Write) -> Result<()> {
         self.player.set_state(gst::State::Paused).map_err(message)?;
         self.wait_ready()?;
         let first = self
@@ -214,47 +217,28 @@ impl Engine {
             .set_state(gst::State::Playing)
             .map_err(message)?;
         self.playing = true;
-        let mut commands = Commands::new()?;
-        let mut last_status = Instant::now();
-        loop {
-            match commands.poll()? {
-                Input::Closed => return Ok(()),
-                Input::Control(control) => self.control(control, output)?,
-                Input::Idle => {}
-            }
-            let bus = self.player.bus().ok_or("Playback bus unavailable")?;
-            for event in bus.iter() {
-                match event.view() {
-                    gst::MessageView::Error(error) => {
-                        return Err(format!("{} ({:?})", error.error(), error.debug()));
-                    }
-                    gst::MessageView::Eos(_) => {
-                        self.playing = false;
-                        self.ended = true;
-                        self.player.set_state(gst::State::Paused).map_err(message)?;
-                        self.update(None, true)
-                            .write(&[], output)
-                            .map_err(message)?;
-                    }
-                    _ => {}
+        Ok(())
+    }
+    fn events(&mut self, output: &mut impl Write) -> Result<()> {
+        let bus = self.player.bus().ok_or("Playback bus unavailable")?;
+        for event in bus.iter() {
+            match event.view() {
+                gst::MessageView::Error(error) => {
+                    return Err(format!("{} ({:?})", error.error(), error.debug()));
                 }
-            }
-            if self.playing {
-                if let Some(sample) = self.sink.try_pull_sample(gst::ClockTime::from_mseconds(10)) {
-                    self.frame(sample, output)?;
+                gst::MessageView::Eos(_) => {
+                    self.playing = false;
+                    self.ended = true;
+                    self.player.set_state(gst::State::Paused).map_err(message)?;
+                    self.update(None, true)
+                        .write(&[], output)
+                        .map_err(message)?;
                 }
-            } else {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            if last_status.elapsed() >= Duration::from_millis(250) {
-                self.update(None, self.ended)
-                    .write(&[], output)
-                    .map_err(message)?;
-                last_status = Instant::now();
+                _ => {}
             }
         }
+        Ok(())
     }
-
     fn wait_ready(&self) -> Result<()> {
         let (result, state, _) = self.player.state(gst::ClockTime::from_seconds(10));
         result.map_err(message)?;
@@ -356,6 +340,52 @@ impl Engine {
         self.frames_sent += 1;
         Ok(())
     }
+}
+
+fn video_sink(settings: &Settings) -> Result<(gst::Bin, gstreamer_app::AppSink)> {
+    let sink = gstreamer_app::AppSink::builder()
+        .caps(
+            &gst::Caps::builder("video/x-raw")
+                .field("format", "RGBA")
+                .field("width", gst::IntRange::<i32>::new(1, settings.width as i32))
+                .field(
+                    "height",
+                    gst::IntRange::<i32>::new(1, settings.height as i32),
+                )
+                .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
+                .field(
+                    "framerate",
+                    gst::FractionRange::new(
+                        gst::Fraction::new(0, 1),
+                        gst::Fraction::new(settings.fps as i32, 1),
+                    ),
+                )
+                .build(),
+        )
+        .max_buffers(1)
+        .drop(true)
+        .sync(true)
+        .wait_on_eos(false)
+        .build();
+    let video = gst::Bin::new();
+    let filters = ["videoflip", "videoconvert", "videoscale", "videorate"]
+        .map(|name| gst::ElementFactory::make(name).build().map_err(message))
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    filters[0].set_property_from_str("video-direction", "auto");
+    filters[3].set_property("drop-only", true);
+    video.add_many(&filters).map_err(message)?;
+    video.add(&sink).map_err(message)?;
+    gst::Element::link_many(&filters).map_err(message)?;
+    filters[3].link(&sink).map_err(message)?;
+    let pad = gst::GhostPad::with_target(
+        &filters[0]
+            .static_pad("sink")
+            .ok_or("Missing video sink pad")?,
+    )
+    .map_err(message)?;
+    video.add_pad(&pad).map_err(message)?;
+    Ok((video, sink))
 }
 
 fn stream_time(sample: &gst::Sample) -> Option<u64> {

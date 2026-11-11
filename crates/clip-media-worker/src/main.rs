@@ -1,4 +1,4 @@
-//! Separate FFmpeg library host. The desktop applications do not link this binary.
+//! Separate media library host. The desktop applications do not link this binary.
 
 mod audio;
 mod audio_filter;
@@ -17,53 +17,49 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
-    if arguments.first().is_some_and(|mode| mode == "playback") {
-        if arguments.len() != 3 || arguments[1].len() > clip_media_protocol::MAX_SETTINGS_BYTES {
-            return Err("Invalid playback request".into());
+    match arguments.first().map(String::as_str) {
+        Some("render-audio") => render_command(&arguments),
+        Some("playback" | "video-frame" | "video-preview" | "video-timeline") => {
+            visual_command(&arguments)
         }
+        Some("probe" | "decode-audio") if arguments.len() == 3 => inspect_command(&arguments),
+        _ => Err("Expected a media command and an inherited content descriptor".into()),
+    }
+}
+
+fn visual_command(arguments: &[String]) -> Result<(), String> {
+    if arguments.len() != 3 || arguments[1].len() > clip_media_protocol::MAX_SETTINGS_BYTES {
+        return Err("Invalid video/playback request".into());
+    }
+    let input = inherited_input(&arguments[2])?;
+    let settings = &arguments[1];
+    if arguments[0] == "playback" {
         return playback::run(
-            inherited_input(&arguments[2])?,
-            serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?,
+            input,
+            serde_json::from_str(settings).map_err(|error| error.to_string())?,
         );
     }
-    if arguments.first().is_some_and(|mode| mode == "render-audio") {
-        return render_command(&arguments);
+    let mut output = std::io::BufWriter::new(std::io::stdout().lock());
+    match arguments[0].as_str() {
+        "video-frame" => video::snapshot(
+            input,
+            &serde_json::from_str(settings).map_err(|error| error.to_string())?,
+            &mut output,
+        ),
+        "video-preview" => video::preview(
+            input,
+            &serde_json::from_str(settings).map_err(|error| error.to_string())?,
+            &mut output,
+        ),
+        _ => video::timeline(
+            input,
+            &serde_json::from_str(settings).map_err(|error| error.to_string())?,
+            &mut output,
+        ),
     }
-    if arguments.first().is_some_and(|mode| {
-        matches!(
-            mode.as_str(),
-            "video-frame" | "video-preview" | "video-timeline"
-        )
-    }) {
-        if arguments.len() != 3 || arguments[1].len() > clip_media_protocol::MAX_SETTINGS_BYTES {
-            return Err("Invalid video frame request".into());
-        }
-        let input = inherited_input(&arguments[2])?;
-        let mut output = std::io::BufWriter::new(std::io::stdout().lock());
-        return match arguments[0].as_str() {
-            "video-frame" => video::snapshot(
-                input,
-                &serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?,
-                &mut output,
-            ),
-            "video-preview" => video::preview(
-                input,
-                &serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?,
-                &mut output,
-            ),
-            _ => video::timeline(
-                input,
-                &serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?,
-                &mut output,
-            ),
-        };
-    }
-    if arguments.len() != 3 || !matches!(arguments[0].as_str(), "probe" | "decode-audio") {
-        return Err(
-            "Expected: clip-media-worker probe|decode-audio FORMAT_WHITELIST /proc/self/fd/N"
-                .into(),
-        );
-    }
+}
+
+fn inspect_command(arguments: &[String]) -> Result<(), String> {
     let input = inherited_input(&arguments[2])?;
     if arguments[0] == "decode-audio" {
         return audio::decode(
