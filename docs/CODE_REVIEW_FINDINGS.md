@@ -54,7 +54,9 @@ touches the host clipboard or USB display unless explicitly stated.
 ### 2. `crates/clipctl`
 
 - [ ] **[Bug / Race & State Leak] `clipctl copy` leaves `RouteNextClipboard` armed in the daemon when falling back to primary selection or failing**:
-  **Current verification — partially resolved, still open:** The new identity-scoped route API and CLI cancellation tests prevent a claimed route from being followed by a duplicate primary-selection push and prevent an ordinary fallback from leaving its route armed. However, the current daemon poller still deduplicates image hashes and self-copied text before claiming routes; its active-right-route text shortcut can also claim unchanged pre-shortcut text. Same-content capture/event identity therefore still needs correction. The existing acknowledgement/cancellation tests do not prove that part fixed.
+  - [x] The identity-scoped route API and CLI cancellation tests prevent a claimed route from being followed by a duplicate primary-selection push and prevent ordinary fallback from leaving its route armed.
+  - [x] A pending Right Hand route no longer treats previously observed text as a new copy. A fake Wayland clipboard regression verifies repeated polls leave the route pending and a subsequent changed value reaches the Right Hand. All 26 daemon tests and four CLI tests passed.
+  - [ ] The polling adapter still cannot distinguish a new clipboard offer containing identical text or image bytes. The active route needs offer identity and correct echo suppression before this finding can be closed.
 
   In [`crates/clipctl/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/clipctl/src/main.rs#L160-L238):
   1. `clipctl copy` first sends `IpcRequest::RouteNextClipboard { hand, timeout_ms: 2000, restore_os_clipboard: !no_restore }` to the daemon.

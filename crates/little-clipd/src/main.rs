@@ -1431,7 +1431,7 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         continue;
                     }
 
-                    // Check if there is an active override routing to Right Hand
+                    // Check if there is an active override routing to Right Hand.
                     let has_active_right_route = {
                         ctx.route_next_clipboard
                             .read()
@@ -1467,7 +1467,9 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         continue;
                     }
 
-                    if !text.is_empty() && (text != last_clipboard_text || has_active_right_route) {
+                    // A pending route cannot turn a previously observed value
+                    // into a new copy. Polling cannot distinguish equal offers.
+                    if !text.is_empty() && text != last_clipboard_text {
                         last_clipboard_text = text.clone();
                         last_image_hash = None;
 
@@ -2065,6 +2067,93 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
         );
         assert!(ctx.is_self_copied_text(CLEAN_URL).await);
         assert!(ctx.is_self_copied_text(&format!("  {CLEAN_URL}\r\n")).await);
+    }
+
+    #[tokio::test]
+    async fn right_route_ignores_previously_observed_clipboard_text() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if isolated_clipboard_test("tests::right_route_ignores_previously_observed_clipboard_text")
+        {
+            return;
+        }
+        let directory = PathBuf::from(std::env::var_os("CLIPD_TEST_CLIPBOARD").unwrap());
+        let adapter = directory.join("wl-paste");
+        std::fs::write(
+            &adapter,
+            r#"#!/bin/sh
+[ "$1" = "--list-types" ] && exit 1
+/bin/cat "$CLIPD_TEST_CLIPBOARD/selection"
+echo . >> "$CLIPD_TEST_CLIPBOARD/reads"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&adapter, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let selection = directory.join("selection");
+        std::fs::write(&selection, "old selection").unwrap();
+
+        let ctx = test_context(SlotManager::default());
+        let watcher = tokio::spawn(run_clipboard_poller(Arc::clone(&ctx)));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let left = ctx
+                    .manager
+                    .read()
+                    .await
+                    .left_hand()
+                    .and_then(extract_clipboard_text);
+                if left.as_deref() == Some("old selection") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let request_id = uuid::Uuid::new_v4();
+        let now = tokio::time::Instant::now();
+        ctx.route_next_clipboard.write().await.install(
+            Some(request_id),
+            HandSide::Right,
+            now + Duration::from_secs(10),
+            false,
+        );
+        let reads = directory.join("reads");
+        let previous = std::fs::metadata(&reads).unwrap().len();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while std::fs::metadata(&reads).unwrap().len() < previous + 4 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let status = ctx
+            .route_next_clipboard
+            .read()
+            .await
+            .status(request_id, tokio::time::Instant::now());
+        assert_eq!(status, little_clip_core::ipc::ClipboardRouteStatus::Pending);
+        assert!(ctx.manager.read().await.right_hand().is_none());
+
+        std::fs::write(&selection, "new selection").unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let right = ctx
+                    .manager
+                    .read()
+                    .await
+                    .right_hand()
+                    .and_then(extract_clipboard_text);
+                if right.as_deref() == Some("new selection") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        watcher.abort();
     }
 
     #[tokio::test]
