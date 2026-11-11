@@ -89,7 +89,7 @@ impl TextPreviewState {
             .len()
             .saturating_sub(trailing)
             .max(1);
-        let total_chars = self.content.chars().count();
+        let total_chars = self.character_count;
         let icon = if self.is_markdown {
             Icon::Book
         } else if self.language != "txt" {

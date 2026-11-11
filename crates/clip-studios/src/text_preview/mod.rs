@@ -27,7 +27,7 @@ use regex::RegexBuilder;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, mpsc::Receiver};
+use std::sync::{Arc, LazyLock, OnceLock, mpsc::Receiver};
 use std::time::{Duration, Instant};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -88,6 +88,8 @@ struct CodeFragment {
 /// Immutable text and layout facts that can be reused by independent viewers.
 pub struct TextPreviewData {
     content: Arc<String>,
+    character_count: usize,
+    markdown: Arc<OnceLock<Vec<markdown::MarkdownBlock>>>,
     language: &'static str,
     is_markdown: bool,
     subtitles: Option<Arc<little_clip_core::subtitles::Document>>,
@@ -204,6 +206,17 @@ impl InlineTextPreview {
 }
 
 impl TextPreviewData {
+    fn prepare_markdown(
+        content: &str,
+        is_markdown: bool,
+    ) -> Arc<OnceLock<Vec<markdown::MarkdownBlock>>> {
+        if is_markdown {
+            Arc::new(OnceLock::from(markdown::parse_blocks(content)))
+        } else {
+            Arc::default()
+        }
+    }
+
     /// Prepares shared source data from in-memory text using the preview's normal format detection.
     pub fn from_text(content: Arc<String>) -> Arc<Self> {
         let content = if content.starts_with('\u{feff}') {
@@ -221,6 +234,8 @@ impl TextPreviewData {
         };
 
         Arc::new(Self {
+            character_count: content.chars().count(),
+            markdown: Self::prepare_markdown(&content, is_markdown),
             content,
             language,
             is_markdown,
@@ -259,6 +274,8 @@ impl TextPreviewData {
             .unwrap_or(false);
 
         Arc::new(Self {
+            character_count: content.chars().count(),
+            markdown: Self::prepare_markdown(&content, is_markdown),
             content,
             language,
             is_markdown,
@@ -457,6 +474,8 @@ pub struct SearchMatch {
 pub struct TextPreviewState {
     pub title: String,
     pub content: Arc<String>,
+    character_count: usize,
+    markdown: Arc<OnceLock<Vec<markdown::MarkdownBlock>>>,
     pub path: Option<PathBuf>,
     pub language: &'static str,
     pub is_markdown: bool,
@@ -598,6 +617,8 @@ impl TextPreviewState {
         Self {
             title,
             content: Arc::clone(&data.content),
+            character_count: data.character_count,
+            markdown: Arc::clone(&data.markdown),
             path,
             language: data.language,
             is_markdown: data.is_markdown,

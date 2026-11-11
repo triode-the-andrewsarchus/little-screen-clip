@@ -1,5 +1,31 @@
 use super::*;
 #[test]
+fn markdown_source_prepares_shared_code_blocks_and_unicode_count() {
+    let text = "# Título\n\n```rs\nlet café = 42;\n\n```\n```txt\nunfinished";
+    let data = TextPreviewData::from_source(Arc::new(text.into()), Some("md"));
+    assert_eq!(data.character_count, text.chars().count());
+    let blocks = data.markdown.get().unwrap();
+    let code: Vec<_> = blocks
+        .iter()
+        .filter_map(|block| match block {
+            markdown::MarkdownBlock::Code { language, text } => {
+                Some((language.as_str(), text.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        code,
+        [("rs", "let café = 42;\n\n"), ("txt", "unfinished\n")]
+    );
+
+    let first = TextPreviewState::from_data(Arc::clone(&data), None, &AppConfig::default());
+    let second = TextPreviewState::from_data(Arc::clone(&data), None, &AppConfig::default());
+    assert!(Arc::ptr_eq(&first.markdown, &second.markdown));
+    assert_eq!(first.character_count, data.character_count);
+}
+
+#[test]
 fn inline_text_previews_share_source_with_independent_scroll_state() {
     let data = TextPreviewData::from_text(Arc::new(
         (0..400).map(|line| format!("row-{line:04}\n")).collect(),

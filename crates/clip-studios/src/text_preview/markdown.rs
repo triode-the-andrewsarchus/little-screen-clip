@@ -1,93 +1,82 @@
 use super::*;
+use little_clip_render::markdown::MarkdownLine;
+
+pub(super) enum MarkdownBlock {
+    Line(MarkdownLine),
+    Code { language: String, text: String },
+}
+
+pub(super) fn parse_blocks(content: &str) -> Vec<MarkdownBlock> {
+    prepare_blocks(little_clip_render::markdown::parse_markdown(content))
+}
+
+pub(super) fn prepare_blocks(lines: impl IntoIterator<Item = MarkdownLine>) -> Vec<MarkdownBlock> {
+    let mut blocks = Vec::new();
+    let mut code: Option<(String, String)> = None;
+    for line in lines {
+        match (line, &mut code) {
+            (MarkdownLine::CodeLine { line }, Some((_, text))) => {
+                text.push_str(&line);
+                text.push('\n');
+            }
+            (MarkdownLine::Empty, Some((_, text))) => text.push('\n'),
+            (MarkdownLine::CodeFence { language }, None) => code = Some((language, String::new())),
+            (line, _) => {
+                if let Some((language, text)) = code.take() {
+                    blocks.push(MarkdownBlock::Code { language, text });
+                }
+                if !matches!(
+                    line,
+                    MarkdownLine::CodeFence { .. } | MarkdownLine::CodeLine { .. }
+                ) {
+                    blocks.push(MarkdownBlock::Line(line));
+                }
+            }
+        }
+    }
+    if let Some((language, text)) = code {
+        blocks.push(MarkdownBlock::Code { language, text });
+    }
+    blocks
+}
 
 impl TextPreviewState {
     /// Renders styled markdown view.
     pub(super) fn render_markdown_view(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let parsed = little_clip_render::markdown::parse_markdown(&self.content);
-
+        let blocks = self.markdown.get_or_init(|| parse_blocks(&self.content));
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| {
-                render_lines(ui, parsed, palette);
-            });
+            .show(ui, |ui| render_blocks(ui, blocks, palette));
     }
 }
 
 pub fn render_lines(
     ui: &mut egui::Ui,
-    parsed: impl IntoIterator<Item = little_clip_render::markdown::MarkdownLine>,
+    parsed: impl IntoIterator<Item = MarkdownLine>,
     palette: &AppPalette,
 ) {
+    render_blocks(ui, &prepare_blocks(parsed), palette);
+}
+
+fn render_blocks(ui: &mut egui::Ui, blocks: &[MarkdownBlock], palette: &AppPalette) {
     ui.spacing_mut().item_spacing = Vec2::new(0.0, 6.0);
-
-    let mut in_code_block = false;
-    let mut code_block_buf = String::new();
-    let mut code_block_lang = String::new();
-
-    for line in parsed {
-        render_markdown_element(
-            ui,
-            line,
-            &mut in_code_block,
-            &mut code_block_buf,
-            &mut code_block_lang,
-            palette,
-        );
-    }
-
-    flush_code_block(
-        ui,
-        &mut in_code_block,
-        &mut code_block_buf,
-        &mut code_block_lang,
-        palette,
-    );
-}
-
-pub(super) fn flush_code_block(
-    ui: &mut egui::Ui,
-    in_code: &mut bool,
-    buf: &mut String,
-    lang: &mut String,
-    palette: &AppPalette,
-) {
-    if *in_code {
-        render_styled_code_block(ui, buf, lang, palette);
-        buf.clear();
-        lang.clear();
-        *in_code = false;
+    for block in blocks {
+        match block {
+            MarkdownBlock::Line(line) => render_markdown_element(ui, line, palette),
+            MarkdownBlock::Code { language, text } => {
+                render_styled_code_block(ui, text, language, palette)
+            }
+        }
     }
 }
 
-pub(super) fn render_markdown_element(
-    ui: &mut egui::Ui,
-    line: little_clip_render::markdown::MarkdownLine,
-    in_code_block: &mut bool,
-    code_block_buf: &mut String,
-    code_block_lang: &mut String,
-    palette: &AppPalette,
-) {
+fn render_markdown_element(ui: &mut egui::Ui, line: &MarkdownLine, palette: &AppPalette) {
     match line {
-        little_clip_render::markdown::MarkdownLine::CodeFence { language } => {
-            if *in_code_block {
-                flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
-            } else {
-                *in_code_block = true;
-                *code_block_lang = language;
-            }
-        }
-        little_clip_render::markdown::MarkdownLine::CodeLine { line } => {
-            if *in_code_block {
-                code_block_buf.push_str(&line);
-                code_block_buf.push('\n');
-            }
-        }
-        little_clip_render::markdown::MarkdownLine::Heading {
+        MarkdownLine::Heading {
             level,
             text: _,
             spans,
         } => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             ui.add_space(crate::ui_ext::SPACE_SM);
             ui.horizontal_wrapped(|ui| {
                 let (size, color) = match level {
@@ -99,15 +88,14 @@ pub(super) fn render_markdown_element(
                     _ => (BODY_FONT_SIZE, hex_to_c32(&palette.colors.text_secondary)),
                 };
                 for span in spans {
-                    render_markdown_span(ui, &span, size, color, palette);
+                    render_markdown_span(ui, span, size, color, palette);
                 }
             });
             ui.add_space(crate::ui_ext::SPACE_XS);
         }
-        little_clip_render::markdown::MarkdownLine::Bullet { indent, spans } => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
+        MarkdownLine::Bullet { indent, spans } => {
             ui.horizontal_wrapped(|ui| {
-                ui.add_space(indent as f32 * 16.0);
+                ui.add_space(*indent as f32 * 16.0);
                 ui.label(egui::RichText::new("•").size(BODY_FONT_SIZE).color(
                     crate::ui_ext::contrast_text_c32_on(
                         ui.visuals().panel_fill,
@@ -120,7 +108,7 @@ pub(super) fn render_markdown_element(
                 for span in spans {
                     render_markdown_span(
                         ui,
-                        &span,
+                        span,
                         BODY_FONT_SIZE,
                         hex_to_c32(&palette.colors.text_primary),
                         palette,
@@ -128,8 +116,7 @@ pub(super) fn render_markdown_element(
                 }
             });
         }
-        little_clip_render::markdown::MarkdownLine::Numbered { number, spans } => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
+        MarkdownLine::Numbered { number, spans } => {
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new(format!("{}.", number))
@@ -146,7 +133,7 @@ pub(super) fn render_markdown_element(
                 for span in spans {
                     render_markdown_span(
                         ui,
-                        &span,
+                        span,
                         BODY_FONT_SIZE,
                         hex_to_c32(&palette.colors.text_primary),
                         palette,
@@ -154,8 +141,7 @@ pub(super) fn render_markdown_element(
                 }
             });
         }
-        little_clip_render::markdown::MarkdownLine::Quote { spans } => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
+        MarkdownLine::Quote { spans } => {
             egui::Frame::none()
                 .fill(hex_to_c32(&palette.colors.surface_recessed))
                 .stroke(Stroke::new(3.0_f32, hex_to_c32(&palette.harmonies.base)))
@@ -166,7 +152,7 @@ pub(super) fn render_markdown_element(
                         for span in spans {
                             render_markdown_span(
                                 ui,
-                                &span,
+                                span,
                                 BODY_FONT_SIZE,
                                 hex_to_c32(&palette.colors.text_secondary),
                                 palette,
@@ -175,19 +161,17 @@ pub(super) fn render_markdown_element(
                     });
                 });
         }
-        little_clip_render::markdown::MarkdownLine::Rule => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
+        MarkdownLine::Rule => {
             ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
             ui.separator();
             ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
         }
-        little_clip_render::markdown::MarkdownLine::Paragraph { spans } => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
+        MarkdownLine::Paragraph { spans } => {
             ui.horizontal_wrapped(|ui| {
                 for span in spans {
                     render_markdown_span(
                         ui,
-                        &span,
+                        span,
                         BODY_FONT_SIZE,
                         hex_to_c32(&palette.colors.text_primary),
                         palette,
@@ -195,13 +179,10 @@ pub(super) fn render_markdown_element(
                 }
             });
         }
-        little_clip_render::markdown::MarkdownLine::Empty => {
-            if *in_code_block {
-                code_block_buf.push('\n');
-            } else {
-                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-            }
+        MarkdownLine::Empty => {
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
         }
+        MarkdownLine::CodeFence { .. } | MarkdownLine::CodeLine { .. } => {}
     }
 }
 
@@ -302,8 +283,8 @@ pub(super) fn render_styled_code_block(
                 ui.fonts(|f| f.layout_job(layout_job))
             };
 
-            let mut code_clone = code.to_string();
-            let text_edit = egui::TextEdit::multiline(&mut code_clone)
+            let mut code = code;
+            let text_edit = egui::TextEdit::multiline(&mut code)
                 .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE))
                 .layouter(&mut layouter)
                 .desired_width(f32::INFINITY)
