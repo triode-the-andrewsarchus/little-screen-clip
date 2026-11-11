@@ -7,13 +7,13 @@ FFmpeg processing to `ffmpeg-next`. Do not introduce new GStreamer integration
 during this work. Preserve supported formats, source identity checks, bounded
 preview work, cancellation, and accepted export completion.
 
-- [ ] Inventory and migrate production FFmpeg/FFprobe call sites.
-- [ ] Reuse native decoding and DSP rather than adding parallel implementations.
-- [ ] Verify FFmpeg 9 compatibility with real decoding/filtering/encoding tests.
-- [ ] Preserve pinned input and seekable staging output handles.
-- [ ] Check cancellation, malformed inputs, stream selection and time ranges.
-- [ ] Run affected tests, final workspace checks and architecture comparison.
-- [ ] Review the evidence below and write a final GStreamer recommendation.
+- [x] Inventory and migrate production FFmpeg/FFprobe call sites.
+- [x] Reuse native decoding and DSP rather than adding parallel implementations.
+- [x] Verify FFmpeg 9 compatibility with real decoding/filtering/encoding tests.
+- [x] Preserve pinned input and seekable staging output handles.
+- [x] Check cancellation, malformed inputs, stream selection and time ranges.
+- [x] Run affected tests, final workspace checks and architecture comparison.
+- [x] Review the evidence below and write a final GStreamer recommendation.
 
 ## Starting architecture
 
@@ -331,9 +331,83 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   including the real-worker six-operation/range PCM check and all four failures
   observed during the full workspace run.
 
+## Final verification
+
+| Check | Result |
+| --- | --- |
+| `cargo test -j4 --workspace --no-fail-fast -- --test-threads=1` | 2,827 passed, zero failed, 35 ignored across 43 suites, including doctests. No compiler warnings. |
+| Worker integration executable with `--include-ignored --test-threads=1` | All 13 passed, including compressed-audio timing, rotated-frame pixels and sequential AV1 timeline references. |
+| `cargo build -j4 --workspace` | Passed with zero compiler warnings; all desktop binaries and helpers built. |
+| `cargo fmt --all --check` | Passed. |
+| Python companion-packaging tests / build-cache tests | Three / four passed; shell syntax checked. |
+| Relocatable/offline companion | Rebuilt from the delivered vendored workspace offline: 22 tests passed, including manual references. A relocated core test executable discovered only its companion bundle and successfully probed the real video/cover fixture. |
+| Dynamic linkage | File manager, workbench and daemon have no FFmpeg shared-library linkage; the worker links the expected FFmpeg 9 ABIs. |
+
+The full suite uncovered two channel-edit integration defects, both fixed and
+committed separately with regression coverage before the successful rerun.
+Real-model GUI search acceptance and broad performance benchmarking were not run.
+
+## Final architecture and verification limits
+
+The final architecture comparison against `native-audio-ffmpeg` reports 3,667
+additional source lines, 136 functions and 16 files. Maximum function complexity
+remains 195; duplication percentage decreases by 0.04 points. It still classifies
+the change as a regression because clone groups increase by five and five
+functions score 16–19. The reviewed high scores are explicit request validation,
+decoder admission, EOF/filter handling and accepted-save orchestration. Shared
+source/filter owners and the existing process supervisor avoid parallel stacks;
+further splitting those flat checks solely for a score would obscure their
+contracts. Remaining clone reports include fixture setup and error propagation.
+This is an accepted implementation cost, not a claim of improved complexity.
+
+Strict workspace Clippy is not green on the starting revision: the same installed
+Clippy reports 155 errors in core there, versus 153 in core after this migration.
+The affected diagnostic lines are unchanged. A subsequent non-strict inventory
+also reaches an existing deny-by-default approximate-constant lint in
+`creative_fx/cmyk_halftone.rs`. These unrelated lint failures are distinct from
+compiler warnings or media test failures; they have not been hidden with project
+lint suppressions. The complete all-target inventory, run with command-local
+`--cap-lints warn` so existing denies cannot stop later crates, reports 2,028
+warnings. Comparing their repository primary spans to the starting revision
+finds none on changed lines. Two macro-generated clone diagnostics point into
+Rust's standard library; their expansion sites are in unchanged search/transfer
+tests.
+Worker/protocol all-target Clippy passes with `-D warnings`.
+
 ## Final recommendation
 
-Pending implementation and verification. This section must be reviewed after
-the native audio and FFmpeg library migration, using actual remaining code and
-measured limitations. No new GStreamer work is authorized by this provisional
-assessment.
+Do not add a new `gstreamer-rs` integration now. Keep the native Rust audio paths,
+FFmpeg library worker, optimized indexed C/GPU timeline helper and existing
+Timelens helper. Timelens already brings GStreamer into the deployment; this work
+does not expand that integration or add another application-level media engine.
+
+The practical division is now:
+
+| Job | Owner | Why retain it |
+| --- | --- | --- |
+| Common audio decoding, analysis, artwork and eligible WAV ranges/gain | Core native audio modules | Reuses the samples/DSP already needed by waveforms and audition; avoids a codec helper for eligible operations. |
+| Uncommon audio, codec exports, existing effect graphs, metadata and bounded video extraction | `clip-media-worker` through `ffmpeg-next` | Preserves codec/filter behavior with typed requests and owned descriptors, without linking GPL FFmpeg libraries into the desktop applications. |
+| Dense indexed/GPU video timelines | `scripts/video_strip/main.c` | Retains specialized sampling and GPU reduction rather than replacing them with an unmeasured generic pipeline. |
+| Existing hover/fallback integration | Timelens helper | Retains its current ownership and deployment boundary. |
+| Explicit external video playback | Owned FFplay session | Embedded synchronized playback is a separate feature; codec bindings alone do not supply its rendering, clock, seeking and device coordination. |
+
+The strongest future case for GStreamer is **embedded synchronized audio/video
+playback**, if replacing FFplay and the coordination in the video studio and
+`file_manager/viewers/video.rs` becomes a concrete product requirement. Compare a
+small persistent pipeline against a persistent FFmpeg decoder at that point,
+including frame delivery to egui, seeking, shutdown, device ownership and plugin
+packaging. That case is not strong enough to start another backend now.
+
+This migration is not evidence of a blanket performance gain. Native eligible
+audio jobs avoid subprocess startup and PCM transport; library jobs deliberately
+retain a helper process for isolation and cancellation. Batch previews reuse one
+decoder/filter/encoder session, but no representative end-to-end benchmark here
+establishes that every workload is faster. The independent reference checks
+establish output/timing fidelity, not universal throughput improvements.
+
+Distribution still needs native FFmpeg shared libraries and existing Timelens
+plugins. The delivered worker source vendors Rust dependencies for an offline
+rebuild; it does not bundle a native FFmpeg SDK. MP4/M4A native WAV rendering stays
+on the FFmpeg path because the current Symphonia reader does not apply edit-list
+timing. A new general playback engine is outside this migration. Stop here for review
+before introducing another framework.
