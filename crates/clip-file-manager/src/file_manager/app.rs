@@ -324,6 +324,11 @@ impl FileManagerApp {
                 self.browser.music_previews.retire();
                 let closed = self.viewers.ui(ui, &self.palette);
                 self.follow_file_renames();
+                for path in self.viewers.saved_rating_paths.drain(..) {
+                    self.browser
+                        .gallery_previews
+                        .invalidate_gallery_rating(&path);
+                }
                 if closed {
                     if let Some(request) = self.pad_studio.take()
                         && let Some(path) = self.viewers.take_audio_result()

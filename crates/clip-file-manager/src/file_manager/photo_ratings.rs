@@ -37,6 +37,7 @@ type Response = mpsc::Receiver<Result<Result<u8, String>, JobError>>;
 pub(super) struct Ratings {
     pub values: BTreeMap<PathBuf, u8>,
     committed: BTreeMap<PathBuf, u8>,
+    pub saved_paths: Vec<PathBuf>,
     writes: BTreeMap<PathBuf, u8>,
     pending: Option<(PathBuf, Option<u8>, Response)>,
 }
@@ -145,6 +146,7 @@ impl Ratings {
                             let rating = rating.min(5);
                             self.committed.insert(path.clone(), rating);
                             if value.is_some() {
+                                self.saved_paths.push(path.clone());
                                 if !self.writes.contains_key(path) {
                                     self.values.insert(path.clone(), rating);
                                 }
@@ -288,6 +290,7 @@ mod tests {
         sender.send(Ok(Err("permission denied".into()))).unwrap();
         ratings.receive(&Context::default());
         assert_eq!(ratings.values.get(&path), Some(&3));
+        assert_eq!(ratings.saved_paths, [path]);
     }
     #[test]
     fn relocate_moves_pending_writes_and_clears_stale_source_entries() {

@@ -93,6 +93,7 @@ pub(super) struct Viewers {
     )>,
     rename: rename::Rename,
     renamed: Vec<(PathBuf, PathBuf)>,
+    pub(super) saved_rating_paths: Vec<PathBuf>,
     close_requested: bool,
     office_preview: bool,
     loading: Option<Loading>,

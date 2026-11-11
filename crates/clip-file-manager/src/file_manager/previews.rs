@@ -684,6 +684,13 @@ impl EntryPreviews {
         self.gallery_sizes.get(path).copied().unwrap_or(0)
     }
 
+    pub(super) fn invalidate_gallery_rating(&mut self, path: &std::path::Path) {
+        self.gallery_sizes.remove(path);
+        if let Some((_, id)) = self.identities.get(path) {
+            self.cache.invalidate(*id);
+        }
+    }
+
     pub fn request_gallery(&mut self, entry: &Entry, edge: u32, orientation: Option<u8>) {
         let id = self.identity(entry);
         let edge = edge
@@ -887,6 +894,38 @@ mod tests {
             previews.listing(entry).is_some()
         });
         previews.listing(entry).unwrap()
+    }
+
+    #[test]
+    fn rating_refresh_retires_only_the_changed_tile() {
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut previews = EntryPreviews::default();
+        let mut entries = Vec::new();
+        for name in ["first", "second"] {
+            let directory = folder.path().join(name);
+            std::fs::create_dir(&directory).unwrap();
+            let path = directory.join("photo.png");
+            image::RgbaImage::new(2, 2).save(path).unwrap();
+            let entry = single_entry(&directory);
+            previews.request_gallery(&entry, 128, None);
+            wait_for_preview(|| {
+                previews.poll(&ctx);
+                previews.cached(&entry).is_some()
+            });
+            entries.push(entry);
+        }
+
+        previews.invalidate_gallery_rating(&entries[0].path);
+        assert!(previews.cached(&entries[0]).is_none());
+        assert!(previews.cached(&entries[1]).is_some());
+        assert_eq!(previews.gallery_size(&entries[0].path), 0);
+
+        previews.request_gallery(&entries[0], 128, None);
+        wait_for_preview(|| {
+            previews.poll(&ctx);
+            previews.cached(&entries[0]).is_some()
+        });
     }
 
     #[test]
