@@ -91,10 +91,48 @@ impl OrbitCamera {
     }
 }
 
+struct FrameTarget {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    staging: wgpu::Buffer,
+}
+
+impl FrameTarget {
+    fn new(device: &wgpu::Device, width: u32, height: u32, buffer_bytes: u64) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Scene frame"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Scene readback"),
+            size: buffer_bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self {
+            texture,
+            view,
+            staging,
+        }
+    }
+}
+
 /// Offscreen Gaussian renderer backed by one process-wide GPU device.
 pub struct SplatRenderer {
     gpu: Arc<Gpu>,
     viewer: gs::Viewer,
+    target: Option<FrameTarget>,
     scene: Arc<SplatScene>,
 }
 
@@ -133,7 +171,12 @@ impl SplatRenderer {
             &gpu.queue,
             &gs::core::GaussianTransformPod::default(),
         );
-        Ok(Self { gpu, viewer, scene })
+        Ok(Self {
+            gpu,
+            viewer,
+            scene,
+            target: None,
+        })
     }
 
     /// Renders one view and reads RGBA pixels back to CPU memory.
@@ -168,38 +211,22 @@ impl SplatRenderer {
         let camera = camera.camera(&self.scene, width as f32 / height as f32)?;
         self.viewer
             .update_camera(&self.gpu.queue, &camera, UVec2::new(width, height));
-        let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Scene frame"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let staging = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Scene readback"),
-            size: buffer_bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        // Remove the target while a GPU copy or mapping is in flight. If
+        // readback fails, the next frame starts with fresh unmapped resources.
+        let target = self
+            .target
+            .take()
+            .filter(|target| target.texture.width() == width && target.texture.height() == height)
+            .unwrap_or_else(|| FrameTarget::new(&self.gpu.device, width, height, buffer_bytes));
         let mut encoder = self
             .gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        self.viewer.render(
-            &mut encoder,
-            &texture.create_view(&wgpu::TextureViewDescriptor::default()),
-        );
+        self.viewer.render(&mut encoder, &target.view);
         encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
+            target.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
+                buffer: &target.staging,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_row_bytes),
@@ -214,7 +241,8 @@ impl SplatRenderer {
         );
         let submission = self.gpu.queue.submit([encoder.finish()]);
         let (tx, rx) = mpsc::sync_channel(1);
-        staging
+        target
+            .staging
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = tx.send(result);
@@ -229,13 +257,14 @@ impl SplatRenderer {
         rx.recv_timeout(Duration::from_secs(1))
             .map_err(|e| SceneError::Gpu(e.to_string()))?
             .map_err(|e| SceneError::Gpu(e.to_string()))?;
-        let mapped = staging.slice(..).get_mapped_range();
+        let mapped = target.staging.slice(..).get_mapped_range();
         let mut pixels = Vec::with_capacity(row_bytes as usize * height as usize);
         for row in mapped.chunks_exact(padded_row_bytes as usize) {
             pixels.extend_from_slice(&row[..row_bytes as usize]);
         }
         drop(mapped);
-        staging.unmap();
+        target.staging.unmap();
+        self.target = Some(target);
         if self.scene.linear_color {
             encode_linear_rgb_to_srgb(&mut pixels);
         }
@@ -292,6 +321,9 @@ mod tests {
         let mut renderer = SplatRenderer::new(Arc::new(crate::splat::tests::scene())).unwrap();
         let initial = renderer.render(OrbitCamera::default(), 97, 64).unwrap();
         assert!(initial.pixels().any(|p| p[0] > 20 || p[1] > 20));
+        let target = renderer.target.as_ref().unwrap();
+        let original_texture = target.texture.clone();
+        let original_staging = target.staging.clone();
         for camera in [
             OrbitCamera {
                 yaw: 2.0,
@@ -308,6 +340,14 @@ mod tests {
         ] {
             assert_ne!(initial, renderer.render(camera, 97, 64).unwrap());
         }
+        let reused = renderer.target.as_ref().unwrap();
+        assert_eq!(reused.texture, original_texture);
+        assert_eq!(reused.staging, original_staging);
+        let resized = renderer.render(OrbitCamera::default(), 129, 48).unwrap();
+        assert_eq!(resized.dimensions(), (129, 48));
+        let replacement = renderer.target.as_ref().unwrap();
+        assert_ne!(replacement.texture, original_texture);
+        assert_ne!(replacement.staging, original_staging);
         let orbit = renderer.bake_orbit(97, 64, || false).unwrap();
         drop(renderer);
         assert_eq!(orbit.frames().len(), ORBIT_FRAME_COUNT);
