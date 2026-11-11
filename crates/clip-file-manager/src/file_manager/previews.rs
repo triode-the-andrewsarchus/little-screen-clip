@@ -698,33 +698,24 @@ impl EntryPreviews {
             .div_ceil(Self::GALLERY_EDGE_STEP)
             * Self::GALLERY_EDGE_STEP;
         let previous = self.gallery_sizes.entry(entry.path.clone()).or_default();
-        if edge > *previous {
-            let started = self.cache.refresh(
-                id,
-                Source::Gallery {
-                    path: entry.path.clone(),
-                    revision: entry.revision,
-                    edge,
-                    orientation,
-                }
-                .checked(&entry.path, &self.context),
-            );
-            if started {
-                *previous = edge;
-            }
-        } else if self.cache.needs(id) {
-            let started = self.cache.request(
-                id,
-                Source::Gallery {
-                    path: entry.path.clone(),
-                    revision: entry.revision,
-                    edge,
-                    orientation,
-                },
-            );
-            if started {
-                *previous = edge;
-            }
+        let refresh = edge > *previous;
+        if !refresh && !self.cache.needs(id) {
+            return;
+        }
+        let source = Source::Gallery {
+            path: entry.path.clone(),
+            revision: entry.revision,
+            edge,
+            orientation,
+        }
+        .checked(&entry.path, &self.context);
+        let started = if refresh {
+            self.cache.refresh(id, source)
+        } else {
+            self.cache.request(id, source)
+        };
+        if started {
+            *previous = edge;
         }
     }
     pub fn show_gallery(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
@@ -894,6 +885,31 @@ mod tests {
             previews.listing(entry).is_some()
         });
         previews.listing(entry).unwrap()
+    }
+
+    #[test]
+    fn gallery_retry_still_rejects_paths_outside_search_results() {
+        let folder = tempfile::tempdir().unwrap();
+        image::RgbaImage::new(2, 2)
+            .save(folder.path().join("photo.png"))
+            .unwrap();
+        let entry = single_entry(folder.path());
+        let ctx = egui::Context::default();
+        let mut previews = EntryPreviews::default();
+        previews.set_context(&super::super::search::PreviewContext::empty_results());
+        let id = previews.identity(&entry);
+        for _ in 0..2 {
+            previews.request_gallery(&entry, 128, None);
+            wait_for_preview(|| {
+                previews.poll(&ctx);
+                previews.cached(&entry).is_some()
+            });
+            let ready = previews.cached(&entry).unwrap();
+            assert!(ready.texture.is_none());
+            assert!(ready.data.detail.contains("outside the published search"));
+            assert_eq!(previews.gallery_size(&entry.path), 128);
+            previews.cache.invalidate(id);
+        }
     }
 
     #[test]
