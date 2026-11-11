@@ -1,6 +1,10 @@
 //! Owned temporary artifacts with explicit retention and cleanup semantics.
 //!
-//! All application generated files live below the XDG cache directory.
+//! This store places artifacts below the application's XDG cache directory.
+//! Unretained leases clean up on drop. Retained path-backed outputs remain
+//! available to consumers whose lifetimes are not observable by this process.
+//! Regenerable caches and tracked internal workspaces apply their own bounded
+//! eviction or crash recovery; the store does not age-delete published outputs.
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -112,7 +116,12 @@ impl ArtifactStore {
         Ok(lease.retain())
     }
 
-    /// Removes retained artifacts older than max_age_seconds.
+    /// Explicitly removes retained artifacts older than `max_age_seconds`.
+    ///
+    /// This maintenance operation does not discover clipboard, editor, or other
+    /// path consumers. Callers must ensure those consumers no longer need the
+    /// affected artifacts. It is not an automatic startup or periodic sweep.
+    /// Tracked temporary workspaces use their separate lock-aware recovery.
     ///
     /// # Errors
     ///
