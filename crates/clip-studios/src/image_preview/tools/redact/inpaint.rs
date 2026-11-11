@@ -154,21 +154,23 @@ impl ImagePreviewState {
             }
 
             match status {
-                Ok(st) if st.success() => match image::open(&temp_out) {
-                    Ok(dyn_img) => {
-                        let _ = std::fs::remove_file(&temp_out);
-                        let _ = tx.send(LamaInpaintMsg::Success {
-                            result_rgba: dyn_img.to_rgba8(),
-                            duration_ms: start.elapsed().as_millis(),
-                        });
+                Ok(st) if st.success() => {
+                    match decode_inpaint_output(&temp_out, current_image.dimensions()) {
+                        Ok(dyn_img) => {
+                            let _ = std::fs::remove_file(&temp_out);
+                            let _ = tx.send(LamaInpaintMsg::Success {
+                                result_rgba: dyn_img,
+                                duration_ms: start.elapsed().as_millis(),
+                            });
+                        }
+                        Err(err) => {
+                            let _ = std::fs::remove_file(&temp_out);
+                            let _ = tx.send(LamaInpaintMsg::Error(format!(
+                                "Failed to read inpaint output: {err}"
+                            )));
+                        }
                     }
-                    Err(err) => {
-                        let _ = std::fs::remove_file(&temp_out);
-                        let _ = tx.send(LamaInpaintMsg::Error(format!(
-                            "Failed to read inpaint output: {err}"
-                        )));
-                    }
-                },
+                }
                 Ok(st) => {
                     let mut stderr_msg = String::new();
                     if let Some(mut err_pipe) = child.stderr.take() {
@@ -261,6 +263,30 @@ impl ImagePreviewState {
     }
 }
 
+fn decode_inpaint_output(
+    path: &std::path::Path,
+    expected: (u32, u32),
+) -> Result<RgbaImage, String> {
+    use image::ImageDecoder;
+
+    const MAX_ENCODED_BYTES: usize = 128 * 1024 * 1024;
+    let bytes = crate::file_source::read_file_bytes(path, MAX_ENCODED_BYTES, true, true)
+        .map_err(|error| error.to_string())?;
+    let mut reader =
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
+    reader.limits(little_clip_core::item::raster_preview_limits());
+    let decoder = reader.into_decoder().map_err(|error| error.to_string())?;
+    if decoder.dimensions() != expected {
+        return Err(format!(
+            "Inpaint output dimensions {:?} do not match {expected:?}",
+            decoder.dimensions()
+        ));
+    }
+    image::DynamicImage::from_decoder(decoder)
+        .map(|image| image.into_rgba8())
+        .map_err(|error| error.to_string())
+}
+
 pub fn run_native_lama_inpaint(
     image: &RgbaImage,
     mask: &image::GrayImage,
@@ -335,4 +361,35 @@ pub fn run_native_lama_inpaint(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inpaint_output_requires_a_bounded_png_at_the_source_dimensions() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("output.png");
+        let pixels = RgbaImage::from_pixel(4, 3, image::Rgba([20, 40, 60, 255]));
+        pixels.save(&output).unwrap();
+        assert_eq!(decode_inpaint_output(&output, (4, 3)).unwrap(), pixels);
+        assert!(
+            decode_inpaint_output(&output, (3, 4))
+                .unwrap_err()
+                .contains("dimensions")
+        );
+
+        std::fs::File::options()
+            .write(true)
+            .open(&output)
+            .unwrap()
+            .set_len(128 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(
+            decode_inpaint_output(&output, (4, 3))
+                .unwrap_err()
+                .contains("limit")
+        );
+    }
 }
