@@ -16,52 +16,23 @@ use std::{
 use symphonia::core::io::MediaSource;
 const MAX_PCM: usize = 256 * 1024 * 1024;
 const ASF: &[u8] = b"\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c";
-const ASF_INPUT_ARGS: &[&str] = &[
-    "-f",
-    "asf",
-    "-protocol_whitelist",
-    "file,pipe,fd",
-    "-max_alloc",
-    "67108864",
-];
-const XWMA_INPUT_ARGS: &[&str] = &[
-    "-f",
-    "xwma",
-    "-protocol_whitelist",
-    "file,pipe,fd",
-    "-max_alloc",
-    "67108864",
-];
-fn container_args(header: &[u8]) -> Option<&'static [&'static str]> {
+fn container_format(header: &[u8]) -> Option<&'static str> {
     if header == ASF {
-        Some(ASF_INPUT_ARGS)
+        Some("asf")
     } else if header.get(..4) == Some(b"RIFF") && header.get(8..12) == Some(b"XWMA") {
-        Some(XWMA_INPUT_ARGS)
+        Some("xwma")
     } else {
         None
-    }
-}
-/// Selects local-protocol demuxers for `.wma` and `.xwma` tool inputs.
-/// Callers still authorize content with `CommandRequest::arg_content_file`.
-pub fn decoder_input_args(path: &Path) -> &'static [&'static str] {
-    let Some(extension) = path.extension() else {
-        return &[];
-    };
-    if extension.eq_ignore_ascii_case("wma") {
-        ASF_INPUT_ARGS
-    } else if extension.eq_ignore_ascii_case("xwma") || extension.eq_ignore_ascii_case("xwm") {
-        XWMA_INPUT_ARGS
-    } else {
-        &[]
     }
 }
 /// Identifies formats whose metadata/PCM preparation belongs on a worker.
 /// This filename hint does not replace content identification on the pinned input.
 pub fn needs_audio_preparation(path: &Path) -> bool {
-    !decoder_input_args(path).is_empty()
-        || path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("ncw"))
+    path.extension().is_some_and(|extension| {
+        ["wma", "xwma", "xwm", "ncw"]
+            .iter()
+            .any(|hint| extension.eq_ignore_ascii_case(hint))
+    })
 }
 /// Seekable encoded or prepared audio, suitable for Symphonia and Rodio.
 pub type SeekableAudio = Box<dyn MediaSource>;
@@ -229,7 +200,7 @@ pub fn from_file(mut file: File, cancelled: &AtomicBool) -> Result<AudioInput, S
     let count = file.read_at(&mut header, 0).map_err(|e| e.to_string())?;
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let native_ncw = ncw::recognizes(&header[..count]);
-    if !native_ncw && container_args(&header[..count]).is_none() {
+    if !native_ncw && container_format(&header[..count]).is_none() {
         return Ok(AudioInput {
             stream: Box::new(file),
             decoded: None,
@@ -274,24 +245,21 @@ struct Probe {
     rate: u32,
     channels: u16,
     duration: Option<f64>,
-    input_args: &'static [&'static str],
+    container: &'static str,
 }
 fn probe(file: &File, cancelled: &AtomicBool) -> Result<Probe, String> {
     let mut magic = [0u8; 16];
     let count = file.read_at(&mut magic, 0).map_err(|e| e.to_string())?;
-    let input_args = container_args(&magic[..count]).ok_or("Not an ASF/xWMA Windows Media file")?;
+    let container =
+        container_format(&magic[..count]).ok_or("Not an ASF/xWMA Windows Media file")?;
 
-    let output = crate::media_backend::probe_request(if input_args == ASF_INPUT_ARGS {
-        "asf"
-    } else {
-        "xwma"
-    })
-    .arg_owned_content_file(file.try_clone().map_err(|error| error.to_string())?)
-    .map_err(|e| e.to_string())?
-    .timeout(Duration::from_secs(3))
-    .max_output_bytes(64 * 1024)
-    .run_cancellable(cancelled)
-    .map_err(|e| e.to_string())?;
+    let output = crate::media_backend::probe_request(container)
+        .arg_owned_content_file(file.try_clone().map_err(|error| error.to_string())?)
+        .map_err(|e| e.to_string())?
+        .timeout(Duration::from_secs(3))
+        .max_output_bytes(64 * 1024)
+        .run_cancellable(cancelled)
+        .map_err(|e| e.to_string())?;
     if !output.status.success() || output.stdout_truncated {
         return Err("Could not probe the Windows Media audio stream".into());
     }
@@ -322,7 +290,7 @@ fn probe(file: &File, cancelled: &AtomicBool) -> Result<Probe, String> {
         rate,
         channels,
         duration,
-        input_args,
+        container,
     })
 }
 /// Reads ASF/xWMA/NCW metadata without developing the entire PCM source.
@@ -347,7 +315,7 @@ pub(super) fn read_prepared_audio_metadata(
         duration_ms: (info.duration.ok_or("Audio duration is unavailable")? * 1000.0) as u64,
         sample_rate: info.rate,
         channels: info.channels,
-        format: if info.input_args == XWMA_INPUT_ARGS {
+        format: if info.container == "xwma" {
             "xWMA"
         } else {
             "WMA"
@@ -357,17 +325,13 @@ pub(super) fn read_prepared_audio_metadata(
 }
 fn prepare(file: &File, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
     let info = probe(file, cancelled)?;
-    let output = crate::media_backend::decode_audio_request(if info.input_args == ASF_INPUT_ARGS {
-        "asf"
-    } else {
-        "xwma"
-    })
-    .arg_owned_content_file(file.try_clone().map_err(|error| error.to_string())?)
-    .map_err(|error| error.to_string())?
-    .timeout(Duration::from_secs(30))
-    .max_output_bytes(MAX_PCM)
-    .run_cancellable(cancelled)
-    .map_err(|e| e.to_string())?;
+    let output = crate::media_backend::decode_audio_request(info.container)
+        .arg_owned_content_file(file.try_clone().map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?
+        .timeout(Duration::from_secs(30))
+        .max_output_bytes(MAX_PCM)
+        .run_cancellable(cancelled)
+        .map_err(|e| e.to_string())?;
     if output.stdout_truncated {
         return Err("Decoded audio exceeds the 256 MiB source budget".into());
     }
@@ -527,9 +491,11 @@ mod tests {
     #[test]
     fn xwma_signature_selects_a_restricted_demuxer_and_enters_shared_analysis() {
         assert!(super::super::is_audio_path(Path::new("GAME.XWM")));
-        assert_eq!(decoder_input_args(Path::new("GAME.XWMA")), XWMA_INPUT_ARGS);
-        assert_eq!(decoder_input_args(Path::new("GAME.XWM")), XWMA_INPUT_ARGS);
-        assert!(container_args(b"RIFF0000WAVE0000").is_none());
+        assert!(needs_audio_preparation(Path::new("GAME.XWMA")));
+        assert!(needs_audio_preparation(Path::new("GAME.XWM")));
+        assert_eq!(container_format(b"RIFF0000XWMA0000"), Some("xwma"));
+        assert_eq!(container_format(ASF), Some("asf"));
+        assert!(container_format(b"RIFF0000WAVE0000").is_none());
         let analysis =
             super::super::compute_audio_analysis_progressive(&path("tones.xwma"), 120, |_| {})
                 .unwrap();

@@ -199,6 +199,12 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   shared wire defaults now have one protocol constructor. Existing studio
   staging orchestration retains the previously documented necessary error paths.
 
+- Removed the now-unused exported `decoder_input_args` and embedded CLI option
+  arrays from `audio/source.rs`. Header recognition now supplies the actual
+  `asf`/`xwma` worker demuxer name directly, while extension hints still select
+  deferred preparation. Six source/cache checks pass; the external-reference
+  fixture check remains explicitly ignored until its optional path is supplied.
+
 ## Final recommendation
 
 Pending implementation and verification. This section must be reviewed after
