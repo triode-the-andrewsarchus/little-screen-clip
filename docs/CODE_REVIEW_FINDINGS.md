@@ -382,9 +382,9 @@ touches the host clipboard or USB display unless explicitly stated.
   - Identical or near-identical strict ASCII-digit `u32` parsing helpers (`fn number(...) -> Option<u32>` / `fn digits(...) -> bool`) are re-implemented in [`connectors.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-file-manager/src/file_manager/system/connectors.rs#L22-L24), [`flash/mod.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-file-manager/src/file_manager/system/flash/mod.rs#L25-L30), [`peripheral_bus/names.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-file-manager/src/file_manager/system/peripheral_bus/names.rs#L11-L16), [`pins.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-file-manager/src/file_manager/system/pins.rs#L19-L24), [`sound.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-file-manager/src/file_manager/system/sound.rs#L17-L22), and [`vfio.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-file-manager/src/file_manager/system/vfio.rs#L68-L72).
 - [x] **[Dead Code] Unused `ConstellationDb::is_folder_indexed` method (`constellation/db.rs`)**:
   **Current verification:** The only callers asserted persisted folder counts in the database round-trip test. That query now lives in the test module, and the production method and its dead-code allowance are gone. The round-trip test passed with exact-root and non-UTF-8 path coverage.
-- [ ] **[Code Quality / Oversized Monolithic Files in `search` & `constellation`]**:
+- [x] **[Code Quality / Oversized Monolithic Files in `search` & `constellation`]**:
   - [x] Decompose top monolithic files: `search/service.rs` (4,442 lines), `constellation/ui.rs` (4,230 lines), and `image_preview/tools/redact.rs` (2,350 lines) into focused submodules and separate test files *(completed in `fc3510e`)*.
-  - [ ] Decompose remaining multi-thousand-line database/retrieval modules by extracting their inline `mod tests`: `search/retrieval.rs` (2,327 lines) and `search/store.rs` (2,185 lines).
+  - [x] Moved the retrieval and storage tests into their own modules in `clip-search`. The production files now have 860 and 1,002 lines respectively, with production logic unchanged. The search library suite passed 292 tests with four ignored.
 
 ---
 
