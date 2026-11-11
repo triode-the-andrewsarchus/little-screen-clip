@@ -13,6 +13,18 @@ pub fn request(
     max_bytes: u64,
     max_request_bytes: usize,
 ) -> Result<IpcResponse, Box<dyn std::error::Error>> {
+    request_on_send(request, timeout, max_bytes, max_request_bytes, || {})
+}
+
+/// Calls `on_send` after preparation succeeds, immediately before writing to the socket.
+/// Once this hook runs, a missing reply cannot rule out daemon ownership.
+pub(crate) fn request_on_send(
+    request: &IpcRequest,
+    timeout: Option<Duration>,
+    max_bytes: u64,
+    max_request_bytes: usize,
+    on_send: impl FnOnce(),
+) -> Result<IpcResponse, Box<dyn std::error::Error>> {
     let mut encoded = BoundedRequest {
         bytes: Vec::new(),
         limit: max_request_bytes,
@@ -21,6 +33,7 @@ pub fn request(
     let mut stream = UnixStream::connect(socket_path())?;
     stream.set_read_timeout(timeout)?;
     stream.set_write_timeout(timeout)?;
+    on_send();
     stream.write_all(&encoded.bytes)?;
     stream.write_all(b"\n")?;
     let mut reader = BufReader::new(stream).take(max_bytes.saturating_add(1));
@@ -140,6 +153,14 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         mpsc,
     };
+
+    #[test]
+    fn request_preparation_failure_does_not_mark_the_payload_as_sent() {
+        let sent = std::cell::Cell::new(false);
+        let result = request_on_send(&IpcRequest::GetState, None, u64::MAX, 0, || sent.set(true));
+        assert!(result.is_err());
+        assert!(!sent.get());
+    }
 
     #[test]
     fn stalled_mutations_leave_previews_available_and_reject_before_execution() {

@@ -227,9 +227,31 @@ pub(super) fn write_midi_export(
 }
 
 pub(super) fn handoff_midi_export(
+    artifact: MidiExportArtifact,
+    cancelled: &AtomicBool,
+    started: Instant,
+) -> Result<MidiExportArtifact, String> {
+    handoff_midi_export_with(
+        artifact,
+        cancelled,
+        started,
+        |request, on_send| {
+            crate::desktop_ipc::request_on_send(request, None, u64::MAX, usize::MAX, on_send)
+                .map_err(|error| error.to_string())
+        },
+        |path| little_clip_core::copy_file_uris_to_system_clipboard(&[path]),
+    )
+}
+
+pub(super) fn handoff_midi_export_with(
     mut artifact: MidiExportArtifact,
     cancelled: &AtomicBool,
     started: Instant,
+    send: impl FnOnce(
+        &IpcRequest,
+        &mut dyn FnMut(),
+    ) -> Result<little_clip_core::ipc::IpcResponse, String>,
+    copy: impl FnOnce(&std::path::Path) -> Result<(), little_clip_core::clipboard::ClipboardError>,
 ) -> Result<MidiExportArtifact, String> {
     if cancelled.load(Ordering::Acquire) {
         return Err("MIDI export cancelled".to_string());
@@ -242,21 +264,32 @@ pub(super) fn handoff_midi_export(
         path: artifact.path.clone(),
         hand: HandSide::Left,
     };
-    // Once a path is handed to the daemon, a lost reply cannot establish that
-    // nobody owns it. Retain it even if transport or fallback later fails.
-    artifact.retain();
-    if matches!(
-        crate::send_ipc_request(&request),
-        Ok(little_clip_core::ipc::IpcResponse::Success { .. })
-    ) {
-        return Ok(artifact);
+    // Retain only once transmission starts. An unavailable daemon has never
+    // received the path, while a lost reply leaves ownership uncertain.
+    match send(&request, &mut || artifact.retain()) {
+        Ok(little_clip_core::ipc::IpcResponse::Success { .. }) => {
+            artifact.retain();
+            return Ok(artifact);
+        }
+        Ok(little_clip_core::ipc::IpcResponse::Error { .. }) => artifact.retain_file = false,
+        _ => {}
     }
 
     if cancelled.load(Ordering::Acquire) {
         return Err("MIDI export cancelled".to_string());
     }
-    little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&artifact.path))
-        .map_err(|error| format!("Failed to copy MIDI file to system clipboard: {error}"))?;
+    if let Err(error) = copy(&artifact.path) {
+        if matches!(
+            error,
+            little_clip_core::clipboard::ClipboardError::Failed(_)
+        ) {
+            // A writer can fail after exposing the URI to another process.
+            artifact.retain();
+        }
+        return Err(format!(
+            "Failed to copy MIDI file to system clipboard: {error}"
+        ));
+    }
     artifact.delivery = MidiExportDelivery::ClipboardFallback;
     artifact.retain();
     Ok(artifact)

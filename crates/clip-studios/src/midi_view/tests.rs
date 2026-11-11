@@ -922,6 +922,75 @@ fn rendered_full_score_copy_shortcut_exports_parseable_midi_to_left_hand() {
 }
 
 #[test]
+fn midi_export_cleanup_distinguishes_definite_failure_from_uncertain_delivery() {
+    use little_clip_core::{clipboard::ClipboardError, ipc::IpcResponse};
+    #[derive(Clone, Copy, Debug)]
+    enum Failure {
+        Offline,
+        Rejected,
+        LostDaemonReply,
+        UncertainClipboardWrite,
+    }
+    for failure in [
+        Failure::Offline,
+        Failure::Rejected,
+        Failure::LostDaemonReply,
+        Failure::UncertainClipboardWrite,
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let artifact = write_midi_export(
+            &inline_midi_data(1),
+            0.0,
+            1.0,
+            false,
+            None,
+            123,
+            directory.path().to_owned(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let path = artifact.path.clone();
+        let result = handoff_midi_export_with(
+            artifact,
+            &AtomicBool::new(false),
+            Instant::now(),
+            |_, on_send| match failure {
+                Failure::Offline | Failure::UncertainClipboardWrite => {
+                    Err("Daemon not connected".into())
+                }
+                Failure::Rejected => {
+                    on_send();
+                    Ok(IpcResponse::Error {
+                        error: "Request rejected".into(),
+                    })
+                }
+                Failure::LostDaemonReply => {
+                    on_send();
+                    Err("Reply lost after send".into())
+                }
+            },
+            |copy_path| {
+                assert_eq!(copy_path, path);
+                assert!(copy_path.is_file());
+                if matches!(failure, Failure::UncertainClipboardWrite) {
+                    Err(ClipboardError::Failed(
+                        "Writer failed after URI publication".into(),
+                    ))
+                } else {
+                    Err(ClipboardError::Unavailable)
+                }
+            },
+        );
+        assert!(result.unwrap_err().contains("Failed to copy MIDI file"));
+        let retained = matches!(
+            failure,
+            Failure::LostDaemonReply | Failure::UncertainClipboardWrite
+        );
+        assert_eq!(path.is_file(), retained, "{failure:?}");
+    }
+}
+
+#[test]
 fn midi_export_worker_honors_cancellation_before_writing() {
     let data = MidiData {
         title: "Cancelled".to_string(),
