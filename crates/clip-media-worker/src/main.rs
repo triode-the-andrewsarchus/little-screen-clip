@@ -1,5 +1,6 @@
 //! Separate FFmpeg library host. The desktop applications do not link this binary.
 
+mod audio;
 mod probe;
 use std::{fs::File, os::fd::FromRawFd};
 
@@ -12,8 +13,11 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
-    if arguments.len() != 3 || arguments[0] != "probe" {
-        return Err("Expected: clip-media-worker probe FORMAT_WHITELIST /proc/self/fd/N".into());
+    if arguments.len() != 3 || !matches!(arguments[0].as_str(), "probe" | "decode-audio") {
+        return Err(
+            "Expected: clip-media-worker probe|decode-audio FORMAT_WHITELIST /proc/self/fd/N"
+                .into(),
+        );
     }
     // Accept only an inherited descriptor, never a pathname supplied by a decoder.
     let descriptor: i32 = arguments[2]
@@ -32,6 +36,13 @@ fn run() -> Result<(), String> {
     }
     // SAFETY: the successful fcntl returned a descriptor owned only by us.
     let input = unsafe { File::from_raw_fd(duplicate) };
+    if arguments[0] == "decode-audio" {
+        return audio::decode(
+            input,
+            &arguments[1],
+            &mut std::io::BufWriter::new(std::io::stdout().lock()),
+        );
+    }
     let result = probe::probe(input, &arguments[1])?;
     let bytes = serde_json::to_vec(&result).map_err(|error| error.to_string())?;
     if bytes.len() > 64 * 1024 {

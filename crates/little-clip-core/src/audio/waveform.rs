@@ -666,7 +666,7 @@ pub fn compute_preview_waveform(
     cancelled: &AtomicBool,
 ) -> Result<(Vec<f32>, Vec<[u8; 3]>), String> {
     use symphonia::core::errors::Error;
-    let mut format = preview_audio_format(file, path, cancelled)?;
+    let mut format = super::source::format_reader(file, path, cancelled)?;
     let track = format.default_track().ok_or("No audio track")?;
     let id = track.id;
     let duration_seconds = codec_duration_seconds(&track.codec_params);
@@ -708,35 +708,6 @@ pub fn compute_preview_waveform(
     let mut summary = summary.ok_or("No decoded audio samples")?;
     summary.finish_bucket();
     Ok((summary.peaks, summary.colors))
-}
-
-// Probing and regular-file validation precede the bounded decode loop.
-fn preview_audio_format(
-    file: std::fs::File,
-    path: &Path,
-    cancelled: &AtomicBool,
-) -> Result<Box<dyn symphonia::core::formats::FormatReader>, String> {
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err("Audio source is not a regular file".into());
-    }
-    let mut hint = Hint::new();
-    if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(extension);
-    }
-    let input = super::source::from_file(file, cancelled)?;
-    let format = symphonia::default::get_probe()
-        .format(
-            &hint,
-            MediaSourceStream::new(input.stream, Default::default()),
-            &FormatOptions {
-                enable_gapless: true,
-                ..Default::default()
-            },
-            &MetadataOptions::default(),
-        )
-        .map_err(|e| e.to_string())?
-        .format;
-    Ok(format)
 }
 
 fn check_preview_budget(cancelled: &AtomicBool, started: std::time::Instant) -> Result<(), String> {

@@ -1,7 +1,6 @@
 //! Visible music cards retain small summaries, never a per-row Audio Studio or PCM buffer.
 use super::super::media::PreviewData as Data;
 use crate::icons::Icon;
-use little_clip_core::process::CommandRequest;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{path::Path, time::Duration};
 
@@ -79,25 +78,18 @@ fn metadata(path: &Path) -> Metadata {
         metadata.sample_rate = (audio.sample_rate > 0).then_some(audio.sample_rate);
         metadata.channels = (audio.channels > 0).then_some(audio.channels);
     }
-    let probe = CommandRequest::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration,bit_rate:format_tags=title,artist,album,encoder,encoder_settings,bitrate_mode:stream=codec_type,codec_name,profile,sample_rate,channels,channel_layout,bit_rate,bits_per_sample,bits_per_raw_sample,sample_fmt:stream_tags=encoder,encoder_settings,bitrate_mode",
-            "-of",
-            "json",
-        ])
-        .args(little_clip_core::audio::decoder_input_args(path))
-        .arg_content_file(path)
-        .ok()
-        .and_then(|command| {
-            command
-                .timeout(Duration::from_secs(3))
-                .max_output_bytes(64 * 1024)
-                .run()
-                .ok()
-        });
+    let probe = little_clip_core::media_backend::probe_request(
+        little_clip_core::media_backend::AUDIO_FORMATS,
+    )
+    .arg_content_file(path)
+    .ok()
+    .and_then(|command| {
+        command
+            .timeout(Duration::from_secs(3))
+            .max_output_bytes(64 * 1024)
+            .run()
+            .ok()
+    });
     if let Some(probe) = probe
         && probe.status.success()
         && !probe.stdout_truncated
@@ -270,6 +262,7 @@ fn format_sample_rate(sample_rate: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use little_clip_core::process::CommandRequest;
     use rodio::Source;
     use std::time::Instant;
     /// Manual release benchmark; the fixture folder is supplied outside the repository.

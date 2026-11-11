@@ -162,20 +162,15 @@ pub(super) struct VideoMetadata {
 
 pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, String> {
     let source = FileSource::capture(path)?;
-    let probe = little_clip_core::process::CommandRequest::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "stream=index,start_time,duration,codec_type,codec_name,profile,width,height,avg_frame_rate,r_frame_rate,bit_rate,channels,channel_layout:stream_disposition=attached_pic,default:stream_tags=DURATION,BPS,BPS-eng,bps,bps-eng,DATE,date,YEAR,year,release_year,RELEASE_YEAR,release_date,RELEASE_DATE,date_released,DATE_RELEASED,originaldate,ORIGINALDATE:format=start_time,duration,size:format_tags=DATE,date,YEAR,year,release_year,RELEASE_YEAR,release_date,RELEASE_DATE,date_released,DATE_RELEASED,originaldate,ORIGINALDATE",
-            "-of",
-            "json",
-        ])
-        .arg_content_file(path).map_err(|e|e.to_string())?
-        .timeout(Duration::from_secs(3))
-        .max_output_bytes(64 * 1024)
-        .run()
-        .map_err(|e| format!("Cannot inspect video; FFprobe is required: {e}"))?;
+    let probe = little_clip_core::media_backend::probe_request(
+        little_clip_core::media_backend::VIDEO_FORMATS,
+    )
+    .arg_content_file(path)
+    .map_err(|e| e.to_string())?
+    .timeout(Duration::from_secs(3))
+    .max_output_bytes(64 * 1024)
+    .run()
+    .map_err(|e| format!("Cannot inspect video: {e}"))?;
     if !probe.status.success() || probe.stdout_truncated {
         return Err("Cannot inspect video. Check the file or open externally.".into());
     }

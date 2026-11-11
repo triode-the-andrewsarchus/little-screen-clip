@@ -1,15 +1,11 @@
 //! Guarded seekable sources, with bounded PCM preparation for bridged formats.
 mod ncw;
 use super::AudioMetadata;
-use crate::process::CommandRequest;
 use std::{
     collections::VecDeque,
     fs::File,
     io::{Cursor, Seek, SeekFrom, Write},
-    os::{
-        fd::AsRawFd,
-        unix::fs::{FileExt, MetadataExt},
-    },
+    os::unix::fs::{FileExt, MetadataExt},
     path::Path,
     sync::{
         Arc, Mutex, OnceLock,
@@ -113,6 +109,38 @@ pub fn open_tool_audio_input(
         })
     }
 }
+// Probing and regular-file validation precede the bounded decode loop.
+pub(super) fn format_reader(
+    file: std::fs::File,
+    path: &Path,
+    cancelled: &AtomicBool,
+) -> Result<Box<dyn symphonia::core::formats::FormatReader>, String> {
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("Audio source is not a regular file".into());
+    }
+    use symphonia::core::{
+        formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
+    };
+    let mut hint = Hint::new();
+    if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(extension);
+    }
+    let input = from_file(file, cancelled)?;
+    let format = symphonia::default::get_probe()
+        .format(
+            &hint,
+            MediaSourceStream::new(input.stream, Default::default()),
+            &FormatOptions {
+                enable_gapless: true,
+                ..Default::default()
+            },
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| e.to_string())?
+        .format;
+    Ok(format)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Revision {
     device: u64,
@@ -252,31 +280,30 @@ fn probe(file: &File, cancelled: &AtomicBool) -> Result<Probe, String> {
     let count = file.read_at(&mut magic, 0).map_err(|e| e.to_string())?;
     let input_args = container_args(&magic[..count]).ok_or("Not an ASF/xWMA Windows Media file")?;
 
-    let path = format!("/proc/self/fd/{}", file.as_raw_fd());
-    let output = CommandRequest::new("ffprobe")
-        .args(input_args)
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "a:0",
-            "-show_entries",
-            "stream=sample_rate,channels:format=duration",
-            "-of",
-            "json",
-        ])
-        .arg_content_file(&path)
-        .map_err(|e| e.to_string())?
-        .timeout(Duration::from_secs(3))
-        .max_output_bytes(64 * 1024)
-        .run_cancellable(cancelled)
-        .map_err(|e| e.to_string())?;
+    let output = crate::media_backend::probe_request(if input_args == ASF_INPUT_ARGS {
+        "asf"
+    } else {
+        "xwma"
+    })
+    .arg_owned_content_file(file.try_clone().map_err(|error| error.to_string())?)
+    .map_err(|e| e.to_string())?
+    .timeout(Duration::from_secs(3))
+    .max_output_bytes(64 * 1024)
+    .run_cancellable(cancelled)
+    .map_err(|e| e.to_string())?;
     if !output.status.success() || output.stdout_truncated {
         return Err("Could not probe the Windows Media audio stream".into());
     }
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
-    let stream = &value["streams"][0];
+    let stream = value["streams"]
+        .as_array()
+        .and_then(|streams| {
+            streams
+                .iter()
+                .find(|stream| stream["codec_type"] == "audio")
+        })
+        .ok_or("No Windows Media audio stream")?;
     let rate = stream["sample_rate"]
         .as_str()
         .and_then(|s| s.parse::<u32>().ok())
@@ -329,32 +356,17 @@ pub(super) fn read_prepared_audio_metadata(
 }
 fn prepare(file: &File, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
     let info = probe(file, cancelled)?;
-    let path = format!("/proc/self/fd/{}", file.as_raw_fd());
-    let output = CommandRequest::new("ffmpeg")
-        .args(info.input_args)
-        .args(["-v", "error", "-nostdin", "-xerror", "-threads", "1", "-i"])
-        .arg_content_file(&path)
-        .map_err(|e| e.to_string())?
-        .args([
-            "-map",
-            "0:a:0",
-            "-vn",
-            "-sn",
-            "-dn",
-            "-acodec",
-            "pcm_f32le",
-            "-ar",
-            &info.rate.to_string(),
-            "-ac",
-            &info.channels.to_string(),
-            "-f",
-            "f32le",
-            "pipe:1",
-        ])
-        .timeout(Duration::from_secs(30))
-        .max_output_bytes(MAX_PCM)
-        .run_cancellable(cancelled)
-        .map_err(|e| e.to_string())?;
+    let output = crate::media_backend::decode_audio_request(if info.input_args == ASF_INPUT_ARGS {
+        "asf"
+    } else {
+        "xwma"
+    })
+    .arg_owned_content_file(file.try_clone().map_err(|error| error.to_string())?)
+    .map_err(|error| error.to_string())?
+    .timeout(Duration::from_secs(30))
+    .max_output_bytes(MAX_PCM)
+    .run_cancellable(cancelled)
+    .map_err(|e| e.to_string())?;
     if output.stdout_truncated {
         return Err("Decoded audio exceeds the 256 MiB source budget".into());
     }

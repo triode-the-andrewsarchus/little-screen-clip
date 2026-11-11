@@ -116,6 +116,13 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 - Host music checks pass: three tests passed, one manual benchmark ignored.
   Five worker tests pass, including probing from an inherited handle at EOF and
   direct compressed-audio decoding into interleaved float PCM.
+- Switched ASF/XWMA preparation to library decoding. Six core source/cache tests
+  pass (one external-reference test remains explicitly ignored). All four bundled
+  mono/stereo WMA/XWMA fixtures produce sample-for-sample identical float PCM to
+  the former CLI path. The search audio-window contract test also passes.
+- Added executable-level descriptor and secondary-open tests; all seven worker
+  unit/integration checks pass. Workspace tests now build the actual helper
+  binary as part of the integration-test artifact graph.
 - Initial architecture comparison: duplicate groups remain 1515, maximum CCN
   remains 195 and cycle count remains 16. The reported regression attributes
   existing clones to the two-line module export addition and identifies the

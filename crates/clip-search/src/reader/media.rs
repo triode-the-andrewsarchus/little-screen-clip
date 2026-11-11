@@ -14,10 +14,13 @@ pub(super) fn command(program: &str, demuxers: &str) -> CommandRequest {
         .timeout(Duration::from_secs(30))
 }
 pub(super) fn probe(path: &Path, demuxers: &str) -> Result<Value, String> {
-    let output = command("ffprobe", demuxers)
-        .args(["-v", "error", "-show_entries", "format=duration,start_time:stream=index,codec_type,duration,start_time,width,height,avg_frame_rate,r_frame_rate:stream_disposition=attached_pic,default:stream_tags=DURATION", "-of", "json"])
-        .arg_content_file(path).map_err(|e| e.to_string())?
-        .max_output_bytes(64 * 1024).run().map_err(|e| e.to_string())?;
+    let output = little_clip_core::media_backend::probe_request(demuxers)
+        .timeout(Duration::from_secs(30))
+        .arg_content_file(path)
+        .map_err(|e| e.to_string())?
+        .max_output_bytes(64 * 1024)
+        .run()
+        .map_err(|e| e.to_string())?;
     if !output.status.success() || output.stdout_truncated {
         return Err("Media metadata unavailable or unsupported container".into());
     }
