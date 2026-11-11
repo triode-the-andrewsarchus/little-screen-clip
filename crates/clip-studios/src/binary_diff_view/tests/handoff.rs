@@ -45,6 +45,27 @@ fn binary_handoff_stages_exact_left_and_right_bytes_as_bin_files() {
 }
 
 #[test]
+fn binary_handoff_failed_install_preserves_existing_files_and_removes_staging() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("input.bin");
+    stage_binary_handoff_at(b"original", "lhs", path.clone()).unwrap();
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(stage_binary_handoff_at(b"replacement", "rhs", path.clone()).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"original");
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    let alias = directory.path().join("alias.bin");
+    std::os::unix::fs::symlink(&path, &alias).unwrap();
+    assert!(stage_binary_handoff_at(b"replacement", "rhs", alias.clone()).is_err());
+    assert!(alias.is_symlink());
+    assert_eq!(std::fs::read(&path).unwrap(), b"original");
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+}
+
+#[test]
 fn binary_handoff_write_failures_skip_external_tool_lookup_and_spawn() {
     use std::cell::Cell;
 

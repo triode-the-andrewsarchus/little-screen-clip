@@ -48,8 +48,19 @@ pub(super) fn stage_binary_handoff_at(
     side: &str,
     path: std::path::PathBuf,
 ) -> Result<std::path::PathBuf, String> {
-    std::fs::write(&path, bytes)
-        .map_err(|error| format!("Failed to write {side} temp file: {error}"))?;
+    use std::io::Write;
+    let write = || -> std::io::Result<()> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("Missing staging directory"))?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        file.write_all(bytes)?;
+        // A failed write or install drops the private temporary file. Existing
+        // paths, including symlinks, cannot be overwritten by this handoff.
+        file.persist_noclobber(&path).map_err(|error| error.error)?;
+        Ok(())
+    };
+    write().map_err(|error| format!("Failed to write {side} temp file: {error}"))?;
     Ok(path)
 }
 

@@ -79,12 +79,16 @@ impl DiffHandoffTarget {
                     }
                     _ => unreachable!(),
                 };
-                let path = std::env::temp_dir().join(format!(
-                    "clip_diff_{side}_{}.{}",
-                    uuid::Uuid::new_v4().simple(),
-                    ext
-                ));
-                std::fs::write(&path, bytes)
+                use std::io::Write;
+                let stage = || -> std::io::Result<std::path::PathBuf> {
+                    let mut file = tempfile::Builder::new()
+                        .prefix(&format!("clip_diff_{side}_"))
+                        .suffix(&format!(".{ext}"))
+                        .tempfile()?;
+                    file.write_all(bytes)?;
+                    file.into_temp_path().keep().map_err(|error| error.error)
+                };
+                let path = stage()
                     .map_err(|error| format!("Failed to stage diff {side} file: {error}"))?;
                 Ok(StagedHandoffPath {
                     path,
