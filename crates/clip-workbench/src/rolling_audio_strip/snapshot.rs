@@ -1,7 +1,7 @@
 //! Frozen waveform data and its identity come from the same guarded file handle.
 use super::*;
 use little_clip_core::file_source::ReadCheck;
-use std::{fs::File, io::BufReader};
+use std::io::BufReader;
 
 // Bound retained mono PCM and the encoded input independently. At 48 kHz this
 // allows over twenty minutes, well beyond the default thirty-second capture.
@@ -10,6 +10,7 @@ const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
 pub(super) struct RollingSnapshot {
     pub path: PathBuf,
     pub source: FileSource,
+    pub lease: Arc<File>,
     pub duration_sec: f32,
     pub sample_rate: u32,
     pub channels: u16,
@@ -24,6 +25,8 @@ pub(super) fn read_snapshot(path: &Path, cancel: &AtomicBool) -> Result<RollingS
         return Err("Rolling snapshot cancelled".into());
     }
     let (file, source) = ReadCheck::default().open(path, None, cancel)?;
+    file.try_lock_shared()
+        .map_err(|error| format!("Could not retain rolling snapshot: {error}"))?;
     let held = file.try_clone().map_err(|error| error.to_string())?;
     let mut reader = pcm16_reader(file)?;
     let spec = reader.spec();
@@ -58,6 +61,7 @@ pub(super) fn read_snapshot(path: &Path, cancel: &AtomicBool) -> Result<RollingS
     Ok(RollingSnapshot {
         path: path.to_owned(),
         source,
+        lease: Arc::new(held),
         duration_sec: mono_samples.len() as f32 / spec.sample_rate as f32,
         sample_rate: spec.sample_rate,
         channels: spec.channels,
@@ -118,6 +122,29 @@ mod tests {
         assert_eq!(snapshot.sample_rate, 8000);
         assert_eq!(snapshot.duration_sec, 2.0 / 8000.0);
         assert!(!snapshot.peaks_lvl0.is_empty());
+    }
+
+    #[test]
+    fn snapshot_lease_blocks_exclusive_cleanup_until_last_consumer_drops_it() {
+        let (_directory, path) = fixture();
+        let snapshot = read_snapshot(&path, &AtomicBool::new(false)).unwrap();
+        let consumer = Arc::clone(&snapshot.lease);
+        let cleanup = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        assert!(matches!(
+            cleanup.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(snapshot);
+        assert!(matches!(
+            cleanup.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(consumer);
+        cleanup.try_lock().unwrap();
     }
 
     #[test]

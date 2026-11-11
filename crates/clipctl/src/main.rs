@@ -93,7 +93,7 @@ enum Commands {
     Unlock,
     /// Check whether the screen display is currently blanked/locked
     IsLocked,
-    /// Capture a snapshot of the rolling system audio buffer
+    /// Capture a temporary WAV snapshot of the rolling system audio buffer
     RollingAudio,
 }
 

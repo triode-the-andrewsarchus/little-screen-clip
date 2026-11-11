@@ -10,6 +10,7 @@ impl WorkbenchApp {
         match action {
             RollingAudioAction::OpenEditor {
                 source,
+                snapshot_lease,
                 duration_sec,
                 selected_region,
             } => {
@@ -28,17 +29,22 @@ impl WorkbenchApp {
                 let task = little_clip_core::jobs::task::Task::start(
                     BackgroundJobs::global(),
                     Duration::from_secs(60),
-                    move |cancel| match selected_region {
-                        Some((start, end)) => RollingAudioStripState::materialize_editor_selection(
-                            &source, start, end, cancel,
-                        ),
-                        None => crate::audio_preview::prepare_audio_slice(
-                            &source,
-                            0.0,
-                            duration_sec,
-                            false,
-                            cancel,
-                        ),
+                    move |cancel| {
+                        let _snapshot_lease = snapshot_lease;
+                        match selected_region {
+                            Some((start, end)) => {
+                                RollingAudioStripState::materialize_editor_selection(
+                                    &source, start, end, cancel,
+                                )
+                            }
+                            None => crate::audio_preview::prepare_audio_slice(
+                                &source,
+                                0.0,
+                                duration_sec,
+                                false,
+                                cancel,
+                            ),
+                        }
                     },
                 )
                 .with_response_deadline(Duration::from_secs(60));

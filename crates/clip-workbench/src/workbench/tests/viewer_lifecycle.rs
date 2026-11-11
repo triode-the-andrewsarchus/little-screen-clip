@@ -226,6 +226,7 @@ fn failed_rolling_selection_action_keeps_the_current_viewer_open() {
     app.apply_rolling_audio_action(
         RollingAudioAction::OpenEditor {
             source,
+            snapshot_lease: None,
             duration_sec: 2.0,
             selected_region: Some((1.0, 2.0)),
         },
@@ -283,6 +284,7 @@ fn rolling_editor_materialization_waits_for_active_viewer_and_preserves_range_ed
     app.apply_rolling_audio_action(
         RollingAudioAction::OpenEditor {
             source: crate::file_source::FileSource::capture(&source).unwrap(),
+            snapshot_lease: None,
             duration_sec: 2.0,
             selected_region: Some((1.25, 0.5)),
         },
@@ -340,6 +342,7 @@ fn cancelling_ready_full_snapshot_handoff_reclaims_only_its_owned_result() {
     app.apply_rolling_audio_action(
         RollingAudioAction::OpenEditor {
             source: crate::file_source::FileSource::capture(&path).unwrap(),
+            snapshot_lease: None,
             duration_sec: 1.0,
             selected_region: None,
         },

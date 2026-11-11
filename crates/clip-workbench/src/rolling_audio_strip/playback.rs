@@ -131,7 +131,9 @@ impl RollingAudioStripState {
         };
         let captured_path = path.clone();
         let captured_source = source.clone();
+        let snapshot_lease = self.snapshot_lease.clone();
         let task = Task::start(jobs, Duration::from_secs(20), move |cancel| {
+            let _snapshot_lease = snapshot_lease;
             let decoder = prepare_source(&captured_path, &captured_source, range, cancel)?;
             // Device discovery and queue initialization also belong off the UI thread.
             let player = player_factory().ok_or("Audio output is unavailable")?;

@@ -23,6 +23,7 @@ mod display_worker;
 mod lock_monitor;
 mod pipeline;
 mod rolling_capture;
+mod rolling_snapshots;
 
 const MAX_IPC_REQUEST_BYTES: usize = 1024 * 1024;
 
@@ -936,14 +937,11 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
             Ok(IpcRequest::GetRollingAudio) => {
                 let rolling_audio = Arc::clone(&ctx.rolling_audio);
                 let res = tokio::task::spawn_blocking(move || {
-                    let snapshot_dir = get_rolling_snapshot_dir();
-                    std::fs::create_dir_all(&snapshot_dir)?;
-                    let snapshot_path =
-                        snapshot_dir.join(format!("snapshot-{}.wav", uuid::Uuid::new_v4()));
                     let guard = rolling_audio.read().map_err(|_| {
                         std::io::Error::other("rolling audio buffer lock was poisoned")
                     })?;
-                    let duration = guard.write_wav(&snapshot_path)?;
+                    let (duration, snapshot_path) =
+                        rolling_snapshots::publish(&get_rolling_snapshot_dir(), &guard)?;
                     Ok::<_, std::io::Error>((
                         duration,
                         guard.sample_rate(),

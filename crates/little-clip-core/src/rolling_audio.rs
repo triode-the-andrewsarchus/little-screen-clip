@@ -169,14 +169,24 @@ impl RollingAudioBuffer {
     /// Writes the current snapshot to a standard 16-bit PCM WAV file at `path`.
     /// Returns the duration of the audio in seconds on success.
     pub fn write_wav(&self, path: &Path) -> Result<f32, std::io::Error> {
-        let samples = self.snapshot_samples();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        let file = File::create(path)?;
-        let mut writer = BufWriter::new(file);
+        self.write_wav_to(File::create(path)?)
+    }
 
+    /// Encodes the current snapshot into an already-owned WAV destination.
+    ///
+    /// Returns the duration in seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the WAV header cannot represent the sample size
+    /// or writing or flushing the destination fails.
+    pub fn write_wav_to(&self, destination: impl Write) -> io::Result<f32> {
+        let samples = self.snapshot_samples();
+        let mut writer = BufWriter::new(destination);
         let channels = self.channels;
         let sample_rate = self.sample_rate;
         let bits_per_sample: u16 = 16;

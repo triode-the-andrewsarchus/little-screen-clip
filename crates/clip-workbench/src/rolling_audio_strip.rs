@@ -13,7 +13,9 @@ use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::palette::AppPalette;
 use little_clip_core::slot::HandSide;
 use rodio::Player;
+use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 #[cfg(test)]
@@ -41,6 +43,7 @@ pub struct RollingAudioStripState {
     pub error_msg: Option<String>,
     snapshot_job: Option<Task<Result<RollingSnapshot, String>>>,
     source: Option<FileSource>,
+    snapshot_lease: Option<Arc<File>>,
     playback_job: Option<PlaybackLoad>,
     copy_job: Option<crate::desktop_ipc::PendingRequest>,
 
@@ -63,10 +66,11 @@ pub struct RollingAudioStripState {
 }
 
 /// Actions requested by the rolling strip that must be applied by the workbench host.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum RollingAudioAction {
     OpenEditor {
         source: FileSource,
+        snapshot_lease: Option<Arc<File>>,
         duration_sec: f32,
         selected_region: Option<(f32, f32)>,
     },
@@ -121,6 +125,7 @@ impl RollingAudioStripState {
             error_msg: None,
             snapshot_job: None,
             source: None,
+            snapshot_lease: None,
             playback_job: None,
             copy_job: None,
             selected_region: None,
@@ -211,6 +216,7 @@ impl RollingAudioStripState {
                 self.channels = snapshot.channels;
                 self.path = Some(snapshot.path);
                 self.source = Some(snapshot.source);
+                self.snapshot_lease = Some(snapshot.lease);
                 self.mono_samples = snapshot.mono_samples;
                 self.peaks_lvl0 = snapshot.peaks_lvl0;
                 self.peaks_lvl1 = snapshot.peaks_lvl1;
@@ -259,7 +265,9 @@ impl RollingAudioStripState {
             );
             return false;
         };
+        let snapshot_lease = self.snapshot_lease.clone();
         self.copy_job = Some(crate::desktop_ipc::PendingRequest::start(jobs, move || {
+            let _snapshot_lease = snapshot_lease;
             let plan = crate::audio_preview::audio_slice_copy_plan(
                 &path,
                 start,
@@ -674,6 +682,7 @@ impl RollingAudioStripState {
                 if let Some(source) = &self.source {
                     *host_action = Some(RollingAudioAction::OpenEditor {
                         source: source.clone(),
+                        snapshot_lease: self.snapshot_lease.clone(),
                         duration_sec: self.duration_sec,
                         selected_region: self.selected_region,
                     });
@@ -977,14 +986,18 @@ mod tests {
             }],
         );
 
-        assert_eq!(
-            action,
-            Some(RollingAudioAction::OpenEditor {
-                source: FileSource::capture(&source).unwrap(),
-                duration_sec: 2.0,
-                selected_region: Some((0.25, 1.25)),
-            })
-        );
+        let Some(RollingAudioAction::OpenEditor {
+            source: captured,
+            duration_sec,
+            selected_region,
+            ..
+        }) = action
+        else {
+            panic!("expected a rolling editor handoff");
+        };
+        assert_eq!(captured, FileSource::capture(&source).unwrap());
+        assert_eq!(duration_sec, 2.0);
+        assert_eq!(selected_region, Some((0.25, 1.25)));
     }
 
     #[test]
@@ -1101,6 +1114,7 @@ mod tests {
             Ok(RollingSnapshot {
                 path: path.clone(),
                 source: source.clone(),
+                lease: Arc::new(File::open(&path).unwrap()),
                 duration_sec: 0.5,
                 sample_rate: 48000,
                 channels: 1,
