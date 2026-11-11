@@ -98,49 +98,24 @@ pub fn is_animated_image_path(path: &Path) -> bool {
     matches!(ext.as_deref(), Some("gif" | "webp" | "apng"))
 }
 
-/// Reads video width, height, and duration (in milliseconds) via ffprobe
+/// Reads non-cover video dimensions and duration through the FFmpeg library worker.
 pub fn read_video_metadata(path: &Path) -> Option<(u32, u32, u64)> {
-    let output = crate::process::CommandRequest::new("ffprobe")
-        .arg("-v")
-        .arg("error")
-        .arg("-show_entries")
-        .arg("stream=width,height")
-        .arg("-show_entries")
-        .arg("format=duration")
-        .arg("-of")
-        .arg("default=noprint_wrappers=1")
+    let output = crate::media_backend::probe_request(crate::media_backend::VIDEO_FORMATS)
         .arg_content_file(path)
         .ok()?
         .run()
         .ok()?;
-
-    if !output.status.success() {
+    if !output.status.success() || output.stdout_truncated {
         return None;
     }
-
-    let text = output.stdout_lossy();
-    let mut width = 0u32;
-    let mut height = 0u32;
-    let mut duration_ms = 0u64;
-
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(w) = line.strip_prefix("width=") {
-            width = w.parse().unwrap_or(0);
-        } else if let Some(h) = line.strip_prefix("height=") {
-            height = h.parse().unwrap_or(0);
-        } else if let Some(d) = line.strip_prefix("duration=") {
-            if let Ok(sec) = d.parse::<f64>() {
-                duration_ms = (sec * 1000.0) as u64;
-            }
-        }
-    }
-
-    if width > 0 && height > 0 {
-        Some((width, height, duration_ms))
-    } else {
-        None
-    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let (_, stream) = crate::media_stream::selected_video_stream(&value).ok()?;
+    let width = u32::try_from(stream["width"].as_u64()?).ok()?;
+    let height = u32::try_from(stream["height"].as_u64()?).ok()?;
+    let duration_ms = crate::media_stream::number(&value["format"]["duration"])
+        .filter(|duration| *duration >= 0.0)
+        .map_or(0, |duration| (duration * 1000.0) as u64);
+    (width > 0 && height > 0).then_some((width, height, duration_ms))
 }
 
 /// Decodes animated GIF or animated WebP from file into an AnimationThumbnail
@@ -506,6 +481,13 @@ mod tests {
         assert!(is_video_path(Path::new("broadcast.MXF")));
         assert!(!is_video_path(Path::new("song.mp3")));
         assert!(!is_video_path(Path::new("photo.png")));
+    }
+
+    #[test]
+    fn video_metadata_uses_the_video_dimensions_instead_of_attached_artwork() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video/with-cover.mp4");
+        assert_eq!(read_video_metadata(&path), Some((160, 90, 200)));
     }
 
     #[test]

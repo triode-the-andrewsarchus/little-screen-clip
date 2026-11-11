@@ -88,6 +88,7 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 - [x] Native music artwork extraction and its targeted core tests.
 - [x] Separate FFmpeg 9 library worker, initial probing and lossy-depth tests.
 - [x] Rewind inherited inputs before probing, with an EOF-position regression test.
+- [x] Keep video dimensions separate from attached cover artwork; regression fixture passes.
 - [ ] Migrate and verify production metadata callers (music, video, format bridge,
   search and animation metadata).
 - [ ] Native audio processing and remaining library decode/filter/export jobs.
@@ -123,6 +124,9 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 - Added executable-level descriptor and secondary-open tests; all seven worker
   unit/integration checks pass. Workspace tests now build the actual helper
   binary as part of the integration-test artifact graph.
+- Migrated animation metadata to the worker and shared non-cover stream selector.
+  A generated MP4 containing a 160 × 90 video and 32 × 32 cover verifies the
+  original last-stream overwrite bug is fixed. Its core regression test passes.
 - Initial architecture comparison: duplicate groups remain 1515, maximum CCN
   remains 195 and cycle count remains 16. The reported regression attributes
   existing clones to the two-line module export addition and identifies the
