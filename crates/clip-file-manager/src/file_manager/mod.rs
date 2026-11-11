@@ -46,6 +46,7 @@ mod system_route;
 mod text_editor;
 mod text_strip;
 mod transfers;
+mod video_playback;
 mod video_timeline;
 mod viewers;
 pub use app::run;

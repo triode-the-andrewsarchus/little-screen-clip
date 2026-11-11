@@ -535,19 +535,30 @@ mod format_tests {
                 assert_eq!(metadata.codec, "mpeg2video");
                 assert!(metadata.audio_description.contains("PCM S16LE"));
                 assert_eq!(metadata.frame_interval_ms, 40);
-                let mut decoder =
-                    super::super::decoder::Decoder::open(&path, &metadata, 96).unwrap();
-                let frame = decoder.frame(500, &AtomicBool::new(false)).unwrap();
-                assert!(frame.time_ms < metadata.duration_ms);
-                assert!(frame.image.width <= 96 && frame.image.height <= 64);
-                assert!(
-                    frame
-                        .image
-                        .premultiplied_rgba
-                        .chunks_exact(4)
-                        .any(|p| p[0] != p[1])
-                );
             }
+            let ctx = egui::Context::default();
+            let mut player = crate::file_manager::video_playback::Session::new(
+                &metadata,
+                500,
+                true,
+                96,
+                ctx.clone(),
+                Default::default(),
+            );
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while player.texture.is_none() {
+                player.poll(&ctx);
+                assert!(player.error.is_none(), "{extension}: {:?}", player.error);
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "{extension}: playback timed out"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(player.frame_position_ms.unwrap() < metadata.duration_ms);
+            let size = player.texture.as_ref().unwrap().size();
+            assert!(size[0] <= 96 && size[1] <= 54);
+            drop(player);
             assert!(media::video_preview(&path).is_some());
             let (inspected, _) = mpsc::sync_channel(1);
             let (progress, _) = mpsc::sync_channel(1);

@@ -1,4 +1,4 @@
-//! Timelens rows use ordinary file selection/actions and a precise hover frame.
+//! Timelens rows use ordinary file selection/actions and a playing hover preview.
 use super::super::{filesystem::Entry, video_timeline::Ready};
 use super::*;
 use clip_ui::buttons::ButtonRole;
@@ -6,7 +6,7 @@ use clip_ui::buttons::ButtonRole;
 impl FileManager {
     pub(super) fn video_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
         ui.horizontal_wrapped(|ui| {
-            ui.label("Hover to preview a frame; click the timeline to play there. Ctrl/Shift-click selects files.");
+            ui.label("Hover to play a muted preview; click the timeline to play there. Ctrl/Shift-click selects files.");
             if ui.add(ButtonRole::Secondary.button("Refresh previews", palette)).clicked() {
                 self.video_previews.clear();
                 self.previews.retain(&Default::default());
@@ -144,34 +144,45 @@ pub(super) fn preview_row(
     let metadata = ready
         .and_then(|ready| ready.as_ref().ok())
         .map(|ready| ready.metadata.clone());
-    video_hover(ui, entry, timeline, metadata, video_previews, colors)
+    video_hover(
+        ui,
+        entry,
+        thumbnail,
+        timeline,
+        metadata,
+        video_previews,
+        colors,
+    )
 }
 
 fn video_hover(
     ui: &mut Ui,
     entry: &Entry,
+    thumbnail: Option<Rect>,
     timeline: Option<Rect>,
     metadata: Option<std::sync::Arc<super::super::media::VideoMetadata>>,
     previews: &mut super::super::video_timeline::Previews,
     colors: WorkbenchColors,
 ) -> Option<u64> {
-    let timeline = timeline?;
     let metadata = metadata?;
-    if !super::preview_hovered(ui, timeline) {
-        return None;
-    }
     let point = ui.ctx().pointer_hover_pos()?;
-    let fraction = ((point.x - timeline.left()) / timeline.width()).clamp(0.0, 1.0);
-    let time = (fraction as f64 * metadata.duration_ms as f64).round() as u64;
-    let time = time.min(metadata.duration_ms.saturating_sub(1));
+    let time = if thumbnail.is_some_and(|rect| super::preview_hovered(ui, rect)) {
+        0
+    } else if let Some(timeline) = timeline.filter(|rect| super::preview_hovered(ui, *rect)) {
+        let fraction = ((point.x - timeline.left()) / timeline.width()).clamp(0.0, 1.0);
+        ui.painter().line_segment(
+            [
+                pos2(point.x, timeline.top()),
+                pos2(point.x, timeline.bottom()),
+            ],
+            egui::Stroke::new(1.0_f32, colors.text_primary),
+        );
+        ((fraction as f64 * metadata.duration_ms as f64).round() as u64)
+            .min(metadata.duration_ms.saturating_sub(1))
+    } else {
+        return None;
+    };
     previews.hover(ui.ctx(), entry, metadata, time);
-    ui.painter().line_segment(
-        [
-            pos2(point.x, timeline.top()),
-            pos2(point.x, timeline.bottom()),
-        ],
-        egui::Stroke::new(1.0_f32, colors.text_primary),
-    );
     // Scrubbing must bypass the ordinary tooltip's stationary-pointer delay.
     egui::show_tooltip_at_pointer(
         ui.ctx(),
@@ -250,7 +261,7 @@ fn video_card(
                     timeline,
                     4.0,
                     timeline.width() - 8.0,
-                    "Loading timeline — hover to scrub now",
+                    "Loading timeline — hover to play now",
                     colors.text_secondary,
                 );
             }

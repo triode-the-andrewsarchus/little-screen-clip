@@ -1,8 +1,6 @@
-//! Visible-only timelines and one coalesced hover frame, on separate bounded queues.
+//! Visible-only timelines and one owned, muted hover player.
 mod backend;
-mod decoder;
 mod dispatch;
-mod scrub;
 use super::{filesystem::Entry, media::VideoMetadata};
 use egui::{Context, TextureHandle};
 use little_clip_core::{BackgroundJobs, ImageThumbnail, JobError};
@@ -16,7 +14,6 @@ use std::{
 use super::preview_job::Task;
 static TIMELINES: LazyLock<BackgroundJobs> =
     LazyLock::new(|| BackgroundJobs::new(*dispatch::FILE_LIMIT, 4));
-static FRAMES: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(1, 2));
 
 pub(super) struct Ready {
     pub metadata: Arc<VideoMetadata>,
@@ -50,9 +47,6 @@ impl FrameKey {
 }
 struct Hover {
     key: FrameKey,
-    frame_time: Option<u64>,
-    texture: Option<TextureHandle>,
-    error: Option<String>,
 }
 #[derive(Default)]
 pub(super) struct Previews {
@@ -60,7 +54,7 @@ pub(super) struct Previews {
     ready: BTreeMap<PathBuf, Cached>,
     pending: BTreeMap<PathBuf, Pending>,
     hover: Option<Hover>,
-    frame: Option<scrub::Session>,
+    frame: Option<super::video_playback::Session>,
     visible_jobs: usize,
 }
 fn texture(ctx: &Context, name: String, image: ImageThumbnail) -> TextureHandle {
@@ -250,76 +244,51 @@ impl Previews {
             path: entry.path.clone(),
             revision: entry.revision,
             time_ms: time_ms / 50 * 50,
-            width: (480.0 * ctx.pixels_per_point().clamp(1.0, 2.0)).ceil() as u32,
+            width: (320.0 * ctx.pixels_per_point().clamp(1.0, 2.0)).ceil() as u32,
         };
         let same = self.hover.as_ref().is_some_and(|h| h.key.same_file(&key));
         if !same {
             self.clear_hover();
-            self.hover = Some(Hover {
-                key: key.clone(),
-                frame_time: None,
-                texture: None,
-                error: None,
-            });
-        } else {
-            self.hover.as_mut().unwrap().key = key.clone();
-        }
-        if self.hover.as_ref().unwrap().error.is_some() {
-            return;
-        }
-        if self.frame.is_none() {
-            self.frame = Some(scrub::Session::new(
-                key.clone(),
-                metadata,
+            self.frame = Some(super::video_playback::Session::new(
+                &metadata,
+                key.time_ms,
+                true,
+                key.width,
                 ctx.clone(),
                 self.context.clone(),
             ));
+        } else if self
+            .hover
+            .as_ref()
+            .is_some_and(|hover| hover.key.time_ms != key.time_ms)
+            && let Some(player) = &mut self.frame
+        {
+            player.seek(key.time_ms);
         }
-        self.frame.as_mut().unwrap().request(key);
+        self.hover = Some(Hover { key });
     }
     fn poll_frame(&mut self, ctx: &Context) {
-        let Some(session) = &mut self.frame else {
-            return;
-        };
-        let completion = session.poll();
-        if session.finished() {
-            self.frame = None;
+        if let Some(player) = &mut self.frame {
+            player.poll(ctx);
         }
-        let Some(completion) = completion else {
-            return;
-        };
-        let Some(hover) = &mut self.hover else {
-            return;
-        };
-        if !hover.key.same_file(&completion.key) {
-            return;
-        }
-        match completion.result {
-            Ok(frame) => {
-                hover.frame_time = Some(frame.time_ms);
-                hover.texture = Some(texture(ctx, "video_hover_frame".into(), frame.image));
-                hover.error = None;
-            }
-            Err(error) => hover.error = Some(error),
-        }
-        ctx.request_repaint();
     }
     pub fn hover_ui(&self, ui: &mut egui::Ui) {
-        if let Some(hover) = &self.hover {
-            ui.label(format!("{:.3} s", hover.key.time_ms as f64 / 1000.0));
-            if let Some(time) = hover.frame_time {
-                ui.label(format!("Keyframe: {:.3} s", time as f64 / 1000.0));
-            }
-            if let Some(texture) = &hover.texture {
-                ui.image((
-                    texture.id(),
-                    texture.size_vec2() / ui.ctx().pixels_per_point(),
-                ));
-            } else if let Some(error) = &hover.error {
-                ui.label(error);
-            } else {
+        if let (Some(hover), Some(player)) = (&self.hover, &self.frame) {
+            ui.label(format!(
+                "From {:.2} s · {:.2} s",
+                hover.key.time_ms as f64 / 1000.0,
+                player.frame_position_ms.unwrap_or(player.position_ms) as f64 / 1000.0
+            ));
+            if let Some(texture) = &player.texture {
+                let image = texture.size_vec2();
+                let scale = (320.0 / image.x).min(240.0 / image.y).min(1.0);
+                ui.image((texture.id(), image * scale));
+            } else if player.error.is_none() {
                 ui.spinner();
-                ui.label("Loading frame…");
+                ui.label("Opening preview…");
+            }
+            if let Some(error) = &player.error {
+                ui.label(error);
             }
         }
     }

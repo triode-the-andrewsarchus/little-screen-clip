@@ -772,7 +772,7 @@ impl EntryPreviews {
                     .icon
                     .paint(ui.painter(), rect, ui.visuals().text_color());
             }
-            if !gallery && !super::ui::popup_open(ui.ctx()) {
+            if !gallery && !entry.is_video() && !super::ui::popup_open(ui.ctx()) {
                 ui.interact(
                     rect,
                     egui::Id::new(("listing_preview", id)),

@@ -1,128 +1,62 @@
-//! An owned FFplay window provides synchronized playback without retaining decoded frames in Files.
+//! Embedded video presentation; synchronized audio and decoding stay in the owned worker.
+use super::super::{
+    media::{VideoMetadata as Prepared, inspect_video},
+    video_playback::Session,
+};
 use crate::file_source::FileSource;
 use clip_ui::buttons::ButtonRole;
 use egui::Ui;
-use std::{
-    path::PathBuf,
-    process::{Child, Stdio},
-    time::Duration,
-};
-
-use super::super::media::{VideoMetadata as Prepared, inspect_video};
+use std::path::PathBuf;
 
 pub(super) fn prepare(path: &std::path::Path) -> Result<Prepared, String> {
-    let prepared = inspect_video(path)?;
-    let version = little_clip_core::process::CommandRequest::new("ffplay")
-        .arg("-version")
-        .timeout(Duration::from_secs(3))
-        .max_output_bytes(4096)
-        .run()
-        .map_err(|e| format!("Video playback requires FFplay: {e}"))?;
-    if !version.status.success() {
-        return Err("FFplay is unavailable; install the FFmpeg player package.".into());
-    }
-    if FileSource::capture(path)? != prepared.source {
-        return Err("Video changed while opening; open it again.".into());
-    }
-    Ok(prepared)
+    inspect_video(path)
 }
 
 pub(super) struct Video {
     path: PathBuf,
     prepared: Prepared,
-    child: Option<Child>,
-    start_seconds: f64,
-    status: String,
+    player: Option<Session>,
+    start_ms: u64,
+    seek_preview: Option<f64>,
+    fullscreen: bool,
+    stopped: bool,
+    context: Option<egui::Context>,
 }
 impl Video {
     pub fn new(path: PathBuf, prepared: Prepared, start_seconds: f64) -> Self {
-        let start_seconds = if start_seconds.is_finite() {
-            start_seconds.clamp(
-                0.0,
+        let start_ms = if start_seconds.is_finite() {
+            (start_seconds.max(0.0) * 1000.0) as u64
+        } else {
+            0
+        };
+        Self {
+            path,
+            start_ms: start_ms.min(
                 prepared
                     .duration_ms
-                    .saturating_sub(prepared.frame_interval_ms) as f64
-                    / 1000.0,
-            )
-        } else {
-            0.0
-        };
-        let mut video = Self {
-            path,
+                    .saturating_sub(prepared.frame_interval_ms),
+            ),
             prepared,
-            child: None,
-            start_seconds,
-            status: String::new(),
-        };
-        video.start();
-        video
-    }
-    fn start(&mut self) {
-        self.stop();
-        let result = self.spawn();
-        match result {
-            Ok(child) => {
-                self.child = Some(child);
-                self.status = "Playing in the Files video window".into();
-            }
-            Err(error) => self.status = error,
+            player: None,
+            seek_preview: None,
+            fullscreen: false,
+            stopped: false,
+            context: None,
         }
-    }
-    fn spawn(&self) -> Result<Child, String> {
-        if FileSource::capture(&self.path)? != self.prepared.source {
-            return Err("Video source changed. Return to the folder and open it again.".into());
-        }
-        let mut command = little_clip_core::process::CommandRequest::new("ffplay")
-            .args([
-                "-loglevel",
-                "error",
-                "-nostats",
-                "-autoexit",
-                "-framedrop",
-                "-noinfbuf",
-                "-threads",
-                "2",
-                "-filter_threads",
-                "1",
-                "-max_alloc",
-                "268435456",
-                "-x",
-                "960",
-                "-y",
-                "540",
-                "-window_title",
-                "Files video",
-            ])
-            .arg("-vst")
-            .arg(format!("v:{}", self.prepared.stream))
-            .arg("-ss")
-            .arg(format!("{:.3}", self.start_seconds))
-            .arg("-i")
-            .arg_content_file(&self.path)
-            .map_err(|error| error.to_string())?
-            .build_command();
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        little_clip_core::process::guard_parent(&mut command);
-        command
-            .spawn()
-            .map_err(|e| format!("Cannot start video playback: {e}"))
     }
     pub(super) fn file_source(&self) -> FileSource {
         self.prepared.source.clone()
     }
     pub(super) fn relocate_file(&mut self, path: PathBuf, source: FileSource) {
         self.path = path;
-        self.prepared.source = source;
+        self.prepared.source = source.clone();
+        if let Some(player) = &self.player {
+            player.relocate(source);
+        }
     }
     pub(super) fn stop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        self.status = "Video stopped".into();
+        self.player = None;
+        self.stopped = true;
     }
     pub fn ui(
         &mut self,
@@ -130,112 +64,170 @@ impl Video {
         close: &mut bool,
         palette: &little_clip_core::palette::AppPalette,
     ) {
-        if let Some(child) = &mut self.child {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    self.child = None;
-                    self.status = if status.success() {
-                        "Video finished or closed".into()
-                    } else {
-                        format!(
-                            "Video playback failed ({status}). Check codec support or open externally."
-                        )
-                    };
-                }
-                Err(error) => {
-                    self.stop();
-                    self.status = format!("Cannot monitor video playback: {error}");
-                }
-                Ok(None) => ui.ctx().request_repaint_after(Duration::from_millis(100)),
-            }
-        }
-        let mut shell = crate::shell::StudioShell::new(
-            "Video playback",
-            crate::icons::Icon::Film,
-            palette,
-            close,
-        );
-        shell.render_header(ui, |_| {});
-        ui.label(format!(
-            "{}×{} · {:.1} seconds",
-            self.prepared.dimensions.0,
-            self.prepared.dimensions.1,
-            self.prepared.duration_ms as f64 / 1000.0
-        ));
-        ui.label(&self.status);
-        ui.label("In the video window: Space pauses/resumes, Left/Right seek 10 seconds, Up/Down seek one minute, right-click seeks to a point, F toggles fullscreen, Q closes playback.");
-        ui.label("Music stays paused while this video session is open. Returning to the folder closes the video window.");
-        ui.horizontal(|ui| {
+        self.context = Some(ui.ctx().clone());
+        if self.stopped {
+            let mut shell =
+                crate::shell::StudioShell::new("Video", crate::icons::Icon::Film, palette, close);
+            shell.render_header(ui, |_| {});
             if ui
-                .add(ButtonRole::Secondary.button("Replay video", palette))
+                .add(ButtonRole::Primary.button("Play video", palette))
                 .clicked()
             {
-                self.start();
+                self.stopped = false;
             }
+            *close |= ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            return;
+        }
+        if self.player.is_none() {
+            self.player = Some(Session::new(
+                &self.prepared,
+                self.start_ms,
+                false,
+                1280,
+                ui.ctx().clone(),
+                Default::default(),
+            ));
+        }
+        let player = self.player.as_mut().unwrap();
+        player.poll(ui.ctx());
+        let mut shell =
+            crate::shell::StudioShell::new("Video", crate::icons::Icon::Film, palette, close);
+        shell.render_header(ui, |_| {});
+        if ui.is_enabled() && !ui.ctx().wants_keyboard_input() {
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
+                player.set_playing(!player.playing());
+            }
+            for (key, offset) in [
+                (egui::Key::ArrowLeft, -5000_i64),
+                (egui::Key::ArrowRight, 5000),
+            ] {
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
+                    player.seek(player.position_ms.saturating_add_signed(offset));
+                }
+            }
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F)) {
+                self.fullscreen = !self.fullscreen;
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+            }
+        }
+        let size = egui::vec2(
+            ui.available_width().max(1.0),
+            (ui.available_height() - 62.0).max(1.0),
+        );
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+        if let Some(texture) = &player.texture {
+            let image = texture.size_vec2();
+            let scale = (rect.width() / image.x).min(rect.height() / image.y);
+            ui.painter().image(
+                texture.id(),
+                egui::Rect::from_center_size(rect.center(), image * scale),
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        } else if player.error.is_none() {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Opening video…",
+                egui::FontId::proportional(16.0),
+                egui::Color32::LIGHT_GRAY,
+            );
+        }
+        if response.double_clicked() {
+            self.fullscreen = !self.fullscreen;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+        } else if response.clicked() {
+            player.set_playing(!player.playing());
+        }
+        ui.horizontal(|ui| {
             if ui
-                .add_enabled(
-                    self.child.is_some(),
-                    ButtonRole::Secondary.button("Stop video", palette),
+                .add(
+                    ButtonRole::Primary
+                        .button(if player.playing() { "Pause" } else { "Play" }, palette),
                 )
                 .clicked()
             {
-                self.stop();
-                self.status = "Video stopped".into();
+                player.set_playing(!player.playing());
+            }
+            if ui
+                .add(ButtonRole::Secondary.button("Stop", palette))
+                .clicked()
+            {
+                player.set_playing(false);
+                player.seek(0);
+            }
+            let mut seconds = self
+                .seek_preview
+                .unwrap_or(player.position_ms as f64 / 1000.0);
+            let duration = player.duration_ms as f64 / 1000.0;
+            let slider = ui.add_sized(
+                [(ui.available_width() - 190.0).max(40.0), 22.0],
+                egui::Slider::new(&mut seconds, 0.0..=duration.max(0.001)).show_value(false),
+            );
+            if slider.dragged() {
+                self.seek_preview = Some(seconds);
+            }
+            if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
+                player.seek((seconds * 1000.0) as u64);
+                self.seek_preview = None;
+            }
+            ui.label(format!(
+                "{} / {}",
+                clock((seconds * 1000.0) as u64),
+                clock(player.duration_ms)
+            ));
+            let mut volume = player.volume();
+            if ui
+                .add_sized(
+                    [72.0, 22.0],
+                    egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false),
+                )
+                .on_hover_text("Volume")
+                .changed()
+            {
+                player.set_volume(volume);
             }
         });
-        *close |= ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        if let Some(error) = &player.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        } else {
+            ui.small(format!(
+                "{} · Space: play/pause · ←/→: seek · F: fullscreen",
+                self.prepared.description
+            ));
+        }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            if self.fullscreen {
+                self.fullscreen = false;
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            } else {
+                *close = true;
+            }
+        }
     }
 }
 impl Drop for Video {
     fn drop(&mut self) {
-        self.stop();
+        if self.fullscreen && let Some(context) = &self.context {
+            context.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::process::Command;
-
-    fn fixture(path: PathBuf, child: Option<Child>) -> Video {
-        Video {
-            prepared: Prepared {
-                source: FileSource::capture(&path).unwrap(),
-                dimensions: (320, 180),
-                duration_ms: 1000,
-                stream: 0,
-                codec: "h264".into(),
-                size_bytes: 0,
-                frame_interval_ms: 40,
-                description: String::new(),
-                audio_description: String::new(),
-            },
-            path,
-            child,
-            start_seconds: 0.0,
-            status: String::new(),
-        }
-    }
-
-    #[test]
-    fn returning_to_folder_terminates_and_reaps_owned_video() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("clip.mp4");
-        std::fs::write(&path, "fixture").unwrap();
-        let child = Command::new("sleep").arg("30").spawn().unwrap();
-        let pid = child.id();
-        let video = fixture(path, Some(child));
-        drop(video);
-        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
-    }
-
-    #[test]
-    fn replay_rejects_changed_source_before_launch() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("clip.mp4");
-        std::fs::write(&path, "original").unwrap();
-        let video = fixture(path.clone(), None);
-        std::fs::write(path, "replacement file").unwrap();
-        assert!(video.spawn().unwrap_err().contains("source changed"));
+fn clock(ms: u64) -> String {
+    let seconds = ms / 1000;
+    if seconds >= 3600 {
+        format!(
+            "{}:{:02}:{:02}",
+            seconds / 3600,
+            seconds / 60 % 60,
+            seconds % 60
+        )
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
     }
 }
