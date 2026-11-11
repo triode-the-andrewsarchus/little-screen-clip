@@ -182,6 +182,7 @@ impl FileManager {
         self.gallery_previews.set_context(context);
         self.video_previews.set_context(context);
         self.gallery_layout.set_context(context);
+        self.gallery_hover.set_context(context);
     }
     pub(in crate::file_manager) fn take_available_open_file(&mut self) -> Option<PathBuf> {
         let path = self.open_file.take()?;

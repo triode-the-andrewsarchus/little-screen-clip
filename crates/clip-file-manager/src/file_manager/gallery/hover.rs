@@ -1,5 +1,8 @@
 //! Dedicated native-resolution hover preview cache for gallery and similarity grid tiles.
-use super::super::shelf::preview::{Previews, Source};
+use super::super::{
+    search::PreviewContext,
+    shelf::preview::{Previews, Source},
+};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,11 +17,18 @@ pub const HOVER_EDGE_STEP: u32 = 128;
 #[derive(Default)]
 pub(in crate::file_manager) struct GalleryHover {
     cache: Previews,
+    context: PreviewContext,
     key: Option<(PathBuf, u32, uuid::Uuid, u64)>,
     unhover_time: Option<std::time::Instant>,
 }
 
 impl GalleryHover {
+    pub fn set_context(&mut self, context: &PreviewContext) {
+        if self.context.replace(context) {
+            self.clear();
+        }
+    }
+
     /// Polls in-flight hover preview loads and uploads completed textures.
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
@@ -82,7 +92,8 @@ impl GalleryHover {
                     revision,
                     edge,
                     orientation: None,
-                },
+                }
+                .checked(path, &self.context),
             );
         }
         self.cache
@@ -96,6 +107,32 @@ impl GalleryHover {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_context_retires_old_hover_and_rejects_unpublished_photo() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("photo.png");
+        image::RgbaImage::new(2, 2).save(&path).unwrap();
+        let mut hover = GalleryHover::default();
+        hover.texture_for(&path, 1, 128, None);
+        let previous = hover.key.as_ref().unwrap().2;
+
+        hover.set_context(&PreviewContext::empty_results());
+        assert!(hover.key.is_none());
+        assert!(hover.cache.needs(previous));
+        hover.texture_for(&path, 1, 128, None);
+        let id = hover.key.as_ref().unwrap().2;
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while hover.cache.get(id).is_none() {
+            hover.poll(&ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let ready = hover.cache.get(id).unwrap();
+        assert!(ready.texture.is_none());
+        assert!(ready.data.detail.contains("outside the published search"));
+    }
 
     #[test]
     fn replacing_hovered_photo_retires_the_old_texture_identity() {
