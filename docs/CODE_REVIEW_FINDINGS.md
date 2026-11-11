@@ -263,11 +263,11 @@ touches the host clipboard or USB display unless explicitly stated.
   In [`crates/clip-workbench/src/onnx_runtime.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/onnx_runtime.rs#L268-L330), `ensure_model_with_url_progress` writes to `models_dir.join(format!("{}.tmp.{}", model_name, std::process::id()))`. Because `std::process::id()` is shared across all threads in the process, two background workers requesting the same model concurrently will clobber the same `.tmp.<pid>` file. In addition, `curl` is spawned via raw `std::process::Command` with `--connect-timeout 15` but no overall transfer timeout or cancellation support, leaving `child` running if the caller times out or drops.
 - [x] **[Bug / `AGENTS.md` Rule Violation] `ImageLoadSource::ItemFile` bypasses `kernel_interface::open_content` and size bounds** *(completed in `29ad75b`)*:
   In [`crates/clip-workbench/src/main.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/main.rs#L510-L515), `ImageLoadSource::ItemFile` calls `std::fs::read(&path)` directly instead of `DecodedImageData::from_path(&path)`.
-- [ ] **[Code Quality / Incomplete Test Constant & Dead Code]**:
+- [x] **[Code Quality / Incomplete Test Constant & Dead Code]**:
   - [x] The shared `clip-ui` enum and `Icon::ALL` now come from the same list. The SVG loader test covers all 108 icons, including the previously omitted audio variants and clefs. All 31 UI unit tests and the doctest passed.
-  - `Icon::Star` is used in the studio footer and gallery rating badge. `Icon::Brush`, `Icon::Pin`, and `Icon::Map` in [`crates/clip-workbench/src/icons.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/icons.rs#L59-L90) are never used outside `icons.rs`.
+  - [x] `Icon::Star` is used in the studio footer and gallery rating badge. Brush, Pin, and Map remain available in the public shared SVG catalog and are validated by its loader test. Their lack of in-tree consumers does not cause a runtime defect.
   - [x] Removed unused `CommonShortcut` variants and their detection branches. The shared dispatcher now detects undo and redo, the only actions its audio editor caller consumes. All 176 audio-preview tests passed.
-  - `PanelState` collapse fields and methods (`left_collapsed`, `right_collapsed`, `bottom_collapsed`, `effective_*`, `toggle_*`) in [`crates/clip-workbench/src/shell/panel.rs`](file:///home/vcarlson/little-screen-clip/crates/clip-workbench/src/shell/panel.rs#L20-L89) are unused outside unit tests (`StudioPanelLayout::with_panel_sizes` ignores them).
+  - [x] Removed unused left and bottom collapse flags and methods. The binary diff studio actively uses the right collapse control, which retains its configured width when reopened. Shell and binary diff tests passed.
 
 ---
 
