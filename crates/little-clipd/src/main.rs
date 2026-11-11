@@ -4,8 +4,7 @@
 //! Wayland clipboard monitoring (`wl-paste`), and IPC communication with `clipctl` and `clip-workbench`.
 
 use little_clip_core::{
-    ClipItem, HandSide, SlotId, SlotManager, copy_bytes_to_system_clipboard,
-    copy_text_to_system_clipboard, file_uri_list,
+    ClipItem, HandSide, SlotId, SlotManager, copy_bytes_to_system_clipboard, file_uri_list,
     ipc::{IpcRequest, IpcResponse},
     rolling_audio::RollingAudioBuffer,
 };
@@ -1552,11 +1551,12 @@ fn extract_clipboard_text(item: &ClipItem) -> Option<String> {
 
 async fn copy_cleaned_clipboard_text(text: String, ctx: &DaemonContext) {
     ctx.add_self_copied_text(text.clone()).await;
-    match tokio::task::spawn_blocking(move || copy_text_to_system_clipboard(&text)).await {
-        Ok(Err(error)) => warn!(%error, "failed to copy cleaned clipboard text"),
-        Err(error) => warn!(%error, "clipboard copy worker failed"),
-        Ok(Ok(())) => {}
-    }
+    write_os_clipboard(
+        text.into_bytes(),
+        "text/plain;charset=utf-8",
+        "cleaned text",
+    )
+    .await;
 }
 
 fn is_image_file_path(p: &std::path::Path) -> bool {
@@ -1573,7 +1573,7 @@ async fn publish_pushed_clipboard(item: &ClipItem, hand: HandSide, ctx: &DaemonC
 async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
     match &item.payload {
         little_clip_core::ClipPayload::Image { bytes, mime, .. } => {
-            copy_image(bytes, mime, ctx).await
+            copy_image(bytes.clone(), mime.clone(), ctx).await
         }
         little_clip_core::ClipPayload::FileBatch(files)
             if files.len() == 1 && is_image_file_path(&files[0]) =>
@@ -1593,31 +1593,42 @@ async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
     }
 }
 
-async fn copy_image(bytes: &[u8], mime: &str, ctx: &DaemonContext) {
+async fn write_os_clipboard(bytes: Vec<u8>, mime: impl Into<String>, description: &str) {
+    let mime = mime.into();
+    match tokio::task::spawn_blocking(move || copy_bytes_to_system_clipboard(&bytes, &mime)).await {
+        Ok(Err(error)) => warn!(%error, %description, "failed to copy to system clipboard"),
+        Err(error) => warn!(%error, %description, "clipboard copy worker failed"),
+        Ok(Ok(())) => {}
+    }
+}
+
+async fn copy_image(bytes: Vec<u8>, mime: String, ctx: &DaemonContext) {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     *ctx.self_copied_image_hash.write().await = Some(hasher.finish());
-    if let Err(error) = copy_bytes_to_system_clipboard(bytes, mime) {
-        warn!(%error, "failed to copy image to system clipboard");
-    }
+    write_os_clipboard(bytes, mime, "image").await;
 }
 
 async fn copy_image_file(path: &std::path::Path, ctx: &DaemonContext) {
-    let Ok(bytes) = std::fs::read(path) else {
-        warn!(path = %path.display(), "failed to read image file for clipboard copy");
-        return;
-    };
     let mime = little_clip_core::item::guess_image_mime(path);
-    copy_image(&bytes, &mime, ctx).await;
+    let path = path.to_owned();
+    match tokio::task::spawn_blocking(move || std::fs::read(path)).await {
+        Ok(Ok(bytes)) => copy_image(bytes, mime, ctx).await,
+        Ok(Err(error)) => warn!(%error, "failed to read image file for clipboard copy"),
+        Err(error) => warn!(%error, "clipboard image read worker failed"),
+    }
 }
 
 async fn copy_text(text: &str, description: &str, ctx: &DaemonContext) {
     ctx.add_self_copied_text(text.to_owned()).await;
-    if let Err(error) = copy_text_to_system_clipboard(text) {
-        warn!(%error, %description, "failed to copy to system clipboard");
-    }
+    write_os_clipboard(
+        text.as_bytes().to_vec(),
+        "text/plain;charset=utf-8",
+        description,
+    )
+    .await;
 }
 
 async fn copy_path_text(paths: &[PathBuf], description: &str, ctx: &DaemonContext) {
@@ -1643,9 +1654,7 @@ async fn copy_file_batch(files: &[PathBuf], ctx: &DaemonContext) {
             .join("\n"),
     )
     .await;
-    if let Err(error) = copy_bytes_to_system_clipboard(uri_list.as_bytes(), "text/uri-list") {
-        warn!(%error, "failed to copy files to system clipboard");
-    }
+    write_os_clipboard(uri_list.into_bytes(), "text/uri-list", "files").await;
 }
 
 async fn copy_audio_path(path: &std::path::Path, ctx: &DaemonContext) {
@@ -1656,9 +1665,7 @@ async fn copy_audio_path(path: &std::path::Path, ctx: &DaemonContext) {
     ctx.add_self_copied_text(uri.clone()).await;
     ctx.add_self_copied_text(path.to_string_lossy().into_owned())
         .await;
-    if let Err(error) = copy_bytes_to_system_clipboard(uri.as_bytes(), "text/uri-list") {
-        warn!(%error, "failed to copy audio path to system clipboard");
-    }
+    write_os_clipboard(uri.into_bytes(), "text/uri-list", "audio path").await;
 }
 
 /// Returns the Unix domain socket path used for IPC communication (`$XDG_RUNTIME_DIR/little-screen-clip.sock`).
@@ -1716,6 +1723,14 @@ mod tests {
         std::fs::write(
             &adapter,
             r#"#!/bin/sh
+if [ -e "$CLIPD_TEST_CLIPBOARD/wait-for-runtime" ]; then
+    attempts=0
+    while [ ! -e "$CLIPD_TEST_CLIPBOARD/runtime-progress" ]; do
+        [ "$attempts" -lt 100 ] || exit 1
+        attempts=$((attempts + 1))
+        /bin/sleep 0.01
+    done
+fi
 /bin/cat > "$CLIPD_TEST_CLIPBOARD/bytes"
 printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
 "#,
@@ -2022,6 +2037,24 @@ printf '%s' "$2" > "$CLIPD_TEST_CLIPBOARD/mime"
         );
         assert!(ctx.is_self_copied_text(CLEAN_URL).await);
         assert!(ctx.is_self_copied_text(&format!("  {CLEAN_URL}\r\n")).await);
+    }
+
+    #[tokio::test]
+    async fn clipboard_adapter_does_not_block_current_thread_runtime() {
+        if isolated_clipboard_test("tests::clipboard_adapter_does_not_block_current_thread_runtime")
+        {
+            return;
+        }
+        let directory = PathBuf::from(std::env::var_os("CLIPD_TEST_CLIPBOARD").unwrap());
+        std::fs::write(directory.join("wait-for-runtime"), b"").unwrap();
+        let ctx = test_context(SlotManager::default());
+        tokio::join!(copy_text("test clipboard", "test", &ctx), async {
+            std::fs::write(directory.join("runtime-progress"), b"").unwrap();
+        });
+        assert_eq!(
+            std::fs::read(directory.join("bytes")).unwrap(),
+            b"test clipboard"
+        );
     }
 
     #[tokio::test]
