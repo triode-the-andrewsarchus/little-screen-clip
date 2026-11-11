@@ -125,6 +125,10 @@ fn worker_path() -> PathBuf {
         if sibling.is_file() {
             return sibling;
         }
+        let companion = parent.join("media-helper/clip-media-worker");
+        if companion.is_file() {
+            return companion;
+        }
         // Cargo test executables live one directory below application binaries.
         if parent.file_name().is_some_and(|name| name == "deps")
             && let Some(profile) = parent.parent()

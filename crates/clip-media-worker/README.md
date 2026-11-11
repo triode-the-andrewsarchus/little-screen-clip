@@ -9,6 +9,27 @@ development libraries, pkg-config and the Clang tooling needed by the bindings.
 The initial dependency line is `ffmpeg-next` 9.x. Runtime deployment must include
 compatible FFmpeg shared libraries or declare the appropriate system packages.
 
+The default workspace build packages `media-helper` beside the release binaries.
+A standalone package can be made with `python3 scripts/build_media_helper.py`;
+`--profile debug` selects a development build, and `--skip-build` packages an
+already successful build. The bundle carries the executable, this notice,
+`COPYING`, both Rust crates, shared fixtures, the lockfile and vendored Rust
+dependencies with their license files. It contains no application library code.
+
+Rebuild a delivered bundle without Cargo network access:
+
+```sh
+cd media-helper/source
+cargo build --release --locked --offline -p clip-media-worker
+```
+
+FFmpeg development headers/libraries, pkg-config and Clang are still required
+for that rebuild; compatible shared libraries are required to run the result.
+The bundle does not contain the native FFmpeg libraries. Distributors supplying
+those libraries must also preserve their selected build's source/license
+requirements. Set `LITTLE_CLIP_MEDIA_WORKER` to an independently rebuilt helper
+to retain the override across normal application builds.
+
 The current commands are:
 
 ```text

@@ -4,8 +4,9 @@ import argparse
 import json
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
+
+from helper_package import package_directory
 
 
 def build(output=None, skip_build=False):
@@ -18,10 +19,7 @@ def build(output=None, skip_build=False):
         subprocess.run(['cargo', 'build', '--release', '-p', 'little-clip-nki'], cwd=repo, check=True)
     binary = target / 'release/little-clip-nki'
     output = output or binary.parent / 'nki-helper'
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='native-nki-', dir=output.parent) as temporary:
-        stage = Path(temporary) / 'helper'
-        stage.mkdir()
+    with package_directory(output) as stage:
         shutil.copy2(binary, stage / 'little-clip-nki')
         shutil.copytree(source, stage / 'source')
         # Resolve workspace inheritance so the delivered source builds on its own.
@@ -35,10 +33,7 @@ def build(output=None, skip_build=False):
         for name in ['README.md', 'COPYING', 'COPYING.LESSER', 'THIRD_PARTY_NOTICES']:
             shutil.copyfile(source / name, stage / name)
         (stage / 'build.json').write_text(json.dumps({'implementation': 'native-rust', 'license': 'LGPL-3.0-only'}, indent=2) + '\n')
-        # Output is a disposable build-artifact directory; never alter user data.
-        if output.exists():
-            shutil.rmtree(output)
-        stage.rename(output)
+
 
 
 def main():

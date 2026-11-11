@@ -105,6 +105,14 @@ function is_ubuntu_or_debian() {
 }
 
 UBUNTU_DEPS=(
+    "pkg-config"
+    "clang"
+    "libavformat-dev"
+    "libavcodec-dev"
+    "libavutil-dev"
+    "libavfilter-dev"
+    "libswresample-dev"
+    "libswscale-dev"
     "libheif-dev"
     "libasound2-dev"
     "libgstreamer1.0-dev"
@@ -185,7 +193,7 @@ function ensure_dependencies() {
         if [ "$verbose" = "1" ]; then
             echo -e "${BLUE}Detected distro: ${distro_name} (${distro_id})${NC}"
             echo -e "${YELLOW}Automatic dependency installation is currently configured for Ubuntu/Debian.${NC}"
-            echo -e "Ensure development packages for libheif, ALSA, and GStreamer 1.0 are installed if build issues arise."
+            echo -e "Ensure development packages for libheif, ALSA, FFmpeg, Clang, and GStreamer 1.0 are installed if build issues arise."
         fi
     fi
 
@@ -238,6 +246,20 @@ function build_if_needed() {
         CLIPCTL_BIN=$(workspace_binary clipctl)
         WORKBENCH_BIN=$(workspace_binary clip-workbench)
     fi
+    ensure_media_worker "$DAEMON_BIN"
+    ensure_media_worker "$WORKBENCH_BIN"
+}
+
+function ensure_media_worker() {
+    local application="$1"
+    local profile_dir
+    profile_dir=$(dirname "$application")
+    if [ -n "${LITTLE_CLIP_MEDIA_WORKER:-}" ] || [ -x "$profile_dir/clip-media-worker" ] || [ -x "$profile_dir/media-helper/clip-media-worker" ]; then
+        return 0
+    fi
+    local profile
+    profile=$(basename "$profile_dir")
+    python3 "$SCRIPT_DIR/scripts/build_media_helper.py" --profile "$profile" --output-dir "$profile_dir/media-helper"
 }
 
 function start_daemon() {
@@ -364,9 +386,10 @@ function run_file_manager() {
     local file_manager_bin
     file_manager_bin=$(workspace_binary clip-file-manager)
     if [ ! -x "$file_manager_bin" ]; then
-        cargo build --release --bin clip-file-manager
+        cargo build --release -p clip-file-manager -p clip-media-worker
         file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
     fi
+    ensure_media_worker "$file_manager_bin"
     "$file_manager_bin" "$@"
 }
 
@@ -594,6 +617,7 @@ case "${1:-}" in
         else
             # Partial/custom builds do not describe the full workspace graph.
             cargo build --release "$@"
+            python3 "$SCRIPT_DIR/scripts/build_media_helper.py"
         fi
         if [ -x "$SCRIPT_DIR/target/release/clip-file-manager" ]; then
             "$SCRIPT_DIR/scripts/build_timelens.sh"

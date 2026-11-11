@@ -114,4 +114,6 @@ if __name__ == "__main__":
     if result == 0:
         from build_multisample_helper import build as package_multisample_helper
         package_multisample_helper(skip_build=True)
+        from build_media_helper import build as package_media_helper
+        package_media_helper(skip_build=True)
     sys.exit(result)

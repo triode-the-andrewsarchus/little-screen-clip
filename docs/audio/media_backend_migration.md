@@ -309,6 +309,14 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   draining at EOF; all eight worker unit and thirteen executable checks pass,
   including the three explicit independent reference comparisons.
 
+- [x] Package the isolated worker with its minimal two-crate workspace, locked
+  vendored Rust dependencies, shared test fixtures and GPL notice. Native FFmpeg
+  shared libraries remain an explicit runtime requirement. Desktop discovery
+  accepts the companion directory; launch and full-build scripts supply it.
+  An offline rebuild of the packaged workspace passes its protocol, worker and
+  executable tests. Packaging tests also verify custom target directories and
+  preservation of the previous bundle when source preparation fails.
+
 ## Final recommendation
 
 Pending implementation and verification. This section must be reviewed after
