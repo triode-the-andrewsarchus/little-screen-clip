@@ -15,10 +15,8 @@ impl TextPreviewState {
     ) {
         let editor = &self.editor_cmd;
 
-        let target_path = if let Some(ref p) = self.path {
-            p.clone()
-        } else {
-            // Write temporary file with appropriate extension
+        let mut staged = if self.path.is_none() {
+            // Keep the file private and delete it unless an editor receives it.
             let ext = match self.language {
                 "rs" => "rs",
                 "py" => "py",
@@ -35,28 +33,44 @@ impl TextPreviewState {
                 _ => "txt",
             };
 
-            let temp_name = format!(
-                "little_clip_preview_{}.{}",
-                uuid::Uuid::new_v4().simple(),
-                ext
-            );
-            let temp_path = std::env::temp_dir().join(temp_name);
-            if let Err(e) = std::fs::write(&temp_path, self.content.as_bytes()) {
-                let now = crate::ui_ext::feedback_time();
-                self.status_toast.set(
-                    StatusMessage::error(format!("Failed to write temporary file: {}", e)),
-                    now,
-                );
-                return;
+            let file = tempfile::Builder::new()
+                .prefix("little_clip_preview_")
+                .suffix(&format!(".{ext}"))
+                .tempfile()
+                .and_then(|mut file| {
+                    file.write_all(self.content.as_bytes())?;
+                    Ok(file)
+                });
+            match file {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    self.status_toast.set(
+                        StatusMessage::error(format!("Failed to write temporary file: {error}")),
+                        crate::ui_ext::feedback_time(),
+                    );
+                    return;
+                }
             }
-            temp_path
+        } else {
+            None
         };
 
-        let now = crate::ui_ext::feedback_time();
-
-        match launch(editor, editor, &target_path) {
-            Ok(_) => self.status_toast.clear(),
-            Err(message) => self.status_toast.set(StatusMessage::error(message), now),
+        let target = self
+            .path
+            .as_deref()
+            .or_else(|| staged.as_ref().map(|file| file.path()))
+            .expect("text handoff has a source path or a staged file");
+        match launch(editor, editor, target) {
+            Ok(_) => {
+                if let Some(file) = &mut staged {
+                    file.disable_cleanup(true);
+                }
+                self.status_toast.clear();
+            }
+            Err(message) => self.status_toast.set(
+                StatusMessage::error(message),
+                crate::ui_ext::feedback_time(),
+            ),
         }
     }
 

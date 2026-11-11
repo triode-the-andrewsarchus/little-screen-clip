@@ -176,6 +176,34 @@ fn inline_text_preview_skips_layout_when_host_is_clipped() {
 }
 
 #[test]
+fn external_editor_handoff_removes_failed_in_memory_stage() {
+    let text = "fn café() {}";
+    let mut state = TextPreviewState::from_text(text.into(), None, &AppConfig::default());
+    state.language = "rs";
+    let mut attempted = None;
+    state.trigger_escape_hatch_with(|_, _, path| {
+        assert_eq!(path.extension().unwrap(), "rs");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), text);
+        attempted = Some(path.to_owned());
+        Err("editor unavailable".into())
+    });
+    assert!(!attempted.unwrap().exists());
+    assert_eq!(
+        state.status_toast.message(crate::ui_ext::feedback_time()),
+        Some("editor unavailable")
+    );
+
+    let mut accepted = None;
+    state.trigger_escape_hatch_with(|_, _, path| {
+        accepted = Some(path.to_owned());
+        Ok("launched".into())
+    });
+    let path = accepted.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn external_editor_handoff_keeps_text_source_search_and_scroll_state() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = temp_dir.path().join("source.txt");
