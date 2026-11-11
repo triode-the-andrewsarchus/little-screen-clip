@@ -7,8 +7,8 @@ mod splat;
 mod structured;
 mod text;
 
-use crate::is_zero_width_or_bom;
-use crate::{FontStyle, ScreenRenderer};
+use crate::file_preview::Preview;
+use crate::{FontStyle, ScreenRenderer, is_zero_width_or_bom};
 use little_clip_core::color::parse_hex_color_rgba_or_white as parse_hex_color;
 use little_clip_core::{ClipItem, ClipPayload, SlotId, SlotManager};
 use little_clip_core::{midi, model3d, network_preview, spreadsheet, timestamps, units};
@@ -60,7 +60,7 @@ impl ScreenRenderer {
         h: u32,
         is_hero: bool,
         collect_previews: bool,
-        document: Option<&crate::document_preview::Page>,
+        file: Option<&Preview>,
     ) -> Option<crate::PreparedTextPreview> {
         let mut text_preview = None;
         let is_cursor = manager.cursor == slot_id;
@@ -144,7 +144,7 @@ impl ScreenRenderer {
                 border_color,
                 &mut text_preview,
                 collect_previews,
-                document,
+                file,
             );
         } else {
             // Empty placeholder
@@ -174,7 +174,7 @@ impl ScreenRenderer {
         border_color: Color,
         text_preview: &mut Option<crate::PreparedTextPreview>,
         collect_previews: bool,
-        document: Option<&crate::document_preview::Page>,
+        file: Option<&Preview>,
     ) {
         let (t_r, t_g, t_b, t_a) = parse_hex_color(&self.palette.colors.text_primary);
         let (s_r, s_g, s_b, s_a) = parse_hex_color(&self.palette.colors.text_secondary);
@@ -232,48 +232,52 @@ impl ScreenRenderer {
             clip_right,
         );
 
+        match file {
+            Some(Preview::Spreadsheet { title, sheet }) => {
+                self.draw_spreadsheet_card(pixmap, title, sheet, rx, ry, rw, rh, is_hero);
+                return;
+            }
+            Some(Preview::Midi(score)) => {
+                self.draw_midi_card(pixmap, score, rx, ry, rw, rh, is_hero);
+                return;
+            }
+            Some(Preview::Page(page)) => {
+                self.draw_image_thumbnail(
+                    pixmap,
+                    page.width,
+                    page.height,
+                    Some(&page.thumbnail),
+                    rx,
+                    ry,
+                    rw,
+                    rh,
+                    is_hero,
+                );
+                return;
+            }
+            _ => {}
+        }
+
         // Payload-specific preview starting around y = 124.0
         match &item.payload {
             ClipPayload::Text(text) => {
-                let ext_hint = Path::new(&item.title)
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .or_else(|| {
-                        let trimmed = text.trim();
-                        let p = Path::new(trimmed);
-                        if p.is_file() {
-                            p.extension().and_then(|s| s.to_str())
-                        } else {
-                            None
-                        }
-                    });
-
-                let (preview_text, effective_hint) = {
-                    let trimmed = text.trim();
-                    let p = Path::new(trimmed);
-                    if p.is_file() && little_clip_core::syntax::is_code_file(p) {
-                        if let Ok(file_content) =
-                            little_clip_core::kernel_interface::read_content_to_string_bounded(
-                                p,
-                                1024 * 1024,
-                            )
-                        {
-                            let clean_content = file_content
-                                .trim_start_matches(is_zero_width_or_bom)
-                                .to_string();
-                            (clean_content, p.extension().and_then(|s| s.to_str()))
-                        } else {
-                            (text.clone(), ext_hint)
-                        }
-                    } else {
-                        (text.clone(), ext_hint)
-                    }
+                let (preview_text, ext_hint) = match file {
+                    Some(Preview::Text {
+                        contents,
+                        extension,
+                    }) => (contents.as_str(), extension.as_deref()),
+                    _ => (
+                        text.as_str(),
+                        Path::new(&item.title)
+                            .extension()
+                            .and_then(|value| value.to_str()),
+                    ),
                 };
 
                 *text_preview = self.draw_text_preview(
                     pixmap,
-                    &preview_text,
-                    effective_hint,
+                    preview_text,
+                    ext_hint,
                     rx,
                     ry,
                     rw,
@@ -427,69 +431,15 @@ impl ScreenRenderer {
             ClipPayload::FileBatch(files) => {
                 if files.len() == 1 {
                     let p = &files[0];
-                    if p.is_file() && spreadsheet::is_spreadsheet_file(p) {
-                        if let Ok(sheet_data) = spreadsheet::load_spreadsheet(p) {
-                            if let Some(first_sheet) = sheet_data.sheets.first() {
-                                self.draw_spreadsheet_card(
-                                    pixmap,
-                                    &sheet_data.title,
-                                    first_sheet,
-                                    rx,
-                                    ry,
-                                    rw,
-                                    rh,
-                                    is_hero,
-                                );
-                                return;
-                            }
-                        }
-                    }
-                    if p.is_file()
-                        && (p
-                            .extension()
-                            .and_then(|s| s.to_str())
-                            .map(|e| {
-                                e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")
-                            })
-                            .unwrap_or(false))
-                    {
-                        if let Ok(midi_data) = midi::MidiData::parse_file(p) {
-                            self.draw_midi_card(pixmap, &midi_data, rx, ry, rw, rh, is_hero);
-                            return;
-                        }
-                    }
-                    if self.draw_scene_file_card(pixmap, p, [rx, ry, rw, rh], is_hero) {
-                        return;
-                    }
-                    if let Some(page) = document {
-                        self.draw_image_thumbnail(
-                            pixmap,
-                            page.width,
-                            page.height,
-                            Some(&page.thumbnail),
-                            rx,
-                            ry,
-                            rw,
-                            rh,
-                            is_hero,
-                        );
-                        return;
-                    }
-                    if p.is_file() && little_clip_core::syntax::is_code_file(p) {
-                        if let Ok(file_content) =
-                            little_clip_core::kernel_interface::read_content_to_string_bounded(
-                                p,
-                                1024 * 1024,
-                            )
-                        {
-                            let clean_content = file_content
-                                .trim_start_matches(is_zero_width_or_bom)
-                                .to_string();
-                            let ext = p.extension().and_then(|s| s.to_str());
+                    match file {
+                        Some(Preview::Text {
+                            contents,
+                            extension,
+                        }) => {
                             self.draw_text_preview(
                                 pixmap,
-                                &clean_content,
-                                ext,
+                                contents,
+                                extension.as_deref(),
                                 rx,
                                 ry,
                                 rw,
@@ -500,6 +450,10 @@ impl ScreenRenderer {
                             );
                             return;
                         }
+                        _ => {}
+                    }
+                    if self.draw_scene_file_card(pixmap, p, [rx, ry, rw, rh], is_hero) {
+                        return;
                     }
                 }
                 self.draw_text(

@@ -156,6 +156,34 @@ fn text_preview_rasters_render_syntax_highlighted_code() {
 }
 
 #[test]
+fn structured_and_code_previews_reuse_only_the_current_file_revision() {
+    let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let midi: &[u8] =
+        b"MThd\0\0\0\x06\0\0\0\x01\0\x60MTrk\0\0\0\x0c\0\x90\x3c\x5a\x60\x80\x3c\0\0\xff\x2f\0";
+    let fixtures = [
+        ("card.rs", b"fn first() {}" as &[u8]),
+        ("card.csv", b"note,velocity\nC4,90\n"),
+        ("card.mid", midi),
+    ];
+    for (name, contents) in fixtures {
+        let path = dir.path().join(name);
+        std::fs::write(&path, contents).unwrap();
+        let mut item = ClipItem::from_text(path.to_str().unwrap());
+        let first = renderer.file_preview(&item).expect(name);
+        item.payload = ClipPayload::FileBatch(vec![path.clone()]);
+        let cached = renderer.clone().file_preview(&item).expect(name);
+        assert!(std::sync::Arc::ptr_eq(&first, &cached));
+
+        let replacement = dir.path().join("replacement");
+        std::fs::write(&replacement, contents).unwrap();
+        std::fs::rename(replacement, path).unwrap();
+        let updated = renderer.file_preview(&item).expect(name);
+        assert!(!std::sync::Arc::ptr_eq(&first, &updated));
+    }
+}
+
+#[test]
 fn office_document_file_batch_renders_page_thumbnail_preview() {
     let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -173,14 +201,11 @@ fn office_document_file_batch_renders_page_thumbnail_preview() {
     item.details = vec!["1 pages".to_string(), "RTF".to_string()];
     item.handler_tag = "RTF (DOCUMENT)".to_string();
 
-    let page = renderer.document_preview(&item).expect("prepared page");
-    let reused = renderer
-        .clone()
-        .document_preview(&item)
-        .expect("cached page");
+    let page = renderer.file_preview(&item).expect("prepared page");
+    let reused = renderer.clone().file_preview(&item).expect("cached page");
     assert!(std::sync::Arc::ptr_eq(&page, &reused));
     std::fs::remove_file(rtf_path).unwrap();
-    assert!(renderer.document_preview(&item).is_none());
+    assert!(renderer.file_preview(&item).is_none());
     let mut pixmap = Pixmap::new(500, 400).unwrap();
     pixmap.fill(Color::BLACK);
     renderer.draw_item_content(

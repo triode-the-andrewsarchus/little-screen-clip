@@ -346,11 +346,9 @@ impl ScreenRenderer {
             return None;
         }
 
-        // 4. Spreadsheet preview (CSV text or spreadsheet file)
-        let p = Path::new(trimmed);
-        let spreadsheet_opt = if p.is_file() && spreadsheet::is_spreadsheet_file(p) {
-            spreadsheet::load_spreadsheet(p).ok()
-        } else if ext_hint
+        // File-backed tables are prepared before rasterization. Inline text
+        // may still describe a table unless its extension identifies source code.
+        let spreadsheet_opt = if ext_hint
             .and_then(little_clip_core::syntax::map_extension_to_language)
             .is_some()
         {
@@ -376,20 +374,7 @@ impl ScreenRenderer {
             }
         }
 
-        // 5. MIDI File Preview
-        if p.is_file()
-            && (p
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
-                .unwrap_or(false))
-        {
-            if let Ok(midi_data) = midi::MidiData::parse_file(p) {
-                self.draw_midi_card(pixmap, &midi_data, rx, ry, rw, rh, is_hero);
-                return None;
-            }
-        }
-
+        let p = Path::new(trimmed);
         if self.draw_scene_file_card(pixmap, p, [rx, ry, rw, rh], is_hero) {
             return None;
         }
