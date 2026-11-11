@@ -52,7 +52,7 @@ pub(super) fn test_workbench_app(
         retained_image_session: None,
         pending_image_close: false,
         startup_viewers,
-        startup_midi: None,
+        startup_file_loads: VecDeque::new(),
         image_load_job: None,
         text_load_job: None,
         spreadsheet_load_job: None,

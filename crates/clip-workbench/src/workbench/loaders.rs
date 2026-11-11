@@ -70,6 +70,9 @@ impl WorkbenchApp {
             Ok(Err(error)) => self.set_status_message(format!("Text preview failed: {error}")),
             Err(error) => self.set_status_message(format!("Text preview failed: {error}")),
         }
+        if self.viewer.is_none() && !self.startup_file_loads.is_empty() {
+            self.advance_startup();
+        }
         ctx.request_repaint();
     }
 
@@ -122,6 +125,10 @@ impl WorkbenchApp {
                         Err(error) => format!("Spreadsheet load failed: {error}"),
                         Ok(Ok(_)) => unreachable!(),
                     });
+                    if self.viewer.is_none() && !self.startup_file_loads.is_empty() {
+                        self.advance_startup();
+                    }
+                    ctx.request_repaint();
                 }
             }
         }

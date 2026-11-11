@@ -684,7 +684,7 @@ fn startup_initial_text_file_opens_text_viewer() {
     let text_path = temp_dir.path().join("sample.txt");
     std::fs::write(&text_path, "Hello from startup text").unwrap();
 
-    let app = WorkbenchApp::new(
+    let mut app = WorkbenchApp::new(
         egui::Context::default(),
         false,
         false,
@@ -700,6 +700,10 @@ fn startup_initial_text_file_opens_text_viewer() {
         false,
     );
 
+    assert!(app.viewer.is_none());
+    assert!(app.text_load_job.is_some());
+    wait_for_text_load(&mut app);
+
     let Some(ViewerSession::Text(state)) = &app.viewer else {
         panic!("expected Text viewer session");
     };
@@ -708,12 +712,15 @@ fn startup_initial_text_file_opens_text_viewer() {
 }
 
 #[test]
-fn startup_initial_sheet_file_opens_spreadsheet_viewer() {
+fn startup_sheet_and_text_load_in_order_without_blocking_construction() {
     let temp_dir = tempfile::tempdir().unwrap();
     let sheet_path = temp_dir.path().join("sample.csv");
     std::fs::write(&sheet_path, "col1,col2\nval1,val2\n").unwrap();
 
-    let app = WorkbenchApp::new(
+    let text_path = temp_dir.path().join("sample.txt");
+    std::fs::write(&text_path, "Text follows the spreadsheet").unwrap();
+
+    let mut app = WorkbenchApp::new(
         egui::Context::default(),
         false,
         false,
@@ -723,11 +730,16 @@ fn startup_initial_sheet_file_opens_spreadsheet_viewer() {
         None,
         None,
         Some(sheet_path),
-        None,
+        Some(text_path),
         false,
         false,
         false,
     );
+
+    assert!(app.viewer.is_none());
+    assert!(app.spreadsheet_load_job.is_some());
+    assert!(app.text_load_job.is_none());
+    wait_for_text_load(&mut app);
 
     let Some(ViewerSession::Spreadsheet(state)) = &app.viewer else {
         panic!("expected Spreadsheet viewer session");
@@ -735,6 +747,32 @@ fn startup_initial_sheet_file_opens_spreadsheet_viewer() {
     assert_eq!(state.data.sheets.len(), 1);
     assert_eq!(state.data.sheets[0].rows.len(), 2);
     assert!(app.status_msg.is_none());
+    assert!(app.text_load_job.is_none());
+
+    app.advance_startup();
+    assert!(app.text_load_job.is_some());
+    wait_for_text_load(&mut app);
+    let Some(ViewerSession::Text(state)) = &app.viewer else {
+        panic!("expected Text viewer after Spreadsheet viewer");
+    };
+    assert_eq!(state.content.as_str(), "Text follows the spreadsheet");
+}
+
+#[test]
+fn failed_startup_sheet_load_advances_to_text() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let text_path = temp_dir.path().join("next.txt");
+    std::fs::write(&text_path, "Next startup viewer").unwrap();
+    let mut app = test_workbench_app(None, VecDeque::new());
+    app.startup_file_loads = VecDeque::from([
+        StartupFileLoad::Sheet(temp_dir.path().join("missing.csv")),
+        StartupFileLoad::Text(text_path),
+    ]);
+
+    app.advance_startup();
+    wait_for_text_load(&mut app);
+    assert!(matches!(app.viewer, Some(ViewerSession::Text(_))));
+    assert!(app.startup_file_loads.is_empty());
 }
 
 #[test]

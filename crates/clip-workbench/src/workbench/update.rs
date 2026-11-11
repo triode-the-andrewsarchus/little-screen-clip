@@ -60,19 +60,19 @@ impl eframe::App for WorkbenchApp {
         self.poll_image_load(ctx);
         self.poll_text_load(ctx);
         self.poll_office_document_load(ctx);
-        if self.render_modal_viewers(ctx) {
-            self.palette_search_needs_focus = true;
-            return;
+        // Foreground viewers and other pending previews keep table/MIDI
+        // completions from replacing the active content.
+        if self.viewer.is_none()
+            && self.in_app_prompt.is_none()
+            && self.image_load_job.is_none()
+            && self.text_load_job.is_none()
+            && self.office_load_job.is_none()
+        {
+            self.poll_spreadsheet_load(ctx);
+            if self.viewer.is_none() && self.text_load_job.is_none() {
+                self.poll_midi_load(ctx);
+            }
         }
-
-        // Hold table-load jobs/results while another viewer is active. The receiver
-        // stays available, but polling waits until the foreground viewer closes.
-        self.poll_spreadsheet_load(ctx);
-        if self.render_modal_viewers(ctx) {
-            self.palette_search_needs_focus = true;
-            return;
-        }
-        self.poll_midi_load(ctx);
         if self.render_modal_viewers(ctx) {
             self.palette_search_needs_focus = true;
             return;

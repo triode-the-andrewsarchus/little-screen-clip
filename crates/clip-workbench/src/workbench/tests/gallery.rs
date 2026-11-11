@@ -501,17 +501,18 @@ fn midi_escape_after_region_clear_returns_to_source_view_and_preserves_slots() {
 fn startup_pdf_queue_precedes_background_midi_entry() {
     let queued_pdf = ViewerSession::Pdf(PdfEditorState::new(PathBuf::from("queued.pdf")));
     let mut app = test_workbench_app(None, VecDeque::from([queued_pdf]));
-    app.startup_midi = Some(PathBuf::from("dense.mid"));
+    app.startup_file_loads
+        .push_back(StartupFileLoad::Midi(PathBuf::from("dense.mid")));
 
     app.advance_startup();
     assert!(matches!(app.viewer, Some(ViewerSession::Pdf(_))));
-    assert!(app.startup_midi.is_some());
+    assert_eq!(app.startup_file_loads.len(), 1);
     assert!(app.midi_load_job.is_none());
 
     app.viewer = None;
     app.advance_startup();
     assert!(app.viewer.is_none());
-    assert!(app.startup_midi.is_none());
+    assert!(app.startup_file_loads.is_empty());
     assert!(app.midi_load_job.is_some());
 }
 

@@ -238,6 +238,12 @@ struct InAppPromptState {
     first_frame: bool,
 }
 
+enum StartupFileLoad {
+    Sheet(PathBuf),
+    Text(PathBuf),
+    Midi(PathBuf),
+}
+
 enum SpreadsheetLoadSource {
     File(PathBuf),
     Text { content: Arc<String>, title: String },
@@ -610,7 +616,7 @@ struct WorkbenchApp {
     retained_image_session: Option<(ImageSessionKey, ImagePreviewState)>,
     pending_image_close: bool,
     startup_viewers: VecDeque<ViewerSession>,
-    startup_midi: Option<PathBuf>,
+    startup_file_loads: VecDeque<StartupFileLoad>,
     image_load_job: Option<ImageLoadJob>,
     text_load_job: Option<TextPreviewLoadJob>,
     spreadsheet_load_job: Option<(

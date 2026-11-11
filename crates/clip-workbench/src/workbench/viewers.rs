@@ -32,6 +32,8 @@ impl WorkbenchApp {
             if self.image_load_job.is_some()
                 || self.text_load_job.is_some()
                 || self.office_load_job.is_some()
+                || self.spreadsheet_load_job.is_some()
+                || self.midi_load_job.is_some()
             {
                 let mut cancel = false;
                 show_viewer_panel(ctx, |ui| {
@@ -41,6 +43,10 @@ impl WorkbenchApp {
                             "Loading image…"
                         } else if self.office_load_job.is_some() {
                             "Converting document…"
+                        } else if self.spreadsheet_load_job.is_some() {
+                            "Loading spreadsheet…"
+                        } else if self.midi_load_job.is_some() {
+                            "Loading MIDI…"
                         } else {
                             "Loading text…"
                         });
@@ -51,6 +57,7 @@ impl WorkbenchApp {
                 });
                 if cancel || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                     self.cancel_preview_loads();
+                    self.advance_startup();
                 }
                 ctx.request_repaint_after(Duration::from_millis(40));
                 return true;

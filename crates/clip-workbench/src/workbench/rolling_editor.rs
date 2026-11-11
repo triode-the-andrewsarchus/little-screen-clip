@@ -74,7 +74,15 @@ impl WorkbenchApp {
             }
         }
 
-        if self.viewer.is_some() || !self.startup_viewers.is_empty() {
+        if self.viewer.is_some()
+            || !self.startup_viewers.is_empty()
+            || !self.startup_file_loads.is_empty()
+            || self.image_load_job.is_some()
+            || self.text_load_job.is_some()
+            || self.office_load_job.is_some()
+            || self.spreadsheet_load_job.is_some()
+            || self.midi_load_job.is_some()
+        {
             let message = match job.ready.as_ref() {
                 Some(Err(error)) => format!("Could not open rolling audio selection: {error}"),
                 _ => "Rolling audio is ready; waiting for the active viewer to close".into(),

@@ -58,29 +58,14 @@ impl WorkbenchApp {
         if let Some(path) = initial_scene {
             startup_viewers.push_back(scene_file_viewer(path, &config));
         }
-        let mut initial_status_msg = None;
-        if let Some(path) = initial_sheet {
-            match little_clip_core::presentation::spreadsheet::load_spreadsheet(&path) {
-                Ok(data) => {
-                    startup_viewers.push_back(ViewerSession::Spreadsheet(
-                        SpreadsheetViewerState::new(data, Some(path)),
-                    ));
-                }
-                Err(error) => {
-                    initial_status_msg = Some(format!("Spreadsheet: {error}"));
-                }
-            }
-        }
-        if let Some(path) = initial_text {
-            if let Some(text_state) = TextPreviewState::from_file(&path, &config) {
-                startup_viewers.push_back(ViewerSession::Text(text_state));
-            } else {
-                initial_status_msg = Some(format!(
-                    "Could not read or prepare text file {}",
-                    path.display()
-                ));
-            }
-        }
+        let startup_file_loads = [
+            initial_sheet.map(StartupFileLoad::Sheet),
+            initial_text.map(StartupFileLoad::Text),
+            initial_midi.map(StartupFileLoad::Midi),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
 
         let view = if start_node_machine {
             WorkbenchView::NodeMachine
@@ -106,7 +91,7 @@ impl WorkbenchApp {
             selected_action_index: 0,
             selected_slots: vec![SlotId::LeftHand],
             inspector_text_preview_cache: None,
-            status_msg: initial_status_msg,
+            status_msg: None,
             appearance_sync: AppearanceSync::default(),
             renderer: None,
             mirror_job: None,
@@ -127,7 +112,7 @@ impl WorkbenchApp {
             retained_image_session: None,
             pending_image_close: false,
             startup_viewers,
-            startup_midi: initial_midi,
+            startup_file_loads,
             image_load_job: None,
             text_load_job: None,
             spreadsheet_load_job: None,
@@ -160,9 +145,15 @@ impl WorkbenchApp {
         }
         self.viewer = self.startup_viewers.pop_front();
         self.active_image_key = None;
-        if self.viewer.is_none() {
-            if let Some(path) = self.startup_midi.take() {
-                self.start_midi_load(path);
+        if self.viewer.is_none()
+            && let Some(load) = self.startup_file_loads.pop_front()
+        {
+            match load {
+                StartupFileLoad::Sheet(path) => {
+                    self.start_spreadsheet_load(SpreadsheetLoadSource::File(path))
+                }
+                StartupFileLoad::Text(path) => self.start_text_file_load(path),
+                StartupFileLoad::Midi(path) => self.start_midi_load(path),
             }
         }
     }
