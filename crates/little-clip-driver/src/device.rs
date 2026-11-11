@@ -308,16 +308,14 @@ impl TrofeoDriver {
             pos += write_size;
         }
 
-        // Read ACK packet and propagate errors — a failure here means
-        // the device is gone/stale and the caller should trigger a reconnect.
-        let mut ack = vec![0u8; USB_ACK_SIZE];
+        // Malformed or rejected acknowledgements use the same reconnect path
+        // as transport errors.
+        let mut ack = [0u8; USB_ACK_SIZE];
         let read = self
             .handle
             .read_bulk(EP_IN, &mut ack, TIMEOUT_READ)
             .map_err(|e| DriverError::WriteFailed(format!("ACK read failed: {e}")))?;
-        if read == 0 {
-            return Err(DriverError::WriteFailed("empty ACK response".to_owned()));
-        }
+        validate_frame_ack(&ack[..read])?;
 
         debug!(
             "Frame sent successfully ({} bytes, {} chunks)",
@@ -327,9 +325,43 @@ impl TrofeoDriver {
     }
 }
 
+fn validate_frame_ack(ack: &[u8]) -> Result<(), DriverError> {
+    if ack.len() != USB_ACK_SIZE {
+        return Err(DriverError::WriteFailed(format!(
+            "Invalid frame ACK length: expected {USB_ACK_SIZE}, got {}",
+            ack.len()
+        )));
+    }
+    if ack[..2] != [0x03, 0xff] {
+        return Err(DriverError::WriteFailed("Invalid frame ACK header".into()));
+    }
+    if ack[8] != 0x01 {
+        return Err(DriverError::WriteFailed(format!(
+            "Unexpected frame ACK status {:#04x}",
+            ack[8]
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_ack_requires_complete_success_response() {
+        let mut ack = [0; USB_ACK_SIZE];
+        ack[..2].copy_from_slice(&[0x03, 0xff]);
+        ack[8] = 1;
+        assert!(validate_frame_ack(&ack).is_ok());
+        assert!(validate_frame_ack(&ack[..USB_ACK_SIZE - 1]).is_err());
+        assert!(validate_frame_ack(&[]).is_err());
+        ack[8] = 0;
+        assert!(validate_frame_ack(&ack).is_err());
+        ack[8] = 1;
+        ack[1] = 0;
+        assert!(validate_frame_ack(&ack).is_err());
+    }
 
     #[test]
     fn frame_chunk_layout_avoids_empty_final_chunk_for_exact_multiples() {
