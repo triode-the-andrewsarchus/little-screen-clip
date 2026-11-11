@@ -18,13 +18,22 @@ pub(in crate::file_manager) fn load(path: &Path, spectrum: bool, cancelled: &Ato
         if cancelled.load(Ordering::Relaxed) {
             return Err("Music preview cancelled".into());
         }
-        // Header probing is inexpensive; expensive tags/cover processes run
+        // Header probing is inexpensive; tag and cover extraction run
         // alongside audio decoding instead of delaying the waveform's start.
         let duration = little_clip_core::audio::read_audio_metadata(path)
             .map_or(0.0, |metadata| metadata.duration_ms as f32 / 1000.0);
         let ((mut metadata, image), result) = std::thread::scope(|scope| {
-            let details =
-                scope.spawn(|| (metadata(path), super::super::media::media_frame(path, 0, 0)));
+            let details = scope.spawn(|| {
+                let cover = little_clip_core::audio::read_audio_cover(path, cancelled)
+                    .unwrap_or_else(|_| {
+                        if cancelled.load(Ordering::Acquire) {
+                            None
+                        } else {
+                            super::super::media::media_frame(path, 0, 0)
+                        }
+                    });
+                (metadata(path), cover)
+            });
             let result = if spectrum {
                 super::spectrum::render(path, duration, cancelled)
                     .map(|image| (Vec::new(), Vec::new(), Some(image)))

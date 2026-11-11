@@ -33,6 +33,8 @@ Remaining process boundaries include:
 | `clip-file-manager/src/file_manager/media.rs` | Thumbnail/frame extraction | Preserve non-cover video selection and bounded image decoding. |
 | `clip-file-manager/src/file_manager/video_timeline/backend.rs` | Persistent scrubbing and timeline helper control | Existing lifecycle, sampling policies and cancellation remain requirements. |
 | `clip-search/src/reader/video.rs` | Isolated bounded video extraction | Retain disposable-helper resource limits and sandbox boundary. |
+| `clip-search/src/reader/media.rs` | Shared media probe and transcription audio windows | Keep format allowlists, selected-stream offsets and bounded mono extraction. |
+| `clip-file-manager/src/file_manager/viewers/video.rs` | One owned FFplay session | Playback replacement needs audio/video synchronization and rendering, not just codec bindings. |
 | `little-clip-core/src/animation.rs` | Animation conversion | Compare native format support and timing fidelity before selecting a backend. |
 
 The C helper in `scripts/video_strip/main.c` already links directly to FFmpeg.
@@ -86,6 +88,23 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 - Established architecture baseline `native-audio-ffmpeg` at `89ccc61`.
 - Confirmed common audio already uses native decoding and DSP; migration must
   remove remaining processes without duplicating those implementations.
+- Added bounded native artwork extraction in `audio/cover.rs` and connected
+  music cards to it. Unsupported readers retain the old fallback temporarily.
+  All three targeted core artwork tests pass: embedded ID3 artwork, front-cover
+  preference/image bounds, and missing-artwork/cancelled requests.
+- Preparing a separate `clip-media-worker` executable using FFmpeg 9 custom
+  stream I/O. It must remain an independently linked process, rather than a
+  dependency of the desktop binaries. Its initial probe implementation is not
+  yet connected to production callers; filter/render/export migration remains.
+- Initial architecture comparison: duplicate groups remain 1515, maximum CCN
+  remains 195 and cycle count remains 16. The reported regression attributes
+  existing clones to the two-line module export addition and identifies the
+  unchanged `video_workload_benchmark.py` cycle with its members reversed.
+  Checked the actual diff; these reports do not identify newly added logic.
+- Symphonia 0.5 exposes metadata allocation options, but its metadata reader
+  implementation does not consistently enforce them. Do not treat those options
+  as a hard parsing-memory guarantee. Artwork decoding enforces its own byte,
+  image-dimension and allocation limits; review parser budgets during migration.
 
 ## Final recommendation
 

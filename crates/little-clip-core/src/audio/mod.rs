@@ -8,6 +8,8 @@
 pub mod test_support;
 
 pub mod analysis;
+mod cover;
+pub use cover::read_audio_cover;
 pub mod decode;
 mod source;
 pub use source::{
