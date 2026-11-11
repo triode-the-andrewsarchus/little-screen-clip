@@ -7,11 +7,12 @@ use std::{
     path::PathBuf,
 };
 
-pub(super) fn path(source: &FileSource, edge: u32) -> Option<PathBuf> {
+pub(super) fn path(source: &FileSource, edge: u32, orientation: u8) -> Option<PathBuf> {
     let store = crate::staging::ArtifactStore::new().ok()?;
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     format!("{source:?}").hash(&mut hash);
     edge.hash(&mut hash);
+    orientation.hash(&mut hash);
     Some(
         store
             .base_dir()

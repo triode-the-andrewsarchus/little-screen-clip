@@ -19,7 +19,7 @@ pub fn load(
     cancelled: &AtomicBool,
 ) -> Option<ImageThumbnail> {
     let source = crate::file_source::FileSource::capture(path).ok()?;
-    let cache = super::thumbnail_cache::path(&source, edge);
+    let cache = super::thumbnail_cache::path(&source, edge, orientation);
     if let Some(image) = cache
         .as_ref()
         .and_then(|path| super::thumbnail_cache::load(path))
