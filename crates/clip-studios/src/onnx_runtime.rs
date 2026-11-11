@@ -1,5 +1,8 @@
-use std::path::PathBuf;
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 pub use little_clip_core::config::{
     DEFAULT_BIG_LAMA_MODEL_URL, DEFAULT_DEPTH_ANYTHING_V2_MODEL_URL,
@@ -207,6 +210,25 @@ pub fn ensure_model_with_progress<F>(
 where
     F: Fn(f32, &str),
 {
+    ensure_model_cancellable(
+        model_name,
+        url_override,
+        &AtomicBool::new(false),
+        on_progress,
+    )
+}
+
+/// Downloads a model while honoring the caller's cancellation token.
+///
+/// # Errors
+/// Returns an error on cancellation, a failed or stalled transfer, an invalid
+/// download, or a cache I/O failure.
+pub fn ensure_model_cancellable(
+    model_name: &str,
+    url_override: Option<&str>,
+    cancelled: &AtomicBool,
+    on_progress: impl Fn(f32, &str),
+) -> Result<PathBuf, String> {
     let url = resolve_model_url(model_name, url_override);
     if url.is_empty() {
         return Err(format!("No download URL configured for model {model_name}"));
@@ -219,9 +241,12 @@ where
             .as_deref()
             .is_some_and(|url| !url.trim().is_empty());
         if url == SIGLIP2_GIANT_MODEL_URL || has_custom_data_url {
-            ensure_model_with_url_progress(
+            download_model(
+                &models_cache_dir(),
                 SIGLIP2_GIANT_MODEL_DATA_NAME,
                 config.siglip2_giant_model_data_url(),
+                cancelled,
+                MODEL_DOWNLOAD_TIMEOUT,
                 |fraction, message| on_progress(fraction * 0.9, message),
             )?;
             true
@@ -231,16 +256,23 @@ where
     } else {
         false
     };
-    ensure_model_with_url_progress(model_name, &url, |fraction, message| {
-        on_progress(
-            if has_external_data {
-                0.9 + fraction * 0.1
-            } else {
-                fraction
-            },
-            message,
-        )
-    })
+    download_model(
+        &models_cache_dir(),
+        model_name,
+        &url,
+        cancelled,
+        MODEL_DOWNLOAD_TIMEOUT,
+        |fraction, message| {
+            on_progress(
+                if has_external_data {
+                    0.9 + fraction * 0.1
+                } else {
+                    fraction
+                },
+                message,
+            )
+        },
+    )
 }
 
 /// Ensure that a named ONNX model is available locally in the cache directory,
@@ -253,81 +285,132 @@ pub fn ensure_model_with_url_progress<F>(
 where
     F: Fn(f32, &str),
 {
-    let models_dir = models_cache_dir();
-    let model_path = models_dir.join(model_name);
-    if model_path.exists() {
-        if let Ok(meta) = std::fs::metadata(&model_path) {
-            // Verify file has non-trivial size (> 1MB) so corrupted/stub downloads are discarded
-            if is_valid_cached_model(model_name, meta.len()) {
-                return Ok(model_path);
-            }
-        }
-        let _ = std::fs::remove_file(&model_path);
-    }
-    let _ = std::fs::create_dir_all(&models_dir);
-    let tmp_path = models_dir.join(format!("{}.tmp.{}", model_name, std::process::id()));
+    download_model(
+        &models_cache_dir(),
+        model_name,
+        url,
+        &AtomicBool::new(false),
+        MODEL_DOWNLOAD_TIMEOUT,
+        on_progress,
+    )
+}
 
-    let mut child = std::process::Command::new("curl")
-        .arg("-L")
-        .arg("-f")
-        .arg("--connect-timeout")
-        .arg("15")
-        .arg("-o")
-        .arg(&tmp_path)
-        .arg(url)
-        .spawn()
-        .map_err(|err| format!("Failed to run curl to download model: {err}"))?;
+const MODEL_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+fn download_model(
+    models_dir: &Path,
+    model_name: &str,
+    url: &str,
+    cancelled: &AtomicBool,
+    timeout: Duration,
+    on_progress: impl Fn(f32, &str),
+) -> Result<PathBuf, String> {
+    use little_clip_core::kernel_interface::{create_content_directory, open_content};
+
+    if Path::new(model_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some(model_name)
+    {
+        return Err("Model name must be a single filename".into());
+    }
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Model download cancelled".into());
+    }
+
+    let directory = create_content_directory(models_dir).map_err(|error| error.to_string())?;
+    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let target = anchor.join(model_name);
+    let model_path = models_dir.join(model_name);
+    let cached = || match open_content(&target, true) {
+        Ok(file) => file
+            .metadata()
+            .map(|metadata| is_valid_cached_model(model_name, metadata.len())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    };
+    if cached().map_err(|error| error.to_string())? {
+        return Ok(model_path);
+    }
+
+    let staged = tempfile::NamedTempFile::new_in(&anchor).map_err(|error| error.to_string())?;
+    let (request, fd) = little_clip_core::CommandRequest::new("curl")
+        .args([
+            "--disable",
+            "--location",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--connect-timeout",
+            "15",
+            "--speed-limit",
+            "1",
+            "--speed-time",
+            "60",
+        ])
+        .timeout(timeout)
+        .own_process_group()
+        .die_with_parent()
+        .inherit_handle(staged.as_file())
+        .map_err(|error| error.to_string())?;
 
     let expected = expected_model_size(model_name);
-    let total_mb = expected.map(|e| e as f32 / 1_000_000.0).unwrap_or(100.0);
-
+    let total_mb = expected.map_or(100.0, |bytes| bytes as f32 / 1_000_000.0);
     on_progress(0.01, &format!("Connecting to download {model_name}..."));
-
-    while let Ok(None) = child.try_wait() {
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        if let Ok(meta) = std::fs::metadata(&tmp_path) {
-            let dl_bytes = meta.len();
-            let dl_mb = dl_bytes as f32 / 1_000_000.0;
-            let frac = if let Some(tot) = expected {
-                (dl_bytes as f32 / tot as f32).clamp(0.01, 0.99)
-            } else {
-                (dl_mb / (dl_mb + 50.0)).clamp(0.01, 0.99)
-            };
-            on_progress(
-                frac,
-                &format!(
-                    "Downloading {model_name}: {:.0}% ({:.1}/{:.1} MB)",
-                    frac * 100.0,
-                    dl_mb,
-                    total_mb
-                ),
-            );
-        }
-    }
-
-    let status = child.wait().map_err(|e| format!("curl wait failed: {e}"))?;
-
-    match status {
-        st if st.success() && tmp_path.exists() => {
-            if let Ok(meta) = std::fs::metadata(&tmp_path) {
-                if !is_valid_cached_model(model_name, meta.len()) {
-                    let _ = std::fs::remove_file(&tmp_path);
-                    return Err(format!(
-                        "Downloaded model {model_name} has an invalid size ({} bytes)",
-                        meta.len()
-                    ));
-                }
+    let mut last_progress = Instant::now();
+    let output = request
+        .arg("--output")
+        .arg(format!("/proc/self/fd/{fd}"))
+        .args(["--", url])
+        .run_cancellable_with_progress(cancelled, || {
+            if last_progress.elapsed() < Duration::from_millis(150) {
+                return;
             }
-            std::fs::rename(&tmp_path, &model_path)
-                .map_err(|e| format!("Failed to save downloaded model: {e}"))?;
-            on_progress(1.0, &format!("Model {model_name} download complete"));
-            Ok(model_path)
-        }
-        st => {
-            let _ = std::fs::remove_file(&tmp_path);
-            Err(format!("curl download failed with exit code {st}"))
-        }
+            last_progress = Instant::now();
+            if let Ok(metadata) = staged.as_file().metadata() {
+                let bytes = metadata.len() as f32;
+                let mb = bytes / 1_000_000.0;
+                let fraction = expected
+                    .map_or(mb / (mb + 50.0), |size| bytes / size as f32)
+                    .clamp(0.01, 0.99);
+                on_progress(
+                    fraction,
+                    &format!(
+                        "Downloading {model_name}: {:.0}% ({mb:.1}/{total_mb:.1} MB)",
+                        fraction * 100.0
+                    ),
+                );
+            }
+        })
+        .map_err(|error| format!("Could not download {model_name}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Could not download {model_name}: {}",
+            output.stderr_lossy()
+        ));
     }
+    let bytes = staged
+        .as_file()
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .len();
+    if !is_valid_cached_model(model_name, bytes) {
+        return Err(format!(
+            "Downloaded model {model_name} has an invalid size ({bytes} bytes)"
+        ));
+    }
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Model download cancelled".into());
+    }
+    // Keep the old entry until a complete replacement is ready. Another
+    // downloader may already have published a valid model in the meantime.
+    if !cached().map_err(|error| error.to_string())? {
+        staged
+            .persist(&target)
+            .map_err(|error| format!("Failed to save downloaded model: {error}"))?;
+    }
+    on_progress(1.0, &format!("Model {model_name} download complete"));
+    Ok(model_path)
 }
 
 fn is_valid_cached_model(model_name: &str, size: u64) -> bool {
@@ -378,6 +461,86 @@ pub fn assert_cuda_execution(model_name: &str, run: impl FnOnce(&mut ort::sessio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_downloads_only_publish_complete_models() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cache = fixture.path().join("models");
+        std::fs::create_dir(&cache).unwrap();
+        let name = "test.onnx";
+        std::fs::write(cache.join(name), b"previous incomplete model").unwrap();
+        let size = MIN_VALID_MODEL_BYTES as usize + 1;
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            for byte in [b'a', b'b'] {
+                let source = fixture.path().join(format!("{byte}.onnx"));
+                std::fs::write(&source, vec![byte; size]).unwrap();
+                let url = format!("file://{}", source.display());
+                let cache = &cache;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    download_model(
+                        &cache,
+                        name,
+                        &url,
+                        &AtomicBool::new(false),
+                        Duration::from_secs(5),
+                        |_, message| {
+                            if message.starts_with("Connecting ") {
+                                barrier.wait();
+                            }
+                        },
+                    )
+                    .unwrap();
+                });
+            }
+        });
+        let bytes = std::fs::read(cache.join(name)).unwrap();
+        assert_eq!(bytes.len(), size);
+        assert!(matches!(bytes[0], b'a' | b'b'));
+        assert!(bytes.iter().all(|&byte| byte == bytes[0]));
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn stalled_model_downloads_cancel_or_time_out_without_publishing() {
+        // A private local listener accepts the TCP handshake but never sends a
+        // response. No real model host or shared cache is used.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let url = format!("http://{}/model", listener.local_addr().unwrap());
+        let cache = tempfile::tempdir().unwrap();
+        let name = "test.onnx";
+        let target = cache.path().join(name);
+        let previous = b"previous incomplete model";
+        std::fs::write(&target, previous).unwrap();
+
+        for cancel in [false, true] {
+            let cancelled = AtomicBool::new(false);
+            let error = download_model(
+                cache.path(),
+                name,
+                &url,
+                &cancelled,
+                if cancel {
+                    Duration::from_secs(5)
+                } else {
+                    Duration::from_millis(300)
+                },
+                |_, message| {
+                    if cancel && message.starts_with("Downloading ") {
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
+                },
+            )
+            .unwrap_err();
+            assert!(
+                error.contains(if cancel { "cancelled" } else { "timeout" }),
+                "{error}"
+            );
+            assert_eq!(std::fs::read(&target).unwrap(), previous);
+            assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 1);
+        }
+    }
 
     #[test]
     #[ignore = "requires cached depth model; validates isolated CPU fallback"]

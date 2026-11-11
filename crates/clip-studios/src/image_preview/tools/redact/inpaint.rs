@@ -53,9 +53,11 @@ impl ImagePreviewState {
             ));
 
             // Priority 1: Native Rust ORT inference if model is available
-            let model_path = crate::onnx_runtime::ensure_model(
+            let model_path = crate::onnx_runtime::ensure_model_cancellable(
                 crate::onnx_runtime::BIG_LAMA_MODEL_NAME,
                 lama_url.as_deref(),
+                &cancel,
+                |_, _| {},
             )
             .ok();
 
@@ -74,6 +76,10 @@ impl ImagePreviewState {
                         )));
                     }
                 }
+            }
+
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
             }
 
             // Priority 2: Fallback to scripts/inpaint_lama.py

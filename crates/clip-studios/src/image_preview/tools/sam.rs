@@ -45,9 +45,19 @@ impl NativeSamSession {
         })
     }
 
-    pub fn load_default() -> Result<Self, String> {
-        let enc_path = crate::onnx_runtime::ensure_model(MOBILE_SAM_ENCODER_MODEL_NAME, None)?;
-        let dec_path = crate::onnx_runtime::ensure_model(MOBILE_SAM_DECODER_MODEL_NAME, None)?;
+    fn load_default(cancelled: &AtomicBool) -> Result<Self, String> {
+        let enc_path = crate::onnx_runtime::ensure_model_cancellable(
+            MOBILE_SAM_ENCODER_MODEL_NAME,
+            None,
+            cancelled,
+            |_, _| {},
+        )?;
+        let dec_path = crate::onnx_runtime::ensure_model_cancellable(
+            MOBILE_SAM_DECODER_MODEL_NAME,
+            None,
+            cancelled,
+            |_, _| {},
+        )?;
         Self::new(&enc_path, &dec_path)
     }
 
@@ -398,7 +408,7 @@ fn run_sam_native_worker_thread(
     resp_tx: Sender<SamWorkerResponse>,
     stopped: Arc<AtomicBool>,
 ) {
-    let mut session = match NativeSamSession::load_default() {
+    let mut session = match NativeSamSession::load_default(&stopped) {
         Ok(sess) => {
             let _ = resp_tx.send(SamWorkerResponse::Ready);
             sess

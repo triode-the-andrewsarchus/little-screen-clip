@@ -596,9 +596,10 @@ impl ImagePreviewState {
                         status: status.to_string(),
                     });
                 };
-                if let Ok(model_path) = crate::onnx_runtime::ensure_model_with_progress(
+                if let Ok(model_path) = crate::onnx_runtime::ensure_model_cancellable(
                     crate::onnx_runtime::FEYNOBG_FP16_MODEL_NAME,
                     request.model_url.as_deref(),
+                    &cancel,
                     on_dl,
                 ) {
                     let tx_run = tx.clone();
@@ -636,9 +637,10 @@ impl ImagePreviewState {
                         status: status.to_string(),
                     });
                 };
-                if let Ok(depth_path) = crate::onnx_runtime::ensure_model_with_progress(
+                if let Ok(depth_path) = crate::onnx_runtime::ensure_model_cancellable(
                     crate::onnx_runtime::DEPTH_ANYTHING_V2_MODEL_NAME,
                     request.model_url.as_deref(),
+                    &cancel,
                     on_dl,
                 ) {
                     let tx_run = tx.clone();
@@ -668,6 +670,10 @@ impl ImagePreviewState {
                         }
                     }
                 }
+            }
+
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
             }
 
             let png_bytes = match request.snapshot.compose_png() {
