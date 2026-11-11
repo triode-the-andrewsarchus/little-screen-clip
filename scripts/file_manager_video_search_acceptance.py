@@ -63,28 +63,32 @@ def main():
     # an overstated duration alone no longer guarantees that late frames fail.
     wrappers = output/'tools'
     wrappers.mkdir()
-    wrapper = wrappers/'ffmpeg'
+    wrapper = wrappers/'clip-media-worker'
     wrapper.write_text(r'''#!/usr/bin/env python3
 import json,os,sys
 args=sys.argv[1:]
-if '-ss' in args and '-vf' in args and 'showinfo' in args[args.index('-vf')+1]:
- source=os.path.basename(os.readlink(args[args.index('-i')+1]))
- offset=float(args[args.index('-ss')+1])
+if len(args)==3 and args[0]=='video-frame':
+ settings=json.loads(args[1])
+ source=os.path.basename(os.readlink(args[2]))
+ offset=float(settings['seconds'])
  if source=='partial.mkv' and offset > 10:
   with open(os.environ['CLIP_TEST_VIDEO_FAILURE_MARKER'],'a') as marker:
    marker.write(json.dumps({'source':source,'offset':offset})+'\n')
   print('Controlled late frame failure',file=sys.stderr)
   sys.exit(1)
 # exec preserves the guarded source descriptors inherited from CommandRequest.
-os.execv(os.environ['CLIP_TEST_REAL_FFMPEG'],['ffmpeg',*args])
+os.execv(os.environ['CLIP_TEST_REAL_MEDIA_WORKER'],['clip-media-worker',*args])
 ''')
     wrapper.chmod(0o700)
-    real_ffmpeg = shutil.which('ffmpeg')
-    assert real_ffmpeg
+    real_worker = os.environ.get('LITTLE_CLIP_MEDIA_WORKER') or str(args.binary.resolve().with_name('clip-media-worker'))
+    if not Path(real_worker).is_file():
+        real_worker = shutil.which('clip-media-worker')
+    assert real_worker, 'Build clip-media-worker before running media acceptance'
+    real_worker = str(Path(real_worker).resolve())
     def environment(env, children):
         search_environment(env, children)
-        env.update(PATH=str(wrappers)+os.pathsep+env['PATH'],
-                   CLIP_TEST_REAL_FFMPEG=real_ffmpeg,
+        env.update(LITTLE_CLIP_MEDIA_WORKER=str(wrapper),
+                   CLIP_TEST_REAL_MEDIA_WORKER=real_worker,
                    CLIP_TEST_VIDEO_FAILURE_MARKER=str(output/'late-frame-failures.jsonl'))
     return run_application_acceptance(args, output, root, exercise,
         'Explicit real-model video enrollment, visual/audio timestamps and vectors, late decode failure retaining earlier segments, unchanged sources', environment)

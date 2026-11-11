@@ -1,6 +1,7 @@
 `with-cover.mp4` contains a generated 160 × 90 red video lasting 0.2 seconds
 and a 32 × 32 blue attached JPEG. It verifies that metadata selects the video
-rather than the artwork. No downloaded media is included. Generation:
+rather than the artwork, and that shared worker/browser thumbnails distinguish
+the red video from the blue cover. No downloaded media is included. Generation:
 
 ```sh
 ffmpeg -f lavfi -i color=red:size=160x90:rate=10:duration=0.2 -c:v mpeg4 video.mp4

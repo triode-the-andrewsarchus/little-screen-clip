@@ -379,3 +379,147 @@ fn library_ranges_match_cli_priming_and_container_timing() {
         }
     }
 }
+
+#[test]
+fn executable_selects_video_and_cover_frames_from_the_same_pinned_input() {
+    use clip_media_protocol::{VideoFrame, VideoStream, parse_video_frame};
+    let mut input = tempfile::tempfile().unwrap();
+    input
+        .write_all(include_bytes!(
+            "../../little-clip-core/tests/fixtures/video/with-cover.mp4"
+        ))
+        .unwrap();
+    for (stream, dimensions) in [
+        (VideoStream::FirstNonCover, (160, 90)),
+        (VideoStream::Ordinal(1), (160, 160)),
+    ] {
+        let mut job = VideoFrame::new("mov", 160, 160);
+        job.stream = stream;
+        let result = command(
+            &[&input],
+            "video-frame",
+            &serde_json::to_string(&job).unwrap(),
+        )
+        .output()
+        .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let frame = parse_video_frame(&result.stdout, 160, 160)
+            .unwrap()
+            .unwrap();
+        assert_eq!((frame.info.width, frame.info.height), dimensions);
+        assert_eq!(
+            u32::from_be_bytes(frame.png[16..20].try_into().unwrap()),
+            dimensions.0
+        );
+        assert_eq!(
+            u32::from_be_bytes(frame.png[20..24].try_into().unwrap()),
+            dimensions.1
+        );
+        assert_eq!(frame.info.seconds, 0.0);
+    }
+}
+
+#[test]
+#[ignore = "requires FFmpeg CLI to generate and independently decode rotated video fixtures"]
+fn library_frame_rotation_matches_reference_pixels() {
+    use clip_media_protocol::{VideoFrame, parse_video_frame};
+    use std::process::Stdio;
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("original.mp4");
+    assert!(
+        Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=80x40:rate=5:duration=1",
+                "-c:v",
+                "mpeg4"
+            ])
+            .arg(&original)
+            .status()
+            .unwrap()
+            .success()
+    );
+    for rotation in [0, 90, 180, 270] {
+        let path = dir.path().join(format!("rotation-{rotation}.mp4"));
+        assert!(
+            Command::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(&original)
+                .args([
+                    "-c",
+                    "copy",
+                    "-metadata:s:v:0",
+                    &format!("rotate={rotation}")
+                ])
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let settings = VideoFrame::new("mov", 160, 160);
+        let result = command(
+            &[&File::open(&path).unwrap()],
+            "video-frame",
+            &serde_json::to_string(&settings).unwrap(),
+        )
+        .output()
+        .unwrap();
+        assert!(
+            result.status.success(),
+            "{rotation}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let frame = parse_video_frame(&result.stdout, 160, 160)
+            .unwrap()
+            .unwrap();
+        let reference = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&path)
+            .args([
+                "-vf",
+                "scale=160:160:force_original_aspect_ratio=decrease",
+                "-frames:v",
+                "1",
+                "-pix_fmt",
+                "rgba",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(reference.status.success());
+        let mut decode = Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "image2pipe",
+                "-i",
+                "pipe:0",
+                "-pix_fmt",
+                "rgba",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        decode.stdin.take().unwrap().write_all(frame.png).unwrap();
+        let decoded = decode.wait_with_output().unwrap();
+        assert!(decoded.status.success());
+        assert_eq!(decoded.stdout, reference.stdout, "rotation {rotation}");
+        assert_eq!(frame.info.seconds, 0.0);
+    }
+}

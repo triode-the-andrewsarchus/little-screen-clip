@@ -1,18 +1,7 @@
 //! Shared bounded media commands and canonical audio windows.
-use super::{CommandRequest, Duration, Engine, Path, Prepared, STANDARD};
+use super::{Duration, Engine, Path, Prepared, STANDARD};
 use serde_json::Value;
 
-pub(super) fn command(program: &str, demuxers: &str) -> CommandRequest {
-    CommandRequest::new(program)
-        .die_with_parent()
-        .args([
-            "-protocol_whitelist",
-            "file,pipe",
-            "-format_whitelist",
-            demuxers,
-        ])
-        .timeout(Duration::from_secs(30))
-}
 pub(super) fn probe(path: &Path, demuxers: &str) -> Result<Value, String> {
     let output = little_clip_core::media_backend::probe_request(demuxers)
         .timeout(Duration::from_secs(30))
@@ -26,7 +15,7 @@ pub(super) fn probe(path: &Path, demuxers: &str) -> Result<Value, String> {
     }
     serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())
 }
-pub(super) use little_clip_core::media_stream::{Track, number};
+pub(super) use little_clip_core::media_stream::Track;
 
 pub(super) fn audio_track(value: &Value) -> Option<Track> {
     value["streams"]

@@ -1,7 +1,9 @@
 //! Requests to the separately linked FFmpeg library worker.
 
 use crate::process::CommandRequest;
-pub use clip_media_protocol::{AudioFilter, AudioInput, AudioRender};
+pub use clip_media_protocol::{
+    AudioFilter, AudioInput, AudioRender, EncodedVideoFrame, VideoFrame, VideoStream,
+};
 use std::path::PathBuf;
 
 /// Audio containers admitted by browser metadata inspection.
@@ -40,13 +42,7 @@ pub fn decode_audio_request(formats: &str) -> CommandRequest {
 /// # Errors
 /// Returns an error if settings cannot be serialized or exceed the wire budget.
 pub fn render_audio_request(settings: &AudioRender) -> Result<CommandRequest, String> {
-    let settings = serde_json::to_string(settings).map_err(|error| error.to_string())?;
-    if settings.len() > clip_media_protocol::MAX_SETTINGS_BYTES {
-        return Err("Audio render settings exceed their budget".into());
-    }
-    Ok(CommandRequest::new(worker_path())
-        .args(["render-audio", &settings])
-        .die_with_parent())
+    settings_request("render-audio", settings)
 }
 
 /// Builds a render request retaining an explicit staging descriptor.
@@ -64,6 +60,41 @@ pub fn render_audio_to_request(
         .inherit_handle(output)
         .map_err(|error| error.to_string())?;
     Ok(request.arg(format!("--output=/proc/self/fd/{descriptor}")))
+}
+
+/// Builds a bounded still-frame request using a pinned content input.
+///
+/// # Errors
+/// Returns a serialization or request-budget error.
+pub fn video_frame_request(settings: &VideoFrame) -> Result<CommandRequest, String> {
+    Ok(settings_request("video-frame", settings)?.max_output_bytes(32 * 1024 * 1024 + 1028))
+}
+
+/// Checks process completion and parses the actual decoded frame record.
+///
+/// # Errors
+/// Returns child-failure, truncation or malformed-response errors.
+pub fn decode_video_frame<'a>(
+    output: &'a crate::process::CommandOutput,
+    settings: &VideoFrame,
+) -> Result<Option<EncodedVideoFrame<'a>>, String> {
+    if !output.status.success() || output.stdout_truncated {
+        return Err("Video frame decode failed or exceeded its output budget".into());
+    }
+    clip_media_protocol::parse_video_frame(&output.stdout, settings.width, settings.height)
+}
+
+fn settings_request(
+    mode: &str,
+    settings: &impl serde::Serialize,
+) -> Result<CommandRequest, String> {
+    let settings = serde_json::to_string(settings).map_err(|error| error.to_string())?;
+    if settings.len() > clip_media_protocol::MAX_SETTINGS_BYTES {
+        return Err("Media worker settings exceed their budget".into());
+    }
+    Ok(CommandRequest::new(worker_path())
+        .args([mode, &settings])
+        .die_with_parent())
 }
 
 fn worker_path() -> PathBuf {

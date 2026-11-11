@@ -94,7 +94,8 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
 - [x] Native streaming WAV ranges and simple gain, with owned staging and retry cleanup.
 - [x] Studio exports/session graphs and pipeline audio filters through library jobs.
 - [x] Search audio windows through bounded library PCM streaming.
-- [ ] Remaining video/frame library jobs.
+- [x] Browser thumbnail/cover fallback and search still-frame library jobs.
+- [ ] Animated/video preview batches and timeline fallback migration.
 
 - Established architecture baseline `native-audio-ffmpeg` at `89ccc61`.
 - Confirmed common audio already uses native decoding and DSP; migration must
@@ -229,6 +230,34 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   horizon check and all seven video/source-clock checks pass. Worker all-target
   Clippy is clean. Architecture comparison reports no new complexity hotspot;
   its additional clone is test request setup rather than a parallel media path.
+
+- Migrated browser `file_manager/media.rs::media_frame` and search
+  `reader/video.rs::frame` to `clip-media-worker/src/video.rs`. The worker selects
+  the same explicit stream, checks source dimensions before opening its codec
+  and after decoding, applies display orientation and scales to the requested
+  bounds. Parent preview/search capture limits and deadlines remain in place.
+- Still-frame replies carry a bounded typed header with the actual decoded
+  source-relative timestamp and PNG dimensions/length. The data-only protocol
+  parser checks incomplete/trailing payloads, dimensions and missing timestamps.
+  Search no longer scrapes `showinfo` logs; its sparse-frame retry still returns
+  the preceding available frame with that frame's observed timestamp.
+- Verification: all seven worker unit and ten executable checks pass, including
+  both explicitly enabled manual-reference checks. Rotation snapshots at 0/90/
+  180/270 degrees exactly match independently decoded CLI reference RGBA pixels.
+  All six current search video checks pass (the old log-parser-only check is
+  replaced by the typed-header check). Three browser media checks and search's
+  quiet-window check pass, including actual red-video/blue-cover thumbnails.
+  Worker/protocol all-target Clippy passes with warnings denied.
+- Updated `file_manager_video_search_acceptance.py` to inject controlled failures
+  into the library worker rather than the retired CLI path. Python compilation
+  and an isolated invocation verify both late-frame rejection and successful
+  descriptor-preserving handoff. This does not claim the real-model GUI
+  acceptance scenario was run.
+- Architecture comparison keeps maximum CCN/cycle counts unchanged. The new
+  source setup, frame delivery and wire parser score 16 due to their explicit
+  stream, bounds and failure checks; those checks remain together rather than
+  being scattered solely to reduce a metric. New clone reports include fixture
+  request setup; shared response/request owners avoid a parallel preview stack.
 
 ## Final recommendation
 

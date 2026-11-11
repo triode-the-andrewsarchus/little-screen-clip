@@ -15,6 +15,7 @@ The current commands are:
 clip-media-worker probe FORMAT_WHITELIST /proc/self/fd/N
 clip-media-worker decode-audio FORMAT_WHITELIST /proc/self/fd/N
 clip-media-worker render-audio SETTINGS_JSON [--output=/proc/self/fd/M] /proc/self/fd/N ...
+clip-media-worker video-frame SETTINGS_JSON /proc/self/fd/N
 ```
 
 The parent must inherit a pinned ordinary input descriptor and retain child
@@ -44,6 +45,19 @@ pipeline jobs retain their existing `CommandRequest` supervision. Containers
 and encoders are finalized only after decoder, filter and encoder draining.
 The protocol crate has no native media or desktop dependencies; sharing request
 data does not link FFmpeg into application libraries.
+
+Still-frame requests use `clip-media-protocol::VideoFrame`. Stream selection
+can use a global index, video ordinal (including artwork), or first non-cover
+video. Output is a little-endian u32 JSON-header length, `VideoFrameInfo` JSON,
+then the exact PNG byte count declared in that header. Empty success means no
+frame after the requested instant. The parent can explicitly retry at the
+preceding seek point and receives that frame's actual source-relative time.
+
+Source pixel budgets are checked before codec opening and after decoding.
+Output bounds are at most 4096 × 4096, PNG data at most 32 MiB, and header data
+at most 1 KiB. Display matrices are applied before scaling; callers retain their
+smaller dimension, capture and process-time budgets. Parsing the response does
+not decode untrusted PNG pixels; host image readers retain their own limits.
 
 `cargo test -p clip-media-worker` includes real executable/descriptor tests.
 Those integration tests also make the helper executable available before a

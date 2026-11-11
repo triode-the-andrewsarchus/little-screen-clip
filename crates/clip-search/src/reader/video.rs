@@ -19,7 +19,7 @@ pub(super) fn prepare(path: &Path, cursor: usize, bytes: u64) -> Result<Prepared
     let count = visual.map_or(0, |track| frame_count(track.duration));
     let mut prepared = if cursor < count {
         let track = visual.unwrap();
-        frame(path, &metadata, &track, sample_time(track.duration, cursor))?
+        frame(path, &track, sample_time(track.duration, cursor))?
     } else if let Some(track) = audio {
         let mut prepared = media::audio_window(path, DEMUXERS, &track, cursor - count)?;
         prepared.next = prepared.next.map(|next| next + count);
@@ -75,60 +75,25 @@ fn sample_time(duration: f64, index: usize) -> f64 {
         (start + (start + 5.0).min(duration)) / 2.0
     }
 }
-fn frame(
-    path: &Path,
-    metadata: &Value,
-    track: &media::Track,
-    offset: f64,
-) -> Result<Prepared, String> {
+fn frame(path: &Path, track: &media::Track, offset: f64) -> Result<Prepared, String> {
+    use little_clip_core::media_backend::{VideoFrame, VideoStream};
+    let mut settings = VideoFrame::new(DEMUXERS, 1024, 1024);
+    settings.stream = VideoStream::Index(track.index);
+    settings.seconds = track.start + offset;
+    settings.max_source_pixels = 4096 * 2160;
     let decode = |accurate: bool| {
-        let mut command = media::command("ffmpeg", DEMUXERS).args([
-            "-v",
-            "info",
-            "-nostdin",
-            "-threads",
-            "2",
-            "-filter_threads",
-            "1",
-            "-max_alloc",
-            "268435456",
-            "-copyts",
-        ]);
-        if !accurate {
-            command = command.arg("-noaccurate_seek");
-        }
-        command
-            .arg("-ss")
-            .arg((track.start + offset).to_string())
-            .arg("-i")
+        let mut request = settings.clone();
+        request.accurate = accurate;
+        little_clip_core::media_backend::video_frame_request(&request)?
             .arg_content_file(path)
-            .map_err(|e| e.to_string())?
-            .args([
-                "-map",
-                &format!("0:{}", track.index),
-                "-an",
-                "-sn",
-                "-dn",
-                "-vf",
-                "scale=1024:1024:force_original_aspect_ratio=decrease,showinfo",
-                "-frames:v",
-                "1",
-                "-fps_mode",
-                "passthrough",
-                "-c:v",
-                "png",
-                "-f",
-                "image2pipe",
-                "pipe:1",
-            ])
+            .map_err(|error| error.to_string())?
             .max_output_bytes(8 * 1024 * 1024)
             .run()
-            .map_err(|e| e.to_string())
+            .map_err(|error| error.to_string())
     };
     let mut output = decode(true)?;
-    // A valid sparse/one-frame clip can have no frame after the requested
-    // instant. Retry once at its preceding demuxer seek point; showinfo keeps
-    // the observed frame's timestamp rather than inventing the requested one.
+    // Sparse clips can end before the requested instant. Retain the actual
+    // timestamp returned by one preceding-seek-point retry, never the request.
     if output.status.success()
         && !output.stdout_truncated
         && output.stdout.is_empty()
@@ -136,36 +101,19 @@ fn frame(
     {
         output = decode(false)?;
     }
-    if !output.status.success() || output.stdout_truncated || output.stdout.is_empty() {
-        return Err("Video frame decode failed".into());
-    }
-    let origin = media::number(&metadata["format"]["start_time"]).unwrap_or(0.0);
-    let timestamp =
-        frame_timestamp(&output.stderr).ok_or("Decoded video timestamp unavailable")? - origin;
+    let frame = little_clip_core::media_backend::decode_video_frame(&output, &settings)?
+        .ok_or("Video frame decode produced no image")?;
+    let timestamp = frame.info.seconds;
     if timestamp < 0.0 || timestamp > track.start + track.duration + 1.0 {
         return Err("Decoded video timestamp outside source duration".into());
     }
     Ok(Prepared {
-        data: Some(STANDARD.encode(&output.stdout)),
+        data: Some(STANDARD.encode(frame.png)),
         modality: "image".into(),
         location: format!("video frame at seconds {timestamp:.6}"),
         vision_tokens: Some(140),
         ..Default::default()
     })
-}
-fn frame_timestamp(stderr: &[u8]) -> Option<f64> {
-    String::from_utf8_lossy(stderr)
-        .lines()
-        .filter(|line| line.contains("Parsed_showinfo_"))
-        .find_map(|line| {
-            let (_, after) = line.split_once("pts_time:")?;
-            after
-                .split_whitespace()
-                .next()?
-                .parse::<f64>()
-                .ok()
-                .filter(|time| time.is_finite())
-        })
 }
 
 #[cfg(test)]
@@ -181,17 +129,6 @@ mod tests {
         assert!(sample_time(10000.0, 0) > 0.0);
         assert!(sample_time(10000.0, MAX_FRAMES - 1) < 10000.0);
         assert!(sample_time(10000.0, MAX_FRAMES - 1) > 9990.0);
-    }
-    #[test]
-    fn source_timestamp_requires_the_decoded_frame_record() {
-        assert_eq!(
-            frame_timestamp(
-                b"Duration: 10\n[Parsed_showinfo_1 @ 0x12] n: 0 pts: 81920 pts_time:5.000 pos: 5\n"
-            ),
-            Some(5.0)
-        );
-        assert_eq!(frame_timestamp(b"other pts_time:5.0\n"), None);
-        assert_eq!(frame_timestamp(b"[Parsed_showinfo_0] pts_time:nan\n"), None);
     }
     #[test]
     fn capped_long_sparse_video_keeps_the_last_observed_frame() {

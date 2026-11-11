@@ -97,50 +97,33 @@ pub(super) fn media_frame(
     stream: usize,
     time_ms: u64,
 ) -> Option<little_clip_core::ImageThumbnail> {
-    let mut command = little_clip_core::process::CommandRequest::new("ffmpeg").args([
-        "-v",
-        "error",
-        "-threads",
-        "2",
-        "-filter_threads",
-        "1",
-        "-max_alloc",
-        "268435456",
-    ]);
-    if time_ms > 0 {
-        // Input-side seeking decodes only the GOP near the chosen thumbnail.
-        command = command.args(["-ss", &format!("{:.3}", time_ms as f64 / 1000.0)]);
-    }
-    let result = command
-        .arg("-i")
+    use little_clip_core::media_backend::{VideoFrame, VideoStream};
+    let mut settings = VideoFrame::new(
+        format!(
+            "{},{}",
+            little_clip_core::media_backend::VIDEO_FORMATS,
+            little_clip_core::media_backend::AUDIO_FORMATS
+        ),
+        160,
+        160,
+    );
+    settings.stream = VideoStream::Ordinal(stream);
+    settings.seconds = time_ms as f64 / 1000.0;
+    let result = little_clip_core::media_backend::video_frame_request(&settings)
+        .ok()?
         .arg_content_file(path)
         .ok()?
-        .arg("-map")
-        .arg(format!("0:v:{stream}"))
-        .args([
-            "-vf",
-            "scale=160:160:force_original_aspect_ratio=decrease",
-            "-frames:v",
-            "1",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "png",
-            "pipe:1",
-        ])
         .timeout(std::time::Duration::from_secs(3))
         .max_output_bytes(256 * 1024)
         .run()
         .ok()?;
-    if !result.status.success() || result.stdout_truncated {
-        return None;
-    }
+    let frame = little_clip_core::media_backend::decode_video_frame(&result, &settings).ok()??;
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(4 * 1024 * 1024);
     limits.max_image_width = Some(160);
     limits.max_image_height = Some(160);
     little_clip_core::ImageThumbnail::generate_with_limits(
-        &result.stdout,
+        frame.png,
         Some("image/png"),
         160,
         160,
@@ -237,6 +220,32 @@ pub(in crate::file_manager) use little_clip_core::media_stream::selected_video_s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thumbnail_worker_distinguishes_real_video_from_attached_artwork() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../little-clip-core/tests/fixtures/video/with-cover.mp4");
+        let video = media_frame(&path, 0, 0).unwrap();
+        let cover = media_frame(&path, 1, 0).unwrap();
+        assert_eq!((video.width, video.height), (160, 90));
+        assert_eq!((cover.width, cover.height), (160, 160));
+        assert!(
+            video
+                .premultiplied_rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[0] > 200 && pixel[2] < 20)
+        );
+        assert!(
+            cover
+                .premultiplied_rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[2] > 200 && pixel[0] < 20)
+        );
+    }
 
     #[test]
     fn video_preview_and_extraction_share_source_relative_duration() {

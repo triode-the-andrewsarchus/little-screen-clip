@@ -4,6 +4,7 @@ mod audio;
 mod audio_filter;
 mod audio_render;
 mod probe;
+mod video;
 use std::{fs::File, os::fd::FromRawFd};
 
 fn main() {
@@ -17,6 +18,17 @@ fn run() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     if arguments.first().is_some_and(|mode| mode == "render-audio") {
         return render_command(&arguments);
+    }
+    if arguments.first().is_some_and(|mode| mode == "video-frame") {
+        if arguments.len() != 3 || arguments[1].len() > clip_media_protocol::MAX_SETTINGS_BYTES {
+            return Err("Invalid video frame request".into());
+        }
+        let job = serde_json::from_str(&arguments[1]).map_err(|error| error.to_string())?;
+        return video::snapshot(
+            inherited_input(&arguments[2])?,
+            &job,
+            &mut std::io::BufWriter::new(std::io::stdout().lock()),
+        );
     }
     if arguments.len() != 3 || !matches!(arguments[0].as_str(), "probe" | "decode-audio") {
         return Err(
