@@ -61,6 +61,7 @@ const ALLOWED: &[&[u8]] = &[
     b"lowpass",
     b"highpass",
     b"pan",
+    b"aeval",
     b"asplit",
     b"amix",
     b"concat",
@@ -80,7 +81,7 @@ mod tests {
         let mut graph = ffmpeg::filter::Graph::new();
         validate(
             &mut graph,
-            "[0:a]volume='if(between(t,1,2),0.5,1)',asoftclip[out]",
+            "[0:a]aeval='val(1)|val(0)':c=stereo,volume='if(between(t,1,2),0.5,1)',asoftclip[out]",
         )
         .unwrap();
         for spec in [

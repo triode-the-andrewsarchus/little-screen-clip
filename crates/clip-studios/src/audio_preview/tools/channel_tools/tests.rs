@@ -59,16 +59,16 @@ fn channel_edits_preserve_stereo_and_affect_only_selected_samples() {
             vec![(0.002, 0.004)],
             vec![(0.004, 0.002), (0.006, 0.008), (0.003, 0.004)],
         ] {
-            let output = directory.path().join("result.wav");
-            let status = std::process::Command::new("ffmpeg")
-                .args(["-v", "error", "-y", "-i"])
-                .arg(&path)
-                .args(["-af", &operation.filter(&regions), "-c:a", "pcm_f32le"])
-                .arg(&output)
-                .status()
-                .unwrap();
-            assert!(status.success());
-            let decoder = Decoder::new(BufReader::new(File::open(&output).unwrap())).unwrap();
+            let output = crate::audio_preview::session_edit::render_session_file(
+                &path,
+                None,
+                &Default::default(),
+                operation.filter(&regions),
+                export::AudioRenderMode::Session,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            let decoder = Decoder::new(BufReader::new(output.staging.reopen().unwrap())).unwrap();
             assert_eq!(decoder.channels().get(), 2);
             assert_eq!(decoder.sample_rate().get(), 8000);
             let samples = decoder.collect::<Vec<_>>();

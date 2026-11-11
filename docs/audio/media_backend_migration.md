@@ -317,6 +317,12 @@ crash isolation, but starting a fresh helper per operation retains startup cost.
   executable tests. Packaging tests also verify custom target directories and
   preservation of the previous bundle when source preparation fails.
 
+- [x] Restore channel edits through the library worker. The full suite caught a
+  missing `aeval` entry in the processing-only filter allowlist. Allow that
+  expression filter, while retaining rejection of file/command sources. The
+  existing six-operation/range PCM test now exercises the real session worker
+  rather than the CLI; it and the undo/source-guard/shortcut regressions pass.
+
 ## Final recommendation
 
 Pending implementation and verification. This section must be reviewed after
