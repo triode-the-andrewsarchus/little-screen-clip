@@ -110,6 +110,9 @@ impl NativeDrag {
         // The foreign backend never disconnects the display. We never destroy the borrowed surface.
         let backend = unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) };
         let connection = Connection::from_backend(backend);
+        // SAFETY: eframe's Wayland window handle is a live wl_surface from
+        // this same display. ObjectId borrows its proxy; no destruction request
+        // is sent, and NativeDrag is dropped with the app before eframe teardown.
         let id = unsafe {
             ObjectId::from_ptr(
                 wl_surface::WlSurface::interface(),

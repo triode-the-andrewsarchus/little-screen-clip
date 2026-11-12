@@ -120,6 +120,8 @@ fn stream_metadata(stream: ffmpeg::Stream<'_>) -> serde_json::Value {
         None
     } else {
         Some(
+            // SAFETY: the checked non-null profile name is FFmpeg's static,
+            // NUL-terminated codec string; this copies it before returning.
             unsafe { std::ffi::CStr::from_ptr(profile) }
                 .to_string_lossy()
                 .into_owned(),

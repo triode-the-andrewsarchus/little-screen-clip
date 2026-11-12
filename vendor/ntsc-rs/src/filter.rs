@@ -292,6 +292,8 @@ impl TransferFunction {
                 // i may be >= width if delay >= width
                 filter_single_sample(
                     simd,
+                    // SAFETY: width is nonzero and every row length was checked
+                    // equal to width above; clamping keeps the read in that row.
                     unsafe { *signal[j].get_unchecked(i.min(width - 1)) },
                     num,
                     den,
@@ -303,6 +305,9 @@ impl TransferFunction {
         // The main loop: we unconditionally read and write the samples. If delay >= width, this never executes.
         for i in delay..width {
             for j in 0..ROWS {
+                // SAFETY: equal nonempty row lengths are checked above and
+                // delay <= i < width bounds both indices. Read completes before
+                // the exclusive write; no element reference escapes the expression.
                 unsafe {
                     // signal[j][i - delay] is valid because i is between [delay, width); signal[j][i] is valid for the
                     // same reason
@@ -327,12 +332,16 @@ impl TransferFunction {
             for j in 0..ROWS {
                 let filt_sample = filter_single_sample(
                     simd,
+                    // SAFETY: all rows have the checked nonzero width, so the
+                    // final sample exists for this clamped trailing-window read.
                     unsafe { *signal[j].get_unchecked(width - 1) },
                     num,
                     den,
                     &mut z[j],
                 );
 
+                // SAFETY: delay.max(width) <= i < width+delay implies
+                // 0 <= i-delay < width, and the checked rows are disjoint.
                 unsafe {
                     *signal[j].get_unchecked_mut(i - delay) = filt_sample;
                 }

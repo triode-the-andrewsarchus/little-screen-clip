@@ -176,6 +176,12 @@ fn open(bytes: &[u8]) -> rusqlite::Result<Connection> {
         unsafe { rusqlite::ffi::sqlite3_malloc64((bytes.len() + 20) as u64) }.cast::<u8>(),
     )
     .ok_or(rusqlite::Error::InvalidQuery)?;
+    // SAFETY: the successful SQLite allocator returned a distinct len+20 byte
+    // allocation. Initialize it before copying len source bytes (no overlap),
+    // and modify header offsets only when they are in bounds. OwnedData adopts
+    // the SQLite allocation once; FREEONCLOSE also frees it on native failure.
+    // rusqlite's safe stream loader allocates only len bytes, without the advised
+    // margin for malformed databases, so it cannot replace this boundary yet.
     unsafe {
         std::ptr::write_bytes(pointer.as_ptr(), 0, bytes.len() + 20);
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer.as_ptr(), bytes.len());

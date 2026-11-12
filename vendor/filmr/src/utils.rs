@@ -170,7 +170,11 @@ fn vertical_blur_pass(
                 let y = first_y + local_y;
                 let out_y = y.saturating_sub(radius) as u32;
                 let in_y = y.saturating_add(radius).saturating_add(1).min(height - 1) as u32;
-                for (x, (sum, pixel)) in sums.iter_mut().zip(row.chunks_exact_mut(3)).enumerate() {
+                for (x, (sum, pixel)) in sums
+                    .iter_mut()
+                    .zip(row.as_chunks_mut::<3>().0.iter_mut())
+                    .enumerate()
+                {
                     let average: [f32; 4] = (*sum * weight).into();
                     pixel.copy_from_slice(&average[..3]);
                     let a = src.get_pixel(x as u32, out_y).0;

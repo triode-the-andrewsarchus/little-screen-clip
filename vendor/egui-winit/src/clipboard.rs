@@ -142,6 +142,9 @@ fn init_smithay_clipboard(
     if let Some(RawDisplayHandle::Wayland(display)) = raw_display_handle {
         log::trace!("Initializing smithay clipboard…");
         #[allow(unsafe_code)]
+        // SAFETY: the integration supplies its live Wayland display and retains
+        // it until this Clipboard is dropped. The clipboard uses a separate queue
+        // and does not own or disconnect the display.
         Some(unsafe { smithay_clipboard::Clipboard::new(display.display.as_ptr()) })
     } else {
         #[cfg(feature = "wayland")]
