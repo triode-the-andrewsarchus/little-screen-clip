@@ -45,26 +45,8 @@ pub fn map_syntect_color_to_theme(
     readable(hex_to_c32(hex))
 }
 
-pub static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
-    let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
-    for definition in [
-        little_clip_core::syntax::CONFIG_SUBLIME_SYNTAX,
-        little_clip_core::syntax::TYPESCRIPT_SUBLIME_SYNTAX,
-        little_clip_core::syntax::PIKCHR_SUBLIME_SYNTAX,
-        little_clip_core::syntax::SVGBOB_SUBLIME_SYNTAX,
-        little_clip_core::syntax::LINI_SUBLIME_SYNTAX,
-        little_clip_core::syntax::GRAPHVIZ_SUBLIME_SYNTAX,
-        little_clip_core::syntax::D2_SUBLIME_SYNTAX,
-        little_clip_core::syntax::BPMN_SUBLIME_SYNTAX,
-        little_clip_core::syntax::MERMAID_SUBLIME_SYNTAX,
-    ] {
-        match syntect::parsing::SyntaxDefinition::load_from_str(definition, true, None) {
-            Ok(syntax) => builder.add(syntax),
-            Err(error) => tracing::warn!(%error, "Could not load bundled syntax definition"),
-        }
-    }
-    builder.build()
-});
+pub static SYNTAX_SET: LazyLock<SyntaxSet> =
+    LazyLock::new(|| little_clip_render::syntax::build_syntax_set(true));
 pub static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 const MINIMAP_COLUMNS: usize = 96;

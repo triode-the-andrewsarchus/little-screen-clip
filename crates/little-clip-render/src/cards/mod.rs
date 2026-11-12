@@ -19,19 +19,7 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 use tiny_skia::*;
 
-static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
-    let mut builder = SyntaxSet::load_defaults_nonewlines().into_builder();
-    for definition in [
-        little_clip_core::syntax::CONFIG_SUBLIME_SYNTAX,
-        little_clip_core::syntax::TYPESCRIPT_SUBLIME_SYNTAX,
-    ] {
-        match syntect::parsing::SyntaxDefinition::load_from_str(definition, false, None) {
-            Ok(syntax) => builder.add(syntax),
-            Err(error) => tracing::warn!(%error, "Could not load bundled syntax definition"),
-        }
-    }
-    builder.build()
-});
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| crate::syntax::build_syntax_set(false));
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 pub(crate) fn find_syntax(lang: &str) -> &'static SyntaxReference {
@@ -276,11 +264,20 @@ impl ScreenRenderer {
                         contents,
                         extension,
                     }) => (contents.as_str(), extension.as_deref()),
+                    // Preserve existing code-language title hints, but never
+                    // force native diagram rendering from a content-derived
+                    // clipboard title. Inference must allow a text fallback.
                     _ => (
                         text.as_str(),
                         Path::new(&item.title)
                             .extension()
-                            .and_then(|value| value.to_str()),
+                            .and_then(|value| value.to_str())
+                            .filter(|extension| {
+                                little_clip_core::diagram::Format::from_source_extension(
+                                    extension, text,
+                                )
+                                .is_none()
+                            }),
                     ),
                 };
 

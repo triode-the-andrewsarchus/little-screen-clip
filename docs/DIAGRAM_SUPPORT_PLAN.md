@@ -620,3 +620,31 @@ and repeated MIT license text. Those are not new application mechanisms; the
 verbatim license is intentionally retained. Existing widget/callback bodies were
 not rewritten to improve the score. Graphviz and BPMN share SVG composition
 rather than duplicating outlining, reference isolation and viewport limits.
+
+
+## Clipboard recognition checkpoint
+
+The little-screen text path now recognizes distinctive headers for the seven
+implemented non-math families: Mermaid, DOT, BPMN, Pikchr, Lini, D2 and SvgBob.
+The shared core hint is capped at 256 KiB and never executes a parser or changes
+the source. It deliberately leaves ambiguous edge-only D2 and bare equations as
+text. These are hints: incomplete input, worker/decoder failure and invalid source
+fall back to the existing highlighted text path. Actual file extensions still
+select their source format and explicit diagnostics. Content-derived diagram-looking clipboard
+titles cannot force native rendering; existing programming-language title hints
+remain in use so code is not mistaken for a table. Copied Markdown containing
+fenced diagrams uses the existing Markdown route too.
+
+Both raster and desktop syntax inventories now use the same builder and bundled
+diagram grammars, avoiding a second incomplete highlighter list. Source painting
+is separate from presentation classification; that reduces the old dispatcher's
+CCN from 24 to 15 while retaining its existing table/unit/network/time/model routes.
+Architecture comparison has one fewer clone group overall; remaining flagged
+clones are unchanged bodies in touched files. No new high-complexity function is
+reported. Clipboard editor routing and the remaining format families are still
+open; recognition must expand alongside each new adapter.
+
+Validation for this checkpoint: all 71 render-library tests pass (one existing
+ignored), plus four core diagram tests and fourteen core syntax tests. Strict
+Clippy for core/render/studios passes. Native diagram engines were unchanged;
+existing native-worker fixtures remain the parser/render compatibility checks.

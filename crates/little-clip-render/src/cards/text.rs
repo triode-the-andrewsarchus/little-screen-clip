@@ -259,6 +259,7 @@ impl ScreenRenderer {
                     max_content_w,
                     (max_y - y - 4.0).max(1.0),
                     body_color,
+                    false,
                 );
                 skipped_until = last + 1;
                 continue;
@@ -512,10 +513,17 @@ impl ScreenRenderer {
         elision_color: Color,
         collect_previews: bool,
     ) -> Option<crate::PreparedTextPreview> {
-        if let Some(format) = ext_hint.and_then(|extension| {
-            little_clip_core::diagram::Format::from_source_extension(extension, text)
-        }) {
-            self.draw_diagram_preview(
+        let inferred = ext_hint
+            .is_none()
+            .then(|| little_clip_core::diagram::Format::from_snippet(text))
+            .flatten();
+        if let Some(format) = ext_hint
+            .and_then(|extension| {
+                little_clip_core::diagram::Format::from_source_extension(extension, text)
+            })
+            .or(inferred)
+        {
+            let height = self.draw_diagram_preview(
                 pixmap,
                 format,
                 text,
@@ -524,10 +532,18 @@ impl ScreenRenderer {
                 (rw - 28.0).max(1.0),
                 (rh - 150.0).max(1.0),
                 self.color_from_hex(&self.palette.colors.text_primary),
+                inferred.is_some(),
             );
-            return None;
+            if height > 0.0 {
+                return None;
+            }
         }
-        if ext_hint.and_then(little_clip_core::syntax::map_extension_to_language) == Some("md") {
+        // A guessed diagram which does not render remains readable source. Its
+        // syntax hint also keeps table heuristics from consuming partial code.
+        let ext_hint = ext_hint.or_else(|| inferred.and_then(|format| format.source_extension()));
+        if ext_hint.and_then(little_clip_core::syntax::map_extension_to_language) == Some("md")
+            || (ext_hint.is_none() && little_clip_core::syntax::detect_markdown_text(text))
+        {
             self.draw_markdown_preview(
                 pixmap,
                 text,
@@ -595,6 +611,27 @@ impl ScreenRenderer {
             return None;
         }
 
+        self.draw_source_preview(
+            pixmap,
+            trimmed,
+            little_clip_core::syntax::detect_language(trimmed, ext_hint),
+            [rx, ry, rw, rh],
+            is_hero,
+            collect_previews,
+        )
+    }
+
+    // Keep source painting separate from presentation classification. Both an
+    // ordinary snippet and a rejected diagram use this exact fallback path.
+    fn draw_source_preview(
+        &self,
+        pixmap: &mut Pixmap,
+        trimmed: &str,
+        lang_id: &str,
+        [rx, ry, rw, rh]: [f32; 4],
+        is_hero: bool,
+        collect_previews: bool,
+    ) -> Option<crate::PreparedTextPreview> {
         let content_x = rx + 14.0;
         let clip_right = rx + rw - 10.0;
         let text_font_size = if is_hero { 18.0 } else { 15.0 };
@@ -608,7 +645,6 @@ impl ScreenRenderer {
         let max_y = ry + rh - 22.0;
         let mut line_y = ry + 124.0;
 
-        let lang_id = little_clip_core::syntax::detect_language(trimmed, ext_hint);
         let syntax = find_syntax(lang_id);
 
         let theme = THEME_SET
@@ -721,6 +757,7 @@ impl ScreenRenderer {
         width: f32,
         height: f32,
         foreground: Color,
+        text_fallback: bool,
     ) -> f32 {
         let result = self
             .diagram_previews
@@ -768,6 +805,7 @@ impl ScreenRenderer {
                 }
                 drawn_height + warning_height + 10.0
             }
+            Err(_) if text_fallback => 0.0,
             Err(error) => {
                 self.draw_text_styled_clipped(
                     pixmap,

@@ -562,6 +562,17 @@ pub const D2_SUBLIME_SYNTAX: &str = include_str!("syntax/d2.sublime-syntax");
 /// BPMN XML highlighting for native source/live-preview sessions.
 pub const BPMN_SUBLIME_SYNTAX: &str = include_str!("syntax/bpmn.sublime-syntax");
 
+/// Shared native diagram grammars used by both screen and desktop source views.
+pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
+    PIKCHR_SUBLIME_SYNTAX,
+    SVGBOB_SUBLIME_SYNTAX,
+    LINI_SUBLIME_SYNTAX,
+    GRAPHVIZ_SUBLIME_SYNTAX,
+    D2_SUBLIME_SYNTAX,
+    BPMN_SUBLIME_SYNTAX,
+    MERMAID_SUBLIME_SYNTAX,
+];
+
 /// Maps a language identifier to a compatible fallback language in syntect's default syntax set.
 pub fn syntect_fallback(lang: &str) -> &'static str {
     match lang {

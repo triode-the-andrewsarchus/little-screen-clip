@@ -64,6 +64,7 @@ pub enum RenderError {
 pub mod diagram;
 pub mod markdown;
 mod scene_preview;
+pub mod syntax;
 
 /// Canonical slot layout geometry computed by `little-clip-render`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

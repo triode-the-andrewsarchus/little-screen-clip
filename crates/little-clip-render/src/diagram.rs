@@ -550,6 +550,49 @@ mod tests {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
         let directory = tempfile::tempdir().unwrap();
         for (extension, content, format, source) in [
+            (
+                "",
+                "flowchart LR\nA-->B",
+                Format::Mermaid,
+                "flowchart LR\nA-->B",
+            ),
+            (
+                "",
+                "digraph { a -> b }",
+                Format::Graphviz,
+                "digraph { a -> b }",
+            ),
+            (
+                "",
+                "box \"Read\"; arrow; circle",
+                Format::Pikchr,
+                "box \"Read\"; arrow; circle",
+            ),
+            ("", "|box| \"Source\"", Format::Lini, "|box| \"Source\""),
+            (
+                "",
+                "direction: right\na -> b",
+                Format::D2,
+                "direction: right\na -> b",
+            ),
+            (
+                "",
+                "+----+\n|Hi! |\n+----+",
+                Format::Svgbob,
+                "+----+\n|Hi! |\n+----+",
+            ),
+            (
+                "",
+                "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL'/>",
+                Format::Bpmn,
+                "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL'/>",
+            ),
+            (
+                "",
+                "```mermaid\nflowchart LR\nA-->B\n```",
+                Format::Mermaid,
+                "flowchart LR\nA-->B\n",
+            ),
             ("md", "```d2\na -> b\n```", Format::D2, "a -> b\n"),
             ("d2", "a -> b\n", Format::D2, "a -> b\n"),
             (
@@ -626,7 +669,9 @@ mod tests {
             ),
         ] {
             let path = directory.path().join(format!("drawing.{extension}"));
-            std::fs::write(&path, content).unwrap();
+            if !extension.is_empty() {
+                std::fs::write(&path, content).unwrap();
+            }
             let renderer = crate::ScreenRenderer::fallback(Default::default());
             let math = matches!(format, Format::Math | Format::MathInline);
             let color = renderer.color_from_hex(&renderer.palette.colors.text_muted);
@@ -655,8 +700,10 @@ mod tests {
                     })),
                     prepared: std::time::Instant::now(),
                 });
-            let mut item = ClipItem::from_text("drawing");
-            item.payload = ClipPayload::FileBatch(vec![path]);
+            let mut item = ClipItem::from_text(content);
+            if !extension.is_empty() {
+                item.payload = ClipPayload::FileBatch(vec![path]);
+            }
             let mut slots = SlotManager::new();
             slots.push_left(item);
             let frame = renderer.render_pixmap(&slots).unwrap();

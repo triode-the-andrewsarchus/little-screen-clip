@@ -76,6 +76,44 @@ impl Format {
         })
     }
 
+    /// Recognizes distinctive diagram syntax in extensionless clipboard text.
+    ///
+    /// This is a bounded hint, not validation. Callers must fall back to text
+    /// when native rendering fails. Ambiguous edge-only D2 and bare math are not
+    /// claimed; explicit files and Markdown fences remain available for them.
+    pub fn from_snippet(source: &str) -> Option<Self> {
+        if source.len() > 256 * 1024 || source.contains('\0') {
+            return None;
+        }
+        let source = source.trim_start_matches('\u{feff}').trim();
+        let signatures = [
+            (Self::Mermaid, mermaid_signature as fn(&str) -> bool),
+            (Self::Graphviz, dot_signature),
+            (Self::Bpmn, bpmn_signature),
+            (Self::Pikchr, pikchr_signature),
+            (Self::Lini, lini_signature),
+            (Self::D2, d2_signature),
+            (Self::Svgbob, svgbob_signature),
+        ];
+        signatures
+            .iter()
+            .find_map(|(format, signature)| signature(source).then_some(*format))
+    }
+
+    /// Returns the preferred standalone source extension, excluding inline math.
+    pub const fn source_extension(self) -> Option<&'static str> {
+        match self {
+            Self::Pikchr => Some("pikchr"),
+            Self::Svgbob => Some("svgbob"),
+            Self::Mermaid => Some("mermaid"),
+            Self::Lini => Some("lini"),
+            Self::Graphviz => Some("gv"),
+            Self::D2 => Some("d2"),
+            Self::Bpmn => Some("bpmn"),
+            Self::Math | Self::MathInline => None,
+        }
+    }
+
     /// Returns the syntax's display name.
     pub const fn name(self) -> &'static str {
         match self {
@@ -89,6 +127,53 @@ impl Format {
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
+}
+
+fn pikchr_signature(source: &str) -> bool {
+    let first = source.lines().next().unwrap_or_default();
+    let (word, rest) = first.split_once(char::is_whitespace).unwrap_or((first, ""));
+    matches!(word, "box" | "circle" | "ellipse" | "oval" | "cylinder")
+        && rest.trim_start().starts_with('"')
+}
+
+fn lini_signature(source: &str) -> bool {
+    (source.starts_with('|') || source.starts_with('{'))
+        && source.lines().take(16).any(lini_declaration)
+}
+
+fn d2_signature(source: &str) -> bool {
+    source
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .strip_prefix("direction:")
+        .is_some_and(|value| matches!(value.trim(), "right" | "left" | "up" | "down"))
+        && source
+            .lines()
+            .skip(1)
+            .any(|line| line.contains("->") || line.contains("shape:"))
+}
+
+fn svgbob_signature(source: &str) -> bool {
+    let first = source.lines().next().unwrap_or_default();
+    first.starts_with('+')
+        && first.ends_with('+')
+        && first.bytes().all(|byte| matches!(byte, b'+' | b'-' | b' '))
+        && first.contains("--")
+        && source.lines().skip(1).any(|line| line.trim() == first)
+        && source.lines().any(|line| line.trim().starts_with('|'))
+}
+
+fn lini_declaration(line: &str) -> bool {
+    let Some(rest) = line.trim_start().strip_prefix('|') else {
+        return false;
+    };
+    let Some((component, label)) = rest.split_once('|') else {
+        return false;
+    };
+    let kind = component.split(['#', ' ', '.']).next().unwrap_or_default();
+    matches!(kind, "box" | "text" | "row" | "column" | "circle")
+        && label.trim_start().starts_with('"')
 }
 
 // Generic XML is claimed only by its actual, namespace-resolved root. A bounded
@@ -256,6 +341,46 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clipboard_diagrams_use_distinctive_bounded_signatures() {
+        for (source, format) in [
+            ("flowchart LR\nA[Source] --> B[Preview]", Format::Mermaid),
+            ("digraph { a -> b }", Format::Graphviz),
+            (
+                "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL'/>",
+                Format::Bpmn,
+            ),
+            ("box \"Read\"; arrow; circle \"Think\"", Format::Pikchr),
+            ("|box#read| \"Read\"\nread -> next", Format::Lini),
+            ("direction: right\na -> b", Format::D2),
+            ("+----+\n|Hi! |\n+----+", Format::Svgbob),
+        ] {
+            assert_eq!(Format::from_snippet(source), Some(format), "{source}");
+            assert_eq!(
+                Format::from_snippet(&format!("\u{feff}\n{source}\n")),
+                Some(format)
+            );
+            assert_eq!(
+                Format::from_extension(format.source_extension().unwrap()),
+                Some(format)
+            );
+        }
+        for source in [
+            "a -> b",
+            "A graph of the results.",
+            "direction: right",
+            "box(1, 2)",
+            "| Name | Value |\n| --- | --- |\n| box | 3 |",
+            "<definitions xmlns='urn:other'/>",
+            "```mermaid\nflowchart LR\nA-->B\n```",
+            "fn main() { println!(\"a -> b\"); }",
+        ] {
+            assert_eq!(Format::from_snippet(source), None, "{source}");
+        }
+        assert_eq!(Format::from_snippet(&"x".repeat(256 * 1024 + 1)), None);
+        assert_eq!(Format::from_snippet("digraph { a -> b }\0"), None);
+    }
+
     #[test]
     fn bpmn_xml_detection_requires_the_resolved_root_namespace() {
         let namespace = "http://www.omg.org/spec/BPMN/20100524/MODEL";
