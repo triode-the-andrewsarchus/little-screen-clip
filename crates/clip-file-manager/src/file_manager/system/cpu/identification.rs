@@ -33,19 +33,12 @@ fn decoded<R: CpuIdReader>(reader: &CpuId<R>) -> Vec<(&'static str, String)> {
 }
 
 struct Affinity {
-    original: libc::cpu_set_t,
+    original: rustix::thread::CpuSet,
     restored: bool,
 }
 impl Affinity {
     fn restore(&mut self) -> io::Result<()> {
-        // SAFETY: the initialized saved mask remains live for this call; pid 0
-        // changes only this helper thread's scheduling affinity.
-        if unsafe {
-            libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &self.original)
-        } != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
+        rustix::thread::sched_setaffinity(None, &self.original)?;
         self.restored = true;
         Ok(())
     }
@@ -59,7 +52,7 @@ impl Drop for Affinity {
 }
 
 fn pinned(id: u32) -> io::Result<Vec<(&'static str, String)>> {
-    if id as usize >= libc::CPU_SETSIZE as usize {
+    if id as usize >= rustix::thread::CpuSet::MAX_CPU {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "CPU exceeds bounded affinity-mask capacity",
@@ -73,30 +66,19 @@ fn pinned(id: u32) -> io::Result<Vec<(&'static str, String)>> {
             "CPUID execution is disabled or unverified",
         ));
     }
-    // SAFETY: zero is a valid empty CPU mask; getaffinity writes the owned mask.
-    let mut original: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    if unsafe { libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mut original) }
-        != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
+    let original = rustix::thread::sched_getaffinity(None)?;
     let mut guard = Affinity {
         original,
         restored: false,
     };
-    // SAFETY: the CPU index was checked against CPU_SETSIZE and the mask is live.
-    let mut selected: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    unsafe { libc::CPU_SET(id as usize, &mut selected) };
-    if unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &selected) } != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: sched_getcpu has no pointer arguments or side effects.
-    if unsafe { libc::sched_getcpu() } != id as i32 {
+    let mut selected = rustix::thread::CpuSet::new();
+    selected.set(id as usize);
+    rustix::thread::sched_setaffinity(None, &selected)?;
+    if rustix::thread::sched_getcpu() != id as usize {
         return Err(io::Error::other("CPU placement could not be verified"));
     }
     let result = decoded(&CpuId::new());
-    if unsafe { libc::sched_getcpu() } != id as i32 {
+    if rustix::thread::sched_getcpu() != id as usize {
         return Err(io::Error::other("CPU changed during CPUID observation"));
     }
     guard.restore()?;

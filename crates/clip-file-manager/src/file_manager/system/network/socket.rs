@@ -2,7 +2,7 @@
 use super::codec;
 use std::{
     io,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    os::fd::OwnedFd,
     time::{Duration, Instant},
 };
 pub(super) struct Query {
@@ -14,33 +14,13 @@ pub(super) struct Query {
 }
 impl Query {
     pub fn new() -> io::Result<Self> {
-        // SAFETY: socket takes integer constants and returns an owned descriptor.
-        let fd = unsafe {
-            libc::socket(
-                libc::AF_NETLINK,
-                libc::SOCK_RAW | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-                libc::NETLINK_ROUTE,
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: successful socket descriptor is uniquely owned; sockaddr_nl is
-        // a plain integer C structure and zero initializes its padding/groups.
-        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-        let mut address: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
-        address.nl_family = libc::AF_NETLINK as u16;
-        // SAFETY: pointer and length describe a live sockaddr_nl; fd is valid.
-        let result = unsafe {
-            libc::bind(
-                fd.as_raw_fd(),
-                (&address as *const libc::sockaddr_nl).cast(),
-                std::mem::size_of_val(&address) as u32,
-            )
-        };
-        if result < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        let fd = rustix::net::socket_with(
+            rustix::net::AddressFamily::NETLINK,
+            rustix::net::SocketType::RAW,
+            rustix::net::SocketFlags::CLOEXEC | rustix::net::SocketFlags::NONBLOCK,
+            None,
+        )?;
+        rustix::net::bind(&fd, &rustix::net::netlink::SocketAddrNetlink::new(0, 0))?;
         Ok(Self {
             fd,
             started: Instant::now(),
@@ -79,23 +59,12 @@ impl Query {
     fn send(&mut self, index: u32, addresses: bool) -> io::Result<u32> {
         self.sequence += 1;
         let request = request(index, addresses, self.sequence)?;
-        // SAFETY: sockaddr_nl is an integer-only C structure. Destination PID 0
-        // is the kernel, with no multicast groups. Buffers remain live for send.
-        let mut target: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
-        target.nl_family = libc::AF_NETLINK as u16;
-        let sent = unsafe {
-            libc::sendto(
-                self.fd.as_raw_fd(),
-                request.as_ptr().cast(),
-                request.len(),
-                libc::MSG_DONTWAIT,
-                (&target as *const libc::sockaddr_nl).cast(),
-                std::mem::size_of_val(&target) as u32,
-            )
-        };
-        if sent < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        let sent = rustix::net::sendto(
+            &self.fd,
+            &request,
+            rustix::net::SendFlags::DONTWAIT,
+            &rustix::net::netlink::SocketAddrNetlink::new(0, 0),
+        )?;
         if sent as usize != request.len() {
             return Err(io::Error::from(io::ErrorKind::WriteZero));
         }
@@ -112,20 +81,19 @@ impl Query {
                     "Netlink response budget exhausted",
                 ));
             }
-            let mut poll = libc::pollfd {
-                fd: self.fd.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
+            let mut fds = [rustix::event::PollFd::new(
+                &self.fd,
+                rustix::event::PollFlags::IN,
+            )];
+            let timeout = rustix::event::Timespec {
+                tv_sec: 0,
+                tv_nsec: remaining.as_millis().max(1) as i64 * 1_000_000,
             };
-            // SAFETY: one valid, writable pollfd; timeout is capped at 500 ms.
-            let ready = unsafe { libc::poll(&mut poll, 1, remaining.as_millis().max(1) as i32) };
-            if ready < 0 {
-                let error = io::Error::last_os_error();
-                if error.kind() == io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err(error);
-            }
+            let ready = match rustix::event::poll(&mut fds, Some(&timeout)) {
+                Ok(ready) => ready,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(error) => return Err(error.into()),
+            };
             if ready == 0 {
                 return Err(io::Error::from(io::ErrorKind::TimedOut));
             }
@@ -145,39 +113,26 @@ impl Query {
     }
     fn datagram(&mut self) -> io::Result<Vec<u8>> {
         let mut buffer = vec![0u8; 64 * 1024];
-        // SAFETY: recvfrom receives into bounded writable storage and a valid
-        // address structure; MSG_TRUNC reports oversized datagrams explicitly.
-        let mut sender: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
-        let mut size = std::mem::size_of_val(&sender) as libc::socklen_t;
-        let count = unsafe {
-            libc::recvfrom(
-                self.fd.as_raw_fd(),
-                buffer.as_mut_ptr().cast(),
-                buffer.len(),
-                libc::MSG_DONTWAIT | libc::MSG_TRUNC,
-                (&mut sender as *mut libc::sockaddr_nl).cast(),
-                &mut size,
-            )
-        };
-        if count < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        let (_, count, sender) = rustix::net::recvfrom(
+            &self.fd,
+            buffer.as_mut_slice(),
+            rustix::net::RecvFlags::DONTWAIT | rustix::net::RecvFlags::TRUNC,
+        )?;
         if count == 0 {
             return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
         }
-        if size as usize != std::mem::size_of_val(&sender)
-            || sender.nl_family != libc::AF_NETLINK as u16
-            || sender.nl_pid != 0
-            || sender.nl_groups != 0
-        {
+        let sender = sender
+            .and_then(|address| rustix::net::netlink::SocketAddrNetlink::try_from(address).ok())
+            .ok_or_else(codec::malformed)?;
+        if sender.pid() != 0 || sender.groups() != 0 {
             return Err(codec::malformed());
         }
         self.packets += 1;
-        self.bytes += count as usize;
-        if count as usize > buffer.len() || self.bytes > 2 * 1024 * 1024 {
+        self.bytes += count;
+        if count > buffer.len() || self.bytes > 2 * 1024 * 1024 {
             return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
         }
-        buffer.truncate(count as usize);
+        buffer.truncate(count);
         Ok(buffer)
     }
     fn receive(&mut self, sequence: u32, dump: bool) -> io::Result<Vec<(u16, Vec<u8>)>> {

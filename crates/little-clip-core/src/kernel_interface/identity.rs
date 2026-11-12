@@ -72,25 +72,14 @@ impl MountIdentity {
     /// # Errors
     /// Returns metadata or `statx` failures, including an unavailable mount ID.
     pub fn pinned(file: &std::fs::File) -> std::io::Result<Self> {
-        use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+        use std::os::unix::fs::MetadataExt;
         let metadata = file.metadata()?;
-        let mut stats = std::mem::MaybeUninit::<libc::statx>::uninit();
-        // SAFETY: the live O_PATH descriptor is queried using an empty C string;
-        // stats points to writable storage for the complete statx structure.
-        if unsafe {
-            libc::statx(
-                file.as_raw_fd(),
-                c"".as_ptr(),
-                libc::AT_EMPTY_PATH,
-                libc::STATX_MNT_ID,
-                stats.as_mut_ptr(),
-            )
-        } != 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: successful statx initialized the structure.
-        let stats = unsafe { stats.assume_init() };
+        let stats = rustix::fs::statx(
+            file,
+            "",
+            rustix::fs::AtFlags::EMPTY_PATH,
+            rustix::fs::StatxFlags::MNT_ID,
+        )?;
         if stats.stx_mask & libc::STATX_MNT_ID == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,

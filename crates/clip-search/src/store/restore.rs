@@ -293,8 +293,7 @@ pub fn clean_staging(directory: &Path) -> Result<(), String> {
             continue;
         }
         let metadata = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
-        // SAFETY: geteuid takes no arguments and has no side effects.
-        let owned = metadata.uid() == unsafe { libc::geteuid() };
+        let owned = metadata.uid() == rustix::process::geteuid().as_raw();
         if restore && metadata.is_file() && owned && metadata.mode() & 0o777 == 0o600 {
             std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
         } else if recovery && metadata.is_dir() && owned && metadata.mode() & 0o022 == 0 {
@@ -311,13 +310,7 @@ pub fn clean_staging(directory: &Path) -> Result<(), String> {
 }
 
 fn require_space(directory: &File, reserve: u64) -> Result<(), String> {
-    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: fstatvfs initializes this buffer on success; directory stays owned.
-    if unsafe { libc::fstatvfs(directory.as_raw_fd(), stats.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    // SAFETY: the successful syscall initialized every field.
-    let stats = unsafe { stats.assume_init() };
+    let stats = rustix::fs::fstatvfs(directory).map_err(|error| error.to_string())?;
     let available = stats.f_bavail.saturating_mul(stats.f_frsize);
     if available < reserve.saturating_add(8 * 1024 * 1024) {
         return Err("Not enough free space to stage and transactionally restore the index".into());

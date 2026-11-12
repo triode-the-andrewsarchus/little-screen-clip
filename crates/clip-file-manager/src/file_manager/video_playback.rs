@@ -11,7 +11,6 @@ use little_clip_core::{
 use std::{
     fs::File,
     io::{self, Read, Write},
-    os::fd::AsRawFd,
     process::{Child, ChildStdin, ChildStdout, Stdio},
     sync::{
         Arc, LazyLock, Mutex,
@@ -289,17 +288,10 @@ impl Connection {
             pending: None,
         };
         // SAFETY: this connection exclusively owns its control pipe descriptor.
-        let flags = unsafe { libc::fcntl(connection.input.as_raw_fd(), libc::F_GETFL) };
-        if flags < 0
-            || unsafe {
-                libc::fcntl(
-                    connection.input.as_raw_fd(),
-                    libc::F_SETFL,
-                    flags | libc::O_NONBLOCK,
-                )
-            } < 0
-        {
-            return Err(io::Error::last_os_error().to_string());
+        if let Err(error) = rustix::fs::fcntl_getfl(&connection.input).and_then(|flags| {
+            rustix::fs::fcntl_setfl(&connection.input, flags | rustix::fs::OFlags::NONBLOCK)
+        }) {
+            return Err(error.to_string());
         }
         Ok(connection)
     }
@@ -362,20 +354,21 @@ impl Read for Reader<'_> {
                 self.last_guard = Instant::now();
             }
             self.connection.controls(&self.worker.pending)?;
-            let mut descriptor = libc::pollfd {
-                fd: self.connection.output.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
+            let mut fds = [rustix::event::PollFd::new(
+                &self.connection.output,
+                rustix::event::PollFlags::IN,
+            )];
+            let ready = match rustix::event::poll(
+                &mut fds,
+                Some(&rustix::event::Timespec {
+                    tv_sec: 0,
+                    tv_nsec: 10_000_000,
+                }),
+            ) {
+                Ok(ready) => ready,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(error) => return Err(error.into()),
             };
-            // SAFETY: the descriptor borrows this worker's live, exclusively read pipe.
-            let ready = unsafe { libc::poll(&mut descriptor, 1, 10) };
-            if ready < 0 {
-                let error = io::Error::last_os_error();
-                if error.kind() == io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err(error);
-            }
             if ready == 0 {
                 continue;
             }

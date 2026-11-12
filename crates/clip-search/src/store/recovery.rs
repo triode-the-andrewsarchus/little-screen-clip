@@ -35,10 +35,7 @@ impl Drop for IndexOwner {
         // A concurrent fork can briefly inherit this open-file description even
         // with CLOEXEC. Retire ownership explicitly rather than waiting for all
         // inherited descriptors to close after their exec.
-        // SAFETY: the lock descriptor remains owned and live during Drop.
-        unsafe {
-            libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN);
-        }
+        let _ = self._lock.unlock();
     }
 }
 impl IndexOwner {
@@ -52,8 +49,7 @@ impl IndexOwner {
             .map_err(|e| e.to_string())?;
         require_local_storage(&directory)?;
         let lock = open_private(&held.join("index.lock"))?;
-        // SAFETY: the owned file remains live for the entire ownership lifetime.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        if lock.try_lock().is_err() {
             return Err("Another file manager owns the search index".into());
         }
         let owner = Self {

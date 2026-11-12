@@ -1,7 +1,6 @@
 //! One bounded udev observation stream shared by every semantic preview.
 use std::{
     collections::VecDeque,
-    os::fd::AsRawFd,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
@@ -49,23 +48,30 @@ fn listen(state: Arc<State>) {
 }
 fn monitor(state: &State, socket: &udev::MonitorSocket) {
     while !state.stop.load(Ordering::Acquire) {
-        let mut pollfd = libc::pollfd {
-            fd: socket.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: pollfd is initialized and writable for the single-descriptor poll.
-        let result = unsafe { libc::poll(&mut pollfd, 1, 250) };
-        if result < 0 {
-            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                continue;
-            }
+        let mut fds = [rustix::event::PollFd::new(
+            socket,
+            rustix::event::PollFlags::IN,
+        )];
+        match rustix::event::poll(
+            &mut fds,
+            Some(&rustix::event::Timespec {
+                tv_sec: 0,
+                tv_nsec: 250_000_000,
+            }),
+        ) {
+            Ok(_) => {}
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(_) => return,
+        }
+        let events = fds[0].revents();
+        if events.intersects(
+            rustix::event::PollFlags::ERR
+                | rustix::event::PollFlags::HUP
+                | rustix::event::PollFlags::NVAL,
+        ) {
             return;
         }
-        if pollfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
-            return;
-        }
-        if pollfd.revents & libc::POLLIN == 0 {
+        if !events.contains(rustix::event::PollFlags::IN) {
             continue;
         }
         let mut incoming = socket.iter();

@@ -9,6 +9,7 @@ license.workspace = true
 test-support = []
 
 [dependencies]
+rustix.workspace = true
 little-clip-core = { path = "../little-clip-core" }
 serde_json.workspace = true
 serde.workspace = true

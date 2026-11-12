@@ -4,7 +4,6 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    os::fd::AsRawFd,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Stdio},
     sync::{
@@ -216,14 +215,12 @@ impl Model {
             let _ = child.wait();
             return Err("Model input/output pipes unavailable".into());
         };
-        let flags = unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFL) };
-        if flags < 0
-            || unsafe { libc::fcntl(input.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) }
-                != 0
+        if let Err(error) = rustix::fs::fcntl_getfl(&input)
+            .and_then(|flags| rustix::fs::fcntl_setfl(&input, flags | rustix::fs::OFlags::NONBLOCK))
         {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(std::io::Error::last_os_error().to_string());
+            return Err(error.to_string());
         }
         let (replies, reader) = match reply_reader(output) {
             Ok(reader) => reader,

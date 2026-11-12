@@ -9,6 +9,7 @@ license.workspace = true
 test-support = []
 
 [dependencies]
+rustix.workspace = true
 clip-media-protocol = { path = "../clip-media-protocol" }
 libc = "0.2"
 imagesize = "0.12"

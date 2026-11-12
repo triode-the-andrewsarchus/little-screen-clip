@@ -9,7 +9,7 @@ safety argument; a comment alone does not repair an invalid invariant.
 - [x] Replace manual GPU uniform `Pod`/`Zeroable` assertions with checked derives and raw-pointer parallel slice splitting with safe splits.
 - [x] Correct the scalar filter fallback's sample-width calculation and remove its unchecked access; forced scalar tests cover empty/short/long rows and delayed filtering.
 - [x] Correct pixel-row stride validation before conversion; reject source/destination rectangles wider than the declared row, including buffers whose total storage is otherwise large enough.
-- [ ] Replace avoidable OS calls with existing safe descriptor-based APIs.
+- [x] Replace avoidable OS calls with existing safe descriptor-based APIs. `rustix` was already locked transitively; direct workspace dependencies now cover flags, polling, metadata/statx/openat2, CPU masks, netlink, resource limits and signals. Inherited raw integers are duplicated in the kernel before constructing owned handles, and their source/output policy is still checked separately. Native SQLite locking uses `File::try_lock`/`unlock`.
 - [ ] Audit native codec/SQLite/Wayland ownership, buffers and callbacks.
 - [ ] Review remaining vendor SIMD, thread guarantees and standalone I/O lifetimes.
 - [x] Retain uncertain io_uring buffers after fatal drain failure instead of treating ring closure as completion; the three standalone direct/prefetch/error tests pass.

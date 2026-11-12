@@ -3,7 +3,7 @@
 //! Browser visibility is deliberately independent from indexing permission.
 use std::{
     fs::File,
-    os::fd::{AsRawFd, FromRawFd},
+    os::fd::AsRawFd,
     path::{Component, Path, PathBuf},
 };
 
@@ -345,35 +345,16 @@ impl Root {
 // Linux openat2 resolves the entire relative path under the retained root.
 // A final mount-ID comparison alone misses paths that cross out and back in.
 fn pin_beneath(directory: &File, path: &Path) -> std::io::Result<File> {
-    #[repr(C)]
-    struct OpenHow {
-        flags: u64,
-        mode: u64,
-        resolve: u64,
-    }
-    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid search path")
-    })?;
-    let how = OpenHow {
-        flags: (libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW) as u64,
-        mode: 0,
-        resolve: 0x01 | 0x04 | 0x08, // NO_XDEV | NO_SYMLINKS | BENEATH (linux/openat2.h)
-    };
-    // SAFETY: directory is live; both pointers describe initialized ABI structures.
-    let descriptor = unsafe {
-        libc::syscall(
-            libc::SYS_openat2,
-            directory.as_raw_fd(),
-            path.as_ptr(),
-            &how,
-            std::mem::size_of::<OpenHow>(),
-        )
-    };
-    if descriptor < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: successful openat2 returned one new owned descriptor.
-    Ok(unsafe { File::from_raw_fd(descriptor as i32) })
+    let descriptor = rustix::fs::openat2(
+        directory,
+        path,
+        rustix::fs::OFlags::PATH | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::NO_XDEV
+            | rustix::fs::ResolveFlags::NO_SYMLINKS
+            | rustix::fs::ResolveFlags::BENEATH,
+    )?;
+    Ok(File::from(descriptor))
 }
 
 /// Validates the existing index limits, exclusions and automatic-search settings.

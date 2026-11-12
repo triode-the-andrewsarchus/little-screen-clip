@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+rustix.workspace = true
 little-clip-core = { path = "../little-clip-core" }
 little-clip-driver = { path = "../little-clip-driver" }
 little-clip-render = { path = "../little-clip-render" }

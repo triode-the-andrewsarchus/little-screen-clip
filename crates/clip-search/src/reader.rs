@@ -211,18 +211,12 @@ fn restore_helper(
     max_vectors: u64,
     page_size: u32,
 ) -> Result<Reply, String> {
-    use std::os::fd::BorrowedFd;
     if fds.iter().any(|fd| *fd < 3) || fds[0] == fds[1] || fds[1] == fds[2] || fds[0] == fds[2] {
         return Err("Invalid inherited restore descriptors".into());
     }
     let handles = fds
         .map(|fd| {
-            // SAFETY: these descriptors are inherited from owned handles. Cloning
-            // validates them without taking ownership of the original numbers.
-            unsafe { BorrowedFd::borrow_raw(fd) }
-                .try_clone_to_owned()
-                .map(std::fs::File::from)
-                .map_err(|e| e.to_string())
+            little_clip_core::process::duplicate_inherited_handle(fd).map_err(|e| e.to_string())
         })
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
@@ -301,17 +295,17 @@ fn reader_limits(request: &Request) -> Result<(), String> {
         _ => (60, 70),
     };
     for (resource, soft, hard) in [
-        (libc::RLIMIT_AS, 2_147_483_648, 2_147_483_648),
-        (libc::RLIMIT_CPU, cpu, hard),
+        (rustix::process::Resource::As, 2_147_483_648, 2_147_483_648),
+        (rustix::process::Resource::Cpu, cpu, hard),
     ] {
-        let limit = libc::rlimit {
-            rlim_cur: soft,
-            rlim_max: hard,
-        };
-        // SAFETY: this affects only the owned reader subprocess and its children.
-        if unsafe { libc::setrlimit(resource, &limit) } != 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
+        rustix::process::setrlimit(
+            resource,
+            rustix::process::Rlimit {
+                current: Some(soft),
+                maximum: Some(hard),
+            },
+        )
+        .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -421,19 +415,20 @@ fn attach_watch(root: &SourceRoot, path: &Path, fd: i32) -> Result<WatchRegistra
         | libc::IN_MOVED_TO
         | libc::IN_DELETE_SELF
         | libc::IN_MOVE_SELF;
-    // SAFETY: fd is an explicitly inherited inotify instance, label names the
-    // held ordinary directory, and the kernel copies its nul-terminated bytes.
-    let wd = unsafe { libc::inotify_add_watch(fd, label.as_ptr(), mask) };
-    if wd < 0 {
-        return Ok(WatchRegistration::Unavailable(
-            std::io::Error::last_os_error().to_string(),
-        ));
-    }
+    let instance = match little_clip_core::process::duplicate_inherited_handle(fd) {
+        Ok(instance) => instance,
+        Err(error) => return Ok(WatchRegistration::Unavailable(error.to_string())),
+    };
+    let wd = match rustix::fs::inotify::add_watch(
+        &instance,
+        label.as_c_str(),
+        rustix::fs::inotify::WatchFlags::from_bits_retain(mask),
+    ) {
+        Ok(wd) => wd,
+        Err(error) => return Ok(WatchRegistration::Unavailable(error.to_string())),
+    };
     if let Err(error) = folder.revalidate().and_then(|_| origin.revalidate()) {
-        // SAFETY: remove only the registration just returned by this instance.
-        unsafe {
-            libc::inotify_rm_watch(fd, wd);
-        }
+        let _ = rustix::fs::inotify::remove_watch(&instance, wd);
         return Err(error);
     }
     Ok(WatchRegistration::Ready(wd))

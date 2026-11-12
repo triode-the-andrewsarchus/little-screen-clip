@@ -4,7 +4,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs::File,
     io::Read,
-    os::fd::{AsRawFd, FromRawFd},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -146,10 +145,7 @@ impl Monitor {
     }
     fn remove_watch(&self, wd: i32) {
         if let Some(fd) = &self.fd {
-            // SAFETY: fd owns this inotify instance; wd came from it.
-            unsafe {
-                libc::inotify_rm_watch(fd.as_raw_fd(), wd);
-            }
+            let _ = rustix::fs::inotify::remove_watch(fd, wd);
         }
     }
     pub fn prepare_watch(&mut self, pending: usize) -> Result<Arc<File>, String> {
@@ -159,12 +155,12 @@ impl Monitor {
             return Err("Directory watch limit reached".into());
         }
         if self.fd.is_none() {
-            // SAFETY: successful initialization returns a newly owned descriptor.
-            let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
-            if fd < 0 {
-                return Err(std::io::Error::last_os_error().to_string());
-            }
-            self.fd = Some(Arc::new(unsafe { File::from_raw_fd(fd) }));
+            let fd = rustix::fs::inotify::init(
+                rustix::fs::inotify::CreateFlags::NONBLOCK
+                    | rustix::fs::inotify::CreateFlags::CLOEXEC,
+            )
+            .map_err(|error| error.to_string())?;
+            self.fd = Some(Arc::new(File::from(fd)));
         }
         Ok(self.fd.as_ref().unwrap().clone())
     }

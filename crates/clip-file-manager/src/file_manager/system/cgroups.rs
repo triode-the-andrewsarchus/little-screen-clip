@@ -9,7 +9,7 @@ use super::{
     model::{Fact, Outcome, Value},
 };
 use little_clip_core::kernel_interface;
-use std::{collections::BTreeSet, io, os::fd::AsRawFd, path::Path};
+use std::{collections::BTreeSet, io, path::Path};
 
 /// Captured hierarchy origin, revalidated before following parent/child links.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -278,13 +278,7 @@ impl Version {
 }
 fn version(root: &Path) -> io::Result<Version> {
     let file = kernel_interface::pin(root, true)?;
-    let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
-    // SAFETY: live pinned descriptor and writable statfs storage.
-    if unsafe { libc::fstatfs(file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: successful fstatfs initialized the structure.
-    match unsafe { stat.assume_init() }.f_type as u64 {
+    match rustix::fs::fstatfs(&file)?.f_type as u64 {
         0x63677270 => Ok(Version::Unified),
         0x27e0eb => Ok(Version::Legacy),
         _ => Err(io::Error::new(

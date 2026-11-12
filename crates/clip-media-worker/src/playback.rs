@@ -686,13 +686,11 @@ struct Commands {
 }
 impl Commands {
     fn new() -> Result<Self> {
-        // SAFETY: stdin is this disposable worker's owned control pipe.
-        let flags = unsafe { libc::fcntl(0, libc::F_GETFL) };
-        if flags < 0 || unsafe { libc::fcntl(0, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-            return Err(message(std::io::Error::last_os_error()));
-        }
+        let stdin = std::io::stdin();
+        let flags = rustix::fs::fcntl_getfl(&stdin).map_err(message)?;
+        rustix::fs::fcntl_setfl(&stdin, flags | rustix::fs::OFlags::NONBLOCK).map_err(message)?;
         Ok(Self {
-            stdin: std::io::stdin(),
+            stdin,
             bytes: Vec::new(),
         })
     }

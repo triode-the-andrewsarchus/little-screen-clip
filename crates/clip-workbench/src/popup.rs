@@ -39,7 +39,10 @@ fn instance_lock_path() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("little-clip-{}", unsafe { libc::geteuid() }))
+            std::env::temp_dir().join(format!(
+                "little-clip-{}",
+                rustix::process::geteuid().as_raw()
+            ))
         })
         .join("clip-workbench.lock")
 }

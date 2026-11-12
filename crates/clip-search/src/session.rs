@@ -2,7 +2,7 @@
 use super::policy::Root;
 use little_clip_core::kernel_interface::Namespace;
 use serde::{Deserialize, Serialize};
-use std::{fs::File, io::Read, os::fd::AsRawFd};
+use std::{fs::File, io::Read};
 
 /// Boot, namespace, mount and filesystem observations for source continuity.
 ///
@@ -45,13 +45,7 @@ impl SourceSession {
     }
 }
 fn filesystem_type(file: &File) -> Option<i64> {
-    let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
-    // SAFETY: file is live and fstatfs initializes the complete output on success.
-    if unsafe { libc::fstatfs(file.as_raw_fd(), stats.as_mut_ptr()) } != 0 {
-        return None;
-    }
-    // SAFETY: successful fstatfs initialized stats.
-    Some(unsafe { stats.assume_init() }.f_type)
+    Some(rustix::fs::fstatfs(file).ok()?.f_type as i64)
 }
 fn boot_id() -> Option<uuid::Uuid> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -73,23 +67,13 @@ fn unique_mount(file: &File) -> Option<u64> {
     // Linux UAPI linux/stat.h: STATX_MNT_ID_UNIQUE. Older kernels may omit it;
     // a reusable mount ID must never be mistaken for this lifetime identifier.
     const UNIQUE: u32 = 0x00004000;
-    let mut stats = std::mem::MaybeUninit::<libc::statx>::uninit();
-    // SAFETY: the descriptor is live, the empty path is NUL terminated and stats
-    // points to writable storage for the full kernel ABI structure.
-    if unsafe {
-        libc::statx(
-            file.as_raw_fd(),
-            c"".as_ptr(),
-            libc::AT_EMPTY_PATH | libc::AT_STATX_DONT_SYNC,
-            UNIQUE,
-            stats.as_mut_ptr(),
-        )
-    } != 0
-    {
-        return None;
-    }
-    // SAFETY: successful statx initialized stats.
-    let stats = unsafe { stats.assume_init() };
+    let stats = rustix::fs::statx(
+        file,
+        "",
+        rustix::fs::AtFlags::EMPTY_PATH | rustix::fs::AtFlags::STATX_DONT_SYNC,
+        rustix::fs::StatxFlags::from_bits_retain(UNIQUE),
+    )
+    .ok()?;
     (stats.stx_mask & UNIQUE != 0 && stats.stx_mnt_id != 0).then_some(stats.stx_mnt_id)
 }
 

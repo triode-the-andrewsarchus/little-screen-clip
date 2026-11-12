@@ -2,7 +2,7 @@
 
 use std::ffi::{CString, OsString};
 use std::io::Write;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -421,30 +421,23 @@ impl NamingOperation {
         let name = CString::new(self.name.as_bytes()).map_err(|error| error.to_string())?;
         let fd = directory.as_raw_fd();
         let result = match &self.action {
-            NamingAction::Folder => {
-                // SAFETY: fd stays open, name is NUL-terminated, and mkdirat
-                // creates one validated leaf relative to this directory.
-                unsafe { libc::mkdirat(fd, name.as_ptr(), 0o777) }
-            }
-            NamingAction::File => {
-                // SAFETY: same directory/name invariants. O_EXCL prevents both
-                // overwriting a file and following a pre-existing destination link.
-                let created = unsafe {
-                    libc::openat(
-                        fd,
-                        name.as_ptr(),
-                        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
-                        0o666,
-                    )
-                };
-                if created >= 0 {
-                    // SAFETY: openat returned a newly owned descriptor.
-                    drop(unsafe { OwnedFd::from_raw_fd(created) });
-                    0
-                } else {
-                    -1
-                }
-            }
+            NamingAction::Folder => rustix::fs::mkdirat(
+                directory,
+                name.as_c_str(),
+                rustix::fs::Mode::from_raw_mode(0o777),
+            )
+            .map_err(std::io::Error::from),
+            NamingAction::File => rustix::fs::openat(
+                directory,
+                name.as_c_str(),
+                rustix::fs::OFlags::WRONLY
+                    | rustix::fs::OFlags::CREATE
+                    | rustix::fs::OFlags::EXCL
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::from_raw_mode(0o666),
+            )
+            .map(drop)
+            .map_err(std::io::Error::from),
             NamingAction::Rename(source) => {
                 if source.parent() != Some(self.parent.as_path()) {
                     return Err("Rename source is outside the captured folder".into());
@@ -458,13 +451,11 @@ impl NamingOperation {
                 )?;
                 super::filesystem::rename_at_noreplace(fd, source_name, fd, &self.name)
                     .map_err(|e| e.to_string())?;
-                0
+                Ok(())
             }
             NamingAction::Content(_) => unreachable!("content is staged above"),
         };
-        if result < 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
+        result.map_err(|error| error.to_string())?;
         let destination = self.parent.join(&self.name);
         if let NamingAction::Rename(source) = &self.action
             && let Err(error) = super::photo_ratings::relocate(source, &destination)

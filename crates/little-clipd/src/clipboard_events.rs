@@ -4,7 +4,7 @@ use std::{
     fs::File,
     io::{self, Write},
     os::{
-        fd::{AsFd, AsRawFd, OwnedFd},
+        fd::{AsFd, OwnedFd},
         unix::net::UnixStream,
     },
     sync::{
@@ -206,20 +206,26 @@ fn run(
         let Some(read) = queue.prepare_read() else {
             continue;
         };
-        let mut fd = libc::pollfd {
-            fd: read.connection_fd().as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
+        let ready = {
+            let descriptor = read.connection_fd();
+            let mut fds = [rustix::event::PollFd::new(
+                &descriptor,
+                rustix::event::PollFlags::IN,
+            )];
+            rustix::event::poll(
+                &mut fds,
+                Some(&rustix::event::Timespec {
+                    tv_sec: 0,
+                    tv_nsec: 25_000_000,
+                }),
+            )
         };
-        // SAFETY: one initialized pollfd, valid for this call, and a bounded timeout.
-        let ready = unsafe { libc::poll(&mut fd, 1, 25) };
-        if ready < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(error.into());
+        match ready {
+            Ok(0) | Err(rustix::io::Errno::INTR) => {}
+            Ok(_) => {
+                read.read()?;
             }
-        } else if ready > 0 {
-            read.read()?;
+            Err(error) => return Err(error.into()),
         }
     }
 }
@@ -345,11 +351,10 @@ impl Dispatch<source::ZwlrDataControlSourceV1, Arc<[u8]>> for State {
 
 async fn write_selection(fd: OwnedFd, mut bytes: &[u8]) -> io::Result<()> {
     // SAFETY: fd is owned and valid. Only its file-status flags are changed.
-    let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
-    if flags < 0
-        || unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    if let Err(error) = rustix::fs::fcntl_getfl(&fd)
+        .and_then(|flags| rustix::fs::fcntl_setfl(&fd, flags | rustix::fs::OFlags::NONBLOCK))
     {
-        return Err(io::Error::last_os_error());
+        return Err(error.into());
     }
     // SAFETY: AsyncFd owns this nonblocking file until registration is removed.
     // It is never closed or replaced through an alias while registered.

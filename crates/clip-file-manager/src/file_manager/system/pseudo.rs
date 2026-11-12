@@ -188,7 +188,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         // A root-run suite cannot manufacture an ordinary DAC denial this way.
         // SAFETY: geteuid only queries this process's credentials.
-        if unsafe { libc::geteuid() } == 0 {
+        if rustix::process::geteuid().as_raw() == 0 {
             return;
         }
         let root = tempfile::tempdir().unwrap();

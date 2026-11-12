@@ -19,6 +19,28 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use wait_timeout::ChildExt;
 
+/// Duplicates an inherited descriptor without adopting the supplied number.
+///
+/// The duplicate is close-on-exec and at least descriptor 3. Invalid integers
+/// return an error without constructing an invalid borrowed descriptor. Callers
+/// still validate the input's content policy or the output's transport role.
+///
+/// # Errors
+/// Returns descriptor validation, allocation or process-limit errors from `fcntl`.
+pub fn duplicate_inherited_handle(
+    descriptor: std::os::fd::RawFd,
+) -> std::io::Result<std::fs::File> {
+    // SAFETY: F_DUPFD_CLOEXEC accepts an integer, validates it in the kernel,
+    // and returns an independent live descriptor. No pointer is dereferenced.
+    let duplicate = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 3) };
+    if duplicate < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: successful fcntl returned a new descriptor owned only by us. File
+    // takes that ownership once, retaining it until Drop; the original is untouched.
+    Ok(unsafe { std::fs::File::from_raw_fd(duplicate) })
+}
+
 /// Default maximum number of bytes retained from each command output stream.
 pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 256 * 1024;
 
@@ -175,13 +197,8 @@ impl CommandRequest {
         mut self,
         source: &std::fs::File,
     ) -> std::io::Result<(Self, std::os::fd::RawFd)> {
-        // SAFETY: source owns a live descriptor; the new descriptor is transferred
-        // into File exactly once and retained through child execution.
-        let fd = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let source = unsafe { std::fs::File::from_raw_fd(fd) };
+        let source = std::fs::File::from(rustix::io::fcntl_dupfd_cloexec(source, 3)?);
+        let fd = source.as_raw_fd();
         self.content_inputs.push(std::sync::Arc::new(source));
         Ok((self, fd))
     }
@@ -374,8 +391,11 @@ impl CommandRequest {
             Ok(status) => status,
             Err(error) => {
                 if self.own_process_group {
-                    // SAFETY: this run created the child's private process group.
-                    unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+                    // This run created the child's private process group.
+                    let _ = rustix::process::kill_process_group(
+                        rustix::process::Pid::from_child(&child),
+                        rustix::process::Signal::KILL,
+                    );
                 }
                 let _ = child.kill();
                 let _ = child.wait();
@@ -386,8 +406,11 @@ impl CommandRequest {
 
         if self.own_process_group {
             // A helper may exit before a descendant closes its inherited pipes.
-            // SAFETY: this run created the child's private process group.
-            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+            // This run created the child's private process group.
+            let _ = rustix::process::kill_process_group(
+                rustix::process::Pid::from_child(&child),
+                rustix::process::Signal::KILL,
+            );
         }
 
         let (stdout, stdout_truncated) = stdout_reader
@@ -629,6 +652,30 @@ fn drain_threads(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_integer_duplication_rejects_invalid_fds_and_retains_shared_position() {
+        use std::io::{Read, Seek, Write};
+        assert!(duplicate_inherited_handle(-1).is_err());
+        let mut source = tempfile::tempfile().unwrap();
+        source.write_all(b"abcdef").unwrap();
+        source.rewind().unwrap();
+        let mut duplicate = duplicate_inherited_handle(source.as_raw_fd()).unwrap();
+        assert!(duplicate.as_raw_fd() >= 3);
+        assert!(
+            rustix::io::fcntl_getfd(&duplicate)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        let mut prefix = [0; 2];
+        duplicate.read_exact(&mut prefix).unwrap();
+        assert_eq!(&prefix, b"ab");
+        assert_eq!(source.stream_position().unwrap(), 2);
+        drop(source);
+        let mut suffix = String::new();
+        duplicate.read_to_string(&mut suffix).unwrap();
+        assert_eq!(suffix, "cdef");
+    }
 
     #[test]
     #[cfg(target_os = "linux")]

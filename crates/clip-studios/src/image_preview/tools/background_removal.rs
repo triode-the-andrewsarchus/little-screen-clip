@@ -132,15 +132,20 @@ pub(super) fn decode_image_tool_output(output: std::process::Output) -> Result<R
 }
 
 pub(crate) fn terminate_image_tool_process(pid: u32) {
-    if pid == 0 {
-        return;
-    }
     #[cfg(unix)]
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGTERM);
-        libc::kill(-(pid as i32), libc::SIGKILL);
-        libc::kill(pid as i32, libc::SIGTERM);
-        libc::kill(pid as i32, libc::SIGKILL);
+    {
+        let Some(pid) = i32::try_from(pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+        else {
+            return;
+        };
+        for signal in [rustix::process::Signal::TERM, rustix::process::Signal::KILL] {
+            let _ = rustix::process::kill_process_group(pid, signal);
+        }
+        for signal in [rustix::process::Signal::TERM, rustix::process::Signal::KILL] {
+            let _ = rustix::process::kill_process(pid, signal);
+        }
     }
     #[cfg(not(unix))]
     let _ = pid;

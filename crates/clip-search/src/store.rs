@@ -859,13 +859,8 @@ fn migrate_file_identity(tx: &Connection, scoped: bool) -> rusqlite::Result<()> 
 }
 
 fn require_local_storage(directory: &File) -> Result<(), String> {
-    let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
-    // SAFETY: directory owns a live descriptor and successful fstatfs initializes stats.
-    if unsafe { libc::fstatfs(directory.as_raw_fd(), stats.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    // SAFETY: successful fstatfs initialized the complete structure.
-    local_index_filesystem(unsafe { stats.assume_init() }.f_type as u64)
+    let stats = rustix::fs::fstatfs(directory).map_err(|error| error.to_string())?;
+    local_index_filesystem(stats.f_type as u64)
 }
 
 fn local_index_filesystem(magic: u64) -> Result<(), String> {

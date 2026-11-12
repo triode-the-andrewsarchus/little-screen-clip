@@ -212,10 +212,8 @@ pub(super) fn spawn_in(budget: Budget, mut command: Command) -> Result<uuid::Uui
         .and_then(|entry| entry.child.stdout.as_ref())
     {
         // SAFETY: stdout is a live owned pipe descriptor; only its status flags change.
-        let flags = unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_GETFL) };
-        if flags < 0
-            || unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) }
-                < 0
+        if let Err(_error) = rustix::fs::fcntl_getfl(stdout)
+            .and_then(|flags| rustix::fs::fcntl_setfl(stdout, flags | rustix::fs::OFlags::NONBLOCK))
         {
             let entry = children.last_mut().unwrap();
             entry.retired = true;

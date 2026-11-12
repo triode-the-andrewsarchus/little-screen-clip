@@ -1,6 +1,6 @@
 //! Bounded nonblocking pipe transfers; never wait for a desktop peer on the UI thread.
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -11,11 +11,10 @@ pub(super) const LIMIT: usize = 1024 * 1024;
 
 fn prepare(fd: &OwnedFd) -> Result<(), String> {
     // SAFETY: fd is owned and remains valid throughout both calls.
-    let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
-    if flags < 0
-        || unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    if let Err(error) = rustix::fs::fcntl_getfl(fd)
+        .and_then(|flags| rustix::fs::fcntl_setfl(fd, flags | rustix::fs::OFlags::NONBLOCK))
     {
-        return Err(std::io::Error::last_os_error().to_string());
+        return Err(error.to_string());
     }
     Ok(())
 }

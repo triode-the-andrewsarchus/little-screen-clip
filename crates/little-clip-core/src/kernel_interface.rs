@@ -77,13 +77,7 @@ pub fn classify_handle(file: &File) -> io::Result<Kind> {
             minor: libc::minor(metadata.rdev()),
         });
     }
-    let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
-    // SAFETY: file owns a live descriptor and stats points to writable statfs storage.
-    if unsafe { libc::fstatfs(file.as_raw_fd(), stats.as_mut_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: successful fstatfs initialized the structure.
-    let magic = unsafe { stats.assume_init() }.f_type as u64;
+    let magic = rustix::fs::fstatfs(file)?.f_type as u64;
     let filesystem = filesystem_for_magic(
         magic,
         magic == 0x1021994 && metadata.is_dir() && device_namespace_directory(&metadata),

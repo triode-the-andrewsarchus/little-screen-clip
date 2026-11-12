@@ -1,7 +1,6 @@
 //! Large inventories use an owned anonymous file rather than the stdout payload cap.
 use super::*;
 use std::io::{BufReader, BufWriter, Seek, Write};
-use std::os::fd::BorrowedFd;
 use std::sync::atomic::Ordering;
 
 const MAX_BYTES: u64 = 128 * 1024 * 1024;
@@ -46,12 +45,8 @@ pub(super) fn reply(directory: Directory, output: Option<i32>) -> Result<Reply, 
     if fd < 3 {
         return Err("Invalid inventory output descriptor".into());
     }
-    // SAFETY: the parent inherits this owned regular-file descriptor. Clone it
-    // without taking ownership of the command's original inherited descriptor.
-    let owned = unsafe { BorrowedFd::borrow_raw(fd) }
-        .try_clone_to_owned()
-        .map_err(|e| e.to_string())?;
-    let mut file = std::fs::File::from(owned);
+    let mut file =
+        little_clip_core::process::duplicate_inherited_handle(fd).map_err(|e| e.to_string())?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     if !metadata.is_file()
         || metadata.len() != 0

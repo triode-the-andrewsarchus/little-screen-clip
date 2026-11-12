@@ -7,6 +7,7 @@ license.workspace = true
 default-run = "clip-workbench"
 
 [dependencies]
+rustix.workspace = true
 clip-studios = { path = "../clip-studios" }
 clip-ui = { path = "../clip-ui" }
 little-clip-core = { path = "../little-clip-core" }

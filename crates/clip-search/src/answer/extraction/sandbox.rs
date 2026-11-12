@@ -15,35 +15,37 @@ pub(super) fn install() -> Result<(), String> {
     // terminal inherited from an unusual launcher. Only these may receive writes.
     // Stdin must be a pipe too: permitting mmap on an inherited writable file
     // there would otherwise allow shared-memory writes despite denying write().
-    for fd in [0, 1, 2] {
-        let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
-        if unsafe { libc::fstat(fd, metadata.as_mut_ptr()) } != 0
-            || unsafe { metadata.assume_init() }.st_mode & libc::S_IFMT != libc::S_IFIFO
-        {
+    use std::os::fd::AsFd;
+    let (input, output, errors) = (io::stdin(), io::stdout(), io::stderr());
+    for fd in [input.as_fd(), output.as_fd(), errors.as_fd()] {
+        let metadata = rustix::fs::fstat(fd).map_err(|error| error.to_string())?;
+        if rustix::fs::FileType::from_raw_mode(metadata.st_mode) != rustix::fs::FileType::Fifo {
             return Err("Extraction worker requires piped input and output".into());
         }
     }
     for (resource, value) in [
-        (libc::RLIMIT_AS, 512 * 1024 * 1024),
-        (libc::RLIMIT_CPU, 2),
-        (libc::RLIMIT_CORE, 0),
+        (rustix::process::Resource::As, 512 * 1024 * 1024),
+        (rustix::process::Resource::Cpu, 2),
+        (rustix::process::Resource::Core, 0),
     ] {
-        let limit = libc::rlimit {
-            rlim_cur: value,
-            rlim_max: value,
-        };
-        if unsafe { libc::setrlimit(resource, &limit) } != 0 {
-            return Err(io::Error::last_os_error().to_string());
-        }
+        rustix::process::setrlimit(
+            resource,
+            rustix::process::Rlimit {
+                current: Some(value),
+                maximum: Some(value),
+            },
+        )
+        .map_err(|error| error.to_string())?;
     }
+    // SAFETY: this is the disposable extraction entry point, before document
+    // parsing, file ownership or threads exist. Descriptors >=3 are inherited
+    // ambient resources, not live Rust-owned handles. Never run this in a GUI.
     if unsafe { libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, 0_u32) } != 0 {
         return Err(io::Error::last_os_error().to_string());
     }
-    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0
-        || unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0
-    {
-        return Err(io::Error::last_os_error().to_string());
-    }
+    rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
+        .map_err(|error| error.to_string())?;
+    rustix::thread::set_no_new_privs(true).map_err(|error| error.to_string())?;
     let mut instructions = program();
     let filter = libc::sock_fprog {
         len: instructions.len() as u16,
@@ -51,6 +53,9 @@ pub(super) fn install() -> Result<(), String> {
     };
     // Synchronize every thread even though the production entry point starts
     // none. A thread outside the filter must never retain ambient capabilities.
+    // SAFETY: filter and its initialized instruction vector remain live for this
+    // syscall, which copies the bounded sock_fprog. TSYNC applies the policy to
+    // the disposable process; no callback or pointer is retained after return.
     let result = unsafe {
         libc::syscall(
             libc::SYS_seccomp,

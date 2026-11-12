@@ -381,19 +381,12 @@ impl RenderGraph {
         })
     }
 
-    fn requested_input(&self, inputs: &[Input]) -> Option<usize> {
+    fn requested_input(&mut self, inputs: &[Input]) -> Option<usize> {
         inputs
             .iter()
             .enumerate()
             .filter(|(_, input)| !input.eof)
-            .max_by_key(|(index, _)| {
-                // SAFETY: each source belongs to the graph retained by this object.
-                unsafe {
-                    ffmpeg::ffi::av_buffersrc_get_nb_failed_requests(
-                        self.sources[*index].as_ptr() as *mut _
-                    )
-                }
-            })
+            .max_by_key(|(index, _)| self.sources[*index].source().failed_requests())
             .map(|(index, _)| index)
     }
 }

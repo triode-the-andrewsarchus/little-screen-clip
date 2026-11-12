@@ -53,7 +53,9 @@ impl Store {
                 .map_err(|error| error.to_string())?;
             let metadata = directory.metadata().map_err(|error| error.to_string())?;
             // SAFETY: geteuid has no arguments or memory effects.
-            if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o777 != 0o700 {
+            if metadata.uid() != rustix::process::geteuid().as_raw()
+                || metadata.mode() & 0o777 != 0o700
+            {
                 return Err("Backup staging directory changed before preparation".into());
             }
             let held = std::path::PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
