@@ -10,6 +10,7 @@ pub fn run() -> bool {
     let worker = match flag {
         "--internal-barcode-worker" => crate::barcode_worker::run_helper,
         "--internal-conversion-decode-worker" => crate::conversion_decode_worker::run_helper,
+        "--internal-png-optimize-worker" => crate::conversion_decode_worker::run_png_optimizer,
         _ => return false,
     };
     let result = if args.len() == 3 {
@@ -21,8 +22,10 @@ pub fn run() -> bool {
         Err("Invalid internal worker arguments".into())
     };
     if let Err(error) = result {
-        if flag == "--internal-barcode-worker"
-            && let Some(output) = args.get(2)
+        if matches!(
+            flag,
+            "--internal-barcode-worker" | "--internal-png-optimize-worker"
+        ) && let Some(output) = args.get(2)
         {
             let _ = std::fs::write(std::path::Path::new(output).with_extension("error"), &error);
         }

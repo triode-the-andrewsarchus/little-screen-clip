@@ -225,7 +225,7 @@ impl ImagePreviewState {
             let optimize_label = if self.convert_state.is_running_optipng {
                 "Optimizing…"
             } else {
-                "Run OptiPNG"
+                "Optimize PNG"
             };
             let optimize = clip_ui::buttons::ButtonRole::Secondary.button(optimize_label, palette);
             if ui
@@ -327,10 +327,13 @@ impl ImagePreviewState {
         {
             let saved = before.saturating_sub(after);
             ui.label(
-                egui::RichText::new(format!("OptiPNG saved {}", format_bytes_size(saved)))
-                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                    .strong()
-                    .color(success),
+                egui::RichText::new(format!(
+                    "PNG optimization saved {}",
+                    format_bytes_size(saved)
+                ))
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .strong()
+                .color(success),
             );
         }
 

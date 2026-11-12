@@ -36,6 +36,45 @@ pub fn run_helper(input: &Path, output: &Path) -> Result<(), String> {
     std::fs::rename(partial, output).map_err(|error| error.to_string())
 }
 
+/// Optimizes PNG bytes in an isolated host process, retaining metadata and pixels.
+///
+/// # Errors
+/// Returns guarded-input, PNG-validation, resource-budget, optimization or write errors.
+pub fn run_png_optimizer(input: &Path, output: &Path) -> Result<(), String> {
+    const ENCODED_LIMIT: usize = 128 * 1024 * 1024;
+    let encoded = little_clip_core::file_source::read_file_bytes(input, ENCODED_LIMIT, true, false)
+        .map_err(|error| error.to_string())?;
+    let limits = little_clip_core::item::raster_preview_limits();
+    let (width, height) =
+        image::ImageReader::with_format(std::io::Cursor::new(&encoded), image::ImageFormat::Png)
+            .into_dimensions()
+            .map_err(|error| error.to_string())?;
+    if limits.max_image_width.is_some_and(|limit| width > limit)
+        || limits.max_image_height.is_some_and(|limit| height > limit)
+    {
+        return Err("PNG optimization exceeds raster dimension limits".into());
+    }
+    let mut options = oxipng::Options::from_preset(2);
+    options.timeout = Some(Duration::from_secs(30));
+    options.max_decompressed_size = limits
+        .max_alloc
+        .map(|limit| limit.min(usize::MAX as u64) as usize);
+    // Keep chunks and hidden RGB data; this operation is strictly lossless.
+    options.strip = oxipng::StripChunks::None;
+    options.optimize_alpha = false;
+    let optimized =
+        oxipng::optimize_from_memory(&encoded, &options).map_err(|error| error.to_string())?;
+    let result = if optimized.len() < encoded.len() {
+        &optimized
+    } else {
+        &encoded
+    };
+    let parent = output.parent().unwrap_or(Path::new("."));
+    let directory = little_clip_core::kernel_interface::pin_content_directory(parent)
+        .map_err(|error| error.to_string())?;
+    little_clip_core::file_source::create_file_in(output, result, &directory).map(drop)
+}
+
 fn kill_and_reap(child: &mut std::process::Child, control: &ImageToolProcessControl) {
     let pid = child.id();
     terminate_image_tool_process(pid);
@@ -158,6 +197,71 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
     use std::time::Instant;
+
+    #[test]
+    fn png_optimizer_preserves_pixels_hidden_rgb_and_text_metadata() {
+        let image = image::RgbaImage::from_fn(37, 19, |x, y| {
+            image::Rgba([
+                (x * 5) as u8,
+                (y * 11) as u8,
+                73,
+                if x % 2 == 0 { 0 } else { 255 },
+            ])
+        });
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut encoded, image.width(), image.height());
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .add_text_chunk("Comment".into(), "keep this metadata".into())
+                .unwrap();
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(image.as_raw())
+                .unwrap();
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.png");
+        std::fs::write(&input, &encoded).unwrap();
+        run_png_optimizer(&input, &output).unwrap();
+        let optimized = std::fs::read(output).unwrap();
+        assert!(optimized.len() <= encoded.len());
+        assert_eq!(
+            image::load_from_memory(&optimized).unwrap().to_rgba8(),
+            image
+        );
+        let decoder = png::Decoder::new(std::io::Cursor::new(&optimized));
+        let reader = decoder.read_info().unwrap();
+        assert!(
+            reader
+                .info()
+                .uncompressed_latin1_text
+                .iter()
+                .any(|chunk| chunk.keyword == "Comment" && chunk.text == "keep this metadata")
+        );
+    }
+
+    #[test]
+    fn png_optimizer_rejects_malformed_or_oversized_inputs_without_publishing() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.png");
+        std::fs::write(&output, b"previous output").unwrap();
+        std::fs::write(&input, b"invalid PNG").unwrap();
+        assert!(run_png_optimizer(&input, &output).is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous output");
+        let image = image::RgbaImage::new(16_385, 1);
+        image.save(&input).unwrap();
+        assert!(
+            run_png_optimizer(&input, &output)
+                .unwrap_err()
+                .contains("dimension limits")
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous output");
+    }
 
     #[test]
     fn supervisor_reads_and_validates_child_pixels() {

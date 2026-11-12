@@ -18,6 +18,8 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Report poisoned clipboard-selection state through the read result and tolerate poisoned one-shot acknowledgement ownership during teardown. Recovery only takes an optional sender; it does not revive a selection or change clipboard routing. Validation: four private-compositor/selection tests pass, including the poisoned-reader regression.
 
+- [x] Replace the system `optipng` program with compiled [OxiPNG](https://docs.rs/oxipng/10.2.1/oxipng/), with CLI/parallel/Zopfli features disabled. Keep optimization in a cancellable host helper, shared by both desktop applications. It preserves hidden RGB and text metadata, never increases output size, enforces the shared raster limits and a 30-second optimization budget, and installs only into an unused output through a retained ordinary-directory handle. Errors reach the editor through the existing bounded error-file handoff. Validation: four conversion-worker tests and both applications’ worker-dispatch integration tests, including invalid-input/no-replacement behavior; strict workspace Clippy passed before the final error-message handoff change.
+
 ## Remaining review
 
 - [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.

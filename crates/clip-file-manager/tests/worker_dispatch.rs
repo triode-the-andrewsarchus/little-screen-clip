@@ -6,6 +6,11 @@ fn studio_workers_dispatch_before_browser_startup_from_another_directory() {
     let mut blank_rgba = Vec::from(32_u32.to_le_bytes());
     blank_rgba.extend_from_slice(&32_u32.to_le_bytes());
     blank_rgba.extend_from_slice(&[255; 32 * 32 * 4]);
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(32, 32, image::Rgba([255; 4]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let png = png.into_inner();
     for (worker, input_bytes, expected) in [
         (
             "--internal-conversion-decode-worker",
@@ -13,6 +18,11 @@ fn studio_workers_dispatch_before_browser_startup_from_another_directory() {
             [0].as_slice(),
         ),
         ("--internal-barcode-worker", blank_rgba.as_slice(), b"[]"),
+        (
+            "--internal-png-optimize-worker",
+            png.as_slice(),
+            png.as_slice(),
+        ),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("input");
@@ -26,7 +36,16 @@ fn studio_workers_dispatch_before_browser_startup_from_another_directory() {
             .status()
             .unwrap();
         assert!(status.success(), "{worker}: {status}");
-        assert_eq!(std::fs::read(output).unwrap(), expected, "{worker}");
+        let actual = std::fs::read(output).unwrap();
+        if worker == "--internal-png-optimize-worker" {
+            assert!(actual.len() <= expected.len());
+            assert_eq!(
+                image::load_from_memory(&actual).unwrap().to_rgba8(),
+                image::load_from_memory(expected).unwrap().to_rgba8()
+            );
+        } else {
+            assert_eq!(actual, expected, "{worker}");
+        }
     }
 }
 

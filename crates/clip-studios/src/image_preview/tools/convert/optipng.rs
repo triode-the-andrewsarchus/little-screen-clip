@@ -29,7 +29,7 @@ impl ImagePreviewState {
         if self.convert_state.target_format != ConvertTargetFormat::Png {
             self.show_toast(crate::ui_ext::StatusMessage::new(
                 crate::icons::Icon::Alert,
-                "OptiPNG is only applicable for PNG format",
+                "PNG optimization is only applicable for PNG format",
             ));
             return;
         }
@@ -69,7 +69,7 @@ impl ImagePreviewState {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 worker_optimizer(&original_bytes, &worker_control)
             }))
-            .unwrap_or_else(|_| Err("OptiPNG worker panicked".to_string()));
+            .unwrap_or_else(|_| Err("PNG optimization worker panicked".to_string()));
             OptipngWorkerMsg {
                 generation: request.generation,
                 input_stamp: request.input_stamp,
@@ -164,11 +164,11 @@ impl ImagePreviewState {
                             };
                         self.show_toast(crate::ui_ext::StatusMessage::new(
                             crate::icons::Icon::Check,
-                            format!("OptiPNG complete! Saved {:.1}%", pct),
+                            format!("PNG optimization complete! Saved {:.1}%", pct),
                         ));
                     }
                     Err(error) => self.show_toast(crate::ui_ext::StatusMessage::error(format!(
-                        "OptiPNG error: {}",
+                        "PNG optimization error: {}",
                         error
                     ))),
                 }
@@ -180,8 +180,9 @@ impl ImagePreviewState {
                 self.convert_state.optipng_rx = None;
                 self.convert_state.optipng_retry_at =
                     Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
-                self.convert_state.optipng_queue_status =
-                    Some("Background workers are busy; retrying OptiPNG shortly".to_string());
+                self.convert_state.optipng_queue_status = Some(
+                    "Background workers are busy; retrying PNG optimization shortly".to_string(),
+                );
             }
             Ok(Err(JobError::Cancelled)) => {
                 self.convert_state.is_running_optipng = false;
@@ -202,7 +203,7 @@ impl ImagePreviewState {
                     && self.convert_state.output_matches(&current_stamp)
                 {
                     self.show_toast(crate::ui_ext::StatusMessage::error(format!(
-                        "OptiPNG error: {error}"
+                        "PNG optimization error: {error}"
                     )));
                 }
             }
@@ -219,7 +220,7 @@ impl ImagePreviewState {
                     && self.convert_state.output_matches(&current_stamp)
                 {
                     self.show_toast(crate::ui_ext::StatusMessage::error(
-                        "OptiPNG error: worker stopped",
+                        "PNG optimization error: worker stopped",
                     ));
                 }
             }
@@ -240,22 +241,34 @@ pub(super) fn run_optipng_optimization(
         .map_err(|e| format!("Tempfile write failed: {}", e))?;
     let temp_path = temp_file.path().to_path_buf();
 
-    let mut command = Command::new("optipng");
-    command.arg("-o2").arg("-quiet").arg(&temp_path);
-    let status = super::super::background_removal::run_image_tool_status_command(command, control)
-        .map_err(|error| {
-            format!(
-                "Failed to run optipng: {}. Ensure optipng is installed.",
-                error
-            )
-        })?;
-
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let output = directory.path().join("optimized.png");
+    let program = std::env::current_exe().map_err(|error| error.to_string())?;
+    let mut command = Command::new(program);
+    command
+        .arg("--internal-png-optimize-worker")
+        .arg(&temp_path)
+        .arg(&output)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let status = super::super::background_removal::run_image_tool_status_command(command, control)?;
     if !status.success() {
+        if let Ok(error) = little_clip_core::file_source::read_file_bytes(
+            &output.with_extension("error"),
+            8192,
+            true,
+            false,
+        ) {
+            return Err(format!(
+                "PNG optimization failed: {}",
+                String::from_utf8_lossy(&error)
+            ));
+        }
         return Err(format!(
-            "optipng failed with exit status {:?}",
+            "PNG optimizer failed with exit status {:?}",
             status.code()
         ));
     }
-
-    std::fs::read(&temp_path).map_err(|e| format!("Failed to read optipng output: {}", e))
+    std::fs::read(output).map_err(|error| format!("Failed to read optimized PNG: {error}"))
 }

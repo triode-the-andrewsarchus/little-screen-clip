@@ -27,6 +27,7 @@ rodio = { version = "0.22.2", features = ["symphonia-mp2", "symphonia-caf", "sym
 hound = "3.5.1"
 image = { workspace = true }
 png = "0.18.1"
+oxipng = { version = "10.2.1", default-features = false }
 tiny-skia = { workspace = true }
 fontdue = { workspace = true }
 syntect = { workspace = true }

@@ -56,6 +56,23 @@ fn helper_matches_image_decoder_for_png_jpeg_and_webp() {
             expected.height()
         );
         assert_eq!(&actual[9..], expected.as_raw(), "{name} pixels changed");
+        if name == "png" {
+            let optimized = directory.path().join("optimized.png");
+            let status = Command::new(env!("CARGO_BIN_EXE_clip-workbench"))
+                .current_dir(directory.path())
+                .arg("--internal-png-optimize-worker")
+                .arg(&input)
+                .arg(&optimized)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let bytes = std::fs::read(optimized).unwrap();
+            assert!(bytes.len() <= encoded.len());
+            assert_eq!(
+                image::load_from_memory(&bytes).unwrap().to_rgba8(),
+                expected
+            );
+        }
     }
 }
 
@@ -73,4 +90,27 @@ fn helper_reports_decode_failure_as_existing_source_fallback() {
         .unwrap();
     assert!(status.success());
     assert_eq!(std::fs::read(output).unwrap(), [0]);
+}
+
+#[test]
+fn png_optimizer_reports_invalid_input_without_replacing_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("invalid.png");
+    let output = directory.path().join("output.png");
+    std::fs::write(&input, b"invalid PNG").unwrap();
+    std::fs::write(&output, b"previous output").unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_clip-workbench"))
+        .current_dir(directory.path())
+        .arg("--internal-png-optimize-worker")
+        .arg(input)
+        .arg(&output)
+        .status()
+        .unwrap();
+    assert!(!status.success());
+    assert_eq!(std::fs::read(&output).unwrap(), b"previous output");
+    assert!(
+        std::fs::read_to_string(output.with_extension("error"))
+            .unwrap()
+            .contains("PNG")
+    );
 }
