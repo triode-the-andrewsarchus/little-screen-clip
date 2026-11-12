@@ -44,13 +44,27 @@ def build(output=None, skip_build=False, profile='release'):
         shutil.copyfile(repo / 'Cargo.lock', source / 'Cargo.lock')
         # Cargo prunes irrelevant workspace entries while preserving locked
         # versions. No dependencies are downloaded and no nested target is built.
-        subprocess.run(['cargo', 'metadata', '--offline', '--format-version', '1',
-                        '--manifest-path', str(source / 'Cargo.toml')],
-                       cwd=repo, check=True, stdout=subprocess.DEVNULL)
-        vendor_config = subprocess.check_output([
-            'cargo', 'vendor', '--offline', '--locked', '--versioned-dirs',
-            '--manifest-path', str(source / 'Cargo.toml'), str(source / 'vendor')],
-            cwd=repo, text=True)
+        # Prefer offline mode to reuse cached dependencies, but fall back to network
+        # if locked cross-platform crates (e.g. non-host targets) have not yet been fetched.
+        metadata_cmd = ['cargo', 'metadata', '--format-version', '1',
+                        '--manifest-path', str(source / 'Cargo.toml')]
+        try:
+            subprocess.run(['cargo', 'metadata', '--offline', '--format-version', '1',
+                            '--manifest-path', str(source / 'Cargo.toml')],
+                           cwd=repo, check=True, stdout=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            subprocess.run(metadata_cmd, cwd=repo, check=True, stdout=subprocess.DEVNULL)
+        vendor_cmd = [
+            'cargo', 'vendor', '--locked', '--versioned-dirs',
+            '--manifest-path', str(source / 'Cargo.toml'), str(source / 'vendor'),
+        ]
+        try:
+            vendor_config = subprocess.check_output([
+                'cargo', 'vendor', '--offline', '--locked', '--versioned-dirs',
+                '--manifest-path', str(source / 'Cargo.toml'), str(source / 'vendor')],
+                cwd=repo, text=True)
+        except subprocess.CalledProcessError:
+            vendor_config = subprocess.check_output(vendor_cmd, cwd=repo, text=True)
         config = source / '.cargo/config.toml'
         config.parent.mkdir()
         # Vendor emits an absolute staging path; keep the delivered bundle movable.
