@@ -20,6 +20,7 @@ pub(super) struct Video {
     seek_preview: Option<f64>,
     fullscreen: bool,
     stopped: bool,
+    last_activity: f64,
     context: Option<egui::Context>,
 }
 impl Video {
@@ -41,8 +42,12 @@ impl Video {
             seek_preview: None,
             fullscreen: false,
             stopped: false,
+            last_activity: 0.0,
             context: None,
         }
+    }
+    pub(super) fn fullscreen(&self) -> bool {
+        self.fullscreen
     }
     pub(super) fn file_source(&self) -> FileSource {
         self.prepared.source.clone()
@@ -90,15 +95,33 @@ impl Video {
         }
         let player = self.player.as_mut().unwrap();
         player.poll(ui.ctx());
-        let mut shell =
-            crate::shell::StudioShell::new("Video", crate::icons::Icon::Film, palette, close);
-        shell.render_header(ui, |_| {});
+        if !self.fullscreen {
+            let mut shell =
+                crate::shell::StudioShell::new("Video", crate::icons::Icon::Film, palette, close);
+            shell.render_header(ui, |_| {});
+        }
+        let was_fullscreen = self.fullscreen;
         if ui.is_enabled() && !ui.ctx().wants_keyboard_input() {
             shortcuts(ui, player, &mut self.fullscreen);
         }
+        let now = ui.input(|i| i.time);
+        if was_fullscreen != self.fullscreen
+            || ui.input(|i| {
+                i.pointer.delta() != egui::Vec2::ZERO
+                    || i.pointer.any_down()
+                    || !i.events.is_empty()
+            })
+        {
+            self.last_activity = now;
+        }
+        let overlay_visible =
+            now - self.last_activity < 2.5 || ui.ctx().memory(|m| m.any_popup_open());
+        if self.fullscreen && !overlay_visible {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        }
         let size = egui::vec2(
             ui.available_width().max(1.0),
-            (ui.available_height() - 76.0).max(1.0),
+            (ui.available_height() - if self.fullscreen { 0.0 } else { 76.0 }).max(1.0),
         );
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
@@ -127,14 +150,63 @@ impl Video {
         } else if response.clicked() {
             player.set_playing(!player.playing());
         }
-        controls(ui, player, &mut self.seek_preview, palette);
-        if let Some(error) = &player.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+        if self.fullscreen {
+            if overlay_visible || player.error.is_some() {
+                let ctx = ui.ctx().clone();
+                egui::Area::new(egui::Id::new("video_fullscreen_title"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(rect.left_top() + egui::vec2(16.0, 16.0))
+                    .show(&ctx, |ui| {
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_black_alpha(160))
+                            .inner_margin(8.0)
+                            .rounding(6.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.button("Back to folder").clicked() {
+                                        *close = true;
+                                    }
+                                    ui.colored_label(
+                                        egui::Color32::WHITE,
+                                        self.path.file_name().unwrap_or_default().to_string_lossy(),
+                                    );
+                                    if ui.button("Exit fullscreen").clicked() {
+                                        self.fullscreen = false;
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
+                                            false,
+                                        ));
+                                    }
+                                });
+                            });
+                    });
+                egui::Area::new(egui::Id::new("video_fullscreen_transport"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(egui::pos2(rect.left() + 16.0, rect.bottom() - 64.0))
+                    .show(&ctx, |ui| {
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_black_alpha(160))
+                            .inner_margin(8.0)
+                            .rounding(6.0)
+                            .show(ui, |ui| {
+                                ui.set_width((rect.width() - 48.0).max(100.0));
+                                ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
+                                controls(ui, player, &mut self.seek_preview, palette);
+                                if let Some(error) = &player.error {
+                                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                                }
+                            });
+                    });
+            }
         } else {
-            ui.small(format!(
-                "{} · Space: play/pause · ←/→: seek · F: fullscreen",
-                self.prepared.description
-            ));
+            controls(ui, player, &mut self.seek_preview, palette);
+            if let Some(error) = &player.error {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            } else {
+                ui.small(format!(
+                    "{} · Space: play/pause · ←/→: seek · F: fullscreen",
+                    self.prepared.description
+                ));
+            }
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             if self.fullscreen {
@@ -173,25 +245,27 @@ fn controls(
     palette: &little_clip_core::palette::AppPalette,
 ) {
     ui.horizontal(|ui| {
+        let icon = if player.playing() {
+            crate::icons::Icon::Pause
+        } else {
+            crate::icons::Icon::Play
+        };
         if ui
-            .add(
-                ButtonRole::Primary
-                    .button(if player.playing() { "Pause" } else { "Play" }, palette),
-            )
+            .add(crate::ui_ext::icon_button(
+                icon,
+                18.0,
+                ui.visuals().widgets.inactive.bg_fill,
+                None,
+                palette,
+            ))
+            .on_hover_text(if player.playing() { "Pause" } else { "Play" })
             .clicked()
         {
             player.set_playing(!player.playing());
         }
-        if ui
-            .add(ButtonRole::Secondary.button("Stop", palette))
-            .clicked()
-        {
-            player.set_playing(false);
-            player.seek(0);
-        }
         let mut seconds = (*seek_preview).unwrap_or(player.position_ms as f64 / 1000.0);
         let duration = player.duration_ms as f64 / 1000.0;
-        let seek_width = (ui.available_width() - 210.0).max(40.0);
+        let seek_width = (ui.available_width() - 125.0).max(40.0);
         let slider = ui
             .scope(|ui| {
                 ui.spacing_mut().slider_width = seek_width;
@@ -210,18 +284,6 @@ fn controls(
             clock((seconds * 1000.0) as u64),
             clock(player.duration_ms)
         ));
-        let mut volume = player.volume();
-        if ui
-            .scope(|ui| {
-                ui.spacing_mut().slider_width = 72.0;
-                ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
-            })
-            .inner
-            .on_hover_text("Volume")
-            .changed()
-        {
-            player.set_volume(volume);
-        }
     });
 }
 

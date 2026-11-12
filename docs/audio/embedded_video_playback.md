@@ -127,3 +127,13 @@ slightly, and one additional clone group remains (including standard pipe setup
 and fixture patterns); modified-file reports also include unchanged row code.
 This is a reviewed feature cost, with one shared player and no application-level
 GStreamer linkage.
+
+## Player refinements
+
+- [x] Fill the fullscreen viewport and move title/navigation and transport into
+  translucent overlays that hide after 2.5 seconds without interaction.
+- [x] Use the shared fixed-size play/pause icon and remove stop/volume controls.
+- [ ] Add temporary subtitle/audio track, speed and loop choices.
+- [ ] Add a manual-config-only subtitle default, initially disabled.
+- [ ] Open a stereo audio copy from the video-file context menu.
+- [ ] Verify controls, actual subtitles/tracks, audio extraction and fullscreen.

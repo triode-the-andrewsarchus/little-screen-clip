@@ -110,9 +110,6 @@ impl Session {
     pub fn playing(&self) -> bool {
         self.control.playing && !self.ended && self.error.is_none()
     }
-    pub fn volume(&self) -> f64 {
-        self.control.volume
-    }
     pub fn seek(&mut self, milliseconds: u64) {
         self.control.epoch = self.control.epoch.wrapping_add(1);
         self.control.seek_ms =
@@ -128,10 +125,6 @@ impl Session {
         } else {
             self.send();
         }
-    }
-    pub fn set_volume(&mut self, volume: f64) {
-        self.control.volume = volume.clamp(0.0, 1.0);
-        self.send();
     }
     fn send(&mut self) {
         let mut pending = self.pending.lock().unwrap();

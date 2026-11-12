@@ -120,6 +120,9 @@ impl Viewers {
             ..Self::default()
         }
     }
+    pub(super) fn video_fullscreen(&self) -> bool {
+        matches!(&self.session, Some(ViewerSession::Video(video)) if video.fullscreen())
+    }
     pub fn active(&self) -> bool {
         self.loading.is_some() || self.session.is_some() || self.error.is_some()
     }

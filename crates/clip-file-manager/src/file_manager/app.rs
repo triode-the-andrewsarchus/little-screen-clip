@@ -12,10 +12,22 @@ pub(super) fn central_panel<R>(
     ctx: &egui::Context,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
+    central_panel_mode(ctx, false, add_contents)
+}
+
+fn central_panel_mode<R>(
+    ctx: &egui::Context,
+    fullscreen: bool,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
     let bounds = ctx.available_rect();
-    let fill = ctx.style().visuals.panel_fill;
+    let fill = if fullscreen {
+        egui::Color32::BLACK
+    } else {
+        ctx.style().visuals.panel_fill
+    };
     egui::CentralPanel::default()
-        .frame(egui::Frame::none().inner_margin(8.0))
+        .frame(egui::Frame::none().inner_margin(if fullscreen { 0.0 } else { 8.0 }))
         .show(ctx, |ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(bounds));
             ui.painter().rect_filled(bounds, 0.0, fill);
@@ -317,7 +329,7 @@ impl FileManagerApp {
         }
     }
     fn main_content(&mut self, ctx: &egui::Context) {
-        central_panel(ctx, |ui| {
+        central_panel_mode(ctx, self.viewers.video_fullscreen(), |ui| {
             if self.viewers.active() {
                 self.browser.video_previews.clear();
                 self.browser.previews.retire();
@@ -573,30 +585,32 @@ impl eframe::App for FileManagerApp {
                 .tick(little_clip_core::BackgroundJobs::global());
         }
         self.browser.handle_address_escape(ctx);
-        egui::TopBottomPanel::top("file_manager_title").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                for title in ["File", "Edit", "View"] {
-                    ui.menu_button(title, |ui| {
-                        if title == "View" {
-                            ui.menu_button("Photos", |ui| {
-                                ui.style_mut().wrap = Some(false);
-                                let current_mode = self.browser.photo_mode;
-                                if ui
-                                    .selectable_label(
-                                        current_mode
-                                            == super::gallery::similarity::PhotoMode::Masonry,
-                                        "Masonry Grid",
-                                    )
-                                    .clicked()
-                                {
-                                    let mode = super::gallery::similarity::PhotoMode::Masonry;
-                                    self.browser.photo_mode = mode;
-                                    self.browser.gallery_last_scroll_time = ui.input(|i| i.time);
-                                    let _ = AppConfig::save_file_manager_photo_mode_to_file(
-                                        mode.as_str(),
-                                    );
-                                }
-                                if ui
+        if !self.viewers.video_fullscreen() {
+            egui::TopBottomPanel::top("file_manager_title").show(ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    for title in ["File", "Edit", "View"] {
+                        ui.menu_button(title, |ui| {
+                            if title == "View" {
+                                ui.menu_button("Photos", |ui| {
+                                    ui.style_mut().wrap = Some(false);
+                                    let current_mode = self.browser.photo_mode;
+                                    if ui
+                                        .selectable_label(
+                                            current_mode
+                                                == super::gallery::similarity::PhotoMode::Masonry,
+                                            "Masonry Grid",
+                                        )
+                                        .clicked()
+                                    {
+                                        let mode = super::gallery::similarity::PhotoMode::Masonry;
+                                        self.browser.photo_mode = mode;
+                                        self.browser.gallery_last_scroll_time =
+                                            ui.input(|i| i.time);
+                                        let _ = AppConfig::save_file_manager_photo_mode_to_file(
+                                            mode.as_str(),
+                                        );
+                                    }
+                                    if ui
                                     .selectable_label(
                                         current_mode
                                             == super::gallery::similarity::PhotoMode::Similarity,
@@ -610,20 +624,21 @@ impl eframe::App for FileManagerApp {
                                         mode.as_str(),
                                     );
                                 }
-                                ui.separator();
-                                let mut recurse = self.browser.photo_recurse;
-                                if ui
-                                    .checkbox(&mut recurse, "Recurse into subfolders")
-                                    .clicked()
-                                {
-                                    self.browser.photo_recurse = recurse;
-                                    let _ =
-                                        AppConfig::save_file_manager_photo_recurse_to_file(recurse);
-                                    self.browser.similarity_canvas.reset_view();
-                                    self.browser.refresh();
-                                }
-                            });
-                            ui.menu_button("Audio", |ui| {
+                                    ui.separator();
+                                    let mut recurse = self.browser.photo_recurse;
+                                    if ui
+                                        .checkbox(&mut recurse, "Recurse into subfolders")
+                                        .clicked()
+                                    {
+                                        self.browser.photo_recurse = recurse;
+                                        let _ = AppConfig::save_file_manager_photo_recurse_to_file(
+                                            recurse,
+                                        );
+                                        self.browser.similarity_canvas.reset_view();
+                                        self.browser.refresh();
+                                    }
+                                });
+                                ui.menu_button("Audio", |ui| {
                                 ui.style_mut().wrap = Some(false);
                                 let mut spectrum = self.browser.music_previews.audio_spectrum();
                                 if ui
@@ -649,30 +664,33 @@ impl eframe::App for FileManagerApp {
                                     }
                                 }
                             });
-                        } else if title == "Edit" {
-                            self.edit_menu(ui);
-                            if !self.viewers.active() && ui.button("Search settings…").clicked() {
-                                self.browser.open_search_settings();
-                                ui.close_menu();
+                            } else if title == "Edit" {
+                                self.edit_menu(ui);
+                                if !self.viewers.active() && ui.button("Search settings…").clicked()
+                                {
+                                    self.browser.open_search_settings();
+                                    ui.close_menu();
+                                }
+                            } else if title == "File" {
+                                self.constellation_index_menu(ui);
+                            } else {
+                                ui.add_enabled(false, egui::Label::new("No actions yet"));
                             }
-                        } else if title == "File" {
-                            self.constellation_index_menu(ui);
+                        });
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.viewers.active() {
+                            self.viewers.menu_controls(ui, &self.palette);
                         } else {
-                            ui.add_enabled(false, egui::Label::new("No actions yet"));
+                            ui.add(
+                                egui::Label::new("Ctrl+L: address  ·  Ctrl+Q: close")
+                                    .truncate(true),
+                            );
                         }
                     });
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.viewers.active() {
-                        self.viewers.menu_controls(ui, &self.palette);
-                    } else {
-                        ui.add(
-                            egui::Label::new("Ctrl+L: address  ·  Ctrl+Q: close").truncate(true),
-                        );
-                    }
                 });
             });
-        });
+        }
         if !self.viewers.active() {
             egui::TopBottomPanel::bottom("file_manager_summary")
                 .frame(
