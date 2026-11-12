@@ -112,6 +112,10 @@ fn rendered_save_as_dialog_writes_reloadable_recipe_in_private_directory() {
         graph: graph.clone(),
         script_editors: HashMap::new(),
         selected_node: None,
+        selected_nodes: HashSet::new(),
+        box_select_start: None,
+        box_select_additive: false,
+        box_select_base: HashSet::new(),
         dragging_from: None,
         pending_wire_connect: None,
         node_previews: HashMap::new(),
@@ -853,4 +857,179 @@ fn inline_property_typing_is_one_undoable_graph_edit() {
     );
     frame(&mut canvas, vec![key(egui::Key::Z)], command);
     assert_eq!(canvas.graph.nodes[0].props["text"], "after more");
+}
+
+#[test]
+fn marquee_box_select_allows_group_reposition_and_delete() {
+    let mut canvas = NodeCanvasState::new();
+    let trim_tpl =
+        little_clip_ops::pipeline::catalog::find_template("text_trim").expect("text_trim");
+    let case_tpl =
+        little_clip_ops::pipeline::catalog::find_template("text_case").expect("text_case");
+    let slug_tpl =
+        little_clip_ops::pipeline::catalog::find_template("text_slugify").expect("text_slugify");
+    let node_a = instantiate_template(trim_tpl, [80.0, 80.0]);
+    let node_b = instantiate_template(case_tpl, [80.0, 260.0]);
+    let node_c = instantiate_template(slug_tpl, [650.0, 500.0]);
+    let id_a = node_a.id;
+    let id_b = node_b.id;
+    let id_c = node_c.id;
+    canvas.graph.nodes = vec![node_a, node_b, node_c];
+    canvas.graph.connections = vec![Connection {
+        from_node: id_a,
+        from_pin: "Out".to_owned(),
+        to_node: id_b,
+        to_pin: "In".to_owned(),
+    }];
+    canvas.graph.pan = [0.0, 0.0];
+    canvas.graph.zoom = 1.0;
+    canvas.clear_selection();
+
+    let palette = AppPalette::default();
+    let ctx = egui::Context::default();
+    let frame = |canvas: &mut NodeCanvasState, events: Vec<egui::Event>, modifiers| {
+        let mut raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 900.0))),
+            events,
+            ..Default::default()
+        };
+        raw.modifiers = modifiers;
+        ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                canvas.ui(ui, &palette);
+            });
+        })
+    };
+
+    // Initial render so layout/rects are established.
+    frame(&mut canvas, vec![], egui::Modifiers::NONE);
+
+    // Drag a marquee box in empty space from (30, 120) to (420, 600) covering node_a and node_b,
+    // leaving node_c at (650, 500) outside.
+    let start = Pos2::new(30.0, 120.0);
+    let end = Pos2::new(420.0, 600.0);
+    // Frame 1: press in empty space at `start`.
+    frame(
+        &mut canvas,
+        vec![
+            egui::Event::PointerMoved(start),
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+        egui::Modifiers::NONE,
+    );
+    // Frame 2: drag to `end` covering node_a and node_b.
+    frame(
+        &mut canvas,
+        vec![egui::Event::PointerMoved(end)],
+        egui::Modifiers::NONE,
+    );
+    assert!(
+        canvas.box_select_start.is_some(),
+        "box_select_start should be Some while dragging"
+    );
+    // Frame 3: release.
+    frame(
+        &mut canvas,
+        vec![egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        egui::Modifiers::NONE,
+    );
+
+    assert!(
+        canvas.is_node_selected(id_a),
+        "id_a not selected: {:?}",
+        canvas.effective_selected_nodes()
+    );
+    assert!(
+        canvas.is_node_selected(id_b),
+        "id_b not selected: selected={:?}, id_a={id_a}, id_b={id_b}, id_c={id_c}",
+        canvas.effective_selected_nodes()
+    );
+    assert!(!canvas.is_node_selected(id_c));
+    assert_eq!(canvas.selected_node, None);
+
+    // Drag node_a by (+40, +30) on screen: both node_a and node_b should move together, node_c stays put.
+    let drag_start = Pos2::new(180.0, 155.0);
+    let drag_end = Pos2::new(220.0, 185.0);
+    frame(
+        &mut canvas,
+        vec![
+            egui::Event::PointerMoved(drag_start),
+            egui::Event::PointerButton {
+                pos: drag_start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+        egui::Modifiers::NONE,
+    );
+    frame(
+        &mut canvas,
+        vec![egui::Event::PointerMoved(drag_end)],
+        egui::Modifiers::NONE,
+    );
+    frame(
+        &mut canvas,
+        vec![egui::Event::PointerButton {
+            pos: drag_end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        egui::Modifiers::NONE,
+    );
+
+    let pos_a = canvas
+        .graph
+        .nodes
+        .iter()
+        .find(|n| n.id == id_a)
+        .unwrap()
+        .pos;
+    let pos_b = canvas
+        .graph
+        .nodes
+        .iter()
+        .find(|n| n.id == id_b)
+        .unwrap()
+        .pos;
+    let pos_c = canvas
+        .graph
+        .nodes
+        .iter()
+        .find(|n| n.id == id_c)
+        .unwrap()
+        .pos;
+    assert!((pos_a[0] - 120.0).abs() < 0.5, "pos_a.x = {}", pos_a[0]);
+    assert!((pos_a[1] - 110.0).abs() < 0.5, "pos_a.y = {}", pos_a[1]);
+    assert!((pos_b[0] - 120.0).abs() < 0.5, "pos_b.x = {}", pos_b[0]);
+    assert!((pos_b[1] - 290.0).abs() < 0.5, "pos_b.y = {}", pos_b[1]);
+    assert_eq!(pos_c, [650.0, 500.0]);
+
+    // Press Delete: both selected nodes and their connection should be deleted, leaving node_c.
+    frame(
+        &mut canvas,
+        vec![egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(canvas.graph.nodes.len(), 1);
+    assert_eq!(canvas.graph.nodes[0].id, id_c);
+    assert!(canvas.graph.connections.is_empty());
+    assert!(canvas.effective_selected_nodes().is_empty());
 }

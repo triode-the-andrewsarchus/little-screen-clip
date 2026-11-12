@@ -41,6 +41,8 @@ impl NodeCanvasState {
                 self.graph = template.graph;
                 self.current_recipe_file = None;
                 self.node_previews.clear();
+                self.clear_selection();
+                self.box_select_start = None;
                 self.status_message = Some(("Created new recipe from template".to_string(), false));
             }
 
@@ -70,6 +72,8 @@ impl NodeCanvasState {
                 self.snapshot_undo();
                 self.selected_recipe_name = r.name.clone();
                 self.graph = r.graph.clone();
+                self.clear_selection();
+                self.box_select_start = None;
                 let safe: String = r
                     .name
                     .chars()
@@ -202,6 +206,8 @@ impl NodeCanvasState {
                 self.graph.nodes.clear();
                 self.graph.connections.clear();
                 self.node_previews.clear();
+                self.clear_selection();
+                self.box_select_start = None;
                 self.status_message = Some(("Canvas cleared".to_string(), false));
             }
 

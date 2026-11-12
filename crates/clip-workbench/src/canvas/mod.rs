@@ -23,7 +23,7 @@ use little_clip_ops::pipeline::recipes::{
 use little_clip_ops::pipeline::types::{
     Connection, NodeGraph, NodeInstance, NodeKind, PortType, Recipe,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -47,6 +47,10 @@ pub struct NodeCanvasState {
     pub script_editors: HashMap<Uuid, crate::script_editor::ScriptEditor>,
     pub graph: NodeGraph,
     pub selected_node: Option<Uuid>,
+    pub selected_nodes: HashSet<Uuid>,
+    pub box_select_start: Option<Pos2>,
+    box_select_additive: bool,
+    box_select_base: HashSet<Uuid>,
     pub dragging_from: Option<(Uuid, String, bool)>, // (node_id, pin_name, is_output)
     pub pending_wire_connect: Option<PendingWireConnect>,
     pub node_previews: HashMap<Uuid, String>,
@@ -98,6 +102,10 @@ impl NodeCanvasState {
             graph,
             script_editors: HashMap::new(),
             selected_node: None,
+            selected_nodes: HashSet::new(),
+            box_select_start: None,
+            box_select_additive: false,
+            box_select_base: HashSet::new(),
             dragging_from: None,
             pending_wire_connect: None,
             node_previews: HashMap::new(),
@@ -166,11 +174,111 @@ impl NodeCanvasState {
         self.redo_stack.clear();
     }
 
+    /// Returns `true` if `node_id` is part of the current single or multi-node selection.
+    pub fn is_node_selected(&self, node_id: Uuid) -> bool {
+        self.selected_node == Some(node_id) || self.selected_nodes.contains(&node_id)
+    }
+
+    /// Returns the union of `selected_nodes` and `selected_node` for group operations.
+    pub fn effective_selected_nodes(&self) -> HashSet<Uuid> {
+        let mut selected = self.selected_nodes.clone();
+        if let Some(id) = self.selected_node {
+            selected.insert(id);
+        }
+        selected
+    }
+
+    /// Selects a single node and clears any previous multi-selection.
+    pub fn select_single(&mut self, node_id: Uuid) {
+        self.selected_nodes.clear();
+        self.selected_nodes.insert(node_id);
+        self.selected_node = Some(node_id);
+    }
+
+    /// Toggles `node_id` in the current selection and keeps `selected_node` in sync.
+    pub fn toggle_node_selection(&mut self, node_id: Uuid) {
+        let mut selected = self.effective_selected_nodes();
+        if !selected.remove(&node_id) {
+            selected.insert(node_id);
+        }
+        self.set_selected_nodes(selected);
+    }
+
+    /// Replaces the current selection with `nodes` and keeps `selected_node` in sync.
+    pub fn set_selected_nodes(&mut self, nodes: HashSet<Uuid>) {
+        self.selected_nodes = nodes;
+        self.selected_node = if self.selected_nodes.len() == 1 {
+            self.selected_nodes.iter().next().copied()
+        } else {
+            None
+        };
+    }
+
+    /// Clears all node selection state.
+    pub fn clear_selection(&mut self) {
+        self.selected_nodes.clear();
+        self.selected_node = None;
+    }
+
+    /// Removes any selected IDs that no longer exist in `self.graph.nodes`.
+    fn prune_selection(&mut self) {
+        let valid: HashSet<Uuid> = self.graph.nodes.iter().map(|n| n.id).collect();
+        self.selected_nodes.retain(|id| valid.contains(id));
+        if let Some(id) = self.selected_node
+            && !valid.contains(&id)
+        {
+            self.selected_node = None;
+        }
+        if self.selected_node.is_none() && self.selected_nodes.len() == 1 {
+            self.selected_node = self.selected_nodes.iter().next().copied();
+        }
+    }
+
+    /// Deletes all currently selected nodes and their incident connections, pushing an undo snapshot.
+    /// Returns the number of deleted nodes.
+    pub fn delete_selected_nodes(&mut self) -> usize {
+        let to_delete = self.effective_selected_nodes();
+        if to_delete.is_empty() {
+            return 0;
+        }
+        self.snapshot_undo();
+        let count = to_delete.len();
+        self.graph.nodes.retain(|n| !to_delete.contains(&n.id));
+        self.graph
+            .connections
+            .retain(|c| !to_delete.contains(&c.from_node) && !to_delete.contains(&c.to_node));
+        self.clear_selection();
+        self.status_message = Some((
+            if count == 1 {
+                "Deleted node".to_string()
+            } else {
+                format!("Deleted {count} nodes")
+            },
+            false,
+        ));
+        count
+    }
+
+    /// Translates all currently selected nodes in world coordinates by `delta`.
+    pub fn translate_selected_nodes(&mut self, delta: Vec2) {
+        let selected = self.effective_selected_nodes();
+        if selected.is_empty() {
+            return;
+        }
+        for node in &mut self.graph.nodes {
+            if selected.contains(&node.id) {
+                node.pos[0] += delta.x;
+                node.pos[1] += delta.y;
+            }
+        }
+    }
+
     pub fn undo(&mut self) {
         self.property_edit_group = None;
         if let Some(prev) = self.undo_stack.pop() {
             self.redo_stack.push(self.graph.clone());
             self.graph = prev;
+            self.prune_selection();
             self.status_message = Some(("↶ Undo".to_string(), false));
         }
     }
@@ -180,6 +288,7 @@ impl NodeCanvasState {
         if let Some(next) = self.redo_stack.pop() {
             self.undo_stack.push(self.graph.clone());
             self.graph = next;
+            self.prune_selection();
             self.status_message = Some(("↷ Redo".to_string(), false));
         }
     }

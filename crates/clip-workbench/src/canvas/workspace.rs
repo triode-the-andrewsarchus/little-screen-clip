@@ -18,15 +18,8 @@ impl NodeCanvasState {
                 self.redo();
             } else if ui
                 .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
-                && let Some(sel_id) = self.selected_node
             {
-                self.snapshot_undo();
-                self.graph.nodes.retain(|n| n.id != sel_id);
-                self.graph
-                    .connections
-                    .retain(|c| c.from_node != sel_id && c.to_node != sel_id);
-                self.selected_node = None;
-                self.status_message = Some(("Deleted node".to_string(), false));
+                self.delete_selected_nodes();
             }
         }
 
@@ -121,6 +114,12 @@ impl NodeCanvasState {
         let mut socket_to_disconnect = None;
         let mut script_to_edit = None;
         let mut node_drag_started = false;
+        let mut drag_started_node: Option<Uuid> = None;
+        let mut dragged_node: Option<Uuid> = None;
+        let mut group_drag_delta: Option<Vec2> = None;
+        let shift_held = ui.input(|i| i.modifiers.shift);
+        let mut clicked_node: Option<Uuid> = None;
+        let selected_snapshot = self.effective_selected_nodes();
 
         let zoom = self.graph.zoom;
         let mut property_edits = Vec::new();
@@ -135,16 +134,18 @@ impl NodeCanvasState {
                 ui.make_persistent_id(node_id),
                 egui::Sense::click_and_drag(),
             );
-            if node_resp.drag_started() {
+            if node_resp.drag_started_by(egui::PointerButton::Primary)
+                && self.dragging_from.is_none()
+            {
                 node_drag_started = true;
+                drag_started_node = Some(node_id);
             }
             if node_resp.dragged_by(egui::PointerButton::Primary) && self.dragging_from.is_none() {
-                node.pos[0] += node_resp.drag_delta().x / zoom;
-                node.pos[1] += node_resp.drag_delta().y / zoom;
-                self.selected_node = Some(node_id);
+                dragged_node = Some(node_id);
+                group_drag_delta = Some(node_resp.drag_delta() / zoom);
             }
             if node_resp.clicked() {
-                self.selected_node = Some(node_id);
+                clicked_node = Some(node_id);
             }
             if matches!(node.kind, NodeKind::PythonScript | NodeKind::BashCommand)
                 && node_resp.double_clicked()
@@ -153,7 +154,7 @@ impl NodeCanvasState {
             }
 
             // Render Card Frame
-            let is_selected = self.selected_node == Some(node_id);
+            let is_selected = selected_snapshot.contains(&node_id);
             let card = render_node_card(
                 zoom,
                 &self.node_previews,
@@ -177,10 +178,37 @@ impl NodeCanvasState {
             );
         }
 
+        if let Some(node_id) = drag_started_node
+            && !self.is_node_selected(node_id)
+        {
+            if shift_held {
+                self.toggle_node_selection(node_id);
+            } else {
+                self.select_single(node_id);
+            }
+        }
+        if let Some(node_id) = dragged_node
+            && !self.is_node_selected(node_id)
+        {
+            self.select_single(node_id);
+        }
+        if let Some(delta) = group_drag_delta {
+            self.translate_selected_nodes(delta);
+        }
+        if let Some(node_id) = clicked_node {
+            if shift_held {
+                self.toggle_node_selection(node_id);
+            } else {
+                self.select_single(node_id);
+            }
+        }
+
         // 5. Active Dragging Cable, Magnetic Snapping & Visual Feedback (Drawn ON TOP of Node Cards)
         // Cancel dragging if Escape is pressed
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.dragging_from = None;
+            self.box_select_start = None;
+            self.box_select_base.clear();
         }
 
         let mut snapped_candidate: Option<SnappedTargetInfo> = None;
@@ -355,8 +383,67 @@ impl NodeCanvasState {
             self.graph
                 .connections
                 .retain(|c| c.from_node != del_id && c.to_node != del_id);
-            if self.selected_node == Some(del_id) {
-                self.selected_node = None;
+            self.prune_selection();
+        }
+
+        // Empty-space click clears selection; empty-space primary drag performs marquee multi-select
+        if response.clicked() && !shift_held {
+            self.clear_selection();
+        }
+        if response.drag_started_by(egui::PointerButton::Primary) && self.dragging_from.is_none() {
+            let press_pos = ui
+                .input(|i| i.pointer.press_origin().or(i.pointer.hover_pos()))
+                .unwrap_or(canvas_rect.center());
+            let started_on_node = node_screen_rects.values().any(|r| r.contains(press_pos));
+            if !started_on_node {
+                let world_start =
+                    screen_to_world(canvas_rect, self.graph.pan, self.graph.zoom, press_pos);
+                self.box_select_start = Some(world_start);
+                self.box_select_additive = shift_held;
+                if shift_held {
+                    self.box_select_base = self.effective_selected_nodes();
+                } else {
+                    self.box_select_base.clear();
+                    self.clear_selection();
+                }
+            }
+        }
+        if let Some(world_start) = self.box_select_start {
+            if ui.input(|i| i.pointer.primary_down()) {
+                ui.ctx().request_repaint();
+                if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                    let start_screen = canvas_rect.clamp(world_to_screen(
+                        canvas_rect,
+                        self.graph.pan,
+                        self.graph.zoom,
+                        world_start,
+                    ));
+                    let end_screen = canvas_rect.clamp(mouse_pos);
+                    let marquee_rect = Rect::from_two_pos(start_screen, end_screen);
+                    let accent = hex_to_c32(&palette.harmonies.base);
+                    let fill =
+                        Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 36);
+                    painter.rect(
+                        marquee_rect,
+                        Rounding::same(3.0),
+                        fill,
+                        Stroke::new(1.5_f32, accent),
+                    );
+                    let mut next_selected = if self.box_select_additive {
+                        self.box_select_base.clone()
+                    } else {
+                        HashSet::new()
+                    };
+                    for (id, rect) in &node_screen_rects {
+                        if rect.intersects(marquee_rect) {
+                            next_selected.insert(*id);
+                        }
+                    }
+                    self.set_selected_nodes(next_selected);
+                }
+            } else {
+                self.box_select_start = None;
+                self.box_select_base.clear();
             }
         }
 
@@ -377,7 +464,7 @@ impl NodeCanvasState {
         }
 
         if let Some(id) = script_to_edit {
-            self.selected_node = Some(id);
+            self.select_single(id);
         }
 
         // Catalog Modal / Popup
