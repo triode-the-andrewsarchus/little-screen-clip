@@ -571,7 +571,7 @@ impl FileManager {
 /// Paints a center crop and its selection feedback within the tile boundary.
 #[expect(
     clippy::too_many_arguments,
-    reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    reason = "Drawing keeps target, geometry, content and palette explicit at the rendering boundary"
 )]
 fn paint_gallery_tile(
     ui: &mut Ui,

@@ -282,7 +282,7 @@ fn entry_card(entry: &Entry, key: Selected, color: egui::Color32) -> Card<'_> {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    reason = "Drawing keeps target, geometry, content and palette explicit at the rendering boundary"
 )]
 fn card_row(
     ui: &mut Ui,

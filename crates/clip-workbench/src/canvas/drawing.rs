@@ -55,7 +55,7 @@ pub(super) struct SnappedTargetInfo {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    reason = "Drawing keeps target, geometry, content and palette explicit at the rendering boundary"
 )]
 pub(super) fn draw_active_cable(
     painter: &egui::Painter,
@@ -283,7 +283,7 @@ pub(super) struct NodeCardResponse {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    reason = "Drawing keeps target, geometry, content and palette explicit at the rendering boundary"
 )]
 pub(super) fn render_node_card(
     zoom: f32,
@@ -583,7 +583,7 @@ fn render_node_properties(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    reason = "Drawing keeps target, geometry, content and palette explicit at the rendering boundary"
 )]
 pub(super) fn render_socket(
     ui: &mut egui::Ui,

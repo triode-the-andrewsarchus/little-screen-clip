@@ -3,7 +3,7 @@ use super::*;
 impl ScreenRenderer {
     #[expect(
         clippy::too_many_arguments,
-        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+        reason = "Drawing keeps target, geometry, content and palette explicit at the rendering boundary"
     )]
     pub(super) fn draw_audio_waveform(
         &self,
