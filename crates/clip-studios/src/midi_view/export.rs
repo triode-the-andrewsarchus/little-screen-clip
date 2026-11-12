@@ -266,16 +266,19 @@ pub(super) fn handoff_midi_export_with(
     };
     // Retain only once transmission starts. An unavailable daemon has never
     // received the path, while a lost reply leaves ownership uncertain.
-    match send(&request, &mut || artifact.retain()) {
+    let pushed = match send(&request, &mut || artifact.retain()) {
         Ok(little_clip_core::ipc::IpcResponse::Success { .. }) => {
             artifact.retain();
-            return Ok(artifact);
+            true
         }
-        Ok(little_clip_core::ipc::IpcResponse::Error { .. }) => artifact.retain_file = false,
-        _ => {}
-    }
+        Ok(little_clip_core::ipc::IpcResponse::Error { .. }) => {
+            artifact.retain_file = false;
+            false
+        }
+        _ => false,
+    };
 
-    if cancelled.load(Ordering::Acquire) {
+    if !pushed && cancelled.load(Ordering::Acquire) {
         return Err("MIDI export cancelled".to_string());
     }
     if let Err(error) = copy(&artifact.path) {
@@ -290,7 +293,9 @@ pub(super) fn handoff_midi_export_with(
             "Failed to copy MIDI file to system clipboard: {error}"
         ));
     }
-    artifact.delivery = MidiExportDelivery::ClipboardFallback;
+    if !pushed {
+        artifact.delivery = MidiExportDelivery::ClipboardFallback;
+    }
     artifact.retain();
     Ok(artifact)
 }

@@ -922,6 +922,64 @@ fn rendered_full_score_copy_shortcut_exports_parseable_midi_to_left_hand() {
 }
 
 #[test]
+fn midi_daemon_success_still_publishes_the_file_and_surfaces_clipboard_failure() {
+    use little_clip_core::{clipboard::ClipboardError, ipc::IpcResponse};
+    for succeeds in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let artifact = write_midi_export(
+            &inline_midi_data(1),
+            0.0,
+            1.0,
+            false,
+            None,
+            123,
+            directory.path().to_owned(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let path = artifact.path.clone();
+        let mut copied = false;
+        let result = handoff_midi_export_with(
+            artifact,
+            &AtomicBool::new(false),
+            Instant::now(),
+            |_, on_send| {
+                on_send();
+                Ok(IpcResponse::Success {
+                    message: "hand accepted".into(),
+                })
+            },
+            |file| {
+                copied = true;
+                assert_eq!(file, path);
+                assert_eq!(MidiData::parse_file(file).unwrap().total_notes, 1);
+                if succeeds {
+                    Ok(())
+                } else {
+                    Err(ClipboardError::Unavailable)
+                }
+            },
+        );
+        assert!(
+            copied,
+            "a daemon acknowledgment cannot replace desktop publication"
+        );
+        assert!(
+            path.is_file(),
+            "the hand owns the exported file even if clipboard publication fails"
+        );
+        if succeeds {
+            assert!(matches!(
+                result.unwrap().delivery,
+                MidiExportDelivery::PushedToWorkbench
+            ));
+        } else {
+            assert!(result.err().unwrap().contains("system clipboard"));
+        }
+    }
+}
+
+#[test]
 fn midi_export_cleanup_distinguishes_definite_failure_from_uncertain_delivery() {
     use little_clip_core::{clipboard::ClipboardError, ipc::IpcResponse};
     #[derive(Clone, Copy, Debug)]

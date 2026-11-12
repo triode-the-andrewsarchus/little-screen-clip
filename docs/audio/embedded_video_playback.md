@@ -230,3 +230,10 @@ replace seeded text with `text/uri-list`, retained stereo WAV data, and duration
 matching the displayed selection. Waiting for completed waveform analysis avoids
 racing range setup against initial analysis; expected duration comes from the
 editor readout rather than assumed pointer-drag coordinates.
+
+## Remaining media clipboard audit
+
+- [x] MIDI Studio and file-manager MIDI strips publish file URIs after successful daemon handoff, preserving owned files on partial failure. All 28 MIDI tests pass, including successful handoff with a failed desktop writer.
+- [ ] Rolling-audio selection copies use the shared guarded audio clipboard delivery.
+- [ ] Audio waveform/FFT PNG copies publish images directly and report clipboard errors.
+- [ ] Image Studio normal and optimized copies report desktop failure as failure even when the hand push succeeds.
