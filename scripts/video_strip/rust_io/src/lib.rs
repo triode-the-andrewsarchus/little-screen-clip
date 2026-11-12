@@ -9,6 +9,10 @@ use std::{
 };
 
 const BLOCK: usize = 64 * 1024;
+const BUFFER_LAYOUT: Layout = match Layout::from_size_align(BLOCK, 4096) {
+    Ok(layout) => layout,
+    Err(_) => panic!("invalid read-ahead buffer layout"),
+};
 const SLOTS: usize = 16;
 const EMPTY: i32 = i32::MIN;
 const PENDING: i32 = i32::MIN + 1;
@@ -21,9 +25,8 @@ struct Buffer {
 }
 impl Buffer {
     fn new() -> io::Result<Self> {
-        let layout = Layout::from_size_align(BLOCK, 4096).unwrap();
         // SAFETY: valid nonzero layout; allocation is exclusively owned here.
-        let bytes = NonNull::new(unsafe { alloc_zeroed(layout) })
+        let bytes = NonNull::new(unsafe { alloc_zeroed(BUFFER_LAYOUT) })
             .ok_or_else(|| io::Error::from_raw_os_error(libc::ENOMEM))?;
         Ok(Self {
             bytes,
@@ -44,12 +47,7 @@ impl Drop for Buffer {
         }
         // SAFETY: allocation/layout match new and no read remains pending for
         // this block. Reader drains its ring before ordinary field destruction.
-        unsafe {
-            dealloc(
-                self.bytes.as_ptr(),
-                Layout::from_size_align(BLOCK, 4096).unwrap(),
-            )
-        };
+        unsafe { dealloc(self.bytes.as_ptr(), BUFFER_LAYOUT) };
     }
 }
 

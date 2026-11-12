@@ -32,6 +32,8 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Make answer-type labels an exhaustive constant match, with parser options derived from those labels. Adding an enum variant now requires defining its label instead of risking a failed table lookup. All five query tests pass.
 
+- [x] Share one compile-time-validated allocation layout between allocation and deallocation in the standalone io_uring helper. The previous fixed layout was valid; this removes duplicate runtime construction and keeps both operations consistent. Its separate locked Cargo check passes using the existing target directory.
+
 ## Remaining review
 
 - [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.
