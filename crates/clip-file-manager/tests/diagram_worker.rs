@@ -14,7 +14,7 @@ fn diagram_license_notices_are_available_without_host_startup() {
     let output = CommandRequest::new(env!("CARGO_BIN_EXE_clip-file-manager"))
         .arg("--diagram-licenses")
         .timeout(Duration::from_secs(5))
-        .max_output_bytes(128 * 1024)
+        .max_output_bytes(512 * 1024)
         .own_process_group()
         .die_with_parent()
         .run()
@@ -27,6 +27,8 @@ fn diagram_license_notices_are_available_without_host_startup() {
     assert!(notices.contains("Abbas Monfared"));
     assert!(notices.contains("SIL OPEN FONT LICENSE"));
     assert!(notices.contains("CORE-MATH"));
+    assert!(notices.contains("D2 and TALA"));
+    assert!(notices.contains("Fuzzy Bubbles Project Authors"));
     assert!(notices.contains("Matheus Mota"));
     assert!(notices.contains("STIX Fonts Project Authors"));
     assert!(notices.contains("234fc35f116bceca2c34579879a6e6893112ccf8"));

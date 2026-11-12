@@ -10,6 +10,7 @@ pub enum Format {
     Mermaid,
     Lini,
     Graphviz,
+    D2,
     Math,
     MathInline,
 }
@@ -27,6 +28,7 @@ impl Format {
             "mermaid" | "mmd" => Some(Self::Mermaid),
             "lini" => Some(Self::Lini),
             "graphviz" | "dot" => Some(Self::Graphviz),
+            "d2" => Some(Self::D2),
             _ => None,
         }
     }
@@ -46,6 +48,7 @@ impl Format {
             "mermaid" => Some(Self::Mermaid),
             "lini" => Some(Self::Lini),
             "gv" | "graphviz" => Some(Self::Graphviz),
+            "d2" => Some(Self::D2),
             _ => None,
         }
     }
@@ -76,6 +79,7 @@ impl Format {
             Self::Mermaid => "Mermaid",
             Self::Lini => "Lini",
             Self::Graphviz => "Graphviz",
+            Self::D2 => "D2",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }

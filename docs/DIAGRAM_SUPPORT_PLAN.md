@@ -31,7 +31,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | LaTeX math | Mathra 1.12.0; latex-rust 2.1.1 / 3.0.3; retex-svg 1.9.0; KaTeX; MathLive editor reference | Native Mathra selected; inline/display previews implemented in both viewers; structured graphical editing pending |
 | Mermaid | Merman 0.10.0; mermaid-rs-renderer 0.3.1; ariel-rs 0.4 | Selected Merman; native source/live previews implemented; parser-backed graphical editing pending |
 | PlantUML / C4 | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [plantuml_encoding](https://crates.io/crates/plantuml_encoding) 2.0.3; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
-| D2 | [graphs-tui](https://crates.io/crates/graphs-tui) 0.4.0; [d2-rs-target](https://crates.io/crates/d2-rs-target) 0.1.7; [d2-rs-scenebuild](https://crates.io/crates/d2-rs-scenebuild) 0.1.7 | Pending comparison / editor research |
+| D2 | d2-rs 0.1.7 pipeline; d2-render 0.1.0; graphs-tui 0.4.0; official Go D2 | Native full compiler/layout and scene renderer selected; engine tests pass; editor/host validation pending |
 | Graphviz DOT | graphviz-pure 1.2.0; layout-rs 0.1.3; graphviz-rust 0.9.9 | Native Graphviz port selected; source/live preview and bounded multi-graph rendering implemented; graphical manipulation pending |
 | DBML | [dbml-language-server](https://crates.io/crates/dbml-language-server) 0.1.2; [dbml_diff_mysql](https://crates.io/crates/dbml_diff_mysql) 0.1.5; [sea-orm-dbml](https://crates.io/crates/sea-orm-dbml) 0.1.0-beta.2 | Pending comparison / editor research |
 | BPMN | [orvanta-api](https://crates.io/crates/orvanta-api) 7.0.0; [bpmn-svg](https://crates.io/crates/bpmn-svg) 0.1.0; [bpmnkit-bpmn](https://crates.io/crates/bpmnkit-bpmn) 0.2.1 | Pending comparison / editor research |
@@ -462,3 +462,64 @@ editing are still separate work, as are exact source correspondence and the
 remaining diagram families. Compact overflow badges still count physical source
 lines; precise block/source accounting should accompany source correspondence.
 The overall goal remains incomplete.
+
+
+## Native D2 engine
+
+Compared [d2-rs 0.1.7](https://github.com/nelsonjchen/d2-rs),
+[d2-render 0.1.0](https://crates.io/crates/d2-render/0.1.0), the official Go D2
+library/CLI, and graphs-tui. d2-render's default native implementation is a
+smaller subset (its full backend invokes the CLI); graphs-tui is AGPL-3.0 and
+is not incorporated. The original Go engine would require a Go runtime/FFI
+boundary or an external tool. d2-rs supplies the full native parser, IR, font
+measurement, Dagre/ELK/TALA layouts, target model and resolved scene. This avoids
+inventing another partial D2 parser or duplicating its source-editing machinery.
+
+The published wasm facade already contains the complete source-to-layout
+pipeline. Its small local MPL patch exposes that same implementation with
+ordinary Rust errors, without constructing JavaScript exceptions. It compiles
+as an rlib: no JavaScript, WASM runtime, DOM or browser runs in the application.
+A second manifest patch accepts compatible binding versions so existing locked
+packages stay unchanged. User-requested history separation is preserved:
+`4239986` imports unchanged upstream sources/notices (131 package files verified
+byte-for-byte); `81f28ea` contains our API/manifest modifications and wiring.
+Their PATCHES.md files record changes and corresponding published source.
+
+The application adapter uses an explicit unavailable-image resolver and bounded,
+bundled-only font resolution. It does not call the CLI PNG exporter, whose
+default resource resolver can open files. Source imports have no host opener.
+D2's typed scene handles text, Markdown and TeX labels natively; feeding their
+SVG foreignObject labels to an ordinary SVG rasterizer would drop content.
+SVG structure and dimensions still pass the existing shared safety checks;
+scene construction, glyphs, paths, fonts, raster pixels and auxiliary work have
+finite budgets inside the existing owned/cancellable helper. Images show the
+engine's placeholder with a warning rather than resolving their source URLs.
+
+Renderer validation: 23 diagram tests pass, including all three D2 engines,
+class/SQL shapes, sequence/grid layouts, Markdown/TeX labels, sketch mode,
+theme overrides, valid-but-denied local D2 imports, a valid-but-denied red PNG,
+inert remote image references, syntax/configuration failures and a large diagram
+fitted to the raster bounds. Root flat-board previews are implemented;
+isometric output reports a diagnostic. Board selection and interactive editing
+remain separate work. Standalone highlighting/save and executable-host checks
+are being verified before claiming the integration complete.
+
+Editor research: [Daedalus](https://github.com/Sotilrac/daedalus) is MPL-2.0,
+with useful grid snapping, endpoint placement, pan/zoom and reversible layout
+comparison. Its React/Tauri UI stores layout in a separate sidecar rather than
+editing D2 source, so importing it would not meet this application's native UI
+and source-correspondence goals. [D2 Canvas](https://github.com/ArisMontclair/d2-canvas)
+illustrates a node palette, two-node connection gesture and source/canvas sync;
+its README's open-source claim is not a verified license grant, and no code is
+copied. D2 Studio is a design reference, not an imported editor. The selected
+native d2-rs-editor library already provides source edits, references and
+reconnect/move/rename operations without an LSP transport; prefer those APIs for
+future direct manipulation rather than translating a web editor's parser.
+
+Whole-tree architecture measurements include the unchanged upstream source
+imports: 118 added measured files, about 35.7k lines, and upstream test/renderer
+clone/complexity warnings. Do not remove upstream sources/tests just to hide
+these metrics. A separate measurement of the application adapter reports 256
+code lines, eight functions, maximum CCN 15 and no clones. The structural tool
+cannot analyze a single-file target; the whole-tree report supplies structural
+context. The full feature and editing goal remains active.

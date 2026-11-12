@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+mod d2;
 mod graphviz;
 mod lini;
 mod math;
@@ -185,6 +186,7 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/lini-google-sans-OFL.txt"),
             include_str!("../third_party/lini-google-sans-code-OFL.txt"),
             include_str!("../third_party/lini-phosphor-MIT.txt"),
+            include_str!("../third_party/d2-notices.txt"),
             include_str!("../third_party/mathra-MIT.txt"),
             include_str!("../third_party/mathra-stix-OFL.txt"),
             include_str!("../third_party/graphviz-EPL-2.0.txt"),
@@ -249,6 +251,7 @@ fn render_inline(
     validate_source(source)?;
     let mut math_layout = None;
     let (svg, warnings) = match format {
+        Format::D2 => return d2::render(source),
         Format::Math | Format::MathInline => {
             let (svg, layout) = math::svg(
                 source,
@@ -475,6 +478,8 @@ mod tests {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
         let directory = tempfile::tempdir().unwrap();
         for (extension, content, format, source) in [
+            ("md", "```d2\na -> b\n```", Format::D2, "a -> b\n"),
+            ("d2", "a -> b\n", Format::D2, "a -> b\n"),
             ("md", "$x$", Format::MathInline, "x"),
             ("md", "$$x$$", Format::Math, "x"),
             ("md", "```pikchr\nbox\n```", Format::Pikchr, "box\n"),
