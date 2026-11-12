@@ -1,16 +1,9 @@
-//! Optional Blender thumbnails; helper failures remain ordinary preview results.
+//! Saved Blender thumbnails from the shared bounded native reader.
 use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
-use crate::{file_source::FileSource, icons::Icon, ui_appearance::WorkbenchColors};
+use crate::{icons::Icon, ui_appearance::WorkbenchColors};
 use egui::{Align2, FontId, Rect, Ui, pos2, vec2};
-use little_clip_core::{
-    ImageThumbnail,
-    process::{CommandRequest, command_available},
-};
-use std::{
-    path::Path,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use little_clip_core::ImageThumbnail;
+use std::{path::Path, sync::atomic::AtomicBool};
 
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     let mut data = PreviewData::new(String::new(), "Blender project".into(), Icon::Model3d);
@@ -22,42 +15,7 @@ pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
 }
 
 fn thumbnail(path: &Path, token: &AtomicBool) -> Result<ImageThumbnail, String> {
-    if token.load(Ordering::Relaxed) {
-        return Err("Preview cancelled".into());
-    }
-    let helper = command_available("blender-thumbnailer")
-        .ok_or("Blender thumbnail unavailable: blender-thumbnailer is not in PATH")?;
-    let source = FileSource::capture(path)?;
-    let directory = tempfile::Builder::new()
-        .prefix("veylar-blend-thumbnail-")
-        .tempdir()
-        .map_err(|error| error.to_string())?;
-    let output = directory.path().join("preview.png");
-    let result = CommandRequest::new(helper.into_os_string())
-        .arg_content_file(path)
-        .map_err(|e| e.to_string())?
-        .arg(output.as_os_str())
-        .timeout(Duration::from_secs(8))
-        .max_output_bytes(16 * 1024)
-        .run_cancellable(token)
-        .map_err(|error| format!("Blender thumbnail unavailable: {error}"))?;
-    if !result.status.success() {
-        return Err("Blender thumbnail unavailable; the file may have no saved preview".into());
-    }
-    source.check()?;
-    if token.load(Ordering::Relaxed) {
-        return Err("Preview cancelled".into());
-    }
-    let bytes = crate::file_source::read_file_bytes(&output, 4 * 1024 * 1024, true, false)
-        .map_err(|_| {
-            "Blender thumbnail unavailable; the helper produced no usable preview".to_string()
-        })?;
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(16 * 1024 * 1024);
-    limits.max_image_width = Some(1024);
-    limits.max_image_height = Some(1024);
-    ImageThumbnail::generate_with_limits(&bytes, Some("image/png"), 512, 512, limits)
-        .ok_or_else(|| "Blender thumbnail unavailable; invalid or oversized PNG".into())
+    little_clip_core::blend_image::thumbnail(path, token)
 }
 
 pub(super) fn show(

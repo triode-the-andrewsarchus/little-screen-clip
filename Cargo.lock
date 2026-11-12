@@ -5119,6 +5119,7 @@ dependencies = [
  "uuid",
  "wait-timeout",
  "zip 7.4.0",
+ "zstd",
 ]
 
 [[package]]

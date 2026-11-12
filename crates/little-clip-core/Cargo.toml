@@ -45,6 +45,7 @@ tobj = "4.0"
 tempfile = "3.27"
 regex.workspace = true
 flate2 = "1.1"
+zstd = { version = "0.13", default-features = false }
 quick-xml = "0.41"
 roxmltree = "0.20"
 ncw = "=0.4.0"
