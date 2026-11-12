@@ -50,7 +50,9 @@ enum Delivery {
 }
 
 struct Editor {
+    id: egui::Id,
     text: String,
+    timing: Option<Box<crate::text_editor_wave::WaveEditor>>,
     saved: String,
     source: Option<FileSource>,
     path: PathBuf,
@@ -78,6 +80,8 @@ impl TextSession {
                         |extension| format!("edited.{extension}"),
                     );
                 Editor {
+                    id: egui::Id::new(uuid::Uuid::new_v4()),
+                    timing: Default::default(),
                     saved: text.clone(),
                     text,
                     source: Some(source),
@@ -138,6 +142,8 @@ impl TextSession {
             mode: Mode::Diagram,
             diagram: Some((format, Default::default())),
             editor: Some(Editor {
+                id: egui::Id::new(uuid::Uuid::new_v4()),
+                timing: Default::default(),
                 text: content.as_str().to_owned(),
                 saved: content.as_str().to_owned(),
                 source: None,
@@ -334,6 +340,11 @@ impl TextSession {
                 self.mode = mode;
             }
             if self.mode != Mode::Diagram
+                && let Some(timing) = &mut editor.timing
+            {
+                timing.suspend();
+            }
+            if self.mode != Mode::Diagram
                 && let Some((_, preview)) = &mut self.diagram
             {
                 preview.suspend();
@@ -378,6 +389,80 @@ impl TextSession {
     }
 }
 impl Editor {
+    fn apply_graphical_edit(&mut self, ctx: &egui::Context, id: egui::Id, text: String) {
+        let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+        let cursor = state.cursor.char_range().unwrap_or_default();
+        let mut history = state.undoer();
+        history.add_undo(&(cursor, self.text.clone()));
+        self.text = text;
+        let cursor = egui::text::CCursorRange::one(egui::text::CCursor::new(
+            cursor.primary.index.min(self.text.chars().count()),
+        ));
+        history.add_undo(&(cursor, self.text.clone()));
+        state.cursor.set_char_range(Some(cursor));
+        state.set_undoer(history);
+        state.store(ctx, id);
+        ctx.request_repaint();
+    }
+    fn history_ui(&mut self, ui: &mut egui::Ui, id: egui::Id, palette: &AppPalette) {
+        let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) else {
+            return;
+        };
+        let cursor = state.cursor.char_range().unwrap_or_default();
+        let current = (cursor, self.text.clone());
+        let mut history = state.undoer();
+        let mut next = None;
+        let (undo_key, redo_key) = if ui.ctx().wants_keyboard_input() {
+            (false, false)
+        } else {
+            ui.input_mut(|input| {
+                // Logical modifier matching permits extra Shift, so consume
+                // the more specific redo chord before ordinary undo.
+                let redo = input.consume_shortcut(&egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::Z,
+                )) || input.consume_shortcut(&egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND,
+                    egui::Key::Y,
+                ));
+                let undo = !redo
+                    && input.consume_shortcut(&egui::KeyboardShortcut::new(
+                        egui::Modifiers::COMMAND,
+                        egui::Key::Z,
+                    ));
+                (undo, redo)
+            })
+        };
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    history.has_undo(&current),
+                    ButtonRole::Secondary.button("Undo", palette),
+                )
+                .clicked()
+                || undo_key
+            {
+                next = history.undo(&current).cloned();
+            }
+            if ui
+                .add_enabled(
+                    history.has_redo(&current),
+                    ButtonRole::Secondary.button("Redo", palette),
+                )
+                .clicked()
+                || redo_key
+            {
+                next = history.redo(&current).cloned();
+            }
+        });
+        if let Some((cursor, text)) = next {
+            self.text = text;
+            state.cursor.set_char_range(Some(cursor));
+            ui.ctx().request_repaint();
+        }
+        state.set_undoer(history);
+        state.store(ui.ctx(), id);
+    }
     fn poll(&mut self, ctx: &egui::Context) -> Option<TextPreviewState> {
         let receiver = self.pending.as_ref()?;
         let Some(result) = little_clip_core::jobs::task::poll(receiver, None).map(|result| {
@@ -486,6 +571,7 @@ impl Editor {
         ui: &mut egui::Ui,
         palette: &AppPalette,
         format: Option<little_clip_core::diagram::Format>,
+        id: egui::Id,
     ) {
         let syntax = format
             .and_then(|format| crate::text_preview::SYNTAX_SET.find_syntax_by_name(format.name()))
@@ -501,6 +587,7 @@ impl Editor {
             .id_source("diagram_source_editor")
             .show(ui, |ui| {
                 let mut edit = egui::TextEdit::multiline(&mut self.text)
+                    .id(id)
                     .code_editor()
                     .desired_width(f32::INFINITY)
                     .desired_rows(24);
@@ -509,6 +596,34 @@ impl Editor {
                 }
                 ui.add(edit);
             });
+    }
+
+    fn diagram_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        format: little_clip_core::diagram::Format,
+        preview: &mut crate::diagram_preview::Preview,
+        source_id: egui::Id,
+    ) {
+        ui.columns(2, |columns| {
+            self.source_ui(&mut columns[0], palette, Some(format), source_id);
+            egui::ScrollArea::vertical()
+                .id_source("diagram_live_preview")
+                .show(&mut columns[1], |ui| {
+                    if format == little_clip_core::diagram::Format::Wavedrom {
+                        if let Some(text) = self
+                            .timing
+                            .get_or_insert_default()
+                            .show(ui, &self.text, palette)
+                        {
+                            self.apply_graphical_edit(ui.ctx(), source_id, text);
+                        }
+                        ui.separator();
+                    }
+                    preview.show(ui, format, &self.text);
+                });
+        });
     }
 
     fn ui(
@@ -521,6 +636,7 @@ impl Editor {
             crate::diagram_preview::Preview,
         )>,
     ) {
+        let source_id = self.id;
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
@@ -563,16 +679,12 @@ impl Editor {
             ui.label(error);
         }
         if let Some((format, preview)) = diagram {
-            ui.columns(2, |columns| {
-                self.source_ui(&mut columns[0], palette, syntax_format);
-                egui::ScrollArea::vertical()
-                    .id_source("diagram_live_preview")
-                    .show(&mut columns[1], |ui| {
-                        preview.show(ui, *format, &self.text);
-                    });
-            });
+            self.diagram_ui(ui, palette, *format, preview, source_id);
         } else {
-            self.source_ui(ui, palette, syntax_format);
+            self.source_ui(ui, palette, syntax_format, source_id);
+        }
+        if syntax_format == Some(little_clip_core::diagram::Format::Wavedrom) {
+            self.history_ui(ui, source_id, palette);
         }
         if self.save_as {
             egui::Window::new("Save source to a new file")
@@ -638,6 +750,65 @@ mod tests {
             editor.poll(ctx);
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn graphical_gestures_and_intervening_typing_share_source_undo_history() {
+        let ctx = egui::Context::default();
+        let mut session = clipboard_graph("original");
+        let editor = session.editor.as_mut().unwrap();
+        let id = editor.id;
+        let other = clipboard_graph("unrelated file");
+        assert_ne!(id, other.editor.as_ref().unwrap().id);
+        editor.apply_graphical_edit(&ctx, id, "painted".into());
+        editor.text = "painted and typed".into();
+        editor.apply_graphical_edit(&ctx, id, "second painting".into());
+        let state = egui::TextEdit::load_state(&ctx, id).unwrap();
+        let cursor = state.cursor.char_range().unwrap();
+        let mut history = state.undoer();
+        let current = (cursor, editor.text.clone());
+        let typed = history.undo(&current).unwrap().clone();
+        assert_eq!(typed.1, "painted and typed");
+        let painted = history.undo(&typed).unwrap().clone();
+        assert_eq!(painted.1, "painted");
+        let original = history.undo(&painted).unwrap().clone();
+        assert_eq!(original.1, "original");
+        assert_eq!(history.redo(&original).unwrap().1, "painted");
+    }
+
+    #[test]
+    fn canvas_shortcuts_undo_and_redo_without_a_focused_text_field() {
+        let ctx = egui::Context::default();
+        let mut session = clipboard_graph("original");
+        let editor = session.editor.as_mut().unwrap();
+        editor.apply_graphical_edit(&ctx, editor.id, "painted".into());
+        for (redo, expected) in [(false, "original"), (true, "painted")] {
+            let modifiers = egui::Modifiers {
+                ctrl: true,
+                command: true,
+                shift: redo,
+                ..Default::default()
+            };
+            let _ = ctx.run(
+                egui::RawInput {
+                    modifiers,
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Z,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        editor.history_ui(ui, editor.id, &Default::default())
+                    });
+                },
+            );
+            assert_eq!(editor.text, expected);
         }
     }
 

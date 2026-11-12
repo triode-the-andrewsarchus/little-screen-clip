@@ -559,7 +559,7 @@
     - [ ] `.diag`, `.blockdiag`, `.seqdiag`, `.actdiag`, `.nwdiag`, `.packetdiag`, `.rackdiag` — BlockDiag family diagram (May need disambiguation with system diagnostic log files on `.diag`)
   - [ ] Hardware, electrical, and packet layout diagrams
     - [ ] `.bytefield`, `.bf` — Bytefield-SVG network/binary packet layout (May need disambiguation with Brainfuck source files on `.bf`)
-    - [x] `.json`/`.json5` with distinctive WaveJSON content, `.wavejson`, `.wavedrom` — WaveDrom timing/register/logic diagrams (source editor; graphical timing editing pending)
+    - [x] `.json`/`.json5` with distinctive WaveJSON content, `.wavejson`, `.wavedrom` — WaveDrom timing/register/logic diagrams (source editor and basic signal-cell painter; advanced operations stay in source)
     - [ ] `.wireviz`, `.wire.yaml`, `.wire.yml` — WireViz cable and wiring harness diagram (conventional compound extension for YAML)
     - [ ] `.sym` — Symbolator circuit component pinout diagram (May need disambiguation with compiler debug symbol files on `.sym`)
   - [ ] ASCII-art and text-to-vector diagram tools

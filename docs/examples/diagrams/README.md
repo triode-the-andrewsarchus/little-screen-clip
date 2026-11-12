@@ -89,3 +89,9 @@ directory. Original clipboard bytes are retained until explicitly edited.
 files need a distinctive WaveJSON structure; ordinary JSON stays text. Explicit
 `.wavejson` and `.wavedrom` files select the renderer even while source is invalid.
 Register (`reg`) and logic (`assign`) figures also render.
+
+Timing files also have a direct signal-cell painter. Choose a state and click or
+drag a lane; use Undo/Redo or Ctrl+Z/Ctrl+Shift+Z while the canvas is focused.
+The source and rendered timing stay linked, including comments and unrelated
+properties. Gaps/subcycles, adding lanes and editing bus labels/arcs still use
+the highlighted source editor.

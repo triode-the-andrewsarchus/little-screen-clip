@@ -37,7 +37,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | BPMN | BPMN Kit 0.2.1 native model/layout/SVG; bpmn-svg 0.1.0; bpmn-js and BPMNKit graphical editors | Native authored-DI and automatic-layout previews; highlighted source editor; direct manipulation optional follow-up |
 | draw.io | [drawio-exporter](https://crates.io/crates/drawio-exporter) 1.6.0; [flowchart-mcp-server](https://crates.io/crates/flowchart-mcp-server) 0.1.0; [drawio-lc](https://crates.io/crates/drawio-lc) 0.4.0 | Pending comparison / editor research |
 | Excalidraw | [excalidraw-image](https://crates.io/crates/excalidraw-image) 0.2.0; [gpui-excalidraw](https://crates.io/crates/gpui-excalidraw) 0.1.9; [excalidraw-render-cli](https://crates.io/crates/excalidraw-render-cli) 0.1.0 | Pending comparison / editor research |
-| WaveDrom | [wavedrom](https://crates.io/crates/wavedrom) 0.1.0; [mdbook-wavedrom-rs](https://crates.io/crates/mdbook-wavedrom-rs) 0.1.0; [mdbook-wavedrom](https://crates.io/crates/mdbook-wavedrom) 0.10.0 | Pending comparison / editor research |
+| WaveDrom | Canonical 3.8.0; native wavedrom 0.1.0 and current Rust main; WavePaint graphical reference | Canonical engine embedded without a browser; timing/register/logic source previews integrated; direct timing painting and lane naming integrated; advanced operations stay in source |
 | Structurizr | [oak-structurizr](https://crates.io/crates/oak-structurizr) 0.0.11; [dendryform-export](https://crates.io/crates/dendryform-export) 0.1.0; [cadastre](https://crates.io/crates/cadastre) 0.4.0 | Pending comparison / editor research |
 | BlockDiag / SeqDiag / ActDiag / NwDiag / PacketDiag / RackDiag | [xio_job_to_blockdiag](https://crates.io/crates/xio_job_to_blockdiag) 0.8.0 | Pending comparison / editor research |
 | Bytefield | [bytefield](https://crates.io/crates/bytefield) 0.1.0; [wiry-core](https://crates.io/crates/wiry-core) 0.1.0; [wiry-capture](https://crates.io/crates/wiry-capture) 0.1.0 | Pending comparison / editor research |
@@ -175,7 +175,7 @@ owner and cache rather than adding format-specific UI implementations. Test
 harness duplication across hosts verifies independently linked executables;
 source-sharing through crate-crossing `#[path]` remains prohibited.
 
-## WaveDrom research (renderer integrated; graphical timing editing pending)
+## WaveDrom research (renderer and basic signal painter integrated)
 
 Compared the native [wavedrom 0.1.0](https://github.com/coastalwhite/wavedrom-rs)
 renderer with the [canonical JS engine](https://github.com/wavedrom/wavedrom)
@@ -747,3 +747,55 @@ An application-side clipboard-title branch was separated into its existing
 language-hint responsibility to keep dispatch complexity from increasing.
 Graphical timing editing is still the next deliverable; these source/live
 previews do not claim to be a graphical editor.
+
+## Direct timing editing
+
+WaveDrom timing sources gain a signal-cell painter alongside the authoritative
+source and canonical rendered preview. Choose low/high/hold/unknown/high-impedance,
+clock or bus state, then click or drag across a lane. Cell width is adjustable;
+lane names can be edited. The canvas explicitly shows source cells rather than
+claiming they are uniformly timed: fractional periods, phases, headings and all
+other timing semantics remain visible in the canonical rendering below. Extended
+subcycle lanes remain source-editable rather than being approximated by the painter.
+
+A bounded background task builds a concrete JSON5 syntax model. It must reproduce
+the exact source before graphical editing is admitted. A gesture changes one
+string literal, preserving grouping, comments, unknown fields, CRLF/BOM, quoting
+and source around the edited literal. Duplicate edited fields disable direct
+edits with an explicit diagnostic. Stale models retire immediately on typing;
+no old geometry can overwrite a newer draft. Parsing and rendering stay off the
+UI thread. One pointer gesture commits one replacement on release, including
+release outside the lane. Graphical and source edits share the existing TextEdit
+undo state, and all saves/copies/close guards retain the existing editor owners.
+
+Painted runs use WaveJSON holds rather than introducing repeated-edge glitches.
+Untouched trailing holds keep their old meaning, and repainting an already matching
+state is a no-op.
+
+The first direct editor covers waveform cells and existing string lane names.
+Adding lanes/groups, editing bus labels/markers/arcs, period/phase controls and
+register/logic manipulation remain source operations and possible later improvements.
+It is not a full graphical WaveJSON authoring environment.
+
+Timing validation includes byte-preserving concrete-syntax checks, inline comments,
+ambiguous edited fields, pointer drags with press-origin interpolation and release
+outside the lane, continuous-state holds, per-session undo isolation and keyboard
+undo/redo. The private desktop acceptance exercises opening a real `.json5` file,
+clicking a signal cell, exact-source guarded saving, canvas undo, a second save and
+returning to its folder. `scripts/diagram_timing_acceptance.py` retains screenshots
+and checks the saved bytes; it uses only the existing isolated compositor runner.
+
+The dark signal skin gets matching paper in the application's adapter: the upstream
+template otherwise hardcodes white behind white strokes. A pixel test checks dark
+coverage in addition to SVG structure. Vendor source remains unchanged.
+
+Final timing checkpoint validation: `cargo test -j4 --workspace --lib --test
+diagram_worker -- --test-threads=1` passes 2832 tests (33 ignored), including the
+actual-host dispatch checks. Workspace `cargo clippy -j4 --workspace --all-targets
+-- -D warnings`, formatting and diff checks pass. Private light and dark native
+window runs both pass painting, byte-exact saves, keyboard undo and folder return;
+the SPI example and dark-skin PNGs were visually inspected. About 110 GiB remains
+free; no separate target directory or cleanup sweep was used. User-local Cargo
+settings remain uncommitted. The full run also exposed an insertion-order-sensitive
+front-matter schema hash; its separate fix canonicalizes only structured front
+matter, preserving ordered prose behavior and the former default schema ordering.
