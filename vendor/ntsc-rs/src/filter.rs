@@ -178,21 +178,17 @@ impl TransferFunction {
         z: [&mut [f32]; ROWS],
         delay: usize,
     ) {
-        let width = signal.len();
-        if width == 0 {
-            return;
-        }
         let filter_len = num.len();
-        for row_idx in 0..ROWS {
-            let signal = &mut signal[row_idx];
+        for (signal, state) in signal.iter_mut().zip(z) {
+            let width = signal.len();
+            if width == 0 {
+                continue;
+            }
             for i in 0..(width + delay) {
-                // Either the loop bound extending past items.len() or the min() call seems to prevent the optimizer from
-                // determining that we're in-bounds here. Since i.min(items.len() - 1) never exceeds items.len() - 1 by
-                // definition, this is safe.
-                let sample = unsafe { signal.get_unchecked(i.min(width - 1)) };
-                let filt_sample = Self::filter_sample(filter_len, num, den, z[row_idx], *sample);
+                let sample = signal[i.min(width - 1)];
+                let filtered = Self::filter_sample(filter_len, num, den, state, sample);
                 if i >= delay {
-                    signal[i - delay] = filt_sample;
+                    signal[i - delay] = filtered;
                 }
             }
         }
@@ -486,6 +482,24 @@ mod tests {
                          delay={delay}, row={r}, idx={i}: {x} vs {y}\nsimd:   {row_simd:?}\nscalar: {row_scalar:?}"
                     )
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_fallback_processes_full_rows_including_empty_and_short_planes() {
+        let tf = TransferFunction::new(&[0.5, 0.5], &[-0.25]);
+        let initial = [0.0; 4];
+        for width in [0, 1, 2, 17] {
+            for delay in [0, 1, 5] {
+                let rows: [Vec<f32>; 4] = core::array::from_fn(|row| {
+                    (0..width).map(|i| (i + row) as f32 / 20.0).collect()
+                });
+                let expected = reference(&tf, &rows, initial, delay);
+                let mut actual = rows;
+                let mut slices = actual.each_mut().map(Vec::as_mut_slice);
+                tf.filter_signal_in_place_fixed_size::<2, 4>(&mut slices, initial, delay);
+                assert_eq!(actual, expected, "scalar width={width}, delay={delay}");
             }
         }
     }

@@ -307,7 +307,7 @@ impl<'a> EffectCtx<'a> {
 
                     // Box-blur the signal.
                     for index in 0..width - 2 {
-                        let c = unsafe { *y.get_unchecked(index + 2) };
+                        let c = y[index + 2];
                         sum -= delay.push(c);
                         sum += c;
                         y[index] = sum * 0.25;

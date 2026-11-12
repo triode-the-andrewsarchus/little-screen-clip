@@ -7,6 +7,7 @@ safety argument; a comment alone does not repair an invalid invariant.
 
 - [x] Replace the film blur's overlapping mutable image slices with disjoint parallel row bands; compare against a scalar reference across image/band boundaries and verify cancellation.
 - [x] Replace manual GPU uniform `Pod`/`Zeroable` assertions with checked derives and raw-pointer parallel slice splitting with safe splits.
+- [x] Correct the scalar filter fallback's sample-width calculation and remove its unchecked access; forced scalar tests cover empty/short/long rows and delayed filtering.
 - [ ] Replace avoidable OS calls with existing safe descriptor-based APIs.
 - [ ] Audit native codec/SQLite/Wayland ownership, buffers and callbacks.
 - [ ] Review remaining vendor SIMD, thread guarantees and standalone I/O lifetimes.
