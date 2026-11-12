@@ -1688,3 +1688,34 @@ fn rejected_maintenance_does_not_leave_close_blocked() {
     );
     assert!(matches!(receiver.try_recv().unwrap(), Command::Setup));
 }
+
+#[test]
+fn dropping_service_with_poisoned_dispatch_still_cancels_without_panicking() {
+    let interactive = Arc::new(AtomicBool::new(false));
+    let dispatch = Arc::new(Mutex::new(Dispatch {
+        interactive: Some(interactive.clone()),
+        ..Default::default()
+    }));
+    let background = dispatch.lock().unwrap().cancel.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (commands, _incoming) = mpsc::sync_channel(1);
+    let service = Service {
+        commands,
+        dispatch: dispatch.clone(),
+        snapshot: Default::default(),
+        stop: stop.clone(),
+        worker: None,
+    };
+    let poison = std::panic::catch_unwind(|| {
+        let _guard = dispatch.lock().unwrap();
+        panic!("simulate a failed dispatch update");
+    });
+    assert!(poison.is_err());
+    assert!(dispatch.is_poisoned());
+
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(service))).is_ok());
+    assert!(stop.load(Ordering::Relaxed));
+    assert!(background.load(Ordering::Relaxed));
+    assert!(interactive.load(Ordering::Relaxed));
+    assert!(dispatch.lock().err().unwrap().into_inner().stopped);
+}

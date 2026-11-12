@@ -20,6 +20,7 @@ Diagnostic matches are review leads, not a mandate to rewrite every occurrence. 
 
 - [x] Share immutable diff inputs with background workers. Previously initial text jobs cloned both complete targets and image jobs copied both encoded buffers. Workers now retain the same `Arc<DiffTarget>` snapshots as the viewer, including during recomputation. Image validation and comparison behavior remain unchanged. Validation: diff-view unit tests.
 - [x] Consolidate diff computation ownership using core’s existing `Task`. One optional task replaces two optional receivers, a separate ticket and a boolean. Text/image outcomes share terminal handling; replacement and drop request cancellation through the same owner. Tests cover computation, recomputation cancellation, viewer-drop cancellation, image errors and queue rejection. Validation: 53 diff-view tests and strict studio Clippy.
+- [x] Avoid a second panic during search-service destruction when dispatch is poisoned. Shutdown recovers the guard only to close admission and signal cancellation; it never resumes potentially inconsistent queued work. A regression test poisons the dispatch and verifies all cancellation signals and stopped admission.
 - [ ] Remove worthwhile last-use clones and avoid unnecessary intermediate collections.
 
 ## Intentional patterns retained

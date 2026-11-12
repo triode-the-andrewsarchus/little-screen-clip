@@ -303,7 +303,13 @@ impl Service {
 impl Drop for Service {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        self.dispatch.lock().unwrap().close_admission();
+        // Shutdown only closes admission and signals cancellation; it does not
+        // resume work or rely on queue invariants that a panic may have broken.
+        // Recover the guard here so cleanup cannot panic again during unwinding.
+        self.dispatch
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .close_admission();
     }
 }
 
