@@ -27,7 +27,7 @@ from that directory; replace `little-clip-nki` with the resulting executable.
 `LITTLE_CLIP_NKI_HELPER` selects another compatible helper directory. An ordinary
 workspace build also builds the executable; packaging supplies its source/notices.
 
-The application runs the helper with Bubblewrap, prlimit, no network or access to
+The application runs the helper with Bubblewrap, native child resource limits, no network or access to
 the user's files, a 512 MiB address-space budget, 15 seconds of CPU time, 20 seconds
 elapsed time, 64 MiB input, 16 MiB expanded payloads and 4 MiB output. Sample paths
 remain references. Only the application's guarded reader opens a selected sample.

@@ -265,7 +265,7 @@ fn read_layer(bytes: &[u8], position: usize, wide: bool) -> Result<Layer, String
     })
 }
 /// Renders a canvas or aspect-preserving thumbnail through an isolated native renderer.
-/// Requires installed GIMP 3, its Python batch plug-in, bubblewrap and prlimit.
+/// Requires installed GIMP 3, its Python batch plug-in and bubblewrap.
 ///
 /// # Errors
 /// Reports invalid documents, unavailable isolation/rendering, cancellation or output limits.
@@ -292,14 +292,10 @@ pub fn render_rgba(
     };
     let mut staging = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
     staging.write_all(bytes).map_err(|e| e.to_string())?;
-    let output = crate::process::CommandRequest::new("prlimit")
-        .args([
-            "--as=3221225472",
-            "--cpu=20",
-            "--fsize=269484032",
-            "--",
-            "bwrap",
-        ])
+    let output = crate::process::CommandRequest::new("bwrap")
+        .resource_limit(rustix::process::Resource::As, 3_221_225_472)
+        .resource_limit(rustix::process::Resource::Cpu, 20)
+        .resource_limit(rustix::process::Resource::Fsize, 269_484_032)
         .args([
             "--die-with-parent",
             "--unshare-all",
@@ -378,7 +374,7 @@ pub fn render_rgba(
         .timeout(Duration::from_secs(30))
         .max_output_bytes(target.0 as usize * target.1 as usize * 4 + 1024 * 1024)
         .run_cancellable(cancelled)
-        .map_err(|e| format!("XCF rendering requires GIMP 3, bubblewrap and prlimit: {e}"))?;
+        .map_err(|e| format!("XCF rendering requires GIMP 3 and bubblewrap: {e}"))?;
     let start = output
         .stdout
         .windows(8)

@@ -57,6 +57,7 @@ pub struct CommandRequest {
     capture_stderr: bool,
     own_process_group: bool,
     die_with_parent: bool,
+    resource_limits: Vec<(rustix::process::Resource, u64)>,
 }
 
 impl CommandRequest {
@@ -73,6 +74,7 @@ impl CommandRequest {
             capture_stderr: true,
             own_process_group: false,
             die_with_parent: false,
+            resource_limits: Vec::new(),
         }
     }
 
@@ -92,6 +94,16 @@ impl CommandRequest {
     /// responsibility. Other platforms retain the ordinary child lifecycle.
     pub fn die_with_parent(mut self) -> Self {
         self.die_with_parent = true;
+        self
+    }
+
+    /// Adds a soft and hard resource limit applied before child execution.
+    ///
+    /// CPU limits use seconds; address-space and file-size limits use bytes.
+    /// Limits apply in the order supplied and never alter the parent process.
+    /// Setup failures are reported by spawning the command (or [`Self::run`]).
+    pub fn resource_limit(mut self, resource: rustix::process::Resource, value: u64) -> Self {
+        self.resource_limits.push((resource, value));
         self
     }
 
@@ -305,13 +317,25 @@ impl CommandRequest {
         self.run_inner(Some(cancelled), Some(&mut progress))
     }
 
-    fn inherit_content_inputs(&self, command: &mut Command) {
+    fn prepare_child(&self, command: &mut Command) {
         let inputs = self.content_inputs.clone();
-        if !inputs.is_empty() {
-            // SAFETY: only async-signal-safe fcntl calls run after fork. Parent
-            // descriptors remain CLOEXEC; inheritance is enabled only in this child.
+        let limits = self.resource_limits.clone();
+        if !inputs.is_empty() || !limits.is_empty() {
+            // SAFETY: only fcntl and setrlimit syscalls run after fork. Both
+            // vectors are allocated beforehand; the callback allocates nothing
+            // and acquires no locks. Parent descriptors stay CLOEXEC and parent
+            // resource limits remain unchanged; setup applies only in the child.
             unsafe {
                 command.pre_exec(move || {
+                    for &(resource, value) in &limits {
+                        rustix::process::setrlimit(
+                            resource,
+                            rustix::process::Rlimit {
+                                current: Some(value),
+                                maximum: Some(value),
+                            },
+                        )?;
+                    }
                     for input in &inputs {
                         let fd = input.as_raw_fd();
                         let flags = libc::fcntl(fd, libc::F_GETFD);
@@ -338,7 +362,7 @@ impl CommandRequest {
         if self.own_process_group {
             command.process_group(0);
         }
-        self.inherit_content_inputs(&mut command);
+        self.prepare_child(&mut command);
         if self.die_with_parent {
             guard_parent(&mut command);
         }
@@ -652,6 +676,35 @@ fn drain_threads(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_resource_limits_apply_to_children_without_changing_the_parent() {
+        use rustix::process::{Resource, getrlimit};
+        let before = [Resource::As, Resource::Cpu, Resource::Fsize].map(getrlimit);
+        // Keep a large virtual allocation live across spawning. Limits must be
+        // installed without allocating in the forked GUI's inherited address space.
+        let reservation = Vec::<u8>::with_capacity(256 * 1024 * 1024);
+        std::hint::black_box(&reservation);
+        let output = CommandRequest::new("python3")
+            .args(["-c", "import json,resource; print(json.dumps([resource.getrlimit(k) for k in (resource.RLIMIT_AS,resource.RLIMIT_CPU,resource.RLIMIT_FSIZE)]))"])
+            .resource_limit(Resource::As, 128 * 1024 * 1024)
+            .resource_limit(Resource::Cpu, 10)
+            .resource_limit(Resource::Fsize, 1024 * 1024)
+            .run().unwrap();
+        assert!(output.status.success(), "{}", output.stderr_lossy());
+        let observed: Vec<[u64; 2]> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            observed,
+            vec![[128 * 1024 * 1024; 2], [10; 2], [1024 * 1024; 2]]
+        );
+        for (resource, original) in [Resource::As, Resource::Cpu, Resource::Fsize]
+            .into_iter()
+            .zip(before)
+        {
+            assert_eq!(getrlimit(resource), original);
+        }
+        drop(reservation);
+    }
 
     #[test]
     fn inherited_integer_duplication_rejects_invalid_fds_and_retains_shared_position() {

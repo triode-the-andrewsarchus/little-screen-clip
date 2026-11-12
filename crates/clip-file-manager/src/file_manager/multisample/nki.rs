@@ -27,13 +27,11 @@ pub(super) fn read_with(
     if !helper.join("little-clip-nki").is_file() {
         return Err("Native sample-map reader is not installed. Build it with: python3 scripts/build_multisample_helper.py.".into());
     }
-    let result = CommandRequest::new("prlimit")
+    let result = CommandRequest::new("bwrap")
+        .resource_limit(rustix::process::Resource::As, 536_870_912)
+        .resource_limit(rustix::process::Resource::Cpu, 15)
+        .resource_limit(rustix::process::Resource::Fsize, 67_108_864)
         .args([
-            "--as=536870912",
-            "--cpu=15",
-            "--fsize=67108864",
-            "--",
-            "bwrap",
             "--die-with-parent",
             "--new-session",
             "--unshare-all",

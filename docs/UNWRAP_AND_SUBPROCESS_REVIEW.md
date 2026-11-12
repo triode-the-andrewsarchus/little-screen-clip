@@ -22,6 +22,8 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Handle invalid/overflowing film-grain variance in the maintained `filmr` fork. A failed normal-distribution construction now contributes zero additional noise, consistent with the existing zero-variance path. Tests cover infinite and overflowing noise parameters.
 
+- [x] Replace both `prlimit` wrappers with native child resource limits in core’s existing `CommandRequest` pre-exec setup. Preserve each caller’s exact address-space, CPU and file-size budgets before Bubblewrap or a replaceable helper runs. The existing audited hook performs only syscalls, using vectors captured before fork, and never changes parent limits. Validation: seven process tests, including a parent with a large live virtual allocation; four native XCF tests pass under the new launcher.
+
 ## Remaining review
 
 - [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.
