@@ -82,7 +82,7 @@ directory. Original clipboard bytes are retained until explicitly edited.
 ## Digital timing
 
 ```wavedrom
-{signal:[{name:'clock',wave:'p...'},{name:'data',wave:'x34x',data:['Address','Payload']}]}
+{signal:[{name:'clock',wave:'p.......'},{name:'data',wave:'x3..4..x',data:['Address','Payload']}]}
 ```
 
 `spi.json5` demonstrates grouped lanes, event arrows and a heading. JSON/JSON5

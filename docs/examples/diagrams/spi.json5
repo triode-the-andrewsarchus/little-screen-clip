@@ -10,5 +10,5 @@
   ],
   edge: ['a~>b Transfer'],
   head: {text: 'Serial transaction', tick: 0},
-  config: {skin: 'default', hscale: 1},
+  config: {skin: 'default', hscale: 2},
 }
