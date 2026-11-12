@@ -17,6 +17,7 @@ pub(super) struct Video {
     prepared: Prepared,
     player: Option<Session>,
     start_ms: u64,
+    subtitles_enabled: bool,
     seek_preview: Option<f64>,
     fullscreen: bool,
     stopped: bool,
@@ -24,7 +25,12 @@ pub(super) struct Video {
     context: Option<egui::Context>,
 }
 impl Video {
-    pub fn new(path: PathBuf, prepared: Prepared, start_seconds: f64) -> Self {
+    pub fn new(
+        path: PathBuf,
+        prepared: Prepared,
+        start_seconds: f64,
+        subtitles_enabled: bool,
+    ) -> Self {
         let start_ms = if start_seconds.is_finite() {
             (start_seconds.max(0.0) * 1000.0) as u64
         } else {
@@ -32,6 +38,7 @@ impl Video {
         };
         Self {
             path,
+            subtitles_enabled,
             start_ms: start_ms.min(
                 prepared
                     .duration_ms
@@ -91,6 +98,10 @@ impl Video {
                 1280,
                 ui.ctx().clone(),
                 Default::default(),
+                little_clip_core::media_backend::playback::Options {
+                    subtitles_enabled: self.subtitles_enabled,
+                    ..Default::default()
+                },
             ));
         }
         let player = self.player.as_mut().unwrap();
@@ -143,6 +154,7 @@ impl Video {
                 egui::Color32::LIGHT_GRAY,
             );
         }
+        response.context_menu(|ui| playback_menu(ui, player));
         if response.double_clicked() {
             self.fullscreen = !self.fullscreen;
             ui.ctx()
@@ -309,4 +321,46 @@ fn clock(ms: u64) -> String {
     } else {
         format!("{}:{:02}", seconds / 60, seconds % 60)
     }
+}
+
+fn playback_menu(ui: &mut Ui, player: &mut Session) {
+    let mut options = player.options().clone();
+    ui.menu_button("Subtitles", |ui| {
+        ui.checkbox(&mut options.subtitles_enabled, "Enable subtitles");
+        if player.tracks.subtitles.is_empty() {
+            ui.add_enabled(false, egui::Label::new("No embedded subtitle tracks"));
+        }
+        for track in &player.tracks.subtitles {
+            let selected =
+                options.subtitle_track.or(player.tracks.current_subtitle) == Some(track.index);
+            if ui
+                .selectable_label(selected, format!("{} · {}", track.index + 1, track.label))
+                .clicked()
+            {
+                options.subtitle_track = Some(track.index);
+                options.subtitles_enabled = true;
+            }
+        }
+    });
+    ui.menu_button("Audio track", |ui| {
+        if player.tracks.audio.is_empty() {
+            ui.add_enabled(false, egui::Label::new("No audio tracks"));
+        }
+        for track in &player.tracks.audio {
+            let selected = options.audio_track.or(player.tracks.current_audio) == Some(track.index);
+            if ui
+                .selectable_label(selected, format!("{} · {}", track.index + 1, track.label))
+                .clicked()
+            {
+                options.audio_track = Some(track.index);
+            }
+        }
+    });
+    ui.menu_button("Playback speed", |ui| {
+        for rate in little_clip_core::media_backend::playback::RATES {
+            ui.selectable_value(&mut options.rate, rate, format!("{rate}×"));
+        }
+    });
+    ui.checkbox(&mut options.looping, "Loop video");
+    player.set_options(options);
 }

@@ -5,7 +5,7 @@ use little_clip_core::{
     BackgroundJobs, JobError,
     media_backend::{
         self,
-        playback::{Control, Settings, Update},
+        playback::{Control, Options, Settings, Tracks, Update},
     },
 };
 use std::{
@@ -24,6 +24,7 @@ static PLAYERS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(
 #[derive(Default)]
 struct Delivery {
     state: Option<Update>,
+    tracks: Option<Tracks>,
     frame: Option<(Update, Vec<u8>)>,
 }
 
@@ -41,6 +42,7 @@ pub(super) struct Session {
     pub duration_ms: u64,
     frame_interval_ms: u64,
     pub ended: bool,
+    pub tracks: Tracks,
     pub error: Option<String>,
     finished: bool,
 }
@@ -53,6 +55,7 @@ impl Session {
         width: u32,
         ctx: egui::Context,
         context: PreviewContext,
+        options: Options,
     ) -> Self {
         let start_ms = start_ms.min(
             metadata
@@ -70,6 +73,7 @@ impl Session {
             start_ms,
             duration_ms: metadata.duration_ms,
             silent,
+            options: options.clone(),
         };
         let worker = Worker {
             pending: pending.clone(),
@@ -89,6 +93,7 @@ impl Session {
                 seek_ms: None,
                 playing: true,
                 volume: 1.0,
+                options: options.clone(),
             },
             pending,
             delivery,
@@ -100,6 +105,7 @@ impl Session {
             duration_ms: metadata.duration_ms,
             frame_interval_ms: metadata.frame_interval_ms,
             ended: false,
+            tracks: Tracks::default(),
             error: None,
             finished: false,
         }
@@ -126,6 +132,15 @@ impl Session {
             self.send();
         }
     }
+    pub fn options(&self) -> &Options {
+        &self.control.options
+    }
+    pub fn set_options(&mut self, options: Options) {
+        if options != self.control.options {
+            self.control.options = options;
+            self.seek(self.position_ms);
+        }
+    }
     fn send(&mut self) {
         let mut pending = self.pending.lock().unwrap();
         let mut next = self.control.clone();
@@ -137,6 +152,9 @@ impl Session {
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
         let mut delivery = self.delivery.lock().unwrap();
+        if let Some(tracks) = delivery.tracks.take() {
+            self.tracks = tracks;
+        }
         if let Some((frame, pixels)) = delivery.frame.take()
             && frame.epoch == self.control.epoch
         {
@@ -225,6 +243,9 @@ impl Worker {
             let packet = Update::read(&mut reader).map_err(|error| error.to_string())?;
             self.check(&pin, cancel)?;
             let mut delivery = self.delivery.lock().unwrap();
+            if let Some(tracks) = &packet.0.tracks {
+                delivery.tracks = Some(tracks.clone());
+            }
             delivery.state = Some(packet.0.clone());
             if !packet.1.is_empty() {
                 delivery.frame = Some(packet);
@@ -396,7 +417,15 @@ mod tests {
     #[test]
     fn shared_player_delivers_real_frames_and_rejects_stale_seek_epochs() {
         let ctx = egui::Context::default();
-        let mut player = Session::new(&metadata(), 100, true, 320, ctx.clone(), Default::default());
+        let mut player = Session::new(
+            &metadata(),
+            100,
+            true,
+            320,
+            ctx.clone(),
+            Default::default(),
+            Default::default(),
+        );
         wait(&mut player, &ctx, |player| {
             player.frame_position_ms.is_some_and(|ms| ms >= 400)
         });
@@ -417,6 +446,7 @@ mod tests {
             height: 1,
             bytes: 4,
             error: None,
+            tracks: None,
         };
         player.delivery.lock().unwrap().frame = Some((stale, vec![0; 4]));
         player.poll(&ctx);
@@ -448,6 +478,7 @@ mod tests {
             320,
             ctx.clone(),
             PreviewContext::empty_results(),
+            Default::default(),
         );
         let deadline = Instant::now() + Duration::from_secs(5);
         while player.error.is_none() {

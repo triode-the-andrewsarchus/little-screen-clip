@@ -690,7 +690,12 @@ fn session(
             .with_file_source(source),
         ),
         Loaded::Video(prepared) => {
-            ViewerSession::Video(video::Video::new(path, prepared, video_start))
+            ViewerSession::Video(video::Video::new(
+                path,
+                prepared,
+                video_start,
+                config.file_manager.video_subtitles_enabled,
+            ))
         }
         Loaded::Text(state) => ViewerSession::Text(state),
         Loaded::Sheet(data) => ViewerSession::Sheet(SpreadsheetViewerState::new(data, Some(path))),

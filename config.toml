@@ -155,6 +155,8 @@ workbench_triangle_limit = 150000
 constellation_pad_keys = ["zxcv", "asdf", "qwer", "1234"]
 # Pixels per video timeline sample: 1 (native resolution), 2, 4, 8, or 16.
 video_timeline_decimation = 1
+# Start video playback with subtitles enabled. Player menu choices are temporary.
+video_subtitles_enabled = false
 photo_mode = "similarity"
 photo_recurse = true
 # Maximum photos loaded by recursive similarity scans (default: 10000).

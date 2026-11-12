@@ -51,6 +51,8 @@ pub struct FileManagerConfig {
     pub audio_spectrum: bool,
     /// Timeline pixels per sample: 1, 2, 4, 8, or 16 (default: 1).
     pub video_timeline_decimation: u8,
+    /// Enable embedded video subtitles on open; changed only by editing the config.
+    pub video_subtitles_enabled: bool,
     /// Four rows of four logical characters, bottom to top, for constellation pads.
     /// Letters are case-insensitive; Shift assigns a sample instead of playing it.
     #[serde(deserialize_with = "deserialize_constellation_pad_keys")]
@@ -74,6 +76,7 @@ impl Default for FileManagerConfig {
             music_threshold_percent: 75,
             audio_spectrum: false,
             video_timeline_decimation: 1,
+            video_subtitles_enabled: false,
             constellation_pad_keys: ["zxcv", "asdf", "qwer", "1234"].map(str::to_owned),
             photo_mode: "masonry".to_string(),
             photo_recurse: false,

@@ -100,6 +100,7 @@ impl FileManagerApp {
         browser
             .music_previews
             .set_audio_spectrum(config.file_manager.audio_spectrum);
+        browser.video_previews.subtitles_enabled = config.file_manager.video_subtitles_enabled;
         browser.video_timeline_decimation = match config.file_manager.video_timeline_decimation {
             value @ (1 | 2 | 4 | 8 | 16) => value,
             _ => 1,

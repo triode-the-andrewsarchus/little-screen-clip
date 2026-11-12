@@ -56,6 +56,7 @@ pub(super) struct Previews {
     hover: Option<Hover>,
     frame: Option<super::video_playback::Session>,
     visible_jobs: usize,
+    pub subtitles_enabled: bool,
 }
 fn texture(ctx: &Context, name: String, image: ImageThumbnail) -> TextureHandle {
     ctx.load_texture(
@@ -256,6 +257,10 @@ impl Previews {
                 key.width,
                 ctx.clone(),
                 self.context.clone(),
+                little_clip_core::media_backend::playback::Options {
+                    subtitles_enabled: self.subtitles_enabled,
+                    ..Default::default()
+                },
             ));
         } else if self
             .hover

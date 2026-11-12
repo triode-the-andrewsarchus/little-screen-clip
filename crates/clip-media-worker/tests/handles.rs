@@ -765,6 +765,7 @@ mod playback {
                 start_ms: 1200,
                 duration_ms: 3000,
                 silent: true,
+                options: Default::default(),
             };
             Self::source(
                 std::path::Path::new(concat!(
@@ -797,6 +798,7 @@ mod playback {
                 seek_ms,
                 playing,
                 volume: 0.5,
+                options: Default::default(),
             })
             .unwrap();
             writeln!(self.input.as_mut().unwrap(), "{bytes}").unwrap();
@@ -859,10 +861,91 @@ mod playback {
                 start_ms: 0,
                 duration_ms: 1000,
                 silent: true,
+                options: Default::default(),
             },
         );
         player.until(|packet| packet.bytes > 0)
     }
+    #[test]
+    fn embedded_tracks_render_subtitles_and_options_seek_at_the_requested_rate_and_loop() {
+        use clip_media_protocol::playback::Options;
+        let mut player = Player::source(
+            std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../little-clip-core/tests/fixtures/video/playback-tracks.mkv"
+            )),
+            Settings {
+                stream: 0,
+                width: 320,
+                height: 180,
+                fps: 20,
+                start_ms: 1000,
+                duration_ms: 3000,
+                silent: true,
+                options: Options::default(),
+            },
+        );
+        let (initial, dark) = player.until(|p| p.bytes > 0 && p.tracks.is_some());
+        let tracks = initial.tracks.unwrap();
+        assert_eq!(tracks.audio.len(), 2);
+        assert_eq!(tracks.subtitles.len(), 2);
+        assert!(tracks.subtitles[0].label.contains("en"), "{tracks:?}");
+        let mut options = Options {
+            subtitles_enabled: true,
+            subtitle_track: Some(0),
+            audio_track: Some(1),
+            ..Options::default()
+        };
+        let send = |player: &mut Player, epoch, seek_ms, playing, options: &Options| {
+            writeln!(
+                player.input.as_mut().unwrap(),
+                "{}",
+                serde_json::to_string(&Control {
+                    epoch,
+                    seek_ms: Some(seek_ms),
+                    playing,
+                    volume: 1.0,
+                    options: options.clone()
+                })
+                .unwrap()
+            )
+            .unwrap();
+        };
+        send(&mut player, 1, 1000, false, &options);
+        let (selected, subtitled) = player.until(|p| p.epoch == 1 && p.bytes > 0);
+        assert_eq!(selected.tracks.unwrap().current_audio, Some(1));
+        let bright = |pixels: &[u8]| {
+            pixels
+                .chunks_exact(4)
+                .filter(|p| p[0] > 120 && p[1] > 120 && p[2] > 120)
+                .count()
+        };
+        assert!(
+            bright(&subtitled) > bright(&dark) + 100,
+            "subtitles must change actual video pixels"
+        );
+        options.subtitle_track = Some(1);
+        send(&mut player, 2, 1000, false, &options);
+        let (_, second) = player.until(|p| p.epoch == 2 && p.bytes > 0);
+        assert_ne!(
+            subtitled, second,
+            "switching subtitle track changes rendered text"
+        );
+        options.subtitles_enabled = false;
+        options.rate = 4.0;
+        options.looping = true;
+        send(&mut player, 3, 1000, true, &options);
+        let (_, off) = player.until(|p| p.epoch == 3 && p.bytes > 0);
+        assert!(bright(&off) <= bright(&dark) + 5);
+        let start = Instant::now();
+        player.until(|p| p.epoch == 3 && p.position_ms >= 2400 && p.bytes > 0);
+        assert!(
+            start.elapsed() < Duration::from_millis(1000),
+            "4x playback should advance 1.4 seconds in substantially less than real time"
+        );
+        player.until(|p| p.epoch == 3 && p.position_ms < 500 && p.bytes > 0);
+    }
+
     #[test]
     fn player_clocks_frames_pauses_seeks_with_epochs_and_reports_eof_without_a_window() {
         let mut player = Player::open();

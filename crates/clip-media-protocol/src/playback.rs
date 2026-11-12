@@ -4,7 +4,77 @@ use std::io::{self, Read, Write};
 
 /// Largest accepted tightly packed RGBA frame (full HD).
 pub const MAX_FRAME_BYTES: usize = 1920 * 1080 * 4;
-const MAX_HEADER_BYTES: usize = 4096;
+const MAX_HEADER_BYTES: usize = 65536;
+
+/// Playback rates exposed by the viewer.
+pub const RATES: [f64; 8] = [0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 10.0];
+
+/// Choices scoped to one viewing session.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Options {
+    /// None selects the container's default audio track.
+    pub audio_track: Option<u32>,
+    /// Render embedded subtitles.
+    pub subtitles_enabled: bool,
+    /// None selects the first available subtitle track.
+    pub subtitle_track: Option<u32>,
+    /// Source-time multiplier.
+    pub rate: f64,
+    /// Restart this file at its end.
+    pub looping: bool,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            audio_track: None,
+            subtitles_enabled: false,
+            subtitle_track: None,
+            rate: 1.0,
+            looping: false,
+        }
+    }
+}
+impl Options {
+    /// Rejects unsupported rates and out-of-budget stream ordinals.
+    pub fn valid(&self) -> bool {
+        RATES.contains(&self.rate)
+            && self.audio_track.is_none_or(|n| n < 64)
+            && self.subtitle_track.is_none_or(|n| n < 64)
+    }
+}
+
+/// One bounded embedded-track description.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Track {
+    /// Ordinal within this track type.
+    pub index: u32,
+    /// Human-readable title, language or codec.
+    pub label: String,
+}
+/// Available tracks discovered during preroll.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Tracks {
+    /// Audio tracks, excluding video/subtitle streams.
+    pub audio: Vec<Track>,
+    /// Embedded subtitle tracks.
+    pub subtitles: Vec<Track>,
+    /// Actual selected audio ordinal.
+    pub current_audio: Option<u32>,
+    /// Actual selected subtitle ordinal.
+    pub current_subtitle: Option<u32>,
+}
+impl Tracks {
+    fn valid(&self) -> bool {
+        self.audio.len() <= 64
+            && self.subtitles.len() <= 64
+            && self
+                .audio
+                .iter()
+                .chain(&self.subtitles)
+                .all(|t| t.index < 64 && t.label.len() <= 512)
+    }
+}
 
 /// Initial playback configuration for one inherited ordinary file.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -24,6 +94,9 @@ pub struct Settings {
     pub duration_ms: u64,
     /// Disable audio decoding and device acquisition for hover previews.
     pub silent: bool,
+    /// Initial session choices; absent in older requests.
+    #[serde(default)]
+    pub options: Options,
 }
 
 /// A seek replaces earlier commands using its monotonically increasing epoch.
@@ -38,6 +111,9 @@ pub struct Control {
     pub playing: bool,
     /// Linear volume, bounded to zero through one.
     pub volume: f64,
+    /// Desired session choices.
+    #[serde(default)]
+    pub options: Options,
 }
 
 /// A frame or state/error update, followed by exactly `bytes` raw RGBA bytes.
@@ -62,10 +138,16 @@ pub struct Update {
     pub bytes: usize,
     /// Terminal playback error, bounded by the header budget.
     pub error: Option<String>,
+    /// Track catalogue, delivered independently from pixel frames.
+    #[serde(default)]
+    pub tracks: Option<Tracks>,
 }
 
 impl Update {
     fn validate(&self) -> io::Result<()> {
+        if self.tracks.as_ref().is_some_and(|tracks| !tracks.valid()) {
+            return Err(io::Error::other("Invalid playback track catalogue"));
+        }
         let pixels = u64::from(self.width) * u64::from(self.height) * 4;
         if self.bytes > MAX_FRAME_BYTES
             || pixels != self.bytes as u64
@@ -128,6 +210,7 @@ mod tests {
             height: 1,
             bytes: 8,
             error: None,
+            tracks: None,
         };
         let mut bytes = Vec::new();
         frame.write(&[12; 8], &mut bytes).unwrap();

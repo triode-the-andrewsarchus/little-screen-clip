@@ -133,7 +133,14 @@ GStreamer linkage.
 - [x] Fill the fullscreen viewport and move title/navigation and transport into
   translucent overlays that hide after 2.5 seconds without interaction.
 - [x] Use the shared fixed-size play/pause icon and remove stop/volume controls.
-- [ ] Add temporary subtitle/audio track, speed and loop choices.
-- [ ] Add a manual-config-only subtitle default, initially disabled.
+- [x] Add temporary subtitle/audio track, speed and loop choices.
+- [x] Add a manual-config-only subtitle default, initially disabled.
 - [ ] Open a stereo audio copy from the video-file context menu.
 - [ ] Verify controls, actual subtitles/tracks, audio extraction and fullscreen.
+
+The player context menu offers embedded subtitle and audio tracks, rates from
+0.1× through 10×, and looping of the current file. Choices reset on close.
+`[file_manager].video_subtitles_enabled = false` initializes each new session
+(including muted hover playback); menu changes never write this setting.
+A generated two-audio/two-subtitle MKV verifies actual subtitle pixels, switching
+and disabling text, selected audio ordinal, 4× timing and looping.

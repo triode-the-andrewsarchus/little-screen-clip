@@ -544,6 +544,7 @@ mod format_tests {
                 96,
                 ctx.clone(),
                 Default::default(),
+                Default::default(),
             );
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
             while player.texture.is_none() {

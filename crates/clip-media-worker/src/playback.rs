@@ -1,5 +1,5 @@
 //! Synchronized GStreamer playback with a bounded, clocked application video sink.
-use clip_media_protocol::playback::{Control, Settings, Update};
+use clip_media_protocol::playback::{Control, Options, Settings, Track, Tracks, Update};
 use gstreamer::{self as gst, prelude::*};
 use gstreamer_video::VideoFrameExt;
 use std::{
@@ -108,7 +108,8 @@ pub(crate) fn run(file: File, settings: Settings) -> Result<()> {
 }
 
 fn validate(settings: &Settings) -> Result<()> {
-    if settings.width == 0
+    if !settings.options.valid()
+        || settings.width == 0
         || settings.height == 0
         || settings.width > 1920
         || settings.height > 1920
@@ -134,6 +135,8 @@ struct Engine {
     position_ms: u64,
     duration_ms: u64,
     stream_start_ms: u64,
+    options: Options,
+    tracks_pending: bool,
 }
 
 impl Engine {
@@ -155,6 +158,7 @@ impl Engine {
         } else {
             "video+audio+soft-volume+deinterlace".to_owned()
         };
+        flags.push_str("+text");
         if software {
             flags.push_str("+force-sw-decoders");
         }
@@ -167,6 +171,9 @@ impl Engine {
             }
             None
         });
+        if let Ok(tempo) = gst::ElementFactory::make("scaletempo").build() {
+            player.set_property("audio-filter", tempo);
+        }
         if settings.silent {
             let audio = gst::ElementFactory::make("fakesink")
                 .property("sync", true)
@@ -185,6 +192,8 @@ impl Engine {
             position_ms: settings.start_ms,
             duration_ms: settings.duration_ms,
             stream_start_ms: source.start_ms,
+            options: settings.options.clone(),
+            tracks_pending: true,
         })
     }
 
@@ -229,6 +238,7 @@ impl Engine {
         }
         self.player
             .set_property("current-video", settings.stream as i32);
+        self.apply_tracks()?;
         self.seek(settings.start_ms, output)?;
         self.player
             .set_state(gst::State::Playing)
@@ -242,6 +252,13 @@ impl Engine {
             match event.view() {
                 gst::MessageView::Error(error) => {
                     return Err(format!("{} ({:?})", error.error(), error.debug()));
+                }
+                gst::MessageView::Eos(_) if self.options.looping => {
+                    self.seek(0, output)?;
+                    self.player
+                        .set_state(gst::State::Playing)
+                        .map_err(message)?;
+                    self.playing = true;
                 }
                 gst::MessageView::Eos(_) => {
                     self.playing = false;
@@ -269,9 +286,13 @@ impl Engine {
         self.player.set_state(gst::State::Paused).map_err(message)?;
         self.wait_ready()?;
         self.player
-            .seek_simple(
+            .seek(
+                self.options.rate,
                 gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                gst::SeekType::Set,
                 gst::ClockTime::from_mseconds(position),
+                gst::SeekType::None,
+                gst::ClockTime::NONE,
             )
             .map_err(message)?;
         self.wait_ready()?;
@@ -284,13 +305,23 @@ impl Engine {
     }
 
     fn control(&mut self, control: Control, output: &mut impl Write) -> Result<()> {
-        if !control.volume.is_finite()
+        if !control.options.valid()
+            || !control.volume.is_finite()
             || !(0.0..=1.0).contains(&control.volume)
             || control.seek_ms.is_some_and(|ms| ms > 9_000_000_000_000)
         {
             return Err("Invalid playback control".into());
         }
-        if let Some(position) = control.seek_ms {
+        let changed = self.options != control.options;
+        if changed {
+            self.options = control.options;
+            self.apply_tracks()?;
+            self.tracks_pending = true;
+        }
+        if let Some(position) = control
+            .seek_ms
+            .or_else(|| changed.then_some(self.position_ms))
+        {
             self.epoch = control.epoch;
             self.seek(position, output)?;
         }
@@ -308,7 +339,7 @@ impl Engine {
             .map_err(message)
     }
 
-    fn update(&self, time: Option<u64>, ended: bool) -> Update {
+    fn update(&mut self, time: Option<u64>, ended: bool) -> Update {
         Update {
             epoch: self.epoch,
             position_ms: time.unwrap_or(self.position_ms),
@@ -319,6 +350,88 @@ impl Engine {
             height: 0,
             bytes: 0,
             error: None,
+            tracks: if std::mem::take(&mut self.tracks_pending) {
+                Some(self.tracks())
+            } else {
+                None
+            },
+        }
+    }
+
+    fn apply_tracks(&self) -> Result<()> {
+        for (kind, requested) in [
+            ("audio", self.options.audio_track),
+            ("text", self.options.subtitle_track),
+        ] {
+            if let Some(index) = requested {
+                if index as i32 >= self.player.property::<i32>(&format!("n-{kind}")) {
+                    return Err(format!("Selected {kind} track unavailable"));
+                }
+                self.player
+                    .set_property(&format!("current-{kind}"), index as i32);
+            }
+        }
+        // Keep text decoding available, but suppress rendering when disabled.
+        self.player.set_property(
+            "current-text",
+            if self.options.subtitles_enabled {
+                self.options.subtitle_track.unwrap_or(0) as i32
+            } else {
+                -1
+            },
+        );
+        let flags = self.player.property_value("flags");
+        let class =
+            gst::glib::FlagsClass::with_type(flags.type_()).ok_or("Missing playback flags")?;
+        let flags = if self.options.subtitles_enabled {
+            class.set_by_nick(flags, "text")
+        } else {
+            class.unset_by_nick(flags, "text")
+        }
+        .map_err(|_| "Missing subtitle playback flag")?;
+        self.player.set_property("flags", flags);
+        Ok(())
+    }
+
+    fn tracks(&self) -> Tracks {
+        let collect = |kind: &str| {
+            let count = self
+                .player
+                .property::<i32>(&format!("n-{kind}"))
+                .clamp(0, 64);
+            (0..count)
+                .map(|index| {
+                    let tags = self.player.emit_by_name::<Option<gst::TagList>>(
+                        &format!("get-{kind}-tags"),
+                        &[&index],
+                    );
+                    let label = tags
+                        .as_ref()
+                        .map(|tags| {
+                            [
+                                tags.get::<gst::tags::Title>().map(|v| v.get().to_owned()),
+                                tags.get::<gst::tags::LanguageCode>()
+                                    .map(|v| v.get().to_owned()),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                        })
+                        .filter(|label| !label.is_empty())
+                        .unwrap_or_else(|| format!("Track {}", index + 1));
+                    Track {
+                        index: index as u32,
+                        label: label.chars().take(100).collect(),
+                    }
+                })
+                .collect()
+        };
+        Tracks {
+            audio: collect("audio"),
+            subtitles: collect("text"),
+            current_audio: u32::try_from(self.player.property::<i32>("current-audio")).ok(),
+            current_subtitle: u32::try_from(self.player.property::<i32>("current-text")).ok(),
         }
     }
 
