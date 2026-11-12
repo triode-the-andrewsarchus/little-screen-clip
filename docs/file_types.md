@@ -210,7 +210,7 @@
       - [ ] `<head>` metadata (`<meta>` tags, Open Graph, Twitter Cards, canonical URL)
       - [ ] Embedded JSON-LD structured data (`<script type="application/ld+json">`)
     - [x] `.md`, `.markdown` — Markdown syntax highlighting
-      - [ ] Front matter parsing (YAML `---`, TOML `+++`, JSON `;;;` / `{...}`)
+      - [x] Front matter parsing (YAML `---`, TOML `+++`, JSON `;;;` / `{...}`) — shared bounded metadata with diagnostics and large/small Markdown presentation
       - [ ] Embedded LaTeX math blocks (`$...$`, `$$...$$`)
       - [ ] Inline diagram block rendering (Kroki-compatible)
         - [ ] Mermaid (`mermaid`, `mmd`)

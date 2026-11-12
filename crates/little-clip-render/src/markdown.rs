@@ -33,6 +33,8 @@ pub enum MarkdownSpan {
 /// A parsed line of Markdown content for ambient preview rendering.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MarkdownLine {
+    /// Parsed document metadata, or an explicit framing/parse diagnostic.
+    FrontMatter(Box<little_clip_core::markdown_metadata::FrontMatter>),
     /// Section heading with level 1..=3.
     Heading {
         level: usize,
@@ -65,6 +67,17 @@ pub enum MarkdownLine {
 
 /// Parses raw Markdown text into a sequence of [`MarkdownLine`] blocks.
 pub fn parse_markdown(input: &str) -> Vec<MarkdownLine> {
+    let metadata = little_clip_core::markdown_metadata::parse(input);
+    let body = &input[metadata.as_ref().map_or(0, |value| value.body_start)..];
+    let mut lines = Vec::new();
+    if let Some(metadata) = metadata {
+        lines.push(MarkdownLine::FrontMatter(Box::new(metadata)));
+    }
+    lines.extend(parse_body(body));
+    lines
+}
+
+fn parse_body(input: &str) -> Vec<MarkdownLine> {
     let input = input.trim_start_matches('\u{feff}');
     let mut lines = Vec::new();
     let mut in_code_fence = false;
@@ -182,15 +195,23 @@ pub fn parse_markdown(input: &str) -> Vec<MarkdownLine> {
 pub(crate) fn parse_markdown_preview(input: &str) -> (Vec<MarkdownLine>, usize) {
     const MAX_PREVIEW_BYTES: usize = 4096;
     const MAX_PREVIEW_LINES: usize = 64;
-    let mut end = input.len().min(MAX_PREVIEW_BYTES);
-    while !input.is_char_boundary(end) {
+    let metadata = little_clip_core::markdown_metadata::parse(input);
+    let body = &input[metadata.as_ref().map_or(0, |value| value.body_start)..];
+    let mut end = body.len().min(MAX_PREVIEW_BYTES);
+    while !body.is_char_boundary(end) {
         end -= 1;
     }
-    let prefix = &input[..end];
+    let prefix = &body[..end];
     if let Some((offset, _)) = prefix.match_indices('\n').nth(MAX_PREVIEW_LINES - 1) {
         end = offset + 1;
     }
-    (parse_markdown(&input[..end]), input.lines().count())
+    let mut lines = Vec::new();
+    let total = body.lines().count() + usize::from(metadata.is_some());
+    if let Some(metadata) = metadata {
+        lines.push(MarkdownLine::FrontMatter(Box::new(metadata)));
+    }
+    lines.extend(parse_body(&body[..end]));
+    (lines, total)
 }
 
 /// Parses inline formatting spans (bold, italic, code, links) within a line of text.
@@ -293,6 +314,27 @@ pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_is_shared_without_parsing_truncated_front_matter() {
+        let input = format!(
+            "---\ntitle: Example\nnotes: '{}'\n---\n# Body",
+            "x".repeat(5000)
+        );
+        let full = parse_markdown(&input);
+        let (compact, total) = parse_markdown_preview(&input);
+        assert_eq!(full, compact);
+        assert_eq!(total, 2);
+        assert!(matches!(&compact[0], MarkdownLine::FrontMatter(value) if value.value.is_ok()));
+        assert!(matches!(&compact[1], MarkdownLine::Heading { text, .. } if text == "Body"));
+        let malformed = parse_markdown("+++\nnot closed\n# Body");
+        assert!(matches!(&malformed[0], MarkdownLine::FrontMatter(value) if value.value.is_err()));
+        assert!(
+            malformed
+                .iter()
+                .any(|line| matches!(line, MarkdownLine::Heading { text, .. } if text == "Body"))
+        );
+    }
 
     #[test]
     fn preview_preserves_prefix_fence_state_and_counts_unparsed_lines() {

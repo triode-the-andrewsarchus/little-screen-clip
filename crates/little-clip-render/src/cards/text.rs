@@ -147,6 +147,44 @@ impl ScreenRenderer {
             }
 
             match line {
+                MarkdownLine::FrontMatter(metadata) => {
+                    let fields = metadata.display_fields();
+                    let heading = match &metadata.value {
+                        Ok(_) => format!(
+                            "{} metadata · {} fields",
+                            metadata.format.name(),
+                            fields.len()
+                        ),
+                        Err(_) => format!("{} metadata · parse error", metadata.format.name()),
+                    };
+                    self.draw_text_styled_clipped(
+                        pixmap,
+                        &heading,
+                        content_x,
+                        y,
+                        14.0,
+                        border_color,
+                        FontStyle::Bold,
+                        clip_right,
+                    );
+                    y += 18.0;
+                    for (key, value) in fields.iter().take(2) {
+                        if y + 18.0 > max_y {
+                            break;
+                        }
+                        self.draw_text_styled_clipped(
+                            pixmap,
+                            &format!("{key}: {value}"),
+                            content_x,
+                            y,
+                            13.0,
+                            body_color,
+                            FontStyle::Regular,
+                            clip_right,
+                        );
+                        y += 18.0;
+                    }
+                }
                 MarkdownLine::Heading {
                     level,
                     text: _,

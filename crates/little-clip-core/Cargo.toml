@@ -16,6 +16,7 @@ imagesize = "0.12"
 kamadak-exif = "0.6.2"
 serde.workspace = true
 serde_json.workspace = true
+serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
 thiserror.workspace = true
 uuid.workspace = true
 url.workspace = true

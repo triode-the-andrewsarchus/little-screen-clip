@@ -72,6 +72,25 @@ fn render_blocks(ui: &mut egui::Ui, blocks: &[MarkdownBlock], palette: &AppPalet
 
 fn render_markdown_element(ui: &mut egui::Ui, line: &MarkdownLine, palette: &AppPalette) {
     match line {
+        MarkdownLine::FrontMatter(metadata) => {
+            egui::CollapsingHeader::new(format!("{} metadata", metadata.format.name()))
+                .default_open(true)
+                .show(ui, |ui| {
+                    if let Err(error) = &metadata.value {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    } else {
+                        egui::Grid::new(ui.next_auto_id())
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for (key, value) in metadata.display_fields() {
+                                    ui.label(egui::RichText::new(key).strong());
+                                    ui.label(value);
+                                    ui.end_row();
+                                }
+                            });
+                    }
+                });
+        }
         MarkdownLine::Heading {
             level,
             text: _,
