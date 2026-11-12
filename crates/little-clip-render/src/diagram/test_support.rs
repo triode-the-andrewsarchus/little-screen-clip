@@ -32,6 +32,16 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         ("wavedrom", "{assign:[['out',['&','a','b']]]}", true),
         ("wavedrom", "{signal:(()=>{throw 'executed'})()}", false),
         (
+            "excalidraw",
+            include_str!("../../../../docs/examples/diagrams/drawing.excalidraw"),
+            true,
+        ),
+        (
+            "excalidraw",
+            r#"{"type":"excalidraw","version":3,"elements":[]}"#,
+            false,
+        ),
+        (
             "bpmn",
             include_str!("../../../../docs/examples/diagrams/order.bpmn"),
             true,
@@ -73,6 +83,7 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         if let Ok(rendered) = response {
             assert!(rendered.svg.contains("<svg"));
             assert_eq!(rendered.math.is_some(), format.starts_with("math"));
+            assert_eq!(rendered.drawing.is_some(), format == "excalidraw");
             if let Some(layout) = rendered.math {
                 assert!(layout.valid());
             }

@@ -3,8 +3,7 @@
 The application uses excalidraw-render 0.1.0 and its matching
 excalidraw-render-fonts 0.1.0+excalidraw.0.18.1 catalog (including bundled CJK
 assets), and excalidraw-document 0.2.0. SVG rendering is selected without the
-renderer library's optional PNG/PDF backends. Font decoding uses the same native
-wuff version as the file manager's font viewer. There is no browser, V8, Node,
+renderer library's optional PNG/PDF backends. Text shaping and font decoding stay inside the native renderer. There is no browser, V8, Node,
 GPUI or source-driven filesystem/network service in this integration.
 
 Original renderer source:
@@ -21,6 +20,14 @@ Translated-scene, rotation, empty-scene and output-scaling integration tests cov
 that correspondence. The released source package omits upstream qualification
 fixtures, so this dependency is excluded from application workspace membership;
 application integration tests exercise its real public API.
+
+A second opt-in extension, `svg-text-outlines`, emits the renderer's retained,
+positioned glyph contours for text, frame names and generated labels. It avoids
+reshaping those labels through a consumer's different font fallback algorithm.
+The default upstream text/tspan output is unchanged when the feature is off;
+the existing subset/notice accounting is retained. Native contours remain under
+the existing geometry/output budgets. Placeholder diagnostic labels still use
+ordinary SVG text. Tests cover mixed Latin, CJK and RTL text as actual paths.
 
 The unmodified document-model dependency is from
 https://github.com/sagikazarmark/excaliplot/tree/29392d10d9c504ec22d67f37a4dd545a63d5b371

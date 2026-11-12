@@ -5,7 +5,7 @@ use crate::{
     ui_tabs::{Tab, TabBar},
 };
 use clip_ui::buttons::ButtonRole;
-use little_clip_core::{BackgroundJobs, JobError, palette::AppPalette};
+use little_clip_core::{BackgroundJobs, JobError, diagram::Format, palette::AppPalette};
 use std::{
     path::{Path, PathBuf},
     sync::mpsc,
@@ -74,7 +74,13 @@ impl TextSession {
                 .map_err(|e| e.to_string())?;
             String::from_utf8(bytes).ok().map(|text| {
                 let name = little_clip_core::diagram::Format::from_source_path(path, &text)
-                    .and_then(|_| path.extension().and_then(|extension| extension.to_str()))
+                    .and_then(|format| {
+                        if format == Format::Excalidraw {
+                            Some("excalidraw")
+                        } else {
+                            path.extension().and_then(|extension| extension.to_str())
+                        }
+                    })
                     .map_or_else(
                         || "edited.txt".into(),
                         |extension| format!("edited.{extension}"),
@@ -1101,6 +1107,21 @@ mod tests {
             ("graphviz", "digraph { a -> b }", "digraph { a -> c }"),
             ("d2", "a -> b: Original", "a -> b: Edited"),
             (
+                "excalidraw",
+                r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+                r#"{"type":"excalidraw","version":2,"elements":[],"appState":{}}"#,
+            ),
+            (
+                "excalidraw.json",
+                r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+                r#"{"type":"excalidraw","version":2,"elements":[],"appState":{}}"#,
+            ),
+            (
+                "json",
+                r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+                r#"{"type":"excalidraw","version":2,"elements":[],"appState":{}}"#,
+            ),
+            (
                 "json5",
                 "{signal:[{name:'x',wave:'01'}]}",
                 "{signal:[{name:'x',wave:'10'}]}",
@@ -1147,7 +1168,11 @@ mod tests {
             assert!(session.mode == Mode::Diagram);
             assert_eq!(
                 session.editor.as_ref().unwrap().name,
-                format!("edited.{extension}")
+                if Format::from_source_path(&path, original) == Some(Format::Excalidraw) {
+                    "edited.excalidraw".into()
+                } else {
+                    format!("edited.{extension}")
+                }
             );
             assert!(session.diagram.is_some());
             session.editor.as_mut().unwrap().text = edited.into();

@@ -90,3 +90,43 @@ fn authored_scene_renders_shapes_handwriting_freehand_and_embedded_image() {
     assert!(output.viewport().origin.into_iter().all(f64::is_finite));
     assert!(output.report().is_empty(), "{:?}", output.report());
 }
+
+#[test]
+fn svg_outlines_keep_native_font_fallback_and_mixed_script_layout() {
+    let mut value: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docs/examples/diagrams/drawing.excalidraw"
+    ))
+    .unwrap();
+    let mut element = value["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|element| element["type"] == "text")
+        .unwrap()
+        .clone();
+    element["text"] = serde_json::json!("Café 中文 אבג");
+    element["originalText"] = element["text"].clone();
+    element["containerId"] = serde_json::Value::Null;
+    value["elements"] = serde_json::json!([element]);
+    let scene = SceneDocument::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let request = RenderRequest::builder(OutputFormat::Svg).build().unwrap();
+    let output = Renderer::new().render(&scene, &request).unwrap();
+    let svg = std::str::from_utf8(output.artifact().bytes()).unwrap();
+    assert!(
+        !svg.contains("<text"),
+        "consumer must not reshape native glyphs"
+    );
+    let doc = roxmltree::Document::parse(svg).unwrap();
+    let glyphs = doc
+        .descendants()
+        .find(|node| {
+            node.has_tag_name("path") && node.attribute("data-source-text") == Some("Café 中文 אבג")
+        })
+        .unwrap();
+    let path = glyphs.attribute("d").unwrap();
+    assert!(
+        path.matches('Q').count() > 50,
+        "real shaped contours, not an empty label"
+    );
+    assert!(path.matches('M').count() >= 8);
+}

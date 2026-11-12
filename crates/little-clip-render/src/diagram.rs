@@ -1,5 +1,8 @@
 //! Compiled diagram engines, isolated from hosts by their existing executable.
-use little_clip_core::{CommandRequest, diagram::Format};
+use little_clip_core::{
+    CommandRequest,
+    diagram::{Format, MAX_DRAWING_SOURCE_BYTES as MAX_DRAWING_SOURCE},
+};
 use resvg::usvg::{TreeParsing, TreeTextToPath};
 use std::{
     io::{Read, Write},
@@ -12,6 +15,7 @@ use std::{
 
 mod bpmn;
 mod d2;
+mod excalidraw;
 mod fonts;
 mod graphviz;
 mod images;
@@ -59,6 +63,24 @@ impl MathLayout {
     }
 }
 
+/// Source-space viewport for a drawing's normalized, outlined preview.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DrawingLayout {
+    pub origin: [f64; 2],
+    pub size: [f64; 2],
+}
+impl DrawingLayout {
+    fn valid(self) -> bool {
+        self.origin
+            .iter()
+            .all(|value| value.is_finite() && value.abs() <= 1e12)
+            && self
+                .size
+                .iter()
+                .all(|value| value.is_finite() && *value > 0.0 && *value <= 16384.0)
+    }
+}
+
 /// An immutable rendered diagram, retaining vectors for export and source inspection.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rendered {
@@ -71,6 +93,8 @@ pub struct Rendered {
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub math: Option<MathLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing: Option<DrawingLayout>,
 }
 
 impl Rendered {
@@ -78,6 +102,11 @@ impl Rendered {
         let expects_math = matches!(format, Format::Math | Format::MathInline);
         if self.math.is_some() != expects_math || self.math.is_some_and(|layout| !layout.valid()) {
             return Err("Invalid equation layout in worker response".into());
+        }
+        if self.drawing.is_some() != (format == Format::Excalidraw)
+            || self.drawing.is_some_and(|layout| !layout.valid())
+        {
+            return Err("Invalid drawing viewport in worker response".into());
         }
         if self.width == 0
             || self.height == 0
@@ -139,7 +168,7 @@ fn render_request(
     foreground: Option<[u8; 3]>,
     cancelled: &AtomicBool,
 ) -> Result<Rendered, String> {
-    validate_source(source)?;
+    validate_source(format, source)?;
     if cancelled.load(Ordering::Relaxed) {
         return Err("Diagram preview cancelled".into());
     }
@@ -187,6 +216,10 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/diagram-notices.md"),
             include_str!("../third_party/bpmnkit-MIT.txt"),
             include_str!("../third_party/wavedrom-notices.md"),
+            include_str!("../third_party/excalidraw-notices.md"),
+            include_str!("../third_party/excalidraw-render-LICENSE-BUNDLE.txt"),
+            include_str!("../third_party/excalidraw-document-LICENSE-MIT.txt"),
+            include_str!("../third_party/excalidraw-document-LICENSE-APACHE.txt"),
             include_str!("../../../vendor/wavedrom/LICENSE"),
             include_str!("../third_party/wavedrom-onml-LICENSE"),
             include_str!("../third_party/wavedrom-tspan-LICENSE"),
@@ -225,7 +258,7 @@ pub fn run_worker_cli() -> bool {
     let response = (|| {
         let mut bytes = Vec::new();
         std::io::stdin()
-            .take((MAX_SOURCE * 8 + 1024) as u64)
+            .take((MAX_DRAWING_SOURCE * 8 + 1024) as u64)
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
         let request: Request = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
@@ -254,9 +287,17 @@ fn bounded_warnings(warnings: Vec<String>) -> Vec<String> {
     bounded
 }
 
-fn validate_source(source: &str) -> Result<(), String> {
-    if source.len() > MAX_SOURCE || source.contains('\0') {
-        return Err("Diagram source exceeds 256 KiB or contains a NUL byte".into());
+fn validate_source(format: Format, source: &str) -> Result<(), String> {
+    let limit = if format == Format::Excalidraw {
+        MAX_DRAWING_SOURCE
+    } else {
+        MAX_SOURCE
+    };
+    if source.len() > limit || source.contains('\0') {
+        return Err(format!(
+            "Diagram source exceeds {} KiB or contains a NUL byte",
+            limit / 1024
+        ));
     }
     Ok(())
 }
@@ -266,10 +307,11 @@ fn render_inline(
     source: &str,
     foreground: Option<[u8; 3]>,
 ) -> Result<Rendered, String> {
-    validate_source(source)?;
+    validate_source(format, source)?;
     let mut math_layout = None;
     let (svg, warnings) = match format {
         Format::D2 => return d2::render(source),
+        Format::Excalidraw => return excalidraw::render(source),
         Format::Math | Format::MathInline => {
             let (svg, layout) = math::svg(
                 source,
@@ -329,17 +371,7 @@ fn parse_svg(
     family: &str,
     images: ImagePolicy,
 ) -> Result<(resvg::usvg::Tree, Vec<String>), String> {
-    if svg.len() > MAX_SVG {
-        return Err("Diagram SVG exceeds 2 MiB".into());
-    }
-    let document = roxmltree::Document::parse(svg).map_err(|error| error.to_string())?;
-    if document.descendants().count() > 16_384
-        || document
-            .descendants()
-            .any(|node| node.ancestors().take(66).count() > 64)
-    {
-        return Err("Diagram SVG exceeds structural limits".into());
-    }
+    let document = svg_document(svg)?;
     let (image_href_resolver, image_budget) = images::resolver(images);
     let mut options = resvg::usvg::Options {
         font_family: family.into(),
@@ -366,6 +398,21 @@ fn parse_svg(
         _ => Vec::new(),
     };
     Ok((tree, warnings))
+}
+
+fn svg_document(svg: &str) -> Result<roxmltree::Document<'_>, String> {
+    if svg.len() > MAX_SVG {
+        return Err("Diagram SVG exceeds 2 MiB".into());
+    }
+    let document = roxmltree::Document::parse(svg).map_err(|error| error.to_string())?;
+    if document.descendants().count() > 16_384
+        || document
+            .descendants()
+            .any(|node| node.ancestors().take(66).count() > 64)
+    {
+        return Err("Diagram SVG exceeds structural limits".into());
+    }
+    Ok(document)
 }
 
 fn svg_viewbox(root: roxmltree::Node<'_, '_>) -> Result<Option<resvg::usvg::NonZeroRect>, String> {
@@ -483,6 +530,7 @@ fn rasterize_svg(svg: String, white_paper: bool, images: ImagePolicy) -> Result<
         height,
         warnings,
         math: None,
+        drawing: None,
     })
 }
 
@@ -645,6 +693,34 @@ mod tests {
                 "{signal:[{name:'clk',wave:'p...'}]}",
                 Format::Wavedrom,
                 "{signal:[{name:'clk',wave:'p...'}]}",
+            ),
+            (
+                "excalidraw",
+                r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+                Format::Excalidraw,
+                r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+            ),
+            (
+                "json",
+                r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+                Format::Excalidraw,
+                r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+            ),
+            (
+                "",
+                r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+                Format::Excalidraw,
+                r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+            ),
+            (
+                "md",
+                concat!(
+                    "```excalidraw\n",
+                    r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+                    "\n```"
+                ),
+                Format::Excalidraw,
+                concat!(r#"{"type":"excalidraw","version":2,"elements":[]}"#, "\n"),
             ),
             ("md", "```d2\na -> b\n```", Format::D2, "a -> b\n"),
             ("d2", "a -> b\n", Format::D2, "a -> b\n"),
@@ -888,7 +964,7 @@ impl Cache {
             self.0.push_back(entry);
             return result;
         }
-        validate_source(source)?;
+        validate_source(format, source)?;
         self.0.retain(|entry| {
             entry.format != format || entry.source != source || entry.foreground != foreground
         });

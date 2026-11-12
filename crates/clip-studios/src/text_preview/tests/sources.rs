@@ -409,6 +409,11 @@ fn standalone_diagram_sources_have_loaded_native_syntax_definitions() {
         ("d2", "D2", "direction: right\na -> b: Preview"),
         ("wavejson", "WaveDrom", "{signal:[{name:'x',wave:'01'}]}"),
         (
+            "excalidraw",
+            "Excalidraw",
+            r#"{"type":"excalidraw","version":2,"elements":[]}"#,
+        ),
+        (
             "json5",
             "JSON5",
             "{ // comment\n value:'text', count:0x20, }",

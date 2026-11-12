@@ -36,7 +36,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | DBML | [dbml-language-server](https://crates.io/crates/dbml-language-server) 0.1.2; [dbml_diff_mysql](https://crates.io/crates/dbml_diff_mysql) 0.1.5; [sea-orm-dbml](https://crates.io/crates/sea-orm-dbml) 0.1.0-beta.2 | Pending comparison / editor research |
 | BPMN | BPMN Kit 0.2.1 native model/layout/SVG; bpmn-svg 0.1.0; bpmn-js and BPMNKit graphical editors | Native authored-DI and automatic-layout previews; highlighted source editor; direct manipulation optional follow-up |
 | draw.io | [drawio-exporter](https://crates.io/crates/drawio-exporter) 1.6.0; [flowchart-mcp-server](https://crates.io/crates/flowchart-mcp-server) 0.1.0; [drawio-lc](https://crates.io/crates/drawio-lc) 0.4.0 | Pending comparison / editor research |
-| Excalidraw | excalidraw-render 0.1.0; excalidraw-document 0.2.0; gpui-excalidraw 0.1.9; excalidraw-image 0.2.0 | Native renderer and preserving model selected for integration; graphical canvas pending |
+| Excalidraw | excalidraw-render 0.1.0; excalidraw-document 0.2.0; gpui-excalidraw 0.1.9; excalidraw-image 0.2.0 | Native SVG renderer integrated; preserving model selected; graphical canvas pending |
 | WaveDrom | Canonical 3.8.0; native wavedrom 0.1.0 and current Rust main; WavePaint graphical reference | Canonical engine embedded without a browser; timing/register/logic source previews integrated; direct timing painting and lane naming integrated; advanced operations stay in source |
 | Structurizr | [oak-structurizr](https://crates.io/crates/oak-structurizr) 0.0.11; [dendryform-export](https://crates.io/crates/dendryform-export) 0.1.0; [cadastre](https://crates.io/crates/cadastre) 0.4.0 | Pending comparison / editor research |
 | BlockDiag / SeqDiag / ActDiag / NwDiag / PacketDiag / RackDiag | [xio_job_to_blockdiag](https://crates.io/crates/xio_job_to_blockdiag) 0.8.0 | Pending comparison / editor research |
@@ -895,6 +895,50 @@ Clippy. Architecture comparison reports no new application function above the
 complexity threshold. Source import growth is the already selected native
 dependency, retained for a small reviewable extension, not new application logic.
 
-This checkpoint is a tested rendering/coordinate foundation. Excalidraw fence,
-file/clipboard dispatch, font-database composition, source-session integration
-and the interactive canvas still need implementation and verification.
+This checkpoint supplied the rendering/coordinate foundation. The next section
+records source routing and composition; the interactive canvas remains pending.
+
+
+## Native drawing source integration
+
+Excalidraw now uses the shared bounded helper, static SVG/PNG pipeline and existing
+source-session save ownership. Explicit `.excalidraw` and `.excalidraw.json` files
+retain their identity even for invalid drafts; ordinary JSON and clipboard text
+require the distinctive complete scene envelope. Ambiguous detection keeps its
+small input ceiling. Explicit drawing sources allow 2 MiB for embedded assets,
+while other diagram and clipboard budgets remain unchanged. Shared extension-hint
+handling keeps desktop and little-screen compound-name behavior consistent.
+Save As proposes `.excalidraw`, including for scenes originally inferred from JSON.
+
+A second SVG text engine must not reshape the drawing's handwriting: usvg 0.37's
+missing-glyph fallback searches database insertion order and can choose a different
+family for CJK or mixed-font text. Instead, the local renderer's opt-in
+`svg-text-outlines` feature writes its existing, positioned native contours for
+text, frame names and generated labels. Default upstream text output remains
+unchanged when that feature is off. Font subset/notice accounting is retained;
+notices survive composition as escaped inert metadata. Placeholder diagnostic
+labels use the shared metric-compatible font database. The adapter needs no
+second font catalog loader, alias table or font decoding dependency.
+
+The source-space viewport also survives the helper protocol, with finite-size
+validation and compensation for composition's actual outlined-content bounds.
+It will supply canvas coordinates without fitting the view again after every
+edit. Native geometry, text, raster, output and helper-process budgets all remain
+explicit; retained compatibility diagnostics appear beside the preview.
+
+The focused adapter tests pass for embedded pixels/static notices, translated
+source correspondence, protocol geometry rejection and source-size limits.
+Workspace, real-host dispatch and mixed-script outline checks are being run.
+The graphical canvas is still pending. It must use fresh worker-prepared scene
+snapshots, one source-history transaction per gesture, and the existing guarded
+save/close flow. Semantic JSON preservation includes unknown records, resources,
+tombstones and exact numbers; graphical edits may reformat JSON. The native
+model's `translate_connected` moves the entire connected composition, so it is
+not a substitute for moving one box while updating its attached arrow endpoints.
+
+Architecture review prompted a focused text-emission extraction from the vendor's
+large writer and shared extension-hint handling in core. Maximum CCN stays at the
+existing 195; there is no new application hotspot or dependency cycle. The tool
+still flags the extracted pre-existing text branch (CCN 16) and a clone-group
+increase in vendor/test code; those require review rather than unrelated changes
+to pristine renderer algorithms or shared test infrastructure.

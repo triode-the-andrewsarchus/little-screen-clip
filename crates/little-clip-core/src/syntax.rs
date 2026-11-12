@@ -320,6 +320,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "d2" => Some("d2"),
         "bpmn" | "bpmn2" => Some("bpmn"),
         "wavejson" | "wavedrom" => Some("wavejson"),
+        "excalidraw" => Some("excalidraw"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -447,6 +448,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "d2" => "D2",
         "bpmn" => "BPMN",
         "wavejson" | "wavedrom" => "WaveDrom",
+        "excalidraw" => "Excalidraw",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -572,6 +574,9 @@ pub const JSON5_SUBLIME_SYNTAX: &str = include_str!("syntax/json5.sublime-syntax
 /// WaveJSON source highlighting, including JSON5 comments and single quotes.
 pub const WAVEDROM_SUBLIME_SYNTAX: &str = include_str!("syntax/wavedrom.sublime-syntax");
 
+/// JSON highlighting for native drawing sources.
+pub const EXCALIDRAW_SUBLIME_SYNTAX: &str = include_str!("syntax/excalidraw.sublime-syntax");
+
 /// Shared native diagram grammars used by both screen and desktop source views.
 pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     PIKCHR_SUBLIME_SYNTAX,
@@ -581,6 +586,7 @@ pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     D2_SUBLIME_SYNTAX,
     BPMN_SUBLIME_SYNTAX,
     WAVEDROM_SUBLIME_SYNTAX,
+    EXCALIDRAW_SUBLIME_SYNTAX,
     MERMAID_SUBLIME_SYNTAX,
 ];
 
@@ -590,7 +596,7 @@ pub fn syntect_fallback(lang: &str) -> &'static str {
         "ts" | "tsx" | "mts" | "cts" => "js",
         "toml" | "kdl" | "ini" | "cfg" | "conf" | "env" => "yaml",
         "bpmn" | "bpmn2" => "xml",
-        "json5" | "wavejson" | "wavedrom" => "json",
+        "json5" | "wavejson" | "wavedrom" | "excalidraw" => "json",
         "objc" | "mm" => "m",
         "swift" => "rs",
         "bazel" | "bzl" => "py",

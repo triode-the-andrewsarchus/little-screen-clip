@@ -76,6 +76,7 @@ pub(super) fn render(source: &str) -> Result<Rendered, String> {
         height,
         warnings: super::bounded_warnings(warnings),
         math: None,
+        drawing: None,
     };
     result.validate(little_clip_core::diagram::Format::D2)?;
     Ok(result)

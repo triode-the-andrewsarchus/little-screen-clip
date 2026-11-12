@@ -22,7 +22,9 @@ use super::super::resolve::{
 };
 use super::super::rough::{Drawing, FillKind};
 use super::super::svg_fonts::Bundle;
-use super::super::text::{ResolvedLabel, ResolvedTextAlign, ResolvedTextRun, FRAME_NAME_FONT_SIZE};
+use super::super::text::{
+    LabelPathOperation, ResolvedLabel, ResolvedTextAlign, ResolvedTextRun, FRAME_NAME_FONT_SIZE,
+};
 use super::super::{freedraw, FormatEncodeError};
 use super::sink::SvgSink;
 use super::{
@@ -143,7 +145,13 @@ fn push_frame_name<W: SvgSink + ?Sized>(
     push_svg_number(svg, transform.center_x, "SVG frame name center x")?;
     svg.push(' ');
     push_svg_number(svg, transform.center_y, "SVG frame name center y")?;
-    svg.push_str(")\"><text data-frame-name=\"");
+    svg.push_str(")\">");
+    if cfg!(feature = "svg-text-outlines") {
+        push_label_outline(svg, label, *color, 0.0)?;
+        svg.push_str("</g>");
+        return Ok(());
+    }
+    svg.push_str("<text data-frame-name=\"");
     push_escaped_attribute(svg, source.id());
     svg.push_str("\" data-source-text=\"");
     push_escaped_attribute(svg, &label.text);
@@ -521,81 +529,92 @@ impl SvgPlan {
                         )?;
                     }
                     if let (Some(label), Some(color)) = (generated_label, generated_label_color) {
-                        svg.push_str("<text data-source-text=\"");
-                        for line in &label.lines {
-                            push_escaped_attribute(&mut svg, &line.text);
-                        }
-                        svg.push_str("\" xml:space=\"preserve\" fill=\"");
-                        color.write_hex(&mut svg).map_err(|_| {
-                            FormatEncodeError::Encoding(
-                                "failed to write SVG embeddable label color".to_owned(),
-                            )
-                        })?;
-                        svg.push_str("\" font-family=\"");
-                        push_escaped_attribute(
-                            &mut svg,
-                            Bundle::font_family_list("Liberation Sans"),
-                        );
-                        svg.push_str("\" font-size=\"");
-                        push_svg_number(&mut svg, label.font_size, "SVG embeddable font size")?;
-                        svg.push_str("\">");
-                        for line in &label.lines {
-                            if !line.runs.is_empty() {
-                                for run in &line.runs {
-                                    svg.push_str("<tspan font-family=\"");
-                                    push_escaped_attribute(
-                                        &mut svg,
-                                        Bundle::font_family_list(run.font_family),
-                                    );
-                                    svg.push_str(if run.rtl {
-                                        "\" direction=\"rtl\""
-                                    } else {
-                                        "\" direction=\"ltr\""
-                                    });
-                                    push_svg_run_positions(
-                                        &mut svg,
-                                        line,
-                                        run,
-                                        *generated_label_offset_y,
-                                        "SVG embeddable run",
-                                    )?;
-                                    svg.push('>');
-                                    push_escaped_text(&mut svg, &run.display_text);
-                                    svg.push_str("</tspan>");
-                                }
-                                continue;
-                            }
-                            svg.push_str("<tspan x=\"");
-                            for (index, glyph) in line.glyphs.iter().enumerate() {
-                                if index != 0 {
-                                    svg.push(' ');
-                                }
-                                push_svg_number(&mut svg, glyph.x, "SVG embeddable glyph x")?;
-                            }
-                            svg.push_str("\" y=\"");
-                            if line.glyphs.is_empty() {
-                                push_svg_number(
+                        if cfg!(feature = "svg-text-outlines") {
+                            for line in &label.lines {
+                                push_label_outline(
                                     &mut svg,
-                                    line.baseline + generated_label_offset_y,
-                                    "SVG embeddable baseline",
+                                    line,
+                                    *color,
+                                    *generated_label_offset_y,
                                 )?;
-                            } else {
+                            }
+                        } else {
+                            svg.push_str("<text data-source-text=\"");
+                            for line in &label.lines {
+                                push_escaped_attribute(&mut svg, &line.text);
+                            }
+                            svg.push_str("\" xml:space=\"preserve\" fill=\"");
+                            color.write_hex(&mut svg).map_err(|_| {
+                                FormatEncodeError::Encoding(
+                                    "failed to write SVG embeddable label color".to_owned(),
+                                )
+                            })?;
+                            svg.push_str("\" font-family=\"");
+                            push_escaped_attribute(
+                                &mut svg,
+                                Bundle::font_family_list("Liberation Sans"),
+                            );
+                            svg.push_str("\" font-size=\"");
+                            push_svg_number(&mut svg, label.font_size, "SVG embeddable font size")?;
+                            svg.push_str("\">");
+                            for line in &label.lines {
+                                if !line.runs.is_empty() {
+                                    for run in &line.runs {
+                                        svg.push_str("<tspan font-family=\"");
+                                        push_escaped_attribute(
+                                            &mut svg,
+                                            Bundle::font_family_list(run.font_family),
+                                        );
+                                        svg.push_str(if run.rtl {
+                                            "\" direction=\"rtl\""
+                                        } else {
+                                            "\" direction=\"ltr\""
+                                        });
+                                        push_svg_run_positions(
+                                            &mut svg,
+                                            line,
+                                            run,
+                                            *generated_label_offset_y,
+                                            "SVG embeddable run",
+                                        )?;
+                                        svg.push('>');
+                                        push_escaped_text(&mut svg, &run.display_text);
+                                        svg.push_str("</tspan>");
+                                    }
+                                    continue;
+                                }
+                                svg.push_str("<tspan x=\"");
                                 for (index, glyph) in line.glyphs.iter().enumerate() {
                                     if index != 0 {
                                         svg.push(' ');
                                     }
+                                    push_svg_number(&mut svg, glyph.x, "SVG embeddable glyph x")?;
+                                }
+                                svg.push_str("\" y=\"");
+                                if line.glyphs.is_empty() {
                                     push_svg_number(
                                         &mut svg,
-                                        glyph.y + generated_label_offset_y,
-                                        "SVG embeddable glyph y",
+                                        line.baseline + generated_label_offset_y,
+                                        "SVG embeddable baseline",
                                     )?;
+                                } else {
+                                    for (index, glyph) in line.glyphs.iter().enumerate() {
+                                        if index != 0 {
+                                            svg.push(' ');
+                                        }
+                                        push_svg_number(
+                                            &mut svg,
+                                            glyph.y + generated_label_offset_y,
+                                            "SVG embeddable glyph y",
+                                        )?;
+                                    }
                                 }
+                                svg.push_str("\">");
+                                push_escaped_text(&mut svg, &line.display_text);
+                                svg.push_str("</tspan>");
                             }
-                            svg.push_str("\">");
-                            push_escaped_text(&mut svg, &line.display_text);
-                            svg.push_str("</tspan>");
+                            svg.push_str("</text>");
                         }
-                        svg.push_str("</text>");
                     }
                     svg.push_str("</g>");
                     if label_mask.is_some() {
@@ -784,61 +803,8 @@ impl SvgPlan {
                     }
                     svg.push('>');
                     push_svg_link_hit_rect(&mut svg, link.as_deref(), *width, *height)?;
-                    svg.push_str("<text data-source-text=\"");
-                    for line in &text.lines {
-                        push_escaped_attribute(&mut svg, &line.text);
-                    }
-                    svg.push_str("\" xml:space=\"preserve\" fill=\"");
-                    color.write_hex(&mut svg).map_err(|_| {
-                        FormatEncodeError::Encoding("failed to write SVG text color".to_owned())
-                    })?;
-                    svg.push_str("\" font-family=\"");
-                    push_escaped_attribute(&mut svg, Bundle::font_family_list(text.font_family));
-                    svg.push_str("\" font-size=\"");
-                    push_svg_number(&mut svg, text.font_size, "SVG text font size")?;
-                    let (line_x, text_anchor) = match text.text_align {
-                        ResolvedTextAlign::Left => (0.0, "start"),
-                        ResolvedTextAlign::Center => (*width / 2.0, "middle"),
-                        ResolvedTextAlign::Right => (*width, "end"),
-                    };
-                    svg.push_str("\" text-anchor=\"");
-                    svg.push_str(text_anchor);
-                    svg.push_str("\">");
-                    for line in &text.lines {
-                        if line.runs.is_empty() {
-                            svg.push_str("<tspan x=\"");
-                            push_svg_number(&mut svg, line_x, "SVG text line anchor x")?;
-                            svg.push_str("\" y=\"");
-                            push_svg_number(&mut svg, line.baseline, "SVG text line baseline")?;
-                            svg.push_str("\">");
-                            push_escaped_text(&mut svg, &line.display_text);
-                            svg.push_str("</tspan>");
-                        } else {
-                            for run in &line.runs {
-                                svg.push_str("<tspan font-family=\"");
-                                push_escaped_attribute(
-                                    &mut svg,
-                                    Bundle::font_family_list(run.font_family),
-                                );
-                                svg.push_str(if run.rtl {
-                                    "\" direction=\"rtl\" text-anchor=\"start\""
-                                } else {
-                                    "\" direction=\"ltr\" text-anchor=\"start\""
-                                });
-                                push_svg_run_positions(&mut svg, line, run, 0.0, "SVG text run")?;
-                                svg.push('>');
-                                push_escaped_text(&mut svg, &run.display_text);
-                                svg.push_str("</tspan>");
-                            }
-                        }
-                        // Nothing separates one line's tspans from the next.
-                        // Under xml:space="preserve" a separator is a rendered
-                        // character that joins the preceding text chunk, and a
-                        // trailing space shifts every middle- or end-anchored
-                        // line off the position the official export gives it.
-                        // The source line break is carried by data-source-text.
-                    }
-                    svg.push_str("</text></g>");
+                    push_text(&mut svg, text, *color, *width)?;
+                    svg.push_str("</g>");
                 }
                 SvgElementKind::Image {
                     source,
@@ -1397,4 +1363,113 @@ mod tests {
         push_escaped_text(&mut output, "a \"b\" <c> & d\t");
         assert_eq!(output, "a \"b\" &lt;c&gt; &amp; d\t");
     }
+}
+
+/// Write one resolved text element, retaining native contours when requested.
+fn push_text<W: SvgSink + ?Sized>(
+    svg: &mut W,
+    text: &super::super::text::ResolvedText,
+    color: CanonicalColor,
+    width: f64,
+) -> Result<(), FormatEncodeError> {
+    if cfg!(feature = "svg-text-outlines") {
+        for line in &text.lines {
+            push_label_outline(svg, line, color, 0.0)?;
+        }
+    } else {
+        svg.push_str("<text data-source-text=\"");
+        for line in &text.lines {
+            push_escaped_attribute(svg, &line.text);
+        }
+        svg.push_str("\" xml:space=\"preserve\" fill=\"");
+        color.write_hex(svg).map_err(|_| {
+            FormatEncodeError::Encoding("failed to write SVG text color".to_owned())
+        })?;
+        svg.push_str("\" font-family=\"");
+        push_escaped_attribute(svg, Bundle::font_family_list(text.font_family));
+        svg.push_str("\" font-size=\"");
+        push_svg_number(svg, text.font_size, "SVG text font size")?;
+        let (line_x, text_anchor) = match text.text_align {
+            ResolvedTextAlign::Left => (0.0, "start"),
+            ResolvedTextAlign::Center => (width / 2.0, "middle"),
+            ResolvedTextAlign::Right => (width, "end"),
+        };
+        svg.push_str("\" text-anchor=\"");
+        svg.push_str(text_anchor);
+        svg.push_str("\">");
+        for line in &text.lines {
+            if line.runs.is_empty() {
+                svg.push_str("<tspan x=\"");
+                push_svg_number(svg, line_x, "SVG text line anchor x")?;
+                svg.push_str("\" y=\"");
+                push_svg_number(svg, line.baseline, "SVG text line baseline")?;
+                svg.push_str("\">");
+                push_escaped_text(svg, &line.display_text);
+                svg.push_str("</tspan>");
+            } else {
+                for run in &line.runs {
+                    svg.push_str("<tspan font-family=\"");
+                    push_escaped_attribute(svg, Bundle::font_family_list(run.font_family));
+                    svg.push_str(if run.rtl {
+                        "\" direction=\"rtl\" text-anchor=\"start\""
+                    } else {
+                        "\" direction=\"ltr\" text-anchor=\"start\""
+                    });
+                    push_svg_run_positions(svg, line, run, 0.0, "SVG text run")?;
+                    svg.push('>');
+                    push_escaped_text(svg, &run.display_text);
+                    svg.push_str("</tspan>");
+                }
+            }
+            // Nothing separates one line's tspans from the next.
+            // Under xml:space="preserve" a separator is a rendered
+            // character that joins the preceding text chunk, and a
+            // trailing space shifts every middle- or end-anchored
+            // line off the position the official export gives it.
+            // The source line break is carried by data-source-text.
+        }
+        svg.push_str("</text>");
+    }
+    Ok(())
+}
+
+/// Emit the layout engine's already positioned contours. Re-shaping SVG text
+/// in a downstream engine can otherwise change fallback families and clusters.
+/// Coordinates include alignment, baseline and per-run shaping; only generated
+/// labels need an additional vertical offset.
+fn push_label_outline<W: SvgSink + ?Sized>(
+    svg: &mut W,
+    label: &ResolvedLabel,
+    color: CanonicalColor,
+    offset_y: f64,
+) -> Result<(), FormatEncodeError> {
+    svg.push_str("<path data-source-text=\"");
+    push_escaped_attribute(svg, &label.text);
+    svg.push_str("\" fill=\"");
+    color
+        .write_hex(svg)
+        .map_err(|_| FormatEncodeError::Encoding("failed to write SVG glyph color".to_owned()))?;
+    svg.push_str("\" d=\"");
+    for operation in &label.path.operations {
+        let (command, points) = match *operation {
+            LabelPathOperation::Move { x, y } => ('M', [Some((x, y)), None]),
+            LabelPathOperation::Line { x, y } => ('L', [Some((x, y)), None]),
+            LabelPathOperation::Quadratic {
+                control_x,
+                control_y,
+                x,
+                y,
+            } => ('Q', [Some((control_x, control_y)), Some((x, y))]),
+            LabelPathOperation::Close => ('Z', [None, None]),
+        };
+        svg.push(command);
+        for (x, y) in points.into_iter().flatten() {
+            push_svg_number(svg, x, "SVG glyph x")?;
+            svg.push(' ');
+            push_svg_number(svg, y + offset_y, "SVG glyph y")?;
+            svg.push(' ');
+        }
+    }
+    svg.push_str("\"/>");
+    Ok(())
 }

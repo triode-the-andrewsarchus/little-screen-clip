@@ -668,7 +668,7 @@ impl TextPreviewState {
         } else {
             little_clip_ops::read_text_file_preview(path_ref, 2 * 1024 * 1024)?
         };
-        let ext = path_ref.extension().and_then(|e| e.to_str());
+        let ext = little_clip_core::diagram::Format::source_extension_hint(path_ref);
         let data = TextPreviewData::from_source(Arc::new(content), ext);
         let title = path_ref
             .file_name()

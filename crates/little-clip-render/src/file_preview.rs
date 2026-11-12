@@ -61,7 +61,7 @@ impl crate::ScreenRenderer {
             ClipPayload::Text(text) => (Path::new(text.trim()), false),
             _ => return None,
         };
-        let extension = path.extension().and_then(|value| value.to_str());
+        let extension = little_clip_core::diagram::Format::source_extension_hint(path);
         let kind = if spreadsheet::is_spreadsheet_file(path) {
             Kind::Spreadsheet
         } else if extension.is_some_and(|value| {
@@ -144,7 +144,11 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
         Kind::Text => {
             let contents = little_clip_core::kernel_interface::read_content_to_string_bounded(
                 path,
-                1024 * 1024,
+                if extension == Some("excalidraw") {
+                    little_clip_core::diagram::MAX_DRAWING_SOURCE_BYTES
+                } else {
+                    1024 * 1024
+                },
             )
             .ok()?;
             Some(Preview::Text {

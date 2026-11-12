@@ -4,6 +4,9 @@ use std::path::Path;
 /// Bounded WaveJSON parsing shared by rendering and graphical editing.
 pub mod wavejson;
 
+/// Maximum decoded UTF-8 source size for an explicit native drawing.
+pub const MAX_DRAWING_SOURCE_BYTES: usize = 2 * 1024 * 1024;
+
 /// A diagram syntax with an integrated native renderer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -16,6 +19,7 @@ pub enum Format {
     D2,
     Bpmn,
     Wavedrom,
+    Excalidraw,
     Math,
     MathInline,
 }
@@ -36,6 +40,7 @@ impl Format {
             "d2" => Some(Self::D2),
             "bpmn" | "bpmn2" => Some(Self::Bpmn),
             "wavedrom" | "wavejson" => Some(Self::Wavedrom),
+            "excalidraw" => Some(Self::Excalidraw),
             _ => None,
         }
     }
@@ -44,7 +49,24 @@ impl Format {
     ///
     /// Ambiguous `.bob` files need content classification and are not claimed here.
     pub fn from_path(path: &Path) -> Option<Self> {
+        let name = path.file_name()?.as_encoded_bytes();
+        let suffix = b".excalidraw.json";
+        if name
+            .get(name.len().saturating_sub(suffix.len())..)
+            .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+        {
+            return Some(Self::Excalidraw);
+        }
         Self::from_extension(path.extension()?.to_str()?)
+    }
+
+    /// Keeps compound drawing names identifiable when a text viewer stores only
+    /// an extension hint. Other formats retain their original suffix and aliases.
+    pub fn source_extension_hint(path: &Path) -> Option<&str> {
+        match Self::from_path(path) {
+            Some(Self::Excalidraw) => Some("excalidraw"),
+            _ => path.extension()?.to_str(),
+        }
     }
 
     /// Recognizes an unambiguous extension without treating fence aliases as paths.
@@ -58,13 +80,15 @@ impl Format {
             "d2" => Some(Self::D2),
             "bpmn" | "bpmn2" => Some(Self::Bpmn),
             "wavedrom" | "wavejson" => Some(Self::Wavedrom),
+            "excalidraw" => Some(Self::Excalidraw),
             _ => None,
         }
     }
 
     /// Uses content signatures for extensions shared with ordinary Markdown.
     pub fn from_source_path(path: &Path, source: &str) -> Option<Self> {
-        Self::from_source_extension(path.extension()?.to_str()?, source)
+        Self::from_path(path)
+            .or_else(|| Self::from_source_extension(path.extension()?.to_str()?, source))
     }
 
     /// Combines unambiguous extensions with conservative content classification.
@@ -76,6 +100,8 @@ impl Format {
                 Some(Self::Graphviz)
             } else if extension.eq_ignore_ascii_case("xml") && bpmn_signature(source) {
                 Some(Self::Bpmn)
+            } else if extension.eq_ignore_ascii_case("json") && excalidraw_signature(source) {
+                Some(Self::Excalidraw)
             } else if matches!(extension.to_ascii_lowercase().as_str(), "json" | "json5")
                 && wavejson::signature(source)
             {
@@ -101,6 +127,7 @@ impl Format {
             (Self::Graphviz, dot_signature),
             (Self::Bpmn, bpmn_signature),
             (Self::Wavedrom, wavejson::signature),
+            (Self::Excalidraw, excalidraw_signature),
             (Self::Pikchr, pikchr_signature),
             (Self::Lini, lini_signature),
             (Self::D2, d2_signature),
@@ -124,6 +151,7 @@ impl Format {
             Self::D2 => Some("d2"),
             Self::Bpmn => Some("bpmn"),
             Self::Wavedrom => Some("json5"),
+            Self::Excalidraw => Some("excalidraw"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -139,9 +167,24 @@ impl Format {
             Self::D2 => "D2",
             Self::Bpmn => "BPMN",
             Self::Wavedrom => "WaveDrom",
+            Self::Excalidraw => "Excalidraw",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
+}
+
+fn excalidraw_signature(source: &str) -> bool {
+    if source.len() > 32 * 1024 {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(source.trim_start_matches('\u{feff}')).is_ok_and(
+        |value| {
+            value.get("type").and_then(serde_json::Value::as_str) == Some("excalidraw")
+                && value
+                    .get("elements")
+                    .is_some_and(serde_json::Value::is_array)
+        },
+    )
 }
 
 fn pikchr_signature(source: &str) -> bool {
@@ -356,6 +399,52 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drawing_signatures_do_not_claim_ordinary_json_or_incomplete_clipboard_data() {
+        let source = r#"{"type":"excalidraw","version":2,"elements":[]}"#;
+        assert_eq!(
+            Format::from_source_extension("json", source),
+            Some(Format::Excalidraw)
+        );
+        assert_eq!(Format::from_snippet(source), Some(Format::Excalidraw));
+        for name in [
+            "drawing.excalidraw",
+            "drawing.excalidraw.json",
+            "drawing.EXCALIDRAW.JSON",
+        ] {
+            let path = Path::new(name);
+            assert_eq!(Format::source_extension_hint(path), Some("excalidraw"));
+            assert_eq!(
+                Format::from_source_path(path, "invalid draft"),
+                Some(Format::Excalidraw)
+            );
+        }
+        assert_eq!(
+            Format::source_extension_hint(Path::new("plain.json")),
+            Some("json")
+        );
+        assert_eq!(
+            Format::source_extension_hint(Path::new("scope.wavejson")),
+            Some("wavejson")
+        );
+
+        assert_eq!(
+            Format::from_extension("excalidraw"),
+            Some(Format::Excalidraw)
+        );
+        assert_eq!(
+            Format::from_language("excalidraw"),
+            Some(Format::Excalidraw)
+        );
+        for text in [
+            r#"{"type":"excalidraw","elements":"ordinary value"}"#,
+            r#"{"type":"excalidraw""#,
+            r#"{"elements":[]}"#,
+        ] {
+            assert_eq!(Format::from_snippet(text), None);
+        }
+    }
+
     #[test]
     fn clipboard_diagrams_use_distinctive_bounded_signatures() {
         for (source, format) in [

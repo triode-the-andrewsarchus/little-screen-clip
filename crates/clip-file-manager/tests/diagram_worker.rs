@@ -30,6 +30,8 @@ fn diagram_license_notices_are_available_without_host_startup() {
     assert!(notices.contains("2026 urbanisierung"));
     assert!(notices.contains("2011-2026 Aliaksei Chapyzhenka"));
     assert!(notices.contains("Rquickjs Contributors"));
+    assert!(notices.contains("Excalidraw Render License Bundle"));
+    assert!(notices.contains("29392d10d9c504ec22d67f37a4dd545a63d5b371"));
     assert!(notices.contains("D2 and TALA"));
     assert!(notices.contains("Fuzzy Bubbles Project Authors"));
     assert!(notices.contains("Matheus Mota"));
