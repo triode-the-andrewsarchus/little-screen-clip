@@ -236,16 +236,23 @@ impl RollingAudioStripState {
     }
 
     pub fn copy_selection(&mut self, now: f64) -> bool {
-        self.copy_selection_on(now, crate::desktop_ipc::mutation_jobs(), |request| {
-            crate::send_ipc_request(&request).map_err(|error| error.to_string())
-        })
+        self.copy_selection_on(
+            now,
+            crate::desktop_ipc::mutation_jobs(),
+            |request| crate::send_ipc_request(&request).map_err(|error| error.to_string()),
+            |path| {
+                little_clip_core::copy_file_uris_to_system_clipboard(&[path])
+                    .map_err(|error| error.to_string())
+            },
+        )
     }
 
     fn copy_selection_on(
         &mut self,
         _now: f64,
         jobs: &BackgroundJobs,
-        send: impl FnOnce(IpcRequest) -> Result<IpcResponse, String> + Send + 'static,
+        mut send: impl FnMut(IpcRequest) -> Result<IpcResponse, String> + Send + 'static,
+        copy: impl FnMut(&std::path::Path) -> Result<(), String> + Send + 'static,
     ) -> bool {
         if self.copy_pending() {
             return false;
@@ -276,11 +283,14 @@ impl RollingAudioStripState {
                 None,
             )
             .with_file_source(source);
-            let path =
-                crate::audio_preview::extract_audio_slice_file(&plan, &AtomicBool::new(false))?;
-            send(IpcRequest::PushFile {
-                path,
-                hand: HandSide::Left,
+            crate::audio_preview::copy_audio_slice_with(
+                plan,
+                &AtomicBool::new(false),
+                |request| crate::desktop_ipc::action_result(send(request.clone())?),
+                copy,
+            )?;
+            Ok(IpcResponse::Success {
+                message: "Copied audio slice to OS clipboard".into(),
             })
         }));
         self.copy_notice.clear();
@@ -1318,80 +1328,103 @@ mod tests {
 
     #[test]
     fn copy_selection_retains_completion_after_stop_and_rejects_repeated_submission() {
-        let jobs = BackgroundJobs::new(1, 2);
-        let (release, wait) = std::sync::mpsc::channel();
-        let mut strip = empty_test_strip();
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("snapshot.wav");
-        let samples: Vec<i16> = (0..16000).flat_map(|n| [n as i16, -(n as i16)]).collect();
-        let mut buffer = RollingAudioBuffer::new(2, 8000, 2);
-        buffer.push_samples(&samples);
-        buffer.write_wav(&source).unwrap();
-        strip.source = Some(FileSource::capture(&source).unwrap());
-        strip.path = Some(source);
-        let (captured, artifact_rx) = std::sync::mpsc::channel();
-        strip.selected_region = Some((1.5, 0.5));
-        assert!(strip.copy_selection_on(7.0, &jobs, move |request| {
-            let IpcRequest::PushFile { path, hand } = request else {
-                panic!("unexpected handoff");
-            };
-            assert_eq!(hand, HandSide::Left);
-            let mut reader = hound::WavReader::open(&path).unwrap();
-            assert_eq!(reader.spec().channels, 2);
-            assert_eq!(reader.spec().sample_rate, 8000);
-            let actual: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
-            assert_eq!(actual, samples[8000..24000]);
-            captured.send(path).unwrap();
-            wait.recv_timeout(Duration::from_secs(5)).unwrap();
-            Ok(IpcResponse::Error {
-                error: "controlled handoff failure".into(),
-            })
-        }));
-        assert!(!strip.copy_selection_on(8.0, &jobs, |_| panic!("duplicate copy")));
-        strip.stop();
-        strip.selected_region = None;
-        assert!(strip.copy_pending());
-        let ctx = egui::Context::default();
-        let output = ctx.run(egui::RawInput::default(), |ctx| strip.poll_copy(ctx));
-        assert!(output.viewport_output.values().any(|v| {
-            v.commands
-                .iter()
-                .any(|c| matches!(c, egui::ViewportCommand::CancelClose))
-        }));
-        let artifact = artifact_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        let palette =
-            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                strip.render_header(ui, &palette, 2.0, feedback_time() + 60.0);
+        for desktop_succeeds in [true, false] {
+            let jobs = BackgroundJobs::new(1, 2);
+            let (release, wait) = std::sync::mpsc::channel();
+            let mut strip = empty_test_strip();
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("snapshot.wav");
+            let samples: Vec<i16> = (0..16000).flat_map(|n| [n as i16, -(n as i16)]).collect();
+            let mut buffer = RollingAudioBuffer::new(2, 8000, 2);
+            buffer.push_samples(&samples);
+            buffer.write_wav(&source).unwrap();
+            strip.source = Some(FileSource::capture(&source).unwrap());
+            strip.path = Some(source);
+            let (captured, artifact_rx) = std::sync::mpsc::channel();
+            strip.selected_region = Some((1.5, 0.5));
+            assert!(strip.copy_selection_on(
+                7.0,
+                &jobs,
+                move |request| {
+                    let IpcRequest::PushFile { path, hand } = request else {
+                        panic!("unexpected handoff");
+                    };
+                    assert_eq!(hand, HandSide::Left);
+                    let mut reader = hound::WavReader::open(&path).unwrap();
+                    assert_eq!(reader.spec().channels, 2);
+                    assert_eq!(reader.spec().sample_rate, 8000);
+                    let actual: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
+                    assert_eq!(actual, samples[8000..24000]);
+                    captured.send(path).unwrap();
+                    wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                    Ok(IpcResponse::Success {
+                        message: "accepted by hand".into(),
+                    })
+                },
+                move |path| {
+                    assert!(path.is_file());
+                    if desktop_succeeds {
+                        Ok(())
+                    } else {
+                        Err("controlled clipboard failure".into())
+                    }
+                }
+            ));
+            assert!(!strip.copy_selection_on(
+                8.0,
+                &jobs,
+                |_| panic!("duplicate copy"),
+                |_| panic!("duplicate clipboard copy")
+            ));
+            strip.stop();
+            strip.selected_region = None;
+            assert!(strip.copy_pending());
+            let ctx = egui::Context::default();
+            let output = ctx.run(egui::RawInput::default(), |ctx| strip.poll_copy(ctx));
+            assert!(output.viewport_output.values().any(|v| {
+                v.commands
+                    .iter()
+                    .any(|c| matches!(c, egui::ViewportCommand::CancelClose))
+            }));
+            let artifact = artifact_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    strip.render_header(ui, &palette, 2.0, feedback_time() + 60.0);
+                });
             });
-        });
-        assert!(
+            assert!(
             output.shapes.iter().any(|shape| matches!(
                 &shape.shape,
                 egui::epaint::Shape::Text(text) if text.galley.job.text == "Preparing audio slice…"
             )),
             "accepted work owns progress even after a transient notice would expire"
         );
-        release.send(()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while strip.copy_pending() {
-            strip.poll_copy(&ctx);
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(2));
+            release.send(()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while strip.copy_pending() {
+                strip.poll_copy(&ctx);
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            if desktop_succeeds {
+                assert!(strip.copy_notice.message(feedback_time()).is_none());
+            } else {
+                assert!(
+                    strip
+                        .copy_notice
+                        .message(feedback_time() + 60.0)
+                        .unwrap()
+                        .contains("controlled clipboard failure")
+                );
+            }
+            assert!(
+                artifact.is_file(),
+                "published artifact survives handoff failure"
+            );
+            std::fs::remove_dir_all(artifact.parent().unwrap()).unwrap();
         }
-        assert!(
-            strip
-                .copy_notice
-                .message(feedback_time() + 60.0)
-                .unwrap()
-                .contains("controlled handoff failure")
-        );
-        assert!(
-            artifact.is_file(),
-            "published artifact survives handoff failure"
-        );
-        std::fs::remove_dir_all(artifact.parent().unwrap()).unwrap();
     }
 
     #[test]
@@ -1413,9 +1446,12 @@ mod tests {
         strip.source = Some(FileSource::capture(&path).unwrap());
         strip.path = Some(path.clone());
         strip.selected_region = Some((0.1, 0.5));
-        assert!(
-            strip.copy_selection_on(0.0, &jobs, |_| panic!("a replaced source reached handoff"))
-        );
+        assert!(strip.copy_selection_on(
+            0.0,
+            &jobs,
+            |_| panic!("a replaced source reached handoff"),
+            |_| panic!("a replaced source reached clipboard")
+        ));
         buffer.push_samples(&vec![4321; 8000]);
         buffer.write_wav(&path).unwrap();
         release.send(()).unwrap();

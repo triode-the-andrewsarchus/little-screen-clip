@@ -234,6 +234,6 @@ editor readout rather than assumed pointer-drag coordinates.
 ## Remaining media clipboard audit
 
 - [x] MIDI Studio and file-manager MIDI strips publish file URIs after successful daemon handoff, preserving owned files on partial failure. All 28 MIDI tests pass, including successful handoff with a failed desktop writer.
-- [ ] Rolling-audio selection copies use the shared guarded audio clipboard delivery.
+- [x] Rolling-audio selection copies use the shared guarded audio clipboard delivery. Workbench tests verify exact stereo PCM, completed copy ownership after stop, daemon-success/clipboard-failure reporting and source-replacement rejection (16 passed, one unrelated ignored).
 - [x] Audio waveform/FFT PNG copies publish images directly and report clipboard errors. Both renderers pass the four-way daemon/desktop outcome matrix, preserving captured bytes and pending-job lifetime.
 - [x] Image Studio normal and optimized copies report desktop failure as failure even when the hand push succeeds. Shared image delivery now enforces this policy centrally; all 29 image-save tests pass.

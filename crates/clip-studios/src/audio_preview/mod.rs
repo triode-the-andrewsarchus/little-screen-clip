@@ -81,7 +81,7 @@ mod selection;
 mod session_edit;
 mod studio;
 
-pub use export::{audio_slice_copy_plan, extract_audio_slice_file};
+pub use export::{audio_slice_copy_plan, copy_audio_slice_with, extract_audio_slice_file};
 pub use export::{copy_file_audio_segment, run_audio_command_cancellable};
 pub use prepared_slice::{PreparedAudioSlice, prepare_audio_slice};
 pub use tools::spectrogram_view::{format_time_label, time_ruler_interval};
@@ -888,9 +888,12 @@ fn submit_session_analysis(
     (cancelled, ticket, progress_rx, job_rx)
 }
 
+/// Describes an audio slice successfully published to the desktop clipboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AudioSliceDelivery {
+pub enum AudioSliceDelivery {
+    /// The daemon also accepted the file into Left Hand.
     Daemon,
+    /// Desktop publication succeeded without a daemon acknowledgment.
     SystemClipboard,
 }
 

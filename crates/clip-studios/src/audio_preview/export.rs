@@ -967,21 +967,36 @@ pub(super) fn extract_and_handoff_audio_slice(
     plan: AudioSliceCopyPlan,
     cancelled: &AtomicBool,
 ) -> Result<AudioSliceDelivery, String> {
+    copy_audio_slice_with(plan, cancelled, send_audio_handoff, |path| {
+        little_clip_core::copy_file_uris_to_system_clipboard(&[path])
+            .map_err(|error| error.to_string())
+    })
+}
+
+/// Extracts a guarded slice and publishes it through supplied hand and desktop writers.
+///
+/// Retains the generated file once another process may have received its path.
+/// A successful hand push does not replace desktop clipboard publication.
+///
+/// # Errors
+/// Returns source validation, rendering, cancellation or desktop clipboard errors.
+pub fn copy_audio_slice_with(
+    plan: AudioSliceCopyPlan,
+    cancelled: &AtomicBool,
+    mut send: impl FnMut(&IpcRequest) -> Result<(), String>,
+    copy: impl FnMut(&Path) -> Result<(), String>,
+) -> Result<AudioSliceDelivery, String> {
     let mut artifact = extract_audio_slice_owned(&plan, cancelled)?;
     let output = artifact.path.clone();
     handoff_audio_slice(
         &output,
         cancelled,
         |request| {
-            // Sending can expose the path even if its acknowledgement is lost.
+            // Even a lost acknowledgment can leave the daemon owning this path.
             artifact.preserve();
-            send_audio_handoff(request)
+            send(request)
         },
-        |path| {
-            let path = path.to_path_buf();
-            little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&path))
-                .map_err(|error| error.to_string())
-        },
+        copy,
     )
 }
 
