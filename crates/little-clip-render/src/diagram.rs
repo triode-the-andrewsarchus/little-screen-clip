@@ -187,6 +187,8 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/lini-google-sans-code-OFL.txt"),
             include_str!("../third_party/lini-phosphor-MIT.txt"),
             include_str!("../third_party/d2-notices.txt"),
+            include_str!("../third_party/d2-upstream-notices.md"),
+            include_str!("../third_party/d2-mathjax-NOTICE.txt"),
             include_str!("../third_party/mathra-MIT.txt"),
             include_str!("../third_party/mathra-stix-OFL.txt"),
             include_str!("../third_party/graphviz-EPL-2.0.txt"),
