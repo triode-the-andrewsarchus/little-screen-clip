@@ -183,7 +183,7 @@ pub fn stamp_sam_mask_on_inpaint_mask(target: &mut GrayImage, source: &GrayImage
     let w = tw.min(sw);
     let h = th.min(sh);
 
-    let target_raw = target.as_mut();
+    let target_raw: &mut [u8] = target.as_mut();
     let source_raw = source.as_raw();
 
     if tw == sw && th == sh {
