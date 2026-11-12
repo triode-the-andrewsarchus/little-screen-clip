@@ -413,14 +413,19 @@ pub struct YiqView<'a> {
 }
 
 fn slice_to_maybe_uninit<T>(slice: &[T]) -> &[MaybeUninit<T>] {
-    // Safety: we know these are all initialized, so it's fine to transmute into a type that makes fewer assumptions
+    // SAFETY: MaybeUninit<T> has T's layout/alignment; initialized elements
+    // are valid as MaybeUninit<T>. The shared view cannot invalidate them and
+    // its lifetime/length are tied to the original slice, without allocation.
     unsafe { core::slice::from_raw_parts(slice.as_ptr() as _, slice.len()) }
 }
 
-/// # Safety:
-/// - You must only write initialized values into the slice.
+/// # Safety
+/// Only write initialized valid `T` values. All elements must remain valid even
+/// if the caller unwinds, because the original typed slice outlives this view.
 unsafe fn slice_to_maybe_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
-    // Safety: we know these are all initialized, so it's fine to transmute into a type that makes fewer assumptions
+    // SAFETY: MaybeUninit<T> has T's layout/alignment and the input is an
+    // exclusive live slice. The unsafe caller must preserve initialization and
+    // validity on return and unwind before the original typed slice is reused.
     unsafe { core::slice::from_raw_parts_mut(slice.as_mut_ptr() as _, slice.len()) }
 }
 
@@ -493,9 +498,10 @@ impl<'a> YiqView<'a> {
     /// be the case for effect plugin APIs (OpenFX and After Effects, which both leave it ambiguous).
     ///
     /// # Safety
-    /// - `buf` must be a valid pointer to a buffer of length `len`.
-    /// - All data within the portions of `buf` within each row, as specified by `row_bytes` and this view's dimensions,
-    ///   must be initialized and valid. Data outside of those portions need not be valid.
+    /// - BlitInfo must describe valid source rows, stride, rectangle and height
+    ///   without arithmetic overflow. All sampled RGB components must contain
+    ///   initialized valid T values; unused padding/alpha may remain uninitialized.
+    /// - The source buffer must not alias the exclusively borrowed output planes.
     pub unsafe fn set_from_strided_buffer_maybe_uninit<
         S: PixelFormat,
         T: Normalize,
@@ -516,7 +522,7 @@ impl<'a> YiqView<'a> {
         let row_length = blit_info.row_bytes / core::mem::size_of::<T>();
         assert!(num_components >= 3);
         assert!(
-            row_length * S::NUM_COMPONENTS >= blit_info.rect.width(),
+            blit_info.rect.right <= row_length / S::NUM_COMPONENTS,
             "Blit rectangle width exceeds rowbytes"
         );
 
@@ -543,6 +549,9 @@ impl<'a> YiqView<'a> {
             let (r_idx, g_idx, b_idx, ..) = P::RGBA_INDICES;
             for idx in 0..blit_info.rect.width() {
                 let src_pixel_idx = idx + blit_info.rect.left;
+                // SAFETY: the unsafe entry point's contract requires initialized
+                // RGB components in each selected source pixel. Slice indexing
+                // still checks storage bounds; padding and alpha are never read.
                 let rgba = unsafe {
                     T::to_norm(
                         simd,
@@ -581,6 +590,8 @@ impl<'a> YiqView<'a> {
             src_row_idx: usize,
             pixel_transform: F,
         ) {
+            // SAFETY: dispatch supplies a supported SIMD capability token; the
+            // source initialization contract and disjoint row borrows are unchanged.
             dispatch!(level, simd => unsafe { blit_row_simd_inner::<_, P, T, F>(simd, y, i, q, buf, blit_info, src_row_idx, pixel_transform) })
         }
 
@@ -623,6 +634,8 @@ impl<'a> YiqView<'a> {
                         if blit_info.rect.height() == 1 {
                             src_row_idx = 0;
                         }
+                        // SAFETY: this row uses the caller's initialized RGB
+                        // rectangle; ZipChunks lends disjoint output row slices.
                         unsafe {
                             blit_row_simd::<S, T, F>(
                                 ctx.level,
@@ -643,6 +656,9 @@ impl<'a> YiqView<'a> {
                 let (mut upper, mut lower) = self.split_at_row(num_upper_rows);
                 if let Some(upper) = upper.as_mut() {
                     upper.field = YiqField::Upper;
+                    // SAFETY: splitting only partitions the output planes;
+                    // the source buffer and its initialized-channel contract are
+                    // inherited unchanged from this unsafe entry point's caller.
                     unsafe {
                         upper.set_from_strided_buffer_maybe_uninit::<S, T, F>(
                             ctx,
@@ -655,6 +671,9 @@ impl<'a> YiqView<'a> {
 
                 if let Some(lower) = lower.as_mut() {
                     lower.field = YiqField::Lower;
+                    // SAFETY: splitting only partitions the output planes;
+                    // the source buffer and its initialized-channel contract are
+                    // inherited unchanged from this unsafe entry point's caller.
                     unsafe {
                         lower.set_from_strided_buffer_maybe_uninit::<S, T, F>(
                             ctx,
@@ -670,6 +689,9 @@ impl<'a> YiqView<'a> {
                 let (mut lower, mut upper) = self.split_at_row(num_lower_rows);
                 if let Some(upper) = upper.as_mut() {
                     upper.field = YiqField::Upper;
+                    // SAFETY: splitting only partitions the output planes;
+                    // the source buffer and its initialized-channel contract are
+                    // inherited unchanged from this unsafe entry point's caller.
                     unsafe {
                         upper.set_from_strided_buffer_maybe_uninit::<S, T, F>(
                             ctx,
@@ -682,6 +704,9 @@ impl<'a> YiqView<'a> {
 
                 if let Some(lower) = lower.as_mut() {
                     lower.field = YiqField::Lower;
+                    // SAFETY: splitting only partitions the output planes;
+                    // the source buffer and its initialized-channel contract are
+                    // inherited unchanged from this unsafe entry point's caller.
                     unsafe {
                         lower.set_from_strided_buffer_maybe_uninit::<S, T, F>(
                             ctx,
@@ -742,8 +767,12 @@ impl<'a> YiqView<'a> {
 
         assert!(S::NUM_COMPONENTS >= 3);
         assert!(
-            blit_info.row_bytes / core::mem::size_of::<T>() * S::NUM_COMPONENTS
-                >= blit_info.rect.width(),
+            blit_info
+                .destination
+                .0
+                .checked_add(blit_info.rect.width())
+                .is_some_and(|end| end
+                    <= blit_info.row_bytes / core::mem::size_of::<T>() / S::NUM_COMPONENTS),
             "Blit rectangle width exceeds rowbytes"
         );
         assert_eq!(
@@ -1005,6 +1034,9 @@ impl<'a> YiqView<'a> {
     ) {
         self.write_to_strided_buffer_maybe_uninit::<S, T, F>(
             ctx,
+            // SAFETY: this writer only stores initialized T values and never
+            // writes uninitialized markers, including when bounds checks panic.
+            // Unwritten padding retains its originally initialized contents.
             unsafe { slice_to_maybe_uninit_mut(dst) },
             blit_info,
             deinterlace_mode,
@@ -1815,6 +1847,34 @@ mod tests {
     }
 
     // ---- row_bytes padding ----
+
+    #[test]
+    fn rowbytes_rejects_pixels_outside_the_declared_stride() {
+        for reading in [true, false] {
+            let mut planes = vec![0.0; YiqView::buf_length_for((2, 1), YiqField::Both)];
+            let mut view = YiqView::from_parts(&mut planes, (2, 1), YiqField::Both);
+            // Storage is large enough, but the declared row only holds one pixel.
+            let mut pixels = [0u8; 8];
+            let blit = BlitInfo::from_full_frame(2, 1, 4);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if reading {
+                    view.set_from_strided_buffer::<Rgbx, u8, _>(ctx(), &pixels, blit, ());
+                } else {
+                    view.write_to_strided_buffer::<Rgbx, u8, _>(
+                        ctx(),
+                        &mut pixels,
+                        blit,
+                        DeinterlaceMode::Bob,
+                        (),
+                    );
+                }
+            }));
+            assert!(
+                result.is_err(),
+                "invalid stride was accepted; reading={reading}"
+            );
+        }
+    }
 
     #[test]
     fn rowbytes_padding() {
