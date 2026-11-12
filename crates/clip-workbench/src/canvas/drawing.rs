@@ -465,7 +465,8 @@ pub(super) fn render_node_card(
     }
 
     // Inline editable properties inside card (strictly placed below pins, no overlap!)
-    let has_custom_preview = node_telemetry.contains_key(&node.id);
+    let has_custom_preview = node_telemetry.contains_key(&node.id)
+        || super::custom_ui::extra_custom_ui_height(node, node_telemetry.get(&node.id)) > 0.0;
     let response = if is_script_node || !node.props.is_empty() || has_custom_preview {
         let content_min = Pos2::new(rect.min.x + 12.0 * zoom, props_top);
         let bottom_pad = if node_previews.contains_key(&node.id) {
@@ -643,6 +644,14 @@ fn render_node_properties(
             | NodeKind::SetRightHand
             | NodeKind::SaveToDisk
             | NodeKind::PasteToApp
+            | NodeKind::OpenAudioStudio
+            | NodeKind::OpenImageStudio
+            | NodeKind::OpenTextStudio
+            | NodeKind::OpenSpreadsheetStudio
+            | NodeKind::OpenMidiStudio
+            | NodeKind::OpenPdfStudio
+            | NodeKind::OpenModel3dStudio
+            | NodeKind::OpenExternalProgram
     ) {
         super::custom_ui::render_sink_custom_ui(ui, node, telemetry, zoom, palette, &mut response);
     } else if matches!(
@@ -1071,6 +1080,14 @@ pub(super) fn get_node_category_color(kind: &NodeKind, palette: &AppPalette) -> 
         NodeKind::SetLeftHand
         | NodeKind::SetRightHand
         | NodeKind::SaveToDisk
-        | NodeKind::PasteToApp => hex_to_c32(&palette.diff_del),
+        | NodeKind::PasteToApp
+        | NodeKind::OpenAudioStudio
+        | NodeKind::OpenImageStudio
+        | NodeKind::OpenTextStudio
+        | NodeKind::OpenSpreadsheetStudio
+        | NodeKind::OpenMidiStudio
+        | NodeKind::OpenPdfStudio
+        | NodeKind::OpenModel3dStudio
+        | NodeKind::OpenExternalProgram => hex_to_c32(&palette.diff_del),
     }
 }

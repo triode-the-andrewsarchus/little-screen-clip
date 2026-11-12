@@ -135,6 +135,8 @@ fn rendered_save_as_dialog_writes_reloadable_recipe_in_private_directory() {
         available_recipes: Vec::new(),
         selected_recipe_name: "Original Recipe".to_owned(),
         last_run_duration_ms: None,
+        pending_open_studios: Vec::new(),
+        pending_external_opens: Vec::new(),
     };
     let recipes_dir = tempfile::tempdir().unwrap();
     let ctx = egui::Context::default();
@@ -218,6 +220,8 @@ fn daemon_pipeline_response_restores_previews_and_output_status() {
         node_telemetry: Default::default(),
         output_title: Some("once".to_owned()),
         duration_ms: 17,
+        open_studios: Vec::new(),
+        external_opens: Vec::new(),
     });
 
     assert_eq!(

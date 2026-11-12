@@ -71,7 +71,18 @@ impl NodeTemplate {
             }
             "file_sha256" | "file_zip" | "file_extract_name" => "Files",
             "script_python" | "script_bash" => "Script",
-            "sink_lh" | "sink_rh" | "sink_save_disk" | "sink_paste_app" => "Sink",
+            "sink_lh"
+            | "sink_rh"
+            | "sink_save_disk"
+            | "sink_paste_app"
+            | "sink_external_program" => "Sink",
+            "sink_audio_studio"
+            | "sink_image_studio"
+            | "sink_text_studio"
+            | "sink_spreadsheet_studio"
+            | "sink_midi_studio"
+            | "sink_pdf_studio"
+            | "sink_model3d_studio" => "Sink/Studios",
             _ => self.category,
         }
     }
@@ -619,6 +630,96 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         inputs: &[("In", PortType::Any)],
         outputs: &[],
         default_props: &[],
+    },
+    NodeTemplate {
+        id: "sink_audio_studio",
+        name: "Open in Audio Studio",
+        category: "Sink",
+        description: "Automatically opens the generated audio in the built-in Audio Studio on run",
+        tags: &["sink", "studio", "audio", "wav", "preview", "open"],
+        kind: NodeKind::OpenAudioStudio,
+        inputs: &[("Audio", PortType::Audio)],
+        outputs: &[],
+        default_props: &[],
+    },
+    NodeTemplate {
+        id: "sink_image_studio",
+        name: "Open in Image Studio",
+        category: "Sink",
+        description: "Automatically opens the generated image in the built-in Image Studio on run",
+        tags: &["sink", "studio", "image", "preview", "open"],
+        kind: NodeKind::OpenImageStudio,
+        inputs: &[("Image", PortType::Image)],
+        outputs: &[],
+        default_props: &[],
+    },
+    NodeTemplate {
+        id: "sink_text_studio",
+        name: "Open in Text Studio",
+        category: "Sink",
+        description: "Automatically opens the generated text in the built-in Text Studio on run",
+        tags: &["sink", "studio", "text", "preview", "open"],
+        kind: NodeKind::OpenTextStudio,
+        inputs: &[("Text", PortType::Text)],
+        outputs: &[],
+        default_props: &[],
+    },
+    NodeTemplate {
+        id: "sink_spreadsheet_studio",
+        name: "Open in Spreadsheet Studio",
+        category: "Sink",
+        description: "Automatically opens CSV/table data in the built-in Spreadsheet Studio on run",
+        tags: &["sink", "studio", "spreadsheet", "csv", "table", "open"],
+        kind: NodeKind::OpenSpreadsheetStudio,
+        inputs: &[("In", PortType::Any)],
+        outputs: &[],
+        default_props: &[],
+    },
+    NodeTemplate {
+        id: "sink_midi_studio",
+        name: "Open in MIDI Studio",
+        category: "Sink",
+        description: "Automatically opens a MIDI file in the built-in MIDI Studio on run",
+        tags: &["sink", "studio", "midi", "preview", "open"],
+        kind: NodeKind::OpenMidiStudio,
+        inputs: &[("File", PortType::FilePath)],
+        outputs: &[],
+        default_props: &[],
+    },
+    NodeTemplate {
+        id: "sink_pdf_studio",
+        name: "Open in PDF Studio",
+        category: "Sink",
+        description: "Automatically opens a PDF file in the built-in PDF Studio on run",
+        tags: &["sink", "studio", "pdf", "preview", "open"],
+        kind: NodeKind::OpenPdfStudio,
+        inputs: &[("File", PortType::FilePath)],
+        outputs: &[],
+        default_props: &[],
+    },
+    NodeTemplate {
+        id: "sink_model3d_studio",
+        name: "Open in 3D Studio",
+        category: "Sink",
+        description: "Automatically opens a 3D model or Gaussian splat in the built-in 3D Studio on run",
+        tags: &["sink", "studio", "3d", "model", "splat", "mesh", "open"],
+        kind: NodeKind::OpenModel3dStudio,
+        inputs: &[("File", PortType::FilePath)],
+        outputs: &[],
+        default_props: &[],
+    },
+    NodeTemplate {
+        id: "sink_external_program",
+        name: "External Program",
+        category: "Sink",
+        description: "Opens the output file with the system default handler or a custom binary with pre/post args",
+        tags: &[
+            "sink", "external", "program", "open", "xdg-open", "cli", "app",
+        ],
+        kind: NodeKind::OpenExternalProgram,
+        inputs: &[("In", PortType::Any)],
+        outputs: &[],
+        default_props: &[("program", ""), ("pre_args", ""), ("post_args", "")],
     },
 ];
 

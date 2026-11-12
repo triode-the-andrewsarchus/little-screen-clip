@@ -891,6 +891,8 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                                 let duration_ms = started.elapsed().as_millis();
                                 let node_previews = pipe_res.node_previews.clone();
                                 let node_telemetry = pipe_res.node_telemetry.clone();
+                                let open_studios = pipe_res.open_studios.clone();
+                                let external_opens = pipe_res.external_opens.clone();
                                 let output_title = pipe_res
                                     .left_hand_item
                                     .as_ref()
@@ -902,6 +904,8 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                                             node_telemetry,
                                             output_title,
                                             duration_ms,
+                                            open_studios,
+                                            external_opens,
                                         }
                                     }
                                     other => other,

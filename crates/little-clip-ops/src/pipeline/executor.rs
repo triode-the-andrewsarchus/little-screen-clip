@@ -29,6 +29,85 @@ fn sample_mod_value(inputs: &HashMap<String, PortValue>, min: f64, max: f64) -> 
     None
 }
 
+/// Splits an argument string on whitespace while preserving single/double-quoted segments and `\` escapes.
+pub fn split_shell_args(input: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_token = false;
+    let mut quote: Option<char> = None;
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else if c == '\\'
+                    && q == '"'
+                    && let Some(&next) = chars.peek()
+                {
+                    chars.next();
+                    current.push(next);
+                } else {
+                    current.push(c);
+                }
+            }
+            None => {
+                if c.is_whitespace() {
+                    if in_token {
+                        args.push(std::mem::take(&mut current));
+                        in_token = false;
+                    }
+                } else if c == '\'' || c == '"' {
+                    quote = Some(c);
+                    in_token = true;
+                } else if c == '\\'
+                    && let Some(&next) = chars.peek()
+                {
+                    chars.next();
+                    current.push(next);
+                    in_token = true;
+                } else {
+                    current.push(c);
+                    in_token = true;
+                }
+            }
+        }
+    }
+    if in_token {
+        args.push(current);
+    }
+    args
+}
+
+fn materialize_port_to_file(
+    workspace: &Workspace,
+    val: &PortValue,
+    node_title: &str,
+) -> Result<PathBuf, PipelineError> {
+    match val {
+        PortValue::AudioPath(p)
+        | PortValue::ImagePath(p)
+        | PortValue::SpectralPath(p)
+        | PortValue::FilePath(p) => Ok(p.clone()),
+        PortValue::FileBatch(batch) => batch.first().cloned().ok_or_else(|| {
+            PipelineError::NodeFailed(node_title.to_string(), "Empty file batch".to_string())
+        }),
+        PortValue::Text(t) => {
+            let out_path = workspace.path().join(format!("ext_{}.txt", Uuid::new_v4()));
+            workspace.write_output(&out_path, t.as_bytes())?;
+            Ok(out_path)
+        }
+        PortValue::Automation(pts) => {
+            let out_path = workspace
+                .path()
+                .join(format!("ext_{}.json", Uuid::new_v4()));
+            let json = serde_json::to_string_pretty(pts).unwrap_or_default();
+            workspace.write_output(&out_path, json.as_bytes())?;
+            Ok(out_path)
+        }
+    }
+}
+
 /// Errors that can occur during graph compilation or node execution.
 #[derive(Debug, Error)]
 pub enum PipelineError {
@@ -1363,6 +1442,252 @@ else:
                 result.left_hand_item = Some(clip);
                 result.should_paste = true;
             }
+            NodeKind::OpenAudioStudio => {
+                let in_val = inputs
+                    .values()
+                    .next()
+                    .ok_or_else(|| PipelineError::MissingInput("Audio".to_string()))?;
+                let path = match in_val {
+                    PortValue::AudioPath(p) | PortValue::FilePath(p) => p.clone(),
+                    PortValue::FileBatch(batch) => batch.first().cloned().ok_or_else(|| {
+                        PipelineError::NodeFailed(
+                            node.title.clone(),
+                            "Empty file batch".to_string(),
+                        )
+                    })?,
+                    _ => {
+                        return Err(PipelineError::NodeFailed(
+                            node.title.clone(),
+                            "Audio Studio sink requires an audio file input".to_string(),
+                        ));
+                    }
+                };
+                let auto_open = node.props.get("auto_open").is_none_or(|v| v != "false");
+                preview = Some(format!(
+                    "{}: {}",
+                    if auto_open {
+                        "Open Audio Studio"
+                    } else {
+                        "Audio Studio (muted)"
+                    },
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("audio")
+                ));
+                if auto_open {
+                    result
+                        .open_studios
+                        .push(little_clip_core::ipc::StudioOpenTarget {
+                            studio: little_clip_core::ipc::StudioTarget::Audio,
+                            path: Some(path),
+                            text: None,
+                            title: node.title.clone(),
+                        });
+                }
+            }
+            NodeKind::OpenImageStudio => {
+                let in_val = inputs
+                    .values()
+                    .next()
+                    .ok_or_else(|| PipelineError::MissingInput("Image".to_string()))?;
+                let path = match in_val {
+                    PortValue::ImagePath(p) | PortValue::FilePath(p) => p.clone(),
+                    PortValue::FileBatch(batch) => batch.first().cloned().ok_or_else(|| {
+                        PipelineError::NodeFailed(
+                            node.title.clone(),
+                            "Empty file batch".to_string(),
+                        )
+                    })?,
+                    _ => {
+                        return Err(PipelineError::NodeFailed(
+                            node.title.clone(),
+                            "Image Studio sink requires an image input".to_string(),
+                        ));
+                    }
+                };
+                let auto_open = node.props.get("auto_open").is_none_or(|v| v != "false");
+                preview = Some(format!(
+                    "{}: {}",
+                    if auto_open {
+                        "Open Image Studio"
+                    } else {
+                        "Image Studio (muted)"
+                    },
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("image")
+                ));
+                if auto_open {
+                    result
+                        .open_studios
+                        .push(little_clip_core::ipc::StudioOpenTarget {
+                            studio: little_clip_core::ipc::StudioTarget::Image,
+                            path: Some(path),
+                            text: None,
+                            title: node.title.clone(),
+                        });
+                }
+            }
+            NodeKind::OpenTextStudio => {
+                let in_val = inputs
+                    .values()
+                    .next()
+                    .ok_or_else(|| PipelineError::MissingInput("Text".to_string()))?;
+                let (path, text) = match in_val {
+                    PortValue::FilePath(p) => (Some(p.clone()), None),
+                    PortValue::FileBatch(batch) => (batch.first().cloned(), None),
+                    PortValue::Text(t) => (None, Some(t.clone())),
+                    PortValue::Automation(pts) => (
+                        None,
+                        Some(serde_json::to_string_pretty(pts).unwrap_or_default()),
+                    ),
+                    _ => {
+                        return Err(PipelineError::NodeFailed(
+                            node.title.clone(),
+                            "Text Studio sink requires text or a text file".to_string(),
+                        ));
+                    }
+                };
+                let auto_open = node.props.get("auto_open").is_none_or(|v| v != "false");
+                preview = Some(if auto_open {
+                    "Open Text Studio".to_string()
+                } else {
+                    "Text Studio (muted)".to_string()
+                });
+                if auto_open {
+                    result
+                        .open_studios
+                        .push(little_clip_core::ipc::StudioOpenTarget {
+                            studio: little_clip_core::ipc::StudioTarget::Text,
+                            path,
+                            text,
+                            title: node.title.clone(),
+                        });
+                }
+            }
+            NodeKind::OpenSpreadsheetStudio => {
+                let in_val = inputs
+                    .values()
+                    .next()
+                    .ok_or_else(|| PipelineError::MissingInput("In".to_string()))?;
+                let (path, text) = match in_val {
+                    PortValue::FilePath(p) => (Some(p.clone()), None),
+                    PortValue::FileBatch(batch) => (batch.first().cloned(), None),
+                    PortValue::Text(t) => (None, Some(t.clone())),
+                    _ => {
+                        return Err(PipelineError::NodeFailed(
+                            node.title.clone(),
+                            "Spreadsheet Studio sink requires CSV/TSV text or a spreadsheet file"
+                                .to_string(),
+                        ));
+                    }
+                };
+                let auto_open = node.props.get("auto_open").is_none_or(|v| v != "false");
+                preview = Some(if auto_open {
+                    "Open Spreadsheet Studio".to_string()
+                } else {
+                    "Spreadsheet Studio (muted)".to_string()
+                });
+                if auto_open {
+                    result
+                        .open_studios
+                        .push(little_clip_core::ipc::StudioOpenTarget {
+                            studio: little_clip_core::ipc::StudioTarget::Spreadsheet,
+                            path,
+                            text,
+                            title: node.title.clone(),
+                        });
+                }
+            }
+            NodeKind::OpenMidiStudio | NodeKind::OpenPdfStudio | NodeKind::OpenModel3dStudio => {
+                let in_val = inputs
+                    .values()
+                    .next()
+                    .ok_or_else(|| PipelineError::MissingInput("File".to_string()))?;
+                let path = match in_val {
+                    PortValue::FilePath(p) | PortValue::AudioPath(p) | PortValue::ImagePath(p) => {
+                        p.clone()
+                    }
+                    PortValue::FileBatch(batch) => batch.first().cloned().ok_or_else(|| {
+                        PipelineError::NodeFailed(
+                            node.title.clone(),
+                            "Empty file batch".to_string(),
+                        )
+                    })?,
+                    PortValue::Text(t) if Path::new(t.trim()).is_file() => PathBuf::from(t.trim()),
+                    _ => {
+                        return Err(PipelineError::NodeFailed(
+                            node.title.clone(),
+                            "Studio sink requires a file path input".to_string(),
+                        ));
+                    }
+                };
+                let (studio, label) = match node.kind {
+                    NodeKind::OpenMidiStudio => {
+                        (little_clip_core::ipc::StudioTarget::Midi, "MIDI Studio")
+                    }
+                    NodeKind::OpenPdfStudio => {
+                        (little_clip_core::ipc::StudioTarget::Pdf, "PDF Studio")
+                    }
+                    _ => (little_clip_core::ipc::StudioTarget::Model3d, "3D Studio"),
+                };
+                let auto_open = node.props.get("auto_open").is_none_or(|v| v != "false");
+                preview = Some(format!(
+                    "{}: {}",
+                    if auto_open {
+                        format!("Open {label}")
+                    } else {
+                        format!("{label} (muted)")
+                    },
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("file")
+                ));
+                if auto_open {
+                    result
+                        .open_studios
+                        .push(little_clip_core::ipc::StudioOpenTarget {
+                            studio,
+                            path: Some(path),
+                            text: None,
+                            title: node.title.clone(),
+                        });
+                }
+            }
+            NodeKind::OpenExternalProgram => {
+                let in_val = inputs
+                    .values()
+                    .next()
+                    .ok_or_else(|| PipelineError::MissingInput("In".to_string()))?;
+                let file_path = materialize_port_to_file(workspace, in_val, &node.title)?;
+                let program = node
+                    .props
+                    .get("program")
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+                let pre_args =
+                    split_shell_args(node.props.get("pre_args").map(String::as_str).unwrap_or(""));
+                let post_args = split_shell_args(
+                    node.props
+                        .get("post_args")
+                        .map(String::as_str)
+                        .unwrap_or(""),
+                );
+                let prog_label = if program.is_empty() {
+                    "default handler"
+                } else {
+                    program.as_str()
+                };
+                preview = Some(format!(
+                    "Open ({prog_label}): {}",
+                    file_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("file")
+                ));
+                result
+                    .external_opens
+                    .push(little_clip_core::ipc::ExternalOpenTarget {
+                        program,
+                        pre_args,
+                        file_path,
+                        post_args,
+                    });
+            }
         }
 
         Ok((out, preview))
@@ -2189,5 +2514,86 @@ printf "%s!BASH!" "$data"
         let _ = fs::remove_file(img1_path);
         let _ = fs::remove_file(img2_path);
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn split_shell_args_respects_quotes_and_escapes() {
+        assert_eq!(
+            split_shell_args(r#"--title "My File" -n 'single quoted' --flag\=1"#),
+            vec!["--title", "My File", "-n", "single quoted", "--flag=1"]
+        );
+        assert!(split_shell_args("   ").is_empty());
+    }
+
+    #[test]
+    fn studio_and_external_program_sinks_emit_retained_targets() {
+        use super::super::catalog::{find_template, instantiate_template};
+        use super::super::types::Connection;
+        use little_clip_core::ipc::StudioTarget;
+
+        let t_const = find_template("source_const_text").unwrap();
+        let t_text_studio = find_template("sink_text_studio").unwrap();
+        let t_ext = find_template("sink_external_program").unwrap();
+
+        let mut n_const = instantiate_template(t_const, [0.0, 0.0]);
+        n_const
+            .props
+            .insert("text".to_string(), "hello studio & external".to_string());
+
+        let n_studio = instantiate_template(t_text_studio, [200.0, 0.0]);
+
+        let mut n_ext = instantiate_template(t_ext, [200.0, 150.0]);
+        n_ext
+            .props
+            .insert("program".to_string(), "/bin/foo".to_string());
+        n_ext
+            .props
+            .insert("pre_args".to_string(), r#"--mode "fast""#.to_string());
+        n_ext
+            .props
+            .insert("post_args".to_string(), "--wait".to_string());
+
+        let graph = NodeGraph {
+            nodes: vec![n_const.clone(), n_studio.clone(), n_ext.clone()],
+            connections: vec![
+                Connection {
+                    from_node: n_const.id,
+                    from_pin: "Text".to_string(),
+                    to_node: n_studio.id,
+                    to_pin: "Text".to_string(),
+                },
+                Connection {
+                    from_node: n_const.id,
+                    from_pin: "Text".to_string(),
+                    to_node: n_ext.id,
+                    to_pin: "In".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mgr = SlotManager::default();
+        let res = PipelineExecutor::new(&graph, &mgr)
+            .execute()
+            .expect("pipeline execution failed");
+
+        assert_eq!(res.open_studios.len(), 1);
+        assert_eq!(res.open_studios[0].studio, StudioTarget::Text);
+        assert_eq!(
+            res.open_studios[0].text.as_deref(),
+            Some("hello studio & external")
+        );
+
+        assert_eq!(res.external_opens.len(), 1);
+        let ext = &res.external_opens[0];
+        assert_eq!(ext.program, "/bin/foo");
+        assert_eq!(ext.pre_args, vec!["--mode", "fast"]);
+        assert_eq!(ext.post_args, vec!["--wait"]);
+        assert!(ext.file_path.is_file(), "retained temp file should exist");
+        assert_eq!(
+            std::fs::read_to_string(&ext.file_path).unwrap(),
+            "hello studio & external"
+        );
+        let _ = std::fs::remove_dir_all(ext.file_path.parent().unwrap());
     }
 }

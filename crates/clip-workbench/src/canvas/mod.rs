@@ -70,6 +70,8 @@ pub struct NodeCanvasState {
     pub available_recipes: Vec<Recipe>,
     pub selected_recipe_name: String,
     pub last_run_duration_ms: Option<u128>,
+    pub pending_open_studios: Vec<little_clip_core::ipc::StudioOpenTarget>,
+    pub pending_external_opens: Vec<little_clip_core::ipc::ExternalOpenTarget>,
 }
 
 impl NodeCanvasState {
@@ -125,6 +127,8 @@ impl NodeCanvasState {
             available_recipes: recipes,
             selected_recipe_name: sel_name,
             last_run_duration_ms: None,
+            pending_open_studios: Vec::new(),
+            pending_external_opens: Vec::new(),
         }
     }
 
@@ -325,10 +329,14 @@ impl NodeCanvasState {
                 node_telemetry,
                 output_title,
                 duration_ms,
+                open_studios,
+                external_opens,
             } => {
                 self.node_previews = node_previews;
                 self.node_telemetry = node_telemetry;
                 self.last_run_duration_ms = Some(duration_ms);
+                self.pending_open_studios = open_studios;
+                self.pending_external_opens = external_opens;
                 let output = output_title.as_deref().unwrap_or("Done");
                 self.status_message = Some((
                     format!("Executed in {}ms. Output: {}", duration_ms, output),

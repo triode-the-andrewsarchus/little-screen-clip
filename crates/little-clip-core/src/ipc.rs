@@ -172,6 +172,43 @@ pub struct NodeTelemetry {
     pub text_preview: Option<String>,
 }
 
+/// Built-in workbench studio target requested by a pipeline studio sink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StudioTarget {
+    Audio,
+    Image,
+    Text,
+    Spreadsheet,
+    Midi,
+    Pdf,
+    Model3d,
+}
+
+/// Request from a pipeline studio sink to open a generated output in a built-in studio.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StudioOpenTarget {
+    pub studio: StudioTarget,
+    #[serde(default)]
+    pub path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub text: Option<String>,
+    pub title: String,
+}
+
+/// Request from a pipeline external-program sink to open a materialized temp file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalOpenTarget {
+    /// Binary path or application name on `PATH`; empty means system default handler.
+    #[serde(default)]
+    pub program: String,
+    #[serde(default)]
+    pub pre_args: Vec<String>,
+    pub file_path: std::path::PathBuf,
+    #[serde(default)]
+    pub post_args: Vec<String>,
+}
+
 /// Response messages returned by `little-clipd` across the IPC socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcResponse {
@@ -201,6 +238,10 @@ pub enum IpcResponse {
         node_telemetry: std::collections::HashMap<uuid::Uuid, NodeTelemetry>,
         output_title: Option<String>,
         duration_ms: u128,
+        #[serde(default)]
+        open_studios: Vec<StudioOpenTarget>,
+        #[serde(default)]
+        external_opens: Vec<ExternalOpenTarget>,
     },
     /// List of registered recipe identifiers.
     RecipeList(Vec<String>),
@@ -500,6 +541,8 @@ mod tests {
             node_telemetry: Default::default(),
             output_title: Some("result".to_owned()),
             duration_ms: 12,
+            open_studios: Vec::new(),
+            external_opens: Vec::new(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(!json.contains("payload"));

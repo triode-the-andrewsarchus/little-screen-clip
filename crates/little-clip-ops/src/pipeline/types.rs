@@ -27,6 +27,10 @@ pub struct PipelineExecutionResult {
     pub node_previews: HashMap<Uuid, String>,
     /// Per-node rich execution telemetry (spectra, waveforms, thumbnails, text previews).
     pub node_telemetry: HashMap<Uuid, little_clip_core::ipc::NodeTelemetry>,
+    /// Built-in workbench studio sessions requested to open automatically after execution.
+    pub open_studios: Vec<little_clip_core::ipc::StudioOpenTarget>,
+    /// External programs requested to open materialized output files after execution.
+    pub external_opens: Vec<little_clip_core::ipc::ExternalOpenTarget>,
 }
 
 /// Data type classification for node graph input and output pins.
@@ -287,6 +291,14 @@ pub enum NodeKind {
     SetRightHand,
     SaveToDisk,
     PasteToApp,
+    OpenAudioStudio,
+    OpenImageStudio,
+    OpenTextStudio,
+    OpenSpreadsheetStudio,
+    OpenMidiStudio,
+    OpenPdfStudio,
+    OpenModel3dStudio,
+    OpenExternalProgram,
 }
 
 /// An input or output connection pin on a node.

@@ -129,6 +129,14 @@ impl Workspace {
                 _ => {}
             }
         }
+        for req in &mut result.open_studios {
+            if let Some(path) = req.path.as_mut() {
+                paths.push(path);
+            }
+        }
+        for req in &mut result.external_opens {
+            paths.push(&mut req.file_path);
+        }
         paths.retain(|path| path.starts_with(&self.path));
         if paths.is_empty() {
             return Ok(());

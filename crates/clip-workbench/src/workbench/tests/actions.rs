@@ -555,12 +555,47 @@ fn background_pipeline_completion_reaches_canvas_after_view_switch() {
                 node_telemetry: Default::default(),
                 output_title: Some("output".into()),
                 duration_ms: 17,
+                open_studios: Vec::new(),
+                external_opens: Vec::new(),
             })
         },
     );
     app.view = WorkbenchView::Palette;
     finish_daemon_mutation(&mut app, &ctx);
     assert_eq!(app.canvas_state.last_run_duration_ms, Some(17));
+}
+
+#[test]
+fn pipeline_studio_sink_opens_matching_viewer_on_completion() {
+    let ctx = egui::Context::default();
+    let mut app = test_workbench_app(None, VecDeque::new());
+    let jobs = BackgroundJobs::new(1, 1);
+    let audio_path = std::env::temp_dir().join("pipeline_studio_test.wav");
+    app.submit_daemon_mutation_with(
+        IpcRequest::ExecuteGraphYaml {
+            yaml: "fixture".into(),
+        },
+        DaemonMutationKind::Pipeline,
+        &jobs,
+        move |_| {
+            Ok(IpcResponse::PipelineExecuted {
+                node_previews: Default::default(),
+                node_telemetry: Default::default(),
+                output_title: Some("audio".into()),
+                duration_ms: 9,
+                open_studios: vec![little_clip_core::ipc::StudioOpenTarget {
+                    studio: little_clip_core::ipc::StudioTarget::Audio,
+                    path: Some(audio_path.clone()),
+                    text: None,
+                    title: "Open in Audio Studio".into(),
+                }],
+                external_opens: Vec::new(),
+            })
+        },
+    );
+    app.view = WorkbenchView::NodeMachine;
+    finish_daemon_mutation(&mut app, &ctx);
+    assert!(matches!(app.viewer, Some(ViewerSession::Audio(_))));
 }
 
 fn finish_daemon_mutation(app: &mut WorkbenchApp, ctx: &egui::Context) -> usize {

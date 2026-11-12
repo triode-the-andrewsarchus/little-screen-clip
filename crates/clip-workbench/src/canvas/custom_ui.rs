@@ -84,6 +84,13 @@ pub(super) fn extra_custom_ui_height(
         | NodeKind::SetRightHand
         | NodeKind::SaveToDisk
         | NodeKind::PasteToApp
+        | NodeKind::OpenAudioStudio
+        | NodeKind::OpenImageStudio
+        | NodeKind::OpenTextStudio
+        | NodeKind::OpenSpreadsheetStudio
+        | NodeKind::OpenMidiStudio
+        | NodeKind::OpenPdfStudio
+        | NodeKind::OpenModel3dStudio
         | NodeKind::ImageMagickChain
         | NodeKind::AudioFilterChain => {
             let mut h = 30.0;
@@ -94,6 +101,7 @@ pub(super) fn extra_custom_ui_height(
             }
             h
         }
+        NodeKind::OpenExternalProgram => 136.0,
         NodeKind::PythonScript | NodeKind::BashCommand => {
             let mut h = 26.0;
             if telemetry.is_some_and(|t| t.text_preview.is_some()) {
@@ -2047,6 +2055,81 @@ pub(super) fn render_sink_custom_ui(
                     if focus_back { "true" } else { "false" }.into(),
                 ));
             }
+        }
+        NodeKind::OpenAudioStudio
+        | NodeKind::OpenImageStudio
+        | NodeKind::OpenTextStudio
+        | NodeKind::OpenSpreadsheetStudio
+        | NodeKind::OpenMidiStudio
+        | NodeKind::OpenPdfStudio
+        | NodeKind::OpenModel3dStudio => {
+            let studio_name = match node.kind {
+                NodeKind::OpenAudioStudio => "Audio Studio",
+                NodeKind::OpenImageStudio => "Image Studio",
+                NodeKind::OpenTextStudio => "Text Studio",
+                NodeKind::OpenSpreadsheetStudio => "Spreadsheet Studio",
+                NodeKind::OpenMidiStudio => "MIDI Studio",
+                NodeKind::OpenPdfStudio => "PDF Studio",
+                _ => "3D Studio",
+            };
+            let mut auto_open = node.props.get("auto_open").is_none_or(|v| v != "false");
+            if ui
+                .checkbox(&mut auto_open, format!("Auto-open {studio_name} on run"))
+                .changed()
+            {
+                response.property_edits.push((
+                    "auto_open".into(),
+                    if auto_open { "true" } else { "false" }.into(),
+                ));
+            }
+        }
+        NodeKind::OpenExternalProgram => {
+            let fields = [
+                ("program", "Program", "default handler (xdg-open)"),
+                ("pre_args", "Pre args", "args before <file>"),
+                ("post_args", "Post args", "args after <file>"),
+            ];
+            for (key, label, hint) in fields {
+                let mut val = node.props.get(key).cloned().unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{label}:"))
+                            .size(10.5 * zoom.clamp(0.8, 1.3))
+                            .color(hex_to_c32(&palette.colors.text_muted)),
+                    );
+                    let te = ui.add(
+                        egui::TextEdit::singleline(&mut val)
+                            .id(ui.make_persistent_id((node.id, key)))
+                            .desired_width(ui.available_width())
+                            .hint_text(hint),
+                    );
+                    if te.has_focus() {
+                        response.focused_property = Some(te.id);
+                    }
+                    if te.changed() {
+                        response.property_edits.push((key.into(), val));
+                    }
+                });
+            }
+            let prog = node
+                .props
+                .get("program")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("xdg-open");
+            let pre = node.props.get("pre_args").map(|s| s.trim()).unwrap_or("");
+            let post = node.props.get("post_args").map(|s| s.trim()).unwrap_or("");
+            let preview_cmd = [prog, pre, "<tmp_file>", post]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            ui.label(
+                egui::RichText::new(preview_cmd)
+                    .monospace()
+                    .size(9.5 * zoom.clamp(0.8, 1.3))
+                    .color(hex_to_c32(&palette.colors.text_muted)),
+            );
         }
         _ => {}
     }
