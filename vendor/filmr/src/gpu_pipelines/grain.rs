@@ -4,7 +4,7 @@ use crate::gpu::{GpuBuffer, GpuContext};
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GrainUniforms {
     pub width: u32,
     pub height: u32,
@@ -17,8 +17,6 @@ pub struct GrainUniforms {
     pub shadow_noise: f32,
     pub highlight_coarseness: f32,
 }
-unsafe impl bytemuck::Zeroable for GrainUniforms {}
-unsafe impl bytemuck::Pod for GrainUniforms {}
 
 #[cfg(feature = "compute-gpu")]
 pub struct GrainPipeline {

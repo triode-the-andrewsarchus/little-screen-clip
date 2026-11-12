@@ -107,7 +107,7 @@ impl DevelopPipeline {
         });
 
         #[repr(C)]
-        #[derive(Copy, Clone)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
         struct GpuCurve {
             d_min: f32,
             d_max: f32,
@@ -118,8 +118,6 @@ impl DevelopPipeline {
             _pad1: f32,
             _pad2: f32,
         }
-        unsafe impl bytemuck::Zeroable for GpuCurve {}
-        unsafe impl bytemuck::Pod for GpuCurve {}
 
         impl From<&crate::film::SegmentedCurve> for GpuCurve {
             fn from(c: &crate::film::SegmentedCurve) -> Self {
@@ -137,7 +135,7 @@ impl DevelopPipeline {
         }
 
         #[repr(C)]
-        #[derive(Copy, Clone)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
         struct Uniforms {
             spectral_r: [f32; 4],
             spectral_g: [f32; 4],
@@ -156,8 +154,6 @@ impl DevelopPipeline {
             height: u32,
             _pad: [u32; 2],
         }
-        unsafe impl bytemuck::Zeroable for Uniforms {}
-        unsafe impl bytemuck::Pod for Uniforms {}
 
         let sm = spectral_matrix;
         let cm = film.color_matrix;

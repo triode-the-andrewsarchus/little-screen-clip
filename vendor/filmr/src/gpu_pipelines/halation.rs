@@ -182,7 +182,7 @@ impl HalationPipeline {
         });
 
         #[repr(C)]
-        #[derive(Copy, Clone)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
         struct Uniforms {
             width: u32,
             height: u32,
@@ -197,8 +197,6 @@ impl HalationPipeline {
             _pad3: f32,
             _pad4: f32,
         }
-        unsafe impl bytemuck::Zeroable for Uniforms {}
-        unsafe impl bytemuck::Pod for Uniforms {}
 
         let sigma = width as f32 * film.halation_sigma;
         let uniforms = Uniforms {

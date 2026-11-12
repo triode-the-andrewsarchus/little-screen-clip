@@ -94,7 +94,7 @@ impl LightLeakPipeline {
         }
 
         #[repr(C)]
-        #[derive(Copy, Clone)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
         struct GpuLightLeak {
             position: [f32; 2],
             radius: f32,
@@ -105,8 +105,6 @@ impl LightLeakPipeline {
             roughness: f32,
             padding: [f32; 2],
         }
-        unsafe impl bytemuck::Zeroable for GpuLightLeak {}
-        unsafe impl bytemuck::Pod for GpuLightLeak {}
 
         let gpu_leaks: Vec<GpuLightLeak> = config
             .leaks
@@ -132,15 +130,13 @@ impl LightLeakPipeline {
             });
 
         #[repr(C)]
-        #[derive(Copy, Clone)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
         struct Uniforms {
             width: u32,
             height: u32,
             leak_count: u32,
             _pad: u32,
         }
-        unsafe impl bytemuck::Zeroable for Uniforms {}
-        unsafe impl bytemuck::Pod for Uniforms {}
 
         let uniforms = Uniforms {
             width: buffer.width,

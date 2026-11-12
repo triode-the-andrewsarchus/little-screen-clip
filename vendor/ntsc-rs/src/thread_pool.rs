@@ -101,19 +101,15 @@ impl<'a, const N: usize, T> ZipChunks<'a, N, T> {
     }
 
     #[cfg(feature = "rayon")]
-    fn split_at(mut self, chunk_idx: usize) -> (Self, Self) {
+    fn split_at(self, chunk_idx: usize) -> (Self, Self) {
         let len = self.len();
         let split_point = (chunk_idx * self.chunk_size).min(len);
 
-        // Store raw pointers before consuming self.arrays
-        let ptrs: [*mut T; N] = self.arrays.each_mut().map(|s| s.as_mut_ptr());
-
-        let left_halves = core::array::from_fn(|i: usize| unsafe {
-            core::slice::from_raw_parts_mut(ptrs[i], split_point)
-        });
-
-        let right_halves = core::array::from_fn(|i: usize| unsafe {
-            core::slice::from_raw_parts_mut(ptrs[i].add(split_point), len - split_point)
+        let mut right_halves = self.arrays;
+        let left_halves = right_halves.each_mut().map(|slice| {
+            let (left, right) = std::mem::take(slice).split_at_mut(split_point);
+            *slice = right;
+            left
         });
 
         (

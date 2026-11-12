@@ -123,15 +123,13 @@ impl GaussianPipeline {
         });
 
         #[repr(C)]
-        #[derive(Copy, Clone)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
         struct Uniforms {
             width: u32,
             height: u32,
             sigma: f32,
             _pad: f32,
         }
-        unsafe impl bytemuck::Zeroable for Uniforms {}
-        unsafe impl bytemuck::Pod for Uniforms {}
 
         let uniforms = Uniforms {
             width,
