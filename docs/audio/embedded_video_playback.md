@@ -135,7 +135,7 @@ GStreamer linkage.
 - [x] Use the shared fixed-size play/pause icon and remove stop/volume controls.
 - [x] Add temporary subtitle/audio track, speed and loop choices.
 - [x] Add a manual-config-only subtitle default, initially disabled.
-- [ ] Open a stereo audio copy from the video-file context menu.
+- [x] Open a stereo audio copy from the video-file context menu.
 - [ ] Verify controls, actual subtitles/tracks, audio extraction and fullscreen.
 
 The player context menu offers embedded subtitle and audio tracks, rates from
@@ -144,3 +144,11 @@ The player context menu offers embedded subtitle and audio tracks, rates from
 (including muted hover playback); menu changes never write this setting.
 A generated two-audio/two-subtitle MKV verifies actual subtitle pixels, switching
 and disabling text, selected audio ordinal, 4× timing and looping.
+
+Video-file menus expose **Edit Audio Track**. The guarded background loader
+extracts the default audio stream into a seekable float stereo WAV in an owned
+temporary workspace, opens it in the existing Audio Studio and suggests the
+original folder for exports. Source identity comes from held input/output
+descriptors; Audio Studio and deferred readers retain workspace ownership.
+Tests verify stereo metadata and non-silent decoded samples, backing-file
+ownership, unchanged original bytes, cancellation and a missing-audio failure.

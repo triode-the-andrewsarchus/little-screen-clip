@@ -711,6 +711,10 @@ impl FileManager {
             self.open_file = Some(path);
         }
         if let Some(path) = actions.open {
+            if actions.video_audio {
+                self.document_start =
+                    Some((path.clone(), super::DocumentPosition::VideoAudioTrack));
+            }
             self.open_path(path);
         }
         if let Some(folder) = actions.navigate_folder {
@@ -1382,6 +1386,7 @@ struct ListActions {
     additive: bool,
     selection: Option<(PathBuf, bool, bool)>,
     open: Option<PathBuf>,
+    video_audio: bool,
     navigate_folder: Option<PathBuf>,
     reveal: Option<PathBuf>,
     external: Option<PathBuf>,
@@ -1551,6 +1556,16 @@ impl ListActions {
             if !entry.directory && entry.system.is_none() && ui.button("Open externally").clicked()
             {
                 self.external = Some(entry.path.clone());
+                ui.close_menu();
+            }
+
+            if !entry.directory
+                && entry.system.is_none()
+                && little_clip_core::animation::is_video_path(&entry.path)
+                && ui.button("Edit Audio Track").clicked()
+            {
+                self.open = Some(entry.path.clone());
+                self.video_audio = true;
                 ui.close_menu();
             }
 

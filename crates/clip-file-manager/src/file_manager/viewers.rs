@@ -22,6 +22,7 @@ mod chrome;
 mod gallery;
 mod rename;
 mod video;
+mod video_audio;
 
 enum Loaded {
     System(super::system::Document),
@@ -46,6 +47,7 @@ enum Loaded {
     },
     Path,
     Video(super::media::VideoMetadata),
+    VideoAudio(video_audio::Prepared),
     External,
 }
 enum ViewerSession {
@@ -161,6 +163,9 @@ impl Viewers {
         self.open_on(path, false);
     }
     fn open_on(&mut self, path: PathBuf, system: bool) {
+        self.open_mode(path, system, false);
+    }
+    fn open_mode(&mut self, path: PathBuf, system: bool, video_audio: bool) {
         if self.active() {
             return;
         }
@@ -183,7 +188,11 @@ impl Viewers {
                         .map(|document| (Loaded::System(document), None))
                 } else {
                     let identity = FileSource::capture(&source);
-                    let loaded = load(&source, &config, &worker)?;
+                    let loaded = if video_audio {
+                        Loaded::VideoAudio(video_audio::Prepared::load(&source, &worker)?)
+                    } else {
+                        load(&source, &config, &worker)?
+                    };
                     let identity = if matches!(&loaded, Loaded::System(_)) {
                         None
                     } else {
@@ -215,7 +224,11 @@ impl Viewers {
         if self.active() {
             return;
         }
-        self.open(path);
+        if position == super::DocumentPosition::VideoAudioTrack {
+            self.open_mode(path, false, true);
+        } else {
+            self.open(path);
+        }
         self.document_start = Some(position);
     }
     fn poll(&mut self, ctx: &Context) {
@@ -234,7 +247,12 @@ impl Viewers {
         self.path = Some(path.clone());
         let result = result.map(|(loaded, source)| {
             self.source = source;
-            self.source_path = Some(path.clone());
+            if let Loaded::VideoAudio(audio) = &loaded {
+                self.path = Some(audio.source.path().to_path_buf());
+                self.source = Some(audio.source.clone());
+                self.source_guard = None;
+            }
+            self.source_path = self.path.clone();
             self.office_preview = matches!(&loaded, Loaded::OfficePdf { .. });
             loaded
         });
@@ -689,14 +707,13 @@ fn session(
             )
             .with_file_source(source),
         ),
-        Loaded::Video(prepared) => {
-            ViewerSession::Video(video::Video::new(
-                path,
-                prepared,
-                video_start,
-                config.file_manager.video_subtitles_enabled,
-            ))
-        }
+        Loaded::Video(prepared) => ViewerSession::Video(video::Video::new(
+            path,
+            prepared,
+            video_start,
+            config.file_manager.video_subtitles_enabled,
+        )),
+        Loaded::VideoAudio(prepared) => ViewerSession::Audio(prepared.studio(config)),
         Loaded::Text(state) => ViewerSession::Text(state),
         Loaded::Sheet(data) => ViewerSession::Sheet(SpreadsheetViewerState::new(data, Some(path))),
         Loaded::Midi(data) => ViewerSession::Midi(MidiViewerState::from_parsed_file(path, data)),

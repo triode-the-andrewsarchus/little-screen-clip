@@ -95,6 +95,7 @@ impl LastStatus {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DocumentPosition {
+    VideoAudioTrack,
     TextLine(usize),
     PdfPage(usize),
     NotebookCell(usize),
