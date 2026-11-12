@@ -406,6 +406,7 @@ fn standalone_diagram_sources_have_loaded_native_syntax_definitions() {
         ("svgbob", "SvgBob", "+----+\n|Text|\n+----+\n"),
         ("lini", "Lini", "|box#a| \"Source\"\na -> b\n"),
         ("gv", "Graphviz", "digraph { a -> b [label=\"Source\"] }"),
+        ("d2", "D2", "direction: right\na -> b: Preview"),
     ] {
         let syntax = SYNTAX_SET.find_syntax_by_extension(extension).unwrap();
         assert_eq!(syntax.name, name);

@@ -1,6 +1,6 @@
 ---
 title: Native diagram previews
-tags: [Pikchr, SvgBob, Mermaid, Lini, Graphviz]
+tags: [Pikchr, SvgBob, Mermaid, Lini, Graphviz, D2]
 ---
 
 # From source to preview
@@ -45,3 +45,13 @@ digraph Preview {
 
 [Native equation examples](math.md) exercise inline/display math, matrices,
 emphasis, lists, quotes, literal dollars and source diagnostics.
+
+```d2
+direction: right
+vars: { d2-config: { pad: 24 } }
+source: Source { style: { fill: "#d1f4fc"; stroke: "#00576a" } }
+compiler: Compile + layout { style: { fill: "#cdf7f0"; stroke: "#006a61" } }
+scene: Native scene { style: { fill: "#efe7ff"; stroke: "#573790" } }
+preview: Preview { style: { fill: "#fff1d7"; stroke: "#935f0b" } }
+source -> compiler -> scene -> preview
+```

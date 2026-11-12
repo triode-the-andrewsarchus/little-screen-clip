@@ -31,7 +31,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | LaTeX math | Mathra 1.12.0; latex-rust 2.1.1 / 3.0.3; retex-svg 1.9.0; KaTeX; MathLive editor reference | Native Mathra selected; inline/display previews implemented in both viewers; structured graphical editing pending |
 | Mermaid | Merman 0.10.0; mermaid-rs-renderer 0.3.1; ariel-rs 0.4 | Selected Merman; native source/live previews implemented; parser-backed graphical editing pending |
 | PlantUML / C4 | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [plantuml_encoding](https://crates.io/crates/plantuml_encoding) 2.0.3; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
-| D2 | d2-rs 0.1.7 pipeline; d2-render 0.1.0; graphs-tui 0.4.0; official Go D2 | Native full compiler/layout and scene renderer selected; engine tests pass; editor/host validation pending |
+| D2 | d2-rs 0.1.7 pipeline; d2-render 0.1.0; graphs-tui 0.4.0; official Go D2 | Native compiler/layout and scene renderer integrated; flat-board Markdown/standalone previews and highlighted guarded saves implemented; graphical editing/board selection pending |
 | Graphviz DOT | graphviz-pure 1.2.0; layout-rs 0.1.3; graphviz-rust 0.9.9 | Native Graphviz port selected; source/live preview and bounded multi-graph rendering implemented; graphical manipulation pending |
 | DBML | [dbml-language-server](https://crates.io/crates/dbml-language-server) 0.1.2; [dbml_diff_mysql](https://crates.io/crates/dbml_diff_mysql) 0.1.5; [sea-orm-dbml](https://crates.io/crates/sea-orm-dbml) 0.1.0-beta.2 | Pending comparison / editor research |
 | BPMN | [orvanta-api](https://crates.io/crates/orvanta-api) 7.0.0; [bpmn-svg](https://crates.io/crates/bpmn-svg) 0.1.0; [bpmnkit-bpmn](https://crates.io/crates/bpmnkit-bpmn) 0.2.1 | Pending comparison / editor research |
@@ -523,3 +523,31 @@ these metrics. A separate measurement of the application adapter reports 256
 code lines, eight functions, maximum CCN 15 and no clones. The structural tool
 cannot analyze a single-file target; the whole-tree report supplies structural
 context. The full feature and editing goal remains active.
+
+
+### D2 editor and host integration
+
+D2 fences and `.d2` sources now share the existing native preview owner in the
+large viewer and little-screen renderer. Standalone sources load the bundled D2
+syntax definition and retain the existing guarded editor/atomic save/unused
+Save As behavior; the session's live source remains authoritative. Added sample
+`docs/examples/diagrams/pipeline.d2` also appears as a Markdown fence in the
+example README. No new source-save or resource-loading mechanism is introduced.
+
+Final targeted checks: 32 integration tests pass (file-manager save/draft cases,
+shared syntax definitions and ownership, core format classification, renderer
+routing and native engine tests). Real dispatch and license queries pass across
+all four executable hosts; an initial missing upstream-notice printout was
+caught and fixed in `4ac3611`. Strict workspace/all-target Clippy and formatting
+checks pass. Actual file-manager worker PNGs for the colored pipeline,
+Markdown/TeX labels and a sequence diagram were visually inspected. Free disk
+space remains about 128 GiB; existing locked package versions were retained.
+
+The library still emits layout compatibility notes despite stronger README
+parity claims. The application preserves the user-relevant limitation as
+“layout may differ from the reference renderer,” while omitting a purely
+informational sequence-adapter identity. It makes no byte-for-byte fidelity
+claim. Imported images remain unavailable placeholders with a warning; source
+imports report an error. Isometric output, selecting child boards, exact source
+correspondence and native graphical operations remain open work. These are not
+silently treated as completed by this integration.

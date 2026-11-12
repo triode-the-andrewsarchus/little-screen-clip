@@ -215,7 +215,7 @@
       - [ ] Inline diagram block rendering (Kroki-compatible)
         - [x] Mermaid (`mermaid`, `mmd`) — compiled native renderer, bounded helper, large/small previews
         - [ ] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`)
-        - [ ] D2 (`d2`)
+        - [x] D2 (`d2`) — native flat-board previews, Dagre/ELK/TALA, `.d2` highlighted source/live preview and diagnostics
         - [x] Graphviz DOT (`graphviz`, `dot`) — compiled Rust renderer, all eight layout engines, bounded multi-graph previews
         - [ ] DBML database markup (`dbml`)
         - [ ] BPMN business process (`bpmn`)

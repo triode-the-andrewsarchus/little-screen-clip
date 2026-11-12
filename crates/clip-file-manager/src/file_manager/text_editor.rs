@@ -375,6 +375,7 @@ mod tests {
             ("gv", "digraph { a -> b }", "digraph { a -> c }"),
             ("dot", "digraph { a -> b }", "digraph { a -> c }"),
             ("graphviz", "digraph { a -> b }", "digraph { a -> c }"),
+            ("d2", "a -> b: Original", "a -> b: Edited"),
             (
                 "pikchr",
                 "box \"Original\"\n",

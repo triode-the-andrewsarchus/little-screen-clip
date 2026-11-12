@@ -43,7 +43,7 @@ pub(super) fn render(source: &str) -> Result<Rendered, String> {
     // PNG is painted from D2's native scene: its Markdown/TeX labels cannot be
     // faithfully rasterized by treating SVG foreignObject as ordinary SVG text.
     let (_, mut warnings) = super::parse_svg(&svg, super::default_fonts(), "Noto Sans CJK JP")?;
-    warnings.extend(layout.report.warnings.iter().cloned());
+    warnings.extend(preview_warnings(&layout.report.warnings));
     let target =
         d2_rs_render::target_diagram_json(&graph, &layout, &labels, &styles, &options, sketch)?;
     let diagram: d2_rs_target::Diagram =
@@ -74,6 +74,21 @@ pub(super) fn render(source: &str) -> Result<Rendered, String> {
     };
     result.validate(little_clip_core::diagram::Format::D2)?;
     Ok(result)
+}
+
+fn preview_warnings(warnings: &[String]) -> Vec<String> {
+    warnings
+        .iter()
+        .filter_map(|warning| {
+            if warning == "Sequence layout uses the in-process d2sequence adapter." {
+                None // Implementation identity is not a user-visible limitation.
+            } else if warning.ends_with("parity is pending.") {
+                Some("This D2 layout may differ from the reference renderer.".into())
+            } else {
+                Some(warning.clone())
+            }
+        })
+        .collect()
 }
 
 fn scene_options(
@@ -218,6 +233,24 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_limits_remain_visible_without_implementation_status_messages() {
+        let sequence = render("shape: sequence_diagram\na -> b: request").unwrap();
+        assert!(
+            !sequence
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("in-process"))
+        );
+        let dagre = render("a -> b").unwrap();
+        assert!(
+            dagre
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("may differ"))
+        );
+    }
+
+    #[test]
     fn d2_errors_preserve_diagnostics_and_imports_have_no_filesystem_capability() {
         for source in [
             "a: {",
@@ -235,8 +268,8 @@ mod tests {
         let path = directory.path().join("ordinary.d2");
         std::fs::write(&path, "a -> b: readable local fixture").unwrap();
         let error = render(&format!("...@{}", path.display()))
-            .err()
-            .expect("a valid local import must still be denied");
+            .map(|_| ())
+            .expect_err("a valid local import must still be denied");
         assert!(
             error.to_ascii_lowercase().contains("import") || error.contains("opener"),
             "{error}"
