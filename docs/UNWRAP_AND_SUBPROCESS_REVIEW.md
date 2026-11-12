@@ -14,6 +14,8 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Make component-gallery construction fallible. WAV creation/writes/flush and PDF fixture creation now return errors to the existing startup status UI rather than panicking. Test-only callers explicitly require successful fixture setup. A child-process regression test supplies an unusable temporary directory without changing environment variables in concurrent tests. Validation: 17 gallery tests pass; native checksum validation passed two core tests and five guarded pipeline tests.
 
+- [x] Replace three `niri msg` launches with a bounded native Unix-socket client, using existing Rustix/Serde dependencies. [Niri’s IPC documentation](https://docs.rs/niri-ipc/latest/niri_ipc/) specifies newline-framed JSON requests and result-wrapped responses. Preserve the 250 ms total deadline, bounded response bytes, fixed popup geometry, PID/window-size matching and fallback behavior. A full connection backlog fails promptly. Validate reply framing, split packets, application errors, malformed/oversized/incomplete responses, trickle deadlines and window/output payloads (nine popup tests). Read-only queries against the live compositor also returned the documented response variants.
+
 ## Remaining review
 
 - [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.

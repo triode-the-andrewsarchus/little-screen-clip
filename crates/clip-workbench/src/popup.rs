@@ -1,11 +1,12 @@
 //! Screen-relative sizing for the fixed-size workbench popup.
 
 use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{Vec2, ViewportBuilder};
-use little_clip_core::process::CommandRequest;
 use serde::Deserialize;
 
 const SCREEN_FRACTION: f32 = 0.92;
@@ -81,9 +82,12 @@ pub(crate) fn claim_instance() -> Option<File> {
     }
 }
 
-fn window_id_from_json(json: &[u8], pid: Option<u32>, expected_size: Option<Vec2>) -> Option<u64> {
-    serde_json::from_slice::<Vec<NiriWindow>>(json)
-        .ok()?
+fn window_id(
+    windows: Vec<NiriWindow>,
+    pid: Option<u32>,
+    expected_size: Option<Vec2>,
+) -> Option<u64> {
+    windows
         .into_iter()
         .find(|window| {
             window.app_id.as_deref() == Some("little-clip-workbench")
@@ -98,28 +102,98 @@ fn window_id_from_json(json: &[u8], pid: Option<u32>, expected_size: Option<Vec2
         .map(|window| window.id)
 }
 
-fn niri_window_id(pid: Option<u32>, expected_size: Option<Vec2>) -> Option<u64> {
-    let output = CommandRequest::new("niri")
-        .args(["msg", "--json", "windows"])
-        .timeout(Duration::from_millis(250))
-        .max_output_bytes(1024 * 1024)
-        .run()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+#[derive(Deserialize)]
+enum NiriResponse {
+    Windows(Vec<NiriWindow>),
+    FocusedOutput(Option<Output>),
+    Handled,
+}
+
+fn niri_request(request: &serde_json::Value, limit: usize) -> Result<NiriResponse, String> {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    let path = std::env::var_os("NIRI_SOCKET").ok_or("Niri IPC is unavailable")?;
+    let address =
+        rustix::net::SocketAddrUnix::new(PathBuf::from(path)).map_err(|error| error.to_string())?;
+    // A full Unix-socket backlog must fail promptly rather than block popup
+    // creation. No subprocess or visible probe window is needed.
+    let socket = rustix::net::socket_with(
+        rustix::net::AddressFamily::UNIX,
+        rustix::net::SocketType::STREAM,
+        rustix::net::SocketFlags::CLOEXEC | rustix::net::SocketFlags::NONBLOCK,
+        None,
+    )
+    .map_err(|error| error.to_string())?;
+    rustix::net::connect(&socket, &address).map_err(|error| error.to_string())?;
+    let stream = UnixStream::from(socket);
+    stream
+        .set_nonblocking(false)
+        .map_err(|error| error.to_string())?;
+    niri_exchange(stream, request, limit, deadline)
+}
+
+fn niri_exchange(
+    mut stream: UnixStream,
+    request: &serde_json::Value,
+    limit: usize,
+    deadline: Instant,
+) -> Result<NiriResponse, String> {
+    let remaining = || {
+        deadline
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or("Niri IPC timed out".to_owned())
+    };
+    stream
+        .set_write_timeout(Some(remaining()?))
+        .map_err(|error| error.to_string())?;
+    let mut encoded = serde_json::to_vec(request).map_err(|error| error.to_string())?;
+    encoded.push(b'\n');
+    stream
+        .write_all(&encoded)
+        .map_err(|error| error.to_string())?;
+    let mut reply = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        stream
+            .set_read_timeout(Some(remaining()?))
+            .map_err(|error| error.to_string())?;
+        // Bound memory even if a peer never terminates its reply line.
+        let capacity = buffer.len().min(limit.saturating_sub(reply.len()));
+        if capacity == 0 {
+            return Err("Niri IPC response exceeds its size limit".into());
+        }
+        let count = match stream.read(&mut buffer[..capacity]) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result.map_err(|error| error.to_string())?,
+        };
+        if count == 0 {
+            return Err("Niri IPC disconnected before completing its response".into());
+        }
+        if let Some(end) = buffer[..count].iter().position(|byte| *byte == b'\n') {
+            reply.extend_from_slice(&buffer[..end]);
+            let reply: Result<NiriResponse, String> =
+                serde_json::from_slice(&reply).map_err(|error| error.to_string())?;
+            return reply;
+        }
+        reply.extend_from_slice(&buffer[..count]);
     }
-    window_id_from_json(&output.stdout, pid, expected_size)
+}
+
+fn niri_window_id(pid: Option<u32>, expected_size: Option<Vec2>) -> Option<u64> {
+    let NiriResponse::Windows(windows) =
+        niri_request(&serde_json::json!("Windows"), 1024 * 1024).ok()?
+    else {
+        return None;
+    };
+    window_id(windows, pid, expected_size)
 }
 
 fn niri_action(action: &str, id: u64) {
-    let id = id.to_string();
-    if let Err(err) = CommandRequest::new("niri")
-        .args(["msg", "action", action, "--id", &id])
-        .timeout(Duration::from_millis(250))
-        .max_output_bytes(4096)
-        .run()
-    {
-        tracing::warn!(%err, %action, "Niri popup action failed");
+    let request = serde_json::json!({"Action": {action: {"id": id}}});
+    match niri_request(&request, 4096) {
+        Ok(NiriResponse::Handled) => {}
+        Ok(_) => tracing::warn!(%action, "Unexpected Niri popup action response"),
+        Err(error) => tracing::warn!(%error, %action, "Niri popup action failed"),
     }
 }
 
@@ -138,7 +212,7 @@ fn focus_existing() {
     if std::env::var_os("NIRI_SOCKET").is_some()
         && let Some(id) = wait_for_window(None, None)
     {
-        niri_action("focus-window", id);
+        niri_action("FocusWindow", id);
     }
 }
 
@@ -147,14 +221,13 @@ pub(crate) fn center_when_mapped() {
         let expected_size = discover_size().unwrap_or(FALLBACK_SIZE);
         std::thread::spawn(move || {
             if let Some(id) = wait_for_window(Some(std::process::id()), Some(expected_size)) {
-                niri_action("center-window", id);
+                niri_action("CenterWindow", id);
             }
         });
     }
 }
 
-fn size_from_output(json: &[u8]) -> Result<Vec2, String> {
-    let output: Option<Output> = serde_json::from_slice(json).map_err(|err| err.to_string())?;
+fn size_from_output(output: Option<Output>) -> Result<Vec2, String> {
     let logical = output
         .and_then(|output| output.logical)
         .filter(|logical| logical.width > 0 && logical.height > 0)
@@ -167,20 +240,12 @@ fn size_from_output(json: &[u8]) -> Result<Vec2, String> {
 }
 
 fn discover_size() -> Result<Vec2, String> {
-    if std::env::var_os("NIRI_SOCKET").is_none() {
-        return Err("Niri IPC is unavailable".to_owned());
-    }
-    // Reuse the bounded process boundary; no daemon or visible probe window is needed.
-    let output = CommandRequest::new("niri")
-        .args(["msg", "--json", "focused-output"])
-        .timeout(Duration::from_millis(250))
-        .max_output_bytes(64 * 1024)
-        .run()
-        .map_err(|err| err.to_string())?;
-    if !output.status.success() {
-        return Err("Niri output query failed".to_owned());
-    }
-    size_from_output(&output.stdout)
+    let NiriResponse::FocusedOutput(output) =
+        niri_request(&serde_json::json!("FocusedOutput"), 64 * 1024)?
+    else {
+        return Err("Unexpected Niri output response".into());
+    };
+    size_from_output(output)
 }
 
 fn fixed_viewport(viewport: ViewportBuilder, size: Vec2) -> ViewportBuilder {
@@ -213,25 +278,141 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_ipc_frames_requests_and_decodes_split_replies() {
+        use std::io::{BufRead, BufReader};
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(server.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&line).unwrap(),
+                serde_json::json!({"Action": {"FocusWindow": {"id": 42}}})
+            );
+            server.write_all(br#"{"Ok":"Han"#).unwrap();
+            server.write_all(b"dled\"}\n").unwrap();
+        });
+        assert!(matches!(
+            niri_exchange(
+                client,
+                &serde_json::json!({"Action": {"FocusWindow": {"id": 42}}}),
+                4096,
+                Instant::now() + Duration::from_secs(1)
+            ),
+            Ok(NiriResponse::Handled)
+        ));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn native_ipc_reports_errors_bad_json_and_unterminated_or_oversized_replies() {
+        for (reply, limit, expected) in [
+            (b"{\"Err\":\"denied\"}\n".as_slice(), 4096, "denied"),
+            (b"invalid\n".as_slice(), 4096, "expected"),
+            (b"{\"Ok\":\"Handled\"}".as_slice(), 4096, "disconnected"),
+            (b"xxxxxxxxxxxxxxxx".as_slice(), 8, "size limit"),
+        ] {
+            let (client, mut server) = UnixStream::pair().unwrap();
+            let worker = std::thread::spawn(move || {
+                // Consume the request so closing the peer does not reset unread data.
+                let mut request = [0; 64];
+                let _ = server.read(&mut request);
+                server.write_all(reply).unwrap();
+            });
+            let error = niri_exchange(
+                client,
+                &serde_json::json!("Windows"),
+                limit,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .err()
+            .unwrap();
+            assert!(error.contains(expected), "{error}");
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn native_ipc_has_a_total_deadline_even_when_bytes_keep_arriving() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = std::thread::spawn(move || {
+            for _ in 0..50 {
+                if server.write_all(b" ").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let started = Instant::now();
+        assert!(
+            niri_exchange(
+                client,
+                &serde_json::json!("Windows"),
+                4096,
+                started + Duration::from_millis(60)
+            )
+            .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn native_ipc_decodes_window_and_output_responses() {
+        let windows: Result<NiriResponse, String> = serde_json::from_str(r#"{"Ok":{"Windows":[{"id":42,"app_id":"little-clip-workbench","pid":123,"layout":{"window_size":[800,600]}}]}}"#).unwrap();
+        let NiriResponse::Windows(windows) = windows.unwrap() else {
+            panic!("wrong response")
+        };
+        assert_eq!(
+            window_id(windows, Some(123), Some(Vec2::new(800.0, 600.0))),
+            Some(42)
+        );
+        let output: Result<NiriResponse, String> = serde_json::from_str(
+            r#"{"Ok":{"FocusedOutput":{"logical":{"width":1280,"height":720}}}}"#,
+        )
+        .unwrap();
+        let NiriResponse::FocusedOutput(output) = output.unwrap() else {
+            panic!("wrong response")
+        };
+        assert_eq!(size_from_output(output).unwrap(), Vec2::new(1177.0, 662.0));
+    }
+
+    #[test]
     fn waits_for_scaled_window_to_reach_final_logical_size() {
         let expected = Vec2::new(2355.0, 1324.0);
         let startup = br#"[{"id":42,"app_id":"little-clip-workbench","pid":123,"layout":{"window_size":[4710,2648]}}]"#;
         let mapped = br#"[{"id":42,"app_id":"little-clip-workbench","pid":123,"layout":{"window_size":[2355,1324]}}]"#;
         assert_eq!(
-            window_id_from_json(startup, Some(123), Some(expected)),
+            window_id(
+                serde_json::from_slice(startup).unwrap(),
+                Some(123),
+                Some(expected)
+            ),
             None
         );
         assert_eq!(
-            window_id_from_json(mapped, Some(123), Some(expected)),
+            window_id(
+                serde_json::from_slice(mapped).unwrap(),
+                Some(123),
+                Some(expected)
+            ),
             Some(42)
         );
-        assert_eq!(window_id_from_json(mapped, Some(456), Some(expected)), None);
+        assert_eq!(
+            window_id(
+                serde_json::from_slice(mapped).unwrap(),
+                Some(456),
+                Some(expected)
+            ),
+            None
+        );
     }
 
     #[test]
     fn uses_logical_dimensions_without_applying_output_scale_twice() {
         let size = size_from_output(
-            br#"{"modes":[{"width":3840,"height":2160}],"logical":{"width":2560,"height":1440,"scale":1.5}}"#,
+            serde_json::from_slice(br#"{"modes":[{"width":3840,"height":2160}],"logical":{"width":2560,"height":1440,"scale":1.5}}"#).unwrap(),
         )
         .unwrap();
         assert_eq!(size, Vec2::new(2355.0, 1324.0));
@@ -241,7 +422,7 @@ mod tests {
     fn retains_output_proportions_and_fits_small_screens() {
         for (width, height) in [(1280, 720), (1920, 1200), (3440, 1440), (640, 480)] {
             let json = format!(r#"{{"logical":{{"width":{width},"height":{height}}}}}"#);
-            let size = size_from_output(json.as_bytes()).unwrap();
+            let size = size_from_output(serde_json::from_str(&json).unwrap()).unwrap();
             assert!(size.x < width as f32 && size.y < height as f32);
             assert!((size.x / size.y - width as f32 / height as f32).abs() < 0.01);
         }
@@ -256,7 +437,12 @@ mod tests {
             r#"{"logical":{"width":1920,"height":0}}"#,
             "invalid JSON",
         ] {
-            assert!(size_from_output(json.as_bytes()).is_err());
+            assert!(
+                serde_json::from_str(json)
+                    .map_err(|error| error.to_string())
+                    .and_then(size_from_output)
+                    .is_err()
+            );
         }
     }
 
