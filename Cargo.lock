@@ -10290,7 +10290,6 @@ dependencies = [
 [[package]]
 name = "spark-lib"
 version = "0.1.0"
-source = "git+https://github.com/sparkjsdev/spark?rev=f5368253780bed4d863c96b1fdea9dd3d614d131#f5368253780bed4d863c96b1fdea9dd3d614d131"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",

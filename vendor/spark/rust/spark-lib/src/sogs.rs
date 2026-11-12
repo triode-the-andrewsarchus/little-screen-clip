@@ -13,8 +13,7 @@ pub const PK_MAGIC: u32 = 0x04034b50;
 const SH_C0: f32 = 0.28209479177387814;
 const MAX_SPLAT_CHUNK: usize = 65536;
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum PcSogsRoot {
     V2(PcSogsV2),
     V1(PcSogsV1),
@@ -164,7 +163,12 @@ fn decode_sogs<T: SplatReceiver>(bytes: &[u8], splats: &mut T, _pathname: Option
         std::io::copy(&mut meta_file, &mut meta_bytes)?;
         meta_bytes
     };
-    let meta: PcSogsRoot = serde_json::from_slice(&meta_bytes)
+    // Parse each schema directly: Serde's untagged intermediate buffering
+    // cannot deserialize fractional f32 fields when another dependency enables
+    // serde_json/arbitrary_precision. Keep the original V2-before-V1 priority.
+    let meta = serde_json::from_slice::<PcSogsV2>(&meta_bytes)
+        .map(PcSogsRoot::V2)
+        .or_else(|_| serde_json::from_slice::<PcSogsV1>(&meta_bytes).map(PcSogsRoot::V1))
         .context("Failed to parse meta.json for SOGS")?;
 
     let mut file_cache: HashMap<String, Vec<u8>> = HashMap::new();

@@ -451,6 +451,7 @@ impl<T: SplatReceiver> MultiDecoder<T> {
     }
 }
 
+#[cfg(feature = "spz")]
 const GZIP_MAGIC: u32 = 0x00088b1f; // Gzip deflate
 
 impl<T: SplatReceiver> ChunkReceiver for MultiDecoder<T> {
@@ -461,7 +462,7 @@ impl<T: SplatReceiver> ChunkReceiver for MultiDecoder<T> {
                 return Ok(());
             }
 
-            let mut detection_complete = false;
+            let detection_complete;
 
             let magic = u32::from_le_bytes([self.buffer[0], self.buffer[1], self.buffer[2], self.buffer[3]]);
             match (magic, magic & 0x00ffffff) {
@@ -475,8 +476,8 @@ impl<T: SplatReceiver> ChunkReceiver for MultiDecoder<T> {
                     if self.buffer_gz.is_none() {
                         self.buffer_gz = try_gunzip(&self.buffer, 4)?;
                     }
+                    detection_complete = self.buffer_gz.is_some();
                     if let Some(buffer_gz) = self.buffer_gz.as_ref() {
-                        detection_complete = true;
                         if buffer_gz.len() >= 4 {
                             let magic = u32::from_le_bytes([buffer_gz[0], buffer_gz[1], buffer_gz[2], buffer_gz[3]]);
                             if magic == SPZ_MAGIC {

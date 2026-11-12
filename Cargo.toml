@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["vendor/excalidraw-render"]
+exclude = ["vendor/excalidraw-render", "vendor/spark/rust"]
 resolver = "2"
 members = [
     "crates/little-clip-core",
@@ -69,3 +69,6 @@ symphonia-codec-pcm = { path = "vendor/symphonia-codec-pcm" }
 
 d2-rs-wasm = { path = "vendor/d2-rs-wasm" }
 d2-rs-scenebuild = { path = "vendor/d2-rs-scenebuild" }
+
+[patch."https://github.com/sparkjsdev/spark"]
+spark-lib = { path = "vendor/spark/rust/spark-lib" }

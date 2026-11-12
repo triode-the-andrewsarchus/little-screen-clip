@@ -931,7 +931,7 @@ All four real-host dispatch checks, syntax/source save checks and mixed-script
 outline tests passed in the serial workspace run. Visual inspection of the real
 file-manager helper output confirmed handwriting, shapes, freehand and pixels.
 Full-workspace verification also exposed a shared JSON-number/SOG compatibility
-issue, which is being corrected separately.
+issue; the separate correction is recorded below.
 The graphical canvas is still pending. It must use fresh worker-prepared scene
 snapshots, one source-history transaction per gesture, and the existing guarded
 save/close flow. Semantic JSON preservation includes unknown records, resources,
@@ -961,3 +961,33 @@ to pristine renderer algorithms or shared test infrastructure.
 Architecture comparison for this fix adds no function or duplication regression;
 the sole reported cycle delta is the same untouched Python benchmark cycle with
 its members listed in a different order.
+
+### Exact JSON numbers and existing SOG decoding
+
+- [x] Restore SOG decoding with serde_json's unified arbitrary-precision feature.
+  The preserving drawing document model enables exact JSON numbers. Spark's
+  `serde(untagged)` metadata root buffered fractional fields into an intermediate
+  form that its typed f32 schemas could not read. Its original Rust workspace and
+  MIT license were committed byte-for-byte first. The local patch parses the
+  original V2 and V1 schemas directly in the same priority order, retaining all
+  decoding math and archive guards. Existing tests cover both versions, all SH
+  bands, fractional metadata, color, scale, orientation and malformed archives.
+- [x] Keep the selected-feature dependency build warning-free. SPZ's gzip constant
+  is guarded by that feature; format detection assigns completion in each branch
+  instead of overwriting an unused initial value. No warning suppression or
+  additional decoder feature is introduced.
+
+The complete serial workspace run passes **2,951 tests, with 36 ignored and zero
+failures**, including all four real diagram-helper hosts, the viewport regression,
+mixed-script native outlines and restored SOG decoding. Strict workspace Clippy
+(`--all-targets -- -D warnings`) and workspace formatting checks pass with no
+warnings. The first parallel run saturated two existing process-global test
+budgets; the serial run avoids that contention. The native drawing artifact was
+also inspected visually through the actual bounded file-manager helper.
+
+The Spark source import retains an already-used dependency for a small patch;
+it does not add a second scene decoder. Architecture comparison reports the
+imported upstream clone groups as repository growth, with no new application
+hotspot and no increase in maximum CCN. Source provenance and the exact patch
+scope are recorded in `vendor/spark/README.integration.md`. The interactive
+whiteboard canvas and the other priority graphical editors remain outstanding.
