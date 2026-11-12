@@ -157,13 +157,12 @@ impl FileManager {
                             let label = if grid.id == 0 {
                                 format!("All ({})", grid.indices.len())
                             } else {
-                                let truncated = if grid.title.chars().count() > 14 {
+                                if grid.title.chars().count() > 14 {
                                     let s: String = grid.title.chars().take(12).collect();
                                     format!("{s}… ({})", grid.indices.len())
                                 } else {
                                     format!("{} ({})", grid.title, grid.indices.len())
-                                };
-                                truncated
+                                }
                             };
                             let is_active = grid.selected_for_search;
                             let btn = ui

@@ -169,7 +169,9 @@ pub(super) fn read_pcm16_wav(path: &Path) -> (u16, u32, Vec<i16>) {
             b"data" => {
                 samples = Some(
                     bytes[data_start..data_end]
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
                         .collect(),
                 );

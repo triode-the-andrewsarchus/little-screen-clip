@@ -806,7 +806,9 @@ mod tests {
         let expected = parse_hex_color(&renderer.palette.colors.text_primary);
         let found_semantic_foreground = pixmap
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(index, pixel)| {
                 let x = index % SCREEN_WIDTH as usize;

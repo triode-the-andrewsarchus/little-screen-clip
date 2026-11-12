@@ -486,7 +486,7 @@ fn discover_interface_relationships(document: &mut Document) {
             if document.interface_directory {
                 canonical.clone()
             } else {
-                canonical.parent().unwrap_or(&canonical).into()
+                canonical.parent().unwrap_or(canonical).into()
             }
         }
     };
@@ -550,20 +550,20 @@ fn metadata(
 }
 fn discover_relationships(document: &mut Document, sys: &Path) {
     if let Ok(sys) = sys.canonicalize() {
-        if let Ok(file) = kernel_interface::pin(&sys, true) {
-            if let Ok(stat) = file.metadata() {
-                document.kernel_identity = Some(super::identity::fingerprint(&stat));
-                match super::identity::ObjectContext::pinned(&file) {
-                    Ok(context) => document.kernel_context = Some(context),
-                    Err(error) => {
-                        let mut fact = Fact::failure(
-                            "Kernel object mount identity (reuse disabled)",
-                            sys.clone(),
-                            error,
-                        );
-                        fact.interface = true;
-                        document.facts.push(fact);
-                    }
+        if let Ok(file) = kernel_interface::pin(&sys, true)
+            && let Ok(stat) = file.metadata()
+        {
+            document.kernel_identity = Some(super::identity::fingerprint(&stat));
+            match super::identity::ObjectContext::pinned(&file) {
+                Ok(context) => document.kernel_context = Some(context),
+                Err(error) => {
+                    let mut fact = Fact::failure(
+                        "Kernel object mount identity (reuse disabled)",
+                        sys.clone(),
+                        error,
+                    );
+                    fact.interface = true;
+                    document.facts.push(fact);
                 }
             }
         }

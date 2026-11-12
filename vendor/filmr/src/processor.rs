@@ -588,65 +588,6 @@ fn process_cpu_fallback(
     halation.process(image_buffer, context);
 }
 
-#[cfg(test)]
-mod cancellation_tests {
-    use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-    #[cfg(feature = "compute-gpu")]
-    #[test]
-    #[ignore = "requires a working GPU compute adapter"]
-    fn gpu_preprocessing_stops_between_dispatches() {
-        assert!(get_gpu_context().is_some());
-        let stock = crate::presets::kodak::KODAK_PORTRA_400();
-        let config = SimulationConfig::default();
-        let cancel = AtomicBool::new(false);
-        let checks = AtomicUsize::new(0);
-        let context = PipelineContext {
-            film: &stock,
-            config: &config,
-            depth_map: None,
-            cancel: Some(&cancel),
-            cancel_after_checks: Some((&checks, 2)),
-        };
-        let image = RgbImage::from_pixel(32, 32, image::Rgb([100, 150, 200]));
-        assert!(process_gpu_pipeline(&context, &image, &stock, &config).is_none());
-        assert!(cancel.load(Ordering::Acquire));
-        assert_eq!(checks.load(Ordering::Acquire), 3);
-    }
-
-    #[test]
-    fn accurate_develop_stops_inside_pixel_pass() {
-        let stock = crate::presets::kodak::KODAK_PORTRA_400();
-        let config = SimulationConfig {
-            enable_grain: false,
-            ..Default::default()
-        };
-        let cancel = AtomicBool::new(false);
-        let checks = AtomicUsize::new(0);
-        let context = PipelineContext {
-            film: &stock,
-            config: &config,
-            depth_map: None,
-            cancel: Some(&cancel),
-            cancel_after_checks: Some((&checks, 50)),
-        };
-        let original = image::ImageBuffer::from_pixel(128, 128, image::Rgb([0.2f32, 0.3, 0.4]));
-        let mut image = original.clone();
-        AccurateDevelopStage.process(&mut image, &context);
-        assert!(cancel.load(Ordering::Acquire));
-        let changed = image
-            .pixels()
-            .zip(original.pixels())
-            .filter(|(a, b)| a != b)
-            .count();
-        assert!(
-            changed > 0 && changed < 128 * 128 / 2,
-            "processed {changed} pixels after cancellation"
-        );
-    }
-}
-
 #[cfg(feature = "compute-gpu")]
 fn process_gpu_pipeline(
     context: &PipelineContext,
@@ -761,4 +702,63 @@ pub async fn process_image_async(
     AccurateDevelopStage.process(&mut image_buffer, &context);
 
     create_output_image(&image_buffer, &context)
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    #[cfg(feature = "compute-gpu")]
+    #[test]
+    #[ignore = "requires a working GPU compute adapter"]
+    fn gpu_preprocessing_stops_between_dispatches() {
+        assert!(get_gpu_context().is_some());
+        let stock = crate::presets::kodak::KODAK_PORTRA_400();
+        let config = SimulationConfig::default();
+        let cancel = AtomicBool::new(false);
+        let checks = AtomicUsize::new(0);
+        let context = PipelineContext {
+            film: &stock,
+            config: &config,
+            depth_map: None,
+            cancel: Some(&cancel),
+            cancel_after_checks: Some((&checks, 2)),
+        };
+        let image = RgbImage::from_pixel(32, 32, image::Rgb([100, 150, 200]));
+        assert!(process_gpu_pipeline(&context, &image, &stock, &config).is_none());
+        assert!(cancel.load(Ordering::Acquire));
+        assert_eq!(checks.load(Ordering::Acquire), 3);
+    }
+
+    #[test]
+    fn accurate_develop_stops_inside_pixel_pass() {
+        let stock = crate::presets::kodak::KODAK_PORTRA_400();
+        let config = SimulationConfig {
+            enable_grain: false,
+            ..Default::default()
+        };
+        let cancel = AtomicBool::new(false);
+        let checks = AtomicUsize::new(0);
+        let context = PipelineContext {
+            film: &stock,
+            config: &config,
+            depth_map: None,
+            cancel: Some(&cancel),
+            cancel_after_checks: Some((&checks, 50)),
+        };
+        let original = image::ImageBuffer::from_pixel(128, 128, image::Rgb([0.2f32, 0.3, 0.4]));
+        let mut image = original.clone();
+        AccurateDevelopStage.process(&mut image, &context);
+        assert!(cancel.load(Ordering::Acquire));
+        let changed = image
+            .pixels()
+            .zip(original.pixels())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            changed > 0 && changed < 128 * 128 / 2,
+            "processed {changed} pixels after cancellation"
+        );
+    }
 }

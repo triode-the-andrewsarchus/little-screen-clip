@@ -23,12 +23,12 @@ pub(super) fn extract(bytes: &[u8], address: u64) -> Option<ImageThumbnail> {
                 continue;
             };
             let image = resource_image(bytes, address, data);
-            if let Some(image) = image {
-                if best.as_ref().is_none_or(|old: &ImageThumbnail| {
+            if let Some(image) = image
+                && best.as_ref().is_none_or(|old: &ImageThumbnail| {
                     image.width * image.height > old.width * old.height
-                }) {
-                    best = Some(image);
-                }
+                })
+            {
+                best = Some(image);
             }
         }
     }
@@ -53,7 +53,8 @@ fn resource_image(
         return None;
     }
     let payload = bytes.get(offset..offset.checked_add(size)?)?;
-    let image = if payload.starts_with(b"\x89PNG") {
+
+    if payload.starts_with(b"\x89PNG") {
         decode(payload, "image/png")
     } else {
         let width = super::analysis::word(payload, 4)?;
@@ -81,6 +82,5 @@ fn resource_image(
         ico.extend_from_slice(&22u32.to_le_bytes());
         ico.extend_from_slice(payload);
         decode(&ico, "image/x-icon")
-    };
-    image
+    }
 }

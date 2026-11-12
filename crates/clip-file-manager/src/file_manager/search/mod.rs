@@ -137,7 +137,7 @@ impl Search {
             .filter(|sort| matches!(sort.field, SortField::Dhash | SortField::Similarity))
         {
             self.images.order(directory, visible, sort.descending);
-        } else if let Some(sort) = super::sorting::for_query(&query) {
+        } else if let Some(sort) = super::sorting::for_query(query) {
             sort.apply(directory, visible);
         } else if !self.result_order.is_empty() {
             visible.sort_by_key(|index| {

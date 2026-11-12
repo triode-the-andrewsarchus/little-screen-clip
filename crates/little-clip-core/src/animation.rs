@@ -184,16 +184,16 @@ pub fn decode_animated_bytes(
     }
 
     // 2. Try WebP decoder
-    if let Ok(decoder) = WebPDecoder::new(Cursor::new(bytes)) {
-        if decoder.has_animation() {
-            let frames: Vec<_> = decoder
-                .into_frames()
-                .take(max_frames.saturating_mul(2))
-                .filter_map(|r| r.ok())
-                .collect();
-            if frames.len() > 1 {
-                return process_image_frames(frames, max_w, max_h, max_frames);
-            }
+    if let Ok(decoder) = WebPDecoder::new(Cursor::new(bytes))
+        && decoder.has_animation()
+    {
+        let frames: Vec<_> = decoder
+            .into_frames()
+            .take(max_frames.saturating_mul(2))
+            .filter_map(|r| r.ok())
+            .collect();
+        if frames.len() > 1 {
+            return process_image_frames(frames, max_w, max_h, max_frames);
         }
     }
 

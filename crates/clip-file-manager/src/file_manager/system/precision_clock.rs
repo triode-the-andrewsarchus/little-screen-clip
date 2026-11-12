@@ -109,10 +109,10 @@ pub(super) fn collect(
         &[("name", "Source"), ("assert", "Assert"), ("clear", "Clear")]
     };
     for (field, label) in fields {
-        if let Some(fact) = document.observed_attribute(root, field) {
-            if let Some(value) = &fact.value {
-                summary.push_str(&format!(" · {label}: {value}"));
-            }
+        if let Some(fact) = document.observed_attribute(root, field)
+            && let Some(value) = &fact.value
+        {
+            summary.push_str(&format!(" · {label}: {value}"));
         }
     }
     let mut topology = Topology::new("Precision clock/source relationships", summary);

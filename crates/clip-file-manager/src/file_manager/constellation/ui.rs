@@ -359,27 +359,28 @@ impl ConstellationState {
         query_lower: &str,
         points: &[super::space::MapPoint],
     ) -> Option<std::path::PathBuf> {
-        if !self.orbit_mode && response.drag_started_by(egui::PointerButton::Primary) {
-            if let Some(origin) = ui.input(|input| input.pointer.press_origin()) {
-                let nearest = points
-                    .iter()
-                    .filter_map(|point| {
-                        let sample = &self.samples[point.index];
-                        let pos = point.position + center.to_vec2();
-                        let distance = pos.distance_sq(origin);
-                        (self.matches_filters(point.index, query_lower)
-                            && distance <= (point.radius + 7.0).max(12.0).powi(2))
-                        .then_some((sample, distance))
-                    })
-                    .min_by(|a, b| a.1.total_cmp(&b.1));
-                if let Some((sample, _)) = nearest {
-                    response.dnd_set_drag_payload(crate::file_manager::transfers::FileDrag {
-                        paths: vec![sample.file_path.clone()],
-                        copy_only: true,
-                        context: Default::default(),
-                    });
-                    return Some(sample.file_path.clone());
-                }
+        if !self.orbit_mode
+            && response.drag_started_by(egui::PointerButton::Primary)
+            && let Some(origin) = ui.input(|input| input.pointer.press_origin())
+        {
+            let nearest = points
+                .iter()
+                .filter_map(|point| {
+                    let sample = &self.samples[point.index];
+                    let pos = point.position + center.to_vec2();
+                    let distance = pos.distance_sq(origin);
+                    (self.matches_filters(point.index, query_lower)
+                        && distance <= (point.radius + 7.0).max(12.0).powi(2))
+                    .then_some((sample, distance))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((sample, _)) = nearest {
+                response.dnd_set_drag_payload(crate::file_manager::transfers::FileDrag {
+                    paths: vec![sample.file_path.clone()],
+                    copy_only: true,
+                    context: Default::default(),
+                });
+                return Some(sample.file_path.clone());
             }
         }
         None
@@ -773,16 +774,16 @@ impl ConstellationState {
                 radius + 6.0,
                 Stroke::new(0.8_f32, color.gamma_multiply(0.4)),
             );
-        } else if self.sample_sets.set_for(point.index).is_some() {
-            if let Some(note) = self.sample_sets.note(point.index) {
-                painter.text(
-                    pos + Vec2::new(radius + 12.0, 0.0),
-                    egui::Align2::LEFT_CENTER,
-                    midi_note_str(note),
-                    egui::FontId::monospace(13.0),
-                    color,
-                );
-            }
+        } else if self.sample_sets.set_for(point.index).is_some()
+            && let Some(note) = self.sample_sets.note(point.index)
+        {
+            painter.text(
+                pos + Vec2::new(radius + 12.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                midi_note_str(note),
+                egui::FontId::monospace(13.0),
+                color,
+            );
         }
     }
 }

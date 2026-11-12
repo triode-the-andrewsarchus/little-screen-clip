@@ -342,57 +342,52 @@ impl ImagePreviewState {
             }
 
             // Cursor rubber-banding and guide badge
-            if let Some(ptr_pos) = response.hover_pos() {
-                if img_rect.contains(ptr_pos) {
-                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Crosshair);
+            if let Some(ptr_pos) = response.hover_pos()
+                && img_rect.contains(ptr_pos)
+            {
+                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Crosshair);
 
-                    // Rubber-band line from last placed point to cursor
-                    let rubber_stroke =
-                        Stroke::new(1.5_f32, hex_to_c32_alpha(&palette.diff_add, 180));
-                    if n >= 1 {
-                        painter
-                            .line_segment([*placed_screen.last().unwrap(), ptr_pos], rubber_stroke);
-                    }
-                    // Closing segment preview if 3 points placed
-                    if n == 3 {
-                        painter.line_segment([ptr_pos, placed_screen[0]], rubber_stroke);
-                    }
-
-                    // Floating guide badge following pointer
-                    let next_name = corner_names.get(n).copied().unwrap_or("Next");
-                    let badge_text = format!("Click {next_idx}/4: {next_name}", next_idx = n + 1);
-                    let b_low = hex_to_c32(&palette.colors.surface_recessed);
-                    let badge_fg = contrast_text_c32(
-                        b_low,
-                        Some(hex_to_c32(&palette.colors.text_primary)),
-                        palette,
-                    );
-                    let galley = ui.painter().layout_no_wrap(
-                        badge_text,
-                        egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
-                        badge_fg,
-                    );
-                    let badge_rect = crate::ui_ext::clamp_overlay_rect(
-                        ptr_pos + Vec2::splat(16.0),
-                        galley.size() + Vec2::new(30.0, 6.0),
-                        overlay_bounds,
-                    );
-                    painter.rect_filled(badge_rect, Rounding::same(4.0), b_low);
-                    painter.rect_stroke(
-                        badge_rect,
-                        Rounding::same(4.0),
-                        Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)),
-                    );
-                    crate::icons::Icon::Crosshair.paint(
-                        painter,
-                        Rect::from_min_size(
-                            badge_rect.min + Vec2::new(6.0, 3.0),
-                            Vec2::splat(14.0),
-                        ),
-                        badge_fg,
-                    );
-                    painter.galley(badge_rect.min + Vec2::new(24.0, 3.0), galley, badge_fg);
+                // Rubber-band line from last placed point to cursor
+                let rubber_stroke = Stroke::new(1.5_f32, hex_to_c32_alpha(&palette.diff_add, 180));
+                if n >= 1 {
+                    painter.line_segment([*placed_screen.last().unwrap(), ptr_pos], rubber_stroke);
                 }
+                // Closing segment preview if 3 points placed
+                if n == 3 {
+                    painter.line_segment([ptr_pos, placed_screen[0]], rubber_stroke);
+                }
+
+                // Floating guide badge following pointer
+                let next_name = corner_names.get(n).copied().unwrap_or("Next");
+                let badge_text = format!("Click {next_idx}/4: {next_name}", next_idx = n + 1);
+                let b_low = hex_to_c32(&palette.colors.surface_recessed);
+                let badge_fg = contrast_text_c32(
+                    b_low,
+                    Some(hex_to_c32(&palette.colors.text_primary)),
+                    palette,
+                );
+                let galley = ui.painter().layout_no_wrap(
+                    badge_text,
+                    egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
+                    badge_fg,
+                );
+                let badge_rect = crate::ui_ext::clamp_overlay_rect(
+                    ptr_pos + Vec2::splat(16.0),
+                    galley.size() + Vec2::new(30.0, 6.0),
+                    overlay_bounds,
+                );
+                painter.rect_filled(badge_rect, Rounding::same(4.0), b_low);
+                painter.rect_stroke(
+                    badge_rect,
+                    Rounding::same(4.0),
+                    Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)),
+                );
+                crate::icons::Icon::Crosshair.paint(
+                    painter,
+                    Rect::from_min_size(badge_rect.min + Vec2::new(6.0, 3.0), Vec2::splat(14.0)),
+                    badge_fg,
+                );
+                painter.galley(badge_rect.min + Vec2::new(24.0, 3.0), galley, badge_fg);
             }
 
             // Top banner instruction
@@ -431,33 +426,30 @@ impl ImagePreviewState {
             painter.galley(banner_rect.min + Vec2::new(26.0, 3.0), banner_galley, b_fg);
 
             // Register point placement on click
-            if response.clicked() {
-                if let Some(ptr_pos) = response.interact_pointer_pos() {
-                    if img_rect.contains(ptr_pos) {
-                        let norm_x =
-                            ((ptr_pos.x - img_rect.min.x) / img_rect.width()).clamp(0.0, 1.0);
-                        let norm_y =
-                            ((ptr_pos.y - img_rect.min.y) / img_rect.height()).clamp(0.0, 1.0);
-                        self.deskew_state
-                            .placed_points
-                            .push(Pos2::new(norm_x, norm_y));
+            if response.clicked()
+                && let Some(ptr_pos) = response.interact_pointer_pos()
+                && img_rect.contains(ptr_pos)
+            {
+                let norm_x = ((ptr_pos.x - img_rect.min.x) / img_rect.width()).clamp(0.0, 1.0);
+                let norm_y = ((ptr_pos.y - img_rect.min.y) / img_rect.height()).clamp(0.0, 1.0);
+                self.deskew_state
+                    .placed_points
+                    .push(Pos2::new(norm_x, norm_y));
 
-                        if self.deskew_state.placed_points.len() == 4 {
-                            self.deskew_state.corners = [
-                                self.deskew_state.placed_points[0],
-                                self.deskew_state.placed_points[1],
-                                self.deskew_state.placed_points[2],
-                                self.deskew_state.placed_points[3],
-                            ];
-                            self.deskew_state.is_clicking_points = false;
-                            self.deskew_state.placed_points.clear();
-                            self.deskew_state.corners_adjusted = true;
-                            self.show_toast(crate::ui_ext::StatusMessage::new(
-                                crate::icons::Icon::Check,
-                                "4 points set! Drag handles to fine-tune, Enter to apply.",
-                            ));
-                        }
-                    }
+                if self.deskew_state.placed_points.len() == 4 {
+                    self.deskew_state.corners = [
+                        self.deskew_state.placed_points[0],
+                        self.deskew_state.placed_points[1],
+                        self.deskew_state.placed_points[2],
+                        self.deskew_state.placed_points[3],
+                    ];
+                    self.deskew_state.is_clicking_points = false;
+                    self.deskew_state.placed_points.clear();
+                    self.deskew_state.corners_adjusted = true;
+                    self.show_toast(crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Check,
+                        "4 points set! Drag handles to fine-tune, Enter to apply.",
+                    ));
                 }
             }
         } else {
@@ -627,16 +619,13 @@ impl ImagePreviewState {
                 }
             }
 
-            if response.dragged() {
-                if let Some(corner_idx) = self.deskew_state.dragging_corner {
-                    if let Some(ptr_pos) = response.interact_pointer_pos() {
-                        let norm_x =
-                            ((ptr_pos.x - img_rect.min.x) / img_rect.width()).clamp(0.0, 1.0);
-                        let norm_y =
-                            ((ptr_pos.y - img_rect.min.y) / img_rect.height()).clamp(0.0, 1.0);
-                        self.deskew_state.corners[corner_idx] = Pos2::new(norm_x, norm_y);
-                    }
-                }
+            if response.dragged()
+                && let Some(corner_idx) = self.deskew_state.dragging_corner
+                && let Some(ptr_pos) = response.interact_pointer_pos()
+            {
+                let norm_x = ((ptr_pos.x - img_rect.min.x) / img_rect.width()).clamp(0.0, 1.0);
+                let norm_y = ((ptr_pos.y - img_rect.min.y) / img_rect.height()).clamp(0.0, 1.0);
+                self.deskew_state.corners[corner_idx] = Pos2::new(norm_x, norm_y);
             }
 
             if response.drag_stopped() {
@@ -644,18 +633,16 @@ impl ImagePreviewState {
             }
 
             // If user clicks on canvas when corners are at default state, immediately start point 1!
-            if response.clicked() && hovered_corner.is_none() && !self.deskew_state.corners_adjusted
+            if response.clicked()
+                && hovered_corner.is_none()
+                && !self.deskew_state.corners_adjusted
+                && let Some(ptr_pos) = response.interact_pointer_pos()
+                && img_rect.contains(ptr_pos)
             {
-                if let Some(ptr_pos) = response.interact_pointer_pos() {
-                    if img_rect.contains(ptr_pos) {
-                        let norm_x =
-                            ((ptr_pos.x - img_rect.min.x) / img_rect.width()).clamp(0.0, 1.0);
-                        let norm_y =
-                            ((ptr_pos.y - img_rect.min.y) / img_rect.height()).clamp(0.0, 1.0);
-                        self.deskew_state.is_clicking_points = true;
-                        self.deskew_state.placed_points = vec![Pos2::new(norm_x, norm_y)];
-                    }
-                }
+                let norm_x = ((ptr_pos.x - img_rect.min.x) / img_rect.width()).clamp(0.0, 1.0);
+                let norm_y = ((ptr_pos.y - img_rect.min.y) / img_rect.height()).clamp(0.0, 1.0);
+                self.deskew_state.is_clicking_points = true;
+                self.deskew_state.placed_points = vec![Pos2::new(norm_x, norm_y)];
             }
 
             if response.double_clicked() {

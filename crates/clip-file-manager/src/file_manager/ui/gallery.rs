@@ -161,13 +161,11 @@ impl FileManager {
             }
             if self.view == super::super::BrowserView::Photos
                 && self.photo_mode == super::super::gallery::similarity::PhotoMode::Similarity
-            {
-                if ui
+                && ui
                     .add(ButtonRole::Secondary.button("Reset View", palette))
                     .clicked()
-                {
-                    self.similarity_canvas.reset_view();
-                }
+            {
+                self.similarity_canvas.reset_view();
             }
         });
     }
@@ -672,10 +670,10 @@ fn paint_gallery_tile(
         let max_image_h = (screen.height() - 120.0).max(100.0);
 
         let (mut orig_w, mut orig_h) = orig_dims.unwrap_or((320.0, 240.0));
-        if let Some((_, tex_size)) = texture_info {
-            if (tex_size.x > tex_size.y) != (orig_w > orig_h) {
-                std::mem::swap(&mut orig_w, &mut orig_h);
-            }
+        if let Some((_, tex_size)) = texture_info
+            && (tex_size.x > tex_size.y) != (orig_w > orig_h)
+        {
+            std::mem::swap(&mut orig_w, &mut orig_h);
         }
 
         let scale = (max_image_w / orig_w.max(1.0))

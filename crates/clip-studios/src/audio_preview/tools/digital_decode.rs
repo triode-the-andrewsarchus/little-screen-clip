@@ -530,19 +530,19 @@ impl AudioPreviewState {
             }
         }
 
-        if response.clicked_by(egui::PointerButton::Primary) {
-            if let Some(pos) = response.interact_pointer_pos() {
-                if scroll_rect.contains(pos) {
-                    let ratio = (pos.x - scroll_rect.min.x) / scroll_rect.width();
-                    let target_start = ratio * self.duration_sec - self.view_duration_sec * 0.5;
-                    let max_start = (self.duration_sec - self.view_duration_sec).max(0.0);
-                    self.view_start_sec = target_start.clamp(0.0, max_start);
-                } else if hovered_chip_idx.is_some() {
-                    clicked_chip_idx = hovered_chip_idx;
-                } else {
-                    let clicked_t = x_to_time(pos.x).clamp(0.0, self.duration_sec);
-                    self.seek_to(clicked_t);
-                }
+        if response.clicked_by(egui::PointerButton::Primary)
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            if scroll_rect.contains(pos) {
+                let ratio = (pos.x - scroll_rect.min.x) / scroll_rect.width();
+                let target_start = ratio * self.duration_sec - self.view_duration_sec * 0.5;
+                let max_start = (self.duration_sec - self.view_duration_sec).max(0.0);
+                self.view_start_sec = target_start.clamp(0.0, max_start);
+            } else if hovered_chip_idx.is_some() {
+                clicked_chip_idx = hovered_chip_idx;
+            } else {
+                let clicked_t = x_to_time(pos.x).clamp(0.0, self.duration_sec);
+                self.seek_to(clicked_t);
             }
         }
 
@@ -900,69 +900,69 @@ impl AudioPreviewState {
             .digital_decode
             .hovered_symbol
             .or(self.digital_decode.selected_symbol);
-        if let Some(idx) = highlight_idx {
-            if let Some(sym) = self.digital_decode.symbols.get(idx) {
-                let x_start = time_to_x(sym.start_sec).clamp(track_min_x, track_max_x);
-                let x_end = time_to_x(sym.end_sec).clamp(track_min_x, track_max_x);
-                let rgb = sym.protocol.chip_color();
-                let highlight_col = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 65);
-                let border_col = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+        if let Some(idx) = highlight_idx
+            && let Some(sym) = self.digital_decode.symbols.get(idx)
+        {
+            let x_start = time_to_x(sym.start_sec).clamp(track_min_x, track_max_x);
+            let x_end = time_to_x(sym.end_sec).clamp(track_min_x, track_max_x);
+            let rgb = sym.protocol.chip_color();
+            let highlight_col = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 65);
+            let border_col = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
 
-                let highlight_rect = Rect::from_min_max(
+            let highlight_rect = Rect::from_min_max(
+                Pos2::new(x_start, ruler_rect.max.y),
+                Pos2::new(x_end.max(x_start + 2.0), spec_rect.max.y),
+            );
+            painter.rect_filled(highlight_rect, Rounding::ZERO, highlight_col);
+            painter.line_segment(
+                [
                     Pos2::new(x_start, ruler_rect.max.y),
-                    Pos2::new(x_end.max(x_start + 2.0), spec_rect.max.y),
-                );
-                painter.rect_filled(highlight_rect, Rounding::ZERO, highlight_col);
-                painter.line_segment(
-                    [
-                        Pos2::new(x_start, ruler_rect.max.y),
-                        Pos2::new(x_start, spec_rect.max.y),
-                    ],
-                    Stroke::new(1.8_f32, border_col),
-                );
-                painter.line_segment(
-                    [
-                        Pos2::new(x_end, ruler_rect.max.y),
-                        Pos2::new(x_end, spec_rect.max.y),
-                    ],
-                    Stroke::new(1.8_f32, border_col),
-                );
+                    Pos2::new(x_start, spec_rect.max.y),
+                ],
+                Stroke::new(1.8_f32, border_col),
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(x_end, ruler_rect.max.y),
+                    Pos2::new(x_end, spec_rect.max.y),
+                ],
+                Stroke::new(1.8_f32, border_col),
+            );
 
-                // Floating tooltip chip over hovered symbol
-                if self.digital_decode.hovered_symbol == Some(idx) {
-                    let desc = sym.details.as_deref().unwrap_or(&sym.symbol);
-                    egui::show_tooltip(ui.ctx(), response.id.with("sym_tt"), |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(format!("[{}]", sym.protocol.label()))
-                                    .strong()
-                                    .color(border_col),
-                            );
-                            ui.label(
-                                egui::RichText::new(&sym.symbol)
-                                    .strong()
-                                    .color(Color32::WHITE),
-                            );
-                        });
+            // Floating tooltip chip over hovered symbol
+            if self.digital_decode.hovered_symbol == Some(idx) {
+                let desc = sym.details.as_deref().unwrap_or(&sym.symbol);
+                egui::show_tooltip(ui.ctx(), response.id.with("sym_tt"), |ui| {
+                    ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!(
-                                "Time: {:.3}s - {:.3}s ({:.1} ms) • Confidence: {:.0}%",
-                                sym.start_sec,
-                                sym.end_sec,
-                                (sym.end_sec - sym.start_sec) * 1000.0,
-                                sym.confidence * 100.0
-                            ))
-                            .monospace()
-                            .color(crate::hex_to_c32(&palette.colors.text_secondary)),
+                            egui::RichText::new(format!("[{}]", sym.protocol.label()))
+                                .strong()
+                                .color(border_col),
                         );
-                        if !desc.is_empty() {
-                            ui.label(
-                                egui::RichText::new(desc)
-                                    .color(crate::hex_to_c32(&palette.colors.text_primary)),
-                            );
-                        }
+                        ui.label(
+                            egui::RichText::new(&sym.symbol)
+                                .strong()
+                                .color(Color32::WHITE),
+                        );
                     });
-                }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Time: {:.3}s - {:.3}s ({:.1} ms) • Confidence: {:.0}%",
+                            sym.start_sec,
+                            sym.end_sec,
+                            (sym.end_sec - sym.start_sec) * 1000.0,
+                            sym.confidence * 100.0
+                        ))
+                        .monospace()
+                        .color(crate::hex_to_c32(&palette.colors.text_secondary)),
+                    );
+                    if !desc.is_empty() {
+                        ui.label(
+                            egui::RichText::new(desc)
+                                .color(crate::hex_to_c32(&palette.colors.text_primary)),
+                        );
+                    }
+                });
             }
         }
 

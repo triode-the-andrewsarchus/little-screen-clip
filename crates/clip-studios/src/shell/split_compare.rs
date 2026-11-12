@@ -106,11 +106,11 @@ impl<'a> SplitCompareView<'a> {
         }
 
         if *self.is_dragging {
-            if response.dragged() {
-                if let Some(pos) = ptr_pos {
-                    let norm = ((pos.x - img_rect.min.x) / img_rect.width()).clamp(0.01, 0.99);
-                    *self.split_pos = norm;
-                }
+            if response.dragged()
+                && let Some(pos) = ptr_pos
+            {
+                let norm = ((pos.x - img_rect.min.x) / img_rect.width()).clamp(0.01, 0.99);
+                *self.split_pos = norm;
             }
             if response.drag_stopped() {
                 *self.is_dragging = false;

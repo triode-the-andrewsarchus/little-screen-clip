@@ -102,10 +102,10 @@ fn validate_region(region: &Region) -> Result<(), String> {
     {
         return Err("Region metadata exceeds display limits".into());
     }
-    if let Some(EmbeddedSample::Archive { path }) = &region.embedded {
-        if path.is_empty() || path.len() > 4096 {
-            return Err("Archive member path exceeds display limits".into());
-        }
+    if let Some(EmbeddedSample::Archive { path }) = &region.embedded
+        && (path.is_empty() || path.len() > 4096)
+    {
+        return Err("Archive member path exceeds display limits".into());
     }
     if region
         .properties

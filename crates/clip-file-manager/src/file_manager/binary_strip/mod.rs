@@ -63,7 +63,7 @@ impl Document {
     fn region(&self, offset: u64) -> (&str, [u8; 3]) {
         if self.uf2 {
             let within = offset % 512;
-            return if within < 32 || within >= 508 {
+            return if !(32..508).contains(&within) {
                 ("UF2 header / trailer", [185, 142, 218])
             } else if within
                 < 32 + u64::from(

@@ -284,9 +284,9 @@ pub(super) fn apply_dither_palette_cancellable(
         return Some(img.clone());
     }
 
-    let scale = params.pixel_scale.clamp(1, 16) as u32;
-    let dw = ((w + scale - 1) / scale).max(1);
-    let dh = ((h + scale - 1) / scale).max(1);
+    let scale = params.pixel_scale.clamp(1, 16);
+    let dw = w.div_ceil(scale).max(1);
+    let dh = h.div_ceil(scale).max(1);
     let colors = params.palette.colors();
 
     // Sample downscaled grid cells

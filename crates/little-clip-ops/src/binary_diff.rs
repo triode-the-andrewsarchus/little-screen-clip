@@ -166,37 +166,37 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
         ClipPayload::Text(s) => {
             let trimmed = s.trim();
             let p = Path::new(trimmed);
-            if p.is_file() {
-                if let Some(bytes) = read_binary_diff_file(p) {
-                    let label = p
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(trimmed)
-                        .to_string();
-                    return (label, bytes);
-                }
+            if p.is_file()
+                && let Some(bytes) = read_binary_diff_file(p)
+            {
+                let label = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(trimmed)
+                    .to_string();
+                return (label, bytes);
             }
             (item.title.clone(), s.as_bytes().to_vec())
         }
         ClipPayload::Markdown(s) => (item.title.clone(), s.as_bytes().to_vec()),
         ClipPayload::FileBatch(paths) => {
-            if let Some(first) = paths.first() {
-                if let Some(bytes) = read_binary_diff_file(first) {
-                    let label = first
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("file")
-                        .to_string();
-                    return (label, bytes);
-                }
+            if let Some(first) = paths.first()
+                && let Some(bytes) = read_binary_diff_file(first)
+            {
+                let label = first
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                return (label, bytes);
             }
             (item.title.clone(), Vec::new())
         }
         ClipPayload::Image { bytes, path, .. } => {
-            if let Some(path) = path {
-                if let Some(source_bytes) = read_binary_diff_file(path) {
-                    return (item.title.clone(), source_bytes);
-                }
+            if let Some(path) = path
+                && let Some(source_bytes) = read_binary_diff_file(path)
+            {
+                return (item.title.clone(), source_bytes);
             }
             (item.title.clone(), bytes.clone())
         }
@@ -210,15 +210,15 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
         }
         ClipPayload::Url(url) => (item.title.clone(), url.as_str().as_bytes().to_vec()),
         ClipPayload::MultiImage { paths, .. } => {
-            if let Some(first) = paths.first() {
-                if let Some(bytes) = read_binary_diff_file(first) {
-                    let label = first
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("image")
-                        .to_string();
-                    return (label, bytes);
-                }
+            if let Some(first) = paths.first()
+                && let Some(bytes) = read_binary_diff_file(first)
+            {
+                let label = first
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("image")
+                    .to_string();
+                return (label, bytes);
             }
             (item.title.clone(), Vec::new())
         }
@@ -468,14 +468,14 @@ pub fn parse_search_query(q: &str) -> Vec<Vec<u8>> {
 
     // 1. Try interpreting as hex string: "48 65 6c" or "0x48, 0x65" or "48656c"
     let hex_chars: String = q_clean.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    if hex_chars.len() >= 2 && hex_chars.len() % 2 == 0 {
-        if let Ok(bytes) = (0..hex_chars.len())
+    if hex_chars.len() >= 2
+        && hex_chars.len().is_multiple_of(2)
+        && let Ok(bytes) = (0..hex_chars.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&hex_chars[i..i + 2], 16))
             .collect::<Result<Vec<u8>, _>>()
-        {
-            candidates.push(bytes);
-        }
+    {
+        candidates.push(bytes);
     }
 
     // 2. Interpret as literal ASCII / UTF-8

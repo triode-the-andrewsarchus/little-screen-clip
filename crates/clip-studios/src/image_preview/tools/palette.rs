@@ -15,19 +15,17 @@ pub fn extract_palette(img: &RgbaImage, target_count: usize) -> (Vec<PaletteColo
 
     let mut i = 0;
     for pixel in img.pixels() {
-        if i % sample_stride == 0 {
-            if pixel[3] >= 64 {
-                sampled_valid_pixels += 1;
-                let r = pixel[0] as u64;
-                let g = pixel[1] as u64;
-                let b = pixel[2] as u64;
-                let key = (((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)) as u16;
-                let entry = bucket_counts.entry(key).or_insert((0, 0, 0, 0));
-                entry.0 += 1;
-                entry.1 += r;
-                entry.2 += g;
-                entry.3 += b;
-            }
+        if i % sample_stride == 0 && pixel[3] >= 64 {
+            sampled_valid_pixels += 1;
+            let r = pixel[0] as u64;
+            let g = pixel[1] as u64;
+            let b = pixel[2] as u64;
+            let key = (((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)) as u16;
+            let entry = bucket_counts.entry(key).or_insert((0, 0, 0, 0));
+            entry.0 += 1;
+            entry.1 += r;
+            entry.2 += g;
+            entry.3 += b;
         }
         i += 1;
     }

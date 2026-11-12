@@ -250,10 +250,10 @@ impl SlotSample {
     /// replaced, or undecodable sources leave the cache empty. This performs
     /// filesystem I/O and decoding; callers must keep it off the UI thread.
     pub fn ensure_audio_loaded(&mut self) {
-        if self.cached_audio.is_none() {
-            if let Some(audio) = CachedAudio::load(&self.file_path) {
-                self.set_cached_audio(Arc::new(audio));
-            }
+        if self.cached_audio.is_none()
+            && let Some(audio) = CachedAudio::load(&self.file_path)
+        {
+            self.set_cached_audio(Arc::new(audio));
         }
     }
 
@@ -300,16 +300,17 @@ impl SlotSample {
     /// Uses core's shared search and returns the input unchanged until PCM is ready.
     /// This method does no I/O; callers clamp the result to their active trim range.
     pub fn snap_time(&self, time_sec: f32) -> f32 {
-        if let Some(ref cached) = self.cached_audio {
-            if cached.sample_rate > 0 && !cached.mono_samples.is_empty() {
-                return little_clip_core::audio::snap_samples_to_zero_crossing(
-                    &cached.mono_samples,
-                    None,
-                    cached.sample_rate,
-                    time_sec,
-                    500, // 500 frames ≈ 11ms at 44.1kHz
-                );
-            }
+        if let Some(ref cached) = self.cached_audio
+            && cached.sample_rate > 0
+            && !cached.mono_samples.is_empty()
+        {
+            return little_clip_core::audio::snap_samples_to_zero_crossing(
+                &cached.mono_samples,
+                None,
+                cached.sample_rate,
+                time_sec,
+                500, // 500 frames ≈ 11ms at 44.1kHz
+            );
         }
         time_sec
     }

@@ -64,7 +64,7 @@ fn summarize(data: MidiData, cancelled: &AtomicBool) -> Result<Arc<Document>, St
 }
 
 fn pitch_window(histogram: &[usize; 128], low: u8, high: u8) -> (u8, u8) {
-    if usize::from(high - low) + 1 <= PITCHES {
+    if usize::from(high - low) < PITCHES {
         return (low.saturating_sub(1), high.saturating_add(1).min(127));
     }
     // Maximize retained notes; ties prefer the center of the score's range.

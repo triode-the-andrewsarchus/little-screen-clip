@@ -196,25 +196,24 @@ async fn run_noctalia_watchdog(ctx: Arc<DaemonContext>) {
         match output {
             Ok(out) if out.status.success() => {
                 consecutive_failures = 0;
-                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                    if let Some(is_active) = val
+                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout)
+                    && let Some(is_active) = val
                         .get("state")
                         .and_then(|s| s.get("lockScreenActive"))
                         .and_then(|b| b.as_bool())
-                    {
-                        if is_active && !was_noctalia_locked {
-                            info!(
-                                "Noctalia watchdog: lockScreenActive became true -> Blanking display"
-                            );
-                            was_noctalia_locked = true;
-                            ctx.set_lock_source(LockSource::Shell, true).await;
-                        } else if !is_active && was_noctalia_locked {
-                            info!(
-                                "Noctalia watchdog: lockScreenActive became false -> Restoring display"
-                            );
-                            was_noctalia_locked = false;
-                            ctx.set_lock_source(LockSource::Shell, false).await;
-                        }
+                {
+                    if is_active && !was_noctalia_locked {
+                        info!(
+                            "Noctalia watchdog: lockScreenActive became true -> Blanking display"
+                        );
+                        was_noctalia_locked = true;
+                        ctx.set_lock_source(LockSource::Shell, true).await;
+                    } else if !is_active && was_noctalia_locked {
+                        info!(
+                            "Noctalia watchdog: lockScreenActive became false -> Restoring display"
+                        );
+                        was_noctalia_locked = false;
+                        ctx.set_lock_source(LockSource::Shell, false).await;
                     }
                 }
             }

@@ -105,13 +105,12 @@ pub use cache::{RenderedPdf, ensure_rendered_pdf};
 /// rendering via `rdocx` for `.docx`, `.odt`, and `.rtf`.
 pub fn render_to_pdf(input: &Path, output_pdf: &Path) -> Result<(), String> {
     // 1. Try headless LibreOffice if installed (handles doc, docx, odt, rtf, ppt, pptx)
-    if let Ok(()) = render_with_libreoffice(input, output_pdf) {
-        if std::fs::metadata(output_pdf)
+    if let Ok(()) = render_with_libreoffice(input, output_pdf)
+        && std::fs::metadata(output_pdf)
             .map(|m| m.len() > 0)
             .unwrap_or(false)
-        {
-            return Ok(());
-        }
+    {
+        return Ok(());
     }
 
     // 2. Fallback to native pure-Rust rdocx layout engine

@@ -844,7 +844,7 @@ fn recipe_needs_prompt(recipe: &Recipe, state: &SlotManager) -> Option<(String, 
             } else {
                 state.right_hand()
             };
-            let has_text = item.map_or(false, |it| match &it.payload {
+            let has_text = item.is_some_and(|it| match &it.payload {
                 little_clip_core::ClipPayload::Text(t)
                 | little_clip_core::ClipPayload::Markdown(t) => !t.trim().is_empty(),
                 little_clip_core::ClipPayload::Url(_) => true,
@@ -906,16 +906,16 @@ impl PromptApp {
 
 impl PromptApp {
     fn poll_pending(&mut self, ctx: &egui::Context) -> bool {
-        if let Some(job) = &self.pending {
-            if let Some(response) = job.poll(ctx) {
-                self.pending = None;
-                match workbench::action_result(response) {
-                    Ok(()) => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        return true;
-                    }
-                    Err(error) => self.error = Some(error),
+        if let Some(job) = &self.pending
+            && let Some(response) = job.poll(ctx)
+        {
+            self.pending = None;
+            match workbench::action_result(response) {
+                Ok(()) => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return true;
                 }
+                Err(error) => self.error = Some(error),
             }
         }
         false
@@ -1142,15 +1142,10 @@ pub fn run_workbench() -> Result<(), eframe::Error> {
         {
             match action {
                 little_clip_core::ipc::LastAction::Recipe { recipe_name } => {
-                    if let Some(recipe) = find_recipe_by_name(&recipe_name) {
-                        if let Some((msg, def)) = recipe_needs_prompt(&recipe, &state) {
-                            return run_prompt_modal(
-                                recipe.name.clone(),
-                                msg,
-                                def,
-                                Some(recipe.name),
-                            );
-                        }
+                    if let Some(recipe) = find_recipe_by_name(&recipe_name)
+                        && let Some((msg, def)) = recipe_needs_prompt(&recipe, &state)
+                    {
+                        return run_prompt_modal(recipe.name.clone(), msg, def, Some(recipe.name));
                     }
                     // No prompt needed, execute immediately
                     let _ = send_ipc_request(&IpcRequest::ExecuteLastAction { prompt_text: None });

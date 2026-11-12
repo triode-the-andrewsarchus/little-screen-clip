@@ -347,7 +347,7 @@ mod tests {
                 batch = fixture.store.prune_candidates(&cursor).unwrap();
             }
             fixture.observe(&SourceRoot::from_root(&fixture.root));
-            fixture.store.apply_prune_batch(batch, |_| false).unwrap().0;
+            fixture.store.apply_prune_batch(batch, |_| false).unwrap();
             assert_eq!(fixture.store.vector_count, 197);
             assert!(
                 fixture

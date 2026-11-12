@@ -172,24 +172,24 @@ impl Previews {
             }
         }
         for (path, pending) in &self.pending {
-            if let Ok(image) = pending.progress.try_recv() {
-                if let Some(Ok(ready)) = self.ready.get_mut(path).map(|cached| &mut cached.value) {
-                    ready.refining = true;
-                    let pixels = egui::ColorImage::from_rgba_premultiplied(
-                        [image.width as usize, image.height as usize],
-                        &image.premultiplied_rgba,
-                    );
-                    if let Some(texture) = &mut ready.texture {
-                        texture.set(pixels, egui::TextureOptions::LINEAR);
-                    } else {
-                        ready.texture = Some(texture(
-                            ctx,
-                            format!("video_timeline:{}", path.display()),
-                            image,
-                        ));
-                    }
-                    ctx.request_repaint();
+            if let Ok(image) = pending.progress.try_recv()
+                && let Some(Ok(ready)) = self.ready.get_mut(path).map(|cached| &mut cached.value)
+            {
+                ready.refining = true;
+                let pixels = egui::ColorImage::from_rgba_premultiplied(
+                    [image.width as usize, image.height as usize],
+                    &image.premultiplied_rgba,
+                );
+                if let Some(texture) = &mut ready.texture {
+                    texture.set(pixels, egui::TextureOptions::LINEAR);
+                } else {
+                    ready.texture = Some(texture(
+                        ctx,
+                        format!("video_timeline:{}", path.display()),
+                        image,
+                    ));
                 }
+                ctx.request_repaint();
             }
         }
         let done: Vec<_> = self

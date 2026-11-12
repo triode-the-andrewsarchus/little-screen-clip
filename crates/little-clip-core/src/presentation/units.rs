@@ -64,7 +64,7 @@ pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
             original: format!("{}' {}\"", feet, inches),
             primary_conversion: format!("{:.1} cm", cm),
             secondary_conversion: Some(format!("{:.2} m", meters)),
-            rule_of_thumb: if cm >= 150.0 && cm <= 205.0 {
+            rule_of_thumb: if (150.0..=205.0).contains(&cm) {
                 Some("typical human height".to_string())
             } else {
                 None
@@ -153,7 +153,7 @@ pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
             let total_inches = val / 2.54;
             let feet = (total_inches / 12.0).floor();
             let rem_in = (total_inches % 12.0).round();
-            let height_thumb = if val >= 150.0 && val <= 205.0 {
+            let height_thumb = if (150.0..=205.0).contains(&val) {
                 Some("human height".to_string())
             } else {
                 None
@@ -243,7 +243,7 @@ pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
                 Some("water boiling point".to_string())
             } else if (val - 98.6).abs() < 1.5 {
                 Some("normal body temp".to_string())
-            } else if val >= 68.0 && val <= 74.0 {
+            } else if (68.0..=74.0).contains(&val) {
                 Some("comfortable room temp".to_string())
             } else {
                 None
@@ -263,7 +263,7 @@ pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
                 Some("water boiling point".to_string())
             } else if (val - 37.0).abs() < 0.5 {
                 Some("normal body temp".to_string())
-            } else if val >= 20.0 && val <= 24.0 {
+            } else if (20.0..=24.0).contains(&val) {
                 Some("comfortable room temp".to_string())
             } else {
                 None

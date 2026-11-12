@@ -862,7 +862,8 @@ fn rendered_full_score_copy_shortcut_exports_parseable_midi_to_left_hand() {
     };
     let mut render = |state: &mut MidiViewerState, events: Vec<egui::Event>| {
         time += 0.1;
-        let output = ctx.run(
+
+        ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -877,8 +878,7 @@ fn rendered_full_score_copy_shortcut_exports_parseable_midi_to_left_hand() {
                     state.render_ui_with_copy_dispatch(ui, &palette, &mut close, &mut dispatch);
                 });
             },
-        );
-        output
+        )
     };
 
     let initial = render(&mut state, Vec::new());

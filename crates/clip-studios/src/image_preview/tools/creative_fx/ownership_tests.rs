@@ -659,7 +659,7 @@ fn thumbnail_queue_saturation_retries_incrementally_with_direct_pixel_parity() {
         image::imageops::FilterType::Nearest,
     );
     let expected: Vec<_> = CreativeFxType::all()
-        .into_iter()
+        .iter()
         .map(|fx| {
             let preset = default_preset_for_fx(*fx);
             (*fx, apply_creative_fx(&thumb_base, &preset.params))

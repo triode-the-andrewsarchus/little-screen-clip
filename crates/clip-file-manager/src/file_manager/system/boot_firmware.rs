@@ -116,13 +116,13 @@ fn dmi(document: &mut Document, interface: &Path, root: &Path, reads: &mut Reads
     }
     let mut summary = String::new();
     for name in ["sys_vendor", "product_name", "bios_version"] {
-        if let Ok(value) = reads.read(&root.join(name)) {
-            if !value.is_empty() {
-                if !summary.is_empty() {
-                    summary.push_str(" · ");
-                }
-                summary.push_str(&value);
+        if let Ok(value) = reads.read(&root.join(name))
+            && !value.is_empty()
+        {
+            if !summary.is_empty() {
+                summary.push_str(" · ");
             }
+            summary.push_str(&value);
         }
     }
     if summary.is_empty() {

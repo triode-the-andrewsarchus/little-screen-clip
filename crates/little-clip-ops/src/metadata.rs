@@ -173,24 +173,22 @@ pub fn extract_image_metadata(bytes: &[u8]) -> ImageMetadataSummary {
                 }
             }
             exif::Tag::FNumber => {
-                if let exif::Value::Rational(ref rats) = field.value {
-                    if let Some(r) = rats.first() {
-                        if r.denom != 0 {
-                            summary.f_number = Some(r.num as f32 / r.denom as f32);
-                        }
-                    }
+                if let exif::Value::Rational(ref rats) = field.value
+                    && let Some(r) = rats.first()
+                    && r.denom != 0
+                {
+                    summary.f_number = Some(r.num as f32 / r.denom as f32);
                 }
             }
             exif::Tag::ExposureTime => {
                 summary.exposure_time = Some(field.display_value().to_string());
             }
             exif::Tag::FocalLength => {
-                if let exif::Value::Rational(ref rats) = field.value {
-                    if let Some(r) = rats.first() {
-                        if r.denom != 0 {
-                            summary.focal_length = Some(r.num as f32 / r.denom as f32);
-                        }
-                    }
+                if let exif::Value::Rational(ref rats) = field.value
+                    && let Some(r) = rats.first()
+                    && r.denom != 0
+                {
+                    summary.focal_length = Some(r.num as f32 / r.denom as f32);
                 }
             }
             exif::Tag::Software => {
@@ -217,22 +215,18 @@ pub fn extract_image_metadata(bytes: &[u8]) -> ImageMetadataSummary {
         exif::Tag::GPSLongitude,
         exif::Tag::GPSLongitudeRef,
     );
-    if let Some(alt_field) = exif_data.get_field(exif::Tag::GPSAltitude, exif::In::PRIMARY) {
-        if let exif::Value::Rational(ref rats) = alt_field.value {
-            if let Some(r) = rats.first() {
-                if r.denom != 0 {
-                    let mut alt = r.num as f64 / r.denom as f64;
-                    if let Some(ref_field) =
-                        exif_data.get_field(exif::Tag::GPSAltitudeRef, exif::In::PRIMARY)
-                    {
-                        if let Some(1) = ref_field.value.get_uint(0) {
-                            alt = -alt; // Below sea level
-                        }
-                    }
-                    summary.gps_altitude = Some(alt);
-                }
-            }
+    if let Some(alt_field) = exif_data.get_field(exif::Tag::GPSAltitude, exif::In::PRIMARY)
+        && let exif::Value::Rational(ref rats) = alt_field.value
+        && let Some(r) = rats.first()
+        && r.denom != 0
+    {
+        let mut alt = r.num as f64 / r.denom as f64;
+        if let Some(ref_field) = exif_data.get_field(exif::Tag::GPSAltitudeRef, exif::In::PRIMARY)
+            && let Some(1) = ref_field.value.get_uint(0)
+        {
+            alt = -alt; // Below sea level
         }
+        summary.gps_altitude = Some(alt);
     }
 
     summary

@@ -344,6 +344,12 @@ fn validate_frame_ack(ack: &[u8]) -> Result<(), DriverError> {
     Ok(())
 }
 
+impl Drop for TrofeoDriver {
+    fn drop(&mut self) {
+        let _ = self.handle.release_interface(USB_INTERFACE);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,11 +375,5 @@ mod tests {
         assert_eq!(frame_chunk_layout(1), (1, 1));
         assert_eq!(frame_chunk_layout(CHUNK_DATA_SIZE), (1, CHUNK_DATA_SIZE));
         assert_eq!(frame_chunk_layout(CHUNK_DATA_SIZE + 1), (2, 1));
-    }
-}
-
-impl Drop for TrofeoDriver {
-    fn drop(&mut self) {
-        let _ = self.handle.release_interface(USB_INTERFACE);
     }
 }

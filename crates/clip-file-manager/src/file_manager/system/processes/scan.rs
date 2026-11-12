@@ -124,10 +124,10 @@ fn descriptors(
             .and_then(|file| file.metadata());
         match metadata {
             Ok(metadata) => {
-                if let Some(device) = Device::from_metadata(&metadata) {
-                    if !devices.contains(&device) {
-                        devices.push(device);
-                    }
+                if let Some(device) = Device::from_metadata(&metadata)
+                    && !devices.contains(&device)
+                {
+                    devices.push(device);
                 }
             }
             Err(error) => coverage.error(&error),

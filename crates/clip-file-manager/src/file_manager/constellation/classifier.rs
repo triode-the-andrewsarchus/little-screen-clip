@@ -172,13 +172,13 @@ pub fn extract_features(samples: &[f32], sample_rate: f32) -> Option<SampleFeatu
         let freq = k as f32 * bin_hz;
         weighted_freq_sum += freq * m;
 
-        if freq >= 20.0 && freq < 100.0 {
+        if (20.0..100.0).contains(&freq) {
             sub_power += p;
-        } else if freq >= 100.0 && freq < 300.0 {
+        } else if (100.0..300.0).contains(&freq) {
             low_power += p;
-        } else if freq >= 300.0 && freq < 2500.0 {
+        } else if (300.0..2500.0).contains(&freq) {
             mid_power += p;
-        } else if freq >= 2500.0 && freq <= 11000.0 {
+        } else if (2500.0..=11000.0).contains(&freq) {
             high_power += p;
         }
     }

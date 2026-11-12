@@ -230,7 +230,7 @@ fn extend(
     buckets: &mut [Vec<Row>],
 ) {
     for (w, h) in SHAPES {
-        if x + w > width || (h == 4 && x % 2 != 0) {
+        if x + w > width || (h == 4 && !x.is_multiple_of(2)) {
             continue;
         }
         let mask = ((1_u128 << w) - 1) << x;
@@ -321,6 +321,22 @@ fn prune(rows: Vec<Row>) -> Vec<Row> {
     rows
 }
 
+pub(super) fn square_placeholder(count: usize, width: usize) -> Layout {
+    let columns = width.max(2) / 2;
+    Layout {
+        height: count.div_ceil(columns) * 2,
+        tiles: (0..count)
+            .map(|item| Tile {
+                item,
+                x: item % columns * 2,
+                y: item / columns * 2,
+                width: 2,
+                height: 2,
+            })
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,21 +369,5 @@ mod tests {
             }
         }
         assert!(improved);
-    }
-}
-
-pub(super) fn square_placeholder(count: usize, width: usize) -> Layout {
-    let columns = width.max(2) / 2;
-    Layout {
-        height: count.div_ceil(columns) * 2,
-        tiles: (0..count)
-            .map(|item| Tile {
-                item,
-                x: item % columns * 2,
-                y: item / columns * 2,
-                width: 2,
-                height: 2,
-            })
-            .collect(),
     }
 }

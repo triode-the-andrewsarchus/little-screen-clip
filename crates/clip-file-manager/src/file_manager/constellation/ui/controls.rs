@@ -136,8 +136,8 @@ impl ConstellationState {
                 }
                 return;
             }
-            if let Some(set) = self.selected_set() {
-                if ui
+            if let Some(set) = self.selected_set()
+                && ui
                     .add(
                         ButtonRole::Secondary
                             .button("Explore set", palette)
@@ -147,9 +147,8 @@ impl ConstellationState {
                         "Open pitch rings; cross rings to audition from lowest to highest",
                     )
                     .clicked()
-                {
-                    self.explore_set(set);
-                }
+            {
+                self.explore_set(set);
             }
             if outlined_toggle(
                 ui,
@@ -379,30 +378,27 @@ impl ConstellationState {
         self.poll_hover_previews();
 
         let cached_preview = self.hover_previews.get(&sample.file_path).cloned();
-        if cached_preview.is_none() {
-            if self.pending_hover_path.as_ref() != Some(&sample.file_path) {
-                self.pending_hover_path = Some(sample.file_path.clone());
-                self.hover_cancelled
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-                self.hover_cancelled =
-                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                let request = super::super::HoverPreviewRequest {
-                    generation: self.folder_generation,
-                    cancelled: self.hover_cancelled.clone(),
-                    file_path: sample.file_path.clone(),
-                    duration: sample.duration_seconds,
-                    sample_rate: (sample.sample_rate > 0).then_some(sample.sample_rate),
-                    channels: (sample.channels > 0).then_some(sample.channels),
-                    bit_depth: (sample.bit_depth > 0).then_some(sample.bit_depth),
-                };
-                if self
-                    .ensure_hover_worker()
-                    .is_none_or(|sender| sender.try_send(request).is_err())
-                {
-                    self.pending_hover_path = None;
-                }
-                ui.ctx().request_repaint();
+        if cached_preview.is_none() && self.pending_hover_path.as_ref() != Some(&sample.file_path) {
+            self.pending_hover_path = Some(sample.file_path.clone());
+            self.hover_cancelled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.hover_cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let request = super::super::HoverPreviewRequest {
+                generation: self.folder_generation,
+                cancelled: self.hover_cancelled.clone(),
+                file_path: sample.file_path.clone(),
+                duration: sample.duration_seconds,
+                sample_rate: (sample.sample_rate > 0).then_some(sample.sample_rate),
+                channels: (sample.channels > 0).then_some(sample.channels),
+                bit_depth: (sample.bit_depth > 0).then_some(sample.bit_depth),
+            };
+            if self
+                .ensure_hover_worker()
+                .is_none_or(|sender| sender.try_send(request).is_err())
+            {
+                self.pending_hover_path = None;
             }
+            ui.ctx().request_repaint();
         }
 
         let (sr, ch, bits) = if let Some(ref prev) = cached_preview {
@@ -521,7 +517,7 @@ impl ConstellationState {
                 truncated
             }
         } else {
-            format!("{}", rel_str)
+            rel_str.to_string()
         };
 
         painter.text(

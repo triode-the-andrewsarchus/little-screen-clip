@@ -89,16 +89,11 @@ impl SlotId {
 }
 
 /// Identifies which hand (stack) a clipboard operation targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum HandSide {
+    #[default]
     Left,
     Right,
-}
-
-impl Default for HandSide {
-    fn default() -> Self {
-        HandSide::Left
-    }
 }
 
 /// Manages dual-stack clipboard history, undo state, and UI cursor/selection.
@@ -355,16 +350,14 @@ impl SlotManager {
             &mut self.right_hand,
         ];
         for slot in slots {
-            if let Some(item) = slot {
-                if item.id == item_id {
-                    if let crate::item::ClipPayload::Image {
-                        ref mut thumbnail, ..
-                    } = item.payload
-                    {
-                        *thumbnail = Some(thumb.clone());
-                        updated = true;
-                    }
-                }
+            if let Some(item) = slot
+                && item.id == item_id
+                && let crate::item::ClipPayload::Image {
+                    ref mut thumbnail, ..
+                } = item.payload
+            {
+                *thumbnail = Some(thumb.clone());
+                updated = true;
             }
         }
         updated
@@ -388,16 +381,14 @@ impl SlotManager {
             &mut self.right_hand,
         ];
         for slot in slots {
-            if let Some(item) = slot {
-                if item.id == item_id {
-                    if let crate::item::ClipPayload::MultiImage {
-                        ref mut thumbnails, ..
-                    } = item.payload
-                    {
-                        *thumbnails = thumbs.clone();
-                        updated = true;
-                    }
-                }
+            if let Some(item) = slot
+                && item.id == item_id
+                && let crate::item::ClipPayload::MultiImage {
+                    ref mut thumbnails, ..
+                } = item.payload
+            {
+                *thumbnails = thumbs.clone();
+                updated = true;
             }
         }
         updated
@@ -421,23 +412,21 @@ impl SlotManager {
             &mut self.right_hand,
         ];
         for slot in slots {
-            if let Some(item) = slot {
-                if item.id == item_id {
-                    if let crate::item::ClipPayload::AudioRef {
-                        ref mut duration_ms,
-                        ref mut sample_rate,
-                        ref mut channels,
-                        waveform: ref mut wf,
-                        ..
-                    } = item.payload
-                    {
-                        *duration_ms = waveform.duration_ms;
-                        *sample_rate = waveform.sample_rate;
-                        *channels = waveform.channels;
-                        *wf = Some(waveform.clone());
-                        updated = true;
-                    }
-                }
+            if let Some(item) = slot
+                && item.id == item_id
+                && let crate::item::ClipPayload::AudioRef {
+                    ref mut duration_ms,
+                    ref mut sample_rate,
+                    ref mut channels,
+                    waveform: ref mut wf,
+                    ..
+                } = item.payload
+            {
+                *duration_ms = waveform.duration_ms;
+                *sample_rate = waveform.sample_rate;
+                *channels = waveform.channels;
+                *wf = Some(waveform.clone());
+                updated = true;
             }
         }
         updated
@@ -461,17 +450,15 @@ impl SlotManager {
             &mut self.right_hand,
         ];
         for slot in slots {
-            if let Some(item) = slot {
-                if item.id == item_id {
-                    if let crate::item::ClipPayload::AudioRef {
-                        waveform: Some(ref mut wf),
-                        ..
-                    } = item.payload
-                    {
-                        wf.spectral_colors = Some(colors.clone());
-                        updated = true;
-                    }
-                }
+            if let Some(item) = slot
+                && item.id == item_id
+                && let crate::item::ClipPayload::AudioRef {
+                    waveform: Some(ref mut wf),
+                    ..
+                } = item.payload
+            {
+                wf.spectral_colors = Some(colors.clone());
+                updated = true;
             }
         }
         updated
@@ -495,25 +482,23 @@ impl SlotManager {
             &mut self.right_hand,
         ];
         for slot in slots {
-            if let Some(item) = slot {
-                if item.id == item_id {
-                    if let crate::item::ClipPayload::Animation {
-                        ref mut thumbnail,
-                        ref mut width,
-                        ref mut height,
-                        ref mut duration_ms,
-                        ..
-                    } = item.payload
-                    {
-                        *width = thumb.width;
-                        *height = thumb.height;
-                        if *duration_ms == 0 {
-                            *duration_ms = thumb.loop_duration_ms;
-                        }
-                        *thumbnail = Some(thumb.clone());
-                        updated = true;
-                    }
+            if let Some(item) = slot
+                && item.id == item_id
+                && let crate::item::ClipPayload::Animation {
+                    ref mut thumbnail,
+                    ref mut width,
+                    ref mut height,
+                    ref mut duration_ms,
+                    ..
+                } = item.payload
+            {
+                *width = thumb.width;
+                *height = thumb.height;
+                if *duration_ms == 0 {
+                    *duration_ms = thumb.loop_duration_ms;
                 }
+                *thumbnail = Some(thumb.clone());
+                updated = true;
             }
         }
         updated
@@ -542,23 +527,15 @@ impl SlotManager {
                 ) {
                     return true;
                 }
-                if let Some(fp) = item.file_path() {
-                    if let Some(ext) = fp.extension().and_then(|e| e.to_str()) {
-                        let e = ext.to_ascii_lowercase();
-                        if matches!(
-                            e.as_str(),
-                            "stl"
-                                | "obj"
-                                | "gltf"
-                                | "glb"
-                                | "fbx"
-                                | "ply"
-                                | "splat"
-                                | "sog"
-                                | "spz"
-                        ) {
-                            return true;
-                        }
+                if let Some(fp) = item.file_path()
+                    && let Some(ext) = fp.extension().and_then(|e| e.to_str())
+                {
+                    let e = ext.to_ascii_lowercase();
+                    if matches!(
+                        e.as_str(),
+                        "stl" | "obj" | "gltf" | "glb" | "fbx" | "ply" | "splat" | "sog" | "spz"
+                    ) {
+                        return true;
                     }
                 }
                 false

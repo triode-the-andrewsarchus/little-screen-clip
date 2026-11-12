@@ -265,24 +265,26 @@ pub(crate) fn detect_transients_with_sensitivity_cancellable(
 
         let threshold = (median * 1.5 + mean * 0.4 + 0.15) / sens;
 
-        if odf[k] > threshold && odf[k] > odf[k - 1] && odf[k] >= odf[k + 1] {
-            if transients.is_empty() || k.saturating_sub(last_transient_hop) >= min_interval_hops {
-                let s_start = k * hop_size;
-                let s_end = (s_start + hop_size).min(samples.len());
-                let mut peak_sample = s_start;
-                let mut peak_val = 0.0f32;
-                for i in s_start..s_end {
-                    let v = samples[i].abs();
-                    if v > peak_val {
-                        peak_val = v;
-                        peak_sample = i;
-                    }
+        if odf[k] > threshold
+            && odf[k] > odf[k - 1]
+            && odf[k] >= odf[k + 1]
+            && (transients.is_empty() || k.saturating_sub(last_transient_hop) >= min_interval_hops)
+        {
+            let s_start = k * hop_size;
+            let s_end = (s_start + hop_size).min(samples.len());
+            let mut peak_sample = s_start;
+            let mut peak_val = 0.0f32;
+            for i in s_start..s_end {
+                let v = samples[i].abs();
+                if v > peak_val {
+                    peak_val = v;
+                    peak_sample = i;
                 }
-
-                let t = peak_sample as f32 / sample_rate;
-                transients.push(t);
-                last_transient_hop = k;
             }
+
+            let t = peak_sample as f32 / sample_rate;
+            transients.push(t);
+            last_transient_hop = k;
         }
     }
 

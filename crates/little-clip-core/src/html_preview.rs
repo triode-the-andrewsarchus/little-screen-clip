@@ -64,7 +64,7 @@ fn content(
     match name {
         "script" | "style" | "iframe" | "object" | "audio" | "video" => (),
         "img" => {
-            if let Some(src) = node.attr("src").and_then(|src| resolve(src)) {
+            if let Some(src) = node.attr("src").and_then(resolve) {
                 blocks.push(Block::Image(src, node.attr("alt").unwrap_or("").into()));
             }
         }
@@ -87,10 +87,10 @@ fn content(
             for child in node.children() {
                 if let Some(element) = scraper::ElementRef::wrap(child) {
                     content(element, resolve, blocks);
-                } else if let Some(text) = child.value().as_text() {
-                    if !text.trim().is_empty() {
-                        blocks.push(Block::Text(text.trim().into()));
-                    }
+                } else if let Some(text) = child.value().as_text()
+                    && !text.trim().is_empty()
+                {
+                    blocks.push(Block::Text(text.trim().into()));
                 }
             }
         }

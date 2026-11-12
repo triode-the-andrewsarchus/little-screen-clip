@@ -93,17 +93,11 @@ fn pinned(id: u32) -> io::Result<Vec<(&'static str, String)>> {
     }
     // SAFETY: sched_getcpu has no pointer arguments or side effects.
     if unsafe { libc::sched_getcpu() } != id as i32 {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "CPU placement could not be verified",
-        ));
+        return Err(io::Error::other("CPU placement could not be verified"));
     }
     let result = decoded(&CpuId::new());
     if unsafe { libc::sched_getcpu() } != id as i32 {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "CPU changed during CPUID observation",
-        ));
+        return Err(io::Error::other("CPU changed during CPUID observation"));
     }
     guard.restore()?;
     Ok(result)

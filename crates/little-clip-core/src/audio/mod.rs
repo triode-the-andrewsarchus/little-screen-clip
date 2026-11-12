@@ -689,8 +689,8 @@ mod tests {
         assert!(bounds.is_some());
         let (start, end) = bounds.unwrap();
         // Should detect start around 1.0s (accounting for 15ms padding = ~0.985s) and end around 2.0s (~2.015s)
-        assert!(start <= 1.0 && start >= 0.95);
-        assert!(end >= 1.99 && end <= 2.05);
+        assert!((0.95..=1.0).contains(&start));
+        assert!((1.99..=2.05).contains(&end));
 
         // Entirely silent track should return None
         analysis.ch1_samples = vec![0.0; 1000].into();

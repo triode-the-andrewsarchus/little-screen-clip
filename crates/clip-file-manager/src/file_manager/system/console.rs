@@ -170,7 +170,7 @@ fn decode(bytes: &[u8], format: Format) -> Result<Snapshot, String> {
             bytes.iter().copied().map(glyph).collect::<Vec<_>>()
         }
         Format::Unicode => {
-            if bytes.len() % 4 != 0 {
+            if !bytes.len().is_multiple_of(4) {
                 return Err("Incomplete native-endian Unicode console cell".into());
             }
             snapshot.description =
@@ -214,7 +214,7 @@ fn decode(bytes: &[u8], format: Format) -> Result<Snapshot, String> {
     Ok(snapshot)
 }
 fn attribute_cells(bytes: &[u8], snapshot: &mut Snapshot) -> Result<Vec<char>, String> {
-    if bytes.len() < 4 || (bytes.len() - 4) % 2 != 0 {
+    if bytes.len() < 4 || !(bytes.len() - 4).is_multiple_of(2) {
         return Err("Incomplete console header or attribute cell".into());
     }
     let (rows, columns) = (bytes[0], bytes[1]);
@@ -342,22 +342,20 @@ impl Capture {
         if format(document.kind).is_none() {
             return;
         }
-        if let Some((request, task)) = &self.pending {
-            if let Some(result) = task.poll() {
-                let matches = request.matches(document);
-                self.pending = None;
-                self.snapshot = None;
-                match result {
-                    Ok(Ok(snapshot)) if matches => {
-                        self.snapshot = Some(snapshot);
-                        self.error = None;
-                    }
-                    Ok(Ok(_)) => self.error = Some("Console capture superseded".into()),
-                    Ok(Err(error)) => self.error = Some(error),
-                    Err(error) => {
-                        self.error = Some(format!("Console capture unavailable: {error:?}"))
-                    }
+        if let Some((request, task)) = &self.pending
+            && let Some(result) = task.poll()
+        {
+            let matches = request.matches(document);
+            self.pending = None;
+            self.snapshot = None;
+            match result {
+                Ok(Ok(snapshot)) if matches => {
+                    self.snapshot = Some(snapshot);
+                    self.error = None;
                 }
+                Ok(Ok(_)) => self.error = Some("Console capture superseded".into()),
+                Ok(Err(error)) => self.error = Some(error),
+                Err(error) => self.error = Some(format!("Console capture unavailable: {error:?}")),
             }
         }
         ui.horizontal(|ui| {

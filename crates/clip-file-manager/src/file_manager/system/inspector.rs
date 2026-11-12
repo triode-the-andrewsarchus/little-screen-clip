@@ -105,16 +105,15 @@ impl Inspector {
                 let document = cache::collect_for(&path, token, policy)?;
                 if let Some(relation) = relation {
                     relation.verify()?;
-                    if let Some(start) = relation.process_start {
-                        if document
+                    if let Some(start) = relation.process_start
+                        && document
                             .observed_raw("Process start tick")
                             .and_then(|value| value.parse::<u64>().ok())
                             != Some(start)
-                        {
-                            return Err(
-                                "Process lifetime changed; refresh the originating device".into()
-                            );
-                        }
+                    {
+                        return Err(
+                            "Process lifetime changed; refresh the originating device".into()
+                        );
                     }
                 }
                 Ok(document)

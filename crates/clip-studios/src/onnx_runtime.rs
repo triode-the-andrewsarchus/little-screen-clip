@@ -126,10 +126,10 @@ fn load_session_with_options(
 /// then checking the runtime configuration file (`config.toml`), and finally falling back
 /// to the default hard-coded URL.
 pub fn resolve_model_url(model_name: &str, url_override: Option<&str>) -> String {
-    if let Some(url) = url_override {
-        if !url.trim().is_empty() {
-            return url.trim().to_string();
-        }
+    if let Some(url) = url_override
+        && !url.trim().is_empty()
+    {
+        return url.trim().to_string();
     }
     let config = little_clip_core::AppConfig::load();
     match model_name {
@@ -472,7 +472,7 @@ mod tests {
         let size = MIN_VALID_MODEL_BYTES as usize + 1;
         let barrier = std::sync::Barrier::new(2);
         std::thread::scope(|scope| {
-            for byte in [b'a', b'b'] {
+            for byte in *b"ab" {
                 let source = fixture.path().join(format!("{byte}.onnx"));
                 std::fs::write(&source, vec![byte; size]).unwrap();
                 let url = format!("file://{}", source.display());
@@ -480,7 +480,7 @@ mod tests {
                 let barrier = &barrier;
                 scope.spawn(move || {
                     download_model(
-                        &cache,
+                        cache,
                         name,
                         &url,
                         &AtomicBool::new(false),

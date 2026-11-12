@@ -44,20 +44,21 @@ impl ClipboardRoute {
     }
 
     pub(super) fn cancel(&mut self, id: Uuid, now: Instant) -> ClipboardRouteStatus {
-        if let Some(route) = &mut self.current {
-            if route.id == Some(id) && route.status(now) == ClipboardRouteStatus::Pending {
-                route.status = ClipboardRouteStatus::Cancelled;
-            }
+        if let Some(route) = &mut self.current
+            && route.id == Some(id)
+            && route.status(now) == ClipboardRouteStatus::Pending
+        {
+            route.status = ClipboardRouteStatus::Cancelled;
         }
         self.status(id, now)
     }
 
     pub(super) fn take(&mut self, now: Instant) -> (HandSide, bool) {
-        if let Some(route) = &mut self.current {
-            if route.status(now) == ClipboardRouteStatus::Pending {
-                route.status = ClipboardRouteStatus::Claimed;
-                return (route.hand, route.restore);
-            }
+        if let Some(route) = &mut self.current
+            && route.status(now) == ClipboardRouteStatus::Pending
+        {
+            route.status = ClipboardRouteStatus::Claimed;
+            return (route.hand, route.restore);
         }
         (HandSide::Left, false)
     }

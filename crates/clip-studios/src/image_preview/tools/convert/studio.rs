@@ -433,19 +433,18 @@ impl ImagePreviewState {
         // Ensure converted texture is loaded
         if self.convert_state.output_matches(&self.input_stamp())
             && (self.convert_state.dirty_texture || self.convert_state.converted_texture.is_none())
+            && let Some(ref conv_rgba) = self.convert_state.converted_rgba
         {
-            if let Some(ref conv_rgba) = self.convert_state.converted_rgba {
-                let color_img = egui::ColorImage::from_rgba_unmultiplied(
-                    [conv_rgba.width() as usize, conv_rgba.height() as usize],
-                    conv_rgba.as_raw(),
-                );
-                self.convert_state.converted_texture = Some(ctx.load_texture(
-                    "converted_preview_tex",
-                    color_img,
-                    image_texture_options(conv_rgba),
-                ));
-                self.convert_state.dirty_texture = false;
-            }
+            let color_img = egui::ColorImage::from_rgba_unmultiplied(
+                [conv_rgba.width() as usize, conv_rgba.height() as usize],
+                conv_rgba.as_raw(),
+            );
+            self.convert_state.converted_texture = Some(ctx.load_texture(
+                "converted_preview_tex",
+                color_img,
+                image_texture_options(conv_rgba),
+            ));
+            self.convert_state.dirty_texture = false;
         }
 
         let split = self.convert_state.comparison_split.clamp(0.0, 1.0);
@@ -513,11 +512,11 @@ impl ImagePreviewState {
         }
 
         if self.convert_state.is_dragging_split {
-            if response.dragged() {
-                if let Some(pos) = ptr_pos {
-                    let new_split = ((pos.x - img_rect.min.x) / img_rect.width()).clamp(0.01, 0.99);
-                    self.convert_state.comparison_split = new_split;
-                }
+            if response.dragged()
+                && let Some(pos) = ptr_pos
+            {
+                let new_split = ((pos.x - img_rect.min.x) / img_rect.width()).clamp(0.01, 0.99);
+                self.convert_state.comparison_split = new_split;
             }
             if response.drag_stopped() {
                 self.convert_state.is_dragging_split = false;

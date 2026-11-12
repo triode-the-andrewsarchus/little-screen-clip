@@ -184,23 +184,23 @@ fn access(document: &mut Document, root: &Path) {
     }
 }
 fn mux(topology: &mut Topology, document: &mut Document, root: &Path, anchor: usize) {
-    if let Ok(target) = root.join("mux_device").canonicalize() {
-        if matches!(object(&target), Some(Object::I2cClient(..))) {
-            let upstream = topology.nodes[anchor].parent;
-            let mux = buses::add(
-                topology,
-                document,
-                target.clone(),
-                "Upstream I²C mux device".into(),
-                upstream,
-            );
-            topology.nodes[anchor].parent = Some(mux);
-            document.facts.push(Fact::text(
-                "I²C mux relationship",
-                target.display().to_string(),
-                root.join("mux_device"),
-            ));
-        }
+    if let Ok(target) = root.join("mux_device").canonicalize()
+        && matches!(object(&target), Some(Object::I2cClient(..)))
+    {
+        let upstream = topology.nodes[anchor].parent;
+        let mux = buses::add(
+            topology,
+            document,
+            target.clone(),
+            "Upstream I²C mux device".into(),
+            upstream,
+        );
+        topology.nodes[anchor].parent = Some(mux);
+        document.facts.push(Fact::text(
+            "I²C mux relationship",
+            target.display().to_string(),
+            root.join("mux_device"),
+        ));
     }
 }
 fn channels(document: &mut Document, root: &Path) {
@@ -295,17 +295,17 @@ fn inventory(
     let mut registrations = Vec::new();
     for path in paths {
         let entry_label = label(document, &path, reads);
-        if let Some(Object::I2cClient(_, encoded)) = object(&path) {
-            if let Some((address, bits, target)) = names::address(encoded) {
-                registrations.push(Registration {
-                    address,
-                    bits,
-                    target,
-                    label: entry_label.clone(),
-                    path: path.clone(),
-                    selected: path == selected_path,
-                });
-            }
+        if let Some(Object::I2cClient(_, encoded)) = object(&path)
+            && let Some((address, bits, target)) = names::address(encoded)
+        {
+            registrations.push(Registration {
+                address,
+                bits,
+                target,
+                label: entry_label.clone(),
+                path: path.clone(),
+                selected: path == selected_path,
+            });
         }
         if !topology.nodes.iter().any(|node| node.path == path) {
             buses::add(

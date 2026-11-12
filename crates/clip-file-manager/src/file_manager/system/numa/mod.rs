@@ -284,12 +284,10 @@ fn node_facts(document: &mut Document, path: &Path, id: u32, selected: bool, sum
     }
     if let Some(fact) = document.facts.iter().find(|fact| {
         fact.source == path.join("cpulist") && fact.outcome == Outcome::Observed && !fact.retained
-    }) {
-        if selected {
-            if let Some(raw) = &fact.raw {
-                summary.push_str(&format!(" · CPUs {raw}"));
-            }
-        }
+    }) && selected
+        && let Some(raw) = &fact.raw
+    {
+        summary.push_str(&format!(" · CPUs {raw}"));
     }
     let meminfo = document
         .facts

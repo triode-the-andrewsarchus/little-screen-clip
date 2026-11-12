@@ -198,10 +198,10 @@ pub(super) fn collect(document: &mut Document, root: &Path, context: &Context, r
         thermal_links(document, root);
     }
     document.telemetry = assemble(document, kind, root);
-    if document.interface_directory {
-        if let Some(data) = &document.telemetry {
-            document.title = data.role.clone();
-        }
+    if document.interface_directory
+        && let Some(data) = &document.telemetry
+    {
+        document.title = data.role.clone();
     }
 }
 fn sensor_context(document: &mut Document, root: &Path, context: &Context, reads: &mut Reads) {

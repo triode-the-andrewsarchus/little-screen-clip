@@ -297,12 +297,11 @@ impl<'a, T: Copy + PartialEq> TabBar<'a, T> {
                         },
                     )
                 });
-                if let Some(index) = self.tabs.iter().position(|tab| tab.value == self.selected) {
-                    if let Some(target) = self.keyboard_target(ui, index) {
-                        if self.tabs[target].value != self.selected {
-                            changed = Some(self.tabs[target].value);
-                        }
-                    }
+                if let Some(index) = self.tabs.iter().position(|tab| tab.value == self.selected)
+                    && let Some(target) = self.keyboard_target(ui, index)
+                    && self.tabs[target].value != self.selected
+                {
+                    changed = Some(self.tabs[target].value);
                 }
             }
             (changed, closed)

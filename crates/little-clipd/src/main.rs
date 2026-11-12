@@ -295,14 +295,15 @@ impl DaemonContext {
         target_hand: little_clip_core::HandSide,
         prior_left: Option<ClipItem>,
     ) {
-        if restore_os && target_hand == little_clip_core::HandSide::Right {
-            if let Some(left_item) = prior_left {
-                let restore_ctx = Arc::clone(self);
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(80)).await;
-                    copy_to_os_clipboard(&left_item, &restore_ctx).await;
-                });
-            }
+        if restore_os
+            && target_hand == little_clip_core::HandSide::Right
+            && let Some(left_item) = prior_left
+        {
+            let restore_ctx = Arc::clone(self);
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                copy_to_os_clipboard(&left_item, &restore_ctx).await;
+            });
         }
     }
 }
@@ -326,14 +327,14 @@ async fn save_last_action(action: &little_clip_core::ipc::LastAction, ctx: &Daem
     let mut lock = ctx.last_action.write().await;
     *lock = Some(action.clone());
     let path = get_last_action_path();
-    if let Some(parent) = path.parent() {
-        if let Err(err) = std::fs::create_dir_all(parent) {
-            warn!(
-                "Failed to create directory for last action state at {}: {err}",
-                parent.display()
-            );
-            return;
-        }
+    if let Some(parent) = path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        warn!(
+            "Failed to create directory for last action state at {}: {err}",
+            parent.display()
+        );
+        return;
     }
     match serde_json::to_string_pretty(action) {
         Ok(json) => {
@@ -1131,30 +1132,29 @@ fn schedule_thumbnail_generation(item: &ClipItem, ctx: Arc<DaemonContext>) {
         ref mime,
         ..
     } = item.payload
+        && thumbnail.is_none()
     {
-        if thumbnail.is_none() {
-            let item_id = item.id;
-            let bytes = bytes.clone();
-            let mime = mime.clone();
-            tokio::task::spawn_blocking(move || {
-                if let Some(thumb) = little_clip_core::item::ImageThumbnail::generate_with_mime(
-                    &bytes,
-                    Some(&mime),
-                    320,
-                    220,
-                ) {
-                    tokio::spawn(async move {
-                        let updated = {
-                            let mut mgr = ctx.manager.write().await;
-                            mgr.update_thumbnail(item_id, thumb)
-                        };
-                        if updated {
-                            ctx.refresh_display().await;
-                        }
-                    });
-                }
-            });
-        }
+        let item_id = item.id;
+        let bytes = bytes.clone();
+        let mime = mime.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Some(thumb) = little_clip_core::item::ImageThumbnail::generate_with_mime(
+                &bytes,
+                Some(&mime),
+                320,
+                220,
+            ) {
+                tokio::spawn(async move {
+                    let updated = {
+                        let mut mgr = ctx.manager.write().await;
+                        mgr.update_thumbnail(item_id, thumb)
+                    };
+                    if updated {
+                        ctx.refresh_display().await;
+                    }
+                });
+            }
+        });
     }
 }
 
@@ -1165,79 +1165,76 @@ fn schedule_audio_waveform_generation(item: &ClipItem, ctx: Arc<DaemonContext>) 
         ref waveform,
         ..
     } = item.payload
+        && waveform.is_none()
     {
-        if waveform.is_none() {
-            let item_id = item.id;
-            let path_clone = path.clone();
-            let ctx_p1 = Arc::clone(&ctx);
-            let ctx_p2 = Arc::clone(&ctx);
+        let item_id = item.id;
+        let path_clone = path.clone();
+        let ctx_p1 = Arc::clone(&ctx);
+        let ctx_p2 = Arc::clone(&ctx);
 
-            let audio_cfg = match ctx.renderer.try_read() {
-                Ok(r) => r.config.audio.clone(),
-                Err(_) => little_clip_core::AppConfig::load().audio,
-            };
+        let audio_cfg = match ctx.renderer.try_read() {
+            Ok(r) => r.config.audio.clone(),
+            Err(_) => little_clip_core::AppConfig::load().audio,
+        };
 
-            tokio::task::spawn_blocking(move || {
-                // Phase 1: Fast plain waveform generation (200 bars)
-                // If duration exceeds audio_cfg.max_full_waveform_sec, extracts a 30s snippet
-                let audio_cfg_p2 = audio_cfg.clone();
-                if let Some(plain_wf) =
-                    little_clip_core::compute_plain_waveform(&path_clone, 200, &audio_cfg)
-                {
-                    let path_p2 = path_clone.clone();
-                    tokio::spawn(async move {
-                        let updated = {
-                            let mut mgr = ctx_p1.manager.write().await;
-                            mgr.update_audio_waveform(item_id, plain_wf)
-                        };
-                        if updated {
-                            ctx_p1.refresh_display().await;
-                        }
-
-                        // Phase 2: Spectral frequency analysis (adds frequency-based color map)
-                        tokio::task::spawn_blocking(move || {
-                            if let Some(spectral_colors) = little_clip_core::compute_spectral_colors(
-                                &path_p2,
-                                200,
-                                &audio_cfg_p2,
-                            ) {
-                                tokio::spawn(async move {
-                                    let updated_spectral = {
-                                        let mut mgr = ctx_p2.manager.write().await;
-                                        mgr.attach_audio_spectral_colors(item_id, spectral_colors)
-                                    };
-                                    if updated_spectral {
-                                        ctx_p2.refresh_display().await;
-                                    }
-                                });
-                            }
-                        });
-                    });
-                } else {
-                    tracing::warn!("Failed to decode audio waveform for {:?}", path_clone);
-                    let empty_wf = little_clip_core::AudioWaveform {
-                        channels: 2,
-                        sample_rate: 44100,
-                        duration_ms,
-                        ch1_peaks: Vec::new(),
-                        ch2_peaks: None,
-                        spectral_colors: None,
-                        is_snippet: false,
-                        snippet_start_ms: 0,
-                        snippet_duration_ms: 0,
+        tokio::task::spawn_blocking(move || {
+            // Phase 1: Fast plain waveform generation (200 bars)
+            // If duration exceeds audio_cfg.max_full_waveform_sec, extracts a 30s snippet
+            let audio_cfg_p2 = audio_cfg.clone();
+            if let Some(plain_wf) =
+                little_clip_core::compute_plain_waveform(&path_clone, 200, &audio_cfg)
+            {
+                let path_p2 = path_clone.clone();
+                tokio::spawn(async move {
+                    let updated = {
+                        let mut mgr = ctx_p1.manager.write().await;
+                        mgr.update_audio_waveform(item_id, plain_wf)
                     };
-                    tokio::spawn(async move {
-                        let updated = {
-                            let mut mgr = ctx_p1.manager.write().await;
-                            mgr.update_audio_waveform(item_id, empty_wf)
-                        };
-                        if updated {
-                            ctx_p1.refresh_display().await;
+                    if updated {
+                        ctx_p1.refresh_display().await;
+                    }
+
+                    // Phase 2: Spectral frequency analysis (adds frequency-based color map)
+                    tokio::task::spawn_blocking(move || {
+                        if let Some(spectral_colors) =
+                            little_clip_core::compute_spectral_colors(&path_p2, 200, &audio_cfg_p2)
+                        {
+                            tokio::spawn(async move {
+                                let updated_spectral = {
+                                    let mut mgr = ctx_p2.manager.write().await;
+                                    mgr.attach_audio_spectral_colors(item_id, spectral_colors)
+                                };
+                                if updated_spectral {
+                                    ctx_p2.refresh_display().await;
+                                }
+                            });
                         }
                     });
-                }
-            });
-        }
+                });
+            } else {
+                tracing::warn!("Failed to decode audio waveform for {:?}", path_clone);
+                let empty_wf = little_clip_core::AudioWaveform {
+                    channels: 2,
+                    sample_rate: 44100,
+                    duration_ms,
+                    ch1_peaks: Vec::new(),
+                    ch2_peaks: None,
+                    spectral_colors: None,
+                    is_snippet: false,
+                    snippet_start_ms: 0,
+                    snippet_duration_ms: 0,
+                };
+                tokio::spawn(async move {
+                    let updated = {
+                        let mut mgr = ctx_p1.manager.write().await;
+                        mgr.update_audio_waveform(item_id, empty_wf)
+                    };
+                    if updated {
+                        ctx_p1.refresh_display().await;
+                    }
+                });
+            }
+        });
     }
 }
 
@@ -1248,52 +1245,46 @@ fn schedule_animation_generation(item: &ClipItem, ctx: Arc<DaemonContext>) {
         ref thumbnail,
         ..
     } = item.payload
+        && thumbnail.is_none()
     {
-        if thumbnail.is_none() {
-            let item_id = item.id;
-            let path_clone = path.clone();
-            let format_clone = format.clone();
-            let ctx_clone = Arc::clone(&ctx);
+        let item_id = item.id;
+        let path_clone = path.clone();
+        let format_clone = format.clone();
+        let ctx_clone = Arc::clone(&ctx);
 
-            tokio::task::spawn_blocking(move || {
-                let anim_thumb = if format_clone == "GIF" || format_clone == "WEBP" {
-                    little_clip_core::animation::decode_animated_gif_or_webp(
-                        &path_clone,
-                        200,
-                        150,
-                        25,
-                    )
-                } else if little_clip_core::animation::is_video_path(&path_clone) {
-                    little_clip_core::animation::extract_video_preview_frames(
-                        &path_clone,
-                        200,
-                        150,
-                        25,
-                        2.5,
-                        true,
-                    )
-                } else {
-                    None
-                };
+        tokio::task::spawn_blocking(move || {
+            let anim_thumb = if format_clone == "GIF" || format_clone == "WEBP" {
+                little_clip_core::animation::decode_animated_gif_or_webp(&path_clone, 200, 150, 25)
+            } else if little_clip_core::animation::is_video_path(&path_clone) {
+                little_clip_core::animation::extract_video_preview_frames(
+                    &path_clone,
+                    200,
+                    150,
+                    25,
+                    2.5,
+                    true,
+                )
+            } else {
+                None
+            };
 
-                if let Some(thumb) = anim_thumb {
-                    tokio::spawn(async move {
-                        let updated = {
-                            let mut mgr = ctx_clone.manager.write().await;
-                            mgr.update_animation_thumbnail(item_id, thumb)
-                        };
-                        if updated {
-                            ctx_clone.refresh_display().await;
-                        }
-                    });
-                } else {
-                    tracing::warn!(
-                        "Failed to generate animation thumbnail for {:?}",
-                        path_clone
-                    );
-                }
-            });
-        }
+            if let Some(thumb) = anim_thumb {
+                tokio::spawn(async move {
+                    let updated = {
+                        let mut mgr = ctx_clone.manager.write().await;
+                        mgr.update_animation_thumbnail(item_id, thumb)
+                    };
+                    if updated {
+                        ctx_clone.refresh_display().await;
+                    }
+                });
+            } else {
+                tracing::warn!(
+                    "Failed to generate animation thumbnail for {:?}",
+                    path_clone
+                );
+            }
+        });
     }
 }
 
@@ -1304,44 +1295,41 @@ fn schedule_multi_image_thumbnail_generation(item: &ClipItem, ctx: Arc<DaemonCon
         ref thumbnails,
         ..
     } = item.payload
+        && thumbnails.is_empty()
     {
-        if thumbnails.is_empty() {
-            let item_id = item.id;
-            let indices = preview_indices.clone();
-            let paths_subset: Vec<PathBuf> = indices
-                .iter()
-                .filter_map(|&idx| paths.get(idx).cloned())
-                .collect();
+        let item_id = item.id;
+        let indices = preview_indices.clone();
+        let paths_subset: Vec<PathBuf> = indices
+            .iter()
+            .filter_map(|&idx| paths.get(idx).cloned())
+            .collect();
 
-            tokio::task::spawn_blocking(move || {
-                let mut thumbs = Vec::with_capacity(paths_subset.len());
-                for path in paths_subset {
-                    if let Ok(bytes) = std::fs::read(&path) {
-                        if let Some(thumb) =
-                            little_clip_core::item::ImageThumbnail::generate_with_mime(
-                                &bytes,
-                                Some(&little_clip_core::item::guess_image_mime(&path)),
-                                200,
-                                160,
-                            )
-                        {
-                            thumbs.push(thumb);
-                        }
+        tokio::task::spawn_blocking(move || {
+            let mut thumbs = Vec::with_capacity(paths_subset.len());
+            for path in paths_subset {
+                if let Ok(bytes) = std::fs::read(&path)
+                    && let Some(thumb) = little_clip_core::item::ImageThumbnail::generate_with_mime(
+                        &bytes,
+                        Some(&little_clip_core::item::guess_image_mime(&path)),
+                        200,
+                        160,
+                    )
+                {
+                    thumbs.push(thumb);
+                }
+            }
+            if !thumbs.is_empty() {
+                tokio::spawn(async move {
+                    let updated = {
+                        let mut mgr = ctx.manager.write().await;
+                        mgr.update_multi_image_thumbnails(item_id, thumbs)
+                    };
+                    if updated {
+                        ctx.refresh_display().await;
                     }
-                }
-                if !thumbs.is_empty() {
-                    tokio::spawn(async move {
-                        let updated = {
-                            let mut mgr = ctx.manager.write().await;
-                            mgr.update_multi_image_thumbnails(item_id, thumbs)
-                        };
-                        if updated {
-                            ctx.refresh_display().await;
-                        }
-                    });
-                }
-            });
-        }
+                });
+            }
+        });
     }
 }
 
@@ -1480,35 +1468,35 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                 .arg(&image_mime)
                 .output()
                 .await
+                && img_out.status.success()
+                && !img_out.stdout.is_empty()
             {
-                if img_out.status.success() && !img_out.stdout.is_empty() {
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    img_out.stdout.hash(&mut hasher);
-                    let hash = hasher.finish();
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                img_out.stdout.hash(&mut hasher);
+                let hash = hasher.finish();
 
-                    let self_img_hash = *ctx.self_copied_image_hash.read().await;
-                    if self_img_hash == Some(hash) {
-                        last_image_hash = Some(hash);
-                        continue;
-                    }
+                let self_img_hash = *ctx.self_copied_image_hash.read().await;
+                if self_img_hash == Some(hash) {
+                    last_image_hash = Some(hash);
+                    continue;
+                }
 
-                    if Some(hash) != last_image_hash {
-                        last_image_hash = Some(hash);
-                        last_clipboard_text.clear();
+                if Some(hash) != last_image_hash {
+                    last_image_hash = Some(hash);
+                    last_clipboard_text.clear();
 
-                        capture_clipboard_selection(
-                            &ctx,
-                            img_out.stdout,
-                            image_mime,
-                            Some(tokio::time::Instant::now()),
-                            None,
-                        )
-                        .await;
-                        continue;
-                    } else {
-                        // Same image as last tick, no update needed
-                        continue;
-                    }
+                    capture_clipboard_selection(
+                        &ctx,
+                        img_out.stdout,
+                        image_mime,
+                        Some(tokio::time::Instant::now()),
+                        None,
+                    )
+                    .await;
+                    continue;
+                } else {
+                    // Same image as last tick, no update needed
+                    continue;
                 }
             }
         }
@@ -1518,66 +1506,62 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
             .arg("-n")
             .output()
             .await
+            && output.status.success()
+            && let Ok(text) = String::from_utf8(output.stdout)
         {
-            if output.status.success() {
-                if let Ok(text) = String::from_utf8(output.stdout) {
-                    if ctx.is_self_copied_text(&text).await {
-                        last_clipboard_text = text;
-                        continue;
-                    }
+            if ctx.is_self_copied_text(&text).await {
+                last_clipboard_text = text;
+                continue;
+            }
 
-                    // Check if there is an active override routing to Right Hand.
-                    let has_active_right_route = {
-                        ctx.route_next_clipboard
-                            .read()
-                            .await
-                            .targets_right(tokio::time::Instant::now())
-                    };
+            // Check if there is an active override routing to Right Hand.
+            let has_active_right_route = {
+                ctx.route_next_clipboard
+                    .read()
+                    .await
+                    .targets_right(tokio::time::Instant::now())
+            };
 
-                    // Check if clipboard content matches what is already in Left Hand
-                    let is_already_in_left = {
-                        let mgr = ctx.manager.read().await;
-                        if let Some(left_item) = mgr.left_hand() {
-                            match &left_item.payload {
-                                little_clip_core::ClipPayload::FileBatch(files) => {
-                                    let cand =
-                                        little_clip_core::item::extract_local_file_paths(&text);
-                                    !cand.is_empty() && cand == *files
-                                }
-                                little_clip_core::ClipPayload::AudioRef { path, .. } => {
-                                    let cand =
-                                        little_clip_core::item::extract_local_file_paths(&text);
-                                    cand.len() == 1 && cand[0] == *path
-                                }
-                                little_clip_core::ClipPayload::Text(t) => t.trim() == text.trim(),
-                                _ => false,
-                            }
-                        } else {
-                            false
+            // Check if clipboard content matches what is already in Left Hand
+            let is_already_in_left = {
+                let mgr = ctx.manager.read().await;
+                if let Some(left_item) = mgr.left_hand() {
+                    match &left_item.payload {
+                        little_clip_core::ClipPayload::FileBatch(files) => {
+                            let cand = little_clip_core::item::extract_local_file_paths(&text);
+                            !cand.is_empty() && cand == *files
                         }
-                    };
-
-                    if !has_active_right_route && is_already_in_left {
-                        last_clipboard_text = text;
-                        continue;
+                        little_clip_core::ClipPayload::AudioRef { path, .. } => {
+                            let cand = little_clip_core::item::extract_local_file_paths(&text);
+                            cand.len() == 1 && cand[0] == *path
+                        }
+                        little_clip_core::ClipPayload::Text(t) => t.trim() == text.trim(),
+                        _ => false,
                     }
-
-                    // A pending route cannot turn a previously observed value
-                    // into a new copy. Polling cannot distinguish equal offers.
-                    if !text.is_empty() && text != last_clipboard_text {
-                        last_clipboard_text = text.clone();
-                        last_image_hash = None;
-
-                        capture_clipboard_selection(
-                            &ctx,
-                            text.into_bytes(),
-                            "text/plain;charset=utf-8".into(),
-                            Some(tokio::time::Instant::now()),
-                            None,
-                        )
-                        .await;
-                    }
+                } else {
+                    false
                 }
+            };
+
+            if !has_active_right_route && is_already_in_left {
+                last_clipboard_text = text;
+                continue;
+            }
+
+            // A pending route cannot turn a previously observed value
+            // into a new copy. Polling cannot distinguish equal offers.
+            if !text.is_empty() && text != last_clipboard_text {
+                last_clipboard_text = text.clone();
+                last_image_hash = None;
+
+                capture_clipboard_selection(
+                    &ctx,
+                    text.into_bytes(),
+                    "text/plain;charset=utf-8".into(),
+                    Some(tokio::time::Instant::now()),
+                    None,
+                )
+                .await;
             }
         }
     }

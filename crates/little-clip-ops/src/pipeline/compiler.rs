@@ -65,10 +65,10 @@ impl<'a> CompiledPipeline<'a> {
     }
 }
 
-fn index_and_validate_nodes<'a>(
-    graph: &'a NodeGraph,
+fn index_and_validate_nodes(
+    graph: &NodeGraph,
     policy: ExecutionPolicy,
-) -> Result<HashMap<Uuid, &'a NodeInstance>, PipelineError> {
+) -> Result<HashMap<Uuid, &NodeInstance>, PipelineError> {
     let mut nodes = HashMap::new();
     for node in &graph.nodes {
         if nodes.insert(node.id, node).is_some() {

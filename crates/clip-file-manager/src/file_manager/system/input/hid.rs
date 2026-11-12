@@ -174,7 +174,7 @@ mod tests {
             summarize(&[0xfe, 0, 0]).unwrap_err().kind(),
             io::ErrorKind::Unsupported
         );
-        assert!(summarize(&vec![0xa4; 9]).is_err());
+        assert!(summarize(&[0xa4; 9]).is_err());
         assert!(summarize(&vec![0x05; 16 * 1024 + 1]).is_err());
     }
 }

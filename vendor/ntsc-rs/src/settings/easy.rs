@@ -99,7 +99,7 @@ pub mod setting_id {
     use crate::{setting_id, settings::{SettingID, easy::EasyMode}};
     type EasySettingID = SettingID<EasyMode>;
 
-    pub const RANDOM_SEED: EasySettingID = setting_id!(4096 | 0, "ez_random_seed", random_seed);
+    pub const RANDOM_SEED: EasySettingID = setting_id!(4096, "ez_random_seed", random_seed);
     pub const USE_FIELD: EasySettingID = setting_id!(4096 | 1, "ez_use_field", use_field);
     pub const FILTER_TYPE: EasySettingID = setting_id!(4096 | 2, "ez_filter_type", filter_type);
     pub const SATURATION: EasySettingID = setting_id!(4096 | 3, "ez_saturation", saturation);

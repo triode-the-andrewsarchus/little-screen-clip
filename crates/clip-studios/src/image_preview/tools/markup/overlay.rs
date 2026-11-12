@@ -584,29 +584,29 @@ impl ImagePreviewState {
             }
 
             // Check hovered handles on selected shape
-            if let Some(sel_idx) = self.markup_state.selected_idx {
-                if sel_idx < self.markup_state.items.len() {
-                    let shape = &self.markup_state.items[sel_idx];
-                    match shape {
-                        MarkupShape::Arrow { start, end, .. }
-                        | MarkupShape::Line { start, end, .. } => {
-                            let s = to_screen(*start);
-                            let e = to_screen(*end);
-                            if s.distance(ptr_pos) <= hit_dist || e.distance(ptr_pos) <= hit_dist {
-                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                            }
+            if let Some(sel_idx) = self.markup_state.selected_idx
+                && sel_idx < self.markup_state.items.len()
+            {
+                let shape = &self.markup_state.items[sel_idx];
+                match shape {
+                    MarkupShape::Arrow { start, end, .. }
+                    | MarkupShape::Line { start, end, .. } => {
+                        let s = to_screen(*start);
+                        let e = to_screen(*end);
+                        if s.distance(ptr_pos) <= hit_dist || e.distance(ptr_pos) <= hit_dist {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
                         }
-                        _ => {
-                            let s_rect = to_screen_rect(shape.bounding_rect_norm(img_w, img_h));
-                            let handles = get_box_handles(s_rect);
-                            if let Some((_, _, cur)) = handles
-                                .iter()
-                                .find(|(_, pos, _)| pos.distance(ptr_pos) <= hit_dist)
-                            {
-                                ui.output_mut(|o| o.cursor_icon = *cur);
-                            } else if s_rect.contains(ptr_pos) {
-                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Move);
-                            }
+                    }
+                    _ => {
+                        let s_rect = to_screen_rect(shape.bounding_rect_norm(img_w, img_h));
+                        let handles = get_box_handles(s_rect);
+                        if let Some((_, _, cur)) = handles
+                            .iter()
+                            .find(|(_, pos, _)| pos.distance(ptr_pos) <= hit_dist)
+                        {
+                            ui.output_mut(|o| o.cursor_icon = *cur);
+                        } else if s_rect.contains(ptr_pos) {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Move);
                         }
                     }
                 }
@@ -614,248 +614,244 @@ impl ImagePreviewState {
         }
 
         // ── 4. Mouse Input Handling ──
-        if response.drag_started() {
-            if let Some(ptr) = response.interact_pointer_pos() {
-                let mut handled = false;
+        if response.drag_started()
+            && let Some(ptr) = response.interact_pointer_pos()
+        {
+            let mut handled = false;
 
-                // 4a. Check if clicking on active selection handles
-                if let Some(sel_idx) = self.markup_state.selected_idx {
-                    if sel_idx < self.markup_state.items.len() {
-                        let shape = &self.markup_state.items[sel_idx];
-                        match shape {
-                            MarkupShape::Arrow { start, end, .. }
-                            | MarkupShape::Line { start, end, .. } => {
-                                let s = to_screen(*start);
-                                let e = to_screen(*end);
-                                if s.distance(ptr) <= hit_dist {
-                                    self.markup_state.active_drag =
-                                        Some(MarkupDrag::ArrowEndpoint {
-                                            idx: sel_idx,
-                                            is_start: true,
-                                            start_ptr: ptr,
-                                            init_pos: *start,
-                                        });
-                                    handled = true;
-                                } else if e.distance(ptr) <= hit_dist {
-                                    self.markup_state.active_drag =
-                                        Some(MarkupDrag::ArrowEndpoint {
-                                            idx: sel_idx,
-                                            is_start: false,
-                                            start_ptr: ptr,
-                                            init_pos: *end,
-                                        });
-                                    handled = true;
-                                }
-                            }
-                            _ => {
-                                let s_rect = to_screen_rect(shape.bounding_rect_norm(img_w, img_h));
-                                let handles = get_box_handles(s_rect);
-                                if let Some((h, pos, _)) =
-                                    handles.iter().find(|(_, p, _)| p.distance(ptr) <= hit_dist)
-                                {
-                                    self.markup_state.active_drag = Some(MarkupDrag::Resizing {
-                                        idx: sel_idx,
-                                        handle: *h,
-                                        start_ptr: *pos,
-                                        init_rect: shape.bounding_rect_norm(img_w, img_h),
-                                    });
-                                    handled = true;
-                                }
-                            }
+            // 4a. Check if clicking on active selection handles
+            if let Some(sel_idx) = self.markup_state.selected_idx
+                && sel_idx < self.markup_state.items.len()
+            {
+                let shape = &self.markup_state.items[sel_idx];
+                match shape {
+                    MarkupShape::Arrow { start, end, .. }
+                    | MarkupShape::Line { start, end, .. } => {
+                        let s = to_screen(*start);
+                        let e = to_screen(*end);
+                        if s.distance(ptr) <= hit_dist {
+                            self.markup_state.active_drag = Some(MarkupDrag::ArrowEndpoint {
+                                idx: sel_idx,
+                                is_start: true,
+                                start_ptr: ptr,
+                                init_pos: *start,
+                            });
+                            handled = true;
+                        } else if e.distance(ptr) <= hit_dist {
+                            self.markup_state.active_drag = Some(MarkupDrag::ArrowEndpoint {
+                                idx: sel_idx,
+                                is_start: false,
+                                start_ptr: ptr,
+                                init_pos: *end,
+                            });
+                            handled = true;
+                        }
+                    }
+                    _ => {
+                        let s_rect = to_screen_rect(shape.bounding_rect_norm(img_w, img_h));
+                        let handles = get_box_handles(s_rect);
+                        if let Some((h, pos, _)) =
+                            handles.iter().find(|(_, p, _)| p.distance(ptr) <= hit_dist)
+                        {
+                            self.markup_state.active_drag = Some(MarkupDrag::Resizing {
+                                idx: sel_idx,
+                                handle: *h,
+                                start_ptr: *pos,
+                                init_rect: shape.bounding_rect_norm(img_w, img_h),
+                            });
+                            handled = true;
                         }
                     }
                 }
+            }
 
-                // 4b. Check if clicking an existing shape body
-                if !handled {
-                    let clicked_shape =
-                        self.markup_state
-                            .items
-                            .iter()
-                            .enumerate()
-                            .rev()
-                            .find_map(|(i, s)| {
-                                let s_rect = to_screen_rect(s.bounding_rect_norm(img_w, img_h));
-                                if s_rect.contains(ptr) { Some(i) } else { None }
-                            });
-
-                    if let Some(found_idx) = clicked_shape {
-                        self.markup_state.selected_idx = Some(found_idx);
-                        let init_shape = self.markup_state.items[found_idx].clone();
-                        self.markup_state.active_drag = Some(MarkupDrag::Moving {
-                            idx: found_idx,
-                            start_ptr: ptr,
-                            init_shape,
+            // 4b. Check if clicking an existing shape body
+            if !handled {
+                let clicked_shape =
+                    self.markup_state
+                        .items
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find_map(|(i, s)| {
+                            let s_rect = to_screen_rect(s.bounding_rect_norm(img_w, img_h));
+                            if s_rect.contains(ptr) { Some(i) } else { None }
                         });
-                        handled = true;
 
-                        if let MarkupShape::Text { .. } = &self.markup_state.items[found_idx] {
-                            if self.markup_state.active_tool == MarkupToolType::Text
-                                || response.double_clicked()
-                            {
-                                self.markup_state.editing_text_idx = Some(found_idx);
-                            }
-                        }
+                if let Some(found_idx) = clicked_shape {
+                    self.markup_state.selected_idx = Some(found_idx);
+                    let init_shape = self.markup_state.items[found_idx].clone();
+                    self.markup_state.active_drag = Some(MarkupDrag::Moving {
+                        idx: found_idx,
+                        start_ptr: ptr,
+                        init_shape,
+                    });
+                    handled = true;
+
+                    if let MarkupShape::Text { .. } = &self.markup_state.items[found_idx]
+                        && (self.markup_state.active_tool == MarkupToolType::Text
+                            || response.double_clicked())
+                    {
+                        self.markup_state.editing_text_idx = Some(found_idx);
                     }
                 }
+            }
 
-                // 4c. Start creating a new shape if in drawing tool
-                if !handled && img_rect.contains(ptr) {
-                    let norm = to_norm(ptr);
-                    match self.markup_state.active_tool {
-                        MarkupToolType::Select => {
-                            self.markup_state.selected_idx = None;
-                            self.markup_state.editing_text_idx = None;
-                        }
-                        drawing_tool => {
-                            self.markup_state.selected_idx = None;
-                            self.markup_state.editing_text_idx = None;
-                            self.markup_state.active_drag = Some(MarkupDrag::Creating {
-                                tool: drawing_tool,
-                                start_norm: norm,
-                                current_norm: norm,
-                            });
-                        }
+            // 4c. Start creating a new shape if in drawing tool
+            if !handled && img_rect.contains(ptr) {
+                let norm = to_norm(ptr);
+                match self.markup_state.active_tool {
+                    MarkupToolType::Select => {
+                        self.markup_state.selected_idx = None;
+                        self.markup_state.editing_text_idx = None;
+                    }
+                    drawing_tool => {
+                        self.markup_state.selected_idx = None;
+                        self.markup_state.editing_text_idx = None;
+                        self.markup_state.active_drag = Some(MarkupDrag::Creating {
+                            tool: drawing_tool,
+                            start_norm: norm,
+                            current_norm: norm,
+                        });
                     }
                 }
             }
         }
 
-        if response.dragged() {
-            if let Some(ptr) = response.interact_pointer_pos() {
-                match self.markup_state.active_drag {
-                    Some(MarkupDrag::Creating {
-                        tool, start_norm, ..
-                    }) => {
-                        let current_norm = to_norm(ptr);
-                        self.markup_state.active_drag = Some(MarkupDrag::Creating {
-                            tool,
-                            start_norm,
-                            current_norm,
-                        });
+        if response.dragged()
+            && let Some(ptr) = response.interact_pointer_pos()
+        {
+            match self.markup_state.active_drag {
+                Some(MarkupDrag::Creating {
+                    tool, start_norm, ..
+                }) => {
+                    let current_norm = to_norm(ptr);
+                    self.markup_state.active_drag = Some(MarkupDrag::Creating {
+                        tool,
+                        start_norm,
+                        current_norm,
+                    });
+                }
+                Some(MarkupDrag::Moving {
+                    idx,
+                    start_ptr,
+                    ref init_shape,
+                }) => {
+                    let delta_screen = ptr - start_ptr;
+                    let delta_norm = Vec2::new(
+                        delta_screen.x / img_rect.width(),
+                        delta_screen.y / img_rect.height(),
+                    );
+                    if idx < self.markup_state.items.len() {
+                        let mut updated = init_shape.clone();
+                        updated.translate(delta_norm);
+                        self.markup_state.items[idx] = updated;
                     }
-                    Some(MarkupDrag::Moving {
-                        idx,
-                        start_ptr,
-                        ref init_shape,
-                    }) => {
-                        let delta_screen = ptr - start_ptr;
-                        let delta_norm = Vec2::new(
-                            delta_screen.x / img_rect.width(),
-                            delta_screen.y / img_rect.height(),
-                        );
-                        if idx < self.markup_state.items.len() {
-                            let mut updated = init_shape.clone();
-                            updated.translate(delta_norm);
-                            self.markup_state.items[idx] = updated;
-                        }
-                    }
-                    Some(MarkupDrag::ArrowEndpoint {
-                        idx,
-                        is_start,
-                        start_ptr,
-                        init_pos,
-                    }) => {
-                        let delta_screen = ptr - start_ptr;
-                        let delta_norm = Vec2::new(
-                            delta_screen.x / img_rect.width(),
-                            delta_screen.y / img_rect.height(),
-                        );
-                        let new_pos =
-                            (init_pos + delta_norm).clamp(Pos2::ZERO, Pos2::new(1.0, 1.0));
-                        if idx < self.markup_state.items.len() {
-                            match &mut self.markup_state.items[idx] {
-                                MarkupShape::Arrow { start, end, .. }
-                                | MarkupShape::Line { start, end, .. } => {
-                                    if is_start {
-                                        *start = new_pos;
-                                    } else {
-                                        *end = new_pos;
-                                    }
+                }
+                Some(MarkupDrag::ArrowEndpoint {
+                    idx,
+                    is_start,
+                    start_ptr,
+                    init_pos,
+                }) => {
+                    let delta_screen = ptr - start_ptr;
+                    let delta_norm = Vec2::new(
+                        delta_screen.x / img_rect.width(),
+                        delta_screen.y / img_rect.height(),
+                    );
+                    let new_pos = (init_pos + delta_norm).clamp(Pos2::ZERO, Pos2::new(1.0, 1.0));
+                    if idx < self.markup_state.items.len() {
+                        match &mut self.markup_state.items[idx] {
+                            MarkupShape::Arrow { start, end, .. }
+                            | MarkupShape::Line { start, end, .. } => {
+                                if is_start {
+                                    *start = new_pos;
+                                } else {
+                                    *end = new_pos;
                                 }
-                                _ => {}
-                            }
-                        }
-                    }
-                    Some(MarkupDrag::Resizing {
-                        idx,
-                        handle,
-                        start_ptr,
-                        init_rect,
-                    }) => {
-                        let delta_screen = ptr - start_ptr;
-                        let delta_norm_x = delta_screen.x / img_rect.width();
-                        let delta_norm_y = delta_screen.y / img_rect.height();
-
-                        let mut min_x = init_rect.min.x;
-                        let mut max_x = init_rect.max.x;
-                        let mut min_y = init_rect.min.y;
-                        let mut max_y = init_rect.max.y;
-
-                        match handle {
-                            CropHandle::TopLeft => {
-                                min_x = (min_x + delta_norm_x).clamp(0.0, max_x - 0.01);
-                                min_y = (min_y + delta_norm_y).clamp(0.0, max_y - 0.01);
-                            }
-                            CropHandle::TopRight => {
-                                max_x = (max_x + delta_norm_x).clamp(min_x + 0.01, 1.0);
-                                min_y = (min_y + delta_norm_y).clamp(0.0, max_y - 0.01);
-                            }
-                            CropHandle::BottomLeft => {
-                                min_x = (min_x + delta_norm_x).clamp(0.0, max_x - 0.01);
-                                max_y = (max_y + delta_norm_y).clamp(min_y + 0.01, 1.0);
-                            }
-                            CropHandle::BottomRight => {
-                                max_x = (max_x + delta_norm_x).clamp(min_x + 0.01, 1.0);
-                                max_y = (max_y + delta_norm_y).clamp(min_y + 0.01, 1.0);
-                            }
-                            CropHandle::Left => {
-                                min_x = (min_x + delta_norm_x).clamp(0.0, max_x - 0.01);
-                            }
-                            CropHandle::Right => {
-                                max_x = (max_x + delta_norm_x).clamp(min_x + 0.01, 1.0);
-                            }
-                            CropHandle::Top => {
-                                min_y = (min_y + delta_norm_y).clamp(0.0, max_y - 0.01);
-                            }
-                            CropHandle::Bottom => {
-                                max_y = (max_y + delta_norm_y).clamp(min_y + 0.01, 1.0);
                             }
                             _ => {}
                         }
+                    }
+                }
+                Some(MarkupDrag::Resizing {
+                    idx,
+                    handle,
+                    start_ptr,
+                    init_rect,
+                }) => {
+                    let delta_screen = ptr - start_ptr;
+                    let delta_norm_x = delta_screen.x / img_rect.width();
+                    let delta_norm_y = delta_screen.y / img_rect.height();
 
-                        let new_rect =
-                            Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y));
-                        if idx < self.markup_state.items.len() {
-                            match &mut self.markup_state.items[idx] {
-                                MarkupShape::Circle { rect, .. }
-                                | MarkupShape::Rectangle { rect, .. }
-                                | MarkupShape::Highlighter { rect, .. } => {
-                                    *rect = new_rect;
-                                }
-                                MarkupShape::StepBadge { center, radius, .. } => {
-                                    *center = new_rect.center();
-                                    let new_r_norm = new_rect.width().min(new_rect.height()) * 0.5;
-                                    let new_r_px = new_r_norm * img_h;
-                                    if new_r_px >= 8.0 {
-                                        *radius = new_r_px;
-                                        self.markup_state.active_badge_radius = new_r_px;
-                                    }
-                                }
-                                MarkupShape::Text { pos, font_size, .. } => {
-                                    *pos = new_rect.min;
-                                    let new_h_px = new_rect.height() * img_h;
-                                    if new_h_px >= 10.0 {
-                                        *font_size = infer_font_size_from_box_height(new_h_px);
-                                        self.markup_state.active_font_size = *font_size;
-                                    }
-                                }
-                                _ => {}
+                    let mut min_x = init_rect.min.x;
+                    let mut max_x = init_rect.max.x;
+                    let mut min_y = init_rect.min.y;
+                    let mut max_y = init_rect.max.y;
+
+                    match handle {
+                        CropHandle::TopLeft => {
+                            min_x = (min_x + delta_norm_x).clamp(0.0, max_x - 0.01);
+                            min_y = (min_y + delta_norm_y).clamp(0.0, max_y - 0.01);
+                        }
+                        CropHandle::TopRight => {
+                            max_x = (max_x + delta_norm_x).clamp(min_x + 0.01, 1.0);
+                            min_y = (min_y + delta_norm_y).clamp(0.0, max_y - 0.01);
+                        }
+                        CropHandle::BottomLeft => {
+                            min_x = (min_x + delta_norm_x).clamp(0.0, max_x - 0.01);
+                            max_y = (max_y + delta_norm_y).clamp(min_y + 0.01, 1.0);
+                        }
+                        CropHandle::BottomRight => {
+                            max_x = (max_x + delta_norm_x).clamp(min_x + 0.01, 1.0);
+                            max_y = (max_y + delta_norm_y).clamp(min_y + 0.01, 1.0);
+                        }
+                        CropHandle::Left => {
+                            min_x = (min_x + delta_norm_x).clamp(0.0, max_x - 0.01);
+                        }
+                        CropHandle::Right => {
+                            max_x = (max_x + delta_norm_x).clamp(min_x + 0.01, 1.0);
+                        }
+                        CropHandle::Top => {
+                            min_y = (min_y + delta_norm_y).clamp(0.0, max_y - 0.01);
+                        }
+                        CropHandle::Bottom => {
+                            max_y = (max_y + delta_norm_y).clamp(min_y + 0.01, 1.0);
+                        }
+                        _ => {}
+                    }
+
+                    let new_rect =
+                        Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y));
+                    if idx < self.markup_state.items.len() {
+                        match &mut self.markup_state.items[idx] {
+                            MarkupShape::Circle { rect, .. }
+                            | MarkupShape::Rectangle { rect, .. }
+                            | MarkupShape::Highlighter { rect, .. } => {
+                                *rect = new_rect;
                             }
+                            MarkupShape::StepBadge { center, radius, .. } => {
+                                *center = new_rect.center();
+                                let new_r_norm = new_rect.width().min(new_rect.height()) * 0.5;
+                                let new_r_px = new_r_norm * img_h;
+                                if new_r_px >= 8.0 {
+                                    *radius = new_r_px;
+                                    self.markup_state.active_badge_radius = new_r_px;
+                                }
+                            }
+                            MarkupShape::Text { pos, font_size, .. } => {
+                                *pos = new_rect.min;
+                                let new_h_px = new_rect.height() * img_h;
+                                if new_h_px >= 10.0 {
+                                    *font_size = infer_font_size_from_box_height(new_h_px);
+                                    self.markup_state.active_font_size = *font_size;
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    None => {}
                 }
+                None => {}
             }
         }
 
@@ -968,12 +964,11 @@ impl ImagePreviewState {
                 MarkupShape::Text { text, .. } => !text.trim().is_empty(),
                 _ => true,
             });
-            if self.markup_state.items.len() < before_len {
-                if let Some(sel) = self.markup_state.selected_idx {
-                    if sel >= self.markup_state.items.len() {
-                        self.markup_state.selected_idx = None;
-                    }
-                }
+            if self.markup_state.items.len() < before_len
+                && let Some(sel) = self.markup_state.selected_idx
+                && sel >= self.markup_state.items.len()
+            {
+                self.markup_state.selected_idx = None;
             }
         }
     }

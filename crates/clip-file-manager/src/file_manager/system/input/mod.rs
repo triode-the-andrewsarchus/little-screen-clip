@@ -257,12 +257,12 @@ pub(super) fn collect(
             .as_deref()
             .and_then(|root| root.join("device").canonicalize().ok())
     });
-    if let Some(owner) = &owner {
-        if let Some(driver) = buses::driver(owner) {
-            document
-                .facts
-                .push(Fact::text("Input driver", driver, owner.join("driver")));
-        }
+    if let Some(owner) = &owner
+        && let Some(driver) = buses::driver(owner)
+    {
+        document
+            .facts
+            .push(Fact::text("Input driver", driver, owner.join("driver")));
     }
     let name = name.filter(|name| !name.is_empty()).unwrap_or_else(|| {
         sys.file_name()

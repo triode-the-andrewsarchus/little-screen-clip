@@ -73,7 +73,7 @@ impl ImagePreviewState {
             )
             .collect();
         let todo: Vec<_> = CreativeFxType::all()
-            .into_iter()
+            .iter()
             .copied()
             .filter(|fx| !completed.contains(fx))
             .collect();

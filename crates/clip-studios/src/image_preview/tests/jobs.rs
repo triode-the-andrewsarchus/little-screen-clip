@@ -277,7 +277,7 @@ fn test_barcode_state_and_scan() {
                 } else {
                     image::Rgba([255, 255, 255, 255])
                 };
-                img.put_pixel(x as u32, y as u32, color);
+                img.put_pixel(x, y, color);
             }
         }
 

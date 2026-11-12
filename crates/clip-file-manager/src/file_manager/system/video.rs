@@ -33,10 +33,11 @@ fn role(path: &Path) -> Option<&'static str> {
 }
 /// Nearest registered parent. Never group devices by a shared name or bus host.
 fn owner(sys: &Path) -> Option<PathBuf> {
-    if let Ok(device) = sys.join("device").canonicalize() {
-        if role(&device).is_none() && device != sys {
-            return Some(device);
-        }
+    if let Ok(device) = sys.join("device").canonicalize()
+        && role(&device).is_none()
+        && device != sys
+    {
+        return Some(device);
     }
     sys.ancestors()
         .skip(1)

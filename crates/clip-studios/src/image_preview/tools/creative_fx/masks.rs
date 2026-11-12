@@ -182,27 +182,24 @@ impl ImagePreviewState {
                     .cmd_args
                     .iter()
                     .any(|a| a.contains("depth_estimation.py"));
-            if is_default_depth_cmd {
-                if let Ok(model_path) = crate::onnx_runtime::ensure_model_cancellable(
+            if is_default_depth_cmd
+                && let Ok(model_path) = crate::onnx_runtime::ensure_model_cancellable(
                     crate::onnx_runtime::DEPTH_ANYTHING_V2_MODEL_NAME,
                     request.model_url.as_deref(),
                     &control.cancel,
                     |_, _| {},
+                )
+            {
+                let source_rgba = request.snapshot.compose();
+                if let Ok(depth_rgba) = super::super::background_removal::run_native_depth_map(
+                    &source_rgba,
+                    &model_path,
                 ) {
-                    let source_rgba = request.snapshot.compose();
-                    match super::super::background_removal::run_native_depth_map(
-                        &source_rgba,
-                        &model_path,
-                    ) {
-                        Ok(depth_rgba) => {
-                            if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                                return;
-                            }
-                            send_creative_fx_mask_result(&tx, &request.stamp, Ok(depth_rgba));
-                            return;
-                        }
-                        Err(_) => {}
+                    if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        return;
                     }
+                    send_creative_fx_mask_result(&tx, &request.stamp, Ok(depth_rgba));
+                    return;
                 }
             }
 
@@ -283,27 +280,26 @@ impl ImagePreviewState {
         let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
             let is_default_bg_cmd = request.cmd_bin.contains("remove_bg.py")
                 || request.cmd_args.iter().any(|a| a.contains("remove_bg.py"));
-            if is_default_bg_cmd {
-                if let Ok(model_path) = crate::onnx_runtime::ensure_model_cancellable(
+            if is_default_bg_cmd
+                && let Ok(model_path) = crate::onnx_runtime::ensure_model_cancellable(
                     crate::onnx_runtime::FEYNOBG_FP16_MODEL_NAME,
                     request.model_url.as_deref(),
                     &control.cancel,
                     |_, _| {},
-                ) {
-                    let source_rgba = request.snapshot.compose();
-                    match super::super::background_removal::run_native_background_removal(
+                )
+            {
+                let source_rgba = request.snapshot.compose();
+                if let Ok(cutout_rgba) =
+                    super::super::background_removal::run_native_background_removal(
                         &source_rgba,
                         &model_path,
-                    ) {
-                        Ok(cutout_rgba) => {
-                            if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                                return;
-                            }
-                            send_creative_fx_mask_result(&tx, &request.stamp, Ok(cutout_rgba));
-                            return;
-                        }
-                        Err(_) => {}
+                    )
+                {
+                    if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        return;
                     }
+                    send_creative_fx_mask_result(&tx, &request.stamp, Ok(cutout_rgba));
+                    return;
                 }
             }
 

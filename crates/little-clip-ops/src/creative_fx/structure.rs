@@ -37,7 +37,7 @@ pub fn compute_box_radii_3(sigma: f32) -> [usize; 3] {
     }
     let w_ideal = ((12.0 * sigma * sigma / 3.0) + 1.0).sqrt();
     let mut wl = w_ideal.floor() as usize;
-    if wl % 2 == 0 {
+    if wl.is_multiple_of(2) {
         wl = wl.saturating_sub(1);
     }
     let wu = wl + 2;

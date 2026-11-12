@@ -73,7 +73,7 @@ fn read_external(path: &Path, ext: &str, token: &AtomicBool) -> Result<Document,
                     .and_then(|n| n.to_str())
                     .unwrap_or("Preset"),
             ),
-            _ => return Err("Unsupported multisample format".into()),
+            _ => Err("Unsupported multisample format".into()),
         }
     }
 }

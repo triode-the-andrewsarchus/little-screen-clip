@@ -532,10 +532,11 @@ pub fn search_templates(query: &str, category_filter: Option<&str>) -> Vec<&'sta
     NODE_CATALOG
         .iter()
         .filter(|t| {
-            if let Some(cat) = category_filter {
-                if !cat.eq_ignore_ascii_case("all") && !t.category.eq_ignore_ascii_case(cat) {
-                    return false;
-                }
+            if let Some(cat) = category_filter
+                && !cat.eq_ignore_ascii_case("all")
+                && !t.category.eq_ignore_ascii_case(cat)
+            {
+                return false;
             }
             if q.is_empty() {
                 return true;

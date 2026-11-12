@@ -34,11 +34,12 @@ impl PdfEditorState {
         let ready = self.decode_job.as_ref().is_some_and(|job| {
             job.raster.page_num() == page_num && !job.cancelled && job.ready.is_some()
         });
-        if let Some(texture) = &page.texture {
-            if (!upgrade || page.error.is_some()) && !ready {
-                page.texture_last_used = self.texture_frame;
-                return Some(texture.id());
-            }
+        if let Some(texture) = &page.texture
+            && (!upgrade || page.error.is_some())
+            && !ready
+        {
+            page.texture_last_used = self.texture_frame;
+            return Some(texture.id());
         }
         if page.raster.is_none() || page.error.is_some() {
             return None;

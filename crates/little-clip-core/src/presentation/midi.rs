@@ -677,10 +677,10 @@ impl MidiData {
         let mut rng_state: u32 = 123456789;
 
         for note in &self.notes {
-            if let Some(st) = solo_track {
-                if note.track != st {
-                    continue;
-                }
+            if let Some(st) = solo_track
+                && note.track != st
+            {
+                continue;
             }
 
             let start_sample = (note.start_sec * sample_rate as f32) as usize;

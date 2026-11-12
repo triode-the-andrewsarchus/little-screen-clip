@@ -284,10 +284,10 @@ impl ConstellationState {
     /// The exploration set resets on a map click or a folder/index reload.
     pub fn record_played_sample(&mut self, sample: &ConstellationSample) {
         self.visited_samples.insert(sample.file_path.clone());
-        if let Some(last) = self.history_trail.back() {
-            if last.file_path == sample.file_path {
-                return;
-            }
+        if let Some(last) = self.history_trail.back()
+            && last.file_path == sample.file_path
+        {
+            return;
         }
         self.history_trail.push_back(HistoryTrailPoint {
             file_path: sample.file_path.clone(),

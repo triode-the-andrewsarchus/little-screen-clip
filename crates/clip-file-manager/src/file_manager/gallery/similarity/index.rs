@@ -157,10 +157,10 @@ fn complete_batch(
         if FileSource::capture(&path).ok().as_ref() != Some(&source) {
             continue;
         }
-        if let Some(cache) = cache {
-            if let Err(error) = cache.store(&path, &source, encoder, &feature) {
-                tracing::warn!(%error, "Cannot persist photo embedding");
-            }
+        if let Some(cache) = cache
+            && let Err(error) = cache.store(&path, &source, encoder, &feature)
+        {
+            tracing::warn!(%error, "Cannot persist photo embedding");
         }
         results.push((path, revision, feature));
     }

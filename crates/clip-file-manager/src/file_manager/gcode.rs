@@ -128,11 +128,11 @@ impl Viewer {
                 self.pan,
                 colors,
             );
-            if response.clicked() {
-                if let Some(index) = hit {
-                    self.progress = index + 1;
-                    self.source_scroll = true;
-                }
+            if response.clicked()
+                && let Some(index) = hit
+            {
+                self.progress = index + 1;
+                self.source_scroll = true;
             }
             ui.label("Program coordinates · drag to pan · scroll to zoom · click a move");
             let row_height = crate::ui_ext::selectable_text_row_height(ui, 24.0);
@@ -155,7 +155,7 @@ impl Viewer {
                         let line = &line[..line.floor_char_boundary(240.min(line.len()))];
                         if crate::ui_ext::selectable_text_row(
                             ui,
-                            &format!("{}  {}", index + 1, line),
+                            format!("{}  {}", index + 1, line),
                             selected == Some(index + 1),
                             row_height,
                         )

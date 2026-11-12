@@ -1026,7 +1026,7 @@ fuse-binwalk /run/user/1001/fuse-binwalk/app-abc1234 fuse.fuse-binwalk rw,nosuid
 
     #[test]
     fn test_mount_entry_sorting_order() {
-        let mut entries = vec![
+        let mut entries = [
             MountEntry {
                 id: "drive1".into(),
                 label: "Z Drive".into(),

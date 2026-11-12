@@ -241,14 +241,13 @@ impl AudioPreviewState {
         if self.active_mode == AudioToolMode::StemSeparation
             && !self.stem_separation.stems.is_empty()
         {
-            if self.stem_separation.editor_playhead_active {
-                if let Some(stem) = self
+            if self.stem_separation.editor_playhead_active
+                && let Some(stem) = self
                     .stem_separation
                     .stems
                     .get(self.stem_separation.selected_stem)
-                {
-                    return (stem.preview.current_time_sec, stem.preview.duration_sec);
-                }
+            {
+                return (stem.preview.current_time_sec, stem.preview.duration_sec);
             }
             return (
                 self.stem_separation.group_current_time_sec,

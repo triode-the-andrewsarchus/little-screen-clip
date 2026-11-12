@@ -178,15 +178,14 @@ impl Viewer {
                 return;
             };
             if self.mode == Mode::Schema {
-                if let Some(name) = schema(ui, table) {
-                    if let Some(index) = self
+                if let Some(name) = schema(ui, table)
+                    && let Some(index) = self
                         .document
                         .tables
                         .iter()
                         .position(|table| table.name == name)
-                    {
-                        self.select(index);
-                    }
+                {
+                    self.select(index);
                 }
                 return;
             }

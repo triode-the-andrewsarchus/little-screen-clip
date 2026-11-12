@@ -245,14 +245,16 @@ impl UnitToQuadHomography {
         ];
 
         for &(sx, sy) in &sample_pts {
-            if let Some((s, t)) = self.map_inverse(sx, sy) {
-                if s.is_finite() && t.is_finite() && s >= -5.0 && s <= 6.0 && t >= -5.0 && t <= 6.0
-                {
-                    s_min = s_min.min(s);
-                    s_max = s_max.max(s);
-                    t_min = t_min.min(t);
-                    t_max = t_max.max(t);
-                }
+            if let Some((s, t)) = self.map_inverse(sx, sy)
+                && s.is_finite()
+                && t.is_finite()
+                && (-5.0..=6.0).contains(&s)
+                && (-5.0..=6.0).contains(&t)
+            {
+                s_min = s_min.min(s);
+                s_max = s_max.max(s);
+                t_min = t_min.min(t);
+                t_max = t_max.max(t);
             }
         }
 

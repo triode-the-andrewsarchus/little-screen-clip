@@ -373,16 +373,16 @@ pub(super) fn power(document: &Document, root: &Path) -> (String, String, Vec<Se
                 false,
             ));
         }
-        if kind == "Battery" && text(document, root, "present") != Some("No") {
-            if let Some(estimate) = full
+        if kind == "Battery"
+            && text(document, root, "present") != Some("No")
+            && let Some(estimate) = full
                 .as_ref()
                 .zip(design.as_ref())
                 .and_then(|(full, design)| capacity_ratio(full, design, unit))
-            {
-                let mut row=series(format!("{label} full/design ratio"),estimate,full.clone().into_iter().chain(design.clone()).collect(),vec!["Capacity estimate, separate from the kernel health state; values above 100% are preserved".into()],false);
-                row.range = Some((0.0, 100.0));
-                rows.push(row);
-            }
+        {
+            let mut row=series(format!("{label} full/design ratio"),estimate,full.clone().into_iter().chain(design.clone()).collect(),vec!["Capacity estimate, separate from the kernel health state; values above 100% are preserved".into()],false);
+            row.range = Some((0.0, 100.0));
+            rows.push(row);
         }
     }
     for (name, label) in [
@@ -405,6 +405,285 @@ pub(super) fn power(document: &Document, root: &Path) -> (String, String, Vec<Se
         rows.insert(0, state);
     }
     ("Power supply".into(), summary, rows)
+}
+
+pub(super) fn brightness(
+    document: &Document,
+    root: &Path,
+    backlight: bool,
+) -> (String, String, Vec<Series>) {
+    let name = root.file_name().unwrap_or_default().to_string_lossy();
+    let role = if backlight {
+        "Backlight brightness"
+    } else {
+        "LED brightness and trigger"
+    };
+    let mut summary = name.into_owned();
+    let maximum = point(document, root, "max_brightness", "Maximum");
+    let mut rows = Vec::new();
+    for (attribute, label) in [
+        (
+            "brightness",
+            if backlight { "Requested" } else { "Reported" },
+        ),
+        ("actual_brightness", "Actual"),
+    ] {
+        if attribute == "actual_brightness" && !backlight {
+            continue;
+        }
+        let Some(mut current) = point(document, root, attribute, label) else {
+            continue;
+        };
+        let mut notes = vec!["Brightness units are driver levels, not calibrated luminance; sequential observations are not an atomic snapshot".into()];
+        let range = brightness_range(&mut current, maximum.as_ref(), &mut notes);
+        let mut row = series(
+            name_for_brightness(backlight, attribute).into(),
+            current,
+            maximum.clone().into_iter().collect(),
+            notes,
+            false,
+        );
+        row.range = range;
+        summary.push_str(&format!(" · {label}: {}", row.current.display));
+        rows.push(row);
+    }
+    if backlight {
+        if let Some(kind) = text(document, root, "type") {
+            summary.push_str(&format!(" · {kind}"));
+        }
+    } else if let Some(fact) = named(document, root, "trigger") {
+        if let Some(Value::Selection {
+            selected: Some(selected),
+            ..
+        }) = &fact.semantic
+        {
+            summary.push_str(&format!(" · Trigger: {selected}"));
+        }
+        if let Some(row) = rows.first_mut() {
+            row.notes.push(format!(
+                "Trigger/choices: {}",
+                fact.value.as_deref().unwrap_or("unavailable")
+            ));
+        }
+    }
+    (role.into(), summary, rows)
+}
+fn name_for_brightness(backlight: bool, attribute: &str) -> &'static str {
+    match (backlight, attribute) {
+        (true, "actual_brightness") => "Hardware-reported brightness",
+        (true, _) => "Requested brightness",
+        (false, _) => "Kernel-reported LED level",
+    }
+}
+fn brightness_range(
+    current: &mut Point,
+    maximum: Option<&Point>,
+    notes: &mut Vec<String>,
+) -> Option<(f64, f64)> {
+    let max = maximum
+        .and_then(|point| point.value)
+        .filter(|value| value.is_finite() && *value > 0.0);
+    let valid = current
+        .value
+        .zip(max)
+        .filter(|(value, max)| value.is_finite() && *value >= 0.0 && *value <= *max);
+    if let Some((value, max)) = valid {
+        current.display = format!(
+            "{:.1}% ({value:.0}/{max:.0}){}",
+            value * 100.0 / max,
+            if value == 0.0 {
+                " · Off (reported)"
+            } else {
+                ""
+            }
+        );
+        Some((0.0, max))
+    } else {
+        notes.push("Percentage unavailable: missing, zero or invalid maximum/brightness; raw observation retained".into());
+        None
+    }
+}
+
+pub(super) fn powercap(document: &Document, root: &Path) -> (String, String, Vec<Series>) {
+    let name = text(document, root, "name")
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            root.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
+    let mut rows = Vec::new();
+    for (field, label, max) in [
+        (
+            "energy_uj",
+            "Energy counter snapshot",
+            "max_energy_range_uj",
+        ),
+        ("power_uw", "Reported power", "max_power_range_uw"),
+    ] {
+        if let Some(current) = point(document, root, field, label) {
+            let markers = point(document, root, max, "Exposed range")
+                .into_iter()
+                .collect();
+            let mut row=series(label.into(),current,markers,vec!["Energy is a wrapping/resettable counter snapshot, not interval consumption; no power is inferred from a single counter observation".into()],false);
+            row.range = row
+                .current
+                .value
+                .zip(
+                    row.markers
+                        .first()
+                        .filter(|marker| marker.unit == row.current.unit)
+                        .and_then(|marker| marker.value),
+                )
+                .filter(|(value, max)| *value >= 0.0 && *max > 0.0 && *value <= *max)
+                .map(|(_, max)| (0.0, max));
+            rows.push(row);
+        }
+    }
+    rows.extend(powercap_constraints(document, root));
+    let mut summary = name;
+    if let Some(value) = text(document, root, "enabled") {
+        summary.push_str(&format!(" · Capping: {value}"));
+    }
+    let role = if rows.is_empty() && text(document, root, "name").is_none() {
+        "Powercap control interface"
+    } else {
+        "Powercap energy and limits"
+    };
+    (role.into(), summary, rows)
+}
+fn powercap_constraints(document: &Document, root: &Path) -> Vec<Series> {
+    let mut rows = Vec::new();
+    let indexes = document
+        .facts
+        .iter()
+        .filter(|fact| fact.source.parent() == Some(root))
+        .filter_map(|fact| {
+            fact.source
+                .file_name()?
+                .to_str()?
+                .strip_prefix("constraint_")?
+                .split_once('_')?
+                .0
+                .parse::<u32>()
+                .ok()
+        })
+        .collect::<BTreeSet<_>>();
+    for index in indexes {
+        if let Some(current) = point(
+            document,
+            root,
+            &format!("constraint_{index}_power_limit_uw"),
+            "Configured limit",
+        ) {
+            let label = text(document, root, &format!("constraint_{index}_name"))
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Constraint {index}"));
+            let markers = [("min_power_uw", "Minimum"), ("max_power_uw", "Maximum")]
+                .iter()
+                .filter_map(|(field, label)| {
+                    point(
+                        document,
+                        root,
+                        &format!("constraint_{index}_{field}"),
+                        label,
+                    )
+                })
+                .collect();
+            let window = text(
+                document,
+                root,
+                &format!("constraint_{index}_time_window_us"),
+            )
+            .unwrap_or("time window unavailable");
+            rows.push(series(
+                label,
+                current,
+                markers,
+                vec![format!(
+                    "Configured time window: {window}; limit setting is not measured power usage"
+                )],
+                false,
+            ));
+        }
+    }
+    rows
+}
+pub(super) fn regulator(document: &Document, root: &Path) -> (String, String, Vec<Series>) {
+    let name = text(document, root, "name").unwrap_or("Regulator");
+    let mut summary = name.to_string();
+    for field in ["type", "state", "status", "opmode", "num_users"] {
+        if let Some(value) = text(document, root, field) {
+            summary.push_str(&format!(" · {field}: {value}"));
+        }
+    }
+    let mut rows = Vec::new();
+    for (field, label, min, max) in [
+        (
+            "microvolts",
+            "Configured voltage",
+            "min_microvolts",
+            "max_microvolts",
+        ),
+        (
+            "microamps",
+            "Configured current limit",
+            "min_microamps",
+            "max_microamps",
+        ),
+        ("requested_microamps", "Consumer-requested load", "", ""),
+    ] {
+        if let Some(current) = point(document, root, field, label) {
+            let markers = [min, max]
+                .into_iter()
+                .filter(|name| !name.trim().is_empty())
+                .filter_map(|name| point(document, root, name, name))
+                .collect();
+            rows.push(series(label.into(),current,markers,vec!["Configured settings/requested load, not a physical voltage/current measurement; undefined constraints do not establish a numeric plot bound".into()],text(document,root,"status")==Some("error")));
+        }
+    }
+    ("Regulator settings and constraints".into(), summary, rows)
+}
+
+pub(super) fn devfreq(document: &Document, root: &Path) -> (String, String, Vec<Series>) {
+    let name = text(document, root, "name")
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            root.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
+    let governor = text(document, root, "governor").unwrap_or("governor unavailable");
+    let summary = format!("{name} · {governor}");
+    let mut rows = Vec::new();
+    for (attribute, label) in [("cur_freq", "Reported"), ("target_freq", "Target/cached")] {
+        if let Some(current) = point(document, root, attribute, label) {
+            let mut notes=vec!["Reported frequency can use a cached fallback; this is not proof of measured clock frequency. Bounds reflect exposed kernel/QoS/OPP state, not an unconstrained hardware range".into()];
+            let mut markers = [
+                ("min_freq", "Exposed minimum"),
+                ("max_freq", "Exposed maximum"),
+            ]
+            .iter()
+            .filter_map(|(field, label)| point(document, root, field, label))
+            .collect::<Vec<_>>();
+            for marker in &mut markers {
+                if marker.value == Some(0.0) {
+                    marker.value = None;
+                    notes.push(format!("{}: zero excluded as an operating bound (legacy ABI permits no user restriction)",marker.label));
+                }
+            }
+            rows.push(series(
+                format!("{name} · {label}"),
+                current,
+                markers,
+                notes,
+                false,
+            ));
+        }
+    }
+    ("Device frequency scaling".into(), summary, rows)
 }
 
 #[cfg(test)]
@@ -1018,283 +1297,4 @@ mod tests {
         assert_eq!(row.current.unit, "%");
         assert_eq!(row.range, Some((0.0, 100.0)));
     }
-}
-
-pub(super) fn brightness(
-    document: &Document,
-    root: &Path,
-    backlight: bool,
-) -> (String, String, Vec<Series>) {
-    let name = root.file_name().unwrap_or_default().to_string_lossy();
-    let role = if backlight {
-        "Backlight brightness"
-    } else {
-        "LED brightness and trigger"
-    };
-    let mut summary = name.into_owned();
-    let maximum = point(document, root, "max_brightness", "Maximum");
-    let mut rows = Vec::new();
-    for (attribute, label) in [
-        (
-            "brightness",
-            if backlight { "Requested" } else { "Reported" },
-        ),
-        ("actual_brightness", "Actual"),
-    ] {
-        if attribute == "actual_brightness" && !backlight {
-            continue;
-        }
-        let Some(mut current) = point(document, root, attribute, label) else {
-            continue;
-        };
-        let mut notes = vec!["Brightness units are driver levels, not calibrated luminance; sequential observations are not an atomic snapshot".into()];
-        let range = brightness_range(&mut current, maximum.as_ref(), &mut notes);
-        let mut row = series(
-            name_for_brightness(backlight, attribute).into(),
-            current,
-            maximum.clone().into_iter().collect(),
-            notes,
-            false,
-        );
-        row.range = range;
-        summary.push_str(&format!(" · {label}: {}", row.current.display));
-        rows.push(row);
-    }
-    if backlight {
-        if let Some(kind) = text(document, root, "type") {
-            summary.push_str(&format!(" · {kind}"));
-        }
-    } else if let Some(fact) = named(document, root, "trigger") {
-        if let Some(Value::Selection {
-            selected: Some(selected),
-            ..
-        }) = &fact.semantic
-        {
-            summary.push_str(&format!(" · Trigger: {selected}"));
-        }
-        if let Some(row) = rows.first_mut() {
-            row.notes.push(format!(
-                "Trigger/choices: {}",
-                fact.value.as_deref().unwrap_or("unavailable")
-            ));
-        }
-    }
-    (role.into(), summary, rows)
-}
-fn name_for_brightness(backlight: bool, attribute: &str) -> &'static str {
-    match (backlight, attribute) {
-        (true, "actual_brightness") => "Hardware-reported brightness",
-        (true, _) => "Requested brightness",
-        (false, _) => "Kernel-reported LED level",
-    }
-}
-fn brightness_range(
-    current: &mut Point,
-    maximum: Option<&Point>,
-    notes: &mut Vec<String>,
-) -> Option<(f64, f64)> {
-    let max = maximum
-        .and_then(|point| point.value)
-        .filter(|value| value.is_finite() && *value > 0.0);
-    let valid = current
-        .value
-        .zip(max)
-        .filter(|(value, max)| value.is_finite() && *value >= 0.0 && *value <= *max);
-    if let Some((value, max)) = valid {
-        current.display = format!(
-            "{:.1}% ({value:.0}/{max:.0}){}",
-            value * 100.0 / max,
-            if value == 0.0 {
-                " · Off (reported)"
-            } else {
-                ""
-            }
-        );
-        Some((0.0, max))
-    } else {
-        notes.push("Percentage unavailable: missing, zero or invalid maximum/brightness; raw observation retained".into());
-        None
-    }
-}
-
-pub(super) fn powercap(document: &Document, root: &Path) -> (String, String, Vec<Series>) {
-    let name = text(document, root, "name")
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            root.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        });
-    let mut rows = Vec::new();
-    for (field, label, max) in [
-        (
-            "energy_uj",
-            "Energy counter snapshot",
-            "max_energy_range_uj",
-        ),
-        ("power_uw", "Reported power", "max_power_range_uw"),
-    ] {
-        if let Some(current) = point(document, root, field, label) {
-            let markers = point(document, root, max, "Exposed range")
-                .into_iter()
-                .collect();
-            let mut row=series(label.into(),current,markers,vec!["Energy is a wrapping/resettable counter snapshot, not interval consumption; no power is inferred from a single counter observation".into()],false);
-            row.range = row
-                .current
-                .value
-                .zip(
-                    row.markers
-                        .first()
-                        .filter(|marker| marker.unit == row.current.unit)
-                        .and_then(|marker| marker.value),
-                )
-                .filter(|(value, max)| *value >= 0.0 && *max > 0.0 && *value <= *max)
-                .map(|(_, max)| (0.0, max));
-            rows.push(row);
-        }
-    }
-    rows.extend(powercap_constraints(document, root));
-    let mut summary = name;
-    if let Some(value) = text(document, root, "enabled") {
-        summary.push_str(&format!(" · Capping: {value}"));
-    }
-    let role = if rows.is_empty() && text(document, root, "name").is_none() {
-        "Powercap control interface"
-    } else {
-        "Powercap energy and limits"
-    };
-    (role.into(), summary, rows)
-}
-fn powercap_constraints(document: &Document, root: &Path) -> Vec<Series> {
-    let mut rows = Vec::new();
-    let indexes = document
-        .facts
-        .iter()
-        .filter(|fact| fact.source.parent() == Some(root))
-        .filter_map(|fact| {
-            fact.source
-                .file_name()?
-                .to_str()?
-                .strip_prefix("constraint_")?
-                .split_once('_')?
-                .0
-                .parse::<u32>()
-                .ok()
-        })
-        .collect::<BTreeSet<_>>();
-    for index in indexes {
-        if let Some(current) = point(
-            document,
-            root,
-            &format!("constraint_{index}_power_limit_uw"),
-            "Configured limit",
-        ) {
-            let label = text(document, root, &format!("constraint_{index}_name"))
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("Constraint {index}"));
-            let markers = [("min_power_uw", "Minimum"), ("max_power_uw", "Maximum")]
-                .iter()
-                .filter_map(|(field, label)| {
-                    point(
-                        document,
-                        root,
-                        &format!("constraint_{index}_{field}"),
-                        label,
-                    )
-                })
-                .collect();
-            let window = text(
-                document,
-                root,
-                &format!("constraint_{index}_time_window_us"),
-            )
-            .unwrap_or("time window unavailable");
-            rows.push(series(
-                label,
-                current,
-                markers,
-                vec![format!(
-                    "Configured time window: {window}; limit setting is not measured power usage"
-                )],
-                false,
-            ));
-        }
-    }
-    rows
-}
-pub(super) fn regulator(document: &Document, root: &Path) -> (String, String, Vec<Series>) {
-    let name = text(document, root, "name").unwrap_or("Regulator");
-    let mut summary = name.to_string();
-    for field in ["type", "state", "status", "opmode", "num_users"] {
-        if let Some(value) = text(document, root, field) {
-            summary.push_str(&format!(" · {field}: {value}"));
-        }
-    }
-    let mut rows = Vec::new();
-    for (field, label, min, max) in [
-        (
-            "microvolts",
-            "Configured voltage",
-            "min_microvolts",
-            "max_microvolts",
-        ),
-        (
-            "microamps",
-            "Configured current limit",
-            "min_microamps",
-            "max_microamps",
-        ),
-        ("requested_microamps", "Consumer-requested load", "", ""),
-    ] {
-        if let Some(current) = point(document, root, field, label) {
-            let markers = [min, max]
-                .into_iter()
-                .filter(|name| !name.trim().is_empty())
-                .filter_map(|name| point(document, root, name, name))
-                .collect();
-            rows.push(series(label.into(),current,markers,vec!["Configured settings/requested load, not a physical voltage/current measurement; undefined constraints do not establish a numeric plot bound".into()],text(document,root,"status")==Some("error")));
-        }
-    }
-    ("Regulator settings and constraints".into(), summary, rows)
-}
-
-pub(super) fn devfreq(document: &Document, root: &Path) -> (String, String, Vec<Series>) {
-    let name = text(document, root, "name")
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            root.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        });
-    let governor = text(document, root, "governor").unwrap_or("governor unavailable");
-    let summary = format!("{name} · {governor}");
-    let mut rows = Vec::new();
-    for (attribute, label) in [("cur_freq", "Reported"), ("target_freq", "Target/cached")] {
-        if let Some(current) = point(document, root, attribute, label) {
-            let mut notes=vec!["Reported frequency can use a cached fallback; this is not proof of measured clock frequency. Bounds reflect exposed kernel/QoS/OPP state, not an unconstrained hardware range".into()];
-            let mut markers = [
-                ("min_freq", "Exposed minimum"),
-                ("max_freq", "Exposed maximum"),
-            ]
-            .iter()
-            .filter_map(|(field, label)| point(document, root, field, label))
-            .collect::<Vec<_>>();
-            for marker in &mut markers {
-                if marker.value == Some(0.0) {
-                    marker.value = None;
-                    notes.push(format!("{}: zero excluded as an operating bound (legacy ABI permits no user restriction)",marker.label));
-                }
-            }
-            rows.push(series(
-                format!("{name} · {label}"),
-                current,
-                markers,
-                notes,
-                false,
-            ));
-        }
-    }
-    ("Device frequency scaling".into(), summary, rows)
 }

@@ -2,10 +2,10 @@ use super::*;
 
 impl WorkbenchApp {
     pub(crate) fn retain_current_image_session(&mut self) -> bool {
-        if let Some(ViewerSession::Image(state)) = self.viewer.as_mut() {
-            if !state.poll_session_snapshots() || state.file_write_pending() {
-                return false;
-            }
+        if let Some(ViewerSession::Image(state)) = self.viewer.as_mut()
+            && (!state.poll_session_snapshots() || state.file_write_pending())
+        {
+            return false;
         }
         if let Some(ViewerSession::Image(mut state)) = self.viewer.take() {
             let key = self.active_image_key.take();

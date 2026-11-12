@@ -223,8 +223,8 @@ impl MidiViewerState {
                                 copy_clicked = true;
                             }
 
-                            if let Some((s, e)) = self.selected_region {
-                                if (e - s).abs() > 0.05 {
+                            if let Some((s, e)) = self.selected_region
+                                && (e - s).abs() > 0.05 {
                                     ui.add_space(crate::ui_ext::SPACE_XS);
                                     let min_s = s.min(e);
                                     let max_s = s.max(e);
@@ -240,7 +240,6 @@ impl MidiViewerState {
                                         clear_sel_clicked = true;
                                     }
                                 }
-                            }
 
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 zoom_action = ui_ext::zoom_control_bar(ui, zoom_pct, palette);
@@ -509,41 +508,35 @@ impl MidiViewerState {
                     self.view_start_sec + rel * self.view_duration_sec
                 };
 
-                if response.drag_started_by(egui::PointerButton::Primary) {
-                    if let Some(pos) = hover_pos {
-                        if pos.x >= grid_rect.min.x {
+                if response.drag_started_by(egui::PointerButton::Primary)
+                    && let Some(pos) = hover_pos
+                        && pos.x >= grid_rect.min.x {
                             let t0 = x_to_time(pos.x);
                             self.drag_start_time = Some(t0);
                             self.is_dragging_selection = true;
                         }
-                    }
-                }
 
-                if response.dragged_by(egui::PointerButton::Primary) {
-                    if self.is_dragging_selection {
-                        if let (Some(pos), Some(t0)) = (hover_pos, self.drag_start_time) {
+                if response.dragged_by(egui::PointerButton::Primary)
+                    && self.is_dragging_selection
+                        && let (Some(pos), Some(t0)) = (hover_pos, self.drag_start_time) {
                             let t_cur = x_to_time(pos.x);
                             if (t_cur - t0).abs() > 0.03 {
                                 self.selected_region = Some((t0.min(t_cur), t0.max(t_cur)));
                             }
                         }
-                    }
-                }
 
-                if response.drag_stopped() {
-                    if self.is_dragging_selection {
+                if response.drag_stopped()
+                    && self.is_dragging_selection {
                         self.is_dragging_selection = false;
-                        if let Some((s, e)) = self.selected_region {
-                            if (e - s).abs() < 0.05 {
+                        if let Some((s, e)) = self.selected_region
+                            && (e - s).abs() < 0.05 {
                                 self.selected_region = None;
                             }
-                        }
                     }
-                }
 
-                if response.clicked() && !response.dragged_by(egui::PointerButton::Secondary) {
-                    if let Some(pos) = hover_pos {
-                        if pos.x >= grid_rect.min.x {
+                if response.clicked() && !response.dragged_by(egui::PointerButton::Secondary)
+                    && let Some(pos) = hover_pos
+                        && pos.x >= grid_rect.min.x {
                             let target_sec = x_to_time(pos.x);
                             self.selected_region = None;
                             self.play_stop_time = None;
@@ -557,8 +550,6 @@ impl MidiViewerState {
                                 self.play();
                             }
                         }
-                    }
-                }
 
                 // Draw Beat / Time Vertical Grid lines based on zoom
                 let view_dur = self.view_duration_sec;

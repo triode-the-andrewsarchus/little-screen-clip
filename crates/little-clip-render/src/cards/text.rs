@@ -358,20 +358,20 @@ impl ScreenRenderer {
         } else {
             spreadsheet::detect_csv_text(trimmed)
         };
-        if let Some(ref sheet_data) = spreadsheet_opt {
-            if let Some(first_sheet) = sheet_data.sheets.first() {
-                self.draw_spreadsheet_card(
-                    pixmap,
-                    &sheet_data.title,
-                    first_sheet,
-                    rx,
-                    ry,
-                    rw,
-                    rh,
-                    is_hero,
-                );
-                return None;
-            }
+        if let Some(ref sheet_data) = spreadsheet_opt
+            && let Some(first_sheet) = sheet_data.sheets.first()
+        {
+            self.draw_spreadsheet_card(
+                pixmap,
+                &sheet_data.title,
+                first_sheet,
+                rx,
+                ry,
+                rw,
+                rh,
+                is_hero,
+            );
+            return None;
         }
 
         let p = Path::new(trimmed);

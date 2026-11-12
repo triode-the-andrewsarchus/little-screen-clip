@@ -116,8 +116,8 @@ impl BinaryDiffViewState {
                     }
 
                     let copy_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(Some(Icon::Copy), "Summary", palette);
-                    if ui.add(copy_btn).clicked() {
-                        if let Some(ref res) = self.result {
+                    if ui.add(copy_btn).clicked()
+                        && let Some(ref res) = self.result {
                             let summary = format!(
                                 "Binary Diff Summary:\nLeft: {} ({} bytes)\nRight: {} ({} bytes)\nSimilarity: {:.2}%\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B\nMode: {:?}{}",
                                 res.left_label, res.stats.left_total_bytes,
@@ -133,7 +133,6 @@ impl BinaryDiffViewState {
                             ctx.output_mut(|o| o.copied_text = summary);
                             self.status_toast.set("Summary copied to clipboard!", now);
                         }
-                    }
 
                     let diff_panel_label = if self.panel_state.right_collapsed { "Diffs (Show)" } else { "Diffs (Hide)" };
                     let diff_toggle_btn = crate::mode_tab_button(diff_panel_label, !self.panel_state.right_collapsed, palette);

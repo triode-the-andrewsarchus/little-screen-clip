@@ -217,37 +217,36 @@ impl MidiViewerState {
             }
         }
 
-        if self.is_playing {
-            if let Some(start_inst) = self.playback_start_instant {
-                let elapsed = start_inst.elapsed().as_secs_f32();
-                self.playhead_sec = self.playback_start_offset + elapsed;
+        if self.is_playing
+            && let Some(start_inst) = self.playback_start_instant
+        {
+            let elapsed = start_inst.elapsed().as_secs_f32();
+            self.playhead_sec = self.playback_start_offset + elapsed;
 
-                if let Some(stop_time) = self.play_stop_time {
-                    if self.playhead_sec >= stop_time {
-                        self.stop();
-                        if let Some((s, _)) = self.selected_region {
-                            self.playhead_sec = s;
-                        }
-                        return;
-                    }
+            if let Some(stop_time) = self.play_stop_time
+                && self.playhead_sec >= stop_time
+            {
+                self.stop();
+                if let Some((s, _)) = self.selected_region {
+                    self.playhead_sec = s;
                 }
+                return;
+            }
 
-                if self.playhead_sec >= self.data.duration_sec {
-                    self.stop();
-                } else {
-                    // Auto-follow playhead when zoomed in, UNLESS user actively panned away during playback
-                    if !self.user_panned_during_playback
-                        && self.view_duration_sec < self.data.duration_sec
-                    {
-                        let view_end = self.view_start_sec + self.view_duration_sec;
-                        if self.playhead_sec > view_end || self.playhead_sec < self.view_start_sec {
-                            let new_start = (self.playhead_sec - 0.1 * self.view_duration_sec)
-                                .clamp(
-                                    0.0,
-                                    (self.data.duration_sec - self.view_duration_sec).max(0.0),
-                                );
-                            self.view_start_sec = new_start;
-                        }
+            if self.playhead_sec >= self.data.duration_sec {
+                self.stop();
+            } else {
+                // Auto-follow playhead when zoomed in, UNLESS user actively panned away during playback
+                if !self.user_panned_during_playback
+                    && self.view_duration_sec < self.data.duration_sec
+                {
+                    let view_end = self.view_start_sec + self.view_duration_sec;
+                    if self.playhead_sec > view_end || self.playhead_sec < self.view_start_sec {
+                        let new_start = (self.playhead_sec - 0.1 * self.view_duration_sec).clamp(
+                            0.0,
+                            (self.data.duration_sec - self.view_duration_sec).max(0.0),
+                        );
+                        self.view_start_sec = new_start;
                     }
                 }
             }

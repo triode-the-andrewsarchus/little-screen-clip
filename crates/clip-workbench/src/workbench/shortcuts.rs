@@ -64,10 +64,10 @@ impl WorkbenchApp {
         ctx: &egui::Context,
         audio_region_active: bool,
     ) {
-        if audio_strip_space_pressed(ctx, audio_region_active) {
-            if let Some(strip) = &mut self.rolling_audio_strip {
-                strip.toggle_playback();
-            }
+        if audio_strip_space_pressed(ctx, audio_region_active)
+            && let Some(strip) = &mut self.rolling_audio_strip
+        {
+            strip.toggle_playback();
         }
     }
 
@@ -83,13 +83,13 @@ impl WorkbenchApp {
         if !copy_pressed {
             return;
         }
-        if let Some(strip) = &mut self.rolling_audio_strip {
-            if strip.selected_region.is_some() {
-                let now = ctx.input(|i| i.time);
-                if strip.copy_selection(now) {
-                    // The existing background state poller observes the copied item.
-                    self.dirty_mirror = true;
-                }
+        if let Some(strip) = &mut self.rolling_audio_strip
+            && strip.selected_region.is_some()
+        {
+            let now = ctx.input(|i| i.time);
+            if strip.copy_selection(now) {
+                // The existing background state poller observes the copied item.
+                self.dirty_mirror = true;
             }
         }
     }

@@ -87,7 +87,7 @@ fn selected_external_and_embedded_samples_decode_to_bounded_raw_audio() {
         let mapping = read(&path, &AtomicBool::new(false)).unwrap();
         let doc = &mapping.document;
         let audio = audition::prepare(
-            &doc,
+            doc,
             &doc.instruments[0].regions[1],
             path.parent().unwrap(),
             mapping.archive.as_ref(),
@@ -101,7 +101,7 @@ fn selected_external_and_embedded_samples_decode_to_bounded_raw_audio() {
         assert!(audio.peaks.len() <= 256);
         assert!(
             audition::prepare(
-                &doc,
+                doc,
                 &doc.instruments[0].regions[0],
                 path.parent().unwrap(),
                 mapping.archive.as_ref(),

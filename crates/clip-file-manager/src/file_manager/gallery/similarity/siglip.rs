@@ -358,7 +358,7 @@ mod tests {
             PathBuf::from("good2"),
         ];
         let features = embed_with_isolation(&paths, &AtomicBool::new(false), |paths| {
-            if paths.len() != 1 || paths[0] == PathBuf::from("bad") {
+            if paths.len() != 1 || paths[0] == *"bad" {
                 return Err("decode failure".into());
             }
             Ok(vec![FeatureVector::Dense((vec![1.0]).into())])

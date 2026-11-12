@@ -166,18 +166,17 @@ impl EntryPreviews {
                 && (previous.0 != event
                     || elapsed
                         >= std::time::Duration::from_secs((5_u64 << previous.2.min(3)).min(30)))
+                && self.cache.refresh(id, Source::System(path))
             {
-                if self.cache.refresh(id, Source::System(path)) {
-                    *previous = (
-                        event,
-                        now,
-                        if failed {
-                            previous.2.saturating_add(1)
-                        } else {
-                            0
-                        },
-                    );
-                }
+                *previous = (
+                    event,
+                    now,
+                    if failed {
+                        previous.2.saturating_add(1)
+                    } else {
+                        0
+                    },
+                );
             }
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
@@ -447,10 +446,9 @@ impl EntryPreviews {
             .raster_sizes
             .get(&id)
             .is_some_and(|(previous, _)| *previous != key)
+            && let Some((_, raster)) = self.raster_sizes.remove(&id)
         {
-            if let Some((_, raster)) = self.raster_sizes.remove(&id) {
-                self.rasters.invalidate(raster);
-            }
+            self.rasters.invalidate(raster);
         }
         let (_, raster) = self
             .raster_sizes

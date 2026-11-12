@@ -184,7 +184,7 @@ impl Viewers {
                 .as_ref()
                 .is_none_or(|state| !state.show_fallback_save_modal);
         let target = collection.controls(ui, ready, active.as_deref());
-        collection.export_ui(ui, active.as_deref_mut(), palette);
+        collection.export_ui(ui, active, palette);
         self.saved_rating_paths
             .append(&mut collection.ratings.saved_paths);
         self.gallery = Some(collection);

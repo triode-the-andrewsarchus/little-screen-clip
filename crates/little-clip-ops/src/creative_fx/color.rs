@@ -65,17 +65,17 @@ pub fn srgb_to_oklab(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     let g_lin = srgb_to_linear(g);
     let b_lin = srgb_to_linear(b);
 
-    let l = 0.4122214708 * r_lin + 0.5363325363 * g_lin + 0.0514459929 * b_lin;
-    let m = 0.2119034982 * r_lin + 0.6806995451 * g_lin + 0.1073969566 * b_lin;
-    let s = 0.0883024619 * r_lin + 0.2817188376 * g_lin + 0.6299787005 * b_lin;
+    let l = 0.412_221_46 * r_lin + 0.536_332_55 * g_lin + 0.051_445_995 * b_lin;
+    let m = 0.211_903_5 * r_lin + 0.680_699_5 * g_lin + 0.107_396_96 * b_lin;
+    let s = 0.088_302_46 * r_lin + 0.281_718_85 * g_lin + 0.629_978_7 * b_lin;
 
     let l_ = l.cbrt();
     let m_ = m.cbrt();
     let s_ = s.cbrt();
 
-    let oklab_l = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
-    let oklab_a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
-    let oklab_b = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+    let oklab_l = 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_;
+    let oklab_a = 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_;
+    let oklab_b = 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_;
 
     (oklab_l, oklab_a, oklab_b)
 }
@@ -83,17 +83,17 @@ pub fn srgb_to_oklab(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
 /// Convert OKLab (L, a, b) to normalized sRGB [0..1].
 #[inline]
 pub fn oklab_to_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
-    let l_ = l + 0.3963377774 * a + 0.2158037573 * b;
-    let m_ = l - 0.1055613458 * a - 0.0638541728 * b;
-    let s_ = l - 0.0894841775 * a - 1.2914855480 * b;
+    let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+    let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
+    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
 
     let l_lin = l_ * l_ * l_;
     let m_lin = m_ * m_ * m_;
     let s_lin = s_ * s_ * s_;
 
-    let r_lin = 4.0767439362 * l_lin - 3.3077115913 * m_lin + 0.2309699292 * s_lin;
-    let g_lin = -1.2684380046 * l_lin + 2.6097574011 * m_lin - 0.3413193965 * s_lin;
-    let b_lin = -0.0041960863 * l_lin - 0.7034186147 * m_lin + 1.7076147010 * s_lin;
+    let r_lin = 4.076_744 * l_lin - 3.307_711_6 * m_lin + 0.230_969_94 * s_lin;
+    let g_lin = -1.268_438 * l_lin + 2.609_757_4 * m_lin - 0.341_319_38 * s_lin;
+    let b_lin = -0.0041960863 * l_lin - 0.703_418_6 * m_lin + 1.707_614_7 * s_lin;
 
     let r = linear_to_srgb(r_lin).clamp(0.0, 1.0);
     let g = linear_to_srgb(g_lin).clamp(0.0, 1.0);

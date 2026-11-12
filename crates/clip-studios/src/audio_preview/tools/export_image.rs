@@ -641,21 +641,21 @@ pub fn render_spectrum_image(
     );
 
     // Draw spectrogram heatmap into `[track_min_x, spec_y_min, track_width, spec_h]`
-    if let Some(img_size) = IntSize::from_wh(tex_w as u32, tex_h as u32) {
-        if let Some(img_pixmap) = Pixmap::from_vec(rgba, img_size) {
-            let scale_x = track_width / tex_w as f32;
-            let scale_y = spec_h / tex_h as f32;
-            let transform =
-                Transform::from_translate(track_min_x, spec_y_min).pre_scale(scale_x, scale_y);
-            pixmap.draw_pixmap(
-                0,
-                0,
-                img_pixmap.as_ref(),
-                &PixmapPaint::default(),
-                transform,
-                None,
-            );
-        }
+    if let Some(img_size) = IntSize::from_wh(tex_w as u32, tex_h as u32)
+        && let Some(img_pixmap) = Pixmap::from_vec(rgba, img_size)
+    {
+        let scale_x = track_width / tex_w as f32;
+        let scale_y = spec_h / tex_h as f32;
+        let transform =
+            Transform::from_translate(track_min_x, spec_y_min).pre_scale(scale_x, scale_y);
+        pixmap.draw_pixmap(
+            0,
+            0,
+            img_pixmap.as_ref(),
+            &PixmapPaint::default(),
+            transform,
+            None,
+        );
     }
 
     // 5. Frequency Axis Ticks & Horizontal Grid Lines

@@ -170,8 +170,11 @@ mod tests {
         let source = directory.path().join("copy.wav");
         std::fs::write(&source, b"retained copy").unwrap();
         for name in ["vocals", "../outside"] {
-            let result =
-                spawn_stem_editor("/missing-stem-editor", &[source.clone()], &[name.into()]);
+            let result = spawn_stem_editor(
+                "/missing-stem-editor",
+                std::slice::from_ref(&source),
+                &[name.into()],
+            );
             assert!(result.is_err());
             assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
             assert_eq!(std::fs::read(&source).unwrap(), b"retained copy");

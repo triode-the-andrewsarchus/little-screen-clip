@@ -112,15 +112,16 @@ fn metadata(
                     .chars()
                     .take(48)
                     .collect::<String>();
-                if name == ".rsrc" && length <= 8 * 1024 * 1024 {
-                    if let Ok(bytes) = section.data() {
-                        icon = super::icon::extract(
-                            bytes,
-                            section
-                                .address()
-                                .saturating_sub(object.relative_address_base()),
-                        );
-                    }
+                if name == ".rsrc"
+                    && length <= 8 * 1024 * 1024
+                    && let Ok(bytes) = section.data()
+                {
+                    icon = super::icon::extract(
+                        bytes,
+                        section
+                            .address()
+                            .saturating_sub(object.relative_address_base()),
+                    );
                 }
                 sections.push(Section {
                     start: offset,

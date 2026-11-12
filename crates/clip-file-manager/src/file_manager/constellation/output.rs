@@ -344,6 +344,162 @@ impl Source for Glue<MixerSource> {
     }
 }
 
+/// Shared ready-to-play rack. MIDI callbacks touch only bounded metadata and PCM
+/// references here; they never decode audio or wait for an egui frame.
+pub(super) struct Rack {
+    bank: super::sample_pack::SamplePackBank,
+    pub output: Option<PadOutput>,
+    pub voices: [Vec<Player>; super::sample_pack::NUM_SLOTS],
+    pub auditions: Vec<Player>,
+    pub map_playing: bool,
+    pub show_midi_notes: bool,
+    pub history: Arc<super::meter_history::MeterHistory>,
+}
+impl Default for Rack {
+    fn default() -> Self {
+        Self {
+            bank: Default::default(),
+            output: None,
+            voices: std::array::from_fn(|_| Vec::new()),
+            auditions: Vec::new(),
+            map_playing: false,
+            show_midi_notes: false,
+            history: Arc::new(Default::default()),
+        }
+    }
+}
+impl Rack {
+    pub fn sync(&mut self, bank: &super::sample_pack::SamplePackBank) {
+        let cache_changed = self
+            .bank
+            .slots
+            .iter()
+            .flat_map(|slot| &slot.samples)
+            .zip(bank.slots.iter().flat_map(|slot| &slot.samples))
+            .any(|(a, b)| {
+                a.cached_audio.as_ref().map(Arc::as_ptr) != b.cached_audio.as_ref().map(Arc::as_ptr)
+                    || a.prepared_pitch
+                        .as_ref()
+                        .map(|(_, audio)| Arc::as_ptr(audio))
+                        != b.prepared_pitch
+                            .as_ref()
+                            .map(|(_, audio)| Arc::as_ptr(audio))
+            });
+        if self.bank != *bank || cache_changed {
+            self.bank = bank.clone();
+        }
+        let solo = bank.slots.iter().any(|slot| slot.solo);
+        for (slot, voices) in bank.slots.iter().zip(&self.voices) {
+            let gain = if slot.mute || (solo && !slot.solo) {
+                0.0
+            } else {
+                1.0
+            };
+            voices.iter().for_each(|voice| voice.set_volume(gain));
+        }
+        if let Some(output) = &self.output {
+            output.set_dynamics(bank);
+        }
+    }
+    pub fn retire(&mut self) {
+        self.voices
+            .iter_mut()
+            .for_each(|voices| voices.retain(|player| !player.empty()));
+        self.auditions.retain(|player| !player.empty());
+        if !self.map_playing && self.auditions.is_empty() && self.voices.iter().all(Vec::is_empty) {
+            self.output = None;
+        }
+    }
+    pub fn stop(&mut self) {
+        for player in self.voices.iter_mut().flat_map(|voices| voices.drain(..)) {
+            player.stop();
+        }
+        self.auditions.drain(..).for_each(|player| player.stop());
+        self.map_playing = false;
+        self.output = None;
+    }
+    pub fn audition(&mut self, samples: &[SlotSample]) {
+        self.auditions.drain(..).for_each(|player| player.stop());
+        if self.output.is_none() {
+            self.output = PadOutput::new(self.bank.compressor_bypass, self.history.clone());
+        }
+        if let Some(output) = &self.output {
+            output.set_dynamics(&self.bank);
+            self.auditions
+                .extend(samples.iter().filter_map(|sample| output.play(sample, 127)));
+        }
+    }
+    pub fn trigger(&mut self, slot_idx: usize, velocity: u8) -> bool {
+        if slot_idx >= self.bank.slots.len() || velocity == 0 {
+            return true;
+        }
+        let slot = &self.bank.slots[slot_idx];
+        let solo = self.bank.slots.iter().any(|slot| slot.solo);
+        if slot.mute || (solo && !slot.solo) {
+            return true;
+        }
+        let group = slot.choke_group;
+        // Equal priority keeps the familiar latest-hit behavior. Finished or gated
+        // voices cannot lock out the group, even before the next UI retirement tick.
+        if group != 0
+            && self
+                .bank
+                .slots
+                .iter()
+                .zip(&self.voices)
+                .any(|(peer, voices)| {
+                    peer.choke_group == group
+                        && peer.choke_priority > slot.choke_priority
+                        && !peer.mute
+                        && (!solo || peer.solo)
+                        && voices.iter().any(|voice| !voice.empty())
+                })
+        {
+            return true;
+        }
+        for (index, voices) in self.voices.iter_mut().enumerate() {
+            if (index == slot_idx && slot.retrigger)
+                || (index != slot_idx && group != 0 && self.bank.slots[index].choke_group == group)
+            {
+                for player in voices.drain(..) {
+                    player.stop();
+                }
+            }
+        }
+        // Bound overlapping hits, retiring completed players even between UI frames.
+        self.voices[slot_idx].retain(|player| !player.empty());
+        while self.voices[slot_idx].len() + slot.samples.len() > 128 {
+            self.voices[slot_idx].remove(0).stop();
+        }
+        let slot = &self.bank.slots[slot_idx];
+        if !slot
+            .samples
+            .iter()
+            .any(|sample| sample.cached_audio.is_some())
+        {
+            return true;
+        }
+        if self.output.is_none() {
+            self.output = PadOutput::new(self.bank.compressor_bypass, self.history.clone());
+        }
+        let Some(output) = &self.output else {
+            return false;
+        };
+        output.set_dynamics(&self.bank);
+        let velocity = if self.bank.override_velocity {
+            127
+        } else {
+            velocity.min(127)
+        };
+        for sample in &slot.samples {
+            if let Some(player) = output.play(sample, velocity) {
+                self.voices[slot_idx].push(player);
+            }
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,161 +774,5 @@ mod tests {
         glue.bypass.store(true, Ordering::Relaxed);
         assert_eq!(glue.frame(2.0, 1.0), (2.0, 1.0));
         assert_eq!(glue.frame(f32::NAN, f32::INFINITY), (0.0, 0.0));
-    }
-}
-
-/// Shared ready-to-play rack. MIDI callbacks touch only bounded metadata and PCM
-/// references here; they never decode audio or wait for an egui frame.
-pub(super) struct Rack {
-    bank: super::sample_pack::SamplePackBank,
-    pub output: Option<PadOutput>,
-    pub voices: [Vec<Player>; super::sample_pack::NUM_SLOTS],
-    pub auditions: Vec<Player>,
-    pub map_playing: bool,
-    pub show_midi_notes: bool,
-    pub history: Arc<super::meter_history::MeterHistory>,
-}
-impl Default for Rack {
-    fn default() -> Self {
-        Self {
-            bank: Default::default(),
-            output: None,
-            voices: std::array::from_fn(|_| Vec::new()),
-            auditions: Vec::new(),
-            map_playing: false,
-            show_midi_notes: false,
-            history: Arc::new(Default::default()),
-        }
-    }
-}
-impl Rack {
-    pub fn sync(&mut self, bank: &super::sample_pack::SamplePackBank) {
-        let cache_changed = self
-            .bank
-            .slots
-            .iter()
-            .flat_map(|slot| &slot.samples)
-            .zip(bank.slots.iter().flat_map(|slot| &slot.samples))
-            .any(|(a, b)| {
-                a.cached_audio.as_ref().map(Arc::as_ptr) != b.cached_audio.as_ref().map(Arc::as_ptr)
-                    || a.prepared_pitch
-                        .as_ref()
-                        .map(|(_, audio)| Arc::as_ptr(audio))
-                        != b.prepared_pitch
-                            .as_ref()
-                            .map(|(_, audio)| Arc::as_ptr(audio))
-            });
-        if self.bank != *bank || cache_changed {
-            self.bank = bank.clone();
-        }
-        let solo = bank.slots.iter().any(|slot| slot.solo);
-        for (slot, voices) in bank.slots.iter().zip(&self.voices) {
-            let gain = if slot.mute || (solo && !slot.solo) {
-                0.0
-            } else {
-                1.0
-            };
-            voices.iter().for_each(|voice| voice.set_volume(gain));
-        }
-        if let Some(output) = &self.output {
-            output.set_dynamics(bank);
-        }
-    }
-    pub fn retire(&mut self) {
-        self.voices
-            .iter_mut()
-            .for_each(|voices| voices.retain(|player| !player.empty()));
-        self.auditions.retain(|player| !player.empty());
-        if !self.map_playing && self.auditions.is_empty() && self.voices.iter().all(Vec::is_empty) {
-            self.output = None;
-        }
-    }
-    pub fn stop(&mut self) {
-        for player in self.voices.iter_mut().flat_map(|voices| voices.drain(..)) {
-            player.stop();
-        }
-        self.auditions.drain(..).for_each(|player| player.stop());
-        self.map_playing = false;
-        self.output = None;
-    }
-    pub fn audition(&mut self, samples: &[SlotSample]) {
-        self.auditions.drain(..).for_each(|player| player.stop());
-        if self.output.is_none() {
-            self.output = PadOutput::new(self.bank.compressor_bypass, self.history.clone());
-        }
-        if let Some(output) = &self.output {
-            output.set_dynamics(&self.bank);
-            self.auditions
-                .extend(samples.iter().filter_map(|sample| output.play(sample, 127)));
-        }
-    }
-    pub fn trigger(&mut self, slot_idx: usize, velocity: u8) -> bool {
-        if slot_idx >= self.bank.slots.len() || velocity == 0 {
-            return true;
-        }
-        let slot = &self.bank.slots[slot_idx];
-        let solo = self.bank.slots.iter().any(|slot| slot.solo);
-        if slot.mute || (solo && !slot.solo) {
-            return true;
-        }
-        let group = slot.choke_group;
-        // Equal priority keeps the familiar latest-hit behavior. Finished or gated
-        // voices cannot lock out the group, even before the next UI retirement tick.
-        if group != 0
-            && self
-                .bank
-                .slots
-                .iter()
-                .zip(&self.voices)
-                .any(|(peer, voices)| {
-                    peer.choke_group == group
-                        && peer.choke_priority > slot.choke_priority
-                        && !peer.mute
-                        && (!solo || peer.solo)
-                        && voices.iter().any(|voice| !voice.empty())
-                })
-        {
-            return true;
-        }
-        for (index, voices) in self.voices.iter_mut().enumerate() {
-            if (index == slot_idx && slot.retrigger)
-                || (index != slot_idx && group != 0 && self.bank.slots[index].choke_group == group)
-            {
-                for player in voices.drain(..) {
-                    player.stop();
-                }
-            }
-        }
-        // Bound overlapping hits, retiring completed players even between UI frames.
-        self.voices[slot_idx].retain(|player| !player.empty());
-        while self.voices[slot_idx].len() + slot.samples.len() > 128 {
-            self.voices[slot_idx].remove(0).stop();
-        }
-        let slot = &self.bank.slots[slot_idx];
-        if !slot
-            .samples
-            .iter()
-            .any(|sample| sample.cached_audio.is_some())
-        {
-            return true;
-        }
-        if self.output.is_none() {
-            self.output = PadOutput::new(self.bank.compressor_bypass, self.history.clone());
-        }
-        let Some(output) = &self.output else {
-            return false;
-        };
-        output.set_dynamics(&self.bank);
-        let velocity = if self.bank.override_velocity {
-            127
-        } else {
-            velocity.min(127)
-        };
-        for sample in &slot.samples {
-            if let Some(player) = output.play(sample, velocity) {
-                self.voices[slot_idx].push(player);
-            }
-        }
-        true
     }
 }

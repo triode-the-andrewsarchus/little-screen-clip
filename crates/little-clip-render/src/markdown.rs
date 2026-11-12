@@ -203,49 +203,48 @@ pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
         let rest = &text[i..];
 
         // Link: [label](url)
-        if rest.starts_with('[') {
-            if let Some(close_bracket) = rest[1..].find(']') {
-                let after_bracket = 1 + close_bracket + 1;
-                if rest[after_bracket..].starts_with('(') {
-                    if let Some(close_paren) = rest[after_bracket + 1..].find(')') {
-                        if !buf.is_empty() {
-                            spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
-                        }
-                        let label = rest[1..1 + close_bracket].to_string();
-                        let url =
-                            rest[after_bracket + 1..after_bracket + 1 + close_paren].to_string();
-                        spans.push(MarkdownSpan::Link { label, url });
-                        i += after_bracket + 1 + close_paren + 1;
-                        continue;
-                    }
+        if rest.starts_with('[')
+            && let Some(close_bracket) = rest[1..].find(']')
+        {
+            let after_bracket = 1 + close_bracket + 1;
+            if rest[after_bracket..].starts_with('(')
+                && let Some(close_paren) = rest[after_bracket + 1..].find(')')
+            {
+                if !buf.is_empty() {
+                    spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
                 }
+                let label = rest[1..1 + close_bracket].to_string();
+                let url = rest[after_bracket + 1..after_bracket + 1 + close_paren].to_string();
+                spans.push(MarkdownSpan::Link { label, url });
+                i += after_bracket + 1 + close_paren + 1;
+                continue;
             }
         }
 
         // Inline code: `code`
-        if rest.starts_with('`') {
-            if let Some(close_tick) = rest[1..].find('`') {
-                if !buf.is_empty() {
-                    spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
-                }
-                let code_str = rest[1..1 + close_tick].to_string();
-                spans.push(MarkdownSpan::Code(code_str));
-                i += 1 + close_tick + 1;
-                continue;
+        if rest.starts_with('`')
+            && let Some(close_tick) = rest[1..].find('`')
+        {
+            if !buf.is_empty() {
+                spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
             }
+            let code_str = rest[1..1 + close_tick].to_string();
+            spans.push(MarkdownSpan::Code(code_str));
+            i += 1 + close_tick + 1;
+            continue;
         }
 
         // Bold italic: ***text***
-        if rest.starts_with("***") {
-            if let Some(close_idx) = rest[3..].find("***") {
-                if !buf.is_empty() {
-                    spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
-                }
-                let bi_str = rest[3..3 + close_idx].to_string();
-                spans.push(MarkdownSpan::BoldItalic(bi_str));
-                i += 3 + close_idx + 3;
-                continue;
+        if rest.starts_with("***")
+            && let Some(close_idx) = rest[3..].find("***")
+        {
+            if !buf.is_empty() {
+                spans.push(MarkdownSpan::Text(std::mem::take(&mut buf)));
             }
+            let bi_str = rest[3..3 + close_idx].to_string();
+            spans.push(MarkdownSpan::BoldItalic(bi_str));
+            i += 3 + close_idx + 3;
+            continue;
         }
 
         // Bold: **text** or __text__

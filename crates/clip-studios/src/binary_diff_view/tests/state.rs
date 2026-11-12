@@ -1096,12 +1096,11 @@ fn test_stale_generation_discarded() {
     state.receiver = Some(rx);
 
     // Poll receiver with generation 2 active
-    if let Some(ref rx) = state.receiver {
-        if let Ok(Ok((req_gen, res))) = rx.try_recv() {
-            if req_gen == state.current_generation {
-                state.result = Some(res);
-            }
-        }
+    if let Some(ref rx) = state.receiver
+        && let Ok(Ok((req_gen, res))) = rx.try_recv()
+        && req_gen == state.current_generation
+    {
+        state.result = Some(res);
     }
 
     // Stale result should NOT have been applied

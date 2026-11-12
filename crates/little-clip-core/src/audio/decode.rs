@@ -523,10 +523,7 @@ where
             },
         )
     };
-    let (peaks_lvl0_ch1, peaks_lvl1_ch1, peaks_lvl2_ch1) = match ch1_pyramid {
-        Some(pyramid) => pyramid,
-        None => return None,
-    };
+    let (peaks_lvl0_ch1, peaks_lvl1_ch1, peaks_lvl2_ch1) = ch1_pyramid?;
     let (peaks_lvl0_ch2, peaks_lvl1_ch2, peaks_lvl2_ch2) = match ch2_pyramid {
         Some(Some((l0, l1, l2))) => (Some(l0), Some(l1), Some(l2)),
         Some(None) => (None, None, None),
@@ -561,7 +558,7 @@ where
 
         let (p1, p2) = if span >= 1024 && !peaks_lvl1_ch1.is_empty() {
             let b_start = (f_start / 1024).min(peaks_lvl1_ch1.len().saturating_sub(1));
-            let b_end = ((f_end + 1023) / 1024).min(peaks_lvl1_ch1.len());
+            let b_end = f_end.div_ceil(1024).min(peaks_lvl1_ch1.len());
             let mut mx1 = 0.0f32;
             for b in &peaks_lvl1_ch1[b_start..b_end] {
                 let m = b.min.abs().max(b.max.abs());
@@ -834,45 +831,46 @@ where
             let mut chord_notes = detect_chord_from_fft(&out_data, sample_rate as f32, window_size);
 
             // Sub-cent pitch refinement via fast early-exit YIN
-            if rms > 0.005 && win_slice.len() >= 256 {
-                if let Some((detected_freq, clarity)) =
+            if rms > 0.005
+                && win_slice.len() >= 256
+                && let Some((detected_freq, clarity)) =
                     detect_pitch_yin(win_slice, sample_rate as f32)
-                {
-                    if detected_freq < 65.0 && clarity >= 0.35 {
-                        // Fundamental is below 65 Hz (sub-bass / rumble / ~40Hz). Ignore as non-musical.
-                        chord_notes.clear();
-                    } else if clarity >= 0.35 && detected_freq >= 65.0 && detected_freq <= 4200.0 {
-                        let (note_class, octave, midi) = freq_to_note(detected_freq);
-                        let note_name = format!("{}{}", note_class, octave);
-                        let note_id = (midi - 69.0).rem_euclid(12.0) / 12.0;
-                        let amp = (rms * 5.0).clamp(0.4, 1.0);
-                        let rgb_f = cc_to_rgb(note_id, 1.0, amp);
-                        let rgb = [
-                            (rgb_f[0] * 255.0).clamp(0.0, 255.0) as u8,
-                            (rgb_f[1] * 255.0).clamp(0.0, 255.0) as u8,
-                            (rgb_f[2] * 255.0).clamp(0.0, 255.0) as u8,
-                        ];
-                        let yin_note = SingleNoteInfo {
-                            note_name,
-                            frequency_hz: detected_freq,
-                            amplitude: amp,
-                            rgb,
-                        };
+            {
+                if detected_freq < 65.0 && clarity >= 0.35 {
+                    // Fundamental is below 65 Hz (sub-bass / rumble / ~40Hz). Ignore as non-musical.
+                    chord_notes.clear();
+                } else if clarity >= 0.35 && (65.0..=4200.0).contains(&detected_freq) {
+                    let (note_class, octave, midi) = freq_to_note(detected_freq);
+                    let note_name = format!("{}{}", note_class, octave);
+                    let note_id = (midi - 69.0).rem_euclid(12.0) / 12.0;
+                    let amp = (rms * 5.0).clamp(0.4, 1.0);
+                    let rgb_f = cc_to_rgb(note_id, 1.0, amp);
+                    let rgb = [
+                        (rgb_f[0] * 255.0).clamp(0.0, 255.0) as u8,
+                        (rgb_f[1] * 255.0).clamp(0.0, 255.0) as u8,
+                        (rgb_f[2] * 255.0).clamp(0.0, 255.0) as u8,
+                    ];
+                    let yin_note = SingleNoteInfo {
+                        note_name,
+                        frequency_hz: detected_freq,
+                        amplitude: amp,
+                        rgb,
+                    };
 
-                        if chord_notes.is_empty() || chord_notes.len() == 1 {
-                            chord_notes = vec![yin_note];
-                        } else {
-                            let class_idx = (midi.round() as i32).rem_euclid(12) as usize;
-                            if let Some(pos) = chord_notes.iter().position(|n| {
-                                n.note_name.starts_with(CHROMATIC_NOTE_NAMES[class_idx])
-                            }) {
-                                chord_notes[pos] = yin_note.clone();
-                                if pos > 0 {
-                                    chord_notes.swap(0, pos);
-                                }
-                            } else if clarity >= 0.5 {
-                                chord_notes.insert(0, yin_note);
+                    if chord_notes.is_empty() || chord_notes.len() == 1 {
+                        chord_notes = vec![yin_note];
+                    } else {
+                        let class_idx = (midi.round() as i32).rem_euclid(12) as usize;
+                        if let Some(pos) = chord_notes
+                            .iter()
+                            .position(|n| n.note_name.starts_with(CHROMATIC_NOTE_NAMES[class_idx]))
+                        {
+                            chord_notes[pos] = yin_note.clone();
+                            if pos > 0 {
+                                chord_notes.swap(0, pos);
                             }
+                        } else if clarity >= 0.5 {
+                            chord_notes.insert(0, yin_note);
                         }
                     }
                 }
@@ -1046,18 +1044,12 @@ where
                     .map(|ch2| build_peak_pyramid_cancellable(ch2, sample_rate as f32, cancelled))
             },
         );
-        let (l0, l1, l2) = match ch1_pyramid {
-            Some(pyramid) => pyramid,
-            None => return None,
-        };
+        let (l0, l1, l2) = ch1_pyramid?;
         analysis.peaks_lvl0_ch1 = l0;
         analysis.peaks_lvl1_ch1 = l1;
         analysis.peaks_lvl2_ch1 = l2;
         if let Some(pyramid) = right {
-            let (l0, l1, l2) = match pyramid {
-                Some(pyramid) => pyramid,
-                None => return None,
-            };
+            let (l0, l1, l2) = pyramid?;
             analysis.peaks_lvl0_ch2 = Some(l0);
             analysis.peaks_lvl1_ch2 = Some(l1);
             analysis.peaks_lvl2_ch2 = Some(l2);
@@ -1145,11 +1137,7 @@ pub fn compute_spectral_colors(
         .make(&track.codec_params, &DecoderOptions::default())
         .ok()?;
 
-    let channels = track
-        .codec_params
-        .channels
-        .map(|c| c.count() as usize)
-        .unwrap_or(2);
+    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
     let sample_rate = (track.codec_params.sample_rate.unwrap_or(44100) as f32).max(8000.0);
 
     // If sampling a snippet from the middle, attempt coarse seek

@@ -232,29 +232,24 @@ impl TextPreviewState {
                                     if let Some(pointer) = pointer.filter(|point| {
                                         text_rect.contains(*point)
                                             && ui.clip_rect().contains(*point)
-                                    }) {
-                                        if (pressed && response.contains_pointer())
-                                            || (self.code_selection_dragging && (down || released))
+                                    }) && ((pressed && response.contains_pointer())
+                                        || (self.code_selection_dragging && (down || released)))
+                                    {
+                                        let cursor =
+                                            galley.cursor_from_pos(pointer - text_rect.min);
+                                        let local_byte = line
+                                            .char_indices()
+                                            .nth(cursor.ccursor.index)
+                                            .map_or(line.len(), |(byte, _)| byte);
+                                        let source_byte = fragment.start_byte + local_byte;
+                                        if pressed {
+                                            self.code_selection = Some((source_byte, source_byte));
+                                            self.code_selection_dragging = true;
+                                        } else if let Some((_, focus)) = &mut self.code_selection
+                                            && *focus != source_byte
                                         {
-                                            let cursor =
-                                                galley.cursor_from_pos(pointer - text_rect.min);
-                                            let local_byte = line
-                                                .char_indices()
-                                                .nth(cursor.ccursor.index)
-                                                .map_or(line.len(), |(byte, _)| byte);
-                                            let source_byte = fragment.start_byte + local_byte;
-                                            if pressed {
-                                                self.code_selection =
-                                                    Some((source_byte, source_byte));
-                                                self.code_selection_dragging = true;
-                                            } else if let Some((_, focus)) =
-                                                &mut self.code_selection
-                                            {
-                                                if *focus != source_byte {
-                                                    *focus = source_byte;
-                                                    ui.ctx().request_repaint();
-                                                }
-                                            }
+                                            *focus = source_byte;
+                                            ui.ctx().request_repaint();
                                         }
                                     }
                                     if let Some((anchor, focus)) = self.code_selection {
@@ -310,8 +305,8 @@ impl TextPreviewState {
                             }
                         },
                     );
-                    if show_minimap {
-                        if let Some(fraction) = render_code_minimap(
+                    if show_minimap
+                        && let Some(fraction) = render_code_minimap(
                             ui,
                             &self.minimap_lines.lines,
                             &self.line_first_fragment,
@@ -320,16 +315,15 @@ impl TextPreviewState {
                             self.minimap_fraction,
                             self.minimap_view_fraction,
                             palette,
-                        ) {
-                            let max_offset = (self.minimap_content_height
-                                - self.minimap_viewport_height)
-                                .max(0.0);
-                            self.scroll_to_offset = Some(
-                                (fraction * self.minimap_content_height
-                                    - self.minimap_viewport_height * 0.5)
-                                    .clamp(0.0, max_offset),
-                            );
-                        }
+                        )
+                    {
+                        let max_offset =
+                            (self.minimap_content_height - self.minimap_viewport_height).max(0.0);
+                        self.scroll_to_offset = Some(
+                            (fraction * self.minimap_content_height
+                                - self.minimap_viewport_height * 0.5)
+                                .clamp(0.0, max_offset),
+                        );
                     }
                 });
             });

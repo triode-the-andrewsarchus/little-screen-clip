@@ -59,10 +59,11 @@ fn pdf_sibling_panes_stay_inside_compact_and_wide_hosts() {
                 },
             );
             for clipped in &output.shapes {
-                if let egui::epaint::Shape::Rect(rect) = &clipped.shape {
-                    if rect.fill == colors.recessed && rect.rect.height() > 100.0 {
-                        panes.push(rect.rect);
-                    }
+                if let egui::epaint::Shape::Rect(rect) = &clipped.shape
+                    && rect.fill == colors.recessed
+                    && rect.rect.height() > 100.0
+                {
+                    panes.push(rect.rect);
                 }
             }
             panes.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));

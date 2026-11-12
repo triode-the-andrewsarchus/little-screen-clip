@@ -1237,8 +1237,7 @@ mod tests {
         let error = fixture
             .store
             .apply_restore(prepared, &[], &AtomicBool::new(false))
-            .err()
-            .expect("restoring the larger database must hit SQLITE_FULL");
+            .expect_err("restoring the larger database must hit SQLITE_FULL");
         assert!(error.contains("full"), "{error}");
         assert!(fixture.store.storage_fault.get());
         assert_eq!(

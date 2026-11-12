@@ -444,26 +444,24 @@ impl Previews {
             data.text = error.to_string();
             data
         });
-        if data.system.is_none() {
-            if let Some(previous) = self.ready.get(&id).and_then(|r| r.data.system.as_ref()) {
-                let mut retained = (**previous).clone();
-                retained.last_error = Some(data.detail.clone());
-                data.detail = retained.title.clone();
-                data.system = Some(Arc::new(retained));
-            }
+        if data.system.is_none()
+            && let Some(previous) = self.ready.get(&id).and_then(|r| r.data.system.as_ref())
+        {
+            let mut retained = (**previous).clone();
+            retained.last_error = Some(data.detail.clone());
+            data.detail = retained.title.clone();
+            data.system = Some(Arc::new(retained));
         }
         if let Some((current, previous)) = data.system.as_mut().zip(
             self.ready
                 .get(&id)
                 .and_then(|ready| ready.data.system.as_ref()),
-        ) {
-            if current
-                .facts
-                .iter()
-                .any(|fact| fact.retained && fact.observed_generation.is_none())
-            {
-                Arc::make_mut(current).inherit_retained_provenance(previous);
-            }
+        ) && current
+            .facts
+            .iter()
+            .any(|fact| fact.retained && fact.observed_generation.is_none())
+        {
+            Arc::make_mut(current).inherit_retained_provenance(previous);
         }
         let options = if data.document.is_some() || data.midi_document.is_some() {
             egui::TextureOptions::NEAREST
@@ -640,7 +638,7 @@ fn item_preview(item: &ClipItem) -> Data {
             thumbnail: image,
             ..
         } => {
-            let mut data = file_preview(&[path.clone()]);
+            let mut data = file_preview(std::slice::from_ref(path));
             data.icon = Icon::Film;
             data.image = image
                 .as_ref()
@@ -653,7 +651,7 @@ fn item_preview(item: &ClipItem) -> Data {
         ClipPayload::FileBatch(paths) | ClipPayload::MultiImage { paths, .. } => {
             file_preview(paths)
         }
-        ClipPayload::Directory(path) => file_preview(&[path.clone()]),
+        ClipPayload::Directory(path) => file_preview(std::slice::from_ref(path)),
         ClipPayload::Url(url) => text_preview(url.as_str().as_bytes(), "URL"),
         ClipPayload::Color { hex, .. } => text_preview(hex.as_bytes(), "Color"),
     };
@@ -784,19 +782,19 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
         }
     } else if little_clip_core::document::is_office_document(path) {
         data.icon = Icon::Pdf;
-        if let Ok(pdf_path) = little_clip_core::document::ensure_rendered_pdf(path) {
-            if let Ok(info) = little_clip_core::pdf::get_pdf_info(&pdf_path) {
-                data.detail = format!("{} pages", info.page_count);
-                data.text = info.title.clone().unwrap_or_default();
-                data.pdf_info = Some(Arc::new(info));
-            }
+        if let Ok(pdf_path) = little_clip_core::document::ensure_rendered_pdf(path)
+            && let Ok(info) = little_clip_core::pdf::get_pdf_info(&pdf_path)
+        {
+            data.detail = format!("{} pages", info.page_count);
+            data.text = info.title.clone().unwrap_or_default();
+            data.pdf_info = Some(Arc::new(info));
         }
-        if data.pdf_info.is_none() {
-            if let Ok(md) = little_clip_core::document::render_to_markdown(path) {
-                data.icon = Icon::Text;
-                data.text = md.lines().take(4).collect::<Vec<_>>().join("\n");
-                data.detail = "Document".to_string();
-            }
+        if data.pdf_info.is_none()
+            && let Ok(md) = little_clip_core::document::render_to_markdown(path)
+        {
+            data.icon = Icon::Text;
+            data.text = md.lines().take(4).collect::<Vec<_>>().join("\n");
+            data.detail = "Document".to_string();
         }
     } else if let Ok(bytes) = crate::file_source::read_file_bytes(path, 2048, false, false)
         && !bytes.contains(&0)

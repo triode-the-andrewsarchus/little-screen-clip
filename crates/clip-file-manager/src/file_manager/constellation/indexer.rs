@@ -222,7 +222,7 @@ fn analyze_audio_paths(
                             samples.push(sample);
                         }
                         let count = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                        if count % 10 == 0 || count == paths.len() {
+                        if count.is_multiple_of(10) || count == paths.len() {
                             let _ = sender.send(IndexProgress::Indexing {
                                 processed: count,
                                 total: paths.len(),

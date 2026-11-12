@@ -192,16 +192,15 @@ fn module(
         &root.join("drivers"),
         "Module driver inventory",
     ) {
-        if let Some(target) = resolve(document, &mut topology, &path, "Module driver") {
-            if let Some(bus) = driver_bus(&target) {
-                let label = format!(
-                    "{bus} driver {}",
-                    target.file_name().unwrap_or_default().to_string_lossy()
-                );
-                let parent =
-                    buses::add(&mut topology, document, target.clone(), label, Some(anchor));
-                bound(document, &mut topology, &target, parent, checkpoint);
-            }
+        if let Some(target) = resolve(document, &mut topology, &path, "Module driver")
+            && let Some(bus) = driver_bus(&target)
+        {
+            let label = format!(
+                "{bus} driver {}",
+                target.file_name().unwrap_or_default().to_string_lossy()
+            );
+            let parent = buses::add(&mut topology, document, target.clone(), label, Some(anchor));
+            bound(document, &mut topology, &target, parent, checkpoint);
         }
         checkpoint(document);
     }
@@ -354,19 +353,19 @@ fn bound(
     }
     let mut count = 0;
     for path in paths {
-        if let Some(target) = resolve(document, topology, &path, "Driver interface link") {
-            if target.join("driver").canonicalize().ok().as_deref() == Some(driver) {
-                let name = target.file_name().unwrap_or_default().to_string_lossy();
-                buses::add(
-                    topology,
-                    document,
-                    target.clone(),
-                    format!("Bound device {name}"),
-                    Some(anchor),
-                );
-                buses::access_node(document, &target, "Bound device access interface");
-                count += 1;
-            }
+        if let Some(target) = resolve(document, topology, &path, "Driver interface link")
+            && target.join("driver").canonicalize().ok().as_deref() == Some(driver)
+        {
+            let name = target.file_name().unwrap_or_default().to_string_lossy();
+            buses::add(
+                topology,
+                document,
+                target.clone(),
+                format!("Bound device {name}"),
+                Some(anchor),
+            );
+            buses::access_node(document, &target, "Bound device access interface");
+            count += 1;
         }
         checkpoint(document);
     }

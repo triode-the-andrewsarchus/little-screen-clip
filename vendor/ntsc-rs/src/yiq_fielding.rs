@@ -2194,7 +2194,7 @@ mod tests {
         let mut view = YiqView::from_parts(&mut buf, (1, 3), YiqField::Both);
         let blit = BlitInfo::from_full_frame(1, 3, 4 * size_of::<f32>());
         view.set_from_strided_buffer::<Rgbx, f32, _>(ctx(), &img, blit, ());
-        let mut out = vec![SENT; 1 * 3 * 4];
+        let mut out = vec![SENT; 3 * 4];
         view.write_to_strided_buffer::<Rgbx, f32, _>(
             ctx(),
             &mut out,

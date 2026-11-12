@@ -712,21 +712,20 @@ fn ancestry(
                 ("ID_SERIAL_SHORT", "Interface serial number"),
                 ("ID_BUS", "Bus"),
             ] {
-                if !seen.contains(property) {
-                    if let Some(fact) = super::buses::database_fact(&device, path, property, label)
-                    {
-                        seen.insert(property.to_string());
-                        document.facts.push(fact);
-                        checkpoint(document);
-                    }
+                if !seen.contains(property)
+                    && let Some(fact) = super::buses::database_fact(&device, path, property, label)
+                {
+                    seen.insert(property.to_string());
+                    document.facts.push(fact);
+                    checkpoint(document);
                 }
             }
-            if let Some(node) = device.devnode() {
-                if !document.relations.iter().any(|r| r.target == node) {
-                    document
-                        .relations
-                        .push(super::Relation::new("Device node", node.to_path_buf()));
-                }
+            if let Some(node) = device.devnode()
+                && !document.relations.iter().any(|r| r.target == node)
+            {
+                document
+                    .relations
+                    .push(super::Relation::new("Device node", node.to_path_buf()));
             }
         }
         let context = Context::discover(path);

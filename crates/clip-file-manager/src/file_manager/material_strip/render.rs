@@ -82,7 +82,7 @@ fn sphere(material: &Material, edge: u32, token: &AtomicBool) -> Option<ImageThu
         for x in 0..edge {
             let nx = (x as f32 + 0.5) / edge as f32 * 2.0 - 1.0;
             let radius = nx * nx + ny * ny;
-            let checker = if ((x * 12 / edge) + (y * 12 / edge)) % 2 == 0 {
+            let checker = if ((x * 12 / edge) + (y * 12 / edge)).is_multiple_of(2) {
                 0.24
             } else {
                 0.30

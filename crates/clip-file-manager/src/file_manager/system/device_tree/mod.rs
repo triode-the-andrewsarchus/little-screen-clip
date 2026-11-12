@@ -341,13 +341,14 @@ fn interrupt_parent(
             Err(error) => Some((path.join("interrupt-parent"), Err(error))),
         });
     let Some((source, value)) = explicit else {
-        if node != root && properties.get(node, "interrupts").is_ok() {
-            if let Some(parent) = node.parent() {
-                document.relations.push(Relation::new(
-                    "Default interrupt-tree parent (binding unverified)",
-                    parent.into(),
-                ));
-            }
+        if node != root
+            && properties.get(node, "interrupts").is_ok()
+            && let Some(parent) = node.parent()
+        {
+            document.relations.push(Relation::new(
+                "Default interrupt-tree parent (binding unverified)",
+                parent.into(),
+            ));
         }
         return;
     };

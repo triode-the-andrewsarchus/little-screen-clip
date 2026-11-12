@@ -41,7 +41,7 @@ impl TimestampPreview {
     /// Formats the timestamp metadata into display lines with emoji icons.
     pub fn summary_lines(&self) -> Vec<String> {
         vec![
-            format!("{}", self.human_readable),
+            self.human_readable.to_string(),
             format!("UTC: {}", self.utc_iso),
             format!("Relative: {}", self.relative),
             format!("Epoch: {} ({})", self.epoch_sec, self.day_info),
@@ -274,7 +274,7 @@ fn parse_numeric_date(input: &str) -> Option<(DateTime<Utc>, TimePrecision)> {
     };
 
     let date_tokens: Vec<&str> = date_str
-        .split(|c| c == '/' || c == '-' || c == '.')
+        .split(['/', '-', '.'])
         .filter(|s| !s.is_empty())
         .collect();
 
@@ -333,11 +333,11 @@ fn parse_textual_date(input: &str) -> Option<(DateTime<Utc>, TimePrecision)> {
     let mut used_indices = vec![month_idx];
 
     // Check before month: e.g. "2nd May 2025"
-    if month_idx > 0 {
-        if let Some(d) = parse_day_number(words[month_idx - 1]) {
-            day_opt = Some(d);
-            used_indices.push(month_idx - 1);
-        }
+    if month_idx > 0
+        && let Some(d) = parse_day_number(words[month_idx - 1])
+    {
+        day_opt = Some(d);
+        used_indices.push(month_idx - 1);
     }
 
     // Check after month: e.g. "May 2nd 2025"
@@ -416,49 +416,49 @@ pub fn detect_timestamp(text: &str) -> Option<TimestampPreview> {
     let mut dt_opt: Option<(DateTime<Utc>, TimePrecision)> = None;
 
     // 1. Pure digits: epoch timestamp
-    if trimmed.chars().all(|c| c.is_ascii_digit()) {
-        if let Ok(num) = trimmed.parse::<i64>() {
-            match trimmed.len() {
-                // 9-10 digits: Seconds (1973 - 2100)
-                9..=10 => {
-                    if num >= 100_000_000 && num <= 4_102_444_800 {
-                        if let Some(dt) = Utc.timestamp_opt(num, 0).single() {
-                            dt_opt = Some((dt, TimePrecision::Second));
-                        }
-                    }
+    if trimmed.chars().all(|c| c.is_ascii_digit())
+        && let Ok(num) = trimmed.parse::<i64>()
+    {
+        match trimmed.len() {
+            // 9-10 digits: Seconds (1973 - 2100)
+            9..=10 => {
+                if (100_000_000..=4_102_444_800).contains(&num)
+                    && let Some(dt) = Utc.timestamp_opt(num, 0).single()
+                {
+                    dt_opt = Some((dt, TimePrecision::Second));
                 }
-                // 12-13 digits: Milliseconds
-                12..=13 => {
-                    let sec = num / 1000;
-                    let ms = (num % 1000) as u32;
-                    if sec >= 100_000_000 && sec <= 4_102_444_800 {
-                        if let Some(dt) = Utc.timestamp_opt(sec, ms * 1_000_000).single() {
-                            dt_opt = Some((dt, TimePrecision::Second));
-                        }
-                    }
-                }
-                // 15-16 digits: Microseconds
-                15..=16 => {
-                    let sec = num / 1_000_000;
-                    let us = (num % 1_000_000) as u32;
-                    if sec >= 100_000_000 && sec <= 4_102_444_800 {
-                        if let Some(dt) = Utc.timestamp_opt(sec, us * 1000).single() {
-                            dt_opt = Some((dt, TimePrecision::Second));
-                        }
-                    }
-                }
-                // 18-19 digits: Nanoseconds
-                18..=19 => {
-                    let sec = num / 1_000_000_000;
-                    let ns = (num % 1_000_000_000) as u32;
-                    if sec >= 100_000_000 && sec <= 4_102_444_800 {
-                        if let Some(dt) = Utc.timestamp_opt(sec, ns).single() {
-                            dt_opt = Some((dt, TimePrecision::Second));
-                        }
-                    }
-                }
-                _ => {}
             }
+            // 12-13 digits: Milliseconds
+            12..=13 => {
+                let sec = num / 1000;
+                let ms = (num % 1000) as u32;
+                if (100_000_000..=4_102_444_800).contains(&sec)
+                    && let Some(dt) = Utc.timestamp_opt(sec, ms * 1_000_000).single()
+                {
+                    dt_opt = Some((dt, TimePrecision::Second));
+                }
+            }
+            // 15-16 digits: Microseconds
+            15..=16 => {
+                let sec = num / 1_000_000;
+                let us = (num % 1_000_000) as u32;
+                if (100_000_000..=4_102_444_800).contains(&sec)
+                    && let Some(dt) = Utc.timestamp_opt(sec, us * 1000).single()
+                {
+                    dt_opt = Some((dt, TimePrecision::Second));
+                }
+            }
+            // 18-19 digits: Nanoseconds
+            18..=19 => {
+                let sec = num / 1_000_000_000;
+                let ns = (num % 1_000_000_000) as u32;
+                if (100_000_000..=4_102_444_800).contains(&sec)
+                    && let Some(dt) = Utc.timestamp_opt(sec, ns).single()
+                {
+                    dt_opt = Some((dt, TimePrecision::Second));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -492,31 +492,31 @@ pub fn detect_timestamp(text: &str) -> Option<TimestampPreview> {
     }
 
     // 3. Time-only expressions: e.g. "1:00 pm", "1pm", "13:00" -> assume current local date
-    if dt_opt.is_none() {
-        if let Some((h, m, s, prec)) = parse_time_component(trimmed) {
-            let now_local = Local::now();
-            let date = now_local.date_naive();
-            if let Some(naive_time) = NaiveTime::from_hms_opt(h, m, s) {
-                let naive_dt = date.and_time(naive_time);
-                if let Some(local_dt) = local_from_naive(&naive_dt) {
-                    dt_opt = Some((local_dt.with_timezone(&Utc), prec));
-                }
+    if dt_opt.is_none()
+        && let Some((h, m, s, prec)) = parse_time_component(trimmed)
+    {
+        let now_local = Local::now();
+        let date = now_local.date_naive();
+        if let Some(naive_time) = NaiveTime::from_hms_opt(h, m, s) {
+            let naive_dt = date.and_time(naive_time);
+            if let Some(local_dt) = local_from_naive(&naive_dt) {
+                dt_opt = Some((local_dt.with_timezone(&Utc), prec));
             }
         }
     }
 
     // 4. Numeric Slash / Dash / Dot Dates: e.g. "02/05/25", "02/05/2025", "2/5/25"
-    if dt_opt.is_none() {
-        if let Some((dt, prec)) = parse_numeric_date(trimmed) {
-            dt_opt = Some((dt, prec));
-        }
+    if dt_opt.is_none()
+        && let Some((dt, prec)) = parse_numeric_date(trimmed)
+    {
+        dt_opt = Some((dt, prec));
     }
 
     // 5. Textual Month Dates: e.g. "May 2nd, 2025", "May 2 2025", "2nd May 2025"
-    if dt_opt.is_none() {
-        if let Some((dt, prec)) = parse_textual_date(trimmed) {
-            dt_opt = Some((dt, prec));
-        }
+    if dt_opt.is_none()
+        && let Some((dt, prec)) = parse_textual_date(trimmed)
+    {
+        dt_opt = Some((dt, prec));
     }
 
     let (dt, precision) = dt_opt?;

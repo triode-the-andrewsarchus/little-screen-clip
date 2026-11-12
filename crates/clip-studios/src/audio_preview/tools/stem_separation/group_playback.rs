@@ -187,12 +187,11 @@ impl AudioPreviewState {
 
     pub(crate) fn pause_group_playback(&mut self) {
         self.stem_separation.group_load = None;
-        if self.stem_separation.group_is_playing {
-            if let Some(started) = self.stem_separation.group_playback_start {
-                self.stem_separation.group_current_time_sec =
-                    self.stem_separation.group_playback_offset_sec
-                        + started.elapsed().as_secs_f32();
-            }
+        if self.stem_separation.group_is_playing
+            && let Some(started) = self.stem_separation.group_playback_start
+        {
+            self.stem_separation.group_current_time_sec =
+                self.stem_separation.group_playback_offset_sec + started.elapsed().as_secs_f32();
         }
         for stem in &self.stem_separation.stems {
             if let Some(player) = &stem.group_player {

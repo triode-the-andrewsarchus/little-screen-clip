@@ -226,18 +226,17 @@ impl ImagePreviewState {
                     i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
                         || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
                 });
-                if del_pressed {
-                    if let Some(sel) = self.markup_state.selected_idx {
-                        if sel < self.markup_state.items.len() {
-                            self.markup_state.items.remove(sel);
-                            self.markup_state.selected_idx = None;
-                            self.markup_state.sync_next_badge_number();
-                            self.show_toast(crate::ui_ext::StatusMessage::new(
-                                crate::icons::Icon::Trash,
-                                "Markup item deleted",
-                            ));
-                        }
-                    }
+                if del_pressed
+                    && let Some(sel) = self.markup_state.selected_idx
+                    && sel < self.markup_state.items.len()
+                {
+                    self.markup_state.items.remove(sel);
+                    self.markup_state.selected_idx = None;
+                    self.markup_state.sync_next_badge_number();
+                    self.show_toast(crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Trash,
+                        "Markup item deleted",
+                    ));
                 }
             }
             if self.active_mode == ImageToolMode::Markup
@@ -394,12 +393,11 @@ impl ImagePreviewState {
         // Poll format conversion and debounce costly full-resolution encodes.
         self.poll_conversion();
         if self.active_mode == ImageToolMode::Convert {
-            if let Some(dirty_at) = self.convert_state.params_dirty_at {
-                if dirty_at.elapsed() >= std::time::Duration::from_millis(180)
-                    && !self.convert_state.is_encoding
-                {
-                    self.run_conversion_worker();
-                }
+            if let Some(dirty_at) = self.convert_state.params_dirty_at
+                && dirty_at.elapsed() >= std::time::Duration::from_millis(180)
+                && !self.convert_state.is_encoding
+            {
+                self.run_conversion_worker();
             }
             let retry_at = self
                 .convert_state
@@ -434,22 +432,20 @@ impl ImagePreviewState {
                 );
             }
             // Debounce: fire render 400ms after last parameter change
-            if let Some(dirty_at) = self.film_sim_state.params_dirty_at {
-                if dirty_at.elapsed() >= std::time::Duration::from_millis(400)
-                    && !self.film_sim_state.is_rendering
-                {
-                    self.film_sim_state.params_dirty_at = None;
-                    self.run_film_sim_render();
-                }
+            if let Some(dirty_at) = self.film_sim_state.params_dirty_at
+                && dirty_at.elapsed() >= std::time::Duration::from_millis(400)
+                && !self.film_sim_state.is_rendering
+            {
+                self.film_sim_state.params_dirty_at = None;
+                self.run_film_sim_render();
             }
             // Debounce thumbnail batch: fire 500ms after last parameter change
-            if let Some(dirty_at) = self.film_sim_state.thumbnail_dirty_at {
-                if dirty_at.elapsed() >= std::time::Duration::from_millis(500)
-                    && !self.film_sim_state.is_generating_thumbnails
-                {
-                    self.film_sim_state.thumbnail_dirty_at = None;
-                    self.run_thumbnail_batch();
-                }
+            if let Some(dirty_at) = self.film_sim_state.thumbnail_dirty_at
+                && dirty_at.elapsed() >= std::time::Duration::from_millis(500)
+                && !self.film_sim_state.is_generating_thumbnails
+            {
+                self.film_sim_state.thumbnail_dirty_at = None;
+                self.run_thumbnail_batch();
             }
             self.retry_thumbnail_batch_if_due(BackgroundJobs::global());
             if let Some(retry_at) = self.film_sim_state.thumbnail_retry_at {

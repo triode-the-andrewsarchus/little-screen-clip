@@ -30,7 +30,7 @@ impl<'a> ListPreviews<'a> {
         marked: bool,
         colors: WorkbenchColors,
     ) -> egui::Response {
-        let response = if entry.system.is_some()
+        if entry.system.is_some()
             || entry.has_content_strip()
             || self.files.is_binary(entry)
             || self.files.is_multisample(entry)
@@ -55,8 +55,7 @@ impl<'a> ListPreviews<'a> {
                         })
                 });
             file_row(ui, rect, entry, marked, self.columns, lines, colors)
-        };
-        response
+        }
     }
     fn row(
         &mut self,

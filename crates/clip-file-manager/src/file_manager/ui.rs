@@ -1586,14 +1586,14 @@ impl ListActions {
                         self.navigate_folder = Some(mount_point.clone());
                         ui.close_menu();
                     }
-                    if shift && mode == super::fuse_binwalk::MountMode::ReadOnly {
-                        if ui
+                    if shift
+                        && mode == super::fuse_binwalk::MountMode::ReadOnly
+                        && ui
                             .button(super::fuse_binwalk::remount_writable_menu_label())
                             .clicked()
-                        {
-                            self.mount_binary = Some((entry.path.clone(), true));
-                            ui.close_menu();
-                        }
+                    {
+                        self.mount_binary = Some((entry.path.clone(), true));
+                        ui.close_menu();
                     }
                     if ui.button("Unmount binary contents").clicked() {
                         self.unmount_binary = Some(mount_point);
@@ -1607,11 +1607,11 @@ impl ListActions {
                     }
                 }
             }
-            if let Some(mount_root) = mounts.enclosing_mount_point(&entry.path) {
-                if ui.button("Unmount binary contents").clicked() {
-                    self.unmount_binary = Some(mount_root);
-                    ui.close_menu();
-                }
+            if let Some(mount_root) = mounts.enclosing_mount_point(&entry.path)
+                && ui.button("Unmount binary contents").clicked()
+            {
+                self.unmount_binary = Some(mount_root);
+                ui.close_menu();
             }
             ui.separator();
             let rename = (!marked || selection_count == 1).then_some(entry.path.as_path());

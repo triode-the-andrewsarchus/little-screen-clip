@@ -52,8 +52,8 @@ impl ImagePreviewState {
                     );
 
                     // Selected box style switcher
-                    if let Some(sel_idx) = self.redaction_state.selected_idx {
-                        if sel_idx < self.redaction_state.boxes.len() {
+                    if let Some(sel_idx) = self.redaction_state.selected_idx
+                        && sel_idx < self.redaction_state.boxes.len() {
                             ui.add_space(crate::ui_ext::SPACE_XS);
                             ui.label(
                                 egui::RichText::new("Selected Bar Style:")
@@ -81,7 +81,6 @@ impl ImagePreviewState {
                                 }
                             });
                         }
-                    }
 
                     ui.add_space(crate::ui_ext::SPACE_SM);
 
@@ -556,136 +555,136 @@ impl ImagePreviewState {
         // 5. Handle Pointer & Drag Events
         let is_secondary_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
 
-        if response.drag_started() {
-            if let Some(ptr) = response.interact_pointer_pos() {
-                if self.redaction_state.tool_type == RedactToolType::LamaInpaint {
-                    match self.redaction_state.inpaint_mode {
-                        InpaintSelectionMode::Rectangle => {
-                            if img_rect.contains(ptr) {
-                                let norm = to_norm(ptr);
-                                self.redaction_state.active_drag =
-                                    Some(RedactionDrag::InpaintRect(norm, norm, is_secondary_down));
-                            }
+        if response.drag_started()
+            && let Some(ptr) = response.interact_pointer_pos()
+        {
+            if self.redaction_state.tool_type == RedactToolType::LamaInpaint {
+                match self.redaction_state.inpaint_mode {
+                    InpaintSelectionMode::Rectangle => {
+                        if img_rect.contains(ptr) {
+                            let norm = to_norm(ptr);
+                            self.redaction_state.active_drag =
+                                Some(RedactionDrag::InpaintRect(norm, norm, is_secondary_down));
                         }
-                        InpaintSelectionMode::Brush => {
-                            if img_rect.contains(ptr) {
-                                let norm = to_norm(ptr);
-                                self.redaction_state.active_drag =
-                                    Some(RedactionDrag::InpaintBrush(is_secondary_down));
-                                self.redaction_state.last_brush_pos = Some(norm);
-                                let val = if is_secondary_down { 0 } else { 255 };
-                                let radius = self.redaction_state.brush_radius;
-                                {
-                                    let mask = self.ensure_inpaint_mask();
-                                    stamp_circle_on_mask(mask, norm, radius, val);
-                                }
-                                self.update_inpaint_mask_texture(ui.ctx());
-                            }
-                        }
-                        InpaintSelectionMode::PointSam => {}
                     }
-                } else {
-                    let mut handled = false;
-                    if let Some(sel_idx) = self.redaction_state.selected_idx {
-                        if sel_idx < self.redaction_state.boxes.len() {
-                            let init_norm = self.redaction_state.boxes[sel_idx].normalized_rect;
-                            let box_screen_rect = to_screen_rect(init_norm);
-                            let handles = get_box_handles(box_screen_rect);
-
-                            if let Some((h, _, _)) = handles
-                                .iter()
-                                .find(|(_, pos, _)| pos.distance(ptr) <= hit_dist)
+                    InpaintSelectionMode::Brush => {
+                        if img_rect.contains(ptr) {
+                            let norm = to_norm(ptr);
+                            self.redaction_state.active_drag =
+                                Some(RedactionDrag::InpaintBrush(is_secondary_down));
+                            self.redaction_state.last_brush_pos = Some(norm);
+                            let val = if is_secondary_down { 0 } else { 255 };
+                            let radius = self.redaction_state.brush_radius;
                             {
-                                self.redaction_state.active_drag =
-                                    Some(RedactionDrag::Resizing(sel_idx, *h, ptr, init_norm));
-                                handled = true;
-                            } else if box_screen_rect.contains(ptr) {
-                                self.redaction_state.active_drag =
-                                    Some(RedactionDrag::Moving(sel_idx, ptr, init_norm));
-                                handled = true;
+                                let mask = self.ensure_inpaint_mask();
+                                stamp_circle_on_mask(mask, norm, radius, val);
                             }
+                            self.update_inpaint_mask_texture(ui.ctx());
                         }
                     }
+                    InpaintSelectionMode::PointSam => {}
+                }
+            } else {
+                let mut handled = false;
+                if let Some(sel_idx) = self.redaction_state.selected_idx
+                    && sel_idx < self.redaction_state.boxes.len()
+                {
+                    let init_norm = self.redaction_state.boxes[sel_idx].normalized_rect;
+                    let box_screen_rect = to_screen_rect(init_norm);
+                    let handles = get_box_handles(box_screen_rect);
 
-                    if !handled {
-                        let found_idx = self
-                            .redaction_state
-                            .boxes
-                            .iter()
-                            .enumerate()
-                            .rev()
-                            .find_map(|(i, b)| {
-                                let r = to_screen_rect(b.normalized_rect);
-                                if r.contains(ptr) { Some(i) } else { None }
-                            });
+                    if let Some((h, _, _)) = handles
+                        .iter()
+                        .find(|(_, pos, _)| pos.distance(ptr) <= hit_dist)
+                    {
+                        self.redaction_state.active_drag =
+                            Some(RedactionDrag::Resizing(sel_idx, *h, ptr, init_norm));
+                        handled = true;
+                    } else if box_screen_rect.contains(ptr) {
+                        self.redaction_state.active_drag =
+                            Some(RedactionDrag::Moving(sel_idx, ptr, init_norm));
+                        handled = true;
+                    }
+                }
 
-                        if let Some(idx) = found_idx {
-                            self.redaction_state.selected_idx = Some(idx);
-                            let init_norm = self.redaction_state.boxes[idx].normalized_rect;
-                            self.redaction_state.active_drag =
-                                Some(RedactionDrag::Moving(idx, ptr, init_norm));
-                        } else if img_rect.contains(ptr) {
-                            let start_norm = to_norm(ptr);
-                            self.redaction_state.selected_idx = None;
-                            self.redaction_state.active_drag =
-                                Some(RedactionDrag::Creating(start_norm, start_norm));
-                        }
+                if !handled {
+                    let found_idx = self
+                        .redaction_state
+                        .boxes
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find_map(|(i, b)| {
+                            let r = to_screen_rect(b.normalized_rect);
+                            if r.contains(ptr) { Some(i) } else { None }
+                        });
+
+                    if let Some(idx) = found_idx {
+                        self.redaction_state.selected_idx = Some(idx);
+                        let init_norm = self.redaction_state.boxes[idx].normalized_rect;
+                        self.redaction_state.active_drag =
+                            Some(RedactionDrag::Moving(idx, ptr, init_norm));
+                    } else if img_rect.contains(ptr) {
+                        let start_norm = to_norm(ptr);
+                        self.redaction_state.selected_idx = None;
+                        self.redaction_state.active_drag =
+                            Some(RedactionDrag::Creating(start_norm, start_norm));
                     }
                 }
             }
         }
 
-        if response.dragged() {
-            if let Some(ptr) = response.interact_pointer_pos() {
-                match self.redaction_state.active_drag {
-                    Some(RedactionDrag::Creating(start_norm, _)) => {
-                        let curr_norm = to_norm(ptr);
-                        self.redaction_state.active_drag =
-                            Some(RedactionDrag::Creating(start_norm, curr_norm));
-                    }
-                    Some(RedactionDrag::InpaintRect(start_norm, _, is_erase)) => {
-                        let curr_norm = to_norm(ptr);
-                        self.redaction_state.active_drag =
-                            Some(RedactionDrag::InpaintRect(start_norm, curr_norm, is_erase));
-                    }
-                    Some(RedactionDrag::InpaintBrush(is_erase)) => {
-                        let curr_norm = to_norm(ptr);
-                        let radius = self.redaction_state.brush_radius;
-                        let val = if is_erase { 0 } else { 255 };
-                        if let Some(last_pos) = self.redaction_state.last_brush_pos {
-                            let mask = self.ensure_inpaint_mask();
-                            stamp_line_on_mask(mask, last_pos, curr_norm, radius, val);
-                        }
-                        self.redaction_state.last_brush_pos = Some(curr_norm);
-                        self.update_inpaint_mask_texture(ui.ctx());
-                    }
-                    Some(RedactionDrag::Moving(idx, start_ptr, init_norm)) => {
-                        let delta_s = ptr - start_ptr;
-                        let delta_norm_x = delta_s.x / img_rect.width();
-                        let delta_norm_y = delta_s.y / img_rect.height();
-                        let box_w = init_norm.width();
-                        let box_h = init_norm.height();
-                        let new_min_x = (init_norm.min.x + delta_norm_x).clamp(0.0, 1.0 - box_w);
-                        let new_min_y = (init_norm.min.y + delta_norm_y).clamp(0.0, 1.0 - box_h);
-                        if idx < self.redaction_state.boxes.len() {
-                            self.redaction_state.boxes[idx].normalized_rect = Rect::from_min_size(
-                                Pos2::new(new_min_x, new_min_y),
-                                Vec2::new(box_w, box_h),
-                            );
-                        }
-                    }
-                    Some(RedactionDrag::Resizing(idx, handle, start_ptr, init_norm)) => {
-                        let delta_s = ptr - start_ptr;
-                        let min_w = 4.0 / img_w as f32;
-                        let min_h = 4.0 / img_h as f32;
-                        let new_rect =
-                            resize_norm_rect(init_norm, handle, delta_s, img_rect, min_w, min_h);
-                        if idx < self.redaction_state.boxes.len() {
-                            self.redaction_state.boxes[idx].normalized_rect = new_rect;
-                        }
-                    }
-                    None => {}
+        if response.dragged()
+            && let Some(ptr) = response.interact_pointer_pos()
+        {
+            match self.redaction_state.active_drag {
+                Some(RedactionDrag::Creating(start_norm, _)) => {
+                    let curr_norm = to_norm(ptr);
+                    self.redaction_state.active_drag =
+                        Some(RedactionDrag::Creating(start_norm, curr_norm));
                 }
+                Some(RedactionDrag::InpaintRect(start_norm, _, is_erase)) => {
+                    let curr_norm = to_norm(ptr);
+                    self.redaction_state.active_drag =
+                        Some(RedactionDrag::InpaintRect(start_norm, curr_norm, is_erase));
+                }
+                Some(RedactionDrag::InpaintBrush(is_erase)) => {
+                    let curr_norm = to_norm(ptr);
+                    let radius = self.redaction_state.brush_radius;
+                    let val = if is_erase { 0 } else { 255 };
+                    if let Some(last_pos) = self.redaction_state.last_brush_pos {
+                        let mask = self.ensure_inpaint_mask();
+                        stamp_line_on_mask(mask, last_pos, curr_norm, radius, val);
+                    }
+                    self.redaction_state.last_brush_pos = Some(curr_norm);
+                    self.update_inpaint_mask_texture(ui.ctx());
+                }
+                Some(RedactionDrag::Moving(idx, start_ptr, init_norm)) => {
+                    let delta_s = ptr - start_ptr;
+                    let delta_norm_x = delta_s.x / img_rect.width();
+                    let delta_norm_y = delta_s.y / img_rect.height();
+                    let box_w = init_norm.width();
+                    let box_h = init_norm.height();
+                    let new_min_x = (init_norm.min.x + delta_norm_x).clamp(0.0, 1.0 - box_w);
+                    let new_min_y = (init_norm.min.y + delta_norm_y).clamp(0.0, 1.0 - box_h);
+                    if idx < self.redaction_state.boxes.len() {
+                        self.redaction_state.boxes[idx].normalized_rect = Rect::from_min_size(
+                            Pos2::new(new_min_x, new_min_y),
+                            Vec2::new(box_w, box_h),
+                        );
+                    }
+                }
+                Some(RedactionDrag::Resizing(idx, handle, start_ptr, init_norm)) => {
+                    let delta_s = ptr - start_ptr;
+                    let min_w = 4.0 / img_w as f32;
+                    let min_h = 4.0 / img_h as f32;
+                    let new_rect =
+                        resize_norm_rect(init_norm, handle, delta_s, img_rect, min_w, min_h);
+                    if idx < self.redaction_state.boxes.len() {
+                        self.redaction_state.boxes[idx].normalized_rect = new_rect;
+                    }
+                }
+                None => {}
             }
         }
 
@@ -738,23 +737,24 @@ impl ImagePreviewState {
         }
 
         // Clicking without dragging on empty background deselects in box mode
-        if response.clicked() && self.redaction_state.tool_type != RedactToolType::LamaInpaint {
-            if let Some(ptr) = response.interact_pointer_pos() {
-                let hit_any = self
-                    .redaction_state
-                    .boxes
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find_map(|(i, b)| {
-                        if to_screen_rect(b.normalized_rect).contains(ptr) {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    });
-                self.redaction_state.selected_idx = hit_any;
-            }
+        if response.clicked()
+            && self.redaction_state.tool_type != RedactToolType::LamaInpaint
+            && let Some(ptr) = response.interact_pointer_pos()
+        {
+            let hit_any = self
+                .redaction_state
+                .boxes
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(i, b)| {
+                    if to_screen_rect(b.normalized_rect).contains(ptr) {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                });
+            self.redaction_state.selected_idx = hit_any;
         }
 
         // Point-to-select SAM mask click actions

@@ -255,7 +255,7 @@ impl NodeCanvasState {
         egui::Area::new(Id::new("catalog_modal_area"))
             .fixed_pos(modal_rect.min)
             .show(ui.ctx(), |ui| {
-                egui::Frame::window(&ui.style())
+                egui::Frame::window(ui.style())
                     .fill(hex_to_c32(&palette.colors.surface_recessed))
                     .stroke(Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)))
                     .rounding(crate::ui_ext::CARD_CORNER_RADIUS)
@@ -401,21 +401,17 @@ impl NodeCanvasState {
                                                                 }
                                                             } else if template.kind
                                                                 == NodeKind::BashCommand
-                                                            {
-                                                                if let Ok(fname) =
+                                                                && let Ok(fname) =
                                                                     create_script_file_scaffold(
                                                                         &self.selected_recipe_name,
                                                                         false,
                                                                     )
-                                                                {
-                                                                    new_node.props.insert(
-                                                                        "script_file".to_string(),
-                                                                        fname,
-                                                                    );
-                                                                    new_node
-                                                                        .props
-                                                                        .remove("command");
-                                                                }
+                                                            {
+                                                                new_node.props.insert(
+                                                                    "script_file".to_string(),
+                                                                    fname,
+                                                                );
+                                                                new_node.props.remove("command");
                                                             }
 
                                                             self.graph.nodes.push(new_node);

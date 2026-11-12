@@ -193,6 +193,36 @@ fn append_properties(result: &mut Vec<(String, String)>, node: Node<'_, '_>) -> 
     Ok(())
 }
 
+fn decent_loops(sample: Node<'_, '_>) -> Result<Vec<[u64; 2]>, String> {
+    let field = |key| inherited(sample, key);
+    let mut loops = Vec::new();
+    if !matches!(field("loopEnabled"), Some("false" | "0"))
+        && let (Some(start), Some(end)) = (
+            frame(field("loopStart"))?,
+            inclusive_end(frame(field("loopEnd"))?)?,
+        )
+        && end > start
+    {
+        loops.push([start, end]);
+    }
+    Ok(loops)
+}
+
+fn bitwig_loops(sample: Node<'_, '_>) -> Result<Vec<[u64; 2]>, String> {
+    let mut loops = Vec::new();
+    if let Some(node) = child(sample, "loop")?
+        && matches!(node.attribute("mode"), Some("loop" | "ping-pong"))
+        && let (Some(start), Some(end)) = (
+            frame(node.attribute("start"))?,
+            frame(node.attribute("stop"))?,
+        )
+        && end > start
+    {
+        loops.push([start, end]);
+    }
+    Ok(loops)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,37 +276,4 @@ mod tests {
         let xml = format!("<multisample><sample file='x'><{tag} a='b'/></sample></multisample>");
         assert!(parse(xml.as_bytes(), "x").is_err());
     }
-}
-
-fn decent_loops(sample: Node<'_, '_>) -> Result<Vec<[u64; 2]>, String> {
-    let field = |key| inherited(sample, key);
-    let mut loops = Vec::new();
-    if !matches!(field("loopEnabled"), Some("false" | "0")) {
-        if let (Some(start), Some(end)) = (
-            frame(field("loopStart"))?,
-            inclusive_end(frame(field("loopEnd"))?)?,
-        ) {
-            if end > start {
-                loops.push([start, end]);
-            }
-        }
-    }
-    Ok(loops)
-}
-
-fn bitwig_loops(sample: Node<'_, '_>) -> Result<Vec<[u64; 2]>, String> {
-    let mut loops = Vec::new();
-    if let Some(node) = child(sample, "loop")? {
-        if matches!(node.attribute("mode"), Some("loop" | "ping-pong")) {
-            if let (Some(start), Some(end)) = (
-                frame(node.attribute("start"))?,
-                frame(node.attribute("stop"))?,
-            ) {
-                if end > start {
-                    loops.push([start, end]);
-                }
-            }
-        }
-    }
-    Ok(loops)
 }

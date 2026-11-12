@@ -1130,27 +1130,27 @@ impl StatusToast {
         palette: &AppPalette,
         now: f64,
     ) {
-        if let Some((msg, ts)) = toast {
-            if msg.visible(*ts, duration, now) {
-                msg.schedule_expiry(ui, *ts, duration, now);
-                let colors = WorkbenchColors::from_palette(palette);
-                let color = if msg.is_error {
-                    colors.danger
-                } else {
-                    colors.success
-                };
-                msg.icon.ui(ui, CONTROL_ICON_SIZE, color);
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(&msg.text)
-                            .size(14.0)
-                            .strong()
-                            .color(color),
-                    )
-                    .truncate(true),
+        if let Some((msg, ts)) = toast
+            && msg.visible(*ts, duration, now)
+        {
+            msg.schedule_expiry(ui, *ts, duration, now);
+            let colors = WorkbenchColors::from_palette(palette);
+            let color = if msg.is_error {
+                colors.danger
+            } else {
+                colors.success
+            };
+            msg.icon.ui(ui, CONTROL_ICON_SIZE, color);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(&msg.text)
+                        .size(14.0)
+                        .strong()
+                        .color(color),
                 )
-                .on_hover_text(&msg.text);
-            }
+                .truncate(true),
+            )
+            .on_hover_text(&msg.text);
         }
     }
 
@@ -1310,6 +1310,35 @@ pub fn zoom_control_bar(
     action
 }
 
+/// Actual height of a single-line selection row at the current text scale.
+pub fn selectable_text_row_height(ui: &Ui, minimum: f32) -> f32 {
+    let font = TextStyle::Button.resolve(ui.style());
+    (ui.fonts(|fonts| fonts.row_height(&font)) + ui.spacing().button_padding.y * 2.0)
+        .max(ui.spacing().interact_size.y)
+        .max(minimum)
+}
+
+/// Draws one clipped, single-line selection row without expanding its host panel.
+pub fn selectable_text_row(
+    ui: &mut Ui,
+    text: impl Into<String>,
+    selected: bool,
+    height: f32,
+) -> Response {
+    let mut layout = egui::text::LayoutJob::simple(
+        text.into(),
+        TextStyle::Button.resolve(ui.style()),
+        Color32::PLACEHOLDER,
+        (ui.available_width() - 12.0).max(1.0),
+    );
+    layout.wrap.max_rows = 1;
+    let galley = ui.fonts(|fonts| fonts.layout_job(layout));
+    ui.add_sized(
+        Vec2::new(ui.available_width(), height),
+        egui::SelectableLabel::new(selected, galley),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1354,7 +1383,7 @@ mod tests {
                     if outer { color } else { Color32::TRANSPARENT }
                 );
             }
-            for triangle in mesh.indices.chunks_exact(3) {
+            for triangle in mesh.indices.as_chunks::<3>().0 {
                 let points: Vec<_> = triangle
                     .iter()
                     .map(|index| mesh.vertices[*index as usize].pos)
@@ -1914,33 +1943,4 @@ mod tests {
         assert_eq!(oversized.min.x, bounds.min.x);
         assert_eq!(oversized.max.y, bounds.max.y);
     }
-}
-
-/// Actual height of a single-line selection row at the current text scale.
-pub fn selectable_text_row_height(ui: &Ui, minimum: f32) -> f32 {
-    let font = TextStyle::Button.resolve(ui.style());
-    (ui.fonts(|fonts| fonts.row_height(&font)) + ui.spacing().button_padding.y * 2.0)
-        .max(ui.spacing().interact_size.y)
-        .max(minimum)
-}
-
-/// Draws one clipped, single-line selection row without expanding its host panel.
-pub fn selectable_text_row(
-    ui: &mut Ui,
-    text: impl Into<String>,
-    selected: bool,
-    height: f32,
-) -> Response {
-    let mut layout = egui::text::LayoutJob::simple(
-        text.into(),
-        TextStyle::Button.resolve(ui.style()),
-        Color32::PLACEHOLDER,
-        (ui.available_width() - 12.0).max(1.0),
-    );
-    layout.wrap.max_rows = 1;
-    let galley = ui.fonts(|fonts| fonts.layout_job(layout));
-    ui.add_sized(
-        Vec2::new(ui.available_width(), height),
-        egui::SelectableLabel::new(selected, galley),
-    )
 }

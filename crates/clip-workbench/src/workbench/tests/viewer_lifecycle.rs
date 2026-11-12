@@ -68,7 +68,7 @@ fn spreadsheet_completion_waits_until_modal_viewer_closes() {
         Some("Spreadsheet: fixture failure")
     );
     app.poll_spreadsheet_load(&ctx);
-    assert!(matches!(app.viewer, None));
+    assert!(app.viewer.is_none());
     assert_eq!(
         app.status_msg.as_deref(),
         Some("Spreadsheet: fixture failure")

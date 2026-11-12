@@ -92,7 +92,7 @@ impl DecorrelationStretchParams {
 pub fn auto_stride(width: u32, height: u32) -> usize {
     let total_pixels = (width as usize) * (height as usize);
     let s = ((total_pixels as f64 / 100_000.0).sqrt().floor() as usize).clamp(1, 8);
-    let sample_count = ((width as usize + s - 1) / s) * ((height as usize + s - 1) / s);
+    let sample_count = (width as usize).div_ceil(s) * (height as usize).div_ceil(s);
     if sample_count < 1000 { 1 } else { s }
 }
 
@@ -128,8 +128,8 @@ fn compute_stats_cancellable(
     let stride = stride.max(1);
     let max_samples = max_samples.unwrap_or(120_000);
 
-    let cap = ((w + stride - 1) / stride) * ((h + stride - 1) / stride);
-    let keep_every = ((cap + max_samples - 1) / max_samples).max(1);
+    let cap = w.div_ceil(stride) * h.div_ceil(stride);
+    let keep_every = cap.div_ceil(max_samples).max(1);
     let mut samples = Vec::with_capacity(cap.min(max_samples));
 
     let mut n: usize = 0;
@@ -165,7 +165,7 @@ fn compute_stats_cancellable(
             s22 += b * b;
             n += 1;
 
-            if (k % keep_every) == 0 && samples.len() < max_samples {
+            if k.is_multiple_of(keep_every) && samples.len() < max_samples {
                 samples.push([pixel[0], pixel[1], pixel[2]]);
             }
             k += 1;

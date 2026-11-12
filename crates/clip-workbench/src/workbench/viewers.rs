@@ -19,7 +19,7 @@ impl WorkbenchApp {
             && self
                 .rolling_audio_strip
                 .as_ref()
-                .map_or(false, |s| s.selected_region.is_some())
+                .is_some_and(|s| s.selected_region.is_some())
     }
 
     pub(crate) fn render_modal_viewers(&mut self, ctx: &egui::Context) -> bool {

@@ -358,7 +358,7 @@ impl CodeRowHeights {
             self.sums[block + 1] = (end - start) as f64 * height as f64;
         }
         for index in 1..=block_count {
-            let parent = index + (index & index.wrapping_neg());
+            let parent = index + index.isolate_lowest_one();
             if parent <= block_count {
                 self.sums[parent] += self.sums[index];
             }
@@ -372,7 +372,7 @@ impl CodeRowHeights {
         let mut index = row / CODE_ROW_HEIGHT_BLOCK_SIZE + 1;
         while index < self.sums.len() {
             self.sums[index] += delta;
-            index += index & index.wrapping_neg();
+            index += index.isolate_lowest_one();
         }
     }
 

@@ -42,12 +42,12 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
             .max_output_bytes(16 * 1024 * 1024)
             .run();
 
-        if let Ok(output) = out {
-            if output.status.success() && output.stdout.len() > 1024 {
-                if let Ok(img) = image::load_from_memory(&output.stdout) {
-                    return Ok((output.stdout, img.width(), img.height()));
-                }
-            }
+        if let Ok(output) = out
+            && output.status.success()
+            && output.stdout.len() > 1024
+            && let Ok(img) = image::load_from_memory(&output.stdout)
+        {
+            return Ok((output.stdout, img.width(), img.height()));
         }
     }
 
@@ -61,12 +61,12 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
         .max_output_bytes(16 * 1024 * 1024)
         .run();
 
-    if let Ok(output) = out {
-        if output.status.success() && output.stdout.len() > 1024 {
-            if let Ok(img) = image::load_from_memory(&output.stdout) {
-                return Ok((output.stdout, img.width(), img.height()));
-            }
-        }
+    if let Ok(output) = out
+        && output.status.success()
+        && output.stdout.len() > 1024
+        && let Ok(img) = image::load_from_memory(&output.stdout)
+    {
+        return Ok((output.stdout, img.width(), img.height()));
     }
 
     Err(format!(

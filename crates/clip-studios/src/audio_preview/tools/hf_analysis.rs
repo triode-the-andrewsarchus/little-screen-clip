@@ -540,19 +540,18 @@ impl AudioPreviewState {
                     ))
                     .on_hover_text("Jump to previous ultrasonic chirp")
                     .clicked()
+                    && let Some(ref analysis) = self.analysis
                 {
-                    if let Some(ref analysis) = self.analysis {
-                        let cur_t = self.current_time_sec;
-                        if let Some(&prev_t) = analysis
-                            .ultrasonic_peak_times
-                            .iter()
-                            .rev()
-                            .find(|&&t| t < cur_t - 0.05_f32)
-                        {
-                            jump_target = Some(prev_t);
-                        } else if let Some(&last_t) = analysis.ultrasonic_peak_times.last() {
-                            jump_target = Some(last_t);
-                        }
+                    let cur_t = self.current_time_sec;
+                    if let Some(&prev_t) = analysis
+                        .ultrasonic_peak_times
+                        .iter()
+                        .rev()
+                        .find(|&&t| t < cur_t - 0.05_f32)
+                    {
+                        jump_target = Some(prev_t);
+                    } else if let Some(&last_t) = analysis.ultrasonic_peak_times.last() {
+                        jump_target = Some(last_t);
                     }
                 }
 
@@ -564,18 +563,17 @@ impl AudioPreviewState {
                     ))
                     .on_hover_text("Jump to next ultrasonic chirp")
                     .clicked()
+                    && let Some(ref analysis) = self.analysis
                 {
-                    if let Some(ref analysis) = self.analysis {
-                        let cur_t = self.current_time_sec;
-                        if let Some(&next_t) = analysis
-                            .ultrasonic_peak_times
-                            .iter()
-                            .find(|&&t| t > cur_t + 0.05_f32)
-                        {
-                            jump_target = Some(next_t);
-                        } else if let Some(&first_t) = analysis.ultrasonic_peak_times.first() {
-                            jump_target = Some(first_t);
-                        }
+                    let cur_t = self.current_time_sec;
+                    if let Some(&next_t) = analysis
+                        .ultrasonic_peak_times
+                        .iter()
+                        .find(|&&t| t > cur_t + 0.05_f32)
+                    {
+                        jump_target = Some(next_t);
+                    } else if let Some(&first_t) = analysis.ultrasonic_peak_times.first() {
+                        jump_target = Some(first_t);
                     }
                 }
 
@@ -693,42 +691,41 @@ impl AudioPreviewState {
         }
 
         // ROI bar interaction (click or drag seeks and centers view)
-        if roi_response.clicked() || roi_response.dragged() {
-            if let Some(mpos) = roi_response.interact_pointer_pos() {
-                let target_t = roi_x_to_time(mpos.x);
-                self.seek_to(target_t);
-                self.view_start_sec = (target_t - self.view_duration_sec * 0.5_f32)
-                    .clamp(0.0_f32, (total_dur - self.view_duration_sec).max(0.0_f32));
-            }
+        if (roi_response.clicked() || roi_response.dragged())
+            && let Some(mpos) = roi_response.interact_pointer_pos()
+        {
+            let target_t = roi_x_to_time(mpos.x);
+            self.seek_to(target_t);
+            self.view_start_sec = (target_t - self.view_duration_sec * 0.5_f32)
+                .clamp(0.0_f32, (total_dur - self.view_duration_sec).max(0.0_f32));
         }
 
-        if roi_response.hovered() {
-            if let Some(mpos) = roi_response.hover_pos() {
-                let hover_t = roi_x_to_time(mpos.x);
-                let roi_val = self
-                    .analysis
-                    .as_ref()
-                    .and_then(|a| {
-                        if a.ultrasonic_roi.is_empty() {
-                            None
-                        } else {
-                            let idx =
-                                ((hover_t / total_dur) * a.ultrasonic_roi.len() as f32) as usize;
-                            a.ultrasonic_roi.get(idx).copied()
-                        }
-                    })
-                    .unwrap_or(0.0_f32);
-                roi_response.on_hover_ui(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Time: {:.3}s | Ultrasonic Energy: {:.0}%",
-                            hover_t,
-                            roi_val * 100.0_f32
-                        ))
-                        .monospace(),
-                    );
-                });
-            }
+        if roi_response.hovered()
+            && let Some(mpos) = roi_response.hover_pos()
+        {
+            let hover_t = roi_x_to_time(mpos.x);
+            let roi_val = self
+                .analysis
+                .as_ref()
+                .and_then(|a| {
+                    if a.ultrasonic_roi.is_empty() {
+                        None
+                    } else {
+                        let idx = ((hover_t / total_dur) * a.ultrasonic_roi.len() as f32) as usize;
+                        a.ultrasonic_roi.get(idx).copied()
+                    }
+                })
+                .unwrap_or(0.0_f32);
+            roi_response.on_hover_ui(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Time: {:.3}s | Ultrasonic Energy: {:.0}%",
+                        hover_t,
+                        roi_val * 100.0_f32
+                    ))
+                    .monospace(),
+                );
+            });
         }
     }
 
@@ -796,13 +793,13 @@ impl AudioPreviewState {
             }
         }
 
-        if canvas_response.clicked() || canvas_response.dragged() {
-            if let Some(mpos) = canvas_response.interact_pointer_pos() {
-                if mpos.x >= track_min_x && mpos.x <= track_max_x {
-                    let clicked_t = spec_x_to_time(mpos.x);
-                    self.seek_to(clicked_t);
-                }
-            }
+        if (canvas_response.clicked() || canvas_response.dragged())
+            && let Some(mpos) = canvas_response.interact_pointer_pos()
+            && mpos.x >= track_min_x
+            && mpos.x <= track_max_x
+        {
+            let clicked_t = spec_x_to_time(mpos.x);
+            self.seek_to(clicked_t);
         }
 
         let painter = ui.painter();
@@ -917,55 +914,54 @@ impl AudioPreviewState {
         }
 
         // Hover crosshairs and frequency/time readout badge
-        if let Some(hpos) = canvas_response.hover_pos() {
-            if spec_rect.contains(hpos) {
-                let hover_t = spec_x_to_time(hpos.x);
-                let frac_y =
-                    ((spec_rect.max.y - hpos.y) / spec_rect.height()).clamp(0.0_f32, 1.0_f32);
-                let hover_freq = frac_y * nyquist;
+        if let Some(hpos) = canvas_response.hover_pos()
+            && spec_rect.contains(hpos)
+        {
+            let hover_t = spec_x_to_time(hpos.x);
+            let frac_y = ((spec_rect.max.y - hpos.y) / spec_rect.height()).clamp(0.0_f32, 1.0_f32);
+            let hover_freq = frac_y * nyquist;
 
-                // Subtle crosshair lines
-                painter.line_segment(
-                    [
-                        Pos2::new(spec_rect.min.x, hpos.y),
-                        Pos2::new(spec_rect.max.x, hpos.y),
-                    ],
-                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 45)),
-                );
-                painter.line_segment(
-                    [
-                        Pos2::new(hpos.x, spec_rect.min.y),
-                        Pos2::new(hpos.x, spec_rect.max.y),
-                    ],
-                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 45)),
-                );
+            // Subtle crosshair lines
+            painter.line_segment(
+                [
+                    Pos2::new(spec_rect.min.x, hpos.y),
+                    Pos2::new(spec_rect.max.x, hpos.y),
+                ],
+                Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 45)),
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(hpos.x, spec_rect.min.y),
+                    Pos2::new(hpos.x, spec_rect.max.y),
+                ],
+                Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 45)),
+            );
 
-                // Cursor readout badge in top-right corner of spectrogram
-                let badge_text = format!("{:.3} s  |  {:.1} kHz", hover_t, hover_freq / 1000.0_f32);
-                let badge_pos = Pos2::new(spec_rect.max.x - 8.0_f32, spec_rect.min.y + 8.0_f32);
-                let font = egui::FontId::monospace(11.0_f32);
-                let galley = painter.layout_no_wrap(badge_text, font, Color32::WHITE);
-                let badge_size = galley.size() + egui::vec2(12.0_f32, 6.0_f32);
-                let badge_rect = Rect::from_min_size(
-                    Pos2::new(badge_pos.x - badge_size.x, badge_pos.y),
-                    badge_size,
-                );
-                painter.rect_filled(
-                    badge_rect,
-                    Rounding::same(3.0_f32),
-                    Color32::from_black_alpha(180),
-                );
-                painter.rect_stroke(
-                    badge_rect,
-                    Rounding::same(3.0_f32),
-                    Stroke::new(1.0_f32, border_frame),
-                );
-                painter.galley(
-                    Pos2::new(badge_rect.min.x + 6.0_f32, badge_rect.min.y + 3.0_f32),
-                    galley,
-                    Color32::WHITE,
-                );
-            }
+            // Cursor readout badge in top-right corner of spectrogram
+            let badge_text = format!("{:.3} s  |  {:.1} kHz", hover_t, hover_freq / 1000.0_f32);
+            let badge_pos = Pos2::new(spec_rect.max.x - 8.0_f32, spec_rect.min.y + 8.0_f32);
+            let font = egui::FontId::monospace(11.0_f32);
+            let galley = painter.layout_no_wrap(badge_text, font, Color32::WHITE);
+            let badge_size = galley.size() + egui::vec2(12.0_f32, 6.0_f32);
+            let badge_rect = Rect::from_min_size(
+                Pos2::new(badge_pos.x - badge_size.x, badge_pos.y),
+                badge_size,
+            );
+            painter.rect_filled(
+                badge_rect,
+                Rounding::same(3.0_f32),
+                Color32::from_black_alpha(180),
+            );
+            painter.rect_stroke(
+                badge_rect,
+                Rounding::same(3.0_f32),
+                Stroke::new(1.0_f32, border_frame),
+            );
+            painter.galley(
+                Pos2::new(badge_rect.min.x + 6.0_f32, badge_rect.min.y + 3.0_f32),
+                galley,
+                Color32::WHITE,
+            );
         }
     }
 }

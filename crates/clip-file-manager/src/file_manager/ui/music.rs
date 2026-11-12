@@ -95,10 +95,9 @@ impl FileManager {
                     ButtonRole::Primary.button("Copy audio selection", palette),
                 )
                 .clicked()
+                && let Some(range) = &range
             {
-                if let Some(range) = &range {
-                    self.music.copy_range(range.clone());
-                }
+                self.music.copy_range(range.clone());
             }
             if ui
                 .add(ButtonRole::Secondary.button("Paste as file", palette))

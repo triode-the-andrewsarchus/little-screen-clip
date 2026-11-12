@@ -554,7 +554,7 @@ impl RollingAudioStripState {
 
                         let (min_s, max_s, block_col) = self.query_peaks(f_s, f_e);
 
-                        let in_sel = sel_range.map_or(false, |(s, e)| t_mid >= s && t_mid <= e);
+                        let in_sel = sel_range.is_some_and(|(s, e)| t_mid >= s && t_mid <= e);
                         let is_silent_col = max_s.abs() < 0.003 && min_s.abs() < 0.003;
 
                         if is_silent_col {
@@ -598,7 +598,7 @@ impl RollingAudioStripState {
                 painter.text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    format!("{}", err),
+                    err.to_string(),
                     egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                     crate::ui_ext::contrast_text_c32_on(
                         hex_to_c32(&palette.colors.surface_recessed),
@@ -669,28 +669,26 @@ impl RollingAudioStripState {
                     self.is_dragging = true;
                 }
             } else if response.dragged() {
-                if let Some(pos) = response.interact_pointer_pos() {
-                    if let Some(t0) = self.drag_start_time {
+                if let Some(pos) = response.interact_pointer_pos()
+                    && let Some(t0) = self.drag_start_time {
                         let t_cur = x_to_time(pos.x);
                         self.selected_region = Some((t0.min(t_cur), t0.max(t_cur)));
                     }
-                }
             } else if response.drag_stopped() {
                 self.is_dragging = false;
-                if let Some((s, e)) = self.selected_region {
-                    if (e - s).abs() < 0.05 {
+                if let Some((s, e)) = self.selected_region
+                    && (e - s).abs() < 0.05 {
                         // Clicked without dragging: clear selection
                         self.selected_region = None;
                         if self.is_silent() {
                             self.load_snapshot();
                         }
                     }
-                }
             }
 
             // Right-click opens the existing full audio editor
-            if response.secondary_clicked() {
-                if let Some(source) = &self.source {
+            if response.secondary_clicked()
+                && let Some(source) = &self.source {
                     *host_action = Some(RollingAudioAction::OpenEditor {
                         source: source.clone(),
                         snapshot_lease: self.snapshot_lease.clone(),
@@ -698,7 +696,6 @@ impl RollingAudioStripState {
                         selected_region: self.selected_region,
                     });
                 }
-            }
         });
     }
 }

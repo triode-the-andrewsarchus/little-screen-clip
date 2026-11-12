@@ -47,15 +47,14 @@ pub(super) fn save(path: &std::path::Path, thumbnail: &ImageThumbnail) {
     ) else {
         return;
     };
-    if let Ok(mut temporary) = tempfile::NamedTempFile::new_in(parent) {
-        if image::DynamicImage::ImageRgba8(image)
+    if let Ok(mut temporary) = tempfile::NamedTempFile::new_in(parent)
+        && image::DynamicImage::ImageRgba8(image)
             .write_to(temporary.as_file_mut(), image::ImageFormat::Png)
             .is_ok()
-        {
-            let bytes = temporary.as_file().metadata().map_or(0, |meta| meta.len());
-            if temporary.persist(path).is_ok() {
-                BUDGET.maintain(parent, bytes, cache_filename);
-            }
+    {
+        let bytes = temporary.as_file().metadata().map_or(0, |meta| meta.len());
+        if temporary.persist(path).is_ok() {
+            BUDGET.maintain(parent, bytes, cache_filename);
         }
     }
 }

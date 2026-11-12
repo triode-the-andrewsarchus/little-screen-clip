@@ -106,7 +106,7 @@ impl ImageThumbnail {
     pub fn from_rgba(image: image::RgbaImage) -> Self {
         let (width, height) = image.dimensions();
         let mut pixels = image.into_raw();
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             for channel in 0..3 {
                 pixel[channel] = (u16::from(pixel[channel]) * u16::from(pixel[3]) / 255) as u8;
             }
@@ -495,10 +495,10 @@ impl ClipItem {
 
         // 1. Check if copied text represents one or more local file paths / URIs (e.g. from file manager)
         let candidate_paths = extract_local_file_paths(trimmed);
-        if !candidate_paths.is_empty() {
-            if let Some(item) = Self::from_candidate_paths(&candidate_paths) {
-                return item;
-            }
+        if !candidate_paths.is_empty()
+            && let Some(item) = Self::from_candidate_paths(&candidate_paths)
+        {
+            return item;
         }
 
         // 2. Check if color hex (#RRGGBB or #RGB)
@@ -512,21 +512,19 @@ impl ClipItem {
         }
 
         // 4. Check if JSON string
-        if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-            || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+            || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+            && let Some(item) = Self::from_json_text(&text, trimmed)
         {
-            if let Some(item) = Self::from_json_text(&text, trimmed) {
-                return item;
-            }
+            return item;
         }
 
         // 5. Check if URL
         if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
             && !trimmed.contains('\n')
+            && let Ok(parsed_url) = url::Url::parse(trimmed)
         {
-            if let Ok(parsed_url) = url::Url::parse(trimmed) {
-                return Self::from_url(parsed_url);
-            }
+            return Self::from_url(parsed_url);
         }
 
         // 6. Check if Markdown text
@@ -1165,27 +1163,27 @@ impl ClipItem {
 
     /// Creates a `ClipItem` for a single file on disk, attempting format-specific dispatch.
     pub fn from_single_file(p: &Path) -> Self {
-        if is_image_path(p) {
-            if let Ok(bytes) = crate::kernel_interface::read_content(p) {
-                let mime = guess_image_mime(p);
-                if let Some(mut item) = Self::from_image_bytes(bytes, mime) {
-                    let name = p
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| p.to_string_lossy().to_string());
-                    item.title = name;
-                    if let ClipPayload::Image { ref mut path, .. } = item.payload {
-                        *path = Some(p.to_path_buf());
-                    }
-                    return item;
+        if is_image_path(p)
+            && let Ok(bytes) = crate::kernel_interface::read_content(p)
+        {
+            let mime = guess_image_mime(p);
+            if let Some(mut item) = Self::from_image_bytes(bytes, mime) {
+                let name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| p.to_string_lossy().to_string());
+                item.title = name;
+                if let ClipPayload::Image { ref mut path, .. } = item.payload {
+                    *path = Some(p.to_path_buf());
                 }
+                return item;
             }
         }
 
-        if crate::audio::is_audio_path(p) {
-            if let Some(item) = Self::from_audio(p.to_path_buf()) {
-                return item;
-            }
+        if crate::audio::is_audio_path(p)
+            && let Some(item) = Self::from_audio(p.to_path_buf())
+        {
+            return item;
         }
 
         let name = p
@@ -1392,11 +1390,11 @@ impl ClipItem {
                 Some((actual_bytes, mime.clone(), path.clone()))
             }
             _ => {
-                if let Some(p) = self.image_path() {
-                    if let Ok(bytes) = crate::kernel_interface::read_content(&p) {
-                        let mime = guess_image_mime(&p);
-                        return Some((bytes, mime, Some(p)));
-                    }
+                if let Some(p) = self.image_path()
+                    && let Ok(bytes) = crate::kernel_interface::read_content(&p)
+                {
+                    let mime = guess_image_mime(&p);
+                    return Some((bytes, mime, Some(p)));
                 }
                 None
             }

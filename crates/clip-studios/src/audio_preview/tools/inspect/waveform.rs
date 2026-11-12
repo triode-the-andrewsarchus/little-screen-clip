@@ -307,22 +307,72 @@ impl AudioPreviewState {
         // Advance right-click hold-to-loop
         if let Some(ref mut hold) = self.right_click_hold {
             ui.ctx().request_repaint();
-            if is_secondary_down {
-                if !hold.started_looping
-                    && hold.start_instant.elapsed()
-                        >= crate::audio_preview::RIGHT_CLICK_HOLD_TIMEOUT
-                {
-                    hold.started_looping = true;
-                    if let Some(idx) = hold.slice_index {
-                        self.active_multi_index = Some(idx);
-                    }
-                    let (s, e) = hold.target_range;
+            if is_secondary_down
+                && !hold.started_looping
+                && hold.start_instant.elapsed() >= crate::audio_preview::RIGHT_CLICK_HOLD_TIMEOUT
+            {
+                hold.started_looping = true;
+                if let Some(idx) = hold.slice_index {
+                    self.active_multi_index = Some(idx);
+                }
+                let (s, e) = hold.target_range;
+                self.play_slice_preview_loop(s, e);
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Repeat,
+                        format!(
+                            "Looping slice ({:02}:{:04.1} - {:02}:{:04.1}) [Hold]",
+                            (s / 60.0) as u32,
+                            s % 60.0,
+                            (e / 60.0) as u32,
+                            e % 60.0
+                        ),
+                    ),
+                    now,
+                ));
+            }
+        }
+
+        // Right-click release handling
+        if (is_secondary_released || (!is_secondary_down && self.right_click_hold.is_some()))
+            && let Some(hold) = self.right_click_hold.take()
+        {
+            if hold.started_looping {
+                self.pause();
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Stop,
+                        "Stopped loop preview".to_string(),
+                    ),
+                    now,
+                ));
+            } else {
+                if let Some(idx) = hold.slice_index {
+                    self.active_multi_index = Some(idx);
+                }
+                let (s, e) = hold.target_range;
+                if self.loop_selection {
                     self.play_slice_preview_loop(s, e);
                     self.status_toast = Some((
                         crate::ui_ext::StatusMessage::new(
                             crate::icons::Icon::Repeat,
                             format!(
-                                "Looping slice ({:02}:{:04.1} - {:02}:{:04.1}) [Hold]",
+                                "Looping slice ({:02}:{:04.1} - {:02}:{:04.1})",
+                                (s / 60.0) as u32,
+                                s % 60.0,
+                                (e / 60.0) as u32,
+                                e % 60.0
+                            ),
+                        ),
+                        now,
+                    ));
+                } else {
+                    self.play_slice_preview(s, e);
+                    self.status_toast = Some((
+                        crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Play,
+                            format!(
+                                "Previewing slice ({:02}:{:04.1} - {:02}:{:04.1})",
                                 (s / 60.0) as u32,
                                 s % 60.0,
                                 (e / 60.0) as u32,
@@ -335,64 +385,12 @@ impl AudioPreviewState {
             }
         }
 
-        // Right-click release handling
-        if is_secondary_released || (!is_secondary_down && self.right_click_hold.is_some()) {
-            if let Some(hold) = self.right_click_hold.take() {
-                if hold.started_looping {
-                    self.pause();
-                    self.status_toast = Some((
-                        crate::ui_ext::StatusMessage::new(
-                            crate::icons::Icon::Stop,
-                            "Stopped loop preview".to_string(),
-                        ),
-                        now,
-                    ));
-                } else {
-                    if let Some(idx) = hold.slice_index {
-                        self.active_multi_index = Some(idx);
-                    }
-                    let (s, e) = hold.target_range;
-                    if self.loop_selection {
-                        self.play_slice_preview_loop(s, e);
-                        self.status_toast = Some((
-                            crate::ui_ext::StatusMessage::new(
-                                crate::icons::Icon::Repeat,
-                                format!(
-                                    "Looping slice ({:02}:{:04.1} - {:02}:{:04.1})",
-                                    (s / 60.0) as u32,
-                                    s % 60.0,
-                                    (e / 60.0) as u32,
-                                    e % 60.0
-                                ),
-                            ),
-                            now,
-                        ));
-                    } else {
-                        self.play_slice_preview(s, e);
-                        self.status_toast = Some((
-                            crate::ui_ext::StatusMessage::new(
-                                crate::icons::Icon::Play,
-                                format!(
-                                    "Previewing slice ({:02}:{:04.1} - {:02}:{:04.1})",
-                                    (s / 60.0) as u32,
-                                    s % 60.0,
-                                    (e / 60.0) as u32,
-                                    e % 60.0
-                                ),
-                            ),
-                            now,
-                        ));
-                    }
-                }
-            }
-        }
-
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) && self.right_click_hold.is_some() {
-            if let Some(hold) = self.right_click_hold.take() {
-                if hold.started_looping {
-                    self.stop();
-                }
-            }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape))
+            && self.right_click_hold.is_some()
+            && let Some(hold) = self.right_click_hold.take()
+            && hold.started_looping
+        {
+            self.stop();
         }
 
         if response.drag_started() && !channel_header_hovered {
@@ -521,117 +519,117 @@ impl AudioPreviewState {
                 }
             }
         } else if response.dragged() {
-            if let Some(mut drag) = self.active_drag {
-                if let Some(mouse_pos) = response.interact_pointer_pos() {
-                    let cur_t = x_to_t(mouse_pos.x, self.view_start_sec, self.view_duration_sec)
-                        .clamp(0.0, self.duration_sec);
-                    let bypass =
-                        ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command);
-                    match drag {
-                        DragAction::PanMiddle {
-                            start_x,
-                            initial_start_sec,
-                        } => {
-                            let dx = mouse_pos.x - start_x;
-                            let dt = (dx / track_width) * self.view_duration_sec;
-                            let max_start = (self.duration_sec - self.view_duration_sec).max(0.0);
-                            self.view_start_sec = (initial_start_sec - dt).clamp(0.0, max_start);
-                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+            if let Some(mut drag) = self.active_drag
+                && let Some(mouse_pos) = response.interact_pointer_pos()
+            {
+                let cur_t = x_to_t(mouse_pos.x, self.view_start_sec, self.view_duration_sec)
+                    .clamp(0.0, self.duration_sec);
+                let bypass =
+                    ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command);
+                match drag {
+                    DragAction::PanMiddle {
+                        start_x,
+                        initial_start_sec,
+                    } => {
+                        let dx = mouse_pos.x - start_x;
+                        let dt = (dx / track_width) * self.view_duration_sec;
+                        let max_start = (self.duration_sec - self.view_duration_sec).max(0.0);
+                        self.view_start_sec = (initial_start_sec - dt).clamp(0.0, max_start);
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                    }
+                    DragAction::ScrubRuler => {
+                        self.seek_to(cur_t);
+                    }
+                    DragAction::PanScrollbar {
+                        start_x,
+                        initial_start_sec,
+                    } => {
+                        let dx = mouse_pos.x - start_x;
+                        let dt = (dx / scroll_rect.width()) * self.duration_sec;
+                        let max_start = (self.duration_sec - self.view_duration_sec).max(0.0);
+                        self.view_start_sec = (initial_start_sec + dt).clamp(0.0, max_start);
+                    }
+                    DragAction::DragLeftHandle { other_anchor } => {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
+                        let snapped_t = self.snap_time(cur_t, bypass);
+                        let t1 = snapped_t.min(other_anchor);
+                        let t2 = snapped_t.max(other_anchor);
+                        self.selection = Some((t1, t2));
+                        self.seek_to(snapped_t);
+                    }
+                    DragAction::DragRightHandle { other_anchor } => {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
+                        let snapped_t = self.snap_time(cur_t, bypass);
+                        let t1 = snapped_t.min(other_anchor);
+                        let t2 = snapped_t.max(other_anchor);
+                        self.selection = Some((t1, t2));
+                        self.seek_to(snapped_t);
+                    }
+                    DragAction::CreateSelection {
+                        start_time,
+                        start_pos_x,
+                        ref mut has_moved,
+                    } => {
+                        let dx = (mouse_pos.x - start_pos_x).abs();
+                        if *has_moved || dx >= 2.0 {
+                            if !*has_moved {
+                                self.clear_single_region_effects();
+                            }
+                            *has_moved = true;
+                            let s_snapped = self.snap_time(start_time, bypass);
+                            let cur_snapped = self.snap_time(cur_t, bypass);
+                            let t1 = s_snapped.min(cur_snapped);
+                            let t2 = s_snapped.max(cur_snapped);
+                            self.selection = Some((t1, t2));
+                            self.seek_to(cur_snapped);
                         }
-                        DragAction::ScrubRuler => {
-                            self.seek_to(cur_t);
-                        }
-                        DragAction::PanScrollbar {
-                            start_x,
-                            initial_start_sec,
-                        } => {
-                            let dx = mouse_pos.x - start_x;
-                            let dt = (dx / scroll_rect.width()) * self.duration_sec;
-                            let max_start = (self.duration_sec - self.view_duration_sec).max(0.0);
-                            self.view_start_sec = (initial_start_sec + dt).clamp(0.0, max_start);
-                        }
-                        DragAction::DragLeftHandle { other_anchor } => {
-                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
+                        self.active_drag = Some(drag);
+                    }
+                    DragAction::DragMultiLeftHandle {
+                        index,
+                        other_anchor,
+                    } => {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
+                        if index < self.multi_selections.len() {
                             let snapped_t = self.snap_time(cur_t, bypass);
                             let t1 = snapped_t.min(other_anchor);
                             let t2 = snapped_t.max(other_anchor);
-                            self.selection = Some((t1, t2));
+                            self.multi_selections[index] = (t1, t2);
                             self.seek_to(snapped_t);
                         }
-                        DragAction::DragRightHandle { other_anchor } => {
-                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
+                    }
+                    DragAction::DragMultiRightHandle {
+                        index,
+                        other_anchor,
+                    } => {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
+                        if index < self.multi_selections.len() {
                             let snapped_t = self.snap_time(cur_t, bypass);
                             let t1 = snapped_t.min(other_anchor);
                             let t2 = snapped_t.max(other_anchor);
-                            self.selection = Some((t1, t2));
+                            self.multi_selections[index] = (t1, t2);
                             self.seek_to(snapped_t);
                         }
-                        DragAction::CreateSelection {
-                            start_time,
-                            start_pos_x,
-                            ref mut has_moved,
-                        } => {
-                            let dx = (mouse_pos.x - start_pos_x).abs();
-                            if *has_moved || dx >= 2.0 {
-                                if !*has_moved {
-                                    self.clear_single_region_effects();
-                                }
-                                *has_moved = true;
-                                let s_snapped = self.snap_time(start_time, bypass);
-                                let cur_snapped = self.snap_time(cur_t, bypass);
-                                let t1 = s_snapped.min(cur_snapped);
-                                let t2 = s_snapped.max(cur_snapped);
-                                self.selection = Some((t1, t2));
-                                self.seek_to(cur_snapped);
-                            }
-                            self.active_drag = Some(drag);
-                        }
-                        DragAction::DragMultiLeftHandle {
-                            index,
-                            other_anchor,
-                        } => {
-                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
+                    }
+                    DragAction::CreateMultiSelection {
+                        start_time,
+                        start_pos_x,
+                        ref mut has_moved,
+                        index,
+                    } => {
+                        let dx = (mouse_pos.x - start_pos_x).abs();
+                        if *has_moved || dx >= 2.0 {
+                            *has_moved = true;
+                            let s_snapped = self.snap_time(start_time, bypass);
+                            let cur_snapped = self.snap_time(cur_t, bypass);
+                            let t1 = s_snapped.min(cur_snapped);
+                            let t2 = s_snapped.max(cur_snapped);
                             if index < self.multi_selections.len() {
-                                let snapped_t = self.snap_time(cur_t, bypass);
-                                let t1 = snapped_t.min(other_anchor);
-                                let t2 = snapped_t.max(other_anchor);
                                 self.multi_selections[index] = (t1, t2);
-                                self.seek_to(snapped_t);
                             }
+                            self.seek_to(cur_snapped);
                         }
-                        DragAction::DragMultiRightHandle {
-                            index,
-                            other_anchor,
-                        } => {
-                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
-                            if index < self.multi_selections.len() {
-                                let snapped_t = self.snap_time(cur_t, bypass);
-                                let t1 = snapped_t.min(other_anchor);
-                                let t2 = snapped_t.max(other_anchor);
-                                self.multi_selections[index] = (t1, t2);
-                                self.seek_to(snapped_t);
-                            }
-                        }
-                        DragAction::CreateMultiSelection {
-                            start_time,
-                            start_pos_x,
-                            ref mut has_moved,
-                            index,
-                        } => {
-                            let dx = (mouse_pos.x - start_pos_x).abs();
-                            if *has_moved || dx >= 2.0 {
-                                *has_moved = true;
-                                let s_snapped = self.snap_time(start_time, bypass);
-                                let cur_snapped = self.snap_time(cur_t, bypass);
-                                let t1 = s_snapped.min(cur_snapped);
-                                let t2 = s_snapped.max(cur_snapped);
-                                if index < self.multi_selections.len() {
-                                    self.multi_selections[index] = (t1, t2);
-                                }
-                                self.seek_to(cur_snapped);
-                            }
-                            self.active_drag = Some(drag);
-                        }
+                        self.active_drag = Some(drag);
                     }
                 }
             }
@@ -1206,55 +1204,55 @@ impl AudioPreviewState {
         );
 
         // Hover tooltip over ColorChord note strip (multi-note chord display)
-        if let Some(mouse_pos) = response.hover_pos() {
-            if strip_rect.contains(mouse_pos) {
-                let mouse_t = x_to_time(mouse_pos.x);
-                let total_dur = self.duration_sec.max(0.01);
-                let col_idx = (((mouse_t / total_dur) * (source_analysis.note_strip_width as f32))
-                    .floor() as usize)
-                    .min(source_analysis.note_strip_info.len().saturating_sub(1));
-                if let Some(info) = source_analysis.note_strip_info.get(col_idx) {
-                    let text = if !info.chord_notes.is_empty() {
-                        if info.chord_notes.len() > 1 {
-                            let names = info
-                                .chord_notes
-                                .iter()
-                                .map(|n| n.note_name.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" + ");
-                            format!(
-                                "Detected Chord: {} • Energy: {:.0}%",
-                                names,
-                                info.amplitude * 100.0
-                            )
-                        } else {
-                            format!(
-                                "Musical Note: {} ({:.1} Hz) • Energy: {:.0}%",
-                                info.note_name,
-                                info.frequency_hz,
-                                info.amplitude * 100.0
-                            )
-                        }
-                    } else if info.active {
+        if let Some(mouse_pos) = response.hover_pos()
+            && strip_rect.contains(mouse_pos)
+        {
+            let mouse_t = x_to_time(mouse_pos.x);
+            let total_dur = self.duration_sec.max(0.01);
+            let col_idx = (((mouse_t / total_dur) * (source_analysis.note_strip_width as f32))
+                .floor() as usize)
+                .min(source_analysis.note_strip_info.len().saturating_sub(1));
+            if let Some(info) = source_analysis.note_strip_info.get(col_idx) {
+                let text = if !info.chord_notes.is_empty() {
+                    if info.chord_notes.len() > 1 {
+                        let names = info
+                            .chord_notes
+                            .iter()
+                            .map(|n| n.note_name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" + ");
+                        format!(
+                            "Detected Chord: {} • Energy: {:.0}%",
+                            names,
+                            info.amplitude * 100.0
+                        )
+                    } else {
                         format!(
                             "Musical Note: {} ({:.1} Hz) • Energy: {:.0}%",
                             info.note_name,
                             info.frequency_hz,
                             info.amplitude * 100.0
                         )
-                    } else {
-                        "Musical Note: — (Silence / Below Threshold)".to_string()
-                    };
-                    egui::show_tooltip(ui.ctx(), response.id.with("note_tt"), |ui| {
-                        ui.add(
-                            crate::icons::Icon::Audio.label(
-                                egui::RichText::new(text)
-                                    .strong()
-                                    .color(crate::hex_to_c32(&palette.colors.text_primary)),
-                            ),
-                        );
-                    });
-                }
+                    }
+                } else if info.active {
+                    format!(
+                        "Musical Note: {} ({:.1} Hz) • Energy: {:.0}%",
+                        info.note_name,
+                        info.frequency_hz,
+                        info.amplitude * 100.0
+                    )
+                } else {
+                    "Musical Note: — (Silence / Below Threshold)".to_string()
+                };
+                egui::show_tooltip(ui.ctx(), response.id.with("note_tt"), |ui| {
+                    ui.add(
+                        crate::icons::Icon::Audio.label(
+                            egui::RichText::new(text)
+                                .strong()
+                                .color(crate::hex_to_c32(&palette.colors.text_primary)),
+                        ),
+                    );
+                });
             }
         }
 

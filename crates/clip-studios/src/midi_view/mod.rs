@@ -278,7 +278,7 @@ pub fn get_track_color(
 }
 
 fn should_draw_pitch_label(key: u8, row_height: f32, label_height: f32) -> bool {
-    row_height >= label_height + 2.0 || key % 12 == 0
+    row_height >= label_height + 2.0 || key.is_multiple_of(12)
 }
 
 fn time_label_fits(left: f32, width: f32, previous_right: f32, clip_right: f32) -> bool {

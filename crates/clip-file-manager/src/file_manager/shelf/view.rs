@@ -434,11 +434,10 @@ fn card_ui(
     if response.clicked() {
         *action = Some(Action::Select(card.key));
     }
-    if response.double_clicked() {
-        match (card.key, card.id) {
-            (Selected::Slot(slot), Some(id)) => *action = Some(Action::CollectSlot(slot, id)),
-            _ => {}
-        }
+    if response.double_clicked()
+        && let (Selected::Slot(slot), Some(id)) = (card.key, card.id)
+    {
+        *action = Some(Action::CollectSlot(slot, id))
     }
 }
 

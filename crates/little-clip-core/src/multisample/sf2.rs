@@ -49,7 +49,9 @@ impl<'a> Bank<'a> {
             return Err("More than 256 SoundFont presets".into());
         }
         for (index, header) in presets
-            .chunks_exact(38)
+            .as_chunks::<38>()
+            .0
+            .iter()
             .enumerate()
             .take(presets.len() / 38 - 1)
         {
@@ -83,7 +85,7 @@ impl<'a> Bank<'a> {
             .get(tag)
             .ok_or_else(|| format!("Missing SoundFont table {}", String::from_utf8_lossy(tag)))?;
         let data = &self.bytes[range.clone()];
-        if data.len() < size || data.len() % size != 0 || data.len() / size > 65536 {
+        if data.len() < size || !data.len().is_multiple_of(size) || data.len() / size > 65536 {
             return Err("SoundFont table has invalid size or exceeds 65,536 records".into());
         }
         Ok(data)
@@ -96,7 +98,7 @@ impl<'a> Bank<'a> {
             let bags = self.table(bag, 4)?;
             let generators = self.table(generator, 4)?;
             let mut previous = 0;
-            for bag in bags.chunks_exact(4) {
+            for bag in bags.as_chunks::<4>().0 {
                 let offset = u16_at(bag, 0)? as usize;
                 if offset < previous || offset > generators.len() / 4 {
                     return Err("Invalid SoundFont generator index".into());
@@ -135,7 +137,7 @@ impl<'a> Bank<'a> {
             .ok_or("SoundFont mapping exceeds the interpretation budget")?;
         self.work.set(remaining);
         let mut zone = Generators::new();
-        for item in data.chunks_exact(4) {
+        for item in data.as_chunks::<4>().0 {
             let opcode = u16_at(item, 0)?;
             let raw = u16_at(item, 2)?;
             // Unknown extensions are not interpreted; retaining them could amplify inherited maps.
@@ -308,7 +310,7 @@ fn riff_end(bytes: &[u8]) -> Result<usize, String> {
         return Err("Expected SoundFont 2 RIFF, at most 256 MiB".into());
     }
     let end = 12_usize
-        .checked_add(u32_at(&bytes, 4)? as usize)
+        .checked_add(u32_at(bytes, 4)? as usize)
         .and_then(|n| n.checked_sub(4))
         .ok_or("RIFF size overflow")?;
     if end != bytes.len() {
@@ -330,10 +332,8 @@ fn index_list(
             if tables.insert(tag, child).is_some() {
                 return Err("Duplicate SoundFont table".into());
             }
-        } else if list == b"sdta" && tag == *b"smpl" {
-            if samples.replace(child).is_some() {
-                return Err("Duplicate PCM table".into());
-            }
+        } else if list == b"sdta" && tag == *b"smpl" && samples.replace(child).is_some() {
+            return Err("Duplicate PCM table".into());
         }
     }
     Ok(())
@@ -421,7 +421,9 @@ mod tests {
         let pcm = doc.pcm.as_ref().unwrap();
         let raw = &pcm[sample.bytes.clone()];
         assert!(
-            raw.chunks_exact(2)
+            raw.as_chunks::<2>()
+                .0
+                .iter()
                 .any(|b| i16::from_le_bytes([b[0], b[1]]).abs() > 20000)
         );
         assert_eq!(doc.instruments[1].regions[0].key, [36, 47]);

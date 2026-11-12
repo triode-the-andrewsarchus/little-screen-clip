@@ -81,11 +81,11 @@ impl AudioPreviewState {
                 let new_time = self.playback_start_offset_sec + elapsed;
 
                 // Check if previewing a specific slice
-                if self.preview_is_looping {
-                    if let Some((sel_start, sel_end)) = self.active_selection_range() {
-                        self.preview_stop_time = Some(sel_end);
-                        self.preview_slice_range = Some((sel_start, sel_end));
-                    }
+                if self.preview_is_looping
+                    && let Some((sel_start, sel_end)) = self.active_selection_range()
+                {
+                    self.preview_stop_time = Some(sel_end);
+                    self.preview_slice_range = Some((sel_start, sel_end));
                 }
 
                 if let Some(stop_t) = self.preview_stop_time {
@@ -354,27 +354,26 @@ impl AudioPreviewState {
                             && !i.modifiers.ctrl
                             && !i.modifiers.command
                             && !i.modifiers.alt
-                    }) {
-                        if idx < self.multi_selections.len() {
-                            let (s, e) = self.multi_selections[idx];
-                            self.active_multi_index = Some(idx);
-                            self.play_slice_preview(s, e);
-                            self.status_toast = Some((
-                                crate::ui_ext::StatusMessage::new(
-                                    crate::icons::Icon::Play,
-                                    format!(
-                                        "Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
-                                        idx + 1,
-                                        (s / 60.0) as u32,
-                                        s % 60.0,
-                                        (e / 60.0) as u32,
-                                        e % 60.0
-                                    ),
+                    }) && idx < self.multi_selections.len()
+                    {
+                        let (s, e) = self.multi_selections[idx];
+                        self.active_multi_index = Some(idx);
+                        self.play_slice_preview(s, e);
+                        self.status_toast = Some((
+                            crate::ui_ext::StatusMessage::new(
+                                crate::icons::Icon::Play,
+                                format!(
+                                    "Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
+                                    idx + 1,
+                                    (s / 60.0) as u32,
+                                    s % 60.0,
+                                    (e / 60.0) as u32,
+                                    e % 60.0
                                 ),
-                                now,
-                            ));
-                            break;
-                        }
+                            ),
+                            now,
+                        ));
+                        break;
                     }
                 }
             }

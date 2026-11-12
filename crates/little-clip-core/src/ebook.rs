@@ -210,7 +210,8 @@ fn cover(metadata: Node<'_, '_>, items: &Items<'_>) -> Option<String> {
     let cover_id = named(metadata, "meta")
         .find(|n| n.attribute("name") == Some("cover"))
         .and_then(|n| n.attribute("content"));
-    let cover = items
+
+    items
         .iter()
         .find(|(id, (_, n))| {
             Some(**id) == cover_id
@@ -219,8 +220,7 @@ fn cover(metadata: Node<'_, '_>, items: &Items<'_>) -> Option<String> {
                     .split_whitespace()
                     .any(|p| p == "cover-image")
         })
-        .map(|(_, (path, _))| path.clone());
-    cover
+        .map(|(_, (path, _))| path.clone())
 }
 fn labels(
     zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>,
@@ -273,10 +273,10 @@ fn navigation(
     labels: &mut BTreeMap<String, String>,
 ) -> Result<(), String> {
     for link in named(doc.root(), "a") {
-        if let Some(href) = link.attribute("href") {
-            if let Ok(path) = resource(base, href) {
-                labels.entry(path).or_insert_with(|| text(link));
-            }
+        if let Some(href) = link.attribute("href")
+            && let Ok(path) = resource(base, href)
+        {
+            labels.entry(path).or_insert_with(|| text(link));
         }
     }
     for point in named(doc.root(), "navPoint") {

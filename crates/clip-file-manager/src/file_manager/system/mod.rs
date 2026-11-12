@@ -464,6 +464,18 @@ pub(super) fn shutdown() {
 }
 
 #[cfg(test)]
+pub(in crate::file_manager) fn retained_provenance_fixture() -> Document {
+    let mut document = worker::interface(Path::new("/proc/uptime")).unwrap();
+    document.generation = 50;
+    let mut fact = Fact::text("Terminal", "PID 42", "/proc/42/stat".into());
+    fact.observed_ms = 123_000;
+    fact.observed_generation = Some(40);
+    document.facts = vec![fact];
+    document.stamp_fact_generations();
+    document
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -537,16 +549,4 @@ mod tests {
         assert!(relation.verify().is_err());
         assert!(Relation::new("Missing", path).verify().is_err());
     }
-}
-
-#[cfg(test)]
-pub(in crate::file_manager) fn retained_provenance_fixture() -> Document {
-    let mut document = worker::interface(Path::new("/proc/uptime")).unwrap();
-    document.generation = 50;
-    let mut fact = Fact::text("Terminal", "PID 42", "/proc/42/stat".into());
-    fact.observed_ms = 123_000;
-    fact.observed_generation = Some(40);
-    document.facts = vec![fact];
-    document.stamp_fact_generations();
-    document
 }

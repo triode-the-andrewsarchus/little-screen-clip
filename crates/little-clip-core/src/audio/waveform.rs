@@ -126,10 +126,7 @@ impl FullAudioAnalysis {
             }
         }
 
-        let first = match first_frame {
-            Some(f) => f,
-            None => return None, // completely silent
-        };
+        let first = first_frame?;
 
         for i in (first..n).rev() {
             let s1 = self.ch1_samples[i].abs();
@@ -934,7 +931,7 @@ fn build_peak_pyramid_inner(
     let mut color = WaveformColor::new(sample_rate);
 
     // Level 0: 64 samples per block (~1.4ms resolution at 44.1kHz)
-    let lvl0_len = (samples.len() + 63) / 64;
+    let lvl0_len = samples.len().div_ceil(64);
     let mut lvl0 = Vec::with_capacity(lvl0_len);
     for (chunk_index, chunk) in samples.chunks(64).enumerate() {
         if chunk_index.is_multiple_of(1024) && is_cancelled() {
@@ -962,7 +959,7 @@ fn build_peak_pyramid_inner(
     }
 
     // Level 1: 1024 samples per block (16 lvl0 blocks)
-    let lvl1_len = (lvl0.len() + 15) / 16;
+    let lvl1_len = lvl0.len().div_ceil(16);
     let mut lvl1 = Vec::with_capacity(lvl1_len);
     for (chunk_index, chunk) in lvl0.chunks(16).enumerate() {
         if chunk_index.is_multiple_of(1024) && is_cancelled() {
@@ -1002,7 +999,7 @@ fn build_peak_pyramid_inner(
     }
 
     // Level 2: 16384 samples per block (16 lvl1 blocks)
-    let lvl2_len = (lvl1.len() + 15) / 16;
+    let lvl2_len = lvl1.len().div_ceil(16);
     let mut lvl2 = Vec::with_capacity(lvl2_len);
     for (chunk_index, chunk) in lvl1.chunks(16).enumerate() {
         if chunk_index.is_multiple_of(1024) && is_cancelled() {

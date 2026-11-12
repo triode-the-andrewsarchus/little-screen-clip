@@ -466,10 +466,10 @@ impl NamingOperation {
             return Err(std::io::Error::last_os_error().to_string());
         }
         let destination = self.parent.join(&self.name);
-        if let NamingAction::Rename(source) = &self.action {
-            if let Err(error) = super::photo_ratings::relocate(source, &destination) {
-                tracing::warn!(%error, "File renamed; photo rating could not be relocated");
-            }
+        if let NamingAction::Rename(source) = &self.action
+            && let Err(error) = super::photo_ratings::relocate(source, &destination)
+        {
+            tracing::warn!(%error, "File renamed; photo rating could not be relocated");
         }
         Ok(destination)
     }

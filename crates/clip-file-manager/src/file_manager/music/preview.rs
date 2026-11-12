@@ -252,11 +252,28 @@ fn technical_details(path: &Path, metadata: &Metadata) -> String {
 }
 
 fn format_sample_rate(sample_rate: u32) -> String {
-    if sample_rate % 1000 == 0 {
+    if sample_rate.is_multiple_of(1000) {
         format!("{} kHz", sample_rate / 1000)
     } else {
         format!("{:.1} kHz", sample_rate as f32 / 1000.0)
     }
+}
+
+pub(in crate::file_manager) fn waveform(
+    path: &Path,
+    duration: f32,
+    bars: usize,
+    max_duration: Option<f32>,
+    cancelled: &AtomicBool,
+) -> Result<(Vec<f32>, Vec<[u8; 3]>), String> {
+    little_clip_core::audio::compute_preview_waveform(
+        super::audio_file(path)?,
+        path,
+        duration,
+        bars,
+        max_duration,
+        cancelled,
+    )
 }
 
 #[cfg(test)]
@@ -401,21 +418,4 @@ mod tests {
         assert!(metadata.source.unwrap().check().is_ok());
         assert!(data.image.is_none());
     }
-}
-
-pub(in crate::file_manager) fn waveform(
-    path: &Path,
-    duration: f32,
-    bars: usize,
-    max_duration: Option<f32>,
-    cancelled: &AtomicBool,
-) -> Result<(Vec<f32>, Vec<[u8; 3]>), String> {
-    little_clip_core::audio::compute_preview_waveform(
-        super::audio_file(path)?,
-        path,
-        duration,
-        bars,
-        max_duration,
-        cancelled,
-    )
 }

@@ -117,7 +117,7 @@ fn loops(sample: Node<'_, '_>) -> Result<Vec<[u64; 2]>, String> {
     match field(sample, "LoopMode")? {
         None | Some("Off") => Ok(Vec::new()),
         Some(_) if end > start => Ok(vec![[start, end]]),
-        _ => return Err("Invalid Renoise loop interval".into()),
+        _ => Err("Invalid Renoise loop interval".into()),
     }
 }
 fn properties(sample: Node<'_, '_>, map: Node<'_, '_>) -> Result<Vec<(String, String)>, String> {

@@ -1012,7 +1012,7 @@ fn scan_digital_decode_mono_streaming_enabled<F>(
         if is_cancelled() {
             return;
         }
-        let dtmf_mono = resample_linear(&mono, sample_rate, 8000);
+        let dtmf_mono = resample_linear(mono, sample_rate, 8000);
         let dtmf_symbols = decode_dtmf(&dtmf_mono, 8000);
         if is_cancelled() {
             return;
@@ -1027,7 +1027,7 @@ fn scan_digital_decode_mono_streaming_enabled<F>(
         if is_cancelled() {
             return;
         }
-        let cw_symbols = decode_morse_cw(&mono, sample_rate);
+        let cw_symbols = decode_morse_cw(mono, sample_rate);
         if is_cancelled() {
             return;
         }
@@ -1041,7 +1041,7 @@ fn scan_digital_decode_mono_streaming_enabled<F>(
         if is_cancelled() {
             return;
         }
-        let aprs_symbols = decode_bell202_aprs(&mono, sample_rate);
+        let aprs_symbols = decode_bell202_aprs(mono, sample_rate);
         if is_cancelled() {
             return;
         }
@@ -1055,7 +1055,7 @@ fn scan_digital_decode_mono_streaming_enabled<F>(
         if is_cancelled() {
             return;
         }
-        let ft8_symbols = decode_ft8(&mono, sample_rate);
+        let ft8_symbols = decode_ft8(mono, sample_rate);
         if is_cancelled() {
             return;
         }
@@ -1069,7 +1069,7 @@ fn scan_digital_decode_mono_streaming_enabled<F>(
         if is_cancelled() {
             return;
         }
-        let wspr_symbols = decode_wspr(&mono, sample_rate);
+        let wspr_symbols = decode_wspr(mono, sample_rate);
         if is_cancelled() {
             return;
         }

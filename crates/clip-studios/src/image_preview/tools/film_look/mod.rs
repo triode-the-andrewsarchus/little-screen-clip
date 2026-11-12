@@ -21,7 +21,7 @@ fn film_rgb_from_rgba(
         if is_cancelled() {
             return None;
         }
-        for pixel in row.chunks_exact(4) {
+        for pixel in row.as_chunks::<4>().0 {
             pixels.extend_from_slice(&pixel[..3]);
         }
     }

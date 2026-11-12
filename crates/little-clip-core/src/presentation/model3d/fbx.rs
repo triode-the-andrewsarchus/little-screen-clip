@@ -45,7 +45,7 @@ pub(super) fn load(path: &Path) -> Result<Vec<Triangle>, String> {
         for (face_index, face) in mesh.faces.iter().enumerate() {
             let count = ufbx::triangulate_face_vec(&mut indices, mesh, *face) as usize;
             let color = material_color(node, mesh, face_index);
-            for corners in indices[..count * 3].chunks_exact(3) {
+            for corners in indices[..count * 3].as_chunks::<3>().0 {
                 if let Some(mut triangle) = triangle(node, mesh, &normal_matrix, corners) {
                     triangle.color = color;
                     triangles.push(triangle);

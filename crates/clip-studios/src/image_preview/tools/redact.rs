@@ -467,20 +467,18 @@ impl ImagePreviewState {
 
     pub fn sync_sam_image(&mut self) {
         self.ensure_sam_worker();
-        if self.sam_state.loaded_revision != Some(self.pixel_revision) && !self.sam_state.is_loading
+        if self.sam_state.loaded_revision != Some(self.pixel_revision)
+            && !self.sam_state.is_loading
+            && let Some(ref worker) = self.sam_state.worker
+            && worker
+                .send(super::sam::SamWorkerCommand::EncodeImage {
+                    image: self.current_rgba.clone(),
+                    revision: self.pixel_revision,
+                })
+                .is_ok()
         {
-            if let Some(ref worker) = self.sam_state.worker {
-                if worker
-                    .send(super::sam::SamWorkerCommand::EncodeImage {
-                        image: self.current_rgba.clone(),
-                        revision: self.pixel_revision,
-                    })
-                    .is_ok()
-                {
-                    self.sam_state.is_loading = true;
-                    self.sam_state.error_text = None;
-                }
-            }
+            self.sam_state.is_loading = true;
+            self.sam_state.error_text = None;
         }
     }
 
@@ -579,20 +577,19 @@ impl ImagePreviewState {
         self.sam_state.latest_query_id = self.sam_state.latest_query_id.wrapping_add(1);
         let qid = self.sam_state.latest_query_id;
 
-        if let Some(ref worker) = self.sam_state.worker {
-            if worker
+        if let Some(ref worker) = self.sam_state.worker
+            && worker
                 .send(super::sam::SamWorkerCommand::PredictPoint {
                     x: px,
                     y: py,
                     query_id: qid,
                 })
                 .is_ok()
-            {
-                self.sam_state.in_flight = true;
-                self.sam_state.last_query_norm_pos = Some(norm_pos);
-                self.sam_state.hovered_pos = Some(norm_pos);
-                self.sam_state.hovered_point_px = Some((px, py));
-            }
+        {
+            self.sam_state.in_flight = true;
+            self.sam_state.last_query_norm_pos = Some(norm_pos);
+            self.sam_state.hovered_pos = Some(norm_pos);
+            self.sam_state.hovered_point_px = Some((px, py));
         }
     }
 
@@ -713,16 +710,16 @@ impl ImagePreviewState {
 
     /// Deletes the currently selected redaction bar.
     pub fn delete_selected_redaction(&mut self) {
-        if let Some(idx) = self.redaction_state.selected_idx {
-            if idx < self.redaction_state.boxes.len() {
-                self.redaction_state.boxes.remove(idx);
-                self.redaction_state.selected_idx = None;
-                self.redaction_state.active_drag = None;
-                self.show_toast(crate::ui_ext::StatusMessage::new(
-                    crate::icons::Icon::Trash,
-                    "Redaction bar removed",
-                ));
-            }
+        if let Some(idx) = self.redaction_state.selected_idx
+            && idx < self.redaction_state.boxes.len()
+        {
+            self.redaction_state.boxes.remove(idx);
+            self.redaction_state.selected_idx = None;
+            self.redaction_state.active_drag = None;
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Trash,
+                "Redaction bar removed",
+            ));
         }
     }
 

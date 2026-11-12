@@ -381,12 +381,11 @@ impl eframe::App for WorkbenchApp {
                         let activate_from_audio = response.clicked()
                             || (response.hovered()
                                 && ctx.input(|i| i.pointer.primary_clicked()));
-                        if audio_region_active && activate_from_audio {
-                                if let Some(strip) = &mut self.rolling_audio_strip {
+                        if audio_region_active && activate_from_audio
+                                && let Some(strip) = &mut self.rolling_audio_strip {
                                     strip.selected_region = None;
                                     strip.stop();
                                 }
-                        }
                         update_palette_search_focus(
                             ctx,
                             &response,

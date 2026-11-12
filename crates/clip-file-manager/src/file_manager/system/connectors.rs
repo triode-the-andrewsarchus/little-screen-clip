@@ -284,10 +284,9 @@ fn summarize(document: &mut Document, root: &Path, kind: Object, topology: &mut 
         if let Some(fact) = current
             .clone()
             .find(|fact| fact.label == label && fact.source.parent() == Some(root))
+            && let Some(value) = &fact.value
         {
-            if let Some(value) = &fact.value {
-                topology.summary.push_str(&format!(" · {value}"));
-            }
+            topology.summary.push_str(&format!(" · {value}"));
         }
     }
     if kind == Object::Port {

@@ -123,10 +123,10 @@ impl AudioPreviewState {
 
         // If selection exists and playhead is outside, jump to selection start
         let sel = self.active_selection_range();
-        if let Some((start, end)) = sel {
-            if self.current_time_sec < start || self.current_time_sec >= end {
-                self.current_time_sec = start;
-            }
+        if let Some((start, end)) = sel
+            && (self.current_time_sec < start || self.current_time_sec >= end)
+        {
+            self.current_time_sec = start;
         }
 
         // If at end of track, wrap to start

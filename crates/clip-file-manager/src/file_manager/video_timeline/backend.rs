@@ -156,16 +156,14 @@ fn timeline(
     let bytes = crate::file_source::read_file_bytes(&output.path, 4 * 1024 * 1024, true, false)
         .map_err(|e| e.to_string())?;
     let image = decode(&bytes, width, 64)?;
-    if let Some(cache) = cached {
-        if let Some(parent) = cache.parent() {
-            if std::fs::create_dir_all(parent).is_ok() {
-                if let Ok(mut file) = tempfile::NamedTempFile::new_in(parent) {
-                    use std::io::Write;
-                    if file.write_all(&bytes).is_ok() {
-                        let _ = file.persist(cache);
-                    }
-                }
-            }
+    if let Some(cache) = cached
+        && let Some(parent) = cache.parent()
+        && std::fs::create_dir_all(parent).is_ok()
+        && let Ok(mut file) = tempfile::NamedTempFile::new_in(parent)
+    {
+        use std::io::Write;
+        if file.write_all(&bytes).is_ok() {
+            let _ = file.persist(cache);
         }
     }
     Ok(image)

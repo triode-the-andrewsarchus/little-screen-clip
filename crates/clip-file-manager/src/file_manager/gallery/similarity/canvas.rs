@@ -1214,6 +1214,17 @@ impl SimilarityCanvas {
     }
 }
 
+pub(super) fn normalized_feature(feature: &FeatureVector) -> Vec<f32> {
+    let mut vector = feature.to_vec();
+    let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm > 1e-6 {
+        for value in &mut vector {
+            *value /= norm;
+        }
+    }
+    vector
+}
+
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
@@ -1387,15 +1398,4 @@ mod lifecycle_tests {
         assert!(canvas.pending_pan_to_grid.is_none());
         assert!(cancelled.load(Ordering::Relaxed));
     }
-}
-
-pub(super) fn normalized_feature(feature: &FeatureVector) -> Vec<f32> {
-    let mut vector = feature.to_vec();
-    let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
-    if norm > 1e-6 {
-        for value in &mut vector {
-            *value /= norm;
-        }
-    }
-    vector
 }

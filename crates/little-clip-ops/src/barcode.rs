@@ -44,15 +44,15 @@ pub fn detect_barcodes(img: &RgbaImage) -> Vec<BarcodeDetection> {
     }
 
     // 2. If rxing found nothing or for additional detection, try zbarimg CLI if available
-    if results.is_empty() {
-        if let Ok(zbar_results) = zbar_detect(img) {
-            for res in zbar_results {
-                if !results
-                    .iter()
-                    .any(|existing: &BarcodeDetection| existing.text == res.text)
-                {
-                    results.push(res);
-                }
+    if results.is_empty()
+        && let Ok(zbar_results) = zbar_detect(img)
+    {
+        for res in zbar_results {
+            if !results
+                .iter()
+                .any(|existing: &BarcodeDetection| existing.text == res.text)
+            {
+                results.push(res);
             }
         }
     }

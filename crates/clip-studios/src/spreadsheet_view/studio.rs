@@ -59,20 +59,18 @@ impl SpreadsheetViewerState {
                     )
                     .with_footer_hints("Click cell: Copy | Filter cells above | Esc: Close");
 
-                if let Some((r, c)) = self.selected_cell {
-                    if let Some(sheet) = self.data.sheets.get(self.active_sheet_idx) {
-                        if let Some(row) = sheet.rows.get(r) {
-                            if let Some(val) = row.get(c) {
-                                shell = shell.with_footer_readout(format!(
-                                    "Selected R{} C{} [{}]: {}",
-                                    r + 1,
-                                    c + 1,
-                                    col_label(c),
-                                    val
-                                ));
-                            }
-                        }
-                    }
+                if let Some((r, c)) = self.selected_cell
+                    && let Some(sheet) = self.data.sheets.get(self.active_sheet_idx)
+                    && let Some(row) = sheet.rows.get(r)
+                    && let Some(val) = row.get(c)
+                {
+                    shell = shell.with_footer_readout(format!(
+                        "Selected R{} C{} [{}]: {}",
+                        r + 1,
+                        c + 1,
+                        col_label(c),
+                        val
+                    ));
                 }
 
                 let mut copy_table_clicked = false;
@@ -115,17 +113,17 @@ impl SpreadsheetViewerState {
                     }
                 }
 
-                if copy_table_clicked {
-                    if let Some(sheet) = self.data.sheets.get(self.active_sheet_idx) {
-                        let tsv = sheet
-                            .rows
-                            .iter()
-                            .map(|r| r.join("\t"))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        ui.output_mut(|o| o.copied_text = tsv);
-                        self.status_toast.set("Copied table as TSV", now);
-                    }
+                if copy_table_clicked
+                    && let Some(sheet) = self.data.sheets.get(self.active_sheet_idx)
+                {
+                    let tsv = sheet
+                        .rows
+                        .iter()
+                        .map(|r| r.join("\t"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    ui.output_mut(|o| o.copied_text = tsv);
+                    self.status_toast.set("Copied table as TSV", now);
                 }
 
                 ui.add_space(crate::ui_ext::SPACE_XS);

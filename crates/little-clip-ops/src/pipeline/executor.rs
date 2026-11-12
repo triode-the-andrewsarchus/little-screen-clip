@@ -117,10 +117,10 @@ impl<'a> PipelineExecutor<'a> {
         for node in compiled.nodes() {
             let mut inputs = HashMap::new();
             for pin in &node.inputs {
-                if let Some(conn) = compiled.input_for(node.id, &pin.name) {
-                    if let Some(val) = outputs.get(&(conn.from_node, conn.from_pin.clone())) {
-                        inputs.insert(pin.name.clone(), val.clone());
-                    }
+                if let Some(conn) = compiled.input_for(node.id, &pin.name)
+                    && let Some(val) = outputs.get(&(conn.from_node, conn.from_pin.clone()))
+                {
+                    inputs.insert(pin.name.clone(), val.clone());
                 }
             }
 
@@ -926,16 +926,16 @@ else:
         preferred_names: &[&str],
     ) -> Result<String, PipelineError> {
         for &name in preferred_names {
-            if let Some(v) = inputs.get(name) {
-                if let Some(t) = v.as_text() {
-                    return Ok(t.to_string());
-                }
-            }
-        }
-        if let Some(v) = inputs.values().next() {
-            if let Some(t) = v.as_text() {
+            if let Some(v) = inputs.get(name)
+                && let Some(t) = v.as_text()
+            {
                 return Ok(t.to_string());
             }
+        }
+        if let Some(v) = inputs.values().next()
+            && let Some(t) = v.as_text()
+        {
+            return Ok(t.to_string());
         }
         Err(PipelineError::MissingInput(preferred_names.join(" or ")))
     }
@@ -984,10 +984,10 @@ fn source_port_value(
 }
 
 fn shellexpand(path: &str) -> PathBuf {
-    if let Some(stripped) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(stripped);
-        }
+    if let Some(stripped) = path.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return PathBuf::from(home).join(stripped);
     }
     PathBuf::from(path)
 }

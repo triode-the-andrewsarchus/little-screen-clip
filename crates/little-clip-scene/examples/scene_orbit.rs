@@ -27,7 +27,7 @@ fn benchmark(
     output: &std::path::Path,
     size: [u32; 2],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(&output)?;
+    std::fs::create_dir_all(output)?;
     let started = Instant::now();
     let scene = SplatScene::load(path)?;
     let points = scene.len();

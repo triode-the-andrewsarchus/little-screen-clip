@@ -628,7 +628,7 @@ impl Model3d {
 fn geometry_to_triangles(geom: &scenix_mesh::Geometry, color: Option<[f32; 4]>) -> Vec<Triangle> {
     let mut triangles = Vec::with_capacity(geom.indices.len() / 3);
     if !geom.indices.is_empty() {
-        for chunk in geom.indices.chunks_exact(3) {
+        for chunk in geom.indices.as_chunks::<3>().0 {
             let i1 = chunk[0] as usize;
             let i2 = chunk[1] as usize;
             let i3 = chunk[2] as usize;
@@ -679,7 +679,7 @@ fn geometry_to_triangles(geom: &scenix_mesh::Geometry, color: Option<[f32; 4]>) 
             }
         }
     } else {
-        for chunk in geom.positions.chunks_exact(3) {
+        for chunk in geom.positions.as_chunks::<3>().0 {
             let v1 = Vec3::new(chunk[0].x, chunk[0].y, chunk[0].z);
             let v2 = Vec3::new(chunk[1].x, chunk[1].y, chunk[1].z);
             let v3 = Vec3::new(chunk[2].x, chunk[2].y, chunk[2].z);

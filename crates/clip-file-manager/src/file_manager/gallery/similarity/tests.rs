@@ -279,8 +279,8 @@ fn test_heterogeneous_feature_vector_pca() {
     for (x, y) in coords {
         assert!(x.is_finite());
         assert!(y.is_finite());
-        assert!(x >= -1.0 && x <= 1.0);
-        assert!(y >= -1.0 && y <= 1.0);
+        assert!((-1.0..=1.0).contains(&x));
+        assert!((-1.0..=1.0).contains(&y));
     }
 }
 
@@ -696,7 +696,7 @@ fn test_search_from_photo_creates_ranked_grid() {
     v1[0] = 1.0;
     let mut v2 = vec![0.0f32; 1536];
     v2[0] = 0.9;
-    v2[1] = 0.43588989; // unit length
+    v2[1] = 0.435_889_9; // unit length
     let mut v3 = vec![0.0f32; 1536];
     v3[0] = 0.6;
     v3[10] = 0.8;
@@ -1217,8 +1217,8 @@ fn test_pca_handles_ragged_feature_dimensions_safely() {
     );
     assert_eq!(coords.len(), 3);
     for (x, y) in coords {
-        assert!(x >= -1.0 && x <= 1.0);
-        assert!(y >= -1.0 && y <= 1.0);
+        assert!((-1.0..=1.0).contains(&x));
+        assert!((-1.0..=1.0).contains(&y));
     }
 }
 

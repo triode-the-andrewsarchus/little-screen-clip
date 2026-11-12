@@ -196,7 +196,7 @@ fn test_crop_aspect_ratio_presets() {
     let px_w = (norm.width() * 1920.0).round();
     let px_h = (norm.height() * 1080.0).round();
     assert_eq!(px_h, 1080.0);
-    assert_eq!((px_w / px_h - 9.0 / 16.0).abs() < 0.01, true);
+    assert!((px_w / px_h - 9.0 / 16.0).abs() < 0.01);
 }
 
 #[test]

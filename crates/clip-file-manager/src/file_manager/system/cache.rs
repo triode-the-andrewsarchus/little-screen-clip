@@ -93,10 +93,10 @@ fn compose(mut interface: Document, observation: &Document) -> Arc<Document> {
         .telemetry
         .as_ref()
         .and_then(|data| super::telemetry::assemble(&interface, data.kind, &data.root));
-    if interface.interface_directory {
-        if let Some(data) = &interface.telemetry {
-            interface.title = data.role.clone();
-        }
+    if interface.interface_directory
+        && let Some(data) = &interface.telemetry
+    {
+        interface.title = data.role.clone();
     }
     interface.cpu = observation.cpu.clone();
     interface.numa = observation.numa.clone();
@@ -107,10 +107,9 @@ fn compose(mut interface: Document, observation: &Document) -> Arc<Document> {
                 filesystem: little_clip_core::kernel_interface::Filesystem::Sysfs
             }
         )
+        && let Some(cpu) = &interface.cpu
     {
-        if let Some(cpu) = &interface.cpu {
-            interface.title = cpu.role.clone();
-        }
+        interface.title = cpu.role.clone();
     }
     if let Some(storage) = &interface.storage {
         interface.title = format!("{} · {}", storage.class, storage.name);

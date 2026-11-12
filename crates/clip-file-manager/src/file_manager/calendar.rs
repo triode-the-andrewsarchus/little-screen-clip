@@ -243,10 +243,10 @@ impl Viewer {
                     true,
                     WorkbenchColors::from_palette(palette),
                 );
-                if response.clicked() {
-                    if let Some(index) = hovered {
-                        self.selected = index;
-                    }
+                if response.clicked()
+                    && let Some(index) = hovered
+                {
+                    self.selected = index;
                 }
             });
     }

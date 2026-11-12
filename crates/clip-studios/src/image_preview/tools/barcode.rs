@@ -31,7 +31,6 @@ impl ImagePreviewState {
         {
             // Unit tests exercise the UI model without recursively launching libtest.
             self.run_barcode_scan_in_process_for_test();
-            return;
         }
         #[cfg(not(test))]
         match std::env::current_exe() {

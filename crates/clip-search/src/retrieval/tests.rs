@@ -1088,7 +1088,7 @@ fn changed_exclusions_filter_cached_rows_before_candidate_caps() {
     let mut fixture = Fixture::new();
     for number in 0..501 {
         fixture.add(
-            &format!("ignore/entry_{number}.txt"),
+            format!("ignore/entry_{number}.txt"),
             "old cache",
             Some(1.0),
             2,
@@ -1337,7 +1337,7 @@ fn hard_link_visibility_comes_from_each_path_not_shared_object_metadata() {
 fn hard_filters_run_before_each_component_limit() {
     let mut fixture = Fixture::new();
     for i in 0..=LIMIT {
-        fixture.add(&format!("tiny{i}.txt"), "needle", Some(1.0), 1);
+        fixture.add(format!("tiny{i}.txt"), "needle", Some(1.0), 1);
     }
     fixture.add("large.txt", &"needle ".repeat(200), Some(0.4), 1);
     assert_eq!(

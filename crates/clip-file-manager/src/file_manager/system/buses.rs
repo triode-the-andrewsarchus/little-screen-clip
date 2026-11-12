@@ -140,16 +140,14 @@ mod summary_tests {
     }
 }
 pub(super) fn access_node(document: &mut Document, path: &Path, label: &str) {
-    if let Ok(device) = udev::Device::from_syspath(path) {
-        if let Some(node) = device.devnode() {
-            if !document
-                .relations
-                .iter()
-                .any(|relation| relation.target == node)
-            {
-                document.relations.push(Relation::new(label, node.into()));
-            }
-        }
+    if let Ok(device) = udev::Device::from_syspath(path)
+        && let Some(node) = device.devnode()
+        && !document
+            .relations
+            .iter()
+            .any(|relation| relation.target == node)
+    {
+        document.relations.push(Relation::new(label, node.into()));
     }
 }
 /// Bounded udev database text with provenance shared by bus and storage collectors.
@@ -292,12 +290,11 @@ pub(super) fn link_relations(document: &mut Document, root: &Path, names: &[&str
     for name in names {
         if std::fs::symlink_metadata(root.join(name))
             .is_ok_and(|metadata| metadata.file_type().is_symlink())
+            && let Ok(target) = root.join(name).canonicalize()
         {
-            if let Ok(target) = root.join(name).canonicalize() {
-                document
-                    .relations
-                    .push(Relation::new(format!("{prefix} {name}"), target));
-            }
+            document
+                .relations
+                .push(Relation::new(format!("{prefix} {name}"), target));
         }
     }
 }

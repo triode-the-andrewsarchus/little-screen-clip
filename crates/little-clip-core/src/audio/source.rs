@@ -345,7 +345,7 @@ fn prepare(file: &File, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
 }
 fn pcm_wav(mut pcm: Vec<u8>, rate: u32, channels: u16) -> Result<Vec<u8>, String> {
     let align = channels * 4;
-    if pcm.is_empty() || pcm.len() % (align as usize) != 0 || pcm.len() > MAX_PCM {
+    if pcm.is_empty() || !pcm.len().is_multiple_of(align as usize) || pcm.len() > MAX_PCM {
         return Err("Invalid or oversized float PCM output".into());
     }
     let length = pcm.len() as u32;

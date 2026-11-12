@@ -170,7 +170,7 @@ impl DiffViewerState {
         } else {
             let lines_count = self.result.raw_ansi.lines().count();
             let mut s = StudioShell::new("Diff Comparison", Icon::Diff, palette, close_requested)
-                .with_badge(format!("{}", self.result.engine_name), Some(accent))
+                .with_badge(self.result.engine_name.to_string(), Some(accent))
                 .with_escape_hatch(hatch)
                 .with_footer_hints("Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Diff");
 

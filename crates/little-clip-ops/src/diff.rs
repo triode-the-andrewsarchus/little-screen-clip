@@ -287,27 +287,26 @@ pub fn resolve_diff_target_from_path(p: &Path) -> Option<DiffTarget> {
         return None;
     }
 
-    if is_image_path(p) {
-        if let Ok(bytes) =
+    if is_image_path(p)
+        && let Ok(bytes) =
             little_clip_core::kernel_interface::read_content_bounded(p, MAX_DIFF_FILE_BYTES)
-        {
-            let mime = guess_image_mime(p);
-            let (width, height) =
-                little_clip_core::item::read_image_dimensions_with_mime(&bytes, Some(&mime))
-                    .unwrap_or((0, 0));
-            let label = p
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Image".to_string());
-            return Some(DiffTarget::Image {
-                label,
-                path: Some(p.to_path_buf()),
-                bytes,
-                width,
-                height,
-                mime,
-            });
-        }
+    {
+        let mime = guess_image_mime(p);
+        let (width, height) =
+            little_clip_core::item::read_image_dimensions_with_mime(&bytes, Some(&mime))
+                .unwrap_or((0, 0));
+        let label = p
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Image".to_string());
+        return Some(DiffTarget::Image {
+            label,
+            path: Some(p.to_path_buf()),
+            bytes,
+            width,
+            height,
+            mime,
+        });
     }
 
     if let Ok(content) =
@@ -423,10 +422,10 @@ pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
         ClipPayload::Text(s) | ClipPayload::Markdown(s) => {
             let trimmed = s.trim();
             let path_candidate = Path::new(trimmed);
-            if path_candidate.is_file() {
-                if let Some(target) = resolve_diff_target_from_path(path_candidate) {
-                    return Some(target);
-                }
+            if path_candidate.is_file()
+                && let Some(target) = resolve_diff_target_from_path(path_candidate)
+            {
+                return Some(target);
             }
 
             let ext_hint = guess_extension_from_content(s).map(|e| e.to_string());

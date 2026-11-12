@@ -210,16 +210,16 @@ impl<'a> ScreenMirrorWidget<'a> {
             *self.dragging_slot = hovered_slot;
         }
 
-        if response.dragged() {
-            if let Some(source) = *self.dragging_slot {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("slot_drag_tip"), |ui| {
-                    ui.label(format!(
-                        "Dragging {} (drop on another slot to swap)",
-                        source.label()
-                    ));
-                });
-            }
+        if response.dragged()
+            && let Some(source) = *self.dragging_slot
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("slot_drag_tip"), |ui| {
+                ui.label(format!(
+                    "Dragging {} (drop on another slot to swap)",
+                    source.label()
+                ));
+            });
         }
 
         if response.drag_stopped() {

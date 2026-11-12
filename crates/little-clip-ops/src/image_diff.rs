@@ -193,7 +193,7 @@ pub fn compare_rgba_images(
             .min(height as usize)
             .max(1);
 
-        let rows_per_thread = (height as usize + num_threads - 1) / num_threads;
+        let rows_per_thread = (height as usize).div_ceil(num_threads);
 
         let diff_count = std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(num_threads);
@@ -205,11 +205,7 @@ pub fn compare_rgba_images(
                 .chunks_mut(rows_per_thread * width as usize * 4)
                 .collect();
 
-            for (i, (m_chunk, o_chunk)) in mask_chunks
-                .into_iter()
-                .zip(overlay_chunks.into_iter())
-                .enumerate()
-            {
+            for (i, (m_chunk, o_chunk)) in mask_chunks.into_iter().zip(overlay_chunks).enumerate() {
                 let start_row = i * rows_per_thread;
                 let start_byte = start_row * width as usize * 4;
                 let len = m_chunk.len();
@@ -258,7 +254,7 @@ pub fn compare_rgba_images(
             .min(height as usize)
             .max(1);
 
-        let rows_per_thread = (height as usize + num_threads - 1) / num_threads;
+        let rows_per_thread = (height as usize).div_ceil(num_threads);
 
         let diff_count = std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(num_threads);
@@ -395,9 +391,9 @@ fn is_pixel_different_fast(b: &[u8], c: &[u8], threshold_sq: f32) -> bool {
         let dg = (b[1] as f32 - c[1] as f32) * (1.0 / 255.0);
         let db = (b[2] as f32 - c[2] as f32) * (1.0 / 255.0);
 
-        let dy = 0.29889531 * dr + 0.58662247 * dg + 0.11448223 * db;
-        let di = 0.59597799 * dr - 0.27417610 * dg - 0.32180189 * db;
-        let dq = 0.21147017 * dr - 0.52261711 * dg + 0.31114694 * db;
+        let dy = 0.298_895_3 * dr + 0.586_622_5 * dg + 0.11448223 * db;
+        let di = 0.59597799 * dr - 0.274_176_1 * dg - 0.321_801_9 * db;
+        let dq = 0.21147017 * dr - 0.522_617_1 * dg + 0.31114694 * db;
 
         let delta = 0.5053 * (dy * dy) + 0.299 * (di * di) + 0.1957 * (dq * dq);
         return delta > threshold_sq;
@@ -419,13 +415,13 @@ fn is_pixel_different_fast(b: &[u8], c: &[u8], threshold_sq: f32) -> bool {
     let g2 = ((c[1] as f32 / 255.0) * a2) + (1.0 - a2);
     let b2_c = ((c[2] as f32 / 255.0) * a2) + (1.0 - a2);
 
-    let y1 = 0.29889531 * r1 + 0.58662247 * g1 + 0.11448223 * b1_c;
-    let i1 = 0.59597799 * r1 - 0.27417610 * g1 - 0.32180189 * b1_c;
-    let q1 = 0.21147017 * r1 - 0.52261711 * g1 + 0.31114694 * b1_c;
+    let y1 = 0.298_895_3 * r1 + 0.586_622_5 * g1 + 0.11448223 * b1_c;
+    let i1 = 0.59597799 * r1 - 0.274_176_1 * g1 - 0.321_801_9 * b1_c;
+    let q1 = 0.21147017 * r1 - 0.522_617_1 * g1 + 0.31114694 * b1_c;
 
-    let y2 = 0.29889531 * r2 + 0.58662247 * g2 + 0.11448223 * b2_c;
-    let i2 = 0.59597799 * r2 - 0.27417610 * g2 - 0.32180189 * b2_c;
-    let q2 = 0.21147017 * r2 - 0.52261711 * g2 + 0.31114694 * b2_c;
+    let y2 = 0.298_895_3 * r2 + 0.586_622_5 * g2 + 0.11448223 * b2_c;
+    let i2 = 0.59597799 * r2 - 0.274_176_1 * g2 - 0.321_801_9 * b2_c;
+    let q2 = 0.21147017 * r2 - 0.522_617_1 * g2 + 0.31114694 * b2_c;
 
     let dy = y1 - y2;
     let di = i1 - i2;

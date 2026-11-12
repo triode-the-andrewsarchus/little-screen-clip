@@ -147,12 +147,11 @@ impl Viewer {
             let hit = paint_map(
                 ui, rect, &self.document, Some(self.selected), self.zoom, self.pan, colors,
             );
-            if response.clicked() {
-                if let Some(hit) = hit {
+            if response.clicked()
+                && let Some(hit) = hit {
                     self.selected = hit.feature;
                     self.current = Some(hit);
                 }
-            }
             if let Some(sample) = self.current.and_then(|hit| self.sample(hit)) {
                 let point = project(rect, self.document.bounds, sample.xy, self.zoom, self.pan);
                 if rect.contains(point) {
@@ -325,21 +324,20 @@ fn paint_map(
                     painter.circle_filled(*position, 4.0, color);
                 }
             }
-            if let Some(pointer) = pointer {
-                if let Some((point, distance)) = nearest_on_path(
+            if let Some(pointer) = pointer
+                && let Some((point, distance)) = nearest_on_path(
                     &positions,
                     pointer,
                     matches!(feature.kind, Kind::Line | Kind::Polygon),
-                ) {
-                    if distance < nearest {
-                        nearest = distance;
-                        hit = Some(Hit {
-                            feature: index,
-                            path: path_index,
-                            point,
-                        });
-                    }
-                }
+                )
+                && distance < nearest
+            {
+                nearest = distance;
+                hit = Some(Hit {
+                    feature: index,
+                    path: path_index,
+                    point,
+                });
             }
         }
     }

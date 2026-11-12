@@ -167,8 +167,8 @@ impl ConstellationState {
                 point.position = *position;
             }
         }
-        if let Some(path) = self.pending_map_reveal.take() {
-            if let Some(point) = points.iter().find(|point| {
+        if let Some(path) = self.pending_map_reveal.take()
+            && let Some(point) = points.iter().find(|point| {
                 self.samples[point.index].file_path == path
                     || point.collapsed_set.is_some_and(|set| {
                         self.sample_sets.sets[set]
@@ -176,9 +176,9 @@ impl ConstellationState {
                             .iter()
                             .any(|index| self.samples[*index].file_path == path)
                     })
-            }) {
-                self.pan = visible.center() - viewport.center() - point.position.to_vec2();
-            }
+            })
+        {
+            self.pan = visible.center() - viewport.center() - point.position.to_vec2();
         }
         let center = viewport.center() + self.pan;
         if self.pitch_height_enabled {

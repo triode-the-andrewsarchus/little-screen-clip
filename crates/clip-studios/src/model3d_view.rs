@@ -260,26 +260,26 @@ impl Model3dViewerState {
     }
 
     fn poll_loader(&mut self) {
-        if let Some(ref rx) = self.rx {
-            if let Ok(res) = rx.try_recv() {
-                match res {
-                    Ok(Ok(m)) => {
-                        self.up_axis = if m.format == ModelFormat::Stl {
-                            UpAxis::ZUp
-                        } else {
-                            UpAxis::YUp
-                        };
-                        self.mesh = Some(m);
-                        self.status = ModelLoadingStatus::Ready;
-                    }
-                    Ok(Err(e)) => {
-                        self.status = ModelLoadingStatus::Error(e);
-                    }
-                    Err(error) => self.status = ModelLoadingStatus::Error(error.to_string()),
+        if let Some(ref rx) = self.rx
+            && let Ok(res) = rx.try_recv()
+        {
+            match res {
+                Ok(Ok(m)) => {
+                    self.up_axis = if m.format == ModelFormat::Stl {
+                        UpAxis::ZUp
+                    } else {
+                        UpAxis::YUp
+                    };
+                    self.mesh = Some(m);
+                    self.status = ModelLoadingStatus::Ready;
                 }
-                self.rx = None;
-                self.load_ticket = None;
+                Ok(Err(e)) => {
+                    self.status = ModelLoadingStatus::Error(e);
+                }
+                Err(error) => self.status = ModelLoadingStatus::Error(error.to_string()),
             }
+            self.rx = None;
+            self.load_ticket = None;
         }
     }
 
@@ -380,16 +380,16 @@ impl Model3dViewerState {
                     .with_footer_hints("Press Esc to close");
 
                 let clicked_hatch = shell.render_header(ui, |_ui| {});
-                if let Some(0) = clicked_hatch {
-                    if let Some(ref p) = self.path {
-                        EscapeHatchLauncher::launch(
-                            "3D Model Viewer",
-                            "blender",
-                            p,
-                            &mut self.status_toast,
-                            now,
-                        );
-                    }
+                if let Some(0) = clicked_hatch
+                    && let Some(ref p) = self.path
+                {
+                    EscapeHatchLauncher::launch(
+                        "3D Model Viewer",
+                        "blender",
+                        p,
+                        &mut self.status_toast,
+                        now,
+                    );
                 }
 
                 ui.add_space(20.0);

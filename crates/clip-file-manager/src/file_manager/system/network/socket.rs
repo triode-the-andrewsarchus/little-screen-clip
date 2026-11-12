@@ -54,7 +54,8 @@ impl Query {
         let packets = self.receive(sequence, false)?;
         let mut links = packets
             .iter()
-            .filter_map(|(kind, payload)| (*kind == 16).then(|| codec::link(payload)))
+            .filter(|&(kind, _payload)| *kind == 16)
+            .map(|(_kind, payload)| codec::link(payload))
             .collect::<io::Result<Vec<_>>>()?;
         if links.len() != 1 || links[0].index != index {
             return Err(codec::malformed());
@@ -66,12 +67,11 @@ impl Query {
         let packets = self.receive(sequence, true)?;
         let mut addresses = Vec::new();
         for (kind, payload) in packets {
-            if kind == 20 {
-                if let Some(address) = codec::address(&payload)? {
-                    if address.index == index {
-                        addresses.push(address);
-                    }
-                }
+            if kind == 20
+                && let Some(address) = codec::address(&payload)?
+                && address.index == index
+            {
+                addresses.push(address);
             }
         }
         Ok(addresses)

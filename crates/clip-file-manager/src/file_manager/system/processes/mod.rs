@@ -217,10 +217,10 @@ fn device_targets(document: &Document) -> Vec<Device> {
         devices.push(device);
     } else {
         for relation in document.relations.iter().take(64) {
-            if let Some(device) = device(&relation.target) {
-                if !devices.contains(&device) {
-                    devices.push(device);
-                }
+            if let Some(device) = device(&relation.target)
+                && !devices.contains(&device)
+            {
+                devices.push(device);
             }
         }
     }

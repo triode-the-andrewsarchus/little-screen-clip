@@ -192,12 +192,11 @@ impl Music {
                     self.offset = prepared.offset;
                     if let Some(player) = output(prepared.audio) {
                         player.pause();
-                        if let Some(time) = self.seek_pending.take() {
-                            if let Err(error) = player
+                        if let Some(time) = self.seek_pending.take()
+                            && let Err(error) = player
                                 .try_seek(Duration::from_secs_f32(time.clamp(0.0, self.duration)))
-                            {
-                                self.error = Some(error.to_string());
-                            }
+                        {
+                            self.error = Some(error.to_string());
                         }
                         player.play();
                         self.player = Some(player);

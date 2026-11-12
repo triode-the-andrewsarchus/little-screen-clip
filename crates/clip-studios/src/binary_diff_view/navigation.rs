@@ -93,15 +93,15 @@ impl BinaryDiffViewState {
         );
 
         // Click / Drag to jump
-        if response.clicked() || response.dragged() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                let rel_y = (pos.y - rect.top()).clamp(0.0, rect.height());
-                let frac = rel_y / rect.height();
-                let target_row =
-                    ((frac * total_rows as f32) as usize).min(total_rows.saturating_sub(1));
-                self.nav.scroll_target_row = Some(target_row);
-                ui.ctx().request_repaint();
-            }
+        if (response.clicked() || response.dragged())
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let rel_y = (pos.y - rect.top()).clamp(0.0, rect.height());
+            let frac = rel_y / rect.height();
+            let target_row =
+                ((frac * total_rows as f32) as usize).min(total_rows.saturating_sub(1));
+            self.nav.scroll_target_row = Some(target_row);
+            ui.ctx().request_repaint();
         }
 
         // Tooltip on hover
@@ -403,12 +403,13 @@ impl BinaryDiffViewState {
     }
 
     pub(super) fn render_footer_inspection(&self, ui: &mut egui::Ui, palette: &AppPalette) {
-        if let (Some(res), Some((row_idx, col_idx))) = (&self.result, self.hovered_cell) {
-            if let Some(row) = res.rows.get(row_idx) {
-                let l_cell = row.left_cells.get(col_idx);
-                let r_cell = row.right_cells.get(col_idx);
+        if let (Some(res), Some((row_idx, col_idx))) = (&self.result, self.hovered_cell)
+            && let Some(row) = res.rows.get(row_idx)
+        {
+            let l_cell = row.left_cells.get(col_idx);
+            let r_cell = row.right_cells.get(col_idx);
 
-                egui::Frame::none()
+            egui::Frame::none()
                     .fill(hex_to_c32(&palette.colors.surface_recessed))
                     .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)))
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0))
@@ -492,7 +493,6 @@ impl BinaryDiffViewState {
                             }
                         });
                     });
-            }
         }
     }
 }

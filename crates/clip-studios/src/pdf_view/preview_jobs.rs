@@ -133,10 +133,10 @@ impl PdfEditorState {
             loop {
                 match rx.try_recv() {
                     Ok(message) => {
-                        if let Some(job) = &mut self.decode_job {
-                            if job.raster.page_num() == message.page_num {
-                                job.cancel();
-                            }
+                        if let Some(job) = &mut self.decode_job
+                            && job.raster.page_num() == message.page_num
+                        {
+                            job.cancel();
                         }
                         if let Some(page) = self.pages.get_mut(message.page_num.saturating_sub(1)) {
                             match message.result {

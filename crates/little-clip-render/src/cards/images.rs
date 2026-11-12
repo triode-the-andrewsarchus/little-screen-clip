@@ -63,8 +63,7 @@ impl ScreenRenderer {
             }
         } else {
             // Sleek placeholder while generating preview async
-            if let Some(card_r) = Rect::from_xywh(rx + 16.0, target_top, box_w as f32, box_h as f32)
-            {
+            if let Some(card_r) = Rect::from_xywh(rx + 16.0, target_top, box_w, box_h) {
                 let mut p = Paint::default();
                 p.set_color(self.color_from_hex(&self.palette.colors.surface_recessed));
                 pixmap.fill_rect(card_r, &p, Transform::identity(), None);
@@ -95,7 +94,7 @@ impl ScreenRenderer {
                 pixmap,
                 &format!("{}×{}", width, height),
                 rx + 14.0,
-                target_top + box_h as f32 + 10.0,
+                target_top + box_h + 10.0,
                 18.0,
                 self.color_from_hex(&self.palette.colors.text_secondary),
                 false,
@@ -207,23 +206,21 @@ impl ScreenRenderer {
             }
 
             // Draw scaled thumbnail centered in cell
-            if let Some(thumb) = thumbnails.get(i) {
-                if let Some(pixmap_ref) =
+            if let Some(thumb) = thumbnails.get(i)
+                && let Some(pixmap_ref) =
                     PixmapRef::from_bytes(&thumb.premultiplied_rgba, thumb.width, thumb.height)
-                {
-                    let scale = ((cw - 4.0) / thumb.width as f32)
-                        .min((ch - 4.0) / thumb.height as f32)
-                        .min(1.0);
-                    let dw = thumb.width as f32 * scale;
-                    let dh = thumb.height as f32 * scale;
+            {
+                let scale = ((cw - 4.0) / thumb.width as f32)
+                    .min((ch - 4.0) / thumb.height as f32)
+                    .min(1.0);
+                let dw = thumb.width as f32 * scale;
+                let dh = thumb.height as f32 * scale;
 
-                    let img_x = cx + (cw - dw) / 2.0;
-                    let img_y = cy + (ch - dh) / 2.0;
+                let img_x = cx + (cw - dw) / 2.0;
+                let img_y = cy + (ch - dh) / 2.0;
 
-                    let transform =
-                        Transform::from_scale(scale, scale).post_translate(img_x, img_y);
-                    pixmap.draw_pixmap(0, 0, pixmap_ref, &PixmapPaint::default(), transform, None);
-                }
+                let transform = Transform::from_scale(scale, scale).post_translate(img_x, img_y);
+                pixmap.draw_pixmap(0, 0, pixmap_ref, &PixmapPaint::default(), transform, None);
             }
 
             // Subtle index number badge in top-left of each cell (e.g. "#1", "#2", "#11", "#12")
@@ -324,92 +321,91 @@ impl ScreenRenderer {
                 .unwrap_or(0);
 
             let frame_idx = thumb.get_frame_index_at_time(now_ms);
-            if let Some(jpeg_bytes) = thumb.frames_jpeg.get(frame_idx) {
-                if let Ok(dyn_img) =
+            if let Some(jpeg_bytes) = thumb.frames_jpeg.get(frame_idx)
+                && let Ok(dyn_img) =
                     image::load_from_memory_with_format(jpeg_bytes, image::ImageFormat::Jpeg)
-                {
-                    let rgba = dyn_img.to_rgba8();
-                    let (fw, fh) = (rgba.width(), rgba.height());
+            {
+                let rgba = dyn_img.to_rgba8();
+                let (fw, fh) = (rgba.width(), rgba.height());
 
-                    let mut premultiplied = Vec::with_capacity(rgba.len());
-                    for p in rgba.chunks_exact(4) {
-                        let a = p[3] as u32;
-                        let r = ((p[0] as u32 * a) / 255) as u8;
-                        let g = ((p[1] as u32 * a) / 255) as u8;
-                        let b = ((p[2] as u32 * a) / 255) as u8;
-                        premultiplied.extend_from_slice(&[r, g, b, p[3]]);
-                    }
+                let mut premultiplied = Vec::with_capacity(rgba.len());
+                for p in rgba.as_chunks::<4>().0 {
+                    let a = p[3] as u32;
+                    let r = ((p[0] as u32 * a) / 255) as u8;
+                    let g = ((p[1] as u32 * a) / 255) as u8;
+                    let b = ((p[2] as u32 * a) / 255) as u8;
+                    premultiplied.extend_from_slice(&[r, g, b, p[3]]);
+                }
 
-                    if let Some(pixmap_ref) = PixmapRef::from_bytes(&premultiplied, fw, fh) {
-                        let center_x = rx + 14.0 + ((rw - 28.0) - fw as f32) / 2.0;
-                        let center_y = target_top + (box_h as f32 - fh as f32) / 2.0;
+                if let Some(pixmap_ref) = PixmapRef::from_bytes(&premultiplied, fw, fh) {
+                    let center_x = rx + 14.0 + ((rw - 28.0) - fw as f32) / 2.0;
+                    let center_y = target_top + (box_h as f32 - fh as f32) / 2.0;
 
-                        // Checkerboard backdrop for animated frame (supports transparent GIF/APNG)
-                        self.draw_checkerboard_pattern(
-                            pixmap,
-                            center_x - 2.0,
-                            center_y - 2.0,
-                            fw as f32 + 4.0,
-                            fh as f32 + 4.0,
-                            6.0,
-                        );
+                    // Checkerboard backdrop for animated frame (supports transparent GIF/APNG)
+                    self.draw_checkerboard_pattern(
+                        pixmap,
+                        center_x - 2.0,
+                        center_y - 2.0,
+                        fw as f32 + 4.0,
+                        fh as f32 + 4.0,
+                        6.0,
+                    );
 
+                    pixmap.draw_pixmap(
+                        center_x as i32,
+                        center_y as i32,
+                        pixmap_ref,
+                        &PixmapPaint::default(),
+                        Transform::identity(),
+                        None,
+                    );
+
+                    // Looping badge in top-left of box
+                    let badge = format!("{} [{}/{}]", format, frame_idx + 1, thumb.frame_count);
+                    let badge_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
+                    let badge_fg = self.contrast_color(
+                        badge_bg,
+                        Some(self.color_from_hex(&self.palette.harmonies.warm_attention)),
+                    );
+                    self.draw_pill_badge(
+                        pixmap,
+                        &badge,
+                        rx + 36.0,
+                        target_top + 18.0,
+                        14.0,
+                        badge_fg,
+                        badge_bg,
+                        clip_right,
+                    );
+                    if let Some(icon) = PLAY_ICON.as_ref() {
+                        if let Some(background) =
+                            Rect::from_xywh(rx + 18.0, target_top + 18.0, 18.0, 22.0)
+                        {
+                            let mut paint = Paint::default();
+                            paint.set_color(badge_bg);
+                            pixmap.fill_rect(background, &paint, Transform::identity(), None);
+                        }
+                        let mut tinted = icon.clone();
+                        let tint = badge_fg.to_color_u8();
+                        for pixel in tinted.pixels_mut() {
+                            let alpha = pixel.alpha();
+                            if let Some(color) = tiny_skia::PremultipliedColorU8::from_rgba(
+                                (u16::from(tint.red()) * u16::from(alpha) / 255) as u8,
+                                (u16::from(tint.green()) * u16::from(alpha) / 255) as u8,
+                                (u16::from(tint.blue()) * u16::from(alpha) / 255) as u8,
+                                alpha,
+                            ) {
+                                *pixel = color;
+                            }
+                        }
                         pixmap.draw_pixmap(
-                            center_x as i32,
-                            center_y as i32,
-                            pixmap_ref,
+                            (rx + 20.0) as i32,
+                            (target_top + 22.0) as i32,
+                            tinted.as_ref(),
                             &PixmapPaint::default(),
                             Transform::identity(),
                             None,
                         );
-
-                        // Looping badge in top-left of box
-                        let badge = format!("{} [{}/{}]", format, frame_idx + 1, thumb.frame_count);
-                        let badge_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
-                        let badge_fg = self.contrast_color(
-                            badge_bg,
-                            Some(self.color_from_hex(&self.palette.harmonies.warm_attention)),
-                        );
-                        self.draw_pill_badge(
-                            pixmap,
-                            &badge,
-                            rx + 36.0,
-                            target_top + 18.0,
-                            14.0,
-                            badge_fg,
-                            badge_bg,
-                            clip_right,
-                        );
-                        if let Some(icon) = PLAY_ICON.as_ref() {
-                            if let Some(background) =
-                                Rect::from_xywh(rx + 18.0, target_top + 18.0, 18.0, 22.0)
-                            {
-                                let mut paint = Paint::default();
-                                paint.set_color(badge_bg);
-                                pixmap.fill_rect(background, &paint, Transform::identity(), None);
-                            }
-                            let mut tinted = icon.clone();
-                            let tint = badge_fg.to_color_u8();
-                            for pixel in tinted.pixels_mut() {
-                                let alpha = pixel.alpha();
-                                if let Some(color) = tiny_skia::PremultipliedColorU8::from_rgba(
-                                    (u16::from(tint.red()) * u16::from(alpha) / 255) as u8,
-                                    (u16::from(tint.green()) * u16::from(alpha) / 255) as u8,
-                                    (u16::from(tint.blue()) * u16::from(alpha) / 255) as u8,
-                                    alpha,
-                                ) {
-                                    *pixel = color;
-                                }
-                            }
-                            pixmap.draw_pixmap(
-                                (rx + 20.0) as i32,
-                                (target_top + 22.0) as i32,
-                                tinted.as_ref(),
-                                &PixmapPaint::default(),
-                                Transform::identity(),
-                                None,
-                            );
-                        }
                     }
                 }
             }

@@ -8,7 +8,7 @@ use std::{
 /// Recovers straight RGBA pixels from the existing premultiplied thumbnail.
 pub fn straight_pixels(thumbnail: &crate::ImageThumbnail) -> Option<image::RgbaImage> {
     let mut pixels = thumbnail.premultiplied_rgba.clone();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let alpha = u32::from(pixel[3]);
         if alpha > 0 {
             for channel in &mut pixel[..3] {

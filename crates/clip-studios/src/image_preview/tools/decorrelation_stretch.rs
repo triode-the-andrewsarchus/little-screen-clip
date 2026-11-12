@@ -956,19 +956,19 @@ impl ImagePreviewState {
         palette: &AppPalette,
     ) {
         // Ensure stretched texture is loaded
-        if self.dcs_state.dirty_texture || self.dcs_state.stretched_texture.is_none() {
-            if let Some(ref dcs_rgba) = self.dcs_state.stretched_rgba {
-                let color_img = egui::ColorImage::from_rgba_unmultiplied(
-                    [dcs_rgba.width() as usize, dcs_rgba.height() as usize],
-                    dcs_rgba.as_raw(),
-                );
-                self.dcs_state.stretched_texture = Some(ctx.load_texture(
-                    "decorrelation_stretch_preview_tex",
-                    color_img,
-                    image_texture_options(dcs_rgba),
-                ));
-                self.dcs_state.dirty_texture = false;
-            }
+        if (self.dcs_state.dirty_texture || self.dcs_state.stretched_texture.is_none())
+            && let Some(ref dcs_rgba) = self.dcs_state.stretched_rgba
+        {
+            let color_img = egui::ColorImage::from_rgba_unmultiplied(
+                [dcs_rgba.width() as usize, dcs_rgba.height() as usize],
+                dcs_rgba.as_raw(),
+            );
+            self.dcs_state.stretched_texture = Some(ctx.load_texture(
+                "decorrelation_stretch_preview_tex",
+                color_img,
+                image_texture_options(dcs_rgba),
+            ));
+            self.dcs_state.dirty_texture = false;
         }
 
         let base_c = hex_to_c32(&palette.harmonies.base);
@@ -1063,11 +1063,11 @@ impl ImagePreviewState {
         }
 
         if self.dcs_state.is_dragging_split {
-            if response.dragged() {
-                if let Some(pos) = ptr_pos {
-                    let new_split = ((pos.x - img_rect.min.x) / img_rect.width()).clamp(0.01, 0.99);
-                    self.dcs_state.comparison_split = new_split;
-                }
+            if response.dragged()
+                && let Some(pos) = ptr_pos
+            {
+                let new_split = ((pos.x - img_rect.min.x) / img_rect.width()).clamp(0.01, 0.99);
+                self.dcs_state.comparison_split = new_split;
             }
             if response.drag_stopped() {
                 self.dcs_state.is_dragging_split = false;

@@ -141,7 +141,7 @@ pub(super) fn apply_cmyk_halftone_cancellable(
         let dist = ((u - cu) * (u - cu) + (v - cv) * (v - cv)).sqrt();
 
         let effective_ink = (ink * dot_gain).min(1.4);
-        let max_r = 0.5 * dot_size * 1.4142;
+        let max_r = 0.5 * dot_size * std::f32::consts::SQRT_2;
         let target_r = 0.5 * dot_size * effective_ink.sqrt() * 1.15;
         let clamped_r = target_r.min(max_r);
 

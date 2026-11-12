@@ -85,11 +85,10 @@ impl ImagePreviewState {
 
                         if resp.on_hover_text(*name).clicked() {
                             self.markup_state.active_color = *col;
-                            if let Some(sel) = self.markup_state.selected_idx {
-                                if sel < self.markup_state.items.len() {
+                            if let Some(sel) = self.markup_state.selected_idx
+                                && sel < self.markup_state.items.len() {
                                     self.markup_state.items[sel].set_color(*col);
                                 }
-                            }
                         }
 
                         if (i + 1) % 3 == 0 {
@@ -110,11 +109,10 @@ impl ImagePreviewState {
                 .changed()
                 {
                     self.markup_state.active_color = custom_c;
-                    if let Some(sel) = self.markup_state.selected_idx {
-                        if sel < self.markup_state.items.len() {
+                    if let Some(sel) = self.markup_state.selected_idx
+                        && sel < self.markup_state.items.len() {
                             self.markup_state.items[sel].set_color(custom_c);
                         }
-                    }
                 }
             });
 
@@ -177,10 +175,10 @@ impl ImagePreviewState {
                     palette,
                 ) {
                     self.markup_state.active_stroke_width = stroke_w;
-                    if let Some(sel) = self.markup_state.selected_idx {
-                        if sel < self.markup_state.items.len() {
-                            self.markup_state.items[sel].set_width(stroke_w);
-                        }
+                    if let Some(sel) = self.markup_state.selected_idx
+                        && sel < self.markup_state.items.len()
+                    {
+                        self.markup_state.items[sel].set_width(stroke_w);
                     }
                 }
             });
@@ -199,14 +197,12 @@ impl ImagePreviewState {
                     palette,
                 ) {
                     self.markup_state.active_font_size = font_sz;
-                    if let Some(sel) = self.markup_state.selected_idx {
-                        if sel < self.markup_state.items.len() {
-                            if let MarkupShape::Text { font_size, .. } =
-                                &mut self.markup_state.items[sel]
-                            {
-                                *font_size = font_sz;
-                            }
-                        }
+                    if let Some(sel) = self.markup_state.selected_idx
+                        && sel < self.markup_state.items.len()
+                        && let MarkupShape::Text { font_size, .. } =
+                            &mut self.markup_state.items[sel]
+                    {
+                        *font_size = font_sz;
                     }
                 }
             });
@@ -216,15 +212,15 @@ impl ImagePreviewState {
                 let mut filled = self.markup_state.active_filled;
                 if ui.checkbox(&mut filled, "Fill shapes").changed() {
                     self.markup_state.active_filled = filled;
-                    if let Some(sel) = self.markup_state.selected_idx {
-                        if sel < self.markup_state.items.len() {
-                            match &mut self.markup_state.items[sel] {
-                                MarkupShape::Circle { filled: f, .. }
-                                | MarkupShape::Rectangle { filled: f, .. } => {
-                                    *f = filled;
-                                }
-                                _ => {}
+                    if let Some(sel) = self.markup_state.selected_idx
+                        && sel < self.markup_state.items.len()
+                    {
+                        match &mut self.markup_state.items[sel] {
+                            MarkupShape::Circle { filled: f, .. }
+                            | MarkupShape::Rectangle { filled: f, .. } => {
+                                *f = filled;
                             }
+                            _ => {}
                         }
                     }
                 }
@@ -266,14 +262,12 @@ impl ImagePreviewState {
                     palette,
                 ) {
                     self.markup_state.active_badge_radius = badge_r;
-                    if let Some(sel) = self.markup_state.selected_idx {
-                        if sel < self.markup_state.items.len() {
-                            if let MarkupShape::StepBadge { radius, .. } =
-                                &mut self.markup_state.items[sel]
-                            {
-                                *radius = badge_r;
-                            }
-                        }
+                    if let Some(sel) = self.markup_state.selected_idx
+                        && sel < self.markup_state.items.len()
+                        && let MarkupShape::StepBadge { radius, .. } =
+                            &mut self.markup_state.items[sel]
+                    {
+                        *radius = badge_r;
                     }
                 }
             });
@@ -388,8 +382,8 @@ impl ImagePreviewState {
                                                 {
                                                     to_remove = Some(i);
                                                 }
-                                                if i + 1 < self.markup_state.items.len() {
-                                                    if ui
+                                                if i + 1 < self.markup_state.items.len()
+                                                    && ui
                                                         .add(crate::ui_ext::icon_button(
                                                             Icon::ArrowUp,
                                                             12.0,
@@ -399,12 +393,11 @@ impl ImagePreviewState {
                                                         ))
                                                         .on_hover_text("Bring forward")
                                                         .clicked()
-                                                    {
-                                                        move_up = Some(i);
-                                                    }
+                                                {
+                                                    move_up = Some(i);
                                                 }
-                                                if i > 0 {
-                                                    if ui
+                                                if i > 0
+                                                    && ui
                                                         .add(crate::ui_ext::icon_button(
                                                             Icon::ArrowDown,
                                                             12.0,
@@ -414,9 +407,8 @@ impl ImagePreviewState {
                                                         ))
                                                         .on_hover_text("Send backward")
                                                         .clicked()
-                                                    {
-                                                        move_down = Some(i);
-                                                    }
+                                                {
+                                                    move_down = Some(i);
                                                 }
                                             },
                                         );
@@ -429,10 +421,10 @@ impl ImagePreviewState {
                             self.markup_state.items.remove(idx);
                             if self.markup_state.selected_idx == Some(idx) {
                                 self.markup_state.selected_idx = None;
-                            } else if let Some(sel) = self.markup_state.selected_idx {
-                                if sel > idx {
-                                    self.markup_state.selected_idx = Some(sel - 1);
-                                }
+                            } else if let Some(sel) = self.markup_state.selected_idx
+                                && sel > idx
+                            {
+                                self.markup_state.selected_idx = Some(sel - 1);
                             }
                             self.markup_state.sync_next_badge_number();
                         }

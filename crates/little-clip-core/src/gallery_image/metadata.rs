@@ -198,9 +198,9 @@ fn save_cache(path: &Path, metadata: Metadata) {
         return;
     };
     let _ = std::fs::create_dir_all(parent);
-    if let Ok(mut file) = tempfile::NamedTempFile::new_in(parent) {
-        if serde_json::to_writer(file.as_file_mut(), &metadata).is_ok() {
-            let _ = file.persist(path);
-        }
+    if let Ok(mut file) = tempfile::NamedTempFile::new_in(parent)
+        && serde_json::to_writer(file.as_file_mut(), &metadata).is_ok()
+    {
+        let _ = file.persist(path);
     }
 }

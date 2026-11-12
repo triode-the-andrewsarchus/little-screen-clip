@@ -44,7 +44,7 @@ pub fn ensure_recipes_dir_and_defaults_in(dir: &Path) -> Result<PathBuf, std::io
             .filter(|e| {
                 e.path()
                     .extension()
-                    .map_or(false, |ext| ext == "yaml" || ext == "yml")
+                    .is_some_and(|ext| ext == "yaml" || ext == "yml")
             })
             .count()
             == 0;
@@ -76,13 +76,12 @@ pub fn load_recipes_in_dir(dir: &Path) -> Vec<Recipe> {
             let path = entry.path();
             if path
                 .extension()
-                .map_or(false, |ext| ext == "yaml" || ext == "yml")
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+                && let Ok(content) = fs::read_to_string(&path)
             {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    match serde_yaml::from_str::<Recipe>(&content) {
-                        Ok(recipe) => recipes.push(recipe),
-                        Err(e) => warn!("Failed to parse recipe {}: {}", path.display(), e),
-                    }
+                match serde_yaml::from_str::<Recipe>(&content) {
+                    Ok(recipe) => recipes.push(recipe),
+                    Err(e) => warn!("Failed to parse recipe {}: {}", path.display(), e),
                 }
             }
         }
@@ -128,12 +127,11 @@ pub fn save_recipe_in_dir(recipe: &Recipe, dir: &Path) -> Result<PathBuf, std::i
     let mut counter = 1;
 
     while path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(existing) = serde_yaml::from_str::<Recipe>(&content) {
-                if existing.name == recipe.name {
-                    break;
-                }
-            }
+        if let Ok(content) = fs::read_to_string(&path)
+            && let Ok(existing) = serde_yaml::from_str::<Recipe>(&content)
+            && existing.name == recipe.name
+        {
+            break;
         }
         path = dir.join(format!("{}_{}.yaml", base_slug, counter));
         counter += 1;

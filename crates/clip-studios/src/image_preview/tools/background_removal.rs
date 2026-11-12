@@ -970,10 +970,10 @@ impl ImagePreviewState {
 
         let base_progress = self.bg_removal_progress.unwrap_or(0.0);
 
-        if let Some(ref status) = self.bg_removal_status {
-            if status.contains("Downloading") || status.contains("Connecting to download") {
-                return (base_progress * 0.45).clamp(0.02, 0.45);
-            }
+        if let Some(ref status) = self.bg_removal_status
+            && (status.contains("Downloading") || status.contains("Connecting to download"))
+        {
+            return (base_progress * 0.45).clamp(0.02, 0.45);
         }
 
         let started = match self.bg_removal_started_at {
@@ -1519,7 +1519,7 @@ mod bounded_job_tests {
         state.last_bg_removal_duration_ms = Some(2000);
 
         let p0 = state.effective_bg_removal_progress();
-        assert!(p0 >= 0.05 && p0 <= 0.35);
+        assert!((0.05..=0.35).contains(&p0));
 
         // Advance artificial start time into the future of the calculation
         state.bg_removal_started_at = Some(Instant::now() - Duration::from_secs(1));

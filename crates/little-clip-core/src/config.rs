@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 /// Root application configuration holding all sub-configurations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     /// Display options (rotation, animations, debug badges, elision character).
     #[serde(default)]
@@ -453,7 +453,7 @@ impl WorkbenchAppearance {
 }
 
 /// Workbench application editor settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WorkbenchConfig {
     /// Preferred text editor command (e.g. "code", "subl", "gedit", "kate", "nano", "nvim")
     /// Defaults to None, which falls back to $VISUAL, $EDITOR, or "xdg-open".
@@ -462,15 +462,6 @@ pub struct WorkbenchConfig {
     /// Fixed Light/Dark palette used by both workbench and display.
     #[serde(default)]
     pub appearance: WorkbenchAppearance,
-}
-
-impl Default for WorkbenchConfig {
-    fn default() -> Self {
-        Self {
-            editor: None,
-            appearance: WorkbenchAppearance::default(),
-        }
-    }
 }
 
 impl WorkbenchConfig {
@@ -586,17 +577,13 @@ impl Default for Model3dConfig {
 /// Preferred position for sampling a preview snippet in long audio tracks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AudioSamplePosition {
     /// Sample the snippet centered around the track's midpoint.
+    #[default]
     Middle,
     /// Sample the snippet starting from the track's beginning.
     Start,
-}
-
-impl Default for AudioSamplePosition {
-    fn default() -> Self {
-        AudioSamplePosition::Middle
-    }
 }
 
 /// Audio decoding, rolling capture, and waveform preview configuration.
@@ -702,23 +689,6 @@ impl Default for DisplayConfig {
     }
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            display: DisplayConfig::default(),
-            audio: AudioConfig::default(),
-            workbench: WorkbenchConfig::default(),
-            image: ImageConfig::default(),
-            text: TextConfig::default(),
-            slots: SlotsConfig::default(),
-            auto_actions: AutoActionsConfig::default(),
-            model3d: Model3dConfig::default(),
-            file_manager: FileManagerConfig::default(),
-            ai_models: AiModelsConfig::default(),
-        }
-    }
-}
-
 impl AppConfig {
     /// Loads configuration from either:
     /// 1. Local `./config.toml`
@@ -754,13 +724,13 @@ impl AppConfig {
             } else {
                 // Auto-create default config template
                 let default_cfg = Self::default();
-                if let Some(parent) = user_path.parent() {
-                    if let Err(err) = std::fs::create_dir_all(parent) {
-                        warn!(
-                            "Failed to create directory for configuration template at {}: {err}",
-                            parent.display()
-                        );
-                    }
+                if let Some(parent) = user_path.parent()
+                    && let Err(err) = std::fs::create_dir_all(parent)
+                {
+                    warn!(
+                        "Failed to create directory for configuration template at {}: {err}",
+                        parent.display()
+                    );
                 }
                 match toml::to_string_pretty(&default_cfg) {
                     Ok(toml_str) => match std::fs::write(&user_path, toml_str) {

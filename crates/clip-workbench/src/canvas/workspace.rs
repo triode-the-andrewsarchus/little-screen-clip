@@ -18,16 +18,15 @@ impl NodeCanvasState {
                 self.redo();
             } else if ui
                 .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+                && let Some(sel_id) = self.selected_node
             {
-                if let Some(sel_id) = self.selected_node {
-                    self.snapshot_undo();
-                    self.graph.nodes.retain(|n| n.id != sel_id);
-                    self.graph
-                        .connections
-                        .retain(|c| c.from_node != sel_id && c.to_node != sel_id);
-                    self.selected_node = None;
-                    self.status_message = Some(("Deleted node".to_string(), false));
-                }
+                self.snapshot_undo();
+                self.graph.nodes.retain(|n| n.id != sel_id);
+                self.graph
+                    .connections
+                    .retain(|c| c.from_node != sel_id && c.to_node != sel_id);
+                self.selected_node = None;
+                self.status_message = Some(("Deleted node".to_string(), false));
             }
         }
 
@@ -195,34 +194,34 @@ impl NodeCanvasState {
             let mut min_dist = (32.0 * zoom).clamp(22.0, 48.0);
             if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
                 for (to_node, &to_rect) in &node_screen_rects {
-                    if *to_node != from_node {
-                        if let Some(node) = self.graph.nodes.iter().find(|n| n.id == *to_node) {
-                            let target_pins = if is_out { &node.inputs } else { &node.outputs };
-                            for (p_idx, target_pin) in target_pins.iter().enumerate() {
-                                let pin_pos = get_pin_pos_by_idx(
-                                    to_rect,
-                                    target_pins.len(),
-                                    p_idx,
-                                    !is_out,
-                                    zoom,
-                                );
-                                let dist = mouse_pos.distance(pin_pos);
-                                if dist < min_dist {
-                                    min_dist = dist;
-                                    let is_compat = match from_port_type {
-                                        Some(fpt) => fpt.is_compatible_with(&target_pin.port_type),
-                                        None => true,
-                                    };
-                                    snapped_candidate = Some(SnappedTargetInfo {
-                                        node_id: *to_node,
-                                        node_title: node.title.clone(),
-                                        pin_name: target_pin.name.clone(),
-                                        port_type: target_pin.port_type,
-                                        pin_pos,
-                                        is_compatible: is_compat,
-                                        from_port_type,
-                                    });
-                                }
+                    if *to_node != from_node
+                        && let Some(node) = self.graph.nodes.iter().find(|n| n.id == *to_node)
+                    {
+                        let target_pins = if is_out { &node.inputs } else { &node.outputs };
+                        for (p_idx, target_pin) in target_pins.iter().enumerate() {
+                            let pin_pos = get_pin_pos_by_idx(
+                                to_rect,
+                                target_pins.len(),
+                                p_idx,
+                                !is_out,
+                                zoom,
+                            );
+                            let dist = mouse_pos.distance(pin_pos);
+                            if dist < min_dist {
+                                min_dist = dist;
+                                let is_compat = match from_port_type {
+                                    Some(fpt) => fpt.is_compatible_with(&target_pin.port_type),
+                                    None => true,
+                                };
+                                snapped_candidate = Some(SnappedTargetInfo {
+                                    node_id: *to_node,
+                                    node_title: node.title.clone(),
+                                    pin_name: target_pin.name.clone(),
+                                    port_type: target_pin.port_type,
+                                    pin_pos,
+                                    is_compatible: is_compat,
+                                    from_port_type,
+                                });
                             }
                         }
                     }
@@ -253,25 +252,24 @@ impl NodeCanvasState {
         }
 
         // 6. Handle Pin Drop Connection
-        if ui.input(|i| i.pointer.any_released()) {
-            if let Some((from_node, from_pin, is_out)) = self.dragging_from.take() {
-                if let Some(target) = snapped_candidate {
-                    if is_out {
-                        connection_to_add = Some(Connection {
-                            from_node,
-                            from_pin,
-                            to_node: target.node_id,
-                            to_pin: target.pin_name,
-                        });
-                    } else {
-                        connection_to_add = Some(Connection {
-                            from_node: target.node_id,
-                            from_pin: target.pin_name,
-                            to_node: from_node,
-                            to_pin: from_pin,
-                        });
-                    }
-                }
+        if ui.input(|i| i.pointer.any_released())
+            && let Some((from_node, from_pin, is_out)) = self.dragging_from.take()
+            && let Some(target) = snapped_candidate
+        {
+            if is_out {
+                connection_to_add = Some(Connection {
+                    from_node,
+                    from_pin,
+                    to_node: target.node_id,
+                    to_pin: target.pin_name,
+                });
+            } else {
+                connection_to_add = Some(Connection {
+                    from_node: target.node_id,
+                    from_pin: target.pin_name,
+                    to_node: from_node,
+                    to_pin: from_pin,
+                });
             }
         }
 

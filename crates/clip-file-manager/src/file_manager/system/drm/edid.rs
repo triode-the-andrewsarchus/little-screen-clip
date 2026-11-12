@@ -20,7 +20,7 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<Monitor> {
     };
     if bytes.len() < 128
         || bytes[..8] != [0, 255, 255, 255, 255, 255, 255, 0]
-        || bytes.len() % 128 != 0
+        || !bytes.len().is_multiple_of(128)
     {
         return Err(invalid());
     }

@@ -122,7 +122,7 @@ impl ScreenRenderer {
         let card_clip_right = rect_x + rect_w - 6.0;
         self.draw_text_clipped(
             pixmap,
-            &header_text,
+            header_text,
             rect_x + 14.0,
             rect_y + 14.0,
             font_size,
@@ -431,26 +431,24 @@ impl ScreenRenderer {
             ClipPayload::FileBatch(files) => {
                 if files.len() == 1 {
                     let p = &files[0];
-                    match file {
-                        Some(Preview::Text {
+                    if let Some(Preview::Text {
+                        contents,
+                        extension,
+                    }) = file
+                    {
+                        self.draw_text_preview(
+                            pixmap,
                             contents,
-                            extension,
-                        }) => {
-                            self.draw_text_preview(
-                                pixmap,
-                                contents,
-                                extension.as_deref(),
-                                rx,
-                                ry,
-                                rw,
-                                rh,
-                                is_hero,
-                                elision_color,
-                                false,
-                            );
-                            return;
-                        }
-                        _ => {}
+                            extension.as_deref(),
+                            rx,
+                            ry,
+                            rw,
+                            rh,
+                            is_hero,
+                            elision_color,
+                            false,
+                        );
+                        return;
                     }
                     if self.draw_scene_file_card(pixmap, p, [rx, ry, rw, rh], is_hero) {
                         return;

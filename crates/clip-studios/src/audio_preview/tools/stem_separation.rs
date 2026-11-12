@@ -24,7 +24,7 @@ pub(crate) fn parse_stem_manifest(stdout: &[u8]) -> Result<Vec<(String, PathBuf)
 }
 
 pub(crate) fn stem_is_audible(index: usize, muted: bool, solo_stem: Option<usize>) -> bool {
-    !muted && solo_stem.map_or(true, |solo_index| solo_index == index)
+    !muted && solo_stem.is_none_or(|solo_index| solo_index == index)
 }
 
 pub(crate) fn editor_stem_switch(
@@ -1185,9 +1185,9 @@ printf '{"vocals":"vocals.wav","drums":"drums.wav","bass":"bass.wav","other":"ot
     fn leaving_stem_tab_cancels_worker_process_group() {
         let directory = test_dir("cancel");
         let jobs = BackgroundJobs::new(1, 1);
-        let script = format!(
+        let script =
             "(sleep 1; touch \"$2/descendant-finished\") &\necho $! > \"$2/descendant.pid\"\nwait"
-        );
+                .to_string();
         let mut state = test_state(&directory.join("input.wav"));
         state.active_mode = AudioToolMode::StemSeparation;
         state.start_stem_separation_on(&jobs, fake_worker(&directory, &script));

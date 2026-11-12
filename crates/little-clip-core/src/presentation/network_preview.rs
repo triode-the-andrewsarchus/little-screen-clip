@@ -48,9 +48,9 @@ impl NetworkPreview {
             } => {
                 let mut lines = Vec::new();
                 lines.push(format!("IP: {}", ip));
-                lines.push(format!("{}", rfc_class));
+                lines.push(rfc_class.to_string());
                 if let Some(desc) = description {
-                    lines.push(format!("{}", desc));
+                    lines.push(desc.to_string());
                 }
                 if let Some(ping) = ping_status {
                     lines.push(format!("Ping: {}", ping));
@@ -107,12 +107,11 @@ fn store_ping_result(ip: IpAddr, status: String) {
 pub fn check_bounded_ping(ip: IpAddr) -> Option<String> {
     let now = Instant::now();
     // 1. Check cache (valid for 60s)
-    if let Ok(cache) = PING_CACHE.read() {
-        if let Some((status, ts)) = cache.get(&ip) {
-            if now.duration_since(*ts) < PING_CACHE_TTL {
-                return Some(status.clone());
-            }
-        }
+    if let Ok(cache) = PING_CACHE.read()
+        && let Some((status, ts)) = cache.get(&ip)
+        && now.duration_since(*ts) < PING_CACHE_TTL
+    {
+        return Some(status.clone());
     }
 
     let mut in_flight = PINGS_IN_FLIGHT.lock().ok()?;

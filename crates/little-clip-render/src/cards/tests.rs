@@ -76,7 +76,9 @@ fn text_preview_rasters_have_readable_ink_on_light_and_dark_cards() {
                 // must still provide enough readable ink in the rendered preview.
                 let ink_pixels = raster
                     .data()
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .filter(|pixel| {
                         contrast_ratio((r, g, b), (pixel[0], pixel[1], pixel[2])) >= 4.5
                     })
@@ -141,7 +143,7 @@ fn text_preview_rasters_render_syntax_highlighted_code() {
         // Collect distinct rendered non-background colors in the pixmap.
         // A syntax-highlighted snippet must produce multiple distinct foreground hues.
         let mut distinct_colors = std::collections::HashSet::new();
-        for pixel in pixmap.data().chunks_exact(4) {
+        for pixel in pixmap.data().as_chunks::<4>().0 {
             let color = (pixel[0], pixel[1], pixel[2]);
             if color != (0, 0, 0) {
                 distinct_colors.insert(color);
@@ -224,7 +226,9 @@ fn office_document_file_batch_renders_page_thumbnail_preview() {
 
     let non_black_count = pixmap
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| (p[0], p[1], p[2]) != (0, 0, 0))
         .count();
     assert!(

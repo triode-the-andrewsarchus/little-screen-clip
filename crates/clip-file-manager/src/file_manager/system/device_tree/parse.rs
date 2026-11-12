@@ -32,7 +32,7 @@ pub(super) fn strings(bytes: &[u8]) -> io::Result<Vec<String>> {
 }
 
 pub(super) fn cells(bytes: &[u8]) -> io::Result<Vec<u32>> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(invalid("Device-tree cells are not aligned to four bytes"));
     }
     if bytes.len() > 4096 {

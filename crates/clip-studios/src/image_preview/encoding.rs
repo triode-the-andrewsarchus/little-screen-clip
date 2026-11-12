@@ -90,10 +90,10 @@ unsafe extern "C" fn webp_cancel_progress_hook(
     if let Some(count) = context.callback_count {
         count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    if context.cancel_on_callback {
-        if let Some(cancel) = context.cancel {
-            cancel.store(true, std::sync::atomic::Ordering::Release);
-        }
+    if context.cancel_on_callback
+        && let Some(cancel) = context.cancel
+    {
+        cancel.store(true, std::sync::atomic::Ordering::Release);
     }
     if context
         .cancel

@@ -697,27 +697,26 @@ impl ImagePreviewState {
             }
         }
 
-        if response.dragged() {
-            if let Some(ptr_pos) = response.interact_pointer_pos() {
-                self.crop_state.update_drag(
-                    ptr_pos,
-                    img_rect,
-                    self.current_rgba.width(),
-                    self.current_rgba.height(),
-                );
-            }
+        if response.dragged()
+            && let Some(ptr_pos) = response.interact_pointer_pos()
+        {
+            self.crop_state.update_drag(
+                ptr_pos,
+                img_rect,
+                self.current_rgba.width(),
+                self.current_rgba.height(),
+            );
         }
 
         if response.drag_stopped() {
             self.crop_state.active_drag = None;
         }
 
-        if response.double_clicked() {
-            if let Some(ptr) = response.interact_pointer_pos() {
-                if crop_screen_rect.contains(ptr) {
-                    self.apply_crop();
-                }
-            }
+        if response.double_clicked()
+            && let Some(ptr) = response.interact_pointer_pos()
+            && crop_screen_rect.contains(ptr)
+        {
+            self.apply_crop();
         }
     }
 }

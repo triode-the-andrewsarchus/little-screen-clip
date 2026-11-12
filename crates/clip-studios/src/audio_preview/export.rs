@@ -501,13 +501,13 @@ impl AudioPreviewState {
             if !start_dir.is_empty() && std::path::Path::new(&start_dir).is_dir() {
                 cmd.arg(format!("--filename={}/", start_dir));
             }
-            if let Ok(output) = cmd.output() {
-                if output.status.success() {
-                    let picked = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !picked.is_empty() {
-                        let _ = tx.send(Some(picked));
-                        return;
-                    }
+            if let Ok(output) = cmd.output()
+                && output.status.success()
+            {
+                let picked = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !picked.is_empty() {
+                    let _ = tx.send(Some(picked));
+                    return;
                 }
             }
             let _ = tx.send(None);
@@ -693,13 +693,13 @@ impl AudioPreviewState {
             return;
         }
 
-        if let Some(rx) = &self.browse_rx {
-            if let Ok(res) = rx.try_recv() {
-                if let Some(dir) = res {
-                    self.save_destination_dir = dir;
-                }
-                self.browse_rx = None;
+        if let Some(rx) = &self.browse_rx
+            && let Ok(res) = rx.try_recv()
+        {
+            if let Some(dir) = res {
+                self.save_destination_dir = dir;
             }
+            self.browse_rx = None;
         }
 
         let mut close_dialog = false;

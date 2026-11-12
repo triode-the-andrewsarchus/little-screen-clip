@@ -193,10 +193,11 @@ pub(in crate::file_manager) fn video_preview(
         .premultiplied_rgba
         .chunks_exact(4)
         .all(|pixel| pixel[..3].iter().all(|component| *component <= 8));
-    if black && prepared.duration_ms > 0 {
-        if let Some(middle) = media_frame(path, prepared.stream, prepared.duration_ms / 2) {
-            image = middle;
-        }
+    if black
+        && prepared.duration_ms > 0
+        && let Some(middle) = media_frame(path, prepared.stream, prepared.duration_ms / 2)
+    {
+        image = middle;
     }
     (FileSource::capture(path).ok()? == prepared.source).then_some(image)
 }
@@ -216,6 +217,8 @@ fn stream_metadata(value: &serde_json::Value) -> Result<(usize, u32, u32, u64), 
 }
 
 pub(in crate::file_manager) use little_clip_core::media_stream::selected_video_stream;
+
+pub(super) use little_clip_core::item::raster_preview_limits;
 
 #[cfg(test)]
 mod tests {
@@ -276,5 +279,3 @@ mod tests {
         assert!(stream_metadata(&serde_json::json!({"streams":[]})).is_err());
     }
 }
-
-pub(super) use little_clip_core::item::raster_preview_limits;
