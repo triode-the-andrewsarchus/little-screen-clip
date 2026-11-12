@@ -277,6 +277,7 @@ impl AudioPreviewState {
             now,
             crate::desktop_ipc::mutation_jobs(),
             |request| crate::send_ipc_request(&request).map_err(|error| error.to_string()),
+            little_clip_core::copy_bytes_to_system_clipboard,
         );
     }
 
@@ -287,6 +288,7 @@ impl AudioPreviewState {
             now,
             crate::desktop_ipc::mutation_jobs(),
             |request| crate::send_ipc_request(&request).map_err(|error| error.to_string()),
+            little_clip_core::copy_bytes_to_system_clipboard,
         );
     }
 
@@ -296,7 +298,10 @@ impl AudioPreviewState {
         palette: &AppPalette,
         now: f64,
         jobs: &BackgroundJobs,
-        send: impl FnOnce(IpcRequest) -> Result<little_clip_core::ipc::IpcResponse, String>
+        mut send: impl FnMut(IpcRequest) -> Result<little_clip_core::ipc::IpcResponse, String>
+        + Send
+        + 'static,
+        mut copy: impl FnMut(&[u8], &str) -> Result<(), little_clip_core::clipboard::ClipboardError>
         + Send
         + 'static,
     ) {
@@ -347,10 +352,16 @@ impl AudioPreviewState {
                     )?
                 }
             };
-            send(IpcRequest::PushImage {
-                bytes,
-                mime: "image/png".into(),
-                hand: little_clip_core::HandSide::Left,
+            crate::desktop_ipc::copy_image_to_targets(
+                &bytes,
+                "image/png",
+                little_clip_core::HandSide::Left,
+                || false,
+                |request| crate::desktop_ipc::action_result(send(request.clone())?),
+                |bytes, mime| copy(bytes, mime).map_err(|error| error.to_string()),
+            )?;
+            Ok(little_clip_core::ipc::IpcResponse::Success {
+                message: "Copied audio image to OS clipboard".into(),
             })
         }));
         self.status_toast = Some((

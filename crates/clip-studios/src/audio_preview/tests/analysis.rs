@@ -694,8 +694,15 @@ fn checked_audio_analysis_rejects_initial_retries_and_edited_source_reads() {
 }
 
 #[test]
-fn audio_image_copies_keep_captured_analysis_and_report_delayed_handoff_failures() {
-    for kind in [AudioImageKind::Waveform, AudioImageKind::Spectrum] {
+fn audio_image_copies_publish_captured_png_and_surface_clipboard_failures() {
+    for (kind, daemon_succeeds, clipboard_succeeds) in
+        [AudioImageKind::Waveform, AudioImageKind::Spectrum]
+            .into_iter()
+            .flat_map(|kind| {
+                [(true, true), (true, false), (false, true), (false, false)]
+                    .map(move |(daemon, clipboard)| (kind, daemon, clipboard))
+            })
+    {
         let jobs = BackgroundJobs::new(1, 2);
         let mut state = AudioPreviewState::new(PathBuf::from("missing.wav"), "test".into());
         let mut analysis = empty_audio_analysis();
@@ -709,16 +716,44 @@ fn audio_image_copies_keep_captured_analysis_and_report_delayed_handoff_failures
         state.view_duration_sec = 1.0;
         let (sent, received) = std::sync::mpsc::channel();
         let (release, wait) = std::sync::mpsc::channel();
-        state.copy_analysis_image_on(kind, &AppPalette::default(), 1.0, &jobs, move |request| {
-            sent.send(request).unwrap();
-            wait.recv_timeout(Duration::from_secs(5)).unwrap();
-            Ok(little_clip_core::ipc::IpcResponse::Error {
-                error: "controlled image rejection".into(),
-            })
-        });
-        state.copy_analysis_image_on(kind, &AppPalette::default(), 2.0, &jobs, |_| {
-            panic!("duplicate copy")
-        });
+        let (copied, clipboard_rx) = std::sync::mpsc::channel();
+        state.copy_analysis_image_on(
+            kind,
+            &AppPalette::default(),
+            1.0,
+            &jobs,
+            move |request| {
+                sent.send(request).unwrap();
+                wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(if daemon_succeeds {
+                    little_clip_core::ipc::IpcResponse::Success {
+                        message: "accepted".into(),
+                    }
+                } else {
+                    little_clip_core::ipc::IpcResponse::Error {
+                        error: "controlled image rejection".into(),
+                    }
+                })
+            },
+            move |bytes, mime| {
+                copied.send((bytes.to_vec(), mime.to_owned())).unwrap();
+                if clipboard_succeeds {
+                    Ok(())
+                } else {
+                    Err(little_clip_core::clipboard::ClipboardError::Failed(
+                        "controlled clipboard rejection".into(),
+                    ))
+                }
+            },
+        );
+        state.copy_analysis_image_on(
+            kind,
+            &AppPalette::default(),
+            2.0,
+            &jobs,
+            |_| panic!("duplicate copy"),
+            |_, _| panic!("duplicate desktop copy"),
+        );
         state.analysis = None;
         state.stop();
         assert!(state.file_write_pending());
@@ -766,6 +801,21 @@ fn audio_image_copies_keep_captured_analysis_and_report_delayed_handoff_failures
             std::thread::sleep(Duration::from_millis(2));
         }
         assert!(!state.file_write_pending());
-        assert!(format!("{:?}", state.status_toast).contains("controlled image rejection"));
+        let (desktop_bytes, desktop_mime) =
+            clipboard_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(desktop_mime, "image/png");
+        assert_eq!(
+            desktop_bytes, bytes,
+            "desktop copy must use the captured PNG"
+        );
+        if clipboard_succeeds {
+            assert!(state.status_toast.is_none());
+        } else {
+            let error = format!("{:?}", state.status_toast);
+            assert!(error.contains("controlled clipboard rejection"));
+            if !daemon_succeeds {
+                assert!(error.contains("controlled image rejection"));
+            }
+        }
     }
 }
