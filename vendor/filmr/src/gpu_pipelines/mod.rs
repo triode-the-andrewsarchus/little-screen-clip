@@ -19,14 +19,14 @@ pub use linearize::LinearizePipeline;
 pub use common::read_gpu_buffer;
 
 #[cfg(feature = "compute-gpu")]
-common::pipeline_cache!(get_linearize_pipeline, LINEARIZE_PIPELINE, LinearizePipeline, context => LinearizePipeline::new(context));
+common::pipeline_cache!(pub get_linearize_pipeline, LINEARIZE_PIPELINE, LinearizePipeline, context => LinearizePipeline::new(context));
 #[cfg(feature = "compute-gpu")]
-common::pipeline_cache!(get_light_leak_pipeline, LIGHT_LEAK_PIPELINE, LightLeakPipeline, context => LightLeakPipeline::new(context));
+common::pipeline_cache!(pub get_light_leak_pipeline, LIGHT_LEAK_PIPELINE, LightLeakPipeline, context => LightLeakPipeline::new(context));
 #[cfg(feature = "compute-gpu")]
-common::pipeline_cache!(get_halation_pipeline, HALATION_PIPELINE, HalationPipeline, context => HalationPipeline::new(context));
+common::pipeline_cache!(pub get_halation_pipeline, HALATION_PIPELINE, HalationPipeline, context => HalationPipeline::new(context));
 #[cfg(feature = "compute-gpu")]
-common::pipeline_cache!(get_gaussian_pipeline, GAUSSIAN_PIPELINE, GaussianPipeline, context => GaussianPipeline::new(context));
+common::pipeline_cache!(pub get_gaussian_pipeline, GAUSSIAN_PIPELINE, GaussianPipeline, context => GaussianPipeline::new(context));
 #[cfg(feature = "compute-gpu")]
-common::pipeline_cache!(get_grain_pipeline, GRAIN_PIPELINE, GrainPipeline, context => GrainPipeline::new(context));
+common::pipeline_cache!(pub get_grain_pipeline, GRAIN_PIPELINE, GrainPipeline, context => GrainPipeline::new(context));
 #[cfg(feature = "compute-gpu")]
-common::pipeline_cache!(get_develop_pipeline, DEVELOP_PIPELINE, DevelopPipeline, context => DevelopPipeline::new(context));
+common::pipeline_cache!(pub get_develop_pipeline, DEVELOP_PIPELINE, DevelopPipeline, context => DevelopPipeline::new(context));

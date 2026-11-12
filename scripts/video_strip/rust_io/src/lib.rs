@@ -166,8 +166,9 @@ impl Reader {
         let within = (offset - buffer.offset) as usize;
         let available = (buffer.result as usize).saturating_sub(within);
         let count = available.min(output.len());
-        // SAFETY: completed buffer, within/count bound the initialized bytes.
         if count > 0 {
+            // SAFETY: the completed block owns initialized bytes bounded by
+            // within/count. The exclusive caller output cannot alias its storage.
             unsafe {
                 ptr::copy_nonoverlapping(
                     buffer.bytes.as_ptr().add(within),

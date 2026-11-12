@@ -9,14 +9,14 @@ use futures::channel::oneshot;
 // worker's lifetime, matching the existing static-reference API.
 #[cfg(feature = "compute-gpu")]
 macro_rules! pipeline_cache {
-    ($getter:ident, $cache:ident, $ty:ty, $context:ident => $init:expr) => {
+    ($visibility:vis $getter:ident, $cache:ident, $ty:ty, $context:ident => $init:expr) => {
         #[cfg(not(target_arch = "wasm32"))]
-        pub fn $getter($context: &crate::gpu::GpuContext) -> &'static $ty {
+        $visibility fn $getter($context: &crate::gpu::GpuContext) -> &'static $ty {
             static $cache: std::sync::OnceLock<$ty> = std::sync::OnceLock::new();
             $cache.get_or_init(|| $init)
         }
         #[cfg(target_arch = "wasm32")]
-        pub fn $getter($context: &crate::gpu::GpuContext) -> &'static $ty {
+        $visibility fn $getter($context: &crate::gpu::GpuContext) -> &'static $ty {
             thread_local! {
                 static $cache: std::cell::OnceCell<&'static $ty> = const { std::cell::OnceCell::new() };
             }
