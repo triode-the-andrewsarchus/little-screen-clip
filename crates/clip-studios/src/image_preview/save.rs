@@ -312,7 +312,7 @@ where
     I: FnMut(&IpcRequest) -> Result<(), String>,
     C: FnMut(&[u8], &str) -> Result<(), String>,
 {
-    let (ipc_result, clipboard_result) = deliver_copy_to_targets(
+    let hand_updated = crate::desktop_ipc::copy_image_to_targets(
         bytes,
         "image/png",
         hand,
@@ -320,48 +320,14 @@ where
         &mut push_to_daemon,
         &mut copy_to_system_clipboard,
     )?;
-    match (ipc_result, clipboard_result) {
-        (Ok(()), Ok(())) => Ok(format!(
+    Ok(if hand_updated {
+        format!(
             "Copied image to {} Hand slot & OS Clipboard",
             hand_slot_label(hand)
-        )),
-        (Ok(()), Err(error)) => Ok(format!(
-            "Copied image to {} Hand slot; OS clipboard failed: {error}",
-            hand_slot_label(hand)
-        )),
-        (Err(_), Ok(())) => Ok("Copied image to OS Clipboard (daemon unavailable)".into()),
-        (Err(ipc), Err(clipboard)) => Err(format!(
-            "Could not copy image to clipboard: daemon: {ipc}; OS clipboard: {clipboard}"
-        )),
-    }
-}
-
-fn deliver_copy_to_targets<I, C>(
-    bytes: &[u8],
-    mime: &str,
-    hand: HandSide,
-    cancelled: impl Fn() -> bool,
-    push_to_daemon: &mut I,
-    copy_to_system_clipboard: &mut C,
-) -> Result<(Result<(), String>, Result<(), String>), String>
-where
-    I: FnMut(&IpcRequest) -> Result<(), String>,
-    C: FnMut(&[u8], &str) -> Result<(), String>,
-{
-    if cancelled() {
-        return Err("Image clipboard copy cancelled".into());
-    }
-    let request = IpcRequest::PushImage {
-        bytes: bytes.to_vec(),
-        mime: mime.to_owned(),
-        hand,
-    };
-    let ipc_result = push_to_daemon(&request);
-    if cancelled() {
-        return Err("Image clipboard copy cancelled".into());
-    }
-    let clipboard_result = copy_to_system_clipboard(bytes, mime);
-    Ok((ipc_result, clipboard_result))
+        )
+    } else {
+        "Copied image to OS Clipboard (daemon unavailable)".into()
+    })
 }
 
 fn deliver_optimized_image_copy<I, C>(
@@ -377,7 +343,7 @@ where
     I: FnMut(&IpcRequest) -> Result<(), String>,
     C: FnMut(&[u8], &str) -> Result<(), String>,
 {
-    let (ipc_result, clipboard_result) = deliver_copy_to_targets(
+    let hand_updated = crate::desktop_ipc::copy_image_to_targets(
         bytes,
         mime,
         HandSide::Left,
@@ -385,14 +351,11 @@ where
         &mut push_to_daemon,
         &mut copy_to_system_clipboard,
     )?;
-    match (ipc_result, clipboard_result) {
-        (Ok(()), Ok(())) => Ok(success_message.to_owned()),
-        (Ok(()), Err(error)) => Ok(format!("{success_message}; OS clipboard failed: {error}")),
-        (Err(_), Ok(())) => Ok(fallback_message.to_owned()),
-        (Err(ipc), Err(clipboard)) => Err(format!(
-            "Could not copy image to clipboard: daemon: {ipc}; OS clipboard: {clipboard}"
-        )),
-    }
+    Ok(if hand_updated {
+        success_message.to_owned()
+    } else {
+        fallback_message.to_owned()
+    })
 }
 
 fn hand_slot_label(hand: HandSide) -> &'static str {
@@ -1220,6 +1183,30 @@ mod tests {
         .unwrap_err();
         assert!(failed.contains("daemon unavailable"));
         assert!(failed.contains("clipboard unavailable"));
+    }
+
+    #[test]
+    fn image_copies_report_desktop_failure_despite_successful_hand_delivery() {
+        let ordinary = deliver_image_copy(
+            b"png",
+            HandSide::Left,
+            || false,
+            |_| Ok(()),
+            |_, _| Err("writer rejected PNG".into()),
+        )
+        .unwrap_err();
+        assert!(ordinary.contains("writer rejected PNG"));
+        let optimized = deliver_optimized_image_copy(
+            b"jpeg",
+            "image/jpeg",
+            "success",
+            "fallback",
+            || false,
+            |_| Ok(()),
+            |_, _| Err("writer rejected JPEG".into()),
+        )
+        .unwrap_err();
+        assert!(optimized.contains("writer rejected JPEG"));
     }
 
     #[test]

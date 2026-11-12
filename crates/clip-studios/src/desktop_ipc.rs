@@ -144,6 +144,36 @@ pub fn action_result(response: IpcResponse) -> Result<(), String> {
     }
 }
 
+// A hand acknowledgment is independent from successful desktop publication.
+// All image-copy callers share the same success/failure policy.
+pub(crate) fn copy_image_to_targets(
+    bytes: &[u8],
+    mime: &str,
+    hand: little_clip_core::HandSide,
+    cancelled: impl Fn() -> bool,
+    mut push: impl FnMut(&IpcRequest) -> Result<(), String>,
+    mut copy: impl FnMut(&[u8], &str) -> Result<(), String>,
+) -> Result<bool, String> {
+    if cancelled() {
+        return Err("Image clipboard copy cancelled".into());
+    }
+    let ipc_result = push(&IpcRequest::PushImage {
+        bytes: bytes.to_vec(),
+        mime: mime.to_owned(),
+        hand,
+    });
+    if cancelled() {
+        return Err("Image clipboard copy cancelled".into());
+    }
+    copy(bytes, mime).map_err(|clipboard| match &ipc_result {
+        Ok(()) => format!("Hand push succeeded, but OS clipboard failed: {clipboard}"),
+        Err(ipc) => {
+            format!("Could not copy image to clipboard: daemon: {ipc}; OS clipboard: {clipboard}")
+        }
+    })?;
+    Ok(ipc_result.is_ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
