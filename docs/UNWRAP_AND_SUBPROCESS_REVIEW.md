@@ -20,6 +20,8 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Replace the system `optipng` program with compiled [OxiPNG](https://docs.rs/oxipng/10.2.1/oxipng/), with CLI/parallel/Zopfli features disabled. Keep optimization in a cancellable host helper, shared by both desktop applications. It preserves hidden RGB and text metadata, never increases output size, enforces the shared raster limits and a 30-second optimization budget, and installs only into an unused output through a retained ordinary-directory handle. Errors reach the editor through the existing bounded error-file handoff. Validation: four conversion-worker tests and both applications’ worker-dispatch integration tests, including invalid-input/no-replacement behavior; strict workspace Clippy passed before the final error-message handoff change.
 
+- [x] Handle invalid/overflowing film-grain variance in the maintained `filmr` fork. A failed normal-distribution construction now contributes zero additional noise, consistent with the existing zero-variance path. Tests cover infinite and overflowing noise parameters.
+
 ## Remaining review
 
 - [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.

@@ -74,8 +74,9 @@ impl GrainModel {
         let std_dev = variance.sqrt().max(0.0);
 
         if std_dev > 0.0 {
-            let normal = Normal::new(0.0, std_dev).unwrap();
-            normal.sample(rng)
+            // Overflowing or non-finite parameters must not panic a render.
+            // Invalid variance contributes no additional noise.
+            Normal::new(0.0, std_dev).map_or(0.0, |normal| normal.sample(rng))
         } else {
             0.0
         }
@@ -86,5 +87,24 @@ impl GrainModel {
     pub fn add_grain<R: Rng>(&self, d: f32, rng: &mut R) -> f32 {
         let noise = self.sample_noise(d, rng);
         (d + noise).max(0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_or_overflowing_variance_does_not_panic_or_emit_nonfinite_noise() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        for parameter in [f32::INFINITY, f32::MAX] {
+            let mut model = GrainModel::medium_grain();
+            model.sigma_read = parameter;
+            assert_eq!(model.sample_noise(0.5, &mut rng), 0.0);
+        }
+        let mut model = GrainModel::medium_grain();
+        model.shadow_noise = f32::INFINITY;
+        assert_eq!(model.sample_noise(0.5, &mut rng), 0.0);
     }
 }
