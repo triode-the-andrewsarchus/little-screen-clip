@@ -1,0 +1,86 @@
+[package]
+name = "excalidraw-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Render Excalidraw drawings to SVG, PNG and PDF in pure Rust, without a browser"
+# The project's code is MIT OR Apache-2.0. Adapted code keeps its license: the
+# rough.js, perfect-freehand, points-on-curve and Excalidraw ports are MIT, the
+# HDR tone mapping is BSD-3-Clause (Skia), and the placeholder icons are
+# CC-BY-4.0 (Font Awesome). LICENSE-BUNDLE.txt carries every license and notice.
+license = "(MIT OR Apache-2.0) AND MIT AND BSD-3-Clause AND CC-BY-4.0"
+repository.workspace = true
+documentation = "https://docs.rs/excalidraw-render"
+readme = "README.md"
+keywords = ["excalidraw", "rendering", "svg", "png", "pdf"]
+categories = ["graphics", "rendering"]
+# Integration tests read workspace evidence, so they run from the repository.
+# `build.rs` stays there too: it only admits the release-qualification tests,
+# so the package leaves it out (Cargo publishes `build = false`) and
+# dependents never compile or run it.
+include = ["/src/", "/LICENSES/", "/LICENSE-BUNDLE.txt", "/README.md"]
+
+[lints]
+workspace = true
+
+[features]
+default = ["cjk", "png", "pdf"]
+cjk = ["excalidraw-fonts/cjk"]
+# The output formats besides SVG (ADR-0023). The public API is the same with
+# or without them: a request for a format that is off fails to build with
+# `request.format-unavailable`. Both formats rasterize (PDF for its isolated
+# fallbacks), so each enables the rasterizer rather than one implying the other.
+png = ["dep:resvg", "dep:tiny-skia"]
+pdf = ["dep:krilla", "dep:resvg", "dep:tiny-skia"]
+
+# docs.rs builds for every tier-1 target by default. The API is the same on
+# each; build only the release-qualified target (ADR-0006).
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+excalidraw-fonts.workspace = true
+base64.workspace = true
+csscolorparser.workspace = true
+cssparser.workspace = true
+cssparser-color.workspace = true
+crc32fast.workspace = true
+gif.workspace = true
+image-webp.workspace = true
+krilla = { workspace = true, optional = true }
+libm.workspace = true
+miniz_oxide.workspace = true
+moxcms.workspace = true
+serde.workspace = true
+simplecss.workspace = true
+sha2.workspace = true
+skera.workspace = true
+png.workspace = true
+resvg = { workspace = true, optional = true }
+roxmltree.workspace = true
+harfrust.workspace = true
+ryu-js.workspace = true
+unicode-bidi.workspace = true
+svgtypes.workspace = true
+tiny-skia = { workspace = true, optional = true }
+ttf2woff2.workspace = true
+usvg.workspace = true
+wuff.workspace = true
+# The font parser, via `write_fonts::read` (ADR-0020).
+write-fonts.workspace = true
+zune-jpeg.workspace = true
+
+[dev-dependencies]
+excalidraw-render-compare = { path = "../excalidraw-render-compare" }
+jpeg-encoder.workspace = true
+# Tests rasterize SVG artifacts to judge them, so SVG coverage keeps the
+# viewer library when the `png` and `pdf` features that use it are off.
+resvg.workspace = true
+tiny-skia.workspace = true
+# Test-only: reports reach applications through `serde::Serialize`, so each
+# application chooses its own serde_json.
+serde_json.workspace = true
+unicode-normalization.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.80"
