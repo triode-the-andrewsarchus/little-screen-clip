@@ -131,7 +131,7 @@ GStreamer linkage.
 ## Player refinements
 
 - [x] Fill the fullscreen viewport and move title/navigation and transport into
-  translucent overlays that hide after 2.5 seconds without interaction.
+  translucent overlays that hide after 500 milliseconds without interaction.
 - [x] Use the shared fixed-size play/pause icon and remove stop/volume controls.
 - [x] Add temporary subtitle/audio track, speed and loop choices.
 - [x] Add a manual-config-only subtitle default, initially disabled.

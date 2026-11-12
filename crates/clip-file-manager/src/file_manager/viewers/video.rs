@@ -185,7 +185,7 @@ fn overlay_visibility(ui: &Ui, fullscreen_changed: bool, last_activity: &mut f64
     {
         *last_activity = now;
     }
-    now - *last_activity < 2.5 || ui.ctx().memory(|m| m.any_popup_open())
+    now - *last_activity < 0.5 || ui.ctx().memory(|m| m.any_popup_open())
 }
 
 fn picture(ui: &mut Ui, player: &Session, fullscreen: bool) -> egui::Response {
