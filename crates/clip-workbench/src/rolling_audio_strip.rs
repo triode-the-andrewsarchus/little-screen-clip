@@ -11,6 +11,7 @@ use little_clip_core::BackgroundJobs;
 use little_clip_core::audio::{PeakBlock, build_peak_pyramid};
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::palette::AppPalette;
+#[cfg(test)]
 use little_clip_core::slot::HandSide;
 use rodio::Player;
 use std::fs::File;

@@ -921,22 +921,26 @@ fn rendered_full_score_copy_shortcut_exports_parseable_midi_to_left_hand() {
     assert_eq!(state.status_toast.message(time + 0.1), None);
 }
 
+fn single_note_export(directory: &std::path::Path) -> MidiExportArtifact {
+    write_midi_export(
+        &inline_midi_data(1),
+        0.0,
+        1.0,
+        false,
+        None,
+        123,
+        directory.to_owned(),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap()
+}
+
 #[test]
 fn midi_daemon_success_still_publishes_the_file_and_surfaces_clipboard_failure() {
     use little_clip_core::{clipboard::ClipboardError, ipc::IpcResponse};
     for succeeds in [true, false] {
         let directory = tempfile::tempdir().unwrap();
-        let artifact = write_midi_export(
-            &inline_midi_data(1),
-            0.0,
-            1.0,
-            false,
-            None,
-            123,
-            directory.path().to_owned(),
-            Arc::new(AtomicBool::new(false)),
-        )
-        .unwrap();
+        let artifact = single_note_export(directory.path());
         let path = artifact.path.clone();
         let mut copied = false;
         let result = handoff_midi_export_with(
@@ -996,17 +1000,7 @@ fn midi_export_cleanup_distinguishes_definite_failure_from_uncertain_delivery() 
         Failure::UncertainClipboardWrite,
     ] {
         let directory = tempfile::tempdir().unwrap();
-        let artifact = write_midi_export(
-            &inline_midi_data(1),
-            0.0,
-            1.0,
-            false,
-            None,
-            123,
-            directory.path().to_owned(),
-            Arc::new(AtomicBool::new(false)),
-        )
-        .unwrap();
+        let artifact = single_note_export(directory.path());
         let path = artifact.path.clone();
         let result = handoff_midi_export_with(
             artifact,

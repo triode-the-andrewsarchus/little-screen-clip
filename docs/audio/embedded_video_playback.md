@@ -237,3 +237,21 @@ editor readout rather than assumed pointer-drag coordinates.
 - [x] Rolling-audio selection copies use the shared guarded audio clipboard delivery. Workbench tests verify exact stereo PCM, completed copy ownership after stop, daemon-success/clipboard-failure reporting and source-replacement rejection (16 passed, one unrelated ignored).
 - [x] Audio waveform/FFT PNG copies publish images directly and report clipboard errors. Both renderers pass the four-way daemon/desktop outcome matrix, preserving captured bytes and pending-job lifetime.
 - [x] Image Studio normal and optimized copies report desktop failure as failure even when the hand push succeeds. Shared image delivery now enforces this policy centrally; all 29 image-save tests pass.
+
+Final clipboard audit verification: 2,837 workspace tests pass with zero failures
+and 35 ignored. The final focused MIDI and rolling-audio reruns also pass after
+sharing their fixture setup and restricting a test-only import. The optimized
+workspace build completes with zero compiler warnings; formatting, Python
+compilation and rendered public exporter documentation checks pass.
+
+Private desktop acceptance verifies actual WAV and MIDI file URIs and exact
+waveform/FFT PNG payloads after seeding unrelated clipboard text, using a daemon
+that acknowledges requests without publishing them. The WAV selection duration
+matches the editor readout. Image failure and rolling-audio delivery paths are
+covered by the focused tests above.
+
+Architecture review reuses the existing guarded audio export owner and shared
+image delivery policy without adding dependencies. Average/max complexity remain
+4.04/195, clone groups remain 1,521, and measured duplication decreases slightly;
+no new high-complexity functions were introduced. The comparison still flags
+pre-existing clones in touched files, with no significant metric regressions.
