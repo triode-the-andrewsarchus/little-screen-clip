@@ -18,7 +18,7 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Report poisoned clipboard-selection state through the read result and tolerate poisoned one-shot acknowledgement ownership during teardown. Recovery only takes an optional sender; it does not revive a selection or change clipboard routing. Validation: four private-compositor/selection tests pass, including the poisoned-reader regression.
 
-- [x] Replace the system `optipng` program with compiled [OxiPNG](https://docs.rs/oxipng/10.2.1/oxipng/), with CLI/parallel/Zopfli features disabled. Keep optimization in a cancellable host helper, shared by both desktop applications. It preserves hidden RGB and text metadata, never increases output size, enforces the shared raster limits and a 30-second optimization budget, and installs only into an unused output through a retained ordinary-directory handle. Errors reach the editor through the existing bounded error-file handoff. Validation: four conversion-worker tests and both applications’ worker-dispatch integration tests, including invalid-input/no-replacement behavior; strict workspace Clippy passed before the final error-message handoff change.
+- [x] Replace the system `optipng` program with compiled [OxiPNG](https://docs.rs/oxipng/10.2.1/oxipng/), with CLI/parallel/Zopfli features disabled. Keep optimization in a cancellable host helper, shared by both desktop applications. It preserves hidden RGB and text metadata, never increases output size, enforces the shared raster limits and a 30-second optimization budget, and installs only into an unused output through a retained ordinary-directory handle. Errors reach the editor through the existing bounded error-file handoff. Validation: four conversion-worker tests and both applications’ worker-dispatch integration tests, including invalid-input/no-replacement behavior; final strict workspace Clippy passes.
 
 - [x] Handle invalid/overflowing film-grain variance in the maintained `filmr` fork. A failed normal-distribution construction now contributes zero additional noise, consistent with the existing zero-variance path. Tests cover infinite and overflowing noise parameters.
 
@@ -34,8 +34,25 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Share one compile-time-validated allocation layout between allocation and deallocation in the standalone io_uring helper. The previous fixed layout was valid; this removes duplicate runtime construction and keeps both operations consistent. Its separate locked Cargo check passes using the existing target directory.
 
-## Remaining review
+## Audit decisions
 
-- [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.
-- [ ] Finish external-command decisions and practical native replacements.
-- [ ] Run final workspace validation and architecture comparison.
+- [x] Review all remaining source sites: the [call-site index](UNWRAP_AND_SUBPROCESS_REVIEW_INDEX.md) records 286 unwraps outside tests/examples (including 11 offline fixture-tool calls and four standalone helper calls), plus all 74 production command constructor sites. Several calls on one line count separately. Parent-gated retrieval benchmarks/quality fixtures are test-only.
+- [x] Retain checked binary conversions, fixed constructors and validated state transitions. Retain deliberate catalog assertions and fail-fast behavior for coupled poisoned state; the index explicitly records remaining panic risks rather than calling every unwrap infallible. No workspace-wide unwrap prohibition or conversion to `expect` was added.
+- [x] Review all external commands, including dynamically selected programs. Remove requirements for `sha256sum`, the `niri` CLI client, `optipng`, `prlimit` and `blender-thumbnailer`. The compositor, Bubblewrap and other documented engines remain requirements where applicable. Own helper processes remain intentional for isolation, licensing and cancellation.
+
+Native replacements for PDF engines, full SVG/XCF/RAW rendering, ImageMagick pipeline semantics and optional model runtimes are larger compatibility projects. Existing native paths already cover suitable subsets. User-chosen editors, arbitrary pipeline scripts, clipboard compatibility, desktop storage authority and compositor integration are intentional external interfaces. The index records the rationale for each retained site.
+
+## Architecture comparison
+
+Baseline `unwrap-and-subprocess-review` at `647da6d`: NLOC 341,166 → 342,102 (+936); functions 11,225 → 11,258; duplication 4.24% → 4.23%; clone groups 1,518 → 1,516; average complexity remains 4.04, maximum 195, dependency cycles 16. The added code implements bounded native readers/IPC and regression tests, exchanging five installed executable requirements for compiled mechanisms.
+
+The tool labels the comparison **REGRESSION**. Its substantive function flag is `gallery_audio_source` (CCN 2 → 17): propagating each previously unwrapped I/O error adds explicit error branches. These are necessary failure paths, not added domain decisions; hiding them in wrappers would only game the metric. Touched-file clone reports include unchanged row/UI/fixture code; the hash and Blender adapter diffs remove code rather than adding copies. Some fixture clones now match because `?` replaces panic calls. The reported Python cycle addition/removal has the same four members in different order in an untouched file. No new dependency cycle was introduced. The total complexity increase (+120) includes the new bounded parsers and their tests; this review does not claim a net code-size reduction.
+
+## Final validation
+
+- [x] `cargo fmt --all --check`, `git diff --check`.
+- [x] `cargo clippy --workspace --all-targets -j4 -- -D warnings`.
+- [x] Standalone GPL read-ahead helper: locked Cargo check, reusing the existing target directory.
+- [ ] `cargo test --workspace -j4 -- --test-threads=1` (running).
+
+Targeted validation is recorded above. The packaged NKI sandbox and downloaded Blender reference tests were also run explicitly. Builds use four Cargo jobs, no cleanup sweeps and no new target tree; the user’s local `.cargo/config.toml` change is excluded from commits.
