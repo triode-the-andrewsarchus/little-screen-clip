@@ -136,7 +136,7 @@ GStreamer linkage.
 - [x] Add temporary subtitle/audio track, speed and loop choices.
 - [x] Add a manual-config-only subtitle default, initially disabled.
 - [x] Open a stereo audio copy from the video-file context menu.
-- [ ] Verify controls, actual subtitles/tracks, audio extraction and fullscreen.
+- [x] Verify controls, actual subtitles/tracks, audio extraction and fullscreen.
 
 The player context menu offers embedded subtitle and audio tracks, rates from
 0.1× through 10×, and looping of the current file. Choices reset on close.
@@ -168,7 +168,9 @@ instead of a second boolean route. Average CCN remains 4.04, maximum 195,
 clone groups remain 1,521, and duplication falls from 4.26% to 4.25%. The tool
 still labels existing clone patterns in modified files as regressions; the
 introduced overlay/test duplication and oversized video UI method were revised.
-No newly introduced high-complexity function remains in the comparison.
+After the final popup-priority correction, viewer UI orchestration is CCN 17
+in 91 lines (baseline CCN 13); this is the reviewed cost of the new viewer states.
+The backend selection phases remain below the hotspot threshold.
 
 - [x] Fix the live audio-track switch stall exposed by captured output. The
   legacy selector could deadlock when immediately followed by a flushing seek.
@@ -183,3 +185,18 @@ No newly introduced high-complexity function remains in the comparison.
   response's open state before the menu processes Escape. Overlay areas stay
   below menus, and an open menu keeps the overlay visible. The regression test
   verifies menu, fullscreen and viewer dismissal in that order.
+
+Final refinement verification: 2,832 workspace tests pass with 35 ignored after
+the stream-collection correction; the additional Escape regression test also
+passes. All 25 worker/protocol tests pass with manual references enabled, as do
+the eleven-format host matrix, strict worker/protocol Clippy, six packaging/build
+script tests, formatting and Python compilation. The current optimized workspace
+build completes without compiler warnings and updates the bundled helper.
+
+The final optimized light-theme acceptance scenario passes with two audio and
+two subtitle tracks: selecting French changes actual private-sink output from
+440 Hz to 880 Hz, captions paint measurable glyph pixels, and menu Escape keeps
+the player alive. Pixel checks verify overlay appearance/disappearance and the
+full viewport; the stereo Audio Studio handoff, folder return and process cleanup
+also pass. Caption fixtures use ordinary two-second cues; direct glyph-pixel
+checks avoid OCR errors on upscaled low-resolution subtitles.

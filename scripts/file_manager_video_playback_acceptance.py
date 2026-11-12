@@ -33,6 +33,16 @@ def changed(first, second):
     return sum(pixel != (0, 0, 0) for pixel in ImageChops.difference(first, second).get_flattened_data())
 
 
+def observe_overlay(session, name):
+    # Wake before each capture: OCR can outlast the intentionally short timeout.
+    def shown():
+        move(session, 600, 400)
+        move(session, 650, 400)
+        return capture(session, name).getpixel((30, 30)) != (0, 0, 0)
+    wait_for(shown, 'pointer movement reveals fullscreen controls')
+    session.observations.append({'name': name, 'screenshot': str(session.output/(name+'.png')), 'expected_visible_text': ['fullscreen controls']})
+
+
 def exercise_full(session, root):
     filename = next(root.glob('movie.*')).name
     session.observe('video-folder', [filename])
@@ -64,16 +74,62 @@ def exercise_full(session, root):
     normal_size = size()
     session.key('f')
     wait_for(lambda: size()==(1280,800), 'embedded fullscreen fills the private output')
-    session.observe('fullscreen-player', [filename, 'Back to folder'])
+    observe_overlay(session, 'fullscreen-player')
+    move(session, 600, 400)
+    time.sleep(3.0)
+    idle = session.observe('fullscreen-idle', [], preserve_pointer=True)
+    assert 'Back to folder' not in idle and filename not in idle, idle
+    shot = capture(session, 'fullscreen-unobstructed')
+    assert shot.getpixel((20, 20)) == (0, 0, 0), 'fullscreen letterbox must reach the viewport edge'
+    assert sum(max(p)-min(p)>40 for p in shot.crop((0, 45, 1280, 60)).get_flattened_data())>3000, 'video must occupy the space formerly reserved for menu and header'
+    observe_overlay(session, 'fullscreen-overlay-returned')
     session.key('Escape')
     wait_for(lambda: size()==normal_size, 'Escape restores the embedded window')
     assert players(session)==owned, 'Escape from fullscreen must retain playback'
     session.key('space')
     session.observe('resumed-player', [filename, 'Back to folder'])
+    private.run_checked([str(session.pointer), 'right-click', '1280', '800', '650', '400'], env=session.env)
+    session.observe('playback-menu', ['Subtitles', 'Audio track', 'Playback speed', 'Loop video'], preserve_pointer=True)
+    ax, ay = session.word('playback-menu', 'Audio', minimum_y=200)
+    move(session, ax+15, ay)
+    session.observe('audio-track-menu', ['French tone'], preserve_pointer=True)
+    fx, fy = session.word('audio-track-menu', 'French', minimum_y=200)
+    session.click(fx+15, fy)
+    session.key('Escape')
+    assert players(session)==owned, 'Escape must close the menu before the viewer'
+    def french_audio():
+        samples = audio_tail(session)[0][-2000:]
+        if len(samples)<2000: return False
+        hz = sum(a<=0<b for a,b in zip(samples, samples[1:]))*8000/(len(samples)-1)
+        return 850 < hz < 910
+    wait_for(french_audio, 'selecting the French audio track changes the actual captured tone to 880 Hz')
+    private.run_checked([str(session.pointer), 'right-click', '1280', '800', '650', '400'], env=session.env)
+    session.observe('subtitle-menu', ['Subtitles'], preserve_pointer=True)
+    sx, sy = session.word('subtitle-menu', 'Subtitles', minimum_y=200)
+    move(session, sx+15, sy)
+    session.observe('subtitle-track-menu', ['French captions'], preserve_pointer=True)
+    sx, sy = session.word('subtitle-track-menu', 'French', minimum_y=200)
+    session.click(sx+15, sy)
+    session.key('Escape')
+    assert players(session)==owned
+    def captions_visible():
+        shot = capture(session, 'captions-enabled')
+        return sum(min(pixel)>150 and max(pixel)-min(pixel)<35 for pixel in shot.crop((450,580,820,630)).get_flattened_data())>100
+    wait_for(captions_visible, 'the selected subtitle track paints actual caption pixels')
+    session.observations.append({'name': 'captions-enabled', 'screenshot': str(session.output/'captions-enabled.png'), 'expected_visible_text': ['rendered subtitle pixels']})
     session.click(1120, 72)  # Back to folder in the observed fixed-output main bar.
     wait_for(lambda: all(not Path(f'/proc/{pid}').exists() for pid in owned), 'return to folder reaps playback')
     session.observe('returned-folder', [filename])
     x, y = session.word('returned-folder', filename, minimum_y=200)
+    private.run_checked([str(session.pointer), 'right-click', '1280', '800', str(x), str(y)], env=session.env)
+    session.observe('video-file-menu', ['Edit Audio Track'], preserve_pointer=True)
+    ax, ay = session.word('video-file-menu', 'Edit', minimum_y=200)
+    session.click(ax, ay)
+    session.observe('video-audio-studio', ['movie.audio.wav', 'Selection info', 'Back to folder'])
+    assert not players(session), 'Audio Studio must not leave the video playing'
+    session.click(1120, 72)
+    session.observe('audio-returned-folder', [filename])
+    x, y = session.word('audio-returned-folder', filename, minimum_y=200)
     session.click(x, y)
     session.key('Return')
     session.observe('reopened-player', [filename, 'Back to folder'])
@@ -137,7 +193,12 @@ def main():
     repo = Path(__file__).resolve().parent.parent
     args = application_arguments(__doc__, repo / 'target/debug/clip-file-manager')
     output, root = media_fixture_directory(args)
-    private.run_checked(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24:duration=60', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=60', '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-c:a', 'aac', '-shortest', str(root/'movie.mp4')], env=os.environ, timeout=30)
+    captions = []
+    for language, text in [('English', 'FIRST SUBTITLE'), ('French', 'SECOND SUBTITLE')]:
+        path = output / (language + '.srt')
+        path.write_text(''.join(f'{index+1}\n00:00:{index*2:02d},000 --> 00:{(index*2+2)//60:02d}:{(index*2+2)%60:02d},000\n{text}\n\n' for index in range(30)))
+        captions.append(path)
+    private.run_checked(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24:duration=60', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=60', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=60', '-i', str(captions[0]), '-i', str(captions[1]), '-map', '0:v', '-map', '1:a', '-map', '2:a', '-map', '3:s', '-map', '4:s', '-metadata:s:a:0', 'title=English tone', '-metadata:s:a:1', 'title=French tone', '-metadata:s:a:0', 'language=eng', '-metadata:s:a:1', 'language=fra', '-metadata:s:s:0', 'title=English captions', '-metadata:s:s:1', 'title=French captions', '-metadata:s:s:0', 'language=eng', '-metadata:s:s:1', 'language=fra', '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-c:a', 'aac', '-c:s', 'srt', '-shortest', str(root/'movie.mkv')], env=os.environ, timeout=30)
     wrapper = output/'playback-worker'
     wrapper.write_text("#!/usr/bin/env python3\nimport os,sys,json\nif sys.argv[1]=='playback':\n with open(os.environ['PLAYBACK_STARTS'],'a') as log: log.write(json.dumps(json.loads(sys.argv[2]))+'\\n')\nos.execv(os.environ['REAL_MEDIA_WORKER'],['clip-media-worker',*sys.argv[1:]])\n")
     wrapper.chmod(0o700)

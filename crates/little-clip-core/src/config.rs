@@ -1164,6 +1164,10 @@ constellation_pad_keys = [";qjk", "aoeu", "',.p", "1234"]
     fn files_video_decimation_defaults_to_native_resolution() {
         let defaults: AppConfig = toml::from_str("").unwrap();
         assert_eq!(defaults.file_manager.video_timeline_decimation, 1);
+        assert!(!defaults.file_manager.video_subtitles_enabled);
+        let subtitles: AppConfig =
+            toml::from_str("[file_manager]\nvideo_subtitles_enabled = true\n").unwrap();
+        assert!(subtitles.file_manager.video_subtitles_enabled);
         for factor in [1, 2, 4, 8, 16] {
             let configured: AppConfig = toml::from_str(&format!(
                 "[file_manager]\nvideo_timeline_decimation = {factor}\n"

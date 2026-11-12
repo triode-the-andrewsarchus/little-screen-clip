@@ -19,3 +19,9 @@ red, green and blue each last one second at 10 fps; a 440 Hz sine supplies audio
 It verifies clocked playback, pause, precise seeks, EOF and silent hover mode.
 Generated with FFmpeg lavfi `color` inputs joined with `concat`, and `sine` at
 16 kHz; video uses libx264/yuv420p with a one-second GOP, audio AAC at 32 kbps.
+
+`playback-tracks.mkv` is generated synthetic media: three seconds of black
+320×180 H.264 video at 20 fps, 440/880 Hz AAC tracks labelled English/French,
+and two SRT tracks displaying FIRST SUBTITLE / SECOND SUBTITLE for 2.9 seconds.
+It verifies embedded track discovery/selection, actual subtitle rendering and
+disabling, speed changes, looping, and stereo extraction without downloaded media.

@@ -21,7 +21,7 @@ def exercise(session, root, audio_extension, audio_only=False):
         ("mesh.stl", "renamed.stl", ["triangles"]),
         ("scene.splat", "renamed.splat", []),
         ("letter.rtf", "renamed.rtf", []),
-        ("clip.mp4", "renamed.mp4", ["Stop"]),
+        ("clip.mp4", "renamed.mp4", ["Space: play/pause"]),
     ]
     if audio_only:
         cases = cases[1:2]
