@@ -856,3 +856,10 @@ manipulation needs immediate native feedback during gestures, followed by one
 transactional source edit on release. Preserve unknown data; document any source
 reformatting explicitly. Existing image markup/transform code is a reuse
 candidate for geometry and handles, not a second file-save implementation.
+
+The dependency spike passes `cargo check -j4 --workspace --all-targets` with
+`excalidraw-render` and its font catalog pinned to 0.1.0, SVG-only rendering
+features and bundled CJK faces, plus `excalidraw-document` 0.2.0. WOFF decoding
+uses the same 0.2.10 library version as the existing font viewer. No GUI-framework
+dependency is added. This verifies build compatibility, not scene rendering or
+canvas functionality; those remain to be integrated and tested.
