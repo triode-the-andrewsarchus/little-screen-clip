@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Audio Studio copies real file URIs even when the daemon only acknowledges handoff."""
 import json
+import re
 import subprocess
 import wave
 from pathlib import Path
@@ -10,6 +11,7 @@ from ui_acceptance_fixtures import wav_fixture
 from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
 from file_manager_phase4_acceptance import open_file
 from file_manager_media_audio import start_private_audio
+from file_manager_video_playback_acceptance import capture
 
 
 class AudioDaemon(private.FakeTextPreviewDaemon):
@@ -29,9 +31,19 @@ def exercise(session, root, daemon):
     open_file(session, root, 'tone.wav', 'audio-row')
     session.observe('audio-studio', ['tone.wav', 'Selection info', 'Copy Track'])
     for index, button in enumerate([True, False]):
+        expected_duration = 10.0
         if not button:
+            def waveform_ready():
+                image = capture(session, 'ready-waveform')
+                return sum(g-r>60 and g-b>20 for r,g,b in image.crop((300,475,700,500)).get_flattened_data())>2500
+            wait_for(waveform_ready, 'complete stereo waveform before selecting a region')
             private.run_checked([str(session.pointer), 'drag', '1280', '800', '350', '485', '650', '485'], env=session.env)
-            session.observe('audio-selection', ['Copy Slice', 'Selection info'])
+            selection = session.observe('audio-selection', ['Copy Slice', 'Selection info'])
+            match = re.search(r'Duration\s+(\d+):(\d+):(\d+(?:\.\d+)?)', selection)
+            assert match, selection
+            hours,minutes,seconds = map(float,match.groups())
+            expected_duration = hours*3600+minutes*60+seconds
+            assert 0<expected_duration<10
         subprocess.run(['wl-copy', '--type', 'text/plain'], input=b'previous unrelated text', env=session.env, check=True, timeout=5)
         if button:
             session.click(530, 297)
@@ -48,7 +60,7 @@ def exercise(session, root, daemon):
         with wave.open(str(path)) as wav:
             duration = wav.getnframes()/wav.getframerate()
             assert wav.getnchannels()==2
-            assert 9.9<duration<10.1 if button else 2.5<duration<3.5, duration
+            assert abs(duration-expected_duration)<.025, (duration,expected_duration)
         (session.output/f'copied-audio-{index}.json').write_text(json.dumps({'uri':uri,'seconds':duration,'channels':2}))
 
 
