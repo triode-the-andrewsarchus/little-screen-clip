@@ -6,7 +6,7 @@ impl DiffViewerState {
         ui: &mut egui::Ui,
         palette: &little_clip_core::palette::AppPalette,
     ) {
-        if self.is_computing {
+        if self.is_computing() {
             self.render_computing_ui(ui, palette);
             return;
         }

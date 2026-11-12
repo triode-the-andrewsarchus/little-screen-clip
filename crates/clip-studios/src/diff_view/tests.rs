@@ -101,7 +101,7 @@ fn modified_s_does_not_swap_diff_operands() {
         send_modified_s(&mut state, modifiers);
         assert_eq!(state.lhs.label(), "Left");
         assert_eq!(state.rhs.label(), "Right");
-        assert!(!state.is_computing);
+        assert!(!state.is_computing());
         assert_eq!(state.result.raw_ansi, original_result);
     }
 }
@@ -140,7 +140,7 @@ fn unmodified_s_swaps_operands_and_recomputes_text_diff() {
     assert!(!close);
     assert_eq!(state.lhs.label(), "Right");
     assert_eq!(state.rhs.label(), "Left");
-    assert!(state.is_computing);
+    assert!(state.is_computing());
     state.wait_for_completion();
     let plain_result = strip_ansi_codes(&state.result.raw_ansi);
     assert!(plain_result.contains("+ old text"));
@@ -281,9 +281,14 @@ fn text_diff_state_computes_in_background() {
     };
 
     let mut state = DiffViewerState::new(left, right, DiffDisplayMode::Inline);
-    assert!(state.is_computing);
+    assert!(state.is_computing());
+    let previous_cancel = std::sync::Arc::clone(&state.compute_job.as_ref().unwrap().token);
+    state.mode = DiffDisplayMode::SideBySide;
+    state.recompute();
+    assert!(previous_cancel.load(std::sync::atomic::Ordering::Relaxed));
     state.wait_for_completion();
-    assert!(!state.is_computing);
+    assert!(!state.is_computing());
+    assert_eq!(state.result.mode, DiffDisplayMode::SideBySide);
     assert!(!state.result.raw_ansi.is_empty());
 
     for appearance in [
@@ -343,7 +348,7 @@ fn text_diff_tab_and_c_recompute_the_selected_mode() {
 
     send_shortcut(&mut state, egui::Key::Tab);
     assert_eq!(state.mode, DiffDisplayMode::SideBySide);
-    assert!(state.is_computing, "Tab should schedule a new text diff");
+    assert!(state.is_computing(), "Tab should schedule a new text diff");
     assert_eq!(state.result.mode, DiffDisplayMode::Inline);
     state.wait_for_completion();
     assert_eq!(state.result.mode, DiffDisplayMode::SideBySide);
@@ -352,7 +357,7 @@ fn text_diff_tab_and_c_recompute_the_selected_mode() {
 
     send_shortcut(&mut state, egui::Key::C);
     assert_eq!(state.mode, DiffDisplayMode::Inline);
-    assert!(state.is_computing, "C should schedule a new text diff");
+    assert!(state.is_computing(), "C should schedule a new text diff");
     assert_eq!(state.result.mode, DiffDisplayMode::SideBySide);
     state.wait_for_completion();
     assert_eq!(state.result.mode, DiffDisplayMode::Inline);
@@ -413,8 +418,11 @@ fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
     ] {
         send_shortcut(&mut state, key);
         assert_eq!(state.image_mode, expected_mode);
-        assert!(!state.is_computing, "presentation change must not compute");
-        assert!(state.image_receiver.is_none());
+        assert!(
+            !state.is_computing(),
+            "presentation change must not compute"
+        );
+        assert!(state.compute_job.is_none());
         assert_eq!(state.compute_start_time, compute_started);
         assert_eq!(
             std::sync::Arc::as_ptr(state.image_result.as_ref().unwrap()),
@@ -450,11 +458,11 @@ fn saturated_diff_executor_reports_recoverable_error() {
         ext_hint: Some("txt".to_string()),
     };
     let mut state = DiffViewerState::new_with_jobs(left, right, DiffDisplayMode::Inline, &jobs);
-    assert!(state.is_computing);
+    assert!(state.is_computing());
     state.wait_for_completion();
 
-    assert!(!state.is_computing);
-    assert!(state.text_receiver.is_none());
+    assert!(!state.is_computing());
+    assert!(state.compute_job.is_none());
     assert_eq!(
         state.decode_error.as_deref(),
         Some("Diff computation failed: background job queue is full")
@@ -903,15 +911,12 @@ fn dropping_diff_viewer_cancels_queued_compute() {
         content: "right".to_string(),
         ext_hint: Some("txt".to_string()),
     };
-    let mut state = DiffViewerState::new_with_jobs(left, right, DiffDisplayMode::Inline, &jobs);
-    let result_rx = state.text_receiver.take().unwrap();
+    let state = DiffViewerState::new_with_jobs(left, right, DiffDisplayMode::Inline, &jobs);
+    let cancel = std::sync::Arc::clone(&state.compute_job.as_ref().unwrap().token);
     drop(state);
 
+    assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
     let _ = release_tx.send(());
-    assert!(matches!(
-        result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-        Err(little_clip_core::JobError::Cancelled)
-    ));
 }
 
 #[test]
@@ -965,8 +970,7 @@ fn ansi_long_line_scrolls_to_full_tail_with_readable_colors_in_both_appearances(
             mode: DiffDisplayMode::Inline,
         };
         state.layout_job = layout_job.clone();
-        state.is_computing = false;
-        state.text_receiver = None;
+        state.compute_job = None;
 
         let ctx = egui::Context::default();
         crate::ui_ext::configure_workbench_style(&ctx);

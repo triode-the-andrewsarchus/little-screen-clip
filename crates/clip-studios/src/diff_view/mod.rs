@@ -15,6 +15,7 @@ use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
 use egui::{self, Color32, Rounding, Stroke, Vec2};
 use little_clip_core::HandSide;
 use little_clip_core::ipc::IpcRequest;
+use little_clip_core::jobs::task::Task;
 use little_clip_core::{BackgroundJobs, JobTicket};
 use little_clip_ops::diff::{DiffDisplayMode, DiffResult, DiffTarget, compute_diff};
 use little_clip_ops::image_diff::{ImageDiffOptions, ImageDiffResult};
@@ -154,15 +155,7 @@ pub struct DiffViewerState {
     pub textures_loaded: bool,
     pub decode_error: Option<String>,
     pub status_toast: Option<(crate::ui_ext::StatusMessage, f64)>, // (text, timestamp)
-    pub image_receiver:
-        Option<little_clip_core::jobs::JobReceiver<Result<ImageDiffResult, String>>>,
-    pub text_receiver: Option<
-        std::sync::mpsc::Receiver<
-            Result<(DiffResult, egui::text::LayoutJob), little_clip_core::JobError>,
-        >,
-    >,
-    compute_ticket: Option<JobTicket>,
-    pub is_computing: bool,
+    compute_job: Option<Task<Result<DiffComputation, String>>>,
     pub compute_start_time: std::time::Instant,
     handoff: Option<(
         JobTicket,
@@ -173,25 +166,21 @@ pub struct DiffViewerState {
 
 impl Drop for DiffViewerState {
     fn drop(&mut self) {
-        if let Some(ticket) = &self.compute_ticket {
-            ticket.cancel();
-        }
         self.cancel_handoff();
     }
 }
 
-type ImageDiffJob = (
-    Option<JobTicket>,
-    Option<little_clip_core::jobs::JobReceiver<Result<ImageDiffResult, String>>>,
-    Option<String>,
-);
+enum DiffComputation {
+    Image(ImageDiffResult),
+    Text(DiffResult, egui::text::LayoutJob),
+}
 
 fn spawn_image_diff_worker(
     lhs: &std::sync::Arc<DiffTarget>,
     rhs: &std::sync::Arc<DiffTarget>,
     options: ImageDiffOptions,
     jobs: &BackgroundJobs,
-) -> ImageDiffJob {
+) -> Result<Task<Result<DiffComputation, String>>, String> {
     if let (Some(b1), Some(b2)) = (lhs.image_bytes(), rhs.image_bytes()) {
         if b1.is_empty() || b2.is_empty() {
             let mut missing = Vec::new();
@@ -205,12 +194,12 @@ fn spawn_image_diff_worker(
                 "Image data could not be loaded for {}. Please check that the file exists.",
                 missing.join(" and ")
             );
-            return (None, None, Some(err));
+            return Err(err);
         }
 
         let lhs = std::sync::Arc::clone(lhs);
         let rhs = std::sync::Arc::clone(rhs);
-        let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
+        let job = Task::start_unbounded(jobs, move |_| {
             let (Some(b1), Some(b2)) = (lhs.image_bytes(), rhs.image_bytes()) else {
                 return Err("Failed to obtain image bytes from comparison targets".to_string());
             };
@@ -221,16 +210,13 @@ fn spawn_image_diff_worker(
                 rhs.image_mime(),
                 &options,
             )
+            .map(DiffComputation::Image)
             .map_err(|e| e.to_string())
         });
 
-        (Some(ticket), Some(rx), None)
+        Ok(job)
     } else {
-        (
-            None,
-            None,
-            Some("Failed to obtain image bytes from comparison targets".to_string()),
-        )
+        Err("Failed to obtain image bytes from comparison targets".to_string())
     }
 }
 
@@ -240,16 +226,13 @@ fn spawn_text_diff_worker(
     mode: DiffDisplayMode,
     width: usize,
     jobs: &BackgroundJobs,
-) -> (
-    JobTicket,
-    little_clip_core::jobs::JobReceiver<(DiffResult, egui::text::LayoutJob)>,
-) {
+) -> Task<Result<DiffComputation, String>> {
     let lhs = std::sync::Arc::clone(lhs);
     let rhs = std::sync::Arc::clone(rhs);
-    jobs.submit(std::time::Duration::MAX, move || {
+    Task::start_unbounded(jobs, move |_| {
         let r = compute_diff(&lhs, &rhs, mode, width);
         let job = ansi_to_layout_job(&r.raw_ansi, crate::ui_ext::MONO_FONT_SIZE);
-        (r, job)
+        Ok(DiffComputation::Text(r, job))
     })
 }
 
@@ -270,20 +253,21 @@ impl DiffViewerState {
         let is_img = lhs.is_image() && rhs.is_image();
         let image_options = ImageDiffOptions::default();
 
-        let (compute_ticket, image_receiver, text_receiver, is_computing, decode_error) = if is_img
-        {
-            let (ticket, rx, err) =
-                spawn_image_diff_worker(&lhs, &rhs, image_options.clone(), jobs);
-            let computing = rx.is_some();
-            (ticket, rx, None, computing, err)
+        let (compute_job, decode_error) = if is_img {
+            match spawn_image_diff_worker(&lhs, &rhs, image_options.clone(), jobs) {
+                Ok(job) => (Some(job), None),
+                Err(error) => (None, Some(error)),
+            }
         } else {
             let width = if mode == DiffDisplayMode::SideBySide {
                 150
             } else {
                 120
             };
-            let (ticket, rx) = spawn_text_diff_worker(&lhs, &rhs, mode, width, jobs);
-            (Some(ticket), None, Some(rx), true, None)
+            (
+                Some(spawn_text_diff_worker(&lhs, &rhs, mode, width, jobs)),
+                None,
+            )
         };
 
         let result = DiffResult {
@@ -311,10 +295,7 @@ impl DiffViewerState {
             textures_loaded: false,
             decode_error,
             status_toast: None,
-            image_receiver,
-            text_receiver,
-            compute_ticket,
-            is_computing,
+            compute_job,
             compute_start_time: std::time::Instant::now(),
             handoff: None,
             handoff_cancel: None,
@@ -323,42 +304,14 @@ impl DiffViewerState {
 
     #[cfg(test)]
     pub fn wait_for_completion(&mut self) {
-        if let Some(rx) = self.image_receiver.take() {
-            if let Ok(res) = rx.recv() {
-                match res {
-                    Ok(Ok(r)) => {
-                        self.image_result = Some(std::sync::Arc::new(r));
-                        self.decode_error = None;
-                    }
-                    Ok(Err(e)) => {
-                        self.decode_error = Some(e);
-                        self.image_result = None;
-                    }
-                    Err(e) => {
-                        self.decode_error = Some(format!("Diff computation failed: {e}"));
-                        self.image_result = None;
-                    }
-                }
-            }
-            self.is_computing = false;
-            self.compute_ticket = None;
-        }
-        if let Some(rx) = self.text_receiver.take() {
-            match rx.recv() {
-                Ok(Ok((res, job))) => {
-                    self.result = res;
-                    self.layout_job = job;
-                    self.decode_error = None;
-                }
-                Ok(Err(error)) => {
-                    self.decode_error = Some(format!("Diff computation failed: {error}"));
-                }
-                Err(_) => {
-                    self.decode_error = Some("Diff worker disconnected".to_string());
-                }
-            }
-            self.is_computing = false;
-            self.compute_ticket = None;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while self.is_computing() {
+            self.poll_computation();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "diff computation timed out"
+            );
+            std::thread::yield_now();
         }
     }
 
@@ -366,22 +319,54 @@ impl DiffViewerState {
         self.lhs.is_image() && self.rhs.is_image()
     }
 
-    pub fn recompute(&mut self) {
-        if self.is_image() {
-            if let Some(ticket) = self.compute_ticket.take() {
-                ticket.cancel();
+    pub fn is_computing(&self) -> bool {
+        self.compute_job.is_some()
+    }
+
+    fn poll_computation(&mut self) {
+        let Some(outcome) = self.compute_job.as_ref().and_then(Task::poll) else {
+            return;
+        };
+        self.compute_job = None;
+        let outcome = outcome
+            .map_err(|error| format!("Diff computation failed: {error}"))
+            .and_then(|result| result);
+        match outcome {
+            Ok(DiffComputation::Image(result)) => {
+                self.image_result = Some(std::sync::Arc::new(result));
+                self.textures_loaded = false;
+                self.decode_error = None;
             }
-            let (ticket, rx, err) = spawn_image_diff_worker(
+            Ok(DiffComputation::Text(result, layout_job)) => {
+                self.result = result;
+                self.layout_job = layout_job;
+                self.decode_error = None;
+            }
+            Err(error) => {
+                self.decode_error = Some(error);
+                if self.is_image() {
+                    self.image_result = None;
+                }
+            }
+        }
+    }
+
+    pub fn recompute(&mut self) {
+        // Retire the old read before starting its replacement. Task owns cancellation.
+        self.compute_job = None;
+        if self.is_image() {
+            match spawn_image_diff_worker(
                 &self.lhs,
                 &self.rhs,
                 self.image_options.clone(),
                 BackgroundJobs::global(),
-            );
-            self.compute_ticket = ticket;
-            self.is_computing = rx.is_some();
-            self.image_receiver = rx;
-            self.compute_start_time = std::time::Instant::now();
-            self.decode_error = err;
+            ) {
+                Ok(job) => {
+                    self.compute_job = Some(job);
+                    self.decode_error = None;
+                }
+                Err(error) => self.decode_error = Some(error),
+            }
             self.textures_loaded = false;
         } else {
             let width = if self.mode == DiffDisplayMode::SideBySide {
@@ -389,21 +374,15 @@ impl DiffViewerState {
             } else {
                 120
             };
-            if let Some(ticket) = self.compute_ticket.take() {
-                ticket.cancel();
-            }
-            let (ticket, rx) = spawn_text_diff_worker(
+            self.compute_job = Some(spawn_text_diff_worker(
                 &self.lhs,
                 &self.rhs,
                 self.mode,
                 width,
                 BackgroundJobs::global(),
-            );
-            self.compute_ticket = Some(ticket);
-            self.is_computing = true;
-            self.text_receiver = Some(rx);
-            self.compute_start_time = std::time::Instant::now();
+            ));
         }
+        self.compute_start_time = std::time::Instant::now();
     }
 
     pub fn toggle_mode(&mut self) {

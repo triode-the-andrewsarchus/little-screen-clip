@@ -44,73 +44,12 @@ impl DiffViewerState {
 
         let is_img = self.is_image();
 
-        if is_img {
-            if self.is_computing {
-                ctx.request_repaint();
-                if let Some(ref rx) = self.image_receiver {
-                    match rx.try_recv() {
-                        Ok(Ok(Ok(res))) => {
-                            self.image_result = Some(std::sync::Arc::new(res));
-                            self.decode_error = None;
-                            self.is_computing = false;
-                            self.textures_loaded = false;
-                            self.image_receiver = None;
-                            self.compute_ticket = None;
-                        }
-                        Ok(Ok(Err(err))) => {
-                            self.decode_error = Some(err);
-                            self.image_result = None;
-                            self.is_computing = false;
-                            self.image_receiver = None;
-                            self.compute_ticket = None;
-                        }
-                        Ok(Err(err)) => {
-                            self.decode_error = Some(format!("Diff computation failed: {err}"));
-                            self.image_result = None;
-                            self.is_computing = false;
-                            self.image_receiver = None;
-                            self.compute_ticket = None;
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            self.decode_error = Some("Diff worker thread disconnected".to_string());
-                            self.image_result = None;
-                            self.is_computing = false;
-                            self.image_receiver = None;
-                            self.compute_ticket = None;
-                        }
-                    }
-                }
-            }
-
-            self.ensure_image_textures(ctx);
-        } else if self.is_computing {
+        self.poll_computation();
+        if self.is_computing() {
             ctx.request_repaint();
-            if let Some(ref rx) = self.text_receiver {
-                match rx.try_recv() {
-                    Ok(Ok((res, job))) => {
-                        self.result = res;
-                        self.layout_job = job;
-                        self.is_computing = false;
-                        self.text_receiver = None;
-                        self.decode_error = None;
-                        self.compute_ticket = None;
-                    }
-                    Ok(Err(err)) => {
-                        self.is_computing = false;
-                        self.text_receiver = None;
-                        self.decode_error = Some(format!("Diff computation failed: {err}"));
-                        self.compute_ticket = None;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        self.is_computing = false;
-                        self.text_receiver = None;
-                        self.decode_error = Some("Diff worker disconnected".to_string());
-                        self.compute_ticket = None;
-                    }
-                }
-            }
+        }
+        if is_img {
+            self.ensure_image_textures(ctx);
         }
 
         // Copy shortcut
@@ -145,7 +84,7 @@ impl DiffViewerState {
                 .with_escape_hatch(hatch)
                 .with_footer_hints("Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Mask");
 
-            if self.is_computing {
+            if self.is_computing() {
                 let elapsed = self.compute_start_time.elapsed().as_secs_f32();
                 s = s.with_badge(format!("Comparing... ({:.1}s)", elapsed), Some(accent));
             } else if let Some(res) = &self.image_result {

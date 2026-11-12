@@ -19,7 +19,7 @@ Diagnostic matches are review leads, not a mandate to rewrite every occurrence. 
 ## Changes
 
 - [x] Share immutable diff inputs with background workers. Previously initial text jobs cloned both complete targets and image jobs copied both encoded buffers. Workers now retain the same `Arc<DiffTarget>` snapshots as the viewer, including during recomputation. Image validation and comparison behavior remain unchanged. Validation: diff-view unit tests.
-- [ ] Consolidate diff computation ownership using the existing cancellable task type.
+- [x] Consolidate diff computation ownership using core’s existing `Task`. One optional task replaces two optional receivers, a separate ticket and a boolean. Text/image outcomes share terminal handling; replacement and drop request cancellation through the same owner. Tests cover computation, recomputation cancellation, viewer-drop cancellation, image errors and queue rejection. Validation: 53 diff-view tests and strict studio Clippy.
 - [ ] Remove worthwhile last-use clones and avoid unnecessary intermediate collections.
 
 ## Intentional patterns retained
@@ -33,3 +33,7 @@ Diagnostic matches are review leads, not a mandate to rewrite every occurrence. 
 - Large rendering functions are existing hotspots. Splitting them solely to lower measured complexity would not simplify their behavior.
 
 Architecture baseline: `idiomatic-rust-review` (341,207 NLOC, 11,222 functions, 4.25% duplication, 16 dependency cycles). Compare changes against this baseline rather than treating existing hotspots as new regressions.
+
+## Architecture review
+
+After consolidating diff work, production and test code together shrink by roughly 80 lines; total measured cyclomatic complexity drops by 8 and clone groups by 2. No crate/dependency changes. The comparison labels existing clone blocks in touched files as regressions (unchanged shortcut handling, image controls and egui test setup); the diff introduces no copies of those blocks. Reported Python cycle additions/removals have the same members in reversed order, in untouched scripts. These are comparison artifacts, not grounds for unrelated rewrites.

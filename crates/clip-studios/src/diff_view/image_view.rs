@@ -2,7 +2,7 @@ use super::*;
 
 impl DiffViewerState {
     pub(super) fn ensure_image_textures(&mut self, ctx: &egui::Context) {
-        if self.textures_loaded || self.is_computing {
+        if self.textures_loaded || self.is_computing() {
             return;
         }
 
@@ -133,7 +133,7 @@ impl DiffViewerState {
             palette,
         );
 
-        if self.is_computing {
+        if self.is_computing() {
             self.render_computing_ui(ui, palette);
         } else if let Some(res) = &self.image_result {
             let aspect = (res.width as f32) / (res.height as f32).max(1.0);
