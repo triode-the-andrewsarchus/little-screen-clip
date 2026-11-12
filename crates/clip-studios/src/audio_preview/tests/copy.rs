@@ -59,10 +59,11 @@ fn single_slice_copy_plan_keeps_range_active_filter_and_name() {
 }
 
 #[test]
-fn single_slice_handoff_uses_left_slot_and_skips_clipboard_when_daemon_succeeds() {
+fn single_slice_handoff_publishes_clipboard_even_when_daemon_succeeds() {
     let path = Path::new("/tmp/audio slice.wav");
     let cancelled = AtomicBool::new(false);
     let mut daemon_called = false;
+    let mut copied = None;
     let result = handoff_audio_slice(
         path,
         &cancelled,
@@ -80,10 +81,14 @@ fn single_slice_handoff_uses_left_slot_and_skips_clipboard_when_daemon_succeeds(
             }
             Ok(())
         },
-        |_| panic!("clipboard fallback is skipped after daemon success"),
+        |path| {
+            copied = Some(path.to_path_buf());
+            Ok(())
+        },
     );
     assert_eq!(result, Ok(AudioSliceDelivery::Daemon));
     assert!(daemon_called);
+    assert_eq!(copied.as_deref(), Some(path));
 }
 
 #[test]
@@ -112,6 +117,19 @@ fn single_slice_handoff_falls_back_and_reports_both_failures() {
     .unwrap_err();
     assert!(error.contains("daemon error"));
     assert!(error.contains("clipboard error"));
+}
+
+#[test]
+fn successful_daemon_push_does_not_hide_a_failed_desktop_copy() {
+    let error = handoff_audio_slice(
+        Path::new("/tmp/segment.wav"),
+        &AtomicBool::new(false),
+        |_| Ok(()),
+        |_| Err("selection unavailable".into()),
+    )
+    .unwrap_err();
+    assert!(error.contains("system clipboard failed"));
+    assert!(error.contains("selection unavailable"));
 }
 
 #[test]
@@ -171,7 +189,10 @@ fn audio_batch_copy_preserves_selection_order_and_pushes_ordered_files() {
             }
             Ok(())
         },
-        |_| panic!("clipboard fallback is skipped after daemon success"),
+        |paths| {
+            assert_eq!(paths, expected.as_slice());
+            Ok(())
+        },
     )
     .unwrap();
     assert_eq!(sent.into_inner().unwrap(), expected);
@@ -227,7 +248,10 @@ fn audio_inspect_left_copy_extracts_exact_mono_payload_for_left_hand() {
             }
             other => panic!("expected one PushFile request, got {other:?}"),
         },
-        |_| panic!("clipboard fallback is skipped after fake daemon success"),
+        |paths| {
+            assert_eq!(paths, std::slice::from_ref(&expected_output));
+            Ok(())
+        },
     )
     .expect("production FFmpeg extraction and fake handoff should succeed");
     assert_eq!(sent_path.as_deref(), Some(expected_output.as_path()));
@@ -272,7 +296,10 @@ fn audio_batch_copy_reports_mixed_and_total_failures() {
             }
             Ok(())
         },
-        |_| panic!("clipboard fallback is skipped after daemon success"),
+        |paths| {
+            assert_eq!(paths, &[plans[0].output.clone(), plans[2].output.clone()]);
+            Ok(())
+        },
     )
     .unwrap();
     assert!(result.contains("Copied 2/3"));

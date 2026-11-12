@@ -849,18 +849,26 @@ pub(super) fn handoff_audio_files(
             hand: little_clip_core::HandSide::Left,
         }
     };
-    match send_to_daemon(&request) {
-        Ok(()) => Ok(AudioSliceDelivery::Daemon),
-        Err(ipc_error) => {
-            if cancelled.load(Ordering::Acquire) {
-                return Err("Audio slice copy cancelled".to_owned());
-            }
-            copy_to_system(paths).map_err(|clipboard_error| {
-                format!("Daemon handoff failed ({ipc_error}); system clipboard failed ({clipboard_error})")
-            })?;
-            Ok(AudioSliceDelivery::SystemClipboard)
-        }
+    let daemon_result = send_to_daemon(&request);
+    if daemon_result.is_err() && cancelled.load(Ordering::Acquire) {
+        return Err("Audio slice copy cancelled".to_owned());
     }
+    // A successful hand push does not acknowledge OS clipboard publication.
+    // Publish the file URIs directly as well, and surface a failure instead of
+    // reporting success while an unrelated previous text selection remains.
+    copy_to_system(paths).map_err(|clipboard_error| match &daemon_result {
+        Ok(()) => {
+            format!("Audio reached Left Hand, but system clipboard failed: {clipboard_error}")
+        }
+        Err(ipc_error) => format!(
+            "Daemon handoff failed ({ipc_error}); system clipboard failed ({clipboard_error})"
+        ),
+    })?;
+    Ok(if daemon_result.is_ok() {
+        AudioSliceDelivery::Daemon
+    } else {
+        AudioSliceDelivery::SystemClipboard
+    })
 }
 
 pub fn run_audio_command_cancellable(

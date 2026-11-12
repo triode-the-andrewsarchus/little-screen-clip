@@ -200,3 +200,14 @@ the player alive. Pixel checks verify overlay appearance/disappearance and the
 full viewport; the stereo Audio Studio handoff, folder return and process cleanup
 also pass. Caption fixtures use ordinary two-second cues; direct glyph-pixel
 checks avoid OCR errors on upscaled low-resolution subtitles.
+
+## Subsequent runtime fixes
+
+- [x] Publish Audio Studio single/multi-segment copies to the system clipboard
+  even when the daemon accepts its hand push. Daemon success does not acknowledge
+  clipboard publication; a clipboard failure must surface instead of leaving
+  stale text behind while reporting success. Artifacts remain retained before
+  any handoff. Fourteen focused copy tests pass, including successful-daemon
+  clipboard publication, failure reporting, ordered batches and actual PCM.
+  The private desktop regression reproduces stale text with the previous build
+  using a daemon that acknowledges without publishing the selection.
