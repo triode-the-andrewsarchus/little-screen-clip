@@ -177,3 +177,9 @@ No newly introduced high-complexity function remains in the comparison.
   the requested frame. Software fallback excludes hardware decoder factories
   in this disposable process, because decodebin3 ignores the legacy software flag.
   Worker/reference tests and the eleven-format host matrix pass afterward.
+
+- [x] Give Escape priority to an open video context menu before fullscreen or
+  viewer dismissal. Egui 0.27 context menus have their own state, so retain the
+  response's open state before the menu processes Escape. Overlay areas stay
+  below menus, and an open menu keeps the overlay visible. The regression test
+  verifies menu, fullscreen and viewer dismissal in that order.

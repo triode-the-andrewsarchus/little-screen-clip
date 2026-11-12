@@ -115,17 +115,19 @@ impl Video {
         if ui.is_enabled() && !ui.ctx().wants_keyboard_input() {
             shortcuts(ui, player, &mut self.fullscreen);
         }
+        let response = picture(ui, player, self.fullscreen);
+        let rect = response.rect;
+        let menu_was_open =
+            response.context_menu_opened() || ui.ctx().memory(|m| m.any_popup_open());
+        response.context_menu(|ui| playback_menu(ui, player));
         let overlay_visible = overlay_visibility(
             ui,
             was_fullscreen != self.fullscreen,
             &mut self.last_activity,
-        );
+        ) || response.context_menu_opened();
         if self.fullscreen && !overlay_visible {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         }
-        let response = picture(ui, player, self.fullscreen);
-        let rect = response.rect;
-        response.context_menu(|ui| playback_menu(ui, player));
         if response.double_clicked() {
             self.fullscreen = !self.fullscreen;
             ui.ctx()
@@ -157,12 +159,14 @@ impl Video {
                 ));
             }
         }
-        dismiss_key(ui, &mut self.fullscreen, close);
+        dismiss_key(ui, &mut self.fullscreen, close, menu_was_open);
     }
 }
-fn dismiss_key(ui: &Ui, fullscreen: &mut bool, close: &mut bool) {
+fn dismiss_key(ui: &Ui, fullscreen: &mut bool, close: &mut bool, menu_was_open: bool) {
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-        if *fullscreen {
+        if menu_was_open {
+            ui.ctx().memory_mut(|m| m.close_popup());
+        } else if *fullscreen {
             *fullscreen = false;
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
@@ -224,7 +228,7 @@ fn fullscreen_controls(
     let mut exit = false;
     let ctx = ui.ctx().clone();
     egui::Area::new(egui::Id::new("video_fullscreen_title"))
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Middle)
         .fixed_pos(rect.left_top() + egui::vec2(16.0, 16.0))
         .show(&ctx, |ui| {
             overlay_frame().show(ui, |ui| {
@@ -250,7 +254,7 @@ fn fullscreen_controls(
             });
         });
     egui::Area::new(egui::Id::new("video_fullscreen_transport"))
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Middle)
         .fixed_pos(egui::pos2(rect.left() + 16.0, rect.bottom() - 64.0))
         .show(&ctx, |ui| {
             overlay_frame().show(ui, |ui| {
@@ -358,6 +362,10 @@ fn clock(ms: u64) -> String {
 }
 
 fn playback_menu(ui: &mut Ui, player: &mut Session) {
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.close_menu();
+        return;
+    }
     let mut options = player.options().clone();
     ui.menu_button("Subtitles", |ui| {
         ui.checkbox(&mut options.subtitles_enabled, "Enable subtitles");
@@ -404,4 +412,35 @@ fn overlay_frame() -> egui::Frame {
         .fill(egui::Color32::from_black_alpha(160))
         .inner_margin(8.0)
         .rounding(6.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn escape_dismisses_the_menu_before_fullscreen_or_the_viewer() {
+        let ctx = egui::Context::default();
+        let mut fullscreen = true;
+        let mut close = false;
+        for (menu_was_open, expected_fullscreen, expected_close) in [
+            (true, true, false),
+            (false, false, false),
+            (false, false, true),
+        ] {
+            let mut input = egui::RawInput::default();
+            input.events.push(egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    dismiss_key(ui, &mut fullscreen, &mut close, menu_was_open)
+                });
+            });
+            assert_eq!((fullscreen, close), (expected_fullscreen, expected_close));
+        }
+    }
 }
