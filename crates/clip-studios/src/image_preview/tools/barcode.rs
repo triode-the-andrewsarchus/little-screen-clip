@@ -80,7 +80,7 @@ impl ImagePreviewState {
         self.barcode_retry_stamp = None;
         self.barcode_retry_request = None;
         self.barcode_queue_status = None;
-        let worker_control = control.clone();
+        let worker_control = control;
         let worker_request = request.clone();
         let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
             let start = std::time::Instant::now();

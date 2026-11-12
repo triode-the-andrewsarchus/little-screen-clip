@@ -136,8 +136,8 @@ impl Mounts {
         };
         let label = entry.label.clone();
         self.status = Some(format!("Mounting '{label}'…"));
-        let target = device_path.clone();
-        let (ticket, receiver) = jobs.submit(Duration::MAX, move || mount_block_device(&target));
+        let (ticket, receiver) =
+            jobs.submit(Duration::MAX, move || mount_block_device(&device_path));
         self.pending = Some(PendingJob {
             action: PendingAction::Mount,
             _ticket: ticket,
@@ -158,9 +158,14 @@ impl Mounts {
         let kind = entry.kind;
         let label = entry.label.clone();
         self.status = Some(format!("Unmounting '{label}'…"));
-        let mp = mount_point.clone();
         let (ticket, receiver) = jobs.submit(Duration::MAX, move || {
-            unmount_target(&mp, device_path.as_deref(), filesystem.as_deref(), kind).map(|()| mp)
+            unmount_target(
+                &mount_point,
+                device_path.as_deref(),
+                filesystem.as_deref(),
+                kind,
+            )
+            .map(|()| mount_point)
         });
         self.pending = Some(PendingJob {
             action: PendingAction::Unmount,

@@ -356,7 +356,7 @@ pub(super) fn interface(path: &Path) -> Result<Document, String> {
         _ => unreachable!(),
     };
     let mut document = Document {
-        path: canonical.clone(),
+        path: canonical,
         interface_directory: stat.is_dir(),
         kind,
         title,

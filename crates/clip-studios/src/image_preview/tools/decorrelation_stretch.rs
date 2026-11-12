@@ -166,7 +166,7 @@ impl ImagePreviewState {
         self.dcs_state.worker_ticket = Some(ticket);
         self.dcs_state.worker_rx = Some(rx);
         self.dcs_state.worker_cancel = Some(cancel);
-        self.dcs_state.request_stamp = Some(request_stamp.clone());
+        self.dcs_state.request_stamp = Some(request_stamp);
         self.dcs_state.retry_request = Some(request);
         self.dcs_state.is_computing = true;
         self.dcs_state.queue_status = None;

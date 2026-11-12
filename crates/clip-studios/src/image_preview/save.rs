@@ -753,7 +753,7 @@ impl ImagePreviewState {
                     if self.input_stamp() == stamp {
                         if !self.keep_source_on_save_as {
                             self.path = Some(result.path.clone());
-                            self.title = name.clone();
+                            self.title = name;
                         }
                         self.file_size_bytes = result.file_size;
                         self.mime = little_clip_core::item::guess_image_mime(&result.path);

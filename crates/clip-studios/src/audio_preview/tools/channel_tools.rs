@@ -411,7 +411,7 @@ impl AudioPreviewState {
             self.channel_tools.derived_job = None;
             let left = Arc::clone(&source.ch1_samples);
             let right = Arc::clone(right);
-            self.channel_tools.source_samples = Some([left.clone(), right.clone()]);
+            self.channel_tools.source_samples = Some([left, right]);
             let source = Arc::clone(source);
             let (ticket, receiver) = BackgroundJobs::global()
                 .submit(Duration::MAX, move || build_channel_signals(&source));

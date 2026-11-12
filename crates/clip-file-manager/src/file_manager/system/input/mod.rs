@@ -281,7 +281,7 @@ pub(super) fn collect(
     let topology = initial_topology(
         document,
         summary,
-        [usb, owner, hid.clone(), input.clone(), Some(sys.into())]
+        [usb, owner, hid.clone(), input, Some(sys.into())]
             .into_iter()
             .flatten(),
     );

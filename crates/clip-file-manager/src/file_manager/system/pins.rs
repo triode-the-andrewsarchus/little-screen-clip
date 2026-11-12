@@ -313,7 +313,7 @@ fn gpio_controller(
                 buses::add(
                     topology,
                     document,
-                    path.clone(),
+                    path,
                     format!("Legacy controller · line offset {offset}"),
                     Some(anchor),
                 );

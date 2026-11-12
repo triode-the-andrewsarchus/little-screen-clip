@@ -886,7 +886,7 @@ where
                             .iter()
                             .position(|n| n.note_name.starts_with(CHROMATIC_NOTE_NAMES[class_idx]))
                         {
-                            chord_notes[pos] = yin_note.clone();
+                            chord_notes[pos] = yin_note;
                             if pos > 0 {
                                 chord_notes.swap(0, pos);
                             }

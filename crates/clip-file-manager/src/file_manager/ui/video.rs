@@ -29,7 +29,6 @@ impl FileManager {
             ui.available_height(),
         );
         let nearby: Vec<_> = range
-            .clone()
             .filter_map(|index| directory.entries.get(self.visible[index]))
             .filter(|entry| entry.is_video())
             .collect();

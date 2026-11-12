@@ -431,7 +431,7 @@ fn ubi(
             parent = Some(buses::add(
                 &mut topology,
                 document,
-                mtd.clone(),
+                mtd,
                 format!("Backing mtd{number}"),
                 None,
             ));

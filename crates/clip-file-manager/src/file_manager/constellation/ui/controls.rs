@@ -517,7 +517,7 @@ impl ConstellationState {
                 truncated
             }
         } else {
-            rel_str.to_string()
+            rel_str
         };
 
         painter.text(

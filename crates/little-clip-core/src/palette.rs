@@ -422,7 +422,6 @@ impl AppPalette {
 
         Self {
             is_dark,
-            harmonies: harmonies.clone(),
 
             undo_border: harmonies.warm_attention.clone(),
             chrome_border: if is_dark { "#8c8c8c" } else { "#707070" }.to_owned(),
@@ -438,6 +437,7 @@ impl AppPalette {
 
             cursor_border: harmonies.warm_attention.clone(),
             selected_border: harmonies.triadic_1.clone(),
+            harmonies,
 
             url_color: link.to_owned(),
 

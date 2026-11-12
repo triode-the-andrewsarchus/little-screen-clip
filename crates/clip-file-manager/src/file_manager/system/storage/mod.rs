@@ -317,7 +317,7 @@ fn dependency_group(document: &mut Document, sys: &Path, name: &str, label: &str
         if index == 32 {
             document.facts.push(Fact::failure(
                 format!("{label} inventory"),
-                directory.clone(),
+                directory,
                 io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "Dependency inventory capped at 32 links",

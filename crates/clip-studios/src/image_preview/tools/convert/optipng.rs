@@ -78,7 +78,7 @@ impl ImagePreviewState {
             }
         });
         self.convert_state.optipng_request = Some(work.request.clone());
-        self.convert_state.optipng_process_control = Some(control.clone());
+        self.convert_state.optipng_process_control = Some(control);
         self.convert_state.optipng_job_ticket = Some(ticket);
         self.convert_state.optipng_rx = Some(rx);
         self.convert_state.is_running_optipng = true;

@@ -486,7 +486,7 @@ impl NodeCanvasState {
 
                         self.refresh_saved_script_editors();
                         let recipe = Recipe {
-                            name: new_name.clone(),
+                            name: new_name,
                             description: "Custom user recipe".to_string(),
                             input_type: little_clip_ops::pipeline::types::RecipeInputType::Any,
                             tags: vec!["custom".to_string()],

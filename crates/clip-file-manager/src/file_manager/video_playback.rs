@@ -92,7 +92,7 @@ impl Session {
                 seek_ms: None,
                 playing: true,
                 volume: 1.0,
-                options: options.clone(),
+                options,
             },
             pending,
             delivery,

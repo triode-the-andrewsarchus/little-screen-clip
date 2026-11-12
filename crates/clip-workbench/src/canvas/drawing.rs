@@ -488,7 +488,7 @@ pub(super) fn render_node_card(
         painter.text(
             btm_pos,
             egui::Align2::LEFT_BOTTOM,
-            preview_short.to_string(),
+            preview_short,
             egui::FontId::proportional(9.5 * zoom),
             crate::ui_ext::contrast_text_c32_on(
                 hex_to_c32(&palette.colors.surface_recessed),

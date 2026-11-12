@@ -55,7 +55,7 @@ impl DiffViewerState {
             }
             Ok(Ok(Err(error))) => {
                 self.status_toast = Some((
-                    crate::ui_ext::StatusMessage::new(crate::icons::Icon::Close, error.to_string()),
+                    crate::ui_ext::StatusMessage::new(crate::icons::Icon::Close, error),
                     now,
                 ));
                 self.handoff = None;

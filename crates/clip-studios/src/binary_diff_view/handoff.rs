@@ -214,7 +214,7 @@ impl BinaryDiffViewState {
             }
             Ok(Ok(Err(error))) => {
                 self.status_toast.set(
-                    crate::ui_ext::StatusMessage::new(crate::icons::Icon::Close, error.to_string()),
+                    crate::ui_ext::StatusMessage::new(crate::icons::Icon::Close, error),
                     now,
                 );
                 self.handoff = None;

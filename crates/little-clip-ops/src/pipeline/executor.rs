@@ -625,9 +625,9 @@ else:
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0.10);
                 let b1 = super::content::image_bytes(&left_path)
-                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
                 let b2 = super::content::image_bytes(&right_path)
-                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
                 let opts = crate::image_diff::ImageDiffOptions {
                     threshold,
                     ..Default::default()
