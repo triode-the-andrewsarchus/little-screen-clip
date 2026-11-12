@@ -4,6 +4,9 @@ use std::path::Path;
 /// Bounded WaveJSON parsing shared by rendering and graphical editing.
 pub mod wavejson;
 
+/// Preserving scene snapshots and transactional native drawing edits.
+pub mod drawing;
+
 /// Maximum decoded UTF-8 source size for an explicit native drawing.
 pub const MAX_DRAWING_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 

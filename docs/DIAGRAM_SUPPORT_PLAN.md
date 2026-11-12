@@ -991,3 +991,27 @@ imported upstream clone groups as repository growth, with no new application
 hotspot and no increase in maximum CCN. Source provenance and the exact patch
 scope are recorded in `vendor/spark/README.integration.md`. The interactive
 whiteboard canvas and the other priority graphical editors remain outstanding.
+
+
+## Preserving canvas edit model
+
+The shared core drawing model now prepares bounded immutable scene snapshots with
+native document storage. Gesture transactions create ordinary shapes/paths, move
+compositions, change one paint property, or retain deletions as tombstones.
+Groups, bound labels and frame children follow a selected composition. Moving a
+box updates its attached arrow endpoint without dragging the other connected box;
+arrow labels follow the changed center once. Rigid arrow movement preserves local
+points. Stretching rotated/elbowed routes is explicitly refused until their
+routing rules are integrated, rather than breaking their bindings.
+
+Unknown properties, exact numbers, malformed neighboring records, unused files
+and tombstones remain in the native document. Unsupported or locked compositions
+reject atomically. Semantic no-ops retain the original source bytes; actual edits
+may reformat JSON. Property-specific paint edits retain mixed group fills.
+Element revisions advance only on actual changes. The authored example now uses
+real label bindings and still renders with no compatibility diagnostics.
+
+Eight model tests pass for connected movement, mixed group styles, arrow labels,
+tombstones/resources, no-op and failed-gesture behavior, native path creation,
+budgets and rotated coordinate correspondence. Canvas UI work is in progress;
+this model checkpoint does not claim completed graphical editor support.
