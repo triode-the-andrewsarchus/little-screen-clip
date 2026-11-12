@@ -72,6 +72,7 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
         super::fonts::metric_fonts(),
         "Arimo",
         super::ImagePolicy::Block,
+        super::ViewportPolicy::FitContent,
     )
 }
 

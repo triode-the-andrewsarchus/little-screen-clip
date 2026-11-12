@@ -437,6 +437,12 @@ fn svg_viewbox(root: roxmltree::Node<'_, '_>) -> Result<Option<resvg::usvg::NonZ
         .ok_or_else(|| "Diagram viewBox has non-positive dimensions".into())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewportPolicy {
+    FitContent,
+    Preserve,
+}
+
 // Outline and namespace each document before stacking, so marker, gradient and
 // clipping IDs cannot cross between independently authored diagrams.
 fn compose_svg(
@@ -444,6 +450,7 @@ fn compose_svg(
     fonts: &resvg::usvg::fontdb::Database,
     family: &str,
     images: ImagePolicy,
+    viewport_policy: ViewportPolicy,
 ) -> Result<(String, Vec<String>), String> {
     use resvg::usvg::{NodeExt, TreeWriting};
     use std::fmt::Write;
@@ -458,7 +465,11 @@ fn compose_svg(
         // Some generators size the root from shapes alone, excluding external
         // labels. Text has been outlined, so fit its real glyph geometry before
         // nesting rather than clipping labels or guessing a fixed text margin.
-        if let Some(bounds) = tree.root.calculate_bbox() {
+        // Authored native viewports already account for image/frame clips.
+        // NodeExt's geometric bbox includes invisible portions of clipped images.
+        if viewport_policy == ViewportPolicy::FitContent
+            && let Some(bounds) = tree.root.calculate_bbox()
+        {
             let old = tree.view_box.rect;
             let viewport = resvg::usvg::NonZeroRect::from_ltrb(
                 old.left().min(bounds.left() - 2.0),

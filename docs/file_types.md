@@ -220,7 +220,7 @@
         - [ ] DBML database markup (`dbml`)
         - [x] BPMN business process (`bpmn`, `bpmn2`) — native authored-DI/automatic layout, bounded large/small previews and diagnostics
         - [ ] Diagrams.net / draw.io (`drawio`, `diagramsnet`)
-        - [ ] Excalidraw whiteboards (`excalidraw`)
+        - [x] Excalidraw whiteboards (`excalidraw`) — native bounded rendering with handwriting, raster assets and diagnostics; graphical canvas pending
         - [x] WaveDrom digital timing diagrams (`wavedrom`)
         - [ ] Structurizr software architecture (`structurizr`)
         - [ ] BlockDiag family (`blockdiag`, `seqdiag`, `actdiag`, `nwdiag`, `packetdiag`, `rackdiag`)
@@ -542,7 +542,7 @@
     - [ ] `.vst` — Microsoft Visio template (May need disambiguation with VST audio plugins)
     - [ ] `.drawio`, `.dio` — diagrams.net / draw.io diagram (May need disambiguation with digital I/O data on `.dio`; also commonly saved as compound `.drawio.xml`, `.drawio.svg`, `.drawio.png`)
       - [ ] XML root metadata (`<mxfile>`: agent, version, etag, modified, compressed/raw boolean, page IDs/names)
-    - [ ] `.excalidraw`, `.excalidraw.json` — Excalidraw whiteboard drawing
+    - [x] `.excalidraw`, `.excalidraw.json` — native rendering, highlighted source/live preview and guarded saves; graphical canvas pending
     - [ ] `.uxf` — UMLet eXchange Format
   - [ ] Business process and architecture modeling
     - [x] `.bpmn`, `.bpmn2` — BPMN 2.0 XML with highlighted source, live preview, diagnostics and guarded saves

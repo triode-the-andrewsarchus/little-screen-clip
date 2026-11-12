@@ -126,6 +126,7 @@ mod tests {
             super::super::default_fonts(),
             "Noto Sans CJK JP",
             Policy::EmbeddedRaster,
+            super::super::ViewportPolicy::FitContent,
         )
         .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");

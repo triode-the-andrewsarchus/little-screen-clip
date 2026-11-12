@@ -42,8 +42,12 @@ pub(super) fn render(source: &str) -> Result<Rendered, String> {
         super::fonts::metric_fonts(),
         "Helvetica",
         ImagePolicy::EmbeddedRaster,
+        super::ViewportPolicy::Preserve,
     )?;
-    let layout = viewport_after_composition(&svg, viewport.origin)?;
+    let layout = DrawingLayout {
+        origin: viewport.origin,
+        size: viewport.size,
+    };
     if let Some(metadata) = metadata {
         // Keep the native asset notices as inert text after outlining removes
         // font programs and the original SVG's metadata carrier.
@@ -69,24 +73,6 @@ fn attribution(svg: &str) -> Result<Option<String>, String> {
         .find(|node| node.has_tag_name("metadata"))
         .map(|node| quick_xml::escape::escape(&svg[node.range()]).into_owned()))
 }
-fn viewport_after_composition(svg: &str, origin: [f64; 2]) -> Result<DrawingLayout, String> {
-    let document = super::svg_document(svg)?;
-    let inner = document
-        .root_element()
-        .descendants()
-        .skip(1)
-        .find(|node| node.has_tag_name("svg"))
-        .ok_or("Composed drawing has no viewport")?;
-    let bounds = super::svg_viewbox(inner)?.ok_or("Composed drawing has no viewBox")?;
-    Ok(DrawingLayout {
-        origin: [
-            origin[0] + f64::from(bounds.x()),
-            origin[1] + f64::from(bounds.y()),
-        ],
-        size: [f64::from(bounds.width()), f64::from(bounds.height())],
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,7 +80,15 @@ mod tests {
     fn native_scene_keeps_real_fonts_raster_pixels_and_static_attribution() {
         let source = include_str!("../../../../docs/examples/diagrams/drawing.excalidraw");
         let rendered = render(source).unwrap();
-        assert!(rendered.drawing.unwrap().valid());
+        // The image is clipped to its authored box. Its invisible expanded
+        // symbol must not enlarge the 480×275 scene plus ten-unit padding.
+        assert_eq!(
+            rendered.drawing,
+            Some(DrawingLayout {
+                origin: [-10.0, 30.0],
+                size: [500.0, 295.0],
+            })
+        );
         assert!(!rendered.svg.contains("<text"));
         assert!(!rendered.svg.contains("<script"));
         assert!(rendered.svg.contains("drawing-attribution"));

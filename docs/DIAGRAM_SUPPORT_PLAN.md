@@ -921,14 +921,17 @@ labels use the shared metric-compatible font database. The adapter needs no
 second font catalog loader, alias table or font decoding dependency.
 
 The source-space viewport also survives the helper protocol, with finite-size
-validation and compensation for composition's actual outlined-content bounds.
-It will supply canvas coordinates without fitting the view again after every
-edit. Native geometry, text, raster, output and helper-process budgets all remain
+validation and preservation of the native authored viewport. It will supply
+canvas coordinates without fitting the view again after every edit. Native geometry, text, raster, output and helper-process budgets all remain
 explicit; retained compatibility diagnostics appear beside the preview.
 
 The focused adapter tests pass for embedded pixels/static notices, translated
 source correspondence, protocol geometry rejection and source-size limits.
-Workspace, real-host dispatch and mixed-script outline checks are being run.
+All four real-host dispatch checks, syntax/source save checks and mixed-script
+outline tests passed in the serial workspace run. Visual inspection of the real
+file-manager helper output confirmed handwriting, shapes, freehand and pixels.
+Full-workspace verification also exposed a shared JSON-number/SOG compatibility
+issue, which is being corrected separately.
 The graphical canvas is still pending. It must use fresh worker-prepared scene
 snapshots, one source-history transaction per gesture, and the existing guarded
 save/close flow. Semantic JSON preservation includes unknown records, resources,
@@ -942,3 +945,19 @@ existing 195; there is no new application hotspot or dependency cycle. The tool
 still flags the extracted pre-existing text branch (CCN 16) and a clone-group
 increase in vendor/test code; those require review rather than unrelated changes
 to pristine renderer algorithms or shared test infrastructure.
+
+### Clipped-image viewport correction
+
+- [x] Preserve the native drawing viewport through SVG composition. The shared
+  content-fitting mode uses usvg's geometric bbox, which includes invisible
+  portions of clipped images. In the authored fixture, an image symbol expanded
+  the 500×295 viewport to 844×454 despite those extra pixels being clipped.
+  Native drawings now select authored bounds; other generators retain their
+  existing content fitting. This also removes unnecessary viewport reconstruction
+  in the adapter. The regression assertion and real bounded helper both report
+  source origin (-10, 30), size 500×295 and a correctly fitted 1000×590 preview.
+  The rendered artifact was visually inspected with no omission warnings.
+
+Architecture comparison for this fix adds no function or duplication regression;
+the sole reported cycle delta is the same untouched Python benchmark cycle with
+its members listed in a different order.

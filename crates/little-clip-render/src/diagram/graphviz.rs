@@ -46,6 +46,7 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
         super::fonts::metric_fonts(),
         "Tinos",
         super::ImagePolicy::Block,
+        super::ViewportPolicy::FitContent,
     )?;
     warnings.extend(limitations);
     Ok((svg, warnings))

@@ -77,6 +77,7 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
         super::default_fonts(),
         "Noto Sans CJK JP",
         super::ImagePolicy::Block,
+        super::ViewportPolicy::FitContent,
     )?;
     warnings.extend(limitations);
     Ok((svg, warnings))
