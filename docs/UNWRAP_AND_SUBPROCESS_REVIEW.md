@@ -38,7 +38,7 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Review all remaining source sites: the [call-site index](UNWRAP_AND_SUBPROCESS_REVIEW_INDEX.md) records 286 unwraps outside tests/examples (including 11 offline fixture-tool calls and four standalone helper calls), plus all 74 production command constructor sites. Several calls on one line count separately. Parent-gated retrieval benchmarks/quality fixtures are test-only.
 - [x] Retain checked binary conversions, fixed constructors and validated state transitions. Retain deliberate catalog assertions and fail-fast behavior for coupled poisoned state; the index explicitly records remaining panic risks rather than calling every unwrap infallible. No workspace-wide unwrap prohibition or conversion to `expect` was added.
-- [x] Review all external commands, including dynamically selected programs. Remove requirements for `sha256sum`, the `niri` CLI client, `optipng`, `prlimit` and `blender-thumbnailer`. The compositor, Bubblewrap and other documented engines remain requirements where applicable. Own helper processes remain intentional for isolation, licensing and cancellation.
+- [x] Review all external commands, including dynamically selected programs. Remove application runtime requirements for `sha256sum`, the `niri` CLI client, `optipng`, `prlimit` and `blender-thumbnailer`. Build helper scripts still use the system coreutils `sha256sum` for artifact versioning. The compositor, Bubblewrap and other documented engines remain requirements where applicable. Own helper processes remain intentional for isolation, licensing and cancellation.
 
 Native replacements for PDF engines, full SVG/XCF/RAW rendering, ImageMagick pipeline semantics and optional model runtimes are larger compatibility projects. Existing native paths already cover suitable subsets. User-chosen editors, arbitrary pipeline scripts, clipboard compatibility, desktop storage authority and compositor integration are intentional external interfaces. The index records the rationale for each retained site.
 
@@ -53,6 +53,6 @@ The tool labels the comparison **REGRESSION**. Its substantive function flag is 
 - [x] `cargo fmt --all --check`, `git diff --check`.
 - [x] `cargo clippy --workspace --all-targets -j4 -- -D warnings`.
 - [x] Standalone GPL read-ahead helper: locked Cargo check, reusing the existing target directory.
-- [ ] `cargo test --workspace -j4 -- --test-threads=1` (running).
+- [x] `cargo test --workspace -j4 -- --test-threads=1`: 2,862 passed, 36 ignored, zero failures and no compiler warnings.
 
 Targeted validation is recorded above. The packaged NKI sandbox and downloaded Blender reference tests were also run explicitly. Builds use four Cargo jobs, no cleanup sweeps and no new target tree; the user’s local `.cargo/config.toml` change is excluded from commits.
