@@ -52,6 +52,7 @@ pub static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
         little_clip_core::syntax::TYPESCRIPT_SUBLIME_SYNTAX,
         little_clip_core::syntax::PIKCHR_SUBLIME_SYNTAX,
         little_clip_core::syntax::SVGBOB_SUBLIME_SYNTAX,
+        little_clip_core::syntax::MERMAID_SUBLIME_SYNTAX,
     ] {
         match syntect::parsing::SyntaxDefinition::load_from_str(definition, true, None) {
             Ok(syntax) => builder.add(syntax),
@@ -269,11 +270,8 @@ impl TextPreviewData {
         } else {
             detect_language(&content, extension)
         };
-        let is_markdown = extension
-            .map(|extension| {
-                extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
-            })
-            .unwrap_or(false);
+        let is_markdown =
+            extension.and_then(little_clip_core::syntax::map_extension_to_language) == Some("md");
 
         Arc::new(Self {
             character_count: content.chars().count(),

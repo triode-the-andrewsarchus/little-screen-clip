@@ -1,0 +1,28 @@
+%YAML 1.2
+---
+name: Mermaid
+file_extensions: [mermaid, mmd]
+scope: source.mermaid
+contexts:
+  main:
+    - match: '%%.*$'
+      scope: comment.line.mermaid
+    - match: '"'
+      scope: punctuation.definition.string.begin.mermaid
+      push: string
+    - match: '\b(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|timeline|journey|mindmap|subgraph|end|participant|actor|class|note|Note|loop|alt|else|opt|par|and|rect|title|accTitle|accDescr|style|classDef|click|linkStyle|direction)\b'
+      scope: keyword.control.mermaid
+    - match: '\b(LR|RL|TD|TB|BT)\b'
+      scope: storage.modifier.mermaid
+    - match: '[-.=]+[>|]|[<|][-.-]+|[{}\[\]()]'
+      scope: keyword.operator.mermaid
+    - match: '\b[0-9]+(?:\.[0-9]+)?\b'
+      scope: constant.numeric.mermaid
+  string:
+    - match: '\\.'
+      scope: constant.character.escape.mermaid
+    - match: '"'
+      scope: punctuation.definition.string.end.mermaid
+      pop: true
+    - match: '[^"\\]+'
+      scope: string.quoted.double.mermaid

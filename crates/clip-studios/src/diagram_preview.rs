@@ -14,6 +14,7 @@ pub struct Preview {
     due: Option<Instant>,
     texture: Option<egui::TextureHandle>,
     aspect: Option<f32>,
+    prepared_at: Option<Instant>,
     error: Option<String>,
     stale: bool,
 }
@@ -39,6 +40,7 @@ impl Preview {
         self.pending = None;
         self.source = Some((format, source.to_owned()));
         self.due = Some(Instant::now() + Duration::from_millis(120));
+        self.prepared_at = None;
         self.error = None;
         self.stale = true;
     }
@@ -55,10 +57,20 @@ impl Preview {
             return;
         }
         self.update_source(format, source);
+        if format == Format::Mermaid
+            && self.pending.is_none()
+            && self.due.is_none()
+            && self
+                .prepared_at
+                .is_some_and(|at| at.elapsed() >= Duration::from_secs(60))
+        {
+            self.due = Some(Instant::now());
+        }
         if let Some(result) = self.pending.as_ref().and_then(Task::poll) {
             self.pending = None;
             match result {
                 Ok(Ok(pixels)) => {
+                    self.prepared_at = Some(Instant::now());
                     self.aspect = Some(pixels.image.size[0] as f32 / pixels.image.size[1] as f32);
                     self.texture = Some(ui.ctx().load_texture(
                         "native diagram",
@@ -77,6 +89,10 @@ impl Preview {
         }
         if self.due.is_some_and(|due| Instant::now() >= due) && self.pending.is_none() {
             self.due = None;
+            // Count failed refreshes too, so an expired image cannot cause a
+            // render attempt every frame after a transient worker failure.
+            self.prepared_at = Some(Instant::now());
+            self.stale = true;
             let source = source.to_owned();
             self.pending = Some(Task::start(
                 BackgroundJobs::global(),
@@ -115,6 +131,9 @@ impl Preview {
                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
+        }
+        if format == Format::Mermaid && self.texture.is_some() {
+            ui.ctx().request_repaint_after(Duration::from_secs(60));
         }
         if self.pending.is_some() || self.due.is_some() {
             ui.label(format!("Rendering {}…", format.name()));

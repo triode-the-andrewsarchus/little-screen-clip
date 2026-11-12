@@ -1,11 +1,11 @@
 ---
 title: Native diagram previews
-tags: [Pikchr, SvgBob]
+tags: [Pikchr, SvgBob, Mermaid]
 ---
 
 # From source to preview
 
-These two diagrams also have standalone source files beside this document.
+These diagrams also have standalone source files beside this document.
 
 ```pikchr
 box "Source"; arrow; box "Native renderer"; arrow; box "Preview"
@@ -15,4 +15,10 @@ box "Source"; arrow; box "Native renderer"; arrow; box "Preview"
 +----------+      +-----------------+      +-----------+
 | Source   +----->| Native renderer +----->| Preview   |
 +----------+      +-----------------+      +-----------+
+```
+
+```mermaid
+flowchart LR
+    Source[Source] --> Renderer[Native renderer]
+    Renderer --> Preview[Preview]
 ```

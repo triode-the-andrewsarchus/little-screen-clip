@@ -76,7 +76,10 @@ impl TextSession {
         {
             return Err("Text changed while opening; open it again.".into());
         }
-        let format = little_clip_core::diagram::Format::from_path(path);
+        let source = editor
+            .as_ref()
+            .map_or(preview.content.as_str(), |editor| editor.text.as_str());
+        let format = little_clip_core::diagram::Format::from_source_path(path, source);
         Ok(Self {
             preview,
             mode: if format.is_some() {
@@ -169,12 +172,13 @@ impl TextSession {
                     close,
                 );
                 shell.render_header(ui, |_| {});
+                let syntax_format = self.diagram.as_ref().map(|(format, _)| *format);
                 let diagram = if self.mode == Mode::Diagram {
                     self.diagram.as_mut()
                 } else {
                     None
                 };
-                editor.ui(ui, palette, diagram);
+                editor.ui(ui, palette, syntax_format, diagram);
                 return;
             }
         }
@@ -229,14 +233,14 @@ impl Editor {
         });
         self.pending = Some(receiver);
     }
-    fn source_ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let syntax = self
-            .path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .and_then(|extension| {
-                crate::text_preview::SYNTAX_SET.find_syntax_by_extension(extension)
-            })
+    fn source_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        format: Option<little_clip_core::diagram::Format>,
+    ) {
+        let syntax = format
+            .and_then(|format| crate::text_preview::SYNTAX_SET.find_syntax_by_name(format.name()))
             .unwrap_or_else(|| crate::text_preview::SYNTAX_SET.find_syntax_plain_text());
         let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
             let mut job =
@@ -244,8 +248,7 @@ impl Editor {
             job.wrap.max_width = wrap_width;
             ui.fonts(|fonts| fonts.layout_job(job))
         };
-        let highlight = little_clip_core::diagram::Format::from_path(&self.path).is_some()
-            && self.text.len() <= 256 * 1024;
+        let highlight = format.is_some() && self.text.len() <= 256 * 1024;
         egui::ScrollArea::both()
             .id_source("diagram_source_editor")
             .show(ui, |ui| {
@@ -264,6 +267,7 @@ impl Editor {
         &mut self,
         ui: &mut egui::Ui,
         palette: &AppPalette,
+        syntax_format: Option<little_clip_core::diagram::Format>,
         diagram: Option<&mut (
             little_clip_core::diagram::Format,
             clip_studios::diagram_preview::Preview,
@@ -300,7 +304,7 @@ impl Editor {
         }
         if let Some((format, preview)) = diagram {
             ui.columns(2, |columns| {
-                self.source_ui(&mut columns[0], palette);
+                self.source_ui(&mut columns[0], palette, syntax_format);
                 egui::ScrollArea::vertical()
                     .id_source("diagram_live_preview")
                     .show(&mut columns[1], |ui| {
@@ -308,7 +312,7 @@ impl Editor {
                     });
             });
         } else {
-            self.source_ui(ui, palette);
+            self.source_ui(ui, palette, syntax_format);
         }
         if self.save_as {
             egui::Window::new("Save text beside source")
@@ -362,6 +366,8 @@ mod tests {
     fn diagram_files_keep_live_drafts_and_existing_guarded_save_rules() {
         let directory = tempfile::tempdir().unwrap();
         for (extension, original, edited) in [
+            ("mermaid", "flowchart LR\nA-->B\n", "flowchart LR\nA-->C\n"),
+            ("mmd", "flowchart LR\nA-->B\n", "flowchart LR\nA-->C\n"),
             (
                 "pikchr",
                 "box \"Original\"\n",

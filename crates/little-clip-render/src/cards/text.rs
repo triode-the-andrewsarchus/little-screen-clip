@@ -410,6 +410,21 @@ impl ScreenRenderer {
         elision_color: Color,
         collect_previews: bool,
     ) -> Option<crate::PreparedTextPreview> {
+        if let Some(format) = ext_hint.and_then(|extension| {
+            little_clip_core::diagram::Format::from_source_extension(extension, text)
+        }) {
+            self.draw_diagram_preview(
+                pixmap,
+                format,
+                text,
+                rx + 14.0,
+                ry + 124.0,
+                (rw - 28.0).max(1.0),
+                (rh - 150.0).max(1.0),
+                self.color_from_hex(&self.palette.colors.text_primary),
+            );
+            return None;
+        }
         if ext_hint.and_then(little_clip_core::syntax::map_extension_to_language) == Some("md") {
             self.draw_markdown_preview(
                 pixmap,
@@ -421,19 +436,6 @@ impl ScreenRenderer {
                 is_hero,
                 self.color_from_hex(&self.palette.harmonies.base),
                 elision_color,
-            );
-            return None;
-        }
-        if let Some(format) = ext_hint.and_then(little_clip_core::diagram::Format::from_extension) {
-            self.draw_diagram_preview(
-                pixmap,
-                format,
-                text,
-                rx + 14.0,
-                ry + 124.0,
-                (rw - 28.0).max(1.0),
-                (rh - 150.0).max(1.0),
-                self.color_from_hex(&self.palette.colors.text_primary),
             );
             return None;
         }

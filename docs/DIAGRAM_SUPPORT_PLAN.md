@@ -1,6 +1,6 @@
 # Native diagram previews and editing
 
-Branch: `feat/native-diagram-previews`; baseline: `native-diagram-previews` at `c9cbf22`.
+Initial branch: `feat/native-diagram-previews` (merged); continuation: `feat/native-diagram-previews-next`; baseline: `native-diagram-previews` at `c9cbf22`.
 
 ## Required outcome
 
@@ -29,7 +29,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | --- | --- | --- |
 | Front matter | [frontmatter](https://crates.io/crates/frontmatter) 0.4.0; [frontmatter-gen](https://crates.io/crates/frontmatter-gen) 0.0.12; [mdbook-frontmatter-fix](https://crates.io/crates/mdbook-frontmatter-fix) 0.4.0 | Pending comparison / editor research |
 | LaTeX math | [latex-rust](https://crates.io/crates/latex-rust) 3.0.3; [retex-svg](https://crates.io/crates/retex-svg) 1.9.0; [tex2svg](https://crates.io/crates/tex2svg) 0.1.0 | Pending comparison / editor research |
-| Mermaid | [mermaid](https://crates.io/crates/mermaid) 0.2.0; [flowmaid](https://crates.io/crates/flowmaid) 0.40.0; [mermaid-fixer](https://crates.io/crates/mermaid-fixer) 1.0.2 | Pending comparison / editor research |
+| Mermaid | Merman 0.10.0; mermaid-rs-renderer 0.3.1; ariel-rs 0.4 | Selected Merman; native source/live previews implemented; parser-backed graphical editing pending |
 | PlantUML / C4 | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [plantuml_encoding](https://crates.io/crates/plantuml_encoding) 2.0.3; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
 | D2 | [graphs-tui](https://crates.io/crates/graphs-tui) 0.4.0; [d2-rs-target](https://crates.io/crates/d2-rs-target) 0.1.7; [d2-rs-scenebuild](https://crates.io/crates/d2-rs-scenebuild) 0.1.7 | Pending comparison / editor research |
 | Graphviz DOT | [graphviz-pure](https://crates.io/crates/graphviz-pure) 1.2.0; [graphviz-pure-cli](https://crates.io/crates/graphviz-pure-cli) 1.2.0; [graphviz-pure-core](https://crates.io/crates/graphviz-pure-core) 1.2.0 | Pending comparison / editor research |
@@ -99,3 +99,103 @@ Native vectors and raster output for both adapters pass tests and were visually 
 The architecture comparison flags additional complexity: native protocol/parser/raster validation and preview ownership add necessary domain behavior, and the source-vendored Sauron writer accounts for most of the roughly 9,800 newly measured lines (including upstream DOM code that is not enabled). No app dependency cycle was added; reported Python cycle changes only reorder members of untouched scripts. Diagram presentation adds branches to existing text painting; final review must keep these bounded as more adapters arrive rather than duplicating format-specific painting.
 
 First-adapter validation: `cargo test -p little-clip-render -p clip-studios -p clip-file-manager -j4 --lib -- --test-threads=1` passes 1,688 tests (19 ignored); the subsequent viewer-route test and metadata doctest pass. Actual worker integration tests pass across all four executables under the same address-space/CPU limits. `cargo fmt --all --check`, `git diff --check` and final `cargo clippy --workspace --all-targets -j4 -- -D warnings` pass. User-local `.cargo/config.toml` remains excluded. Approximately 125 GiB remains available; no additional target directory or cleanup sweep was used.
+
+## Mermaid decision and compatibility
+
+Compared [merman 0.10.0](https://docs.rs/merman/0.10.0/merman/),
+[mermaid-rs-renderer 0.3.1](https://github.com/1jehuang/mermaid-rs-renderer),
+and [ariel-rs 0.4](https://docs.rs/ariel-rs/0.4.0/ariel_rs/). The latter two
+provide lighter native SVG paths. Merman is selected for its broad diagram
+families, explicit operation controls and native-safe SVG pipeline, and available
+parser-backed source/editor facts for subsequent direct editing. The editor
+feature is not compiled until used. Default features retain its native ELK and
+Cytoscape layout engines; no JS runtime or browser engine is used.
+
+The render request uses constrained resources, a five-second operation deadline
+inside the existing bounded worker, and SVG-only labels rather than HTML
+`foreignObject`. Our existing raster stage resolves text against bundled fonts;
+it does not claim the exported SVG embeds its fonts. Percentage-sized root SVGs
+now derive their viewport from the validated `viewBox`, preserving aspect ratio.
+System clock/timezone adapters preserve local Gantt "today" markers rather than
+using a fixed test epoch. Visible previews and the small-screen cache refresh
+Mermaid results after one minute. Failed refreshes are paced too.
+
+`.mermaid` selects the native source editor. `.mmd` selects it only for a strong
+Mermaid header, including after metadata and initialization/comments. Ordinary
+MultiMarkdown remains Markdown. Once chosen, the session retains its syntax
+while editing an incomplete header. Standalone source saves still use FileSource;
+no second save mechanism was introduced.
+
+Merman's MIT/Apache-2.0 components use the MIT option. The translated ELK
+implementation is a separate, unmodified EPL-2.0 dependency. Exact license texts,
+release/source links and upstream derivation points are retained under
+[`little-clip-render/third_party`](../crates/little-clip-render/third_party/mermaid-notices.md)
+and embedded in every diagram-capable executable (`--diagram-licenses`).
+
+Merman requires pulldown-cmark >=0.13.6; rdocx 0.16.4 pins exactly 0.13.4. Cargo's
+attempted mixed 0.16.0/0.16.4 resolution does not compile. Updating the direct
+rdocx requirement to 0.17 aligns its companion crates and exact pulldown version.
+Eleven core document tests pass with that alignment; no document API call sites
+needed changes. This dependency update is part of the renderer integration.
+
+For editor design, compared [Archyne](https://github.com/archyne/archyne)
+(MIT; source-preserving Mermaid canvas), the
+[Mermaid Gantt editor](https://github.com/yyamamot/mermaid-gantt-editor)
+(MIT; task/date/dependency edits), and the
+[official live editor](https://github.com/mermaid-js/mermaid-live-editor)
+(MIT; source plus SVG). Object/source selection and semantic edits are better
+follow-ups than pretending automatic-layout formats persist arbitrary positions.
+No editor code was copied. Graphical interaction remains pending.
+
+Architecture review still reports the previously recorded vendor growth and
+necessary parser/protocol/preview lifecycle complexity. The new raster branches
+validate responsive viewports before allocation; periodic preview branches keep
+calendar-dependent diagrams fresh. They reuse the existing renderer, preview
+owner and cache rather than adding format-specific UI implementations. Test
+harness duplication across hosts verifies independently linked executables;
+source-sharing through crate-crossing `#[path]` remains prohibited.
+
+## WaveDrom research (not yet implemented)
+
+Compared the native [wavedrom 0.1.0](https://github.com/coastalwhite/wavedrom-rs)
+renderer with the [canonical JS engine](https://github.com/wavedrom/wavedrom)
+and mdbook wrappers. The native crate renders timing signals, grouping, edges,
+headers and markers without a runtime dependency. Its published API and actual
+schema need comparison with current WaveJSON, particularly register/logic
+figures; wrappers and related bitfield libraries are not substitutes for missing
+syntax. The `embed_font` feature brings a Helvetica asset: prefer existing
+bundled font handling unless that asset's license is verified.
+
+Compared the source/live official editor and [WavePaint](https://github.com/lodigic/WavePaint)
+(MIT application; third-party components retain their licenses). WavePaint's
+clickable signal cells, bus data, edge markers and undo model are useful native
+editor directions. Its browser/CDN preview cannot be integrated directly under
+the no-browser requirement. No code was ported.
+
+Mermaid validation: targeted tests cover four diagram families, native raster
+output, responsive viewport sizing, `.mmd` classification and retained source
+syntax, guarded saves and both small-screen routing variants. The actual-host
+integration suites pass for file manager, workbench, daemon and display diagnostic
+under production limits; file-manager tests also exercise malformed Mermaid and
+embedded license/source notices. The example PNG and a dark-theme variant were
+visually inspected. Workspace Clippy with `--all-targets -- -D warnings` passes.
+`cargo test -p little-clip-render -p little-clip-core -p clip-studios -p clip-file-manager -j4 --lib -- --test-threads=1` passes 2,009 tests (22 ignored).
+`cargo fmt --all --check` and `git diff --check` pass. Approximately 118 GiB
+remains free, with no separate target tree or cleanup sweep. User-local Cargo
+build settings remain uncommitted.
+
+Further WaveDrom source inspection found compatibility limitations in the native
+0.1.0 crate: `config.skin` is parsed but ignored, malformed edges are discarded,
+and fractional periods are rounded upward. Register and logic figures are not
+represented in its WaveJson model. Do not silently label this a fully compatible
+adapter. Compare a corrected native port with the canonical engine in a small
+embedded JS runtime (without DOM/browser), then verify current WaveJSON fixtures
+before choosing.
+
+Math follow-up: mathra 1.12.0 is a native AST/layout/SVG candidate with explicit
+strict errors, a STIX Two Math asset (OFL-1.1), and no source-driven file loader.
+Its base SVG API can use our existing rasterizer without its optional PNG stack.
+Compare latex-rust 2.1.1 (MSRV 1.76); its 3.0.x releases require Rust 1.99, beyond
+the installed 1.98.1. retex-svg 1.9.0 is a PDF-to-SVG component, not itself a
+LaTeX parser, so it is not an equivalent standalone math renderer. No math adapter
+has been selected or added yet.

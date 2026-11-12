@@ -26,6 +26,19 @@ fn markdown_source_prepares_shared_code_blocks_and_unicode_count() {
 }
 
 #[test]
+fn ordinary_multimarkdown_keeps_embedded_diagram_blocks() {
+    let source = "An ordinary document.\n\n```mermaid\nflowchart LR\nA-->B\n```";
+    for extension in ["mmd", "MMD"] {
+        let data = TextPreviewData::from_source(Arc::new(source.into()), Some(extension));
+        assert!(data.is_markdown);
+        assert!(data.markdown.get().unwrap().iter().any(|block| {
+            matches!(block, markdown::MarkdownBlock::Code { language, text }
+                if language == "mermaid" && text.contains("A-->B"))
+        }));
+    }
+}
+
+#[test]
 fn inline_text_previews_share_source_with_independent_scroll_state() {
     let data = TextPreviewData::from_text(Arc::new(
         (0..400).map(|line| format!("row-{line:04}\n")).collect(),
@@ -384,6 +397,11 @@ fn subtitle_raw_source_handles_cr_without_normalizing_the_file_bytes() {
 #[test]
 fn standalone_diagram_sources_have_loaded_native_syntax_definitions() {
     for (extension, name, source) in [
+        (
+            "mermaid",
+            "Mermaid",
+            "flowchart LR\nA[Source] --> B[Preview]\n",
+        ),
         ("pikchr", "Pikchr", "box \"Source\"; arrow; circle\n"),
         ("svgbob", "SvgBob", "+----+\n|Text|\n+----+\n"),
     ] {

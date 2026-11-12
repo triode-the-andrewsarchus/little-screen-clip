@@ -795,7 +795,12 @@ mod tests {
 
     #[test]
     fn native_diagram_extensions_select_guarded_text_studios() {
-        for name in ["drawing.pikchr", "drawing.svgbob", "DRAWING.PIKCHR"] {
+        for name in [
+            "drawing.pikchr",
+            "drawing.svgbob",
+            "drawing.mermaid",
+            "DRAWING.PIKCHR",
+        ] {
             assert_eq!(kind(Path::new(name)), Kind::Text);
         }
     }

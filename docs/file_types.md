@@ -213,7 +213,7 @@
       - [x] Front matter parsing (YAML `---`, TOML `+++`, JSON `;;;` / `{...}`) — shared bounded metadata with diagnostics and large/small Markdown presentation
       - [ ] Embedded LaTeX math blocks (`$...$`, `$$...$$`)
       - [ ] Inline diagram block rendering (Kroki-compatible)
-        - [ ] Mermaid (`mermaid`, `mmd`)
+        - [x] Mermaid (`mermaid`, `mmd`) — compiled native renderer, bounded helper, large/small previews
         - [ ] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`)
         - [ ] D2 (`d2`)
         - [ ] Graphviz DOT (`graphviz`, `dot`)
@@ -549,7 +549,7 @@
     - [ ] `.structurizr`, `.dsl` — Structurizr architecture DSL (May need disambiguation with generic DSL scripts and Lingvo dictionary files on `.dsl`)
   - [ ] Diagram as code (declarative architecture, flow, and schema DSLs)
     - [ ] `.puml`, `.plantuml`, `.iuml` — PlantUML / C4-PlantUML diagram
-    - [ ] `.mmd`, `.mermaid` — Mermaid diagram (May need disambiguation with MultiMarkdown documents on `.mmd`)
+    - [x] `.mmd`, `.mermaid` — native Mermaid source/live-preview editor with diagnostics and guarded saves; `.mmd` requires a Mermaid header so ordinary MultiMarkdown stays Markdown; graphical editing pending
     - [ ] `.d2` — Terrastruct D2 diagram (May need disambiguation with Diablo II game data files on `.d2`)
     - [ ] `.dot`, `.gv` — Graphviz DOT graph visualization (May need disambiguation with legacy Microsoft Word templates on `.dot`)
     - [ ] `.dbml` — Database Markup Language (May need disambiguation with Microsoft LINQ to SQL database mapping files on `.dbml`)

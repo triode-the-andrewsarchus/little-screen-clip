@@ -6,8 +6,10 @@ use std::time::Duration;
 fn diagram_worker_renders_and_reports_errors_without_host_startup() {
     for (format, source, success) in [
         ("pikchr", "box \"Source\"; arrow; circle \"Preview\"", true),
+        ("mermaid", "flowchart LR\nA[Source] --> B[Preview]", true),
         ("svgbob", "+----+\n|Hi! |\n+----+", true),
         ("pikchr", "box at invalid nonsense", false),
+        ("mermaid", "flowchart LR\nA[", false),
     ] {
         let request = serde_json::json!({ "format": format, "source": source });
         let output = CommandRequest::new(env!("CARGO_BIN_EXE_clip-file-manager"))
@@ -32,4 +34,22 @@ fn diagram_worker_renders_and_reports_errors_without_host_startup() {
             assert!(rendered.width > 0 && rendered.height > 0);
         }
     }
+}
+
+#[test]
+fn diagram_license_notices_are_available_without_host_startup() {
+    let output = CommandRequest::new(env!("CARGO_BIN_EXE_clip-file-manager"))
+        .arg("--diagram-licenses")
+        .timeout(Duration::from_secs(5))
+        .max_output_bytes(64 * 1024)
+        .own_process_group()
+        .die_with_parent()
+        .run()
+        .unwrap();
+    assert!(output.status.success(), "{}", output.stderr_lossy());
+    assert!(!output.stdout_truncated);
+    let notices = String::from_utf8(output.stdout).unwrap();
+    assert!(notices.contains("Eclipse Public License - v 2.0"));
+    assert!(notices.contains("Permission is hereby granted"));
+    assert!(notices.contains("e0e75bcab2fa8e39dd7a09465b7f2e035eda82ef"));
 }

@@ -6,6 +6,7 @@ use std::time::Duration;
 fn diagram_worker_renders_and_reports_errors_without_host_startup() {
     for (format, source, success) in [
         ("pikchr", "box \"Source\"; arrow; circle \"Preview\"", true),
+        ("mermaid", "flowchart LR\nA[Source] --> B[Preview]", true),
         ("svgbob", "+----+\n|Hi! |\n+----+", true),
         ("pikchr", "box at invalid nonsense", false),
     ] {

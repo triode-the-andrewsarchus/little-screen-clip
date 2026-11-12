@@ -61,7 +61,7 @@ tinypsd = "0.1.0"
 oxideav-pcx = { version = "0.1.2", default-features = false }
 zip = { version = "7.4", default-features = false, features = ["deflate"] }
 anydoc = "0.2"
-rdocx = "0.16"
+rdocx = "0.17"
 
 [dev-dependencies]
 base64 = "0.22"
