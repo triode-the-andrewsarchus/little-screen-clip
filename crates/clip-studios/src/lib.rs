@@ -25,6 +25,7 @@ pub mod shell;
 pub mod splat_view;
 pub mod spreadsheet_view;
 pub mod subtitle_view;
+pub mod text_editor;
 pub mod text_preview;
 pub mod ui_ext;
 pub mod worker_cli;

@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use super::filesystem::decode_path;
 use super::{BackgroundJobs, FileManager, JobError, Navigation, display_path};
 use crate::icons::Icon;
 
@@ -338,18 +337,7 @@ impl FileManager {
     }
 }
 
-pub(super) fn parse_name(text: &str) -> Result<OsString, String> {
-    let path = decode_path(text)?;
-    let bytes = path.as_os_str().as_bytes();
-    if bytes.is_empty()
-        || bytes.contains(&b'/')
-        || path == Path::new(".")
-        || path == Path::new("..")
-    {
-        return Err("Enter one filename, without /, . or ..".into());
-    }
-    Ok(path.into_os_string())
-}
+pub(super) use little_clip_core::path_address::decode_file_name as parse_name;
 
 impl NamingOperation {
     fn preflight(&self) -> Result<(), String> {
@@ -572,14 +560,6 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(&redirected).unwrap().count(), 0);
         assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 1);
-    }
-    #[test]
-    fn names_round_trip_bytes_and_reject_paths() {
-        for invalid in ["", ".", "..", "../escape", "a/b", "\\x00"] {
-            assert!(parse_name(invalid).is_err(), "{invalid}");
-        }
-        let name = parse_name("space \\xFF\\\\end").unwrap();
-        assert_eq!(name.as_bytes(), b"space \xff\\end");
     }
     #[test]
     fn create_and_rename_never_overwrite_existing_files_or_links() {

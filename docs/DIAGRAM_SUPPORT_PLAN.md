@@ -648,3 +648,14 @@ Validation for this checkpoint: all 71 render-library tests pass (one existing
 ignored), plus four core diagram tests and fourteen core syntax tests. Strict
 Clippy for core/render/studios passes. Native diagram engines were unchanged;
 existing native-worker fixtures remain the parser/render compatibility checks.
+
+
+The guarded text/diagram source session now lives in `clip-studios::text_editor`;
+the file manager reexports that owner. Its source editor, preview, draft/save
+state, atomic FileSource writes and four tests moved together. Filename-address
+validation and its byte/path test moved to core beside the shared address decoder;
+file-manager naming reuses that same function. Job polling uses core's existing
+nonblocking delivery helper with no response deadline for accepted writes.
+This preparatory commit does not yet route clipboard text to the editor.
+Validation: all four relocated editor tests and the core filename test pass;
+file-manager all-target checks and workspace/all-target strict Clippy pass.
