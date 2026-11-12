@@ -64,3 +64,6 @@ symphonia-adapter-libopus = { path = "vendor/symphonia-adapter-libopus" }
 egui-winit = { path = "vendor/egui-winit" }
 symphonia-format-caf = { path = "vendor/symphonia-format-caf" }
 symphonia-codec-pcm = { path = "vendor/symphonia-codec-pcm" }
+
+d2-rs-wasm = { path = "vendor/d2-rs-wasm" }
+d2-rs-scenebuild = { path = "vendor/d2-rs-scenebuild" }

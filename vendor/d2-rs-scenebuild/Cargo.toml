@@ -165,7 +165,7 @@ features = [
 ]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.wasm-bindgen]
-version = "=0.2.128"
+version = "0.2.128"
 
 [target."cfg(unix)".dependencies.libc]
 version = "0.2"
@@ -199,3 +199,5 @@ unnecessary_filter_map = "allow"
 unnecessary_sort_by = "allow"
 unnecessary_unwrap = "allow"
 wrong_self_convention = "allow"
+
+[workspace]

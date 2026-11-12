@@ -33,5 +33,11 @@ graphviz-pure = "=1.2.0"
 graphviz-pure-core = "=1.2.0"
 graphviz-pure-parser = "=1.2.0"
 
+d2-rs-wasm = "=0.1.7"
+d2-rs-render = "=0.1.7"
+d2-rs-target = "=0.1.7"
+d2-rs-scenebuild = "=0.1.7"
+d2-rs-raster = "=0.1.7"
+
 [dev-dependencies]
 tempfile = "3.27"

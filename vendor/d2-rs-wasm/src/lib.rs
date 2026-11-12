@@ -2575,13 +2575,22 @@ fn layout_d2_source_with_cancellation_impl(
         .map_err(|error| format!("could not encode source layout result: {error}"))
 }
 
-type SourceLayout = (
+pub type SourceLayout = (
     Graph,
     d2_rs_tala::LayoutResult,
     BTreeMap<d2_rs_core::NodeId, String>,
     BTreeMap<d2_rs_core::NodeId, compiler::SourceNodeStyle>,
     Option<compiler::DiagramConfig>,
 );
+
+/// Compiles and lays out source for native hosts without a JavaScript runtime.
+///
+/// Returns ordinary Rust errors, avoiding `JsValue` construction on native
+/// targets. Options and resource access match the existing source entrypoint:
+/// imports require an explicit in-memory `files` map, never host filesystem I/O.
+pub fn source_layout_native(source: &str, options_json: &str) -> Result<SourceLayout, String> {
+    source_layout_impl(source, options_json)
+}
 
 fn source_layout_impl(source: &str, options_json: &str) -> Result<SourceLayout, String> {
     source_layout_impl_with_cancellation(source, options_json, None)
