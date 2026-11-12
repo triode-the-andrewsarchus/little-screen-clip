@@ -12,6 +12,8 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Replace both production `sha256sum` uses with core's streaming `FileSource::sha256`. Read the retained ordinary-file handle without changing its cursor, validate its observed source before/after hashing, and poll cancellation/elapsed time between 32 KiB reads. SHA-256 was already a core dependency. This removes the executable dependency and filename-output parsing. Native reads cannot be interrupted mid-system-call; the elapsed limit is cooperative, as documented on the API. Tests cover known digest, empty/multi-chunk input, seek position, unusual filename, cancellation, timeout and stale source rejection.
 
+- [x] Make component-gallery construction fallible. WAV creation/writes/flush and PDF fixture creation now return errors to the existing startup status UI rather than panicking. Test-only callers explicitly require successful fixture setup. A child-process regression test supplies an unusable temporary directory without changing environment variables in concurrent tests. Validation: 17 gallery tests pass; native checksum validation passed two core tests and five guarded pipeline tests.
+
 ## Remaining review
 
 - [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.

@@ -231,7 +231,7 @@ fn startup_image_loading_keeps_fifo_position_and_waits_for_foreground() {
 #[test]
 fn palette_prompt_escape_cancels_only_the_overlay() {
     let viewer =
-        ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default());
+        ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::new().unwrap());
     let mut app = test_workbench_app(Some(viewer), VecDeque::new());
     app.search_query = "preserve this Palette query".to_owned();
     app.selected_action_index = 3;

@@ -67,8 +67,12 @@ pub(crate) enum GalleryOpenRequest {
     Pdf(PathBuf, Arc<PdfPageRasterResource>),
 }
 
-impl Default for ComponentGalleryState {
-    fn default() -> Self {
+impl ComponentGalleryState {
+    /// Builds the component samples and their retained temporary files.
+    ///
+    /// # Errors
+    /// Returns an error if an audio or PDF sample cannot be created.
+    pub fn new() -> Result<Self, String> {
         let image_source = gallery_image_source();
         let text_source = TextPreviewData::from_text(Arc::new(
             "gallery-line-alpha\ngallery-line-beta\ngallery-line-gamma\n".to_owned(),
@@ -105,10 +109,10 @@ impl Default for ComponentGalleryState {
                 .collect(),
         });
         let model3d_source = gallery_model3d_source();
-        let (audio_source, audio_source_path, audio_file_guard) = gallery_audio_source();
-        let (pdf_source_path, pdf_raster) =
-            pdf_view::gallery_pdf_page_source().expect("gallery PDF fixture encodes");
-        Self {
+        let (audio_source, audio_source_path, audio_file_guard) = gallery_audio_source()
+            .map_err(|error| format!("Cannot create gallery audio: {error}"))?;
+        let (pdf_source_path, pdf_raster) = pdf_view::gallery_pdf_page_source()?;
+        Ok(Self {
             query: "Sample text".to_owned(),
             notes: "Multiline fields should remain comfortable to read.".to_owned(),
             level: 0.62,
@@ -151,7 +155,7 @@ impl Default for ComponentGalleryState {
             ],
             audio_preview: InlineAudioWaveform::new(audio_source),
             pdf_preview: InlinePdfPagePreview::new(pdf_raster),
-        }
+        })
     }
 }
 
@@ -231,7 +235,8 @@ fn gallery_model3d_source() -> Arc<Model3d> {
     })
 }
 
-fn gallery_audio_source() -> (Arc<FullAudioAnalysis>, PathBuf, tempfile::TempPath) {
+fn gallery_audio_source() -> std::io::Result<(Arc<FullAudioAnalysis>, PathBuf, tempfile::TempPath)>
+{
     use std::io::Write;
 
     let sample_rate = 44_100_u32;
@@ -243,26 +248,25 @@ fn gallery_audio_source() -> (Arc<FullAudioAnalysis>, PathBuf, tempfile::TempPat
     let mut file = tempfile::Builder::new()
         .prefix("little-clip-gallery-")
         .suffix(".wav")
-        .tempfile()
-        .expect("gallery audio fixture file creates");
-    let data_len = u32::try_from(samples.len() * 2).expect("one-second fixture fits a WAV chunk");
-    file.write_all(b"RIFF").unwrap();
-    file.write_all(&(36_u32 + data_len).to_le_bytes()).unwrap();
-    file.write_all(b"WAVEfmt ").unwrap();
-    file.write_all(&16_u32.to_le_bytes()).unwrap();
-    file.write_all(&1_u16.to_le_bytes()).unwrap();
-    file.write_all(&1_u16.to_le_bytes()).unwrap();
-    file.write_all(&sample_rate.to_le_bytes()).unwrap();
-    file.write_all(&(sample_rate * 2).to_le_bytes()).unwrap();
-    file.write_all(&2_u16.to_le_bytes()).unwrap();
-    file.write_all(&16_u16.to_le_bytes()).unwrap();
-    file.write_all(b"data").unwrap();
-    file.write_all(&data_len.to_le_bytes()).unwrap();
+        .tempfile()?;
+    let data_len = sample_rate * 2;
+    file.write_all(b"RIFF")?;
+    file.write_all(&(36_u32 + data_len).to_le_bytes())?;
+    file.write_all(b"WAVEfmt ")?;
+    file.write_all(&16_u32.to_le_bytes())?;
+    file.write_all(&1_u16.to_le_bytes())?;
+    file.write_all(&1_u16.to_le_bytes())?;
+    file.write_all(&sample_rate.to_le_bytes())?;
+    file.write_all(&(sample_rate * 2).to_le_bytes())?;
+    file.write_all(&2_u16.to_le_bytes())?;
+    file.write_all(&16_u16.to_le_bytes())?;
+    file.write_all(b"data")?;
+    file.write_all(&data_len.to_le_bytes())?;
     for sample in &samples {
         let pcm = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
-        file.write_all(&pcm.to_le_bytes()).unwrap();
+        file.write_all(&pcm.to_le_bytes())?;
     }
-    file.flush().unwrap();
+    file.flush()?;
     let path = file.path().to_owned();
     let file_guard = file.into_temp_path();
 
@@ -314,7 +318,7 @@ fn gallery_audio_source() -> (Arc<FullAudioAnalysis>, PathBuf, tempfile::TempPat
         is_truncated: false,
         truncation_warning: None,
     });
-    (source, path, file_guard)
+    Ok((source, path, file_guard))
 }
 
 impl ComponentGalleryState {
@@ -645,6 +649,34 @@ mod tests {
     use little_clip_core::config::WorkbenchAppearance;
 
     #[test]
+    fn gallery_reports_unusable_temporary_directory_without_panicking() {
+        const FLAG: &str = "VEYLAR_GALLERY_TEMP_FAILURE_FIXTURE";
+        if std::env::var_os(FLAG).is_some() {
+            let error = ComponentGalleryState::new()
+                .err()
+                .expect("temporary storage must fail");
+            assert!(error.contains("Cannot create gallery audio"), "{error}");
+            return;
+        }
+        // A child keeps TMPDIR isolated from other tests and application state.
+        let directory = tempfile::tempdir().unwrap();
+        let not_a_directory = directory.path().join("file");
+        std::fs::write(&not_a_directory, b"occupied").unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "component_gallery::tests::gallery_reports_unusable_temporary_directory_without_panicking", "--test-threads=1"])
+            .env(FLAG, "1")
+            .env("TMPDIR", not_a_directory)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn gallery_renders_in_light_and_dark_at_7_by_4_and_ultrawide_sizes() {
         for appearance in [WorkbenchAppearance::Light, WorkbenchAppearance::Dark] {
             for size in [egui::vec2(2240.0, 1280.0), egui::vec2(3440.0, 1440.0)] {
@@ -652,7 +684,7 @@ mod tests {
                 ui_ext::configure_workbench_style(&ctx);
                 let palette = ui_appearance::palette(appearance);
                 ui_appearance::apply_visuals(&ctx, &palette);
-                let mut gallery = ComponentGalleryState::default();
+                let mut gallery = ComponentGalleryState::new().unwrap();
                 let mut close = false;
                 let mut outputs = vec![ctx.run(
                     egui::RawInput {
@@ -796,7 +828,7 @@ mod tests {
 
     #[test]
     fn audio_gallery_source_is_shared_with_inline_and_completed_studio() {
-        let mut gallery = ComponentGalleryState::default();
+        let mut gallery = ComponentGalleryState::new().unwrap();
         assert!(Arc::ptr_eq(
             gallery.audio_preview.source_analysis(),
             &gallery.audio_source
@@ -845,7 +877,7 @@ mod tests {
         let ctx = egui::Context::default();
         ui_ext::configure_workbench_style(&ctx);
         let palette = ui_appearance::palette(WorkbenchAppearance::Dark);
-        let mut gallery = ComponentGalleryState::default();
+        let mut gallery = ComponentGalleryState::new().unwrap();
         let mut close = false;
         let clipped_size = egui::vec2(1280.0, 720.0);
         let visible_size = egui::vec2(2240.0, 1280.0);

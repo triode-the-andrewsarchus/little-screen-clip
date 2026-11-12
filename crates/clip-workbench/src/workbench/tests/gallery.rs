@@ -77,7 +77,7 @@ fn gallery_requests_map_to_each_shared_source_full_viewer() {
         component_gallery::GalleryPreviewKind::Audio,
         component_gallery::GalleryPreviewKind::Pdf,
     ] {
-        let mut gallery = component_gallery::ComponentGalleryState::default();
+        let mut gallery = component_gallery::ComponentGalleryState::new().unwrap();
         gallery.request_open(kind);
         let request = gallery
             .take_pending_open()
@@ -163,8 +163,9 @@ fn visible_gallery_actions_open_full_studios() {
             component_gallery::GalleryPreviewKind::Pdf,
         ),
     ] {
-        let viewer =
-            ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default());
+        let viewer = ViewerSession::ComponentGallery(
+            component_gallery::ComponentGalleryState::new().unwrap(),
+        );
         let mut app = test_workbench_app(Some(viewer), VecDeque::new());
         let ctx = egui::Context::default();
         let input = |events| egui::RawInput {
@@ -389,8 +390,9 @@ fn oversized_markdown_uses_bounded_inspector_hint_and_full_worker_classification
 
 #[test]
 fn closing_startup_viewers_advances_fifo_then_returns_to_selected_workbench_view() {
-    let gallery =
-        || ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default());
+    let gallery = || {
+        ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::new().unwrap())
+    };
     let mut app = test_workbench_app(
         Some(gallery()),
         VecDeque::from([ViewerSession::Spreadsheet(SpreadsheetViewerState::new(

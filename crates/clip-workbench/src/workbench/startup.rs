@@ -130,9 +130,12 @@ impl WorkbenchApp {
         };
 
         if open_component_gallery {
-            app.viewer = Some(ViewerSession::ComponentGallery(
-                component_gallery::ComponentGalleryState::default(),
-            ));
+            match component_gallery::ComponentGalleryState::new() {
+                Ok(gallery) => app.viewer = Some(ViewerSession::ComponentGallery(gallery)),
+                Err(error) => {
+                    app.set_status_message(format!("Cannot open component gallery: {error}"))
+                }
+            }
         }
 
         if app.viewer.is_none() && app.startup_comparison.is_none() {

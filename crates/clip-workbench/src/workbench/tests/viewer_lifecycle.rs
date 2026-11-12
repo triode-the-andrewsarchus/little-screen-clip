@@ -21,7 +21,7 @@ fn hidden_rolling_audio_retires_on_view_switch_and_modal_entry() {
     app.view = WorkbenchView::Palette;
     app.rolling_audio_strip.as_mut().unwrap().is_playing = true;
     app.viewer = Some(ViewerSession::ComponentGallery(
-        component_gallery::ComponentGalleryState::default(),
+        component_gallery::ComponentGalleryState::new().unwrap(),
     ));
     let ctx = egui::Context::default();
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
@@ -34,7 +34,7 @@ fn hidden_rolling_audio_retires_on_view_switch_and_modal_entry() {
 fn spreadsheet_completion_waits_until_modal_viewer_closes() {
     let mut app = test_workbench_app(
         Some(ViewerSession::ComponentGallery(
-            component_gallery::ComponentGalleryState::default(),
+            component_gallery::ComponentGalleryState::new().unwrap(),
         )),
         VecDeque::new(),
     );
@@ -75,7 +75,7 @@ fn spreadsheet_completion_waits_until_modal_viewer_closes() {
     );
 
     app.viewer = Some(ViewerSession::ComponentGallery(
-        component_gallery::ComponentGalleryState::default(),
+        component_gallery::ComponentGalleryState::new().unwrap(),
     ));
     let (ticket, _ticket_receiver) = BackgroundJobs::global().submit(Duration::from_secs(1), || ());
     let (result_tx, receiver) = std::sync::mpsc::channel();
@@ -110,8 +110,9 @@ fn spreadsheet_completion_waits_until_modal_viewer_closes() {
 
 #[test]
 fn midi_completion_waits_for_foreground_and_startup_viewers() {
-    let startup_viewer =
-        || ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default());
+    let startup_viewer = || {
+        ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::new().unwrap())
+    };
     let mut app = test_workbench_app(Some(startup_viewer()), VecDeque::from([startup_viewer()]));
     let (ticket, _ticket_receiver) = BackgroundJobs::global().submit(Duration::from_secs(1), || ());
     let (result_tx, receiver) =
@@ -213,7 +214,7 @@ fn failed_rolling_selection_action_keeps_the_current_viewer_open() {
     let ctx = egui::Context::default();
     let mut app = test_workbench_app(
         Some(ViewerSession::ComponentGallery(
-            component_gallery::ComponentGalleryState::default(),
+            component_gallery::ComponentGalleryState::new().unwrap(),
         )),
         VecDeque::new(),
     );
@@ -276,8 +277,9 @@ fn rolling_editor_materialization_waits_for_active_viewer_and_preserves_range_ed
     let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(2, 44_100, 2);
     buffer.push_samples(&vec![1000i16; 44_100 * 2 * 2]);
     buffer.write_wav(&source).unwrap();
-    let gallery =
-        || ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default());
+    let gallery = || {
+        ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::new().unwrap())
+    };
     let mut app = test_workbench_app(Some(gallery()), VecDeque::new());
     app.config.audio.editor = "custom-audio-editor".to_owned();
     let ctx = egui::Context::default();
@@ -334,7 +336,7 @@ fn cancelling_ready_full_snapshot_handoff_reclaims_only_its_owned_result() {
     buffer.write_wav(&path).unwrap();
     let mut app = test_workbench_app(
         Some(ViewerSession::ComponentGallery(
-            component_gallery::ComponentGalleryState::default(),
+            component_gallery::ComponentGalleryState::new().unwrap(),
         )),
         VecDeque::new(),
     );

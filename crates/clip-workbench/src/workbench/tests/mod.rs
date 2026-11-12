@@ -271,7 +271,7 @@ pub(super) fn write_test_image(path: &std::path::Path, width: u32) {
 }
 
 pub(super) fn gallery_viewer() -> ViewerSession {
-    ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default())
+    ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::new().unwrap())
 }
 
 pub(super) fn test_image_preview_state() -> ImagePreviewState {

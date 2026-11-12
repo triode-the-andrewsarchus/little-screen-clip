@@ -684,7 +684,7 @@ fn node_machine_prompt_and_viewer_preempt_workbench_shortcuts_until_closed() {
 
     let mut viewer_app = test_workbench_app(
         Some(ViewerSession::ComponentGallery(
-            component_gallery::ComponentGalleryState::default(),
+            component_gallery::ComponentGalleryState::new().unwrap(),
         )),
         VecDeque::new(),
     );
