@@ -61,6 +61,7 @@ use super::{asset, freedraw, notices, rough, try_owned};
 
 #[derive(Debug)]
 pub(super) struct ResolvedScene {
+    pub(super) origin: [f64; 2],
     pub(super) coordinate_omissions: Vec<admission::CoordinateOmission>,
     pub(super) logical_width: f64,
     pub(super) logical_height: f64,
@@ -434,6 +435,9 @@ impl ResolvedScene {
             return Err(ResolveSceneError::UnboundedGeometry);
         }
         Ok(Self {
+            origin: viewport.map_or([-request.padding(); 2], |viewport| {
+                [viewport.min_x - request.padding(), viewport.min_y - request.padding()]
+            }),
             coordinate_omissions: Vec::new(),
             logical_width: logical_width.max(1.0),
             logical_height: logical_height.max(1.0),
@@ -793,6 +797,7 @@ impl ResolvedScene {
             None
         };
         Ok(Some(Self {
+            origin: [min_x - request.padding(), min_y - request.padding()],
             coordinate_omissions: Vec::new(),
             logical_width,
             logical_height,

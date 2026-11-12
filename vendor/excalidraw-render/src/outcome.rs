@@ -683,15 +683,34 @@ impl Artifact {
     }
 }
 
+/// Source-space viewport used by a completed render, before output scaling.
+///
+/// A source point maps to logical artifact coordinates by subtracting `origin`.
+/// Consumers can place the artifact in an interactive scene without reproducing
+/// the renderer's text, rotation, frame and clipping bounds rules.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneViewport {
+    /// Source coordinates at the logical artifact's upper-left corner.
+    pub origin: [f64; 2],
+    /// Logical width and height, including requested padding.
+    pub size: [f64; 2],
+}
+
 /// Successful result of one complete render transaction.
 #[derive(Clone, Debug)]
 pub struct RenderOutcome {
+    pub(crate) viewport: SceneViewport,
     pub(crate) artifact: Artifact,
     pub(crate) report: CompatibilityReport,
     pub(crate) profile: &'static ReferenceProfileIdentity,
 }
 
 impl RenderOutcome {
+    /// Returns the source-space viewport used to position this artifact.
+    pub const fn viewport(&self) -> SceneViewport {
+        self.viewport
+    }
+
     /// Returns the single complete artifact.
     pub const fn artifact(&self) -> &Artifact {
         &self.artifact
@@ -869,6 +888,7 @@ mod tests {
         };
         let profile = Renderer::new().profile_identity();
         let outcome = RenderOutcome {
+            viewport: SceneViewport { origin: [0.0; 2], size: [1.0; 2] },
             artifact: Artifact {
                 format: OutputFormat::Svg,
                 bytes: b"<svg/>".to_vec(),

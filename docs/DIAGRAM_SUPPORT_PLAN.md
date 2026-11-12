@@ -863,3 +863,38 @@ features and bundled CJK faces, plus `excalidraw-document` 0.2.0. WOFF decoding
 uses the same 0.2.10 library version as the existing font viewer. No GUI-framework
 dependency is added. This verifies build compatibility, not scene rendering or
 canvas functionality; those remain to be integrated and tested.
+
+## Native drawing rendering foundations
+
+The shared SVG pipeline now has an explicit embedded-raster policy. Existing
+formats keep their original image blocking. The opt-in path accepts only embedded
+PNG/JPEG/WebP data, with 2 MiB encoded bounds, 2048-pixel sides, an aggregate
+eight-megapixel decode budget per SVG and bounded decoder allocations. Accepted
+images become bounded PNGs. Paths, URLs and nested SVG payloads stay blocked;
+malformed, unsupported and oversized references retain visible omission warnings.
+Tests verify colored pixels survive composition and final rasterization, verify
+that the former blocking policy still produces white paper, and reject actual
+ordinary file paths, network references, nested SVG, malformed data URLs and
+exhausted budgets. SVG viewBox admission is shared for subsequent viewport mapping.
+
+The native renderer's computed origin was private. Its pristine published source
+was imported separately before a 31-line extension exposes `SceneViewport` on
+`RenderOutcome`, carrying the existing source-space origin and logical size through
+the pipeline. This will anchor actual canvas coordinates without duplicating
+text/rotation/frame bounds rules. The original SVG output stays unchanged.
+The dependency is excluded from workspace membership because the release package
+does not ship upstream qualification fixtures; application-owned integration
+tests use its real public API.
+
+Three native tests pass: translation and rotation correspondence; empty-scene
+padding separate from output scaling; and the authored `drawing.excalidraw` scene
+with shapes, handwriting, arrows, freehand and an embedded raster. That scene
+produces no native compatibility diagnostics. Shared diagram regression tests
+pass (38 renderer tests plus affected host/core checks), as does strict workspace
+Clippy. Architecture comparison reports no new application function above the
+complexity threshold. Source import growth is the already selected native
+dependency, retained for a small reviewable extension, not new application logic.
+
+This checkpoint is a tested rendering/coordinate foundation. Excalidraw fence,
+file/clipboard dispatch, font-database composition, source-session integration
+and the interactive canvas still need implementation and verification.

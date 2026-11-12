@@ -3276,8 +3276,6 @@ dependencies = [
 [[package]]
 name = "excalidraw-render"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2aa137b78835bb40be720df3f6d7de5626f2bec0df823644c3f6064a519873bd"
 dependencies = [
  "base64 0.23.1",
  "crc32fast",

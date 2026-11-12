@@ -246,7 +246,7 @@ pub use frame::{
 };
 pub use outcome::{
     Artifact, CompatibilityDiagnostic, CompatibilityReport, DiagnosticCode, DiagnosticEffect,
-    DiagnosticSeverity, RenderError, RenderErrorCategory, RenderOutcome,
+    DiagnosticSeverity, RenderError, RenderErrorCategory, RenderOutcome, SceneViewport,
 };
 pub use request::{
     ColorMode, FrameOptions, FrameRenderRequest, FrameRenderRequestBuilder, MetadataOptions,

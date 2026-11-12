@@ -363,6 +363,10 @@ impl RenderSession {
         let mut semantic_working = Vec::new();
         let mut resolved = self.resolve_scene(scene, request, prepared, &mut semantic_working)?;
         self.account_fallback_semantics(&mut resolved, request, &mut semantic_working)?;
+        let viewport = crate::SceneViewport {
+            origin: resolved.origin,
+            size: [resolved.logical_width, resolved.logical_height],
+        };
         let bytes = self.encode(
             resolved,
             scene,
@@ -372,6 +376,7 @@ impl RenderSession {
         )?;
 
         Ok(RenderOutcome {
+            viewport,
             artifact: Artifact {
                 format: request.format(),
                 bytes,
