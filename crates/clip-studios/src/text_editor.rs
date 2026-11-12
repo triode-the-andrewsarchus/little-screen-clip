@@ -930,6 +930,21 @@ mod tests {
             ("graphviz", "digraph { a -> b }", "digraph { a -> c }"),
             ("d2", "a -> b: Original", "a -> b: Edited"),
             (
+                "json5",
+                "{signal:[{name:'x',wave:'01'}]}",
+                "{signal:[{name:'x',wave:'10'}]}",
+            ),
+            (
+                "wavejson",
+                "{signal:[{name:'x',wave:'01'}]}",
+                "{signal:[{name:'x',wave:'10'}]}",
+            ),
+            (
+                "wavedrom",
+                "{signal:[{name:'x',wave:'01'}]}",
+                "{signal:[{name:'x',wave:'10'}]}",
+            ),
+            (
                 "bpmn",
                 "<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" targetNamespace=\"urn:test\"><process id=\"p\" name=\"Original\"/></definitions>",
                 "<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" targetNamespace=\"urn:test\"><process id=\"p\" name=\"Edited\"/></definitions>",

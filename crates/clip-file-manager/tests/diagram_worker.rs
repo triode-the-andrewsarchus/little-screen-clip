@@ -28,6 +28,8 @@ fn diagram_license_notices_are_available_without_host_startup() {
     assert!(notices.contains("SIL OPEN FONT LICENSE"));
     assert!(notices.contains("CORE-MATH"));
     assert!(notices.contains("2026 urbanisierung"));
+    assert!(notices.contains("2011-2026 Aliaksei Chapyzhenka"));
+    assert!(notices.contains("Rquickjs Contributors"));
     assert!(notices.contains("D2 and TALA"));
     assert!(notices.contains("Fuzzy Bubbles Project Authors"));
     assert!(notices.contains("Matheus Mota"));

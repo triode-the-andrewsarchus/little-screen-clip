@@ -1,44 +1,4 @@
 //! Native DOT layout, with file loading disabled before any layout begins.
-use std::sync::LazyLock;
-
-fn fonts() -> &'static resvg::usvg::fontdb::Database {
-    static FONTS: LazyLock<resvg::usvg::fontdb::Database> = LazyLock::new(|| {
-        let mut database = super::default_fonts().clone();
-        for bytes in little_clip_core::font_assets::GRAPHVIZ_FONT_BYTES {
-            database.load_font_data(bytes.to_vec());
-        }
-        // The SVG names the metric families (Helvetica/Times/Courier), while
-        // the bundled faces use their own family names. Keep both names on
-        // each style/weight so explicit requests do not fall back to Tinos.
-        let aliases: &[(&str, &[&str])] = &[
-            ("Tinos", &["Times", "Times-Roman", "Times New Roman"]),
-            ("Arimo", &["Helvetica", "Arial"]),
-            ("Cousine", &["Courier", "Courier New"]),
-        ];
-        let faces: Vec<_> = database.faces().cloned().collect();
-        for mut face in faces {
-            let names = aliases
-                .iter()
-                .find(|(name, _)| face.families.iter().any(|(family, _)| family == name));
-            if let Some((_, names)) = names {
-                for name in *names {
-                    face.families.push((
-                        (*name).into(),
-                        resvg::usvg::fontdb::Language::English_UnitedStates,
-                    ));
-                }
-                database.remove_face(face.id);
-                database.push_face_info(face);
-            }
-        }
-        database.set_serif_family("Tinos");
-        database.set_sans_serif_family("Arimo");
-        database.set_monospace_family("Cousine");
-        database
-    });
-    &FONTS
-}
-
 pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
     let source = source.trim_start_matches('\u{feff}');
     // This library switch rejects image/shapefile/HTML IMG paths before lookup.
@@ -81,7 +41,7 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
         // The inline writer expects an SVG host and omits its namespaces.
         svg.replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" ", 1)
     });
-    let (svg, limitations) = super::compose_svg(diagrams, fonts(), "Tinos")?;
+    let (svg, limitations) = super::compose_svg(diagrams, super::fonts::metric_fonts(), "Tinos")?;
     warnings.extend(limitations);
     Ok((svg, warnings))
 }
@@ -118,32 +78,6 @@ fn preflight(source: &str) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn graphviz_font_family_names_resolve_to_the_metric_compatible_faces() {
-        use resvg::usvg::fontdb::{Family, Query};
-        let database = fonts();
-        for (requested, expected) in [
-            ("Helvetica", "Arimo"),
-            ("Times-Roman", "Tinos"),
-            ("Courier", "Cousine"),
-        ] {
-            let id = database
-                .query(&Query {
-                    families: &[Family::Name(requested)],
-                    ..Default::default()
-                })
-                .unwrap();
-            assert!(
-                database
-                    .face(id)
-                    .unwrap()
-                    .families
-                    .iter()
-                    .any(|(name, _)| name == expected)
-            );
-        }
-    }
 
     #[test]
     fn native_graphviz_renders_all_layout_engines_with_outlined_labels() {

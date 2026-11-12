@@ -12,10 +12,12 @@ use std::{
 
 mod bpmn;
 mod d2;
+mod fonts;
 mod graphviz;
 mod lini;
 mod math;
 mod mermaid;
+mod wavedrom;
 
 /// Owned fixtures for testing early dispatch in independently linked hosts.
 #[cfg(feature = "test-support")]
@@ -182,6 +184,16 @@ pub fn run_worker_cli() -> bool {
         for notice in [
             include_str!("../third_party/diagram-notices.md"),
             include_str!("../third_party/bpmnkit-MIT.txt"),
+            include_str!("../third_party/wavedrom-notices.md"),
+            include_str!("../../../vendor/wavedrom/LICENSE"),
+            include_str!("../third_party/wavedrom-onml-LICENSE"),
+            include_str!("../third_party/wavedrom-tspan-LICENSE"),
+            include_str!("../third_party/wavedrom-logidrom-LICENSE.md"),
+            include_str!("../third_party/wavedrom-bit-field-LICENSE"),
+            include_str!("../third_party/rquickjs-MIT.txt"),
+            include_str!("../third_party/quickjs-MIT.txt"),
+            include_str!("../third_party/json-five-MIT.txt"),
+            include_str!("../third_party/json5-MIT.txt"),
             include_str!("../third_party/merman-MIT.txt"),
             include_str!("../third_party/merman-elk-EPL-2.0.txt"),
             include_str!("../third_party/lini-MIT.txt"),
@@ -265,6 +277,7 @@ fn render_inline(
             math_layout = Some(layout);
             (svg, Vec::new())
         }
+        Format::Wavedrom => wavedrom::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
         Format::Lini => lini::svg(source)?,
@@ -598,6 +611,30 @@ mod tests {
                 "box \"file.example\"; arrow; circle",
                 Format::Pikchr,
                 "box \"file.example\"; arrow; circle",
+            ),
+            (
+                "md",
+                "```wavedrom\n{signal:[{wave:'01'}]}\n```",
+                Format::Wavedrom,
+                "{signal:[{wave:'01'}]}\n",
+            ),
+            (
+                "json5",
+                "{signal:[{name:'clk',wave:'p...'}]}",
+                Format::Wavedrom,
+                "{signal:[{name:'clk',wave:'p...'}]}",
+            ),
+            (
+                "wavejson",
+                "{signal:[{wave:'01'}]}",
+                Format::Wavedrom,
+                "{signal:[{wave:'01'}]}",
+            ),
+            (
+                "",
+                "{signal:[{name:'clk',wave:'p...'}]}",
+                Format::Wavedrom,
+                "{signal:[{name:'clk',wave:'p...'}]}",
             ),
             ("md", "```d2\na -> b\n```", Format::D2, "a -> b\n"),
             ("d2", "a -> b\n", Format::D2, "a -> b\n"),

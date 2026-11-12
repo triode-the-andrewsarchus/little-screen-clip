@@ -1,0 +1,10 @@
+%YAML 1.2
+---
+name: WaveDrom
+file_extensions: [wavejson, wavedrom]
+scope: source.json5.wavedrom
+contexts:
+  main:
+    - match: '\b(?:signal|wave|name|data|node|edge|period|phase|config|skin|head|foot|tick|tock|hscale|hbounds|assign|reg|bits|attr|type|lanes)\b(?=\s*:)'
+      scope: keyword.control.wavedrom
+    - include: scope:source.json5

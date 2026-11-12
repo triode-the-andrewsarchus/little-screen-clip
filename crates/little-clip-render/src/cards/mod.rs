@@ -35,6 +35,19 @@ pub(crate) fn find_syntax(lang: &str) -> &'static SyntaxReference {
         .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text())
 }
 
+// Clipboard titles are content-derived; only retain a recognized code-language hint.
+// Native diagrams use source inference so a failed render can fall back to text.
+fn clipboard_language_hint<'a>(title: &'a str, text: &str) -> Option<&'a str> {
+    Path::new(title)
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|extension| {
+            little_clip_core::syntax::map_extension_to_language(extension).is_some()
+                && little_clip_core::diagram::Format::from_source_extension(extension, text)
+                    .is_none()
+        })
+}
+
 impl ScreenRenderer {
     /// Draws a single slot card on the canvas with rounded header, status badges, and content previews.
     #[expect(
@@ -267,20 +280,7 @@ impl ScreenRenderer {
                     // Preserve existing code-language title hints, but never
                     // force native diagram rendering from a content-derived
                     // clipboard title. Inference must allow a text fallback.
-                    _ => (
-                        text.as_str(),
-                        Path::new(&item.title)
-                            .extension()
-                            .and_then(|value| value.to_str())
-                            .filter(|extension| {
-                                little_clip_core::syntax::map_extension_to_language(extension)
-                                    .is_some()
-                                    && little_clip_core::diagram::Format::from_source_extension(
-                                        extension, text,
-                                    )
-                                    .is_none()
-                            }),
-                    ),
+                    _ => (text.as_str(), clipboard_language_hint(&item.title, text)),
                 };
 
                 *text_preview = self.draw_text_preview(

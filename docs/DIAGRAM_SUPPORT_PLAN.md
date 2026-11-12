@@ -175,7 +175,7 @@ owner and cache rather than adding format-specific UI implementations. Test
 harness duplication across hosts verifies independently linked executables;
 source-sharing through crate-crossing `#[path]` remains prohibited.
 
-## WaveDrom research (not yet implemented)
+## WaveDrom research (renderer integrated; graphical timing editing pending)
 
 Compared the native [wavedrom 0.1.0](https://github.com/coastalwhite/wavedrom-rs)
 renderer with the [canonical JS engine](https://github.com/wavedrom/wavedrom)
@@ -707,3 +707,43 @@ unfinished request is treated as successful measurement.
 The final file-manager viewer pass also succeeds (24 tests), as do all four
 actual-host worker checks, license output and formatting. No new parser library,
 web engine, clipboard payload type or unguarded save path was introduced.
+
+## WaveDrom renderer and source integration
+
+Selected the canonical WaveDrom 3.8.0 engine over the published native 0.1.0
+crate and its current Rust main branch. Both native versions round fractional
+periods; neither covers the canonical logic-assignment family, and the published
+crate ignores requested skins. The canonical `renderAny` API runs without a DOM.
+It is embedded in compiled QuickJS (`rquickjs` 0.14), with no host filesystem,
+network, dynamic loader or browser bindings. Trusted bundled code alone is
+evaluated; JSON5 source becomes a data argument after bounded Rust parsing.
+No installed JavaScript runtime is required.
+
+Pristine npm source and dependency notices were committed before integration.
+The npm archive SHA-512 and upstream git revision are recorded in the bundled
+WaveDrom provenance notice. Existing OFL Arimo/Tinos/Cousine metrics are shared
+with Graphviz; no upstream Helvetica asset is imported. SVG is outlined and
+isolated through the existing composition/raster path.
+
+Signal, register and logic figures, all six bundled skins and non-clock
+fractional periods render through the shared disposable worker. Source size,
+tokens, depth, cells and finite numeric inputs are bounded before layout.
+QuickJS has a 128 MiB heap, bounded stack and three-second interrupt; the existing
+outer worker limits remain in force. External skin requests fail explicitly.
+
+Compared `json5`, `json-five`, `json5format` and `jsonc-parser`: the existing
+JSON5 semantic parser and `json-five` lexer preserve actual JSON5 syntax while
+allowing pre-deserialization bounds. Generic JSON5 receives its own shared
+syntax grammar; WaveJSON aliases receive field highlighting. `.json`/`.json5`
+classification and clipboard inference require distinctive complete structures.
+Explicit `.wavejson`/`.wavedrom` aliases keep invalid drafts in the editor.
+Markdown uses `wavedrom` or `wavejson` fences. Saving, copying, worker ownership
+and failed-inference fallback reuse the shared editor and preview mechanisms.
+
+The architecture comparison against `native-diagrams-after-clipboard` reports
+extra clones/complexity in the retained pristine upstream sources and bundles.
+Those imports are necessary provenance, not newly duplicated application logic.
+An application-side clipboard-title branch was separated into its existing
+language-hint responsibility to keep dispatch complexity from increasing.
+Graphical timing editing is still the next deliverable; these source/live
+previews do not claim to be a graphical editor.

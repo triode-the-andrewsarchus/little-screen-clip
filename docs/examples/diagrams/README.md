@@ -78,3 +78,14 @@ edge-only D2 stays text; use a `.d2` file or Markdown fence to select that synta
 Incomplete or failed inferred renders stay readable text on the little screen.
 Use Copy source to publish edits, or Save As to create a new file in an existing
 directory. Original clipboard bytes are retained until explicitly edited.
+
+## Digital timing
+
+```wavedrom
+{signal:[{name:'clock',wave:'p...'},{name:'data',wave:'x34x',data:['Address','Payload']}]}
+```
+
+`spi.json5` demonstrates grouped lanes, event arrows and a heading. JSON/JSON5
+files need a distinctive WaveJSON structure; ordinary JSON stays text. Explicit
+`.wavejson` and `.wavedrom` files select the renderer even while source is invalid.
+Register (`reg`) and logic (`assign`) figures also render.

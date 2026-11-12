@@ -1,6 +1,9 @@
 //! Diagram syntax identities shared by Markdown and standalone file viewers.
 use std::path::Path;
 
+/// Bounded WaveJSON parsing shared by rendering and graphical editing.
+pub mod wavejson;
+
 /// A diagram syntax with an integrated native renderer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -12,6 +15,7 @@ pub enum Format {
     Graphviz,
     D2,
     Bpmn,
+    Wavedrom,
     Math,
     MathInline,
 }
@@ -31,6 +35,7 @@ impl Format {
             "graphviz" | "dot" => Some(Self::Graphviz),
             "d2" => Some(Self::D2),
             "bpmn" | "bpmn2" => Some(Self::Bpmn),
+            "wavedrom" | "wavejson" => Some(Self::Wavedrom),
             _ => None,
         }
     }
@@ -52,6 +57,7 @@ impl Format {
             "gv" | "graphviz" => Some(Self::Graphviz),
             "d2" => Some(Self::D2),
             "bpmn" | "bpmn2" => Some(Self::Bpmn),
+            "wavedrom" | "wavejson" => Some(Self::Wavedrom),
             _ => None,
         }
     }
@@ -70,6 +76,10 @@ impl Format {
                 Some(Self::Graphviz)
             } else if extension.eq_ignore_ascii_case("xml") && bpmn_signature(source) {
                 Some(Self::Bpmn)
+            } else if matches!(extension.to_ascii_lowercase().as_str(), "json" | "json5")
+                && wavejson::signature(source)
+            {
+                Some(Self::Wavedrom)
             } else {
                 None
             }
@@ -90,6 +100,7 @@ impl Format {
             (Self::Mermaid, mermaid_signature as fn(&str) -> bool),
             (Self::Graphviz, dot_signature),
             (Self::Bpmn, bpmn_signature),
+            (Self::Wavedrom, wavejson::signature),
             (Self::Pikchr, pikchr_signature),
             (Self::Lini, lini_signature),
             (Self::D2, d2_signature),
@@ -100,7 +111,9 @@ impl Format {
             .find_map(|(format, signature)| signature(source).then_some(*format))
     }
 
-    /// Returns the preferred standalone source extension, excluding inline math.
+    /// Returns the preferred source extension, excluding inline math.
+    ///
+    /// Generic extensions such as JSON5 require content classification on reopen.
     pub const fn source_extension(self) -> Option<&'static str> {
         match self {
             Self::Pikchr => Some("pikchr"),
@@ -110,6 +123,7 @@ impl Format {
             Self::Graphviz => Some("gv"),
             Self::D2 => Some("d2"),
             Self::Bpmn => Some("bpmn"),
+            Self::Wavedrom => Some("json5"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -124,6 +138,7 @@ impl Format {
             Self::Graphviz => "Graphviz",
             Self::D2 => "D2",
             Self::Bpmn => "BPMN",
+            Self::Wavedrom => "WaveDrom",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }

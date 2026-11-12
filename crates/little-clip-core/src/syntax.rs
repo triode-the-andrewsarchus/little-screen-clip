@@ -305,6 +305,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "js" | "mjs" | "cjs" | "jsx" => Some("js"),
         "ts" | "tsx" | "mts" | "cts" => Some("ts"),
         "json" => Some("json"),
+        "json5" => Some("json5"),
         "yaml" | "yml" => Some("yaml"),
         "toml" => Some("toml"),
         "kdl" => Some("kdl"),
@@ -318,6 +319,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "dot" | "gv" | "graphviz" => Some("graphviz"),
         "d2" => Some("d2"),
         "bpmn" | "bpmn2" => Some("bpmn"),
+        "wavejson" | "wavedrom" => Some("wavejson"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -429,6 +431,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "js" => "JavaScript",
         "ts" => "TypeScript",
         "json" => "JSON",
+        "json5" => "JSON5",
         "yaml" => "YAML",
         "toml" => "TOML",
         "kdl" => "KDL",
@@ -443,6 +446,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "graphviz" => "Graphviz",
         "d2" => "D2",
         "bpmn" => "BPMN",
+        "wavejson" | "wavedrom" => "WaveDrom",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -562,6 +566,12 @@ pub const D2_SUBLIME_SYNTAX: &str = include_str!("syntax/d2.sublime-syntax");
 /// BPMN XML highlighting for native source/live-preview sessions.
 pub const BPMN_SUBLIME_SYNTAX: &str = include_str!("syntax/bpmn.sublime-syntax");
 
+/// JSON5 highlighting shared by data files and WaveJSON source editing.
+pub const JSON5_SUBLIME_SYNTAX: &str = include_str!("syntax/json5.sublime-syntax");
+
+/// WaveJSON source highlighting, including JSON5 comments and single quotes.
+pub const WAVEDROM_SUBLIME_SYNTAX: &str = include_str!("syntax/wavedrom.sublime-syntax");
+
 /// Shared native diagram grammars used by both screen and desktop source views.
 pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     PIKCHR_SUBLIME_SYNTAX,
@@ -570,6 +580,7 @@ pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     GRAPHVIZ_SUBLIME_SYNTAX,
     D2_SUBLIME_SYNTAX,
     BPMN_SUBLIME_SYNTAX,
+    WAVEDROM_SUBLIME_SYNTAX,
     MERMAID_SUBLIME_SYNTAX,
 ];
 
@@ -579,6 +590,7 @@ pub fn syntect_fallback(lang: &str) -> &'static str {
         "ts" | "tsx" | "mts" | "cts" => "js",
         "toml" | "kdl" | "ini" | "cfg" | "conf" | "env" => "yaml",
         "bpmn" | "bpmn2" => "xml",
+        "json5" | "wavejson" | "wavedrom" => "json",
         "objc" | "mm" => "m",
         "swift" => "rs",
         "bazel" | "bzl" => "py",

@@ -15,6 +15,7 @@ pub fn build_syntax_set(newlines: bool) -> SyntaxSet {
     for definition in [
         little_clip_core::syntax::CONFIG_SUBLIME_SYNTAX,
         little_clip_core::syntax::TYPESCRIPT_SUBLIME_SYNTAX,
+        little_clip_core::syntax::JSON5_SUBLIME_SYNTAX,
     ]
     .into_iter()
     .chain(

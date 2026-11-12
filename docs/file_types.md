@@ -221,7 +221,7 @@
         - [x] BPMN business process (`bpmn`, `bpmn2`) — native authored-DI/automatic layout, bounded large/small previews and diagnostics
         - [ ] Diagrams.net / draw.io (`drawio`, `diagramsnet`)
         - [ ] Excalidraw whiteboards (`excalidraw`)
-        - [ ] WaveDrom digital timing diagrams (`wavedrom`)
+        - [x] WaveDrom digital timing diagrams (`wavedrom`)
         - [ ] Structurizr software architecture (`structurizr`)
         - [ ] BlockDiag family (`blockdiag`, `seqdiag`, `actdiag`, `nwdiag`, `packetdiag`, `rackdiag`)
         - [ ] Bytefield packet layouts (`bytefield`)
@@ -559,7 +559,7 @@
     - [ ] `.diag`, `.blockdiag`, `.seqdiag`, `.actdiag`, `.nwdiag`, `.packetdiag`, `.rackdiag` — BlockDiag family diagram (May need disambiguation with system diagnostic log files on `.diag`)
   - [ ] Hardware, electrical, and packet layout diagrams
     - [ ] `.bytefield`, `.bf` — Bytefield-SVG network/binary packet layout (May need disambiguation with Brainfuck source files on `.bf`)
-    - [ ] `.wavedrom`, `.wave.json` — WaveDrom digital timing diagram (conventional compound extension for JSON)
+    - [x] `.json`/`.json5` with distinctive WaveJSON content, `.wavejson`, `.wavedrom` — WaveDrom timing/register/logic diagrams (source editor; graphical timing editing pending)
     - [ ] `.wireviz`, `.wire.yaml`, `.wire.yml` — WireViz cable and wiring harness diagram (conventional compound extension for YAML)
     - [ ] `.sym` — Symbolator circuit component pinout diagram (May need disambiguation with compiler debug symbol files on `.sym`)
   - [ ] ASCII-art and text-to-vector diagram tools

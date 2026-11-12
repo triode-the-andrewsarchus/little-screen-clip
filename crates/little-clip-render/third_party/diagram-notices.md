@@ -83,3 +83,12 @@ release archives. The renderer's optional Inter fonts (OFL-1.1), PNG backend,
 system-font discovery and browser editor are not compiled. SVG text uses the
 application's existing bundled fonts and rasterizer. The preview does not
 execute BPMN processes, scripts, expressions or extension elements.
+
+## WaveDrom
+
+The unmodified WaveDrom 3.8.0 npm package is embedded under MIT in a hostless
+QuickJS runtime. Source is parsed as JSON5 data in Rust, never evaluated.
+`wavedrom-notices.md` records the verified package integrity, original source,
+bundled dependency notices and runtime/parser provenance. Full notices are
+printed by `--diagram-licenses`. The engine uses the existing OFL font metrics
+and SVG rasterizer; no browser, DOM or installed Node runtime is required.

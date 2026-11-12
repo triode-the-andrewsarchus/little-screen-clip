@@ -23,6 +23,14 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         ("graphviz", "digraph { a -> b }", true),
         ("d2", "direction: right\na -> b: Preview", true),
         ("d2", "a: {", false),
+        ("wavedrom", "{signal:[{name:'clk',wave:'p...'}]}", true),
+        (
+            "wavedrom",
+            "{reg:[{bits:4,name:'op'},{bits:12,name:'payload'}]}",
+            true,
+        ),
+        ("wavedrom", "{assign:[['out',['&','a','b']]]}", true),
+        ("wavedrom", "{signal:(()=>{throw 'executed'})()}", false),
         (
             "bpmn",
             include_str!("../../../../docs/examples/diagrams/order.bpmn"),

@@ -1,0 +1,45 @@
+%YAML 1.2
+---
+name: JSON5
+file_extensions: [json5]
+scope: source.json5
+contexts:
+  main:
+    - match: '//.*$'
+      scope: comment.line.double-slash.json5
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.json5
+      push: comment
+    - match: '"'
+      scope: punctuation.definition.string.begin.json5
+      push: double-quoted
+    - match: "'"
+      scope: punctuation.definition.string.begin.json5
+      push: single-quoted
+    - match: '[A-Za-z_$][A-Za-z0-9_$]*(?=\s*:)'
+      scope: variable.other.member.json5
+    - match: '\b(?:true|false|null|Infinity|NaN)\b'
+      scope: constant.language.json5
+    - match: '[-+]?(?:0[xX][0-9a-fA-F]+|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)'
+      scope: constant.numeric.json5
+    - match: '[{}\[\],:]'
+      scope: punctuation.separator.json5
+  comment:
+    - meta_scope: comment.block.json5
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.json5
+      pop: true
+  double-quoted:
+    - meta_scope: string.quoted.double.json5
+    - match: '\\.'
+      scope: constant.character.escape.json5
+    - match: '"'
+      scope: punctuation.definition.string.end.json5
+      pop: true
+  single-quoted:
+    - meta_scope: string.quoted.single.json5
+    - match: '\\.'
+      scope: constant.character.escape.json5
+    - match: "'"
+      scope: punctuation.definition.string.end.json5
+      pop: true

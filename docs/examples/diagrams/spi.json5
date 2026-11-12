@@ -1,0 +1,14 @@
+{
+  // Illustrative transfer; periods and phases remain numeric source values.
+  signal: [
+    {name: 'clock', wave: 'p.......'},
+    ['Controller',
+      {name: 'select_n', wave: '10.....1', node: '.a....b.'},
+      {name: 'data', wave: 'x.345..x', data: ['Command', 'Address', 'Payload']},
+    ],
+    {name: 'ready', wave: '0...1.0.'},
+  ],
+  edge: ['a~>b Transfer'],
+  head: {text: 'Serial transaction', tick: 0},
+  config: {skin: 'default', hscale: 1},
+}

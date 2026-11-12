@@ -804,6 +804,8 @@ mod tests {
             "drawing.graphviz",
             "drawing.bpmn",
             "drawing.bpmn2",
+            "drawing.wavejson",
+            "drawing.wavedrom",
             "DRAWING.PIKCHR",
         ] {
             assert_eq!(kind(Path::new(name)), Kind::Text);

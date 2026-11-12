@@ -44,5 +44,7 @@ bpmnkit-render = { version = "=0.2.1", default-features = false }
 bpmnkit-layout = "=0.2.1"
 bpmnkit-spec = "=0.2.1"
 
+rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
+
 [dev-dependencies]
 tempfile = "3.27"
