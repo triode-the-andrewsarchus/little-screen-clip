@@ -1,0 +1,51 @@
+[package]
+name = "d2-rs-wasm"
+description = "WebAssembly bindings for d2-rs, a Rust port of D2's d2js package."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories = ["wasm", "visualization", "graphics"]
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Oracle tier: tests that read Go-oracle artifacts regenerated into
+# oracle-cache/fixtures by scripts/regen-fixtures.py (docs/FIXTURES.md).
+oracle-fixtures = []
+
+[dependencies]
+base64.workspace = true
+flate2.workspace = true
+d2-rs-render.workspace = true
+d2-rs-isometric.workspace = true
+d2-rs-layout.workspace = true
+d2-rs-elk.workspace = true
+d2-rs-editor.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+roxmltree.workspace = true
+wasm-bindgen.workspace = true
+d2-rs-tala.workspace = true
+d2-rs-lib.workspace = true
+d2-rs-language.workspace = true
+d2-rs-core.workspace = true
+d2-rs-text.workspace = true
+d2-rs-math.workspace = true
+d2-rs-export.workspace = true
+
+[dev-dependencies]
+d2-rs-testdata.workspace = true
+
+# Enable validation of the WebAssembly instructions emitted by Rust.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+
+[lints]
+workspace = true
