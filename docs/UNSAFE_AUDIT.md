@@ -12,4 +12,5 @@ safety argument; a comment alone does not repair an invalid invariant.
 - [ ] Replace avoidable OS calls with existing safe descriptor-based APIs.
 - [ ] Audit native codec/SQLite/Wayland ownership, buffers and callbacks.
 - [ ] Review remaining vendor SIMD, thread guarantees and standalone I/O lifetimes.
+- [x] Retain uncertain io_uring buffers after fatal drain failure instead of treating ring closure as completion; the three standalone direct/prefetch/error tests pass.
 - [ ] Verify comments and safety contracts, run strict Clippy/tests and architecture review.

@@ -35,7 +35,15 @@ impl Buffer {
 }
 impl Drop for Buffer {
     fn drop(&mut self) {
-        // SAFETY: allocation/layout match new; Reader drops its ring first.
+        if self.result == PENDING {
+            // A fatal drain failure leaves completion uncertain. Closing an
+            // io_uring fd does not prove the kernel has stopped accessing this
+            // allocation. Retain this bounded block until process exit rather
+            // than freeing memory an in-flight read may still write to.
+            return;
+        }
+        // SAFETY: allocation/layout match new and no read remains pending for
+        // this block. Reader drains its ring before ordinary field destruction.
         unsafe {
             dealloc(
                 self.bytes.as_ptr(),
@@ -175,7 +183,8 @@ impl Reader {
 impl Drop for Reader {
     fn drop(&mut self) {
         // Drain outstanding reads before releasing allocations or the fd.
-        // An unrecoverable ring error closes the ring first, cancelling its work.
+        // On an unrecoverable ring error, Buffer::drop retains uncertain pending
+        // allocations: ring closure alone is not a completion acknowledgement.
         while self.pending > 0 {
             if self.collect(true).is_err() {
                 break;
@@ -204,7 +213,8 @@ pub extern "C" fn vs_io_new(fd: i32) -> *mut Reader {
 }
 /// # Safety
 /// Reader must be live and exclusively owned by the calling decoder thread.
-/// `offsets` must contain `count` readable i64 values, with count <= 8.
+/// `offsets` must be aligned and contain `count` initialized readable i64 values,
+/// with count <= 8. Neither pointer may alias a concurrent call on this reader.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vs_io_prefetch(reader: *mut Reader, offsets: *const i64, count: usize) {
     if reader.is_null() || offsets.is_null() || count > 8 {
@@ -212,6 +222,8 @@ pub unsafe extern "C" fn vs_io_prefetch(reader: *mut Reader, offsets: *const i64
     }
     // SAFETY: caller satisfies the documented pointer and exclusive-use contract.
     let reader = unsafe { &mut *reader };
+    // SAFETY: the caller supplies count initialized aligned i64 values; the
+    // checked count <= 8 also bounds the slice size below isize::MAX.
     let offsets = unsafe { std::slice::from_raw_parts(offsets, count) };
     let _ = reader.prefetch(offsets);
 }
@@ -230,6 +242,8 @@ pub unsafe extern "C" fn vs_io_read(
     }
     // SAFETY: caller supplies the documented live reader and output allocation.
     let reader = unsafe { &mut *reader };
+    // SAFETY: output is the caller's exclusive writable allocation, disjoint
+    // from reader buffers; the checked count fits in isize on supported targets.
     let output = unsafe { std::slice::from_raw_parts_mut(output, count) };
     match reader.read(offset, output) {
         Ok(count) => count as i32,
@@ -241,6 +255,8 @@ pub unsafe extern "C" fn vs_io_read(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vs_io_free(reader: *mut Reader) {
     if !reader.is_null() {
+        // SAFETY: caller transfers the same live Box pointer produced by new
+        // exactly once, with no concurrent access and before the borrowed fd closes.
         drop(unsafe { Box::from_raw(reader) });
     }
 }
