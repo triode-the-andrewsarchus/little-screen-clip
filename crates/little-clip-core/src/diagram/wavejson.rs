@@ -2,6 +2,8 @@
 use json_five::tokenize::TokType;
 use serde_json::Value;
 
+pub mod timing;
+
 const MAX_SOURCE: usize = 256 * 1024;
 
 /// Recognizes a small, structurally distinctive WaveJSON clipboard or JSON file.
@@ -79,13 +81,12 @@ pub fn parse(source: &str) -> Result<Value, String> {
             TokType::Nan | TokType::Infinity => {
                 return Err("WaveJSON numbers must be finite".into());
             }
-            TokType::Float | TokType::Exponent => {
+            TokType::Float | TokType::Exponent
                 if !source[*start..*end]
                     .parse::<f64>()
-                    .is_ok_and(f64::is_finite)
-                {
-                    return Err("WaveJSON numbers must be finite".into());
-                }
+                    .is_ok_and(f64::is_finite) =>
+            {
+                return Err("WaveJSON numbers must be finite".into());
             }
             _ => (),
         }
