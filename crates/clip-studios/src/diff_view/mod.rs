@@ -187,8 +187,8 @@ type ImageDiffJob = (
 );
 
 fn spawn_image_diff_worker(
-    lhs: &DiffTarget,
-    rhs: &DiffTarget,
+    lhs: &std::sync::Arc<DiffTarget>,
+    rhs: &std::sync::Arc<DiffTarget>,
     options: ImageDiffOptions,
     jobs: &BackgroundJobs,
 ) -> ImageDiffJob {
@@ -208,16 +208,17 @@ fn spawn_image_diff_worker(
             return (None, None, Some(err));
         }
 
-        let mime1 = lhs.image_mime().map(str::to_owned);
-        let mime2 = rhs.image_mime().map(str::to_owned);
-        let b1_vec = b1.to_vec();
-        let b2_vec = b2.to_vec();
+        let lhs = std::sync::Arc::clone(lhs);
+        let rhs = std::sync::Arc::clone(rhs);
         let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
+            let (Some(b1), Some(b2)) = (lhs.image_bytes(), rhs.image_bytes()) else {
+                return Err("Failed to obtain image bytes from comparison targets".to_string());
+            };
             little_clip_ops::image_diff::compare_image_bytes_with_mime(
-                &b1_vec,
-                mime1.as_deref(),
-                &b2_vec,
-                mime2.as_deref(),
+                b1,
+                lhs.image_mime(),
+                b2,
+                rhs.image_mime(),
                 &options,
             )
             .map_err(|e| e.to_string())
@@ -234,8 +235,8 @@ fn spawn_image_diff_worker(
 }
 
 fn spawn_text_diff_worker(
-    lhs: &DiffTarget,
-    rhs: &DiffTarget,
+    lhs: &std::sync::Arc<DiffTarget>,
+    rhs: &std::sync::Arc<DiffTarget>,
     mode: DiffDisplayMode,
     width: usize,
     jobs: &BackgroundJobs,
@@ -243,8 +244,8 @@ fn spawn_text_diff_worker(
     JobTicket,
     little_clip_core::jobs::JobReceiver<(DiffResult, egui::text::LayoutJob)>,
 ) {
-    let lhs = lhs.clone();
-    let rhs = rhs.clone();
+    let lhs = std::sync::Arc::clone(lhs);
+    let rhs = std::sync::Arc::clone(rhs);
     jobs.submit(std::time::Duration::MAX, move || {
         let r = compute_diff(&lhs, &rhs, mode, width);
         let job = ansi_to_layout_job(&r.raw_ansi, crate::ui_ext::MONO_FONT_SIZE);
@@ -264,6 +265,8 @@ impl DiffViewerState {
         mode: DiffDisplayMode,
         jobs: &BackgroundJobs,
     ) -> Self {
+        let lhs = std::sync::Arc::new(lhs);
+        let rhs = std::sync::Arc::new(rhs);
         let is_img = lhs.is_image() && rhs.is_image();
         let image_options = ImageDiffOptions::default();
 
@@ -292,8 +295,8 @@ impl DiffViewerState {
         let layout_job = ansi_to_layout_job("", crate::ui_ext::MONO_FONT_SIZE);
 
         Self {
-            lhs: std::sync::Arc::new(lhs),
-            rhs: std::sync::Arc::new(rhs),
+            lhs,
+            rhs,
             mode,
             result,
             layout_job,
