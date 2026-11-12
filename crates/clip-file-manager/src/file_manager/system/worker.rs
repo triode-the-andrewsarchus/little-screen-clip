@@ -5,10 +5,7 @@ use little_clip_core::{
 };
 use std::{
     io::{Read, Write},
-    os::{
-        fd::AsRawFd,
-        unix::{fs::MetadataExt, process::CommandExt},
-    },
+    os::{fd::AsRawFd, unix::fs::MetadataExt},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -188,19 +185,9 @@ pub(super) fn spawn_in(budget: Budget, mut command: Command) -> Result<uuid::Uui
     if children.len() >= budget.limit() {
         return Err("System collectors are busy or awaiting kernel I/O completion".into());
     }
-    // SAFETY: pre_exec only makes async-signal-safe Linux syscalls.
-    unsafe {
-        command.pre_exec(|| {
-            let parent = libc::getppid();
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::getppid() != parent || parent == 1 {
-                libc::_exit(2);
-            }
-            Ok(())
-        });
-    }
+    // Share the launch guard that captures parent identity before fork; reading
+    // getppid only in the child can mistake a new subreaper for its original parent.
+    little_clip_core::process::guard_parent(&mut command);
     children.push(ManagedChild {
         id,
         child: command.spawn().map_err(|e| e.to_string())?,
