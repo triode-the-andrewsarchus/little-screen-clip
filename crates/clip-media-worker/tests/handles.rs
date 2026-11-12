@@ -796,15 +796,21 @@ mod playback {
             }
         }
         fn control(&mut self, epoch: u64, seek_ms: Option<u64>, playing: bool) {
-            let bytes = serde_json::to_string(&Control {
+            self.send(&Control {
                 epoch,
                 seek_ms,
                 playing,
                 volume: 0.5,
                 options: Default::default(),
-            })
+            });
+        }
+        fn send(&mut self, control: &Control) {
+            writeln!(
+                self.input.as_mut().unwrap(),
+                "{}",
+                serde_json::to_string(control).unwrap()
+            )
             .unwrap();
-            writeln!(self.input.as_mut().unwrap(), "{bytes}").unwrap();
         }
         fn until(&mut self, accept: impl Fn(&Update) -> bool) -> (Update, Vec<u8>) {
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -869,6 +875,41 @@ mod playback {
         );
         player.until(|packet| packet.bytes > 0)
     }
+    #[test]
+    fn fast_rate_switches_keep_delivering_frames_and_resume_after_pause() {
+        let mut player = Player::open();
+        player.until(|p| p.bytes > 0);
+        for (index, rate) in [10.0, 4.0, 10.0, 2.0, 4.0, 1.5, 10.0, 4.0]
+            .into_iter()
+            .cycle()
+            .take(32)
+            .enumerate()
+        {
+            let epoch = index as u64 + 1;
+            let options = clip_media_protocol::playback::Options {
+                rate,
+                ..Default::default()
+            };
+            let control = Control {
+                epoch,
+                seek_ms: Some(100),
+                playing: true,
+                volume: 1.0,
+                options,
+            };
+            player.send(&control);
+            player.until(|p| p.epoch == epoch && p.bytes > 0 && p.position_ms >= 300);
+            let mut paused = control.clone();
+            paused.seek_ms = None;
+            paused.playing = false;
+            player.send(&paused);
+            player.until(|p| p.epoch == epoch && !p.playing && p.bytes == 0);
+            paused.playing = true;
+            player.send(&paused);
+            player.until(|p| p.epoch == epoch && p.playing && p.bytes > 0 && p.position_ms >= 500);
+        }
+    }
+
     #[test]
     fn embedded_tracks_render_subtitles_and_options_seek_at_the_requested_rate_and_loop() {
         use clip_media_protocol::playback::Options;

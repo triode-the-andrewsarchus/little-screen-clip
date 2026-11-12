@@ -211,3 +211,22 @@ checks avoid OCR errors on upscaled low-resolution subtitles.
   clipboard publication, failure reporting, ordered batches and actual PCM.
   The private desktop regression reproduces stale text with the previous build
   using a daemon that acknowledges without publishing the selection.
+
+- [x] Keep rate-only changes out of track selection/internal muted playback.
+  Send the flushing seek before waiting for preroll so the wait observes the
+  new segment rather than old-rate buffered/clock state. The regression exercises
+  32 fast-rate transitions with pause/resume and actual advancing decoded frames.
+  Native private-audio stress runs pass 80 transitions on 4K HEVC/GPU, 160 with
+  subtitles, and 100 with paused rate changes/resume. The user's exact intermittent
+  stall was not reproduced with these synthetic sources; an affected source is
+  needed to verify that specific case if it persists.
+
+Final follow-up verification: 2,835 workspace tests pass, zero failures and
+35 ignored; all 26 worker/protocol/reference tests and strict worker/protocol
+Clippy pass. The optimized workspace rebuild has zero compiler warnings. The
+private desktop clipboard regression now passes with an acknowledging daemon
+that deliberately leaves the OS selection alone: both the button and Ctrl+C
+replace seeded text with `text/uri-list`, retained stereo WAV data, and duration
+matching the displayed selection. Waiting for completed waveform analysis avoids
+racing range setup against initial analysis; expected duration comes from the
+editor readout rather than assumed pointer-drag coordinates.

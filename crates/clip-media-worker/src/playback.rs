@@ -307,7 +307,8 @@ impl Engine {
 
     fn seek(&mut self, position: u64, output: &mut impl Write) -> Result<()> {
         self.player.set_state(gst::State::Paused).map_err(message)?;
-        self.wait_ready()?;
+        // Flush the old segment before waiting for new preroll. Waiting here
+        // can wait on buffers/clock state from the previous playback rate.
         self.player
             .seek(
                 self.options.rate,
@@ -336,7 +337,11 @@ impl Engine {
             return Err("Invalid playback control".into());
         }
         let changed = self.options != control.options;
-        if changed {
+        let tracks_changed = self.options.audio_track != control.options.audio_track
+            || self.options.subtitle_track != control.options.subtitle_track
+            || self.options.subtitles_enabled != control.options.subtitles_enabled;
+        self.options = control.options;
+        if tracks_changed {
             // Stream selection needs data flow even when the viewer is paused.
             // Mute this internal preroll, then restore the exact requested frame
             // and playing state with the flushing seek below.
@@ -344,7 +349,6 @@ impl Engine {
             self.player
                 .set_state(gst::State::Playing)
                 .map_err(message)?;
-            self.options = control.options;
             self.apply_tracks()?;
             self.tracks_pending = true;
         }
