@@ -14,6 +14,8 @@ mod bpmn;
 mod d2;
 mod fonts;
 mod graphviz;
+mod images;
+use images::Policy as ImagePolicy;
 mod lini;
 mod math;
 mod mermaid;
@@ -301,7 +303,7 @@ fn render_inline(
             (svgbob::to_svg(source), Vec::new())
         }
     };
-    let mut rendered = rasterize_svg(svg, math_layout.is_none())?;
+    let mut rendered = rasterize_svg(svg, math_layout.is_none(), ImagePolicy::Block)?;
     rendered.math = math_layout;
     rendered.warnings.extend(warnings);
     rendered.warnings = bounded_warnings(rendered.warnings);
@@ -325,6 +327,7 @@ fn parse_svg(
     svg: &str,
     fonts: &resvg::usvg::fontdb::Database,
     family: &str,
+    images: ImagePolicy,
 ) -> Result<(resvg::usvg::Tree, Vec<String>), String> {
     if svg.len() > MAX_SVG {
         return Err("Diagram SVG exceeds 2 MiB".into());
@@ -337,32 +340,16 @@ fn parse_svg(
     {
         return Err("Diagram SVG exceeds structural limits".into());
     }
+    let (image_href_resolver, image_budget) = images::resolver(images);
     let mut options = resvg::usvg::Options {
         font_family: family.into(),
-        image_href_resolver: resvg::usvg::ImageHrefResolver {
-            resolve_data: Box::new(|_, _, _| None),
-            resolve_string: Box::new(|_, _| None),
-        },
+        image_href_resolver,
         ..Default::default()
     };
     // Responsive SVGs use percentages for their root size. Their viewBox,
     // rather than usvg's 100×100 fallback, supplies the native viewport.
-    if let Some(viewbox) = document.root_element().attribute("viewBox") {
-        let values = viewbox
-            .split(|value: char| value.is_ascii_whitespace() || value == ',')
-            .filter(|value| !value.is_empty())
-            .take(5)
-            .map(str::parse::<f32>)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("Invalid diagram viewBox: {error}"))?;
-        if values.len() != 4
-            || values.iter().any(|value| !value.is_finite())
-            || values[2] > 16_384.0
-            || values[3] > 16_384.0
-        {
-            return Err("Diagram viewBox exceeds dimension limits".into());
-        }
-        options.default_size = resvg::usvg::Size::from_wh(values[2], values[3])
+    if let Some(viewbox) = svg_viewbox(document.root_element())? {
+        options.default_size = resvg::usvg::Size::from_wh(viewbox.width(), viewbox.height())
             .ok_or("Diagram viewBox has non-positive dimensions")?;
     }
     let mut tree = resvg::usvg::Tree::from_str(svg, &options).map_err(|error| error.to_string())?;
@@ -370,15 +357,37 @@ fn parse_svg(
         return Err("Diagram dimensions exceed 16384 pixels".into());
     }
     tree.convert_text(fonts);
-    let warnings = if document
+    let has_images = document
         .descendants()
-        .any(|node| node.has_tag_name("image"))
-    {
-        vec!["Linked or embedded images are not displayed in diagram previews".into()]
-    } else {
-        Vec::new()
+        .any(|node| node.has_tag_name("image"));
+    let warnings = match images {
+        ImagePolicy::Block if has_images => vec!["Linked or embedded images are not displayed in diagram previews".into()],
+        ImagePolicy::EmbeddedRaster if image_budget.rejected.load(Ordering::Relaxed) || images::invalid_declarations(&document) => vec!["Some images were omitted: only bounded embedded PNG, JPEG and WebP rasters are displayed".into()],
+        _ => Vec::new(),
     };
     Ok((tree, warnings))
+}
+
+fn svg_viewbox(root: roxmltree::Node<'_, '_>) -> Result<Option<resvg::usvg::NonZeroRect>, String> {
+    let Some(viewbox) = root.attribute("viewBox") else {
+        return Ok(None);
+    };
+    let values = viewbox
+        .split(|value: char| value.is_ascii_whitespace() || value == ',')
+        .filter(|value| !value.is_empty())
+        .take(5)
+        .map(str::parse::<f32>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Invalid diagram viewBox: {error}"))?;
+    let [x, y, width, height] = values.as_slice() else {
+        return Err("Diagram viewBox needs four coordinates".into());
+    };
+    if values.iter().any(|value| !value.is_finite()) || *width > 16_384.0 || *height > 16_384.0 {
+        return Err("Diagram viewBox exceeds dimension limits".into());
+    }
+    resvg::usvg::NonZeroRect::from_xywh(*x, *y, *width, *height)
+        .map(Some)
+        .ok_or_else(|| "Diagram viewBox has non-positive dimensions".into())
 }
 
 // Outline and namespace each document before stacking, so marker, gradient and
@@ -387,6 +396,7 @@ fn compose_svg(
     diagrams: impl IntoIterator<Item = String>,
     fonts: &resvg::usvg::fontdb::Database,
     family: &str,
+    images: ImagePolicy,
 ) -> Result<(String, Vec<String>), String> {
     use resvg::usvg::{NodeExt, TreeWriting};
     use std::fmt::Write;
@@ -397,7 +407,7 @@ fn compose_svg(
         if index >= 16 {
             return Err("Previews support at most sixteen diagram planes".into());
         }
-        let (mut tree, limitations) = parse_svg(&svg, fonts, family)?;
+        let (mut tree, limitations) = parse_svg(&svg, fonts, family, images)?;
         // Some generators size the root from shapes alone, excluding external
         // labels. Text has been outlined, so fit its real glyph geometry before
         // nesting rather than clipping labels or guessing a fixed text margin.
@@ -448,8 +458,8 @@ fn compose_svg(
     ))
 }
 
-fn rasterize_svg(svg: String, white_paper: bool) -> Result<Rendered, String> {
-    let (tree, warnings) = parse_svg(&svg, default_fonts(), "Noto Sans CJK JP")?;
+fn rasterize_svg(svg: String, white_paper: bool, images: ImagePolicy) -> Result<Rendered, String> {
+    let (tree, warnings) = parse_svg(&svg, default_fonts(), "Noto Sans CJK JP", images)?;
     let scale = (WIDTH as f32 / tree.size.width())
         .min(HEIGHT as f32 / tree.size.height())
         .min(2.0);
@@ -554,7 +564,7 @@ mod tests {
     #[test]
     fn responsive_svg_keeps_its_viewbox_aspect_ratio() {
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 400 100"><rect width="400" height="100" fill="black"/></svg>"#;
-        let rendered = rasterize_svg(svg.into(), true).unwrap();
+        let rendered = rasterize_svg(svg.into(), true, ImagePolicy::Block).unwrap();
         assert_eq!((rendered.width, rendered.height), (800, 200));
     }
 

@@ -12,7 +12,7 @@ test-support = []
 little-clip-core = { path = "../little-clip-core" }
 little-clip-scene = { path = "../little-clip-scene" }
 tiny-skia.workspace = true
-resvg = { version = "0.37", default-features = false, features = ["text"] }
+resvg = { version = "0.37", default-features = false, features = ["text", "raster-images"] }
 fontdue.workspace = true
 ttf-parser = "0.25"
 image.workspace = true
@@ -49,6 +49,8 @@ rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 excalidraw-render = { version = "=0.1.0", default-features = false, features = ["cjk"] }
 excalidraw-render-fonts = { version = "=0.1.0", default-features = false, features = ["cjk"] }
 wuff = "0.2.10"
+base64 = "0.22"
+data-url = "0.3"
 
 [dev-dependencies]
 tempfile = "3.27"

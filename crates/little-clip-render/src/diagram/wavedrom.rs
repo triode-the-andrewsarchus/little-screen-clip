@@ -67,7 +67,12 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
     })?;
     // Outline generated SVG, isolating references and discarding executable or
     // unsupported SVG content before it can become an exportable artifact.
-    super::compose_svg([svg], super::fonts::metric_fonts(), "Arimo")
+    super::compose_svg(
+        [svg],
+        super::fonts::metric_fonts(),
+        "Arimo",
+        super::ImagePolicy::Block,
+    )
 }
 
 #[cfg(test)]

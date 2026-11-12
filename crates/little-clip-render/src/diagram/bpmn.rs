@@ -72,7 +72,12 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
     if rendered_ids.is_empty() {
         return Err("BPMN contains no drawable elements".into());
     }
-    let (svg, limitations) = super::compose_svg(svgs, super::default_fonts(), "Noto Sans CJK JP")?;
+    let (svg, limitations) = super::compose_svg(
+        svgs,
+        super::default_fonts(),
+        "Noto Sans CJK JP",
+        super::ImagePolicy::Block,
+    )?;
     warnings.extend(limitations);
     Ok((svg, warnings))
 }

@@ -42,7 +42,12 @@ pub(super) fn render(source: &str) -> Result<Rendered, String> {
     // Reuse SVG structural/dimension budgets and its disabled image resolvers.
     // PNG is painted from D2's native scene: its Markdown/TeX labels cannot be
     // faithfully rasterized by treating SVG foreignObject as ordinary SVG text.
-    let (_, mut warnings) = super::parse_svg(&svg, super::default_fonts(), "Noto Sans CJK JP")?;
+    let (_, mut warnings) = super::parse_svg(
+        &svg,
+        super::default_fonts(),
+        "Noto Sans CJK JP",
+        super::ImagePolicy::Block,
+    )?;
     warnings.extend(preview_warnings(&layout.report.warnings));
     let target =
         d2_rs_render::target_diagram_json(&graph, &layout, &labels, &styles, &options, sketch)?;

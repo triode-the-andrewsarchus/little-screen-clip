@@ -6159,6 +6159,7 @@ dependencies = [
 name = "little-clip-render"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bpmnkit-bpmn",
  "bpmnkit-layout",
  "bpmnkit-render",
@@ -6168,6 +6169,7 @@ dependencies = [
  "d2-rs-scenebuild",
  "d2-rs-target",
  "d2-rs-wasm",
+ "data-url",
  "excalidraw-render",
  "excalidraw-render-fonts",
  "fontdue",

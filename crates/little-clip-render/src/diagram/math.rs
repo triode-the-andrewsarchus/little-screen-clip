@@ -134,7 +134,7 @@ mod tests {
         ] {
             let (svg, layout) = svg(source, true, [17; 3]).unwrap();
             assert!(layout.valid(), "{source}");
-            super::super::rasterize_svg(svg, false).unwrap();
+            super::super::rasterize_svg(svg, false, super::super::ImagePolicy::Block).unwrap();
         }
     }
 

@@ -41,7 +41,12 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
         // The inline writer expects an SVG host and omits its namespaces.
         svg.replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" ", 1)
     });
-    let (svg, limitations) = super::compose_svg(diagrams, super::fonts::metric_fonts(), "Tinos")?;
+    let (svg, limitations) = super::compose_svg(
+        diagrams,
+        super::fonts::metric_fonts(),
+        "Tinos",
+        super::ImagePolicy::Block,
+    )?;
     warnings.extend(limitations);
     Ok((svg, warnings))
 }
@@ -97,7 +102,7 @@ mod tests {
             let (svg, _) = svg(&source).unwrap_or_else(|error| panic!("{engine}: {error}"));
             assert!(svg.contains("<path"));
             assert!(!svg.contains("<text"));
-            super::super::rasterize_svg(svg, true).unwrap();
+            super::super::rasterize_svg(svg, true, super::super::ImagePolicy::Block).unwrap();
         }
         assert!(svg("\u{feff}digraph { a -> b }").is_ok());
     }
@@ -123,7 +128,7 @@ mod tests {
         assert_eq!(ids.len(), distinct.len());
         assert!(ids.iter().any(|id| id.starts_with("graph-0-")));
         assert!(ids.iter().any(|id| id.starts_with("graph-1-")));
-        super::super::rasterize_svg(svg, true).unwrap();
+        super::super::rasterize_svg(svg, true, super::super::ImagePolicy::Block).unwrap();
         assert!(
             self::svg("digraph { a -> b }\ndigraph { c -> }").is_err(),
             "errors after the first graph must not disappear"
