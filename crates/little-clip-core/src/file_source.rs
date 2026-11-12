@@ -228,6 +228,50 @@ impl FileSource {
         }
         self.check()
     }
+    /// Hashes the observed file with SHA-256 without changing its seek position.
+    ///
+    /// Run on a worker. Cancellation and the elapsed-time limit are checked
+    /// between bounded reads; they cannot interrupt a filesystem read in flight.
+    /// The handle and named source must still match before and after hashing.
+    ///
+    /// # Errors
+    /// Returns source-validation, read, cancellation or elapsed-time failures.
+    pub fn sha256(
+        &self,
+        file: &File,
+        cancelled: &std::sync::atomic::AtomicBool,
+        timeout: std::time::Duration,
+    ) -> Result<String, String> {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::FileExt;
+        use std::sync::atomic::Ordering;
+
+        let started = std::time::Instant::now();
+        self.check_file(file)?;
+        let mut digest = Sha256::new();
+        let mut buffer = [0_u8; 32 * 1024];
+        let mut offset = 0;
+        loop {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("File hashing cancelled".into());
+            }
+            if started.elapsed() >= timeout {
+                return Err("File hashing timed out".into());
+            }
+            let read = match file.read_at(&mut buffer, offset) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => result.map_err(|error| error.to_string())?,
+            };
+            if read == 0 {
+                break;
+            }
+            digest.update(&buffer[..read]);
+            offset += read as u64;
+        }
+        self.check_file(file)?;
+        Ok(format!("{:x}", digest.finalize()))
+    }
+
     /// Writes beside the destination and atomically installs the completed file.
     ///
     /// Replacing this source requires its identity and timestamps to match.
@@ -382,6 +426,64 @@ pub fn read_file_snapshot_with_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sha256_reads_all_bytes_without_moving_the_cursor_and_rejects_stale_sources() {
+        use std::io::{Seek, SeekFrom};
+        use std::sync::atomic::AtomicBool;
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("line\nbreak.bin");
+        std::fs::write(&path, b"abc").unwrap();
+        let mut file = open_regular_file(&path, true).unwrap();
+        let source = FileSource::capture_file(&file).unwrap();
+        file.seek(SeekFrom::Start(2)).unwrap();
+        assert_eq!(
+            source
+                .sha256(&file, &AtomicBool::new(false), Duration::from_secs(5))
+                .unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(file.stream_position().unwrap(), 2);
+        assert!(
+            source
+                .sha256(&file, &AtomicBool::new(true), Duration::from_secs(5))
+                .unwrap_err()
+                .contains("cancelled")
+        );
+        assert!(
+            source
+                .sha256(&file, &AtomicBool::new(false), Duration::ZERO)
+                .unwrap_err()
+                .contains("timed out")
+        );
+        std::fs::write(&path, b"changed").unwrap();
+        assert!(
+            source
+                .sha256(&file, &AtomicBool::new(false), Duration::from_secs(5))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn sha256_handles_empty_and_multiple_read_chunks() {
+        use sha2::{Digest, Sha256};
+        use std::sync::atomic::AtomicBool;
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input");
+        for bytes in [Vec::new(), vec![b'x'; 100_000]] {
+            std::fs::write(&path, &bytes).unwrap();
+            let file = open_regular_file(&path, true).unwrap();
+            let source = FileSource::capture_file(&file).unwrap();
+            assert_eq!(
+                source
+                    .sha256(&file, &AtomicBool::new(false), Duration::from_secs(5))
+                    .unwrap(),
+                format!("{:x}", Sha256::digest(&bytes))
+            );
+        }
+    }
 
     #[test]
     fn retained_input_check_rejects_changed_content_and_replaced_names() {

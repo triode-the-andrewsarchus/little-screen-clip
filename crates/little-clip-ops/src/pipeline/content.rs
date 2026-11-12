@@ -70,11 +70,11 @@ fn run(request: CommandRequest) -> Result<String, String> {
 
 pub(super) fn checksum(path: &Path) -> Result<String, String> {
     let input = Input::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let output = run(input
-        .argument(CommandRequest::new("sha256sum"))
-        .map_err(|error| error.to_string())?)?;
-    input.check().map_err(|error| error.to_string())?;
-    Ok(output.split_whitespace().next().unwrap_or("").to_owned())
+    input.observed.sha256(
+        &input.file,
+        &std::sync::atomic::AtomicBool::new(false),
+        EXTERNAL_COMMAND_TIMEOUT,
+    )
 }
 
 pub(super) fn image_bytes(path: &Path) -> Result<Vec<u8>, String> {

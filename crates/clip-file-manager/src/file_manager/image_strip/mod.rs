@@ -103,19 +103,13 @@ pub(super) use little_clip_core::gallery_image::hash::{
     difference_hash, parse_dhash, straight_pixels, thumbnail,
 };
 
-// The same bounded helper used by the file SHA-256 pipeline, never a shell.
+// Stream the pinned source on the existing preview worker; never launch a tool.
 fn exact_hash(path: &Path, cancelled: &AtomicBool) -> Option<String> {
-    let output = little_clip_core::process::CommandRequest::new("sha256sum")
-        .arg("--")
-        .arg_content_file(path)
-        .ok()?
-        .timeout(Duration::from_secs(10))
-        .run_cancellable(cancelled)
-        .ok()?;
-    let text = output.stdout_lossy();
-    // sha256sum prefixes a backslash when escaping unusual filenames.
-    let hash = text.trim_start_matches('\\').split_whitespace().next()?;
-    (hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())).then(|| hash.to_owned())
+    let input = little_clip_core::kernel_interface::open_content(path, true).ok()?;
+    let source = FileSource::capture_file(&input).ok()?;
+    source
+        .sha256(&input, cancelled, Duration::from_secs(10))
+        .ok()
 }
 
 #[cfg(test)]
