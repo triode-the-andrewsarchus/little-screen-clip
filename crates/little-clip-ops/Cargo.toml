@@ -31,6 +31,7 @@ realfft = "3.5.1"
 # Synchronous ZIP writing with byte-exact Unix member names.
 rawzip = "0.5.2"
 flate2 = "1.1"
+egglog = "3.0.0"
 
 [dev-dependencies]
 zip = { version = "7.4", default-features = false, features = ["deflate"] }

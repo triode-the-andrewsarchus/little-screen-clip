@@ -22,9 +22,10 @@ pub(super) fn save(
                 file.write_all(text.as_bytes())
             })
         }
-        PortValue::FilePath(path) | PortValue::ImagePath(path) | PortValue::AudioPath(path) => {
-            copy_file(&directory, path, completed)
-        }
+        PortValue::FilePath(path)
+        | PortValue::ImagePath(path)
+        | PortValue::AudioPath(path)
+        | PortValue::SpectralPath(path) => copy_file(&directory, path, completed),
         PortValue::FileBatch(paths) => {
             if paths.is_empty() {
                 return Err(io::Error::new(
@@ -36,6 +37,13 @@ pub(super) fn save(
                 copy_file(&directory, path, completed)?;
             }
             Ok(())
+        }
+        PortValue::Automation(pts) => {
+            let name = format!("automation_{}.json", uuid::Uuid::new_v4());
+            let json = serde_json::to_string_pretty(pts).unwrap_or_else(|_| "[]".to_string());
+            write_file(&directory, OsStr::new(&name), completed, |file| {
+                file.write_all(json.as_bytes())
+            })
         }
     }
 }

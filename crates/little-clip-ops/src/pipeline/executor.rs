@@ -19,6 +19,16 @@ use uuid::Uuid;
 
 use super::EXTERNAL_COMMAND_TIMEOUT;
 
+fn sample_mod_value(inputs: &HashMap<String, PortValue>, min: f64, max: f64) -> Option<f64> {
+    if let Some(PortValue::Automation(curve)) = inputs.get("Mod")
+        && !curve.is_empty()
+    {
+        let mid_v = curve[curve.len() / 2][1].clamp(0.0, 1.0);
+        return Some(min + mid_v * (max - min));
+    }
+    None
+}
+
 /// Errors that can occur during graph compilation or node execution.
 #[derive(Debug, Error)]
 pub enum PipelineError {
@@ -111,7 +121,8 @@ impl<'a> PipelineExecutor<'a> {
     /// [`PipelineError::PartialExecution`] retains paths of files already saved if
     /// a later step fails. Hand assignments and paste are committed only on success.
     pub fn execute(&self) -> Result<PipelineExecutionResult, PipelineError> {
-        let compiled = CompiledPipeline::compile(self.graph)?;
+        let (optimized_graph, _report) = super::optimizer::optimize_graph(self.graph);
+        let compiled = CompiledPipeline::compile(&optimized_graph)?;
         let workspace = Workspace::new()?;
         let mut outputs: HashMap<(Uuid, String), PortValue> = HashMap::new();
         let mut result = PipelineExecutionResult::default();
@@ -132,6 +143,9 @@ impl<'a> PipelineExecutor<'a> {
             if let Some(p) = preview {
                 result.node_previews.insert(node.id, p);
             }
+            if let Some(tel) = super::telemetry::collect_node_telemetry(&inputs, &node_outputs) {
+                result.node_telemetry.insert(node.id, tel);
+            }
             for (pin_name, val) in node_outputs {
                 outputs.insert((node.id, pin_name), val);
             }
@@ -149,12 +163,16 @@ impl<'a> PipelineExecutor<'a> {
             Some(PortValue::Text(t)) => t,
             Some(PortValue::FilePath(p))
             | Some(PortValue::ImagePath(p))
-            | Some(PortValue::AudioPath(p)) => p.display().to_string(),
+            | Some(PortValue::AudioPath(p))
+            | Some(PortValue::SpectralPath(p)) => p.display().to_string(),
             Some(PortValue::FileBatch(paths)) => paths
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect::<Vec<_>>()
                 .join("\n"),
+            Some(PortValue::Automation(pts)) => {
+                serde_json::to_string(&pts).unwrap_or_else(|_| "[]".to_string())
+            }
             None => String::new(),
         }
     }
@@ -292,21 +310,28 @@ impl<'a> PipelineExecutor<'a> {
             // --- Text Operators ---
             NodeKind::TextTrim => {
                 let text = self.get_input_text(inputs, &["In"])?;
-                let trimmed = text.trim().to_string();
+                let mode = node.props.get("mode").map(String::as_str).unwrap_or("both");
+                let trimmed = match mode {
+                    "start" => text.trim_start().to_string(),
+                    "end" => text.trim_end().to_string(),
+                    _ => text.trim().to_string(),
+                };
                 preview = Some(trimmed.clone());
                 out.push(("Out".to_string(), PortValue::Text(trimmed)));
             }
             NodeKind::TextSlugify => {
                 let text = self.get_input_text(inputs, &["In"])?;
-                let slug = run_python_snippet(
-                    r#"import re, sys
-text = sys.stdin.read().strip()
-slug = re.sub(r'[\W_]+', '-', text).strip('-').lower()
-sys.stdout.write(slug)
-"#,
-                    &text,
-                )
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                let sep = node
+                    .props
+                    .get("separator")
+                    .map(String::as_str)
+                    .filter(|s| *s == "-" || *s == "_")
+                    .unwrap_or("-");
+                let script = format!(
+                    "import re, sys\ntext = sys.stdin.read().strip()\nslug = re.sub(r'[\\W_]+', '{sep}', text).strip('{sep}').lower()\nsys.stdout.write(slug)\n"
+                );
+                let slug = run_python_snippet(&script, &text)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
                 preview = Some(slug.clone());
                 out.push(("Out".to_string(), PortValue::Text(slug)));
             }
@@ -436,11 +461,18 @@ else:
                     .get("border_color")
                     .map(|s| s.as_str())
                     .unwrap_or("#1e293b");
-                let border_size = node
+                let border_size_prop = node
                     .props
                     .get("border_size")
                     .map(|s| s.as_str())
                     .unwrap_or("24");
+                let border_size_str;
+                let border_size = if let Some(mod_v) = sample_mod_value(inputs, 0.0, 128.0) {
+                    border_size_str = format!("{:.0}", mod_v.round());
+                    border_size_str.as_str()
+                } else {
+                    border_size_prop
+                };
                 let out_path = temp_dir.join(format!("framed_{}.png", Uuid::new_v4()));
 
                 super::content::magick(
@@ -560,11 +592,18 @@ else:
             }
             NodeKind::ImageConvertWebp => {
                 let in_path = self.get_input_file(inputs, &["Image In", "In"])?;
-                let q = node
+                let q_prop = node
                     .props
                     .get("quality")
                     .map(|s| s.as_str())
                     .unwrap_or("90");
+                let q_str;
+                let q = if let Some(mod_v) = sample_mod_value(inputs, 1.0, 100.0) {
+                    q_str = format!("{:.0}", mod_v.round());
+                    q_str.as_str()
+                } else {
+                    q_prop
+                };
                 let out_path = temp_dir.join(format!("{}.webp", Uuid::new_v4()));
 
                 super::content::magick(workspace, &[&in_path], &["-quality", q], &out_path)
@@ -575,11 +614,18 @@ else:
             }
             NodeKind::ImageRotate => {
                 let in_path = self.get_input_file(inputs, &["Image In", "In"])?;
-                let deg = node
+                let deg_prop = node
                     .props
                     .get("degrees")
                     .map(|s| s.as_str())
                     .unwrap_or("90");
+                let deg_str;
+                let deg = if let Some(mod_v) = sample_mod_value(inputs, -360.0, 360.0) {
+                    deg_str = format!("{:.0}", mod_v.round());
+                    deg_str.as_str()
+                } else {
+                    deg_prop
+                };
                 let out_path = temp_dir.join(format!("rotated_{}.png", Uuid::new_v4()));
 
                 super::content::magick(workspace, &[&in_path], &["-rotate", deg], &out_path)
@@ -590,19 +636,28 @@ else:
             }
             NodeKind::ImageStitch => {
                 let left_path = self.get_input_file(inputs, &["Left Image", "In 1", "In"])?;
-                let right_path = self.get_input_file(inputs, &["Right Image", "In 2"])?;
-                let out_path = temp_dir.join(format!("stitched_{}.png", Uuid::new_v4()));
+                if let Ok(right_path) = self.get_input_file(inputs, &["Right Image", "In 2"]) {
+                    let out_path = temp_dir.join(format!("stitched_{}.png", Uuid::new_v4()));
+                    let dir_flag = if node.props.get("direction").is_some_and(|d| d == "vertical") {
+                        "-append"
+                    } else {
+                        "+append"
+                    };
 
-                super::content::magick(
-                    workspace,
-                    &[&left_path, &right_path],
-                    &["+append"],
-                    &out_path,
-                )
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                    super::content::magick(
+                        workspace,
+                        &[&left_path, &right_path],
+                        &[dir_flag],
+                        &out_path,
+                    )
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
-                preview = Some("Stitched 2 Images".to_string());
-                out.push(("Combined".to_string(), PortValue::ImagePath(out_path)));
+                    preview = Some("Stitched 2 Images".to_string());
+                    out.push(("Combined".to_string(), PortValue::ImagePath(out_path)));
+                } else {
+                    preview = Some("Single Image Pass-through".to_string());
+                    out.push(("Combined".to_string(), PortValue::ImagePath(left_path)));
+                }
             }
             NodeKind::ImageStripExif => {
                 let in_path = self.get_input_file(inputs, &["Image In", "In"])?;
@@ -667,11 +722,18 @@ else:
             // --- Audio transforms ---
             NodeKind::AudioNormalize => {
                 let in_path = self.get_input_file(inputs, &["Audio In", "In"])?;
-                let target = node
+                let target_prop = node
                     .props
                     .get("target_lufs")
                     .map(|s| s.as_str())
                     .unwrap_or("-14");
+                let target_str;
+                let target = if let Some(mod_v) = sample_mod_value(inputs, -30.0, -5.0) {
+                    target_str = format!("{mod_v:.1}");
+                    target_str.as_str()
+                } else {
+                    target_prop
+                };
                 let tp = node.props.get("tp").map(|s| s.as_str()).unwrap_or("-1.5");
                 let out_path = temp_dir.join(format!("norm_{}.wav", Uuid::new_v4()));
 
@@ -689,11 +751,18 @@ else:
             }
             NodeKind::AudioTrimSilence => {
                 let in_path = self.get_input_file(inputs, &["Audio In", "In"])?;
-                let db = node
+                let db_prop = node
                     .props
                     .get("threshold_db")
                     .map(|s| s.as_str())
                     .unwrap_or("-50");
+                let db_str;
+                let db = if let Some(mod_v) = sample_mod_value(inputs, -80.0, -6.0) {
+                    db_str = format!("{mod_v:.1}");
+                    db_str.as_str()
+                } else {
+                    db_prop
+                };
                 let out_path = temp_dir.join(format!("trimmed_{}.wav", Uuid::new_v4()));
 
                 let filter = format!(
@@ -713,11 +782,18 @@ else:
             }
             NodeKind::AudioAdjustGain => {
                 let in_path = self.get_input_file(inputs, &["Audio In", "In"])?;
-                let db = node
+                let db_prop = node
                     .props
                     .get("gain_db")
                     .map(|s| s.as_str())
                     .unwrap_or("3.0");
+                let db_str;
+                let db = if let Some(mod_v) = sample_mod_value(inputs, -24.0, 24.0) {
+                    db_str = format!("{mod_v:.1}");
+                    db_str.as_str()
+                } else {
+                    db_prop
+                };
                 let out_path = temp_dir.join(format!("gain_{}.wav", Uuid::new_v4()));
 
                 super::content::audio_gain(workspace, &in_path, db, &out_path)
@@ -728,18 +804,251 @@ else:
             }
             NodeKind::AudioConcat => {
                 let in1 = self.get_input_file(inputs, &["Clip 1", "In 1", "In"])?;
-                let in2 = self.get_input_file(inputs, &["Clip 2", "In 2"])?;
-                let out_path = temp_dir.join(format!("concat_{}.wav", Uuid::new_v4()));
+                if let Ok(in2) = self.get_input_file(inputs, &["Clip 2", "In 2"]) {
+                    let out_path = temp_dir.join(format!("concat_{}.wav", Uuid::new_v4()));
 
-                let filter = AudioFilter::Graph {
-                    spec: "[0:a][1:a]concat=n=2:v=0:a=1[out]".into(),
-                    output: "out".into(),
-                };
-                super::content::audio(workspace, &[&in1, &in2], filter, &out_path)
+                    let filter = AudioFilter::Graph {
+                        spec: "[0:a][1:a]concat=n=2:v=0:a=1[out]".into(),
+                        output: "out".into(),
+                    };
+                    super::content::audio(workspace, &[&in1, &in2], filter, &out_path)
+                        .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+
+                    preview = Some("Concatenated Audio".to_string());
+                    out.push(("Audio Out".to_string(), PortValue::AudioPath(out_path)));
+                } else {
+                    preview = Some("Single Audio Pass-through".to_string());
+                    out.push(("Audio Out".to_string(), PortValue::AudioPath(in1)));
+                }
+            }
+
+            // --- Fused & CDP8 DSP Transforms ---
+            NodeKind::ImageMagickChain => {
+                let in_path = self.get_input_file(inputs, &["In", "Image In"])?;
+                let ops_json = node.props.get("ops").map(String::as_str).unwrap_or("[]");
+                let ops: Vec<super::optimizer::ImageChainOp> = serde_json::from_str(ops_json)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+                let mut args: Vec<String> = Vec::new();
+                let mut out_ext = "png".to_string();
+                for op in &ops {
+                    match op.kind {
+                        NodeKind::ImageStripExif => args.push("-strip".into()),
+                        NodeKind::ImageCrop => {
+                            let geom = op
+                                .props
+                                .get("geometry")
+                                .map(String::as_str)
+                                .unwrap_or("1000x1000+0+0");
+                            args.extend(["-crop".into(), geom.into(), "+repage".into()]);
+                        }
+                        NodeKind::ImageRotate => {
+                            let deg = op.props.get("degrees").map(String::as_str).unwrap_or("90");
+                            args.extend(["-rotate".into(), deg.into()]);
+                        }
+                        NodeKind::ImageResize => {
+                            let w = op
+                                .props
+                                .get("max_width")
+                                .map(String::as_str)
+                                .unwrap_or("1920");
+                            let h = op
+                                .props
+                                .get("max_height")
+                                .map(String::as_str)
+                                .unwrap_or("1080");
+                            args.extend(["-resize".into(), format!("{w}x{h}>")]);
+                        }
+                        NodeKind::ImageConvertWebp => {
+                            out_ext = "webp".to_string();
+                            if let Some(q) = op.props.get("quality") {
+                                args.extend(["-quality".into(), q.clone()]);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let out_path = temp_dir.join(format!("img_chain_{}.{}", Uuid::new_v4(), out_ext));
+                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                super::content::magick(workspace, &[&in_path], &arg_refs, &out_path)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                preview = Some(format!("Image Chain ({} ops)", ops.len()));
+                out.push(("Out".to_string(), PortValue::ImagePath(out_path)));
+            }
+            NodeKind::AudioFilterChain => {
+                let in_path = self.get_input_file(inputs, &["In", "Audio In"])?;
+                let ops_json = node.props.get("ops").map(String::as_str).unwrap_or("[]");
+                let ops: Vec<super::optimizer::AudioChainOp> = serde_json::from_str(ops_json)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+                let mut filters: Vec<String> = Vec::new();
+                for op in &ops {
+                    match op.kind {
+                        NodeKind::AudioNormalize => {
+                            let target = op
+                                .props
+                                .get("target_lufs")
+                                .map(String::as_str)
+                                .unwrap_or("-14");
+                            let tp = op.props.get("tp").map(String::as_str).unwrap_or("-1.5");
+                            filters.push(format!("loudnorm=I={target}:LRA=11:TP={tp}"));
+                        }
+                        NodeKind::AudioTrimSilence => {
+                            let db = op
+                                .props
+                                .get("threshold_db")
+                                .map(String::as_str)
+                                .unwrap_or("-50");
+                            filters.push(format!(
+                                "silenceremove=start_periods=1:start_duration=0.1:start_threshold={db}dB:stop_periods=1:stop_duration=0.1:stop_threshold={db}dB"
+                            ));
+                        }
+                        NodeKind::AudioAdjustGain => {
+                            let db = op.props.get("gain_db").map(String::as_str).unwrap_or("0");
+                            filters.push(format!("volume={db}dB"));
+                        }
+                        _ => {}
+                    }
+                }
+                let out_path = temp_dir.join(format!("audio_chain_{}.wav", Uuid::new_v4()));
+                super::content::audio(
+                    workspace,
+                    &[&in_path],
+                    AudioFilter::Chain(filters.join(",")),
+                    &out_path,
+                )
+                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                preview = Some(format!("Audio Chain ({} ops)", ops.len()));
+                out.push(("Out".to_string(), PortValue::AudioPath(out_path)));
+            }
+            NodeKind::CdpProcess => {
+                let process_id = node
+                    .props
+                    .get("process_id")
+                    .map(String::as_str)
+                    .ok_or_else(|| {
+                        PipelineError::NodeFailed(
+                            node.title.clone(),
+                            "CDP node missing process_id".to_string(),
+                        )
+                    })?;
+                let meta = super::cdp_catalog::find_cdp_meta(process_id).ok_or_else(|| {
+                    PipelineError::NodeFailed(
+                        node.title.clone(),
+                        format!("Unknown CDP process '{process_id}'"),
+                    )
+                })?;
 
-                preview = Some("Concatenated Audio".to_string());
-                out.push(("Audio Out".to_string(), PortValue::AudioPath(out_path)));
+                let mut input_paths = Vec::new();
+                if meta.inputcount >= 2 {
+                    input_paths.push(self.get_input_file(inputs, &["In 1", "In"])?);
+                    input_paths.push(self.get_input_file(inputs, &["In 2"])?);
+                } else if meta.inputcount == 1 {
+                    input_paths.push(self.get_input_file(inputs, &["In", "Audio In"])?);
+                }
+
+                let bypassed = node
+                    .props
+                    .get("bypass")
+                    .is_some_and(|b| matches!(b.trim(), "1" | "true" | "True"));
+                let out_is_spectral = node
+                    .outputs
+                    .first()
+                    .is_some_and(|p| p.port_type == super::types::PortType::Spectral);
+                let out_pin_name = node
+                    .outputs
+                    .first()
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "Out".to_string());
+
+                if bypassed && let Some(first_in) = input_paths.first() {
+                    let passthrough = if out_is_spectral {
+                        PortValue::SpectralPath(first_in.clone())
+                    } else {
+                        PortValue::AudioPath(first_in.clone())
+                    };
+                    preview = Some(format!("{} (bypassed)", meta.title));
+                    out.push((out_pin_name, passthrough));
+                } else {
+                    let ext = if out_is_spectral { "ana" } else { "wav" };
+                    let out_path =
+                        temp_dir.join(format!("cdp_{}_{}.{}", process_id, Uuid::new_v4(), ext));
+
+                    let mut params = serde_json::Map::new();
+                    let mut breakfiles: serde_json::Map<String, serde_json::Value> =
+                        serde_json::Map::new();
+                    for param in &meta.parameters {
+                        if let Some(raw_val) = node.props.get(&param.key) {
+                            let val = if let Ok(n) = raw_val.parse::<i64>() {
+                                serde_json::json!(n)
+                            } else if let Ok(f) = raw_val.parse::<f64>() {
+                                serde_json::json!(f)
+                            } else if raw_val == "true" {
+                                serde_json::json!(true)
+                            } else if raw_val == "false" {
+                                serde_json::json!(false)
+                            } else {
+                                serde_json::json!(raw_val)
+                            };
+                            params.insert(param.key.clone(), val);
+                        }
+                        if let Some(brk_raw) = node.props.get(&format!("brk_{}", param.key))
+                            && !brk_raw.trim().is_empty()
+                            && let Ok(pts) = serde_json::from_str::<serde_json::Value>(brk_raw)
+                        {
+                            breakfiles.insert(param.key.clone(), pts);
+                        }
+                    }
+
+                    if let Some(PortValue::Automation(curve)) = inputs.get("Mod")
+                        && !curve.is_empty()
+                    {
+                        let target_key = node.props.get("mod_target").map(String::as_str);
+                        let target_param = target_key
+                            .and_then(|k| meta.parameters.iter().find(|p| p.key == k))
+                            .or_else(|| {
+                                meta.parameters
+                                    .iter()
+                                    .find(|p| p.uitype == "hslider" && p.automatable)
+                            })
+                            .or_else(|| meta.parameters.iter().find(|p| p.uitype == "hslider"));
+                        if let Some(tp) = target_param {
+                            let min = tp.minrange.unwrap_or(0.0);
+                            let max = tp.maxrange.unwrap_or(1.0);
+                            if tp.automatable {
+                                let scaled: Vec<[f64; 2]> = curve
+                                    .iter()
+                                    .map(|&[t, v]| {
+                                        [t.clamp(0.0, 1.0), min + v.clamp(0.0, 1.0) * (max - min)]
+                                    })
+                                    .collect();
+                                breakfiles.insert(tp.key.clone(), serde_json::json!(scaled));
+                            } else {
+                                let mid_v = curve[curve.len() / 2][1].clamp(0.0, 1.0);
+                                params.insert(
+                                    tp.key.clone(),
+                                    serde_json::json!(min + mid_v * (max - min)),
+                                );
+                            }
+                        }
+                    }
+
+                    let req = serde_json::json!({
+                        "process_id": process_id,
+                        "inputs": input_paths,
+                        "output": out_path,
+                        "params": params,
+                        "breakfiles": breakfiles,
+                    });
+                    run_cdp_helper(&req)
+                        .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+
+                    preview = Some(format!("CDP: {}", meta.title));
+                    let out_val = if out_is_spectral {
+                        PortValue::SpectralPath(out_path)
+                    } else {
+                        PortValue::AudioPath(out_path)
+                    };
+                    out.push((out_pin_name, out_val));
+                }
             }
 
             // --- File Transforms ---
@@ -749,10 +1058,11 @@ else:
                     .next()
                     .ok_or_else(|| PipelineError::MissingInput("In".to_string()))?;
                 let hash = match in_val {
-                    PortValue::FilePath(p) | PortValue::ImagePath(p) | PortValue::AudioPath(p) => {
-                        super::content::checksum(p)
-                            .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
-                    }
+                    PortValue::FilePath(p)
+                    | PortValue::ImagePath(p)
+                    | PortValue::AudioPath(p)
+                    | PortValue::SpectralPath(p) => super::content::checksum(p)
+                        .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?,
                     PortValue::Text(t) => {
                         let out = run_command_with_stdin("sha256sum", &[], t)
                             .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -771,6 +1081,17 @@ else:
                         }
                         hashes.join("\n")
                     }
+                    PortValue::Automation(pts) => {
+                        let json = serde_json::to_string(pts).unwrap_or_else(|_| "[]".to_string());
+                        let out = run_command_with_stdin("sha256sum", &[], &json)
+                            .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                        out.split_whitespace().next().unwrap_or("").to_string()
+                    }
+                };
+                let hash = if node.props.get("uppercase").is_some_and(|v| v == "true") {
+                    hash.to_ascii_uppercase()
+                } else {
+                    hash
                 };
                 preview = Some(hash.clone());
                 out.push(("Checksum".to_string(), PortValue::Text(hash)));
@@ -808,11 +1129,19 @@ else:
             }
             NodeKind::FileExtractName => {
                 let p = self.get_input_file(inputs, &["File In", "In"])?;
-                let name = p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_string();
+                let part = node
+                    .props
+                    .get("part")
+                    .map(String::as_str)
+                    .unwrap_or("filename");
+                let name = match part {
+                    "stem" => p.file_stem(),
+                    "ext" => p.extension(),
+                    _ => p.file_name(),
+                }
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
                 preview = Some(name.clone());
                 out.push(("Filename".to_string(), PortValue::Text(name)));
             }
@@ -869,6 +1198,123 @@ else:
 
                 preview = Some(stdout.clone());
                 out.push(("Output".to_string(), PortValue::Text(stdout)));
+            }
+
+            // --- Parameter Automation ---
+            NodeKind::AutomationLfo => {
+                let shape = node
+                    .props
+                    .get("shape")
+                    .map(String::as_str)
+                    .unwrap_or("sine");
+                let rate = node
+                    .props
+                    .get("rate_hz")
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .unwrap_or(2.0)
+                    .clamp(0.1, 20.0);
+                let depth = node
+                    .props
+                    .get("depth")
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .unwrap_or(1.0)
+                    .clamp(0.0, 1.0);
+                let offset = node
+                    .props
+                    .get("offset")
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .unwrap_or(0.5)
+                    .clamp(0.0, 1.0);
+                let steps = 32;
+                let mut curve = Vec::with_capacity(steps + 1);
+                for i in 0..=steps {
+                    let t = i as f64 / steps as f64;
+                    let phase = (t * rate) % 1.0;
+                    let raw = match shape {
+                        "triangle" => 1.0 - 4.0 * (phase - 0.5).abs(),
+                        "square" => {
+                            if phase < 0.5 {
+                                1.0
+                            } else {
+                                -1.0
+                            }
+                        }
+                        "saw" => 2.0 * phase - 1.0,
+                        _ => (phase * std::f64::consts::TAU).sin(),
+                    };
+                    let v = (offset + 0.5 * depth * raw).clamp(0.0, 1.0);
+                    curve.push([t, v]);
+                }
+                preview = Some(format!("LFO {shape} ({rate:.1} Hz)"));
+                out.push(("Curve".to_string(), PortValue::Automation(curve)));
+            }
+            NodeKind::AutomationEnvelope => {
+                let a = node
+                    .props
+                    .get("attack")
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .unwrap_or(0.15)
+                    .clamp(0.01, 0.9);
+                let d = node
+                    .props
+                    .get("decay")
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .unwrap_or(0.25)
+                    .clamp(0.01, 0.9);
+                let s = node
+                    .props
+                    .get("sustain")
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .unwrap_or(0.65)
+                    .clamp(0.0, 1.0);
+                let r = node
+                    .props
+                    .get("release")
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .unwrap_or(0.25)
+                    .clamp(0.01, 0.9);
+                let total = (a + d + r).max(1.0);
+                let t_a = (a / total).clamp(0.02, 0.8);
+                let t_d = ((a + d) / total).clamp(t_a + 0.02, 0.9);
+                let t_r = (1.0 - r / total).clamp(t_d, 0.98);
+                let curve = vec![[0.0, 0.0], [t_a, 1.0], [t_d, s], [t_r, s], [1.0, 0.0]];
+                preview = Some(format!("ADSR (S={s:.2})"));
+                out.push(("Curve".to_string(), PortValue::Automation(curve)));
+            }
+            NodeKind::AutomationDraw => {
+                let mut pts: Vec<[f64; 2]> = node
+                    .props
+                    .get("points")
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_else(|| vec![[0.0, 0.2], [1.0, 0.8]]);
+                if pts.len() < 2 {
+                    pts = vec![[0.0, 0.2], [1.0, 0.8]];
+                }
+                pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
+                for p in &mut pts {
+                    p[0] = p[0].clamp(0.0, 1.0);
+                    p[1] = p[1].clamp(0.0, 1.0);
+                }
+                preview = Some(format!("Curve ({} pts)", pts.len()));
+                out.push(("Curve".to_string(), PortValue::Automation(pts)));
+            }
+            NodeKind::AutomationSteps => {
+                let vals: Vec<f64> = node
+                    .props
+                    .get("steps")
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_else(|| vec![0.2, 0.8, 0.4, 0.9, 0.1, 0.6, 0.5, 0.7]);
+                let n = vals.len().max(1);
+                let mut curve = Vec::with_capacity(n * 2);
+                for (i, &v) in vals.iter().enumerate() {
+                    let t0 = i as f64 / n as f64;
+                    let t1 = ((i + 1) as f64 / n as f64 - 0.001).max(t0);
+                    let vc = v.clamp(0.0, 1.0);
+                    curve.push([t0, vc]);
+                    curve.push([t1, vc]);
+                }
+                preview = Some(format!("Steps ({n})"));
+                out.push(("Curve".to_string(), PortValue::Automation(curve)));
             }
 
             // --- Sinks ---
@@ -1053,6 +1499,44 @@ fn run_command_with_stdin(cmd: &str, args: &[&str], stdin_data: &str) -> Result<
 
 fn run_python_snippet(code: &str, stdin_data: &str) -> Result<String, String> {
     run_command_with_stdin("python3", &["-c", code], stdin_data)
+}
+
+fn resolve_cdp_helper_exe() -> String {
+    if let Ok(explicit) = std::env::var("LITTLE_CLIP_CDP_EXE")
+        && !explicit.trim().is_empty()
+    {
+        return explicit;
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for candidate in [
+            dir.join("cdp-helper/little-clip-cdp"),
+            dir.join("little-clip-cdp"),
+        ] {
+            if candidate.is_file() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+    "little-clip-cdp".to_string()
+}
+
+fn run_cdp_helper(req: &serde_json::Value) -> Result<(), String> {
+    let exe = resolve_cdp_helper_exe();
+    let payload = serde_json::to_string(req).map_err(|e| e.to_string())?;
+    let stdout = run_command_with_stdin(&exe, &["--run"], &payload)?;
+    let resp: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("Invalid little-clip-cdp JSON response: {e}"))?;
+    if resp.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        Err(resp
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("little-clip-cdp failed")
+            .to_string())
+    }
 }
 
 #[cfg(test)]

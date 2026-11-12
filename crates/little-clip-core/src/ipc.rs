@@ -149,6 +149,29 @@ fn default_left_hand() -> HandSide {
     HandSide::Left
 }
 
+/// Compact per-node execution telemetry for in-node UI visualizations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct NodeTelemetry {
+    /// Log-spaced spectral hold profile in dB (-72..=+18) for input audio.
+    #[serde(default)]
+    pub before_spectrum_db: Vec<i8>,
+    /// Log-spaced spectral hold profile in dB (-72..=+18) for output audio.
+    #[serde(default)]
+    pub after_spectrum_db: Vec<i8>,
+    /// Downsampled output waveform peaks (`0..=255`).
+    #[serde(default)]
+    pub waveform_peaks: Vec<u8>,
+    /// Peak output amplitude in dBFS.
+    #[serde(default)]
+    pub peak_db: Option<f32>,
+    /// Downscaled PNG thumbnail bytes for image node outputs.
+    #[serde(default)]
+    pub thumbnail_png: Vec<u8>,
+    /// Compact text output preview snippet.
+    #[serde(default)]
+    pub text_preview: Option<String>,
+}
+
 /// Response messages returned by `little-clipd` across the IPC socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcResponse {
@@ -174,6 +197,8 @@ pub enum IpcResponse {
     /// Compact graph result; the daemon applies full output items without serializing them back.
     PipelineExecuted {
         node_previews: std::collections::HashMap<uuid::Uuid, String>,
+        #[serde(default)]
+        node_telemetry: std::collections::HashMap<uuid::Uuid, NodeTelemetry>,
         output_title: Option<String>,
         duration_ms: u128,
     },
@@ -472,6 +497,7 @@ mod tests {
         let id = uuid::Uuid::new_v4();
         let response = IpcResponse::PipelineExecuted {
             node_previews: [(id, "preview".to_owned())].into_iter().collect(),
+            node_telemetry: Default::default(),
             output_title: Some("result".to_owned()),
             duration_ms: 12,
         };
@@ -483,6 +509,7 @@ mod tests {
                 node_previews,
                 output_title: Some(title),
                 duration_ms: 12,
+                ..
             } if node_previews.get(&id).map(String::as_str) == Some("preview") && title == "result"
         ));
     }

@@ -25,6 +25,8 @@ pub struct PipelineExecutionResult {
     pub should_paste: bool,
     /// Per-node intermediate output summary previews.
     pub node_previews: HashMap<Uuid, String>,
+    /// Per-node rich execution telemetry (spectra, waveforms, thumbnails, text previews).
+    pub node_telemetry: HashMap<Uuid, little_clip_core::ipc::NodeTelemetry>,
 }
 
 /// Data type classification for node graph input and output pins.
@@ -38,17 +40,20 @@ pub enum PortType {
     Image,
     /// Single audio file or audio stream.
     Audio,
+    /// Spectral PVOC analysis file (`.ana`).
+    Spectral,
     /// Single filesystem path.
     FilePath,
     /// Collection of filesystem paths.
     FileBatch,
+    /// Normalized parameter automation curve (`[t, v]` in `0.0..=1.0`).
+    Automation,
 }
 
 impl PortType {
     /// Returns `true` if this output port type can connect to `other` input port type.
     ///
-    /// `Any` is deliberately compatible with every port type; all other connections require an
-    /// exact type match.
+    /// `Any` is compatible with data port types, while `Automation` only connects to `Automation`.
     ///
     /// ```
     /// use little_clip_ops::PortType;
@@ -56,9 +61,13 @@ impl PortType {
     /// assert!(PortType::Text.is_compatible_with(&PortType::Text));
     /// assert!(PortType::Any.is_compatible_with(&PortType::Image));
     /// assert!(!PortType::Text.is_compatible_with(&PortType::Audio));
+    /// assert!(PortType::Automation.is_compatible_with(&PortType::Automation));
+    /// assert!(!PortType::Automation.is_compatible_with(&PortType::Any));
     /// ```
     pub fn is_compatible_with(&self, other: &PortType) -> bool {
         match (self, other) {
+            (PortType::Automation, PortType::Automation) => true,
+            (PortType::Automation, _) | (_, PortType::Automation) => false,
             (PortType::Any, _) | (_, PortType::Any) => true,
             (a, b) => a == b,
         }
@@ -71,8 +80,10 @@ impl PortType {
             PortType::Text => [251, 191, 36, 255],       // Amber
             PortType::Image => [56, 189, 248, 255],      // Sky blue
             PortType::Audio => [168, 85, 247, 255],      // Purple
+            PortType::Spectral => [236, 72, 153, 255],   // Magenta
             PortType::FilePath => [52, 211, 153, 255],   // Emerald
             PortType::FileBatch => [244, 114, 182, 255], // Pink
+            PortType::Automation => [45, 212, 191, 255], // Teal
         }
     }
 }
@@ -86,10 +97,14 @@ pub enum PortValue {
     ImagePath(PathBuf),
     /// Path to an audio file.
     AudioPath(PathBuf),
+    /// Path to a spectral PVOC analysis file (`.ana`).
+    SpectralPath(PathBuf),
     /// Path to a generic file.
     FilePath(PathBuf),
     /// Batch of file paths.
     FileBatch(Vec<PathBuf>),
+    /// Normalized automation curve (`[t, v]` in `0.0..=1.0`).
+    Automation(Vec<[f64; 2]>),
 }
 
 impl PortValue {
@@ -99,8 +114,10 @@ impl PortValue {
             PortValue::Text(_) => PortType::Text,
             PortValue::ImagePath(_) => PortType::Image,
             PortValue::AudioPath(_) => PortType::Audio,
+            PortValue::SpectralPath(_) => PortType::Spectral,
             PortValue::FilePath(_) => PortType::FilePath,
             PortValue::FileBatch(_) => PortType::FileBatch,
+            PortValue::Automation(_) => PortType::Automation,
         }
     }
 
@@ -108,20 +125,22 @@ impl PortValue {
     pub fn as_text(&self) -> Option<&str> {
         match self {
             PortValue::Text(s) => Some(s.as_str()),
-            PortValue::FilePath(p) | PortValue::ImagePath(p) | PortValue::AudioPath(p) => {
-                p.to_str()
-            }
+            PortValue::FilePath(p)
+            | PortValue::ImagePath(p)
+            | PortValue::AudioPath(p)
+            | PortValue::SpectralPath(p) => p.to_str(),
             PortValue::FileBatch(paths) if paths.len() == 1 => paths[0].to_str(),
-            PortValue::FileBatch(_) => None,
+            PortValue::FileBatch(_) | PortValue::Automation(_) => None,
         }
     }
 
     /// Returns a filesystem path for a path value or one-reference batch.
     pub fn as_path(&self) -> Option<&Path> {
         match self {
-            PortValue::ImagePath(p) | PortValue::AudioPath(p) | PortValue::FilePath(p) => {
-                Some(p.as_path())
-            }
+            PortValue::ImagePath(p)
+            | PortValue::AudioPath(p)
+            | PortValue::SpectralPath(p)
+            | PortValue::FilePath(p) => Some(p.as_path()),
             PortValue::FileBatch(paths) if paths.len() == 1 => Some(&paths[0]),
             _ => None,
         }
@@ -243,6 +262,11 @@ pub enum NodeKind {
     AudioAdjustGain,
     AudioConcat,
 
+    // Fused / External DSP transforms (emitted or executed by optimizer & CDP8)
+    ImageMagickChain,
+    AudioFilterChain,
+    CdpProcess,
+
     // File transforms
     FileSha256,
     FileZip,
@@ -251,6 +275,12 @@ pub enum NodeKind {
     // Scripting Escape Hatch
     PythonScript,
     BashCommand,
+
+    // Parameter Automation
+    AutomationLfo,
+    AutomationEnvelope,
+    AutomationDraw,
+    AutomationSteps,
 
     // Sinks
     SetLeftHand,

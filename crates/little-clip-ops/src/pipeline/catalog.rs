@@ -47,6 +47,50 @@ impl NodeTemplate {
         };
         target_op.and_then(crate::find_op_by_name)
     }
+
+    /// Returns the hierarchical menu path (e.g. `"Audio/Filtering"` or `"Audio/Spectral/Combine"`)
+    /// used to group this node in cascading menus.
+    pub fn menu_path(&self) -> &'static str {
+        if self.id.starts_with("cdp_") {
+            return super::cdp_catalog::cdp_menu_path(self.id);
+        }
+        match self.id {
+            "source_lh" | "source_rh" | "source_lp1" | "source_lp2" | "source_rp1"
+            | "source_undo" => "Source/Clipboard",
+            "source_const_text" | "source_const_num" => "Source/Constants",
+            "source_prompt_or_hand" => "Source/Interactive",
+            "text_trim" | "text_slugify" | "text_case" => "Text/Clean & Case",
+            "text_regex_replace" | "text_split_lines" | "text_join" | "text_json_query"
+            | "text_base64" => "Text/Transform",
+            "img_pad_frame" | "img_add_title" | "img_crop" | "img_stitch" => "Image/Compose",
+            "img_resize" | "img_rotate" | "img_convert_webp" | "img_strip_exif" | "img_diff" => {
+                "Image/Transform"
+            }
+            "audio_normalize" | "audio_trim_silence" | "audio_adjust_gain" | "audio_concat" => {
+                "Audio/Core"
+            }
+            "file_sha256" | "file_zip" | "file_extract_name" => "Files",
+            "script_python" | "script_bash" => "Script",
+            "sink_lh" | "sink_rh" | "sink_save_disk" | "sink_paste_app" => "Sink",
+            _ => self.category,
+        }
+    }
+
+    /// Returns the first input pin name compatible with `source_out`, if any.
+    pub fn first_compatible_input(&self, source_out: PortType) -> Option<&'static str> {
+        self.inputs
+            .iter()
+            .find(|(_, pt)| source_out.is_compatible_with(pt))
+            .map(|(name, _)| *name)
+    }
+
+    /// Returns the first output pin name compatible with `target_in`, if any.
+    pub fn first_compatible_output(&self, target_in: PortType) -> Option<&'static str> {
+        self.outputs
+            .iter()
+            .find(|(_, pt)| pt.is_compatible_with(&target_in))
+            .map(|(name, _)| *name)
+    }
 }
 
 /// Static catalog of all available pipeline node templates.
@@ -258,7 +302,7 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         description: "Add a solid or accent border around the image (ImageMagick)",
         tags: &["image", "frame", "border", "pad", "magick"],
         kind: NodeKind::ImagePadFrame,
-        inputs: &[("Image In", PortType::Image)],
+        inputs: &[("Image In", PortType::Image), ("Mod", PortType::Automation)],
         outputs: &[("Image Out", PortType::Image)],
         default_props: &[("border_color", "#1e293b"), ("border_size", "24")],
     },
@@ -307,7 +351,7 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         description: "Convert image to modern high-efficiency WebP format",
         tags: &["image", "webp", "convert", "compress", "magick"],
         kind: NodeKind::ImageConvertWebp,
-        inputs: &[("Image In", PortType::Image)],
+        inputs: &[("Image In", PortType::Image), ("Mod", PortType::Automation)],
         outputs: &[("Image Out", PortType::Image)],
         default_props: &[("quality", "90")],
     },
@@ -318,7 +362,7 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         description: "Rotate image degrees (90, 180, 270) or flip (ImageMagick)",
         tags: &["image", "rotate", "flip", "orientation", "magick"],
         kind: NodeKind::ImageRotate,
-        inputs: &[("Image In", PortType::Image)],
+        inputs: &[("Image In", PortType::Image), ("Mod", PortType::Automation)],
         outputs: &[("Image Out", PortType::Image)],
         default_props: &[("degrees", "90")],
     },
@@ -371,7 +415,7 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         description: "Standard broadcast loudness normalization (-14 LUFS via FFmpeg)",
         tags: &["audio", "normalize", "lufs", "broadcast", "ffmpeg"],
         kind: NodeKind::AudioNormalize,
-        inputs: &[("Audio In", PortType::Audio)],
+        inputs: &[("Audio In", PortType::Audio), ("Mod", PortType::Automation)],
         outputs: &[("Audio Out", PortType::Audio)],
         default_props: &[("target_lufs", "-14"), ("tp", "-1.5")],
     },
@@ -382,7 +426,7 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         description: "Remove leading and trailing silence (FFmpeg silenceremove)",
         tags: &["audio", "silence", "trim", "cut", "ffmpeg"],
         kind: NodeKind::AudioTrimSilence,
-        inputs: &[("Audio In", PortType::Audio)],
+        inputs: &[("Audio In", PortType::Audio), ("Mod", PortType::Automation)],
         outputs: &[("Audio Out", PortType::Audio)],
         default_props: &[("threshold_db", "-50")],
     },
@@ -393,7 +437,7 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         description: "Boost or cut audio volume by decibels (FFmpeg volume)",
         tags: &["audio", "gain", "volume", "db", "ffmpeg"],
         kind: NodeKind::AudioAdjustGain,
-        inputs: &[("Audio In", PortType::Audio)],
+        inputs: &[("Audio In", PortType::Audio), ("Mod", PortType::Automation)],
         outputs: &[("Audio Out", PortType::Audio)],
         default_props: &[("gain_db", "3.0")],
     },
@@ -473,6 +517,63 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         default_props: &[("command", "tr '[:lower:]' '[:upper:]'")],
     },
     // -------------------------------------------------------------
+    // Parameter Automation
+    // -------------------------------------------------------------
+    NodeTemplate {
+        id: "auto_lfo",
+        name: "LFO Modulator",
+        category: "Automation",
+        description: "Periodic sine/triangle/square/saw LFO curve for modulating node parameters",
+        tags: &["automation", "lfo", "mod", "sine", "oscillator"],
+        kind: NodeKind::AutomationLfo,
+        inputs: &[],
+        outputs: &[("Curve", PortType::Automation)],
+        default_props: &[
+            ("shape", "sine"),
+            ("rate_hz", "2.0"),
+            ("depth", "1.0"),
+            ("offset", "0.5"),
+        ],
+    },
+    NodeTemplate {
+        id: "auto_envelope",
+        name: "ADSR Envelope",
+        category: "Automation",
+        description: "Attack-Decay-Sustain-Release automation envelope",
+        tags: &["automation", "envelope", "adsr", "mod"],
+        kind: NodeKind::AutomationEnvelope,
+        inputs: &[],
+        outputs: &[("Curve", PortType::Automation)],
+        default_props: &[
+            ("attack", "0.15"),
+            ("decay", "0.25"),
+            ("sustain", "0.65"),
+            ("release", "0.25"),
+        ],
+    },
+    NodeTemplate {
+        id: "auto_draw",
+        name: "Freehand Curve",
+        category: "Automation",
+        description: "Drawn breakpoint automation curve for parameter modulation",
+        tags: &["automation", "draw", "curve", "breakfile", "mod"],
+        kind: NodeKind::AutomationDraw,
+        inputs: &[],
+        outputs: &[("Curve", PortType::Automation)],
+        default_props: &[("points", "[[0.0,0.2],[0.35,0.85],[0.7,0.4],[1.0,0.9]]")],
+    },
+    NodeTemplate {
+        id: "auto_steps",
+        name: "Step Sequencer",
+        category: "Automation",
+        description: "8-step quantized automation sequencer for rhythmic modulation",
+        tags: &["automation", "steps", "sequencer", "mod"],
+        kind: NodeKind::AutomationSteps,
+        inputs: &[],
+        outputs: &[("Curve", PortType::Automation)],
+        default_props: &[("steps", "[0.2,0.8,0.4,0.9,0.1,0.6,0.5,0.7]")],
+    },
+    // -------------------------------------------------------------
     // Sinks / Actions
     // -------------------------------------------------------------
     NodeTemplate {
@@ -521,9 +622,12 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
     },
 ];
 
-/// Finds a node template in `NODE_CATALOG` by its identifier.
+/// Finds a node template in `NODE_CATALOG` or the CDP8 catalog by its identifier.
 pub fn find_template(id: &str) -> Option<&'static NodeTemplate> {
-    NODE_CATALOG.iter().find(|t| t.id == id)
+    NODE_CATALOG
+        .iter()
+        .find(|t| t.id == id)
+        .or_else(|| super::cdp_catalog::find_cdp_template(id))
 }
 
 /// Searches catalog templates by name, description, tags, or category filter.
@@ -531,6 +635,7 @@ pub fn search_templates(query: &str, category_filter: Option<&str>) -> Vec<&'sta
     let q = query.trim().to_lowercase();
     NODE_CATALOG
         .iter()
+        .chain(super::cdp_catalog::all_cdp_templates().iter())
         .filter(|t| {
             if let Some(cat) = category_filter
                 && !cat.eq_ignore_ascii_case("all")

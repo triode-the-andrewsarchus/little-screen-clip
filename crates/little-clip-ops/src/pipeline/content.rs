@@ -263,12 +263,17 @@ impl PortValue {
             }
             PortValue::AudioPath(path) => ClipItem::from_audio(path.clone())
                 .unwrap_or_else(|| ClipItem::from_single_file(&path)),
+            PortValue::SpectralPath(path) => ClipItem::from_single_file(&path),
             PortValue::FileBatch(paths) => {
                 if paths.is_empty() {
                     ClipItem::from_text(title_hint.to_string())
                 } else {
                     ClipItem::from_files(paths)
                 }
+            }
+            PortValue::Automation(pts) => {
+                let json = serde_json::to_string(&pts).unwrap_or_else(|_| "[]".to_string());
+                ClipItem::from_text(json)
             }
         }
     }

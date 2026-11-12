@@ -890,6 +890,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                             Ok(pipe_res) => {
                                 let duration_ms = started.elapsed().as_millis();
                                 let node_previews = pipe_res.node_previews.clone();
+                                let node_telemetry = pipe_res.node_telemetry.clone();
                                 let output_title = pipe_res
                                     .left_hand_item
                                     .as_ref()
@@ -898,6 +899,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                                     IpcResponse::OpResult { .. } | IpcResponse::Success { .. } => {
                                         IpcResponse::PipelineExecuted {
                                             node_previews,
+                                            node_telemetry,
                                             output_title,
                                             duration_ms,
                                         }

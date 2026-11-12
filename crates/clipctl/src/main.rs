@@ -330,6 +330,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             node_previews,
             output_title,
             duration_ms,
+            ..
         } => {
             println!(
                 "{} in {}ms{}",

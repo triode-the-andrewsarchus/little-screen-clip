@@ -85,19 +85,70 @@ fn index_and_validate_nodes(
                 node.title
             )));
         }
-        let template = NODE_CATALOG
-            .iter()
-            .find(|template| template.kind == node.kind)
-            .ok_or_else(|| {
-                PipelineError::InvalidGraph(format!("unknown node kind: {:?}", node.kind))
-            })?;
-        if !matches_schema(&node.inputs, template.inputs)
-            || !matches_schema(&node.outputs, template.outputs)
-        {
-            return Err(PipelineError::InvalidGraph(format!(
-                "node '{}' does not match catalog pin schema",
-                node.title
-            )));
+        match &node.kind {
+            NodeKind::ImageMagickChain => {
+                if !matches_schema(&node.inputs, &[("In", PortType::Image)])
+                    || !matches_schema(&node.outputs, &[("Out", PortType::Image)])
+                {
+                    return Err(PipelineError::InvalidGraph(format!(
+                        "node '{}' does not match ImageMagickChain pin schema",
+                        node.title
+                    )));
+                }
+            }
+            NodeKind::AudioFilterChain => {
+                if !matches_schema(&node.inputs, &[("In", PortType::Audio)])
+                    || !matches_schema(&node.outputs, &[("Out", PortType::Audio)])
+                {
+                    return Err(PipelineError::InvalidGraph(format!(
+                        "node '{}' does not match AudioFilterChain pin schema",
+                        node.title
+                    )));
+                }
+            }
+            NodeKind::CdpProcess => {
+                let process_id = node
+                    .props
+                    .get("process_id")
+                    .map(String::as_str)
+                    .ok_or_else(|| {
+                        PipelineError::InvalidGraph(format!(
+                            "CDP node '{}' is missing 'process_id'",
+                            node.title
+                        ))
+                    })?;
+                let template =
+                    super::cdp_catalog::find_cdp_template(process_id).ok_or_else(|| {
+                        PipelineError::InvalidGraph(format!(
+                            "unknown CDP process '{process_id}' on node '{}'",
+                            node.title
+                        ))
+                    })?;
+                if !matches_schema(&node.inputs, template.inputs)
+                    || !matches_schema(&node.outputs, template.outputs)
+                {
+                    return Err(PipelineError::InvalidGraph(format!(
+                        "node '{}' does not match catalog pin schema",
+                        node.title
+                    )));
+                }
+            }
+            _ => {
+                let template = NODE_CATALOG
+                    .iter()
+                    .find(|template| template.kind == node.kind)
+                    .ok_or_else(|| {
+                        PipelineError::InvalidGraph(format!("unknown node kind: {:?}", node.kind))
+                    })?;
+                if !matches_schema(&node.inputs, template.inputs)
+                    || !matches_schema(&node.outputs, template.outputs)
+                {
+                    return Err(PipelineError::InvalidGraph(format!(
+                        "node '{}' does not match catalog pin schema",
+                        node.title
+                    )));
+                }
+            }
         }
     }
     Ok(nodes)
@@ -171,12 +222,28 @@ fn validate_connections<'a>(
     Ok(destinations)
 }
 
+fn is_optional_input(node: &NodeInstance, pin: &Pin) -> bool {
+    if pin.port_type == PortType::Automation {
+        return true;
+    }
+    matches!(
+        (&node.kind, pin.name.as_str()),
+        (NodeKind::ImageAddTitle, "Caption")
+            | (NodeKind::PythonScript | NodeKind::BashCommand, "Input")
+            | (NodeKind::ImageStitch, "Right Image")
+            | (NodeKind::AudioConcat, "Clip 2")
+    )
+}
+
 fn validate_required_inputs(
     nodes: &HashMap<Uuid, &NodeInstance>,
     connections: &HashMap<(Uuid, String), &Connection>,
 ) -> Result<(), PipelineError> {
     for node in nodes.values() {
         for pin in &node.inputs {
+            if is_optional_input(node, pin) {
+                continue;
+            }
             if !connections.contains_key(&(node.id, pin.name.clone())) {
                 return Err(PipelineError::MissingInput(format!(
                     "{} input '{}' is not connected",
