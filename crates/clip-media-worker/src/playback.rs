@@ -374,7 +374,7 @@ impl Engine {
         // Keep text decoding available, but suppress rendering when disabled.
         self.player.set_property(
             "current-text",
-            if self.options.subtitles_enabled {
+            if self.options.subtitles_enabled && self.player.property::<i32>("n-text") > 0 {
                 self.options.subtitle_track.unwrap_or(0) as i32
             } else {
                 -1
@@ -422,7 +422,11 @@ impl Engine {
                         .unwrap_or_else(|| format!("Track {}", index + 1));
                     Track {
                         index: index as u32,
-                        label: label.chars().take(100).collect(),
+                        label: label
+                            .chars()
+                            .filter(|c| !c.is_control())
+                            .take(100)
+                            .collect(),
                     }
                 })
                 .collect()

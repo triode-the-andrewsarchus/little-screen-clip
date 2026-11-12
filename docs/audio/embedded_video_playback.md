@@ -152,3 +152,20 @@ original folder for exports. Source identity comes from held input/output
 descriptors; Audio Studio and deferred readers retain workspace ownership.
 Tests verify stereo metadata and non-silent decoded samples, backing-file
 ownership, unchanged original bytes, cancellation and a missing-audio failure.
+
+Private optimized-runtime verification passes in dark appearance: fullscreen
+video occupies the former menu/header space, overlays/cursor disappear after
+inactivity and return on pointer movement, Escape preserves the player, and
+right-click exposes playback choices. The file menu opens the extracted stereo
+audio in Audio Studio; returning to the folder and closing a reopened video reap
+the owned player. An initial OCR multiword locator was corrected after its
+screenshot showed the requested action already present.
+
+The follow-up architecture review separates picture painting, overlay activity,
+fullscreen controls and Escape handling, and moves conditional menu chrome out
+of application lifecycle updates. File-menu handoff reuses document positions
+instead of a second boolean route. Average CCN remains 4.04, maximum 195,
+clone groups remain 1,521, and duplication falls from 4.26% to 4.25%. The tool
+still labels existing clone patterns in modified files as regressions; the
+introduced overlay/test duplication and oversized video UI method were revised.
+No newly introduced high-complexity function remains in the comparison.

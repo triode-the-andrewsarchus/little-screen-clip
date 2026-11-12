@@ -115,45 +115,16 @@ impl Video {
         if ui.is_enabled() && !ui.ctx().wants_keyboard_input() {
             shortcuts(ui, player, &mut self.fullscreen);
         }
-        let now = ui.input(|i| i.time);
-        if was_fullscreen != self.fullscreen
-            || ui.input(|i| {
-                i.pointer.delta() != egui::Vec2::ZERO
-                    || i.pointer.any_down()
-                    || !i.events.is_empty()
-            })
-        {
-            self.last_activity = now;
-        }
-        let overlay_visible =
-            now - self.last_activity < 2.5 || ui.ctx().memory(|m| m.any_popup_open());
+        let overlay_visible = overlay_visibility(
+            ui,
+            was_fullscreen != self.fullscreen,
+            &mut self.last_activity,
+        );
         if self.fullscreen && !overlay_visible {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         }
-        let size = egui::vec2(
-            ui.available_width().max(1.0),
-            (ui.available_height() - if self.fullscreen { 0.0 } else { 76.0 }).max(1.0),
-        );
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
-        if let Some(texture) = &player.texture {
-            let image = texture.size_vec2();
-            let scale = (rect.width() / image.x).min(rect.height() / image.y);
-            ui.painter().image(
-                texture.id(),
-                egui::Rect::from_center_size(rect.center(), image * scale),
-                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-        } else if player.error.is_none() {
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Opening video…",
-                egui::FontId::proportional(16.0),
-                egui::Color32::LIGHT_GRAY,
-            );
-        }
+        let response = picture(ui, player, self.fullscreen);
+        let rect = response.rect;
         response.context_menu(|ui| playback_menu(ui, player));
         if response.double_clicked() {
             self.fullscreen = !self.fullscreen;
@@ -164,50 +135,16 @@ impl Video {
         }
         if self.fullscreen {
             if overlay_visible || player.error.is_some() {
-                let ctx = ui.ctx().clone();
-                egui::Area::new(egui::Id::new("video_fullscreen_title"))
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(rect.left_top() + egui::vec2(16.0, 16.0))
-                    .show(&ctx, |ui| {
-                        egui::Frame::none()
-                            .fill(egui::Color32::from_black_alpha(160))
-                            .inner_margin(8.0)
-                            .rounding(6.0)
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    if ui.button("Back to folder").clicked() {
-                                        *close = true;
-                                    }
-                                    ui.colored_label(
-                                        egui::Color32::WHITE,
-                                        self.path.file_name().unwrap_or_default().to_string_lossy(),
-                                    );
-                                    if ui.button("Exit fullscreen").clicked() {
-                                        self.fullscreen = false;
-                                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
-                                            false,
-                                        ));
-                                    }
-                                });
-                            });
-                    });
-                egui::Area::new(egui::Id::new("video_fullscreen_transport"))
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(egui::pos2(rect.left() + 16.0, rect.bottom() - 64.0))
-                    .show(&ctx, |ui| {
-                        egui::Frame::none()
-                            .fill(egui::Color32::from_black_alpha(160))
-                            .inner_margin(8.0)
-                            .rounding(6.0)
-                            .show(ui, |ui| {
-                                ui.set_width((rect.width() - 48.0).max(100.0));
-                                ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
-                                controls(ui, player, &mut self.seek_preview, palette);
-                                if let Some(error) = &player.error {
-                                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                                }
-                            });
-                    });
+                let (back, exit) = fullscreen_controls(
+                    ui,
+                    rect,
+                    &self.path,
+                    player,
+                    &mut self.seek_preview,
+                    palette,
+                );
+                *close |= back;
+                self.fullscreen &= !exit;
             }
         } else {
             controls(ui, player, &mut self.seek_preview, palette);
@@ -220,17 +157,114 @@ impl Video {
                 ));
             }
         }
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-            if self.fullscreen {
-                self.fullscreen = false;
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-            } else {
-                *close = true;
-            }
+        dismiss_key(ui, &mut self.fullscreen, close);
+    }
+}
+fn dismiss_key(ui: &Ui, fullscreen: &mut bool, close: &mut bool) {
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        if *fullscreen {
+            *fullscreen = false;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        } else {
+            *close = true;
         }
     }
 }
+
+fn overlay_visibility(ui: &Ui, fullscreen_changed: bool, last_activity: &mut f64) -> bool {
+    let now = ui.input(|i| i.time);
+    if fullscreen_changed
+        || ui.input(|i| {
+            i.pointer.delta() != egui::Vec2::ZERO || i.pointer.any_down() || !i.events.is_empty()
+        })
+    {
+        *last_activity = now;
+    }
+    now - *last_activity < 2.5 || ui.ctx().memory(|m| m.any_popup_open())
+}
+
+fn picture(ui: &mut Ui, player: &Session, fullscreen: bool) -> egui::Response {
+    let size = egui::vec2(
+        ui.available_width().max(1.0),
+        (ui.available_height() - if fullscreen { 0.0 } else { 76.0 }).max(1.0),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+    if let Some(texture) = &player.texture {
+        let image = texture.size_vec2();
+        let scale = (rect.width() / image.x).min(rect.height() / image.y);
+        ui.painter().image(
+            texture.id(),
+            egui::Rect::from_center_size(rect.center(), image * scale),
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else if player.error.is_none() {
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Opening video…",
+            egui::FontId::proportional(16.0),
+            egui::Color32::LIGHT_GRAY,
+        );
+    }
+    response
+}
+
+fn fullscreen_controls(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    path: &std::path::Path,
+    player: &mut Session,
+    seek_preview: &mut Option<f64>,
+    palette: &little_clip_core::palette::AppPalette,
+) -> (bool, bool) {
+    let mut back = false;
+    let mut exit = false;
+    let ctx = ui.ctx().clone();
+    egui::Area::new(egui::Id::new("video_fullscreen_title"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.left_top() + egui::vec2(16.0, 16.0))
+        .show(&ctx, |ui| {
+            overlay_frame().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(ButtonRole::Secondary.button("Back to folder", palette))
+                        .clicked()
+                    {
+                        back = true;
+                    }
+                    ui.colored_label(
+                        egui::Color32::WHITE,
+                        path.file_name().unwrap_or_default().to_string_lossy(),
+                    );
+                    if ui
+                        .add(ButtonRole::Secondary.button("Exit fullscreen", palette))
+                        .clicked()
+                    {
+                        exit = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                    }
+                });
+            });
+        });
+    egui::Area::new(egui::Id::new("video_fullscreen_transport"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(egui::pos2(rect.left() + 16.0, rect.bottom() - 64.0))
+        .show(&ctx, |ui| {
+            overlay_frame().show(ui, |ui| {
+                ui.set_width((rect.width() - 48.0).max(100.0));
+                ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
+                controls(ui, player, seek_preview, palette);
+                if let Some(error) = &player.error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
+            });
+        });
+    (back, exit)
+}
+
 fn shortcuts(ui: &mut Ui, player: &mut Session, fullscreen: &mut bool) {
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
         player.set_playing(!player.playing());
@@ -363,4 +397,11 @@ fn playback_menu(ui: &mut Ui, player: &mut Session) {
     });
     ui.checkbox(&mut options.looping, "Loop video");
     player.set_options(options);
+}
+
+fn overlay_frame() -> egui::Frame {
+    egui::Frame::none()
+        .fill(egui::Color32::from_black_alpha(160))
+        .inner_margin(8.0)
+        .rounding(6.0)
 }

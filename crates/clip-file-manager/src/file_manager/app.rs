@@ -329,6 +329,114 @@ impl FileManagerApp {
             }
         }
     }
+    fn menu_bar(&mut self, ctx: &egui::Context) {
+        if !self.viewers.video_fullscreen() {
+            egui::TopBottomPanel::top("file_manager_title").show(ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    for title in ["File", "Edit", "View"] {
+                        ui.menu_button(title, |ui| {
+                            if title == "View" {
+                                ui.menu_button("Photos", |ui| {
+                                    ui.style_mut().wrap = Some(false);
+                                    let current_mode = self.browser.photo_mode;
+                                    if ui
+                                        .selectable_label(
+                                            current_mode
+                                                == super::gallery::similarity::PhotoMode::Masonry,
+                                            "Masonry Grid",
+                                        )
+                                        .clicked()
+                                    {
+                                        let mode = super::gallery::similarity::PhotoMode::Masonry;
+                                        self.browser.photo_mode = mode;
+                                        self.browser.gallery_last_scroll_time =
+                                            ui.input(|i| i.time);
+                                        let _ = AppConfig::save_file_manager_photo_mode_to_file(
+                                            mode.as_str(),
+                                        );
+                                    }
+                                    if ui
+                                    .selectable_label(
+                                        current_mode
+                                            == super::gallery::similarity::PhotoMode::Similarity,
+                                        "Similarity Canvas (1x1)",
+                                    )
+                                    .clicked()
+                                {
+                                    let mode = super::gallery::similarity::PhotoMode::Similarity;
+                                    self.browser.photo_mode = mode;
+                                    let _ = AppConfig::save_file_manager_photo_mode_to_file(
+                                        mode.as_str(),
+                                    );
+                                }
+                                    ui.separator();
+                                    let mut recurse = self.browser.photo_recurse;
+                                    if ui
+                                        .checkbox(&mut recurse, "Recurse into subfolders")
+                                        .clicked()
+                                    {
+                                        self.browser.photo_recurse = recurse;
+                                        let _ = AppConfig::save_file_manager_photo_recurse_to_file(
+                                            recurse,
+                                        );
+                                        self.browser.similarity_canvas.reset_view();
+                                        self.browser.refresh();
+                                    }
+                                });
+                                ui.menu_button("Audio", |ui| {
+                                ui.style_mut().wrap = Some(false);
+                                let mut spectrum = self.browser.music_previews.audio_spectrum();
+                                if ui
+                                    .selectable_label(spectrum, "Use spectrum instead of waveform")
+                                    .clicked()
+                                {
+                                    spectrum = !spectrum;
+                                    match AppConfig::save_file_manager_audio_spectrum_to_file(
+                                        spectrum,
+                                    ) {
+                                        Ok(()) => {
+                                            self.browser.music_previews.set_audio_spectrum(spectrum)
+                                        }
+                                        Err(error) => {
+                                            self.browser.edits.report =
+                                                Some(super::edits::EditReport {
+                                                    text: format!(
+                                                        "Cannot save audio view preference: {error}"
+                                                    ),
+                                                    failed: true,
+                                                });
+                                        }
+                                    }
+                                }
+                            });
+                            } else if title == "Edit" {
+                                self.edit_menu(ui);
+                                if !self.viewers.active() && ui.button("Search settings…").clicked()
+                                {
+                                    self.browser.open_search_settings();
+                                    ui.close_menu();
+                                }
+                            } else if title == "File" {
+                                self.constellation_index_menu(ui);
+                            } else {
+                                ui.add_enabled(false, egui::Label::new("No actions yet"));
+                            }
+                        });
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.viewers.active() {
+                            self.viewers.menu_controls(ui, &self.palette);
+                        } else {
+                            ui.add(
+                                egui::Label::new("Ctrl+L: address  ·  Ctrl+Q: close")
+                                    .truncate(true),
+                            );
+                        }
+                    });
+                });
+            });
+        }
+    }
     fn main_content(&mut self, ctx: &egui::Context) {
         central_panel_mode(ctx, self.viewers.video_fullscreen(), |ui| {
             if self.viewers.active() {
@@ -586,112 +694,7 @@ impl eframe::App for FileManagerApp {
                 .tick(little_clip_core::BackgroundJobs::global());
         }
         self.browser.handle_address_escape(ctx);
-        if !self.viewers.video_fullscreen() {
-            egui::TopBottomPanel::top("file_manager_title").show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
-                    for title in ["File", "Edit", "View"] {
-                        ui.menu_button(title, |ui| {
-                            if title == "View" {
-                                ui.menu_button("Photos", |ui| {
-                                    ui.style_mut().wrap = Some(false);
-                                    let current_mode = self.browser.photo_mode;
-                                    if ui
-                                        .selectable_label(
-                                            current_mode
-                                                == super::gallery::similarity::PhotoMode::Masonry,
-                                            "Masonry Grid",
-                                        )
-                                        .clicked()
-                                    {
-                                        let mode = super::gallery::similarity::PhotoMode::Masonry;
-                                        self.browser.photo_mode = mode;
-                                        self.browser.gallery_last_scroll_time =
-                                            ui.input(|i| i.time);
-                                        let _ = AppConfig::save_file_manager_photo_mode_to_file(
-                                            mode.as_str(),
-                                        );
-                                    }
-                                    if ui
-                                    .selectable_label(
-                                        current_mode
-                                            == super::gallery::similarity::PhotoMode::Similarity,
-                                        "Similarity Canvas (1x1)",
-                                    )
-                                    .clicked()
-                                {
-                                    let mode = super::gallery::similarity::PhotoMode::Similarity;
-                                    self.browser.photo_mode = mode;
-                                    let _ = AppConfig::save_file_manager_photo_mode_to_file(
-                                        mode.as_str(),
-                                    );
-                                }
-                                    ui.separator();
-                                    let mut recurse = self.browser.photo_recurse;
-                                    if ui
-                                        .checkbox(&mut recurse, "Recurse into subfolders")
-                                        .clicked()
-                                    {
-                                        self.browser.photo_recurse = recurse;
-                                        let _ = AppConfig::save_file_manager_photo_recurse_to_file(
-                                            recurse,
-                                        );
-                                        self.browser.similarity_canvas.reset_view();
-                                        self.browser.refresh();
-                                    }
-                                });
-                                ui.menu_button("Audio", |ui| {
-                                ui.style_mut().wrap = Some(false);
-                                let mut spectrum = self.browser.music_previews.audio_spectrum();
-                                if ui
-                                    .selectable_label(spectrum, "Use spectrum instead of waveform")
-                                    .clicked()
-                                {
-                                    spectrum = !spectrum;
-                                    match AppConfig::save_file_manager_audio_spectrum_to_file(
-                                        spectrum,
-                                    ) {
-                                        Ok(()) => {
-                                            self.browser.music_previews.set_audio_spectrum(spectrum)
-                                        }
-                                        Err(error) => {
-                                            self.browser.edits.report =
-                                                Some(super::edits::EditReport {
-                                                    text: format!(
-                                                        "Cannot save audio view preference: {error}"
-                                                    ),
-                                                    failed: true,
-                                                });
-                                        }
-                                    }
-                                }
-                            });
-                            } else if title == "Edit" {
-                                self.edit_menu(ui);
-                                if !self.viewers.active() && ui.button("Search settings…").clicked()
-                                {
-                                    self.browser.open_search_settings();
-                                    ui.close_menu();
-                                }
-                            } else if title == "File" {
-                                self.constellation_index_menu(ui);
-                            } else {
-                                ui.add_enabled(false, egui::Label::new("No actions yet"));
-                            }
-                        });
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if self.viewers.active() {
-                            self.viewers.menu_controls(ui, &self.palette);
-                        } else {
-                            ui.add(
-                                egui::Label::new("Ctrl+L: address  ·  Ctrl+Q: close")
-                                    .truncate(true),
-                            );
-                        }
-                    });
-                });
-            });
-        }
+        self.menu_bar(ctx);
         if !self.viewers.active() {
             egui::TopBottomPanel::bottom("file_manager_summary")
                 .frame(

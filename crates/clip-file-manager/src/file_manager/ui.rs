@@ -711,10 +711,9 @@ impl FileManager {
             self.open_file = Some(path);
         }
         if let Some(path) = actions.open {
-            if actions.video_audio {
-                self.document_start =
-                    Some((path.clone(), super::DocumentPosition::VideoAudioTrack));
-            }
+            self.document_start = actions
+                .open_position
+                .map(|position| (path.clone(), position));
             self.open_path(path);
         }
         if let Some(folder) = actions.navigate_folder {
@@ -1386,7 +1385,7 @@ struct ListActions {
     additive: bool,
     selection: Option<(PathBuf, bool, bool)>,
     open: Option<PathBuf>,
-    video_audio: bool,
+    open_position: Option<super::DocumentPosition>,
     navigate_folder: Option<PathBuf>,
     reveal: Option<PathBuf>,
     external: Option<PathBuf>,
@@ -1524,6 +1523,18 @@ impl ListActions {
         }
     }
 
+    fn video_audio_menu(&mut self, ui: &mut Ui, entry: &super::filesystem::Entry) {
+        if !entry.directory
+            && entry.system.is_none()
+            && little_clip_core::animation::is_video_path(&entry.path)
+            && ui.button("Edit Audio Track").clicked()
+        {
+            self.open = Some(entry.path.clone());
+            self.open_position = Some(super::DocumentPosition::VideoAudioTrack);
+            ui.close_menu();
+        }
+    }
+
     fn row_context_menu(
         &mut self,
         response: &egui::Response,
@@ -1559,15 +1570,7 @@ impl ListActions {
                 ui.close_menu();
             }
 
-            if !entry.directory
-                && entry.system.is_none()
-                && little_clip_core::animation::is_video_path(&entry.path)
-                && ui.button("Edit Audio Track").clicked()
-            {
-                self.open = Some(entry.path.clone());
-                self.video_audio = true;
-                ui.close_menu();
-            }
+            self.video_audio_menu(ui, entry);
 
             if entry.is_photo() && ui.button("Find similar photos in canvas").clicked() {
                 self.search_similar = Some(entry.path.clone());

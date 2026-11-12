@@ -757,16 +757,7 @@ mod playback {
     }
     impl Player {
         fn open() -> Self {
-            let settings = Settings {
-                stream: 0,
-                width: 320,
-                height: 180,
-                fps: 20,
-                start_ms: 1200,
-                duration_ms: 3000,
-                silent: true,
-                options: Default::default(),
-            };
+            let settings = Self::settings(1200);
             Self::source(
                 std::path::Path::new(concat!(
                     env!("CARGO_MANIFEST_DIR"),
@@ -774,6 +765,18 @@ mod playback {
                 )),
                 settings,
             )
+        }
+        fn settings(start_ms: u64) -> Settings {
+            Settings {
+                stream: 0,
+                width: 320,
+                height: 180,
+                fps: 20,
+                start_ms,
+                duration_ms: 3000,
+                silent: true,
+                options: Default::default(),
+            }
         }
         fn source(path: &std::path::Path, settings: Settings) -> Self {
             let input = File::open(path).unwrap();
@@ -874,16 +877,7 @@ mod playback {
                 env!("CARGO_MANIFEST_DIR"),
                 "/../little-clip-core/tests/fixtures/video/playback-tracks.mkv"
             )),
-            Settings {
-                stream: 0,
-                width: 320,
-                height: 180,
-                fps: 20,
-                start_ms: 1000,
-                duration_ms: 3000,
-                silent: true,
-                options: Options::default(),
-            },
+            Player::settings(1000),
         );
         let (initial, dark) = player.until(|p| p.bytes > 0 && p.tracks.is_some());
         let tracks = initial.tracks.unwrap();
@@ -916,7 +910,9 @@ mod playback {
         assert_eq!(selected.tracks.unwrap().current_audio, Some(1));
         let bright = |pixels: &[u8]| {
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|p| p[0] > 120 && p[1] > 120 && p[2] > 120)
                 .count()
         };
