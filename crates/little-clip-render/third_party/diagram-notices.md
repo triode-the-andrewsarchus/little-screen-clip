@@ -1,6 +1,6 @@
-# Mermaid renderer notices
+# Native diagram renderer notices
 
-These notices cover the Merman rendering family, not the complete workspace dependency inventory.
+These notices cover the Merman and Lini rendering families, not the complete workspace dependency inventory.
 
 Merman 0.10.0 and its MIT/Apache-2.0 components are used under the MIT license
 (reproduced in `merman-MIT.txt`). Upstream: https://github.com/Latias94/merman.
@@ -23,3 +23,16 @@ These notices and both license texts are embedded in every diagram-capable host.
 Run the executable with `--diagram-licenses` to print them without starting its UI,
 daemon runtime or display hardware. Retain this notice, license texts and source
 availability information when redistributing the executable.
+
+## Lini
+
+Lini 1.1.0 is used as an unmodified MIT dependency. Its license is reproduced in
+`lini-MIT.txt`. Source: https://github.com/monfa-red/lini and
+https://crates.io/api/v1/crates/lini/1.1.0/download.
+
+Default features include Google Sans / Google Sans Code font subsets under the
+SIL Open Font License 1.1 and Phosphor duotone icon geometry under MIT. Their
+upstream notices are reproduced verbatim in `lini-google-sans-OFL.txt`,
+`lini-google-sans-code-OFL.txt` and `lini-phosphor-MIT.txt`. Fonts are not modified
+by this application. Static SVG conversion outlines labels using these bundled
+subsets, without needing system font installation.

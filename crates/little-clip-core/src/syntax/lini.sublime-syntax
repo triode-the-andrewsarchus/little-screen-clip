@@ -1,0 +1,30 @@
+%YAML 1.2
+---
+name: Lini
+file_extensions: [lini]
+scope: source.lini
+contexts:
+  main:
+    - match: '//.*$'
+      scope: comment.line.lini
+    - match: '"'
+      scope: punctuation.definition.string.begin.lini
+      push: string
+    - match: '\|[^|\n]+\|'
+      scope: entity.name.type.lini
+    - match: '--[a-zA-Z][a-zA-Z0-9-]*'
+      scope: variable.other.lini
+    - match: '\b[a-zA-Z][a-zA-Z0-9-]*(?=\s*:)'
+      scope: variable.parameter.lini
+    - match: '\b[0-9]+(?:\.[0-9]+)?(?:px|pt|mm|cm|in|%)?'
+      scope: constant.numeric.lini
+    - match: '->|<-|=>|<=>|[{}\[\];:]'
+      scope: keyword.operator.lini
+  string:
+    - match: '\\.'
+      scope: constant.character.escape.lini
+    - match: '"'
+      scope: punctuation.definition.string.end.lini
+      pop: true
+    - match: '[^"\\]+'
+      scope: string.quoted.double.lini

@@ -23,6 +23,7 @@ roxmltree = "0.20"
 pikchr-rs = "=0.1.0"
 svgbob = "0.7.6"
 merman = { version = "=0.10.0", features = ["system-clock", "system-timezone"] }
+lini = "=1.1.0"
 
 [dev-dependencies]
 tempfile = "3.27"

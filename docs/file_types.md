@@ -231,7 +231,7 @@
         - [x] Pikchr diagrams (`pikchr`) — compiled Rust renderer, bounded native helper, large/small previews
         - [x] Svgbob ASCII art diagrams (`svgbob`) — native SVG/raster output, large/small previews
         - [ ] GoAT ASCII diagrams (`goat`)
-        - [ ] Lini text diagrams (`lini`)
+        - [x] Lini text diagrams (`lini`) — original Rust compiler, static SVG, large/small previews and visible warnings
         - [ ] TikZ / PGF diagrams (`tikz`, `pgf`)
         - [ ] UMLet diagrams (`umlet`)
         - [ ] Vega and Vega-Lite charts (`vega`, `vegalite`)
@@ -568,7 +568,7 @@
       - [x] `.svgbob` — native previews, highlighted source/live preview/errors and guarded saves
       - [ ] `.bob` content disambiguation and graphical cell editing
     - [ ] `.goat` — GoAT ASCII diagram
-    - [ ] `.lini` — Lini text diagram
+    - [x] `.lini` — native highlighted source/live-preview editor with diagnostics and guarded saves; graphical manipulation pending
   - [ ] Scientific and statistical charting specifications
     - [ ] `.vg.json`, `.vega` — Vega visualization specification (conventional compound extension for JSON)
     - [ ] `.vl.json`, `.vegalite` — Vega-Lite visualization specification (conventional compound extension for JSON)

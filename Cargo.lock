@@ -5223,6 +5223,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lini"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b293e4dcde52cc31ecda4e710a56ded9ae2782b0e84ed3464ce0e54beb458be9"
+dependencies = [
+ "clap",
+ "libm",
+ "ttf-parser 0.25.1",
+]
+
+[[package]]
 name = "linked-hash-map"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5366,6 +5377,7 @@ version = "0.1.0"
 dependencies = [
  "fontdue",
  "image 0.25.10",
+ "lini",
  "little-clip-core",
  "little-clip-scene",
  "merman",

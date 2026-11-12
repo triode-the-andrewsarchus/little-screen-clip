@@ -368,6 +368,7 @@ mod tests {
         for (extension, original, edited) in [
             ("mermaid", "flowchart LR\nA-->B\n", "flowchart LR\nA-->C\n"),
             ("mmd", "flowchart LR\nA-->B\n", "flowchart LR\nA-->C\n"),
+            ("lini", "|box| \"Source\"\n", "|box| \"Edited\"\n"),
             (
                 "pikchr",
                 "box \"Original\"\n",

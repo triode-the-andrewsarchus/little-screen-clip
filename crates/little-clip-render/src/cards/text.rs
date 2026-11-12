@@ -626,8 +626,15 @@ impl ScreenRenderer {
             .unwrap_or_else(|error| error.into_inner())
             .thumbnail(format, source);
         match result {
-            Ok(thumbnail) => {
-                let scale = (width / thumbnail.width as f32).min(height / thumbnail.height as f32);
+            Ok(preview) => {
+                let thumbnail = &preview.image;
+                let warning_height = if preview.warnings.is_empty() {
+                    0.0
+                } else {
+                    20.0
+                };
+                let scale = (width / thumbnail.width as f32)
+                    .min((height - warning_height).max(1.0) / thumbnail.height as f32);
                 let drawn_width = thumbnail.width as f32 * scale;
                 let drawn_height = thumbnail.height as f32 * scale;
                 if let Some(image) = PixmapRef::from_bytes(
@@ -645,7 +652,19 @@ impl ScreenRenderer {
                         None,
                     );
                 }
-                drawn_height + 10.0
+                if let Some(warning) = preview.warnings.first() {
+                    self.draw_text_styled_clipped(
+                        pixmap,
+                        &format!("Warnings ({}): {warning}", preview.warnings.len()),
+                        x,
+                        y + drawn_height + 4.0,
+                        12.0,
+                        foreground,
+                        FontStyle::Regular,
+                        x + width,
+                    );
+                }
+                drawn_height + warning_height + 10.0
             }
             Err(error) => {
                 self.draw_text_styled_clipped(

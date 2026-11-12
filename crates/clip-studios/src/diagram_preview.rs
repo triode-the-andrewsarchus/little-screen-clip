@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 struct Pixels {
     image: egui::ColorImage,
+    warnings: Vec<String>,
 }
 
 /// Owns debouncing, cancellation and the last valid image for one diagram source.
@@ -16,6 +17,7 @@ pub struct Preview {
     aspect: Option<f32>,
     prepared_at: Option<Instant>,
     error: Option<String>,
+    warnings: Vec<String>,
     stale: bool,
 }
 impl Preview {
@@ -42,6 +44,7 @@ impl Preview {
         self.due = Some(Instant::now() + Duration::from_millis(120));
         self.prepared_at = None;
         self.error = None;
+        self.warnings.clear();
         self.stale = true;
     }
 
@@ -70,6 +73,7 @@ impl Preview {
             self.pending = None;
             match result {
                 Ok(Ok(pixels)) => {
+                    self.warnings = pixels.warnings;
                     self.prepared_at = Some(Instant::now());
                     self.aspect = Some(pixels.image.size[0] as f32 / pixels.image.size[1] as f32);
                     self.texture = Some(ui.ctx().load_texture(
@@ -116,7 +120,10 @@ impl Preview {
                         [image.width() as usize, image.height() as usize],
                         image.as_raw(),
                     );
-                    Ok(Pixels { image: pixels })
+                    Ok(Pixels {
+                        image: pixels,
+                        warnings: rendered.warnings,
+                    })
                 },
             ));
         }
@@ -145,6 +152,9 @@ impl Preview {
                 ui.small("Preview shows the last valid source.");
             }
         }
+        for warning in &self.warnings {
+            ui.colored_label(ui.visuals().warn_fg_color, warning);
+        }
     }
 }
 
@@ -157,6 +167,7 @@ mod tests {
         let task = Task::start(&jobs, Duration::from_secs(2), |_| {
             Ok(Pixels {
                 image: egui::ColorImage::example(),
+                warnings: Vec::new(),
             })
         });
         let token = task.token.clone();

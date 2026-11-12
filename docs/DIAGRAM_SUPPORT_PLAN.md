@@ -47,7 +47,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | Pikchr | [pikchr](https://crates.io/crates/pikchr) 0.1.4; [pikchr-rs](https://crates.io/crates/pikchr-rs) 0.1.0; [pikchr-sys](https://crates.io/crates/pikchr-sys) 0.1.1 | Selected pikchr-rs; source/live previews implemented; direct manipulation pending |
 | Svgbob | [svgbob](https://crates.io/crates/svgbob) 0.7.6; [mdbook-svgbob](https://crates.io/crates/mdbook-svgbob) 0.3.1; [mdbook-svgbob2](https://crates.io/crates/mdbook-svgbob2) 0.3.0 | Selected original SvgBob; source/live previews implemented; cell editor and .bob disambiguation pending |
 | GoAT | [aasvg](https://crates.io/crates/aasvg) 1.0.0; [formulaa](https://crates.io/crates/formulaa) 0.1.0 | Pending comparison / editor research |
-| Lini | [lini](https://crates.io/crates/lini) 1.1.0; [mdbook-lini](https://crates.io/crates/mdbook-lini) 0.5.5; [hrdf-parser](https://crates.io/crates/hrdf-parser) 0.10.0 | Pending comparison / editor research |
+| Lini | Original lini 1.1.0 compiler; mdbook-lini and lini-wasm integrations of the same compiler; specification reimplementation | Original native compiler selected; highlighted source/live previews implemented, graphical editing pending |
 | TikZ / PGF | [mdbook-tikz](https://crates.io/crates/mdbook-tikz) 0.2.8; [tikra](https://crates.io/crates/tikra) 1.9.2; [tikra-cli](https://crates.io/crates/tikra-cli) 1.9.2 | Pending comparison / editor research |
 | UMLet | No direct crates.io match; compare upstream implementation and format specification. | Pending comparison / editor research |
 | Vega / Vega-Lite | [vega](https://crates.io/crates/vega) 0.0.1; [vega-view](https://crates.io/crates/vega-view) 0.1.0; [encdr](https://crates.io/crates/encdr) 0.9.0 | Pending comparison / editor research |
@@ -129,7 +129,7 @@ no second save mechanism was introduced.
 Merman's MIT/Apache-2.0 components use the MIT option. The translated ELK
 implementation is a separate, unmodified EPL-2.0 dependency. Exact license texts,
 release/source links and upstream derivation points are retained under
-[`little-clip-render/third_party`](../crates/little-clip-render/third_party/mermaid-notices.md)
+[`little-clip-render/third_party`](../crates/little-clip-render/third_party/diagram-notices.md)
 and embedded in every diagram-capable executable (`--diagram-licenses`).
 
 Merman requires pulldown-cmark >=0.13.6; rdocx 0.16.4 pins exactly 0.13.4. Cargo's
@@ -199,3 +199,85 @@ Compare latex-rust 2.1.1 (MSRV 1.76); its 3.0.x releases require Rust 1.99, beyo
 the installed 1.98.1. retex-svg 1.9.0 is a PDF-to-SVG component, not itself a
 LaTeX parser, so it is not an equivalent standalone math renderer. No math adapter
 has been selected or added yet.
+
+## Lini integration
+
+Compared the original [Lini 1.1.0 compiler](https://github.com/monfa-red/lini)
+with [mdbook-lini](https://github.com/monfa-red/mdbook-lini), its WASM-based
+integrations, and implementing the language from its specification. The wrappers
+all use the same compiler; no independent compatible native renderer was found.
+The original Rust library provides the full syntax/layout implementation rather
+than a new approximate subset. `hrdf-parser` from the initial search is unrelated
+and was discarded. Library-only calls are used; no CLI, local HTTP service,
+JavaScript runtime or browser engine is invoked.
+
+The worker selects `static_mode: true` (baked CSS values and outlined labels) and
+`no_fs: true`, with no supplied assets, base directory or asset root. Local image
+paths are refused before lookup; HTTP/data image references remain inert because
+the common SVG rasterizer disables image resolution. Their omission now produces
+a visible warning rather than a silently incomplete image. Support for bounded
+embedded images remains future work, relevant to the richer scene formats too.
+The existing source/vector/raster/process limits apply unchanged.
+
+The shared worker result retains bounded non-fatal warnings alongside pixels.
+The large preview displays them below the image; the small-screen cache keeps
+warnings with its thumbnail and reserves one compact status line. Lini warning
+locations use source line/column, including near-miss auto-created objects.
+At most fifteen detailed Lini warnings plus an overflow summary are returned;
+one raster limitation warning may be added. Each is at most 1,024 characters.
+Existing engines produce empty warning lists when there are no limitations.
+
+`.lini` uses the shared guarded source editor and a bundled source grammar;
+`lini` fences render in both Markdown paths. Save/Save As, unsaved drafts,
+cancellation, last-valid large previews and offscreen texture release reuse their
+existing owners. The [pipeline example](examples/diagrams/pipeline.lini) uses
+three colored nodes; a bar chart was also checked through the actual worker.
+
+The existing Lini playground and serve editor use highlighted source, a live SVG
+result and diagnostics in resizable panes. The Rust crate exposes warnings and
+suggested source edits but not its parsed/layout object tree as a public API.
+Source-aware number/label manipulation is a useful later addition; recreating its
+whole private tree or embedding its HTML editor is not part of this adapter.
+No upstream editor code was copied. Graphical manipulation remains pending.
+
+Lini is MIT; its default font subsets are OFL-1.1 and Phosphor icon geometry is
+MIT. Full notices are embedded by `--diagram-licenses`, including the copyright
+records verified from bundled font name tables. Our code does not alter the
+fonts. License/source records are in
+[the shared notice file](../crates/little-clip-render/third_party/diagram-notices.md).
+Only the Lini package is newly locked; its dependencies already existed.
+
+Architecture comparison against `native-diagrams-after-mermaid` reports roughly
+221 new code lines, five functions and one Rust file. New branches carry bounded
+warnings through the existing renderer/cache/preview owners, not parallel Lini
+UI or save implementations. Reported host-test clone growth reflects the same
+fixture/protocol exercised in independently linked executables. Reported Python
+cycles reorder the members of untouched script cycles; no application cycle was
+added. No extra abstraction or source vendoring was introduced for the compiler.
+
+Validation: targeted renderer/source/save/routing tests and actual-host
+integration suites pass. Native flowchart and bar-chart rasters were visually
+inspected. Workspace strict Clippy passes. `cargo test -p little-clip-render -p clip-studios -p clip-file-manager -j4 --lib -- --test-threads=1` passes 1,696 tests (19 ignored).
+The final file-manager integration run also verifies Lini/font notices. Formatting
+and diff whitespace checks pass. Approximately 116 GiB remains free.
+
+Source errors, no-filesystem asset handling, warning retention and
+overflow summaries have targeted regression coverage.
+
+## Graphviz next-step research
+
+Downloaded and inspected `graphviz-pure` 1.2.0 (EPL-2.0), `layout-rs` 0.1.3
+(MIT), and `graphviz-rust` 0.9.9 (its actual license file is MIT, although its
+registry license metadata is non-standard). The first provides a native port of
+the eight Graphviz engines and explicit diagnostics; the second has a public
+DOT AST and its own layout; the third defaults to spawning installed Graphviz
+and is not equivalent to a compiled renderer. No adapter has been selected yet.
+Review file/resource loaders, layout limits, source correspondence and fidelity
+before selecting. The high-level `render_dot` renders only the first graph:
+do not silently discard additional graphs in a source file or fence.
+
+Compared [Graphviz Visual Editor](https://github.com/magjac/graphviz-visual-editor)
+and [d3-graphviz](https://github.com/magjac/d3-graphviz) as interaction references:
+node/edge insertion, selection linked to source, style changes and pan/zoom are
+more useful than embedding their browser frameworks. Their current license files
+still need checking before considering any port; no editor code has been copied.

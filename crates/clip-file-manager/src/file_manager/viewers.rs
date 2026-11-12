@@ -799,6 +799,7 @@ mod tests {
             "drawing.pikchr",
             "drawing.svgbob",
             "drawing.mermaid",
+            "drawing.lini",
             "DRAWING.PIKCHR",
         ] {
             assert_eq!(kind(Path::new(name)), Kind::Text);

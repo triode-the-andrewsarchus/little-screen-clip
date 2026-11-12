@@ -8,6 +8,7 @@ pub enum Format {
     Pikchr,
     Svgbob,
     Mermaid,
+    Lini,
 }
 impl Format {
     /// Recognizes a Markdown fence's language, without executing its attributes.
@@ -21,6 +22,7 @@ impl Format {
             "pikchr" => Some(Self::Pikchr),
             "svgbob" | "bob" => Some(Self::Svgbob),
             "mermaid" | "mmd" => Some(Self::Mermaid),
+            "lini" => Some(Self::Lini),
             _ => None,
         }
     }
@@ -38,6 +40,7 @@ impl Format {
             "pikchr" => Some(Self::Pikchr),
             "svgbob" => Some(Self::Svgbob),
             "mermaid" => Some(Self::Mermaid),
+            "lini" => Some(Self::Lini),
             _ => None,
         }
     }
@@ -61,6 +64,7 @@ impl Format {
             Self::Pikchr => "Pikchr",
             Self::Svgbob => "SvgBob",
             Self::Mermaid => "Mermaid",
+            Self::Lini => "Lini",
         }
     }
 }

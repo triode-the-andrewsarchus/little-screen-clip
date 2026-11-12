@@ -7,6 +7,11 @@ fn diagram_worker_renders_and_reports_errors_without_host_startup() {
     for (format, source, success) in [
         ("pikchr", "box \"Source\"; arrow; circle \"Preview\"", true),
         ("mermaid", "flowchart LR\nA[Source] --> B[Preview]", true),
+        (
+            "lini",
+            "|box#a| \"Source\"\n|box#b| \"Preview\"\na -> b",
+            true,
+        ),
         ("svgbob", "+----+\n|Hi! |\n+----+", true),
         ("pikchr", "box at invalid nonsense", false),
         ("mermaid", "flowchart LR\nA[", false),
@@ -51,5 +56,7 @@ fn diagram_license_notices_are_available_without_host_startup() {
     let notices = String::from_utf8(output.stdout).unwrap();
     assert!(notices.contains("Eclipse Public License - v 2.0"));
     assert!(notices.contains("Permission is hereby granted"));
+    assert!(notices.contains("Abbas Monfared"));
+    assert!(notices.contains("SIL OPEN FONT LICENSE"));
     assert!(notices.contains("e0e75bcab2fa8e39dd7a09465b7f2e035eda82ef"));
 }

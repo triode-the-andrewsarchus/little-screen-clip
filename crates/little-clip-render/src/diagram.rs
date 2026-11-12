@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+mod lini;
 mod mermaid;
 
 const MAX_SOURCE: usize = 256 * 1024;
@@ -32,6 +33,9 @@ pub struct Rendered {
     pub png: Vec<u8>,
     pub width: u32,
     pub height: u32,
+    /// Non-fatal renderer limitations, retained alongside the image.
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// Renders diagram text in a bounded, owned copy of the current host executable.
@@ -80,6 +84,11 @@ pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Re
         || rendered.height > HEIGHT
         || rendered.svg.len() > MAX_SVG
         || rendered.png.len() > MAX_OUTPUT / 2
+        || rendered.warnings.len() > 17
+        || rendered
+            .warnings
+            .iter()
+            .any(|warning| warning.chars().count() > 1024)
     {
         return Err("Diagram worker exceeded output limits".into());
     }
@@ -90,15 +99,19 @@ pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Re
 ///
 /// Unrelated arguments return `false`. The helper reads bounded JSON on stdin,
 /// writes its result on stdout and exits; it never opens source/output filenames.
-/// `--diagram-licenses` prints the bundled Mermaid notices instead.
+/// `--diagram-licenses` prints the bundled renderer notices instead.
 pub fn run_worker_cli() -> bool {
     let argument = std::env::args_os().nth(1);
     if argument.as_deref() == Some(std::ffi::OsStr::new("--diagram-licenses")) {
         print!(
-            "{}\n{}\n{}",
-            include_str!("../third_party/mermaid-notices.md"),
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+            include_str!("../third_party/diagram-notices.md"),
             include_str!("../third_party/merman-MIT.txt"),
             include_str!("../third_party/merman-elk-EPL-2.0.txt"),
+            include_str!("../third_party/lini-MIT.txt"),
+            include_str!("../third_party/lini-google-sans-OFL.txt"),
+            include_str!("../third_party/lini-google-sans-code-OFL.txt"),
+            include_str!("../third_party/lini-phosphor-MIT.txt"),
         );
         return true;
     }
@@ -132,25 +145,31 @@ fn validate_source(source: &str) -> Result<(), String> {
 
 fn render_inline(format: Format, source: &str) -> Result<Rendered, String> {
     validate_source(source)?;
-    let svg = match format {
-        Format::Mermaid => mermaid::svg(source)?,
-        Format::Pikchr => pikchr_rs::pikchr(
-            source,
-            pikchr_rs::PikchrFlags {
-                plaintext_errors: true,
-                ..Default::default()
-            },
-        )
-        .map_err(|error| error.to_string())?,
+    let (svg, warnings) = match format {
+        Format::Lini => lini::svg(source)?,
+        Format::Mermaid => (mermaid::svg(source)?, Vec::new()),
+        Format::Pikchr => (
+            pikchr_rs::pikchr(
+                source,
+                pikchr_rs::PikchrFlags {
+                    plaintext_errors: true,
+                    ..Default::default()
+                },
+            )
+            .map_err(|error| error.to_string())?,
+            Vec::new(),
+        ),
         Format::Svgbob => {
             if source.lines().count() > 128 || source.lines().any(|line| line.chars().count() > 256)
             {
                 return Err("SvgBob preview exceeds the 256 × 128 cell limit".into());
             }
-            svgbob::to_svg(source)
+            (svgbob::to_svg(source), Vec::new())
         }
     };
-    rasterize_svg(svg)
+    let mut rendered = rasterize_svg(svg)?;
+    rendered.warnings.extend(warnings);
+    Ok(rendered)
 }
 
 fn rasterize_svg(svg: String) -> Result<Rendered, String> {
@@ -222,11 +241,20 @@ fn rasterize_svg(svg: String) -> Result<Rendered, String> {
         &mut pixmap.as_mut(),
     );
     let png = pixmap.encode_png().map_err(|error| error.to_string())?;
+    let warnings = if document
+        .descendants()
+        .any(|node| node.has_tag_name("image"))
+    {
+        vec!["Linked or embedded images are not displayed in diagram previews".into()]
+    } else {
+        Vec::new()
+    };
     Ok(Rendered {
         svg,
         png,
         width,
         height,
+        warnings,
     })
 }
 
@@ -267,6 +295,18 @@ mod tests {
                 "flowchart LR\nA-->B\n",
             ),
             ("mmd", "# Doc\n```pikchr\nbox\n```", Format::Pikchr, "box\n"),
+            (
+                "md",
+                "```lini\n|box| \"Source\"\n```",
+                Format::Lini,
+                "|box| \"Source\"\n",
+            ),
+            (
+                "lini",
+                "|box| \"Source\"\n",
+                Format::Lini,
+                "|box| \"Source\"\n",
+            ),
         ] {
             let path = directory.path().join(format!("drawing.{extension}"));
             std::fs::write(&path, content).unwrap();
@@ -280,9 +320,10 @@ mod tests {
                 .push_back(Cached {
                     format,
                     source: source.into(),
-                    result: Ok(std::sync::Arc::new(
-                        little_clip_core::ImageThumbnail::from_rgba(image),
-                    )),
+                    result: Ok(std::sync::Arc::new(Thumbnail {
+                        image: little_clip_core::ImageThumbnail::from_rgba(image),
+                        warnings: Vec::new(),
+                    })),
                     prepared: std::time::Instant::now(),
                 });
             let mut item = ClipItem::from_text("drawing");
@@ -307,6 +348,7 @@ mod tests {
         for (format, source) in [
             (Format::Pikchr, "box \"Read\"; arrow; circle \"Think\""),
             (Format::Mermaid, "flowchart LR\nA[Source] --> B[Preview]"),
+            (Format::Lini, "|box#a| \"Read\"\n|box#b| \"Think\"\na -> b"),
             (
                 Format::Svgbob,
                 "+------+     +------+\n| Read +---->| Think|\n+------+     +------+",
@@ -327,19 +369,47 @@ mod tests {
 
     #[test]
     fn malformed_inputs_and_resource_exhaustion_are_errors() {
+        assert!(render_inline(Format::Lini, "|box").is_err());
         assert!(render_inline(Format::Pikchr, "box at invalid nonsense").is_err());
         assert!(render_inline(Format::Pikchr, "\0").is_err());
         assert!(render_inline(Format::Pikchr, &"x".repeat(MAX_SOURCE + 1)).is_err());
         assert!(render_inline(Format::Svgbob, &"+".repeat(257)).is_err());
         assert!(render_inline(Format::Svgbob, &"x\n".repeat(129)).is_err());
     }
+
+    #[test]
+    fn diagrams_keep_warnings_in_the_raster_result() {
+        let rendered = render_inline(Format::Lini, "|box#cat| \"cat\"\ncta -> bird\n").unwrap();
+        assert!(
+            rendered
+                .warnings
+                .iter()
+                .any(|item| item.contains("did you mean"))
+        );
+        let rendered = render_inline(
+            Format::Lini,
+            "|image| { src: \"https://example.invalid/photo.png\"; width: 40; height: 40 }",
+        )
+        .unwrap();
+        assert!(
+            rendered
+                .warnings
+                .iter()
+                .any(|item| item.contains("images are not displayed"))
+        );
+    }
 }
 
 struct Cached {
     format: Format,
     source: String,
-    result: Result<std::sync::Arc<little_clip_core::ImageThumbnail>, String>,
+    result: Result<std::sync::Arc<Thumbnail>, String>,
     prepared: std::time::Instant,
+}
+
+pub(crate) struct Thumbnail {
+    pub image: little_clip_core::ImageThumbnail,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Default)]
@@ -349,7 +419,7 @@ impl Cache {
         &mut self,
         format: Format,
         source: &str,
-    ) -> Result<std::sync::Arc<little_clip_core::ImageThumbnail>, String> {
+    ) -> Result<std::sync::Arc<Thumbnail>, String> {
         if let Some(index) = self.0.iter().position(|entry| {
             entry.format == format
                 && entry.source == source
@@ -369,7 +439,12 @@ impl Cache {
             .retain(|entry| entry.format != format || entry.source != source);
         let result = render(format, source, &AtomicBool::new(false)).and_then(|rendered| {
             little_clip_core::ImageThumbnail::generate(&rendered.png, WIDTH, HEIGHT)
-                .map(std::sync::Arc::new)
+                .map(|image| {
+                    std::sync::Arc::new(Thumbnail {
+                        image,
+                        warnings: rendered.warnings,
+                    })
+                })
                 .ok_or_else(|| "Invalid diagram raster".into())
         });
         if self.0.len() >= 8 {
