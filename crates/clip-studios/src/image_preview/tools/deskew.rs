@@ -153,7 +153,6 @@ impl ImagePreviewState {
 
     /// Resizes current_rgba to the specified pixel dimensions using the chosen filter,
     /// recording an undo point.
-
     pub(crate) fn render_deskew_toolbar(
         &mut self,
         ui: &mut egui::Ui,

@@ -23,14 +23,33 @@ pub fn is_audio_path(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase());
 
-    match ext.as_deref() {
+    matches!(
+        ext.as_deref(),
         Some(
-            "mp2" | "mp3" | "wav" | "wave" | "flac" | "ogg" | "oga" | "m4a" | "m4b" | "aac"
-            | "adts" | "caf" | "mka" | "alac" | "aiff" | "aif" | "aifc" | "opus" | "wma" | "xwma"
-            | "xwm" | "ncw",
-        ) => true,
-        _ => false,
-    }
+            "mp2"
+                | "mp3"
+                | "wav"
+                | "wave"
+                | "flac"
+                | "ogg"
+                | "oga"
+                | "m4a"
+                | "m4b"
+                | "aac"
+                | "adts"
+                | "caf"
+                | "mka"
+                | "alac"
+                | "aiff"
+                | "aif"
+                | "aifc"
+                | "opus"
+                | "wma"
+                | "xwma"
+                | "xwm"
+                | "ncw",
+        )
+    )
 }
 
 pub fn read_audio_metadata(path: &Path) -> Option<AudioMetadata> {
@@ -582,8 +601,8 @@ where
         } else {
             let mut mx1 = 0.0f32;
             let mut mx2 = 0.0f32;
-            for f in f_start..f_end {
-                let s1 = ch1_samples[f].abs();
+            for (f, sample) in ch1_samples.iter().enumerate().take(f_end).skip(f_start) {
+                let s1 = (*sample).abs();
                 if s1 > mx1 {
                     mx1 = s1;
                 }
@@ -730,8 +749,13 @@ where
             let center_frame = if sample_rate > 196_000 && frame_end > frame_start + window_size {
                 let mut peak_val = 0.0f32;
                 let mut peak_idx = (frame_start + frame_end) / 2;
-                for idx in frame_start..frame_end {
-                    let s_abs = mixed_samples[idx].abs();
+                for (idx, sample) in mixed_samples
+                    .iter()
+                    .enumerate()
+                    .take(frame_end)
+                    .skip(frame_start)
+                {
+                    let s_abs = (*sample).abs();
                     if s_abs > peak_val {
                         peak_val = s_abs;
                         peak_idx = idx;
@@ -756,9 +780,8 @@ where
 
             // Spectrogram column (Audacity-style Inferno heatmap)
             let mut spec_col_rgba = vec![0u8; num_freq_bins * 4];
-            for b in 0..num_freq_bins {
-                let mag = (out_data[b].re * out_data[b].re + out_data[b].im * out_data[b].im)
-                    .sqrt()
+            for (b, bin) in out_data.iter().enumerate().take(num_freq_bins) {
+                let mag = (bin.re * bin.re + bin.im * bin.im).sqrt()
                     / (window_size as f32 * 0.5);
                 let db = 20.0 * (mag + 1e-6).log10();
                 let norm_db = ((db + 80.0) / 80.0).clamp(0.0, 1.0);
@@ -776,10 +799,9 @@ where
             let mut e_mid = 0.0f32;
             let mut e_high = 0.0f32;
             let mut e_ultrasonic = 0.0f32;
-            for b in 1..num_freq_bins {
+            for (b, bin) in out_data.iter().enumerate().take(num_freq_bins).skip(1) {
                 let freq = b as f32 * sample_rate as f32 / window_size as f32;
-                let mag =
-                    (out_data[b].re * out_data[b].re + out_data[b].im * out_data[b].im).sqrt();
+                let mag = (bin.re * bin.re + bin.im * bin.im).sqrt();
                 let energy = mag * mag;
                 if freq < 250.0 {
                     e_bass += energy;

@@ -433,8 +433,10 @@ impl ScreenRenderer {
                 paint.set_color(row_bg);
                 pixmap.fill_rect(rect, &paint, Transform::identity(), None);
 
-                let mut stroke = Stroke::default();
-                stroke.width = 0.5;
+                let stroke = Stroke {
+                    width: 0.5,
+                    ..Default::default()
+                };
                 let mut stroke_paint = Paint::default();
                 stroke_paint.set_color(self.color_from_hex(&self.palette.colors.surface_panel));
                 let path = PathBuilder::from_rect(rect);

@@ -117,8 +117,8 @@ fn test_high_dimensional_embedding_gemma_support() {
     // Group 1: strong positive signal in first 100 dimensions
     for i in 0..5 {
         let mut v = vec![0.0f32; D];
-        for j in 0..100 {
-            v[j] = 1.0 + (i as f32) * 0.05;
+        for v_value in v.iter_mut().take(100) {
+            (*v_value) = 1.0 + (i as f32) * 0.05;
         }
         features.push(v);
     }
@@ -126,8 +126,8 @@ fn test_high_dimensional_embedding_gemma_support() {
     // Group 2: strong positive signal in dimensions 100..200
     for i in 0..5 {
         let mut v = vec![0.0f32; D];
-        for j in 100..200 {
-            v[j] = 1.0 + (i as f32) * 0.05;
+        for v_value in v.iter_mut().take(200).skip(100) {
+            (*v_value) = 1.0 + (i as f32) * 0.05;
         }
         features.push(v);
     }
@@ -222,8 +222,8 @@ fn test_siglip_giant_1536d_embedding_and_normalization() {
     // Group 1: strong signal in dimensions 0..100
     for i in 0..5 {
         let mut v = vec![0.0f32; D];
-        for j in 0..100 {
-            v[j] = 1.0 + (i as f32) * 0.02;
+        for v_value in v.iter_mut().take(100) {
+            (*v_value) = 1.0 + (i as f32) * 0.02;
         }
         let feat = FeatureVector::Dense((v).into());
         assert_eq!(feat.dimension(), D);
@@ -233,8 +233,8 @@ fn test_siglip_giant_1536d_embedding_and_normalization() {
     // Group 2: strong signal in dimensions 200..300
     for i in 0..5 {
         let mut v = vec![0.0f32; D];
-        for j in 200..300 {
-            v[j] = 1.0 + (i as f32) * 0.02;
+        for v_value in v.iter_mut().take(300).skip(200) {
+            (*v_value) = 1.0 + (i as f32) * 0.02;
         }
         let feat = FeatureVector::Dense((v).into());
         features.push(feat.to_vec());

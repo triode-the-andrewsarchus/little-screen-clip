@@ -32,7 +32,6 @@ impl ImagePreviewState {
     }
 
     /// Runs the target file size optimizer solving the quality vs. resolution trade-off asynchronously.
-
     pub fn run_target_file_size_optimizer(&mut self) {
         self.run_target_file_size_optimizer_on(little_clip_core::BackgroundJobs::global());
     }
@@ -100,7 +99,6 @@ impl ImagePreviewState {
 
     /// Polls the background file size optimizer channel, updating status messages
     /// and storing the final result when complete.
-
     pub fn poll_optimizer(&mut self) {
         self.poll_optimizer_on(little_clip_core::BackgroundJobs::global());
     }
@@ -253,7 +251,6 @@ impl ImagePreviewState {
     }
 
     /// Applies the optimized image result directly to current_rgba.
-
     pub fn apply_optimized_result(&mut self) {
         if !self.optimized_result_is_current() {
             return;
@@ -293,7 +290,6 @@ impl ImagePreviewState {
 
     /// Copies the optimized result directly to the Left Hand clipboard slot via daemon IPC
     /// and synchronizes with OS clipboard.
-
     pub fn copy_optimized_to_slot(&mut self) {
         self.copy_optimized_to_slot_on(crate::desktop_ipc::mutation_jobs());
     }

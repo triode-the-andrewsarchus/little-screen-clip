@@ -283,12 +283,12 @@ pub fn dilate_binary_mask(mask: &GrayImage, radius_px: f32) -> GrayImage {
         }
 
         k = 0;
-        for q in 0..n {
+        for (q, d_value) in d.iter_mut().enumerate().take(n) {
             while z[k + 1] < q as f32 {
                 k += 1;
             }
             let dist_sq = (q as isize - v[k] as isize).pow(2) as f32 + f[v[k]];
-            d[q] = dist_sq;
+            (*d_value) = dist_sq;
         }
     }
 
@@ -329,8 +329,8 @@ pub fn dilate_binary_mask(mask: &GrayImage, radius_px: f32) -> GrayImage {
         let row_start = y * w_usize;
         let row_in = &temp[row_start..row_start + w_usize];
         edt_1d(row_in, &mut row_out, &mut v, &mut z);
-        for x in 0..w_usize {
-            if row_out[x] <= r2 {
+        for (x, row_out_value) in row_out.iter().enumerate().take(w_usize) {
+            if (*row_out_value) <= r2 {
                 dilated.put_pixel(x as u32, y as u32, image::Luma([255]));
             }
         }

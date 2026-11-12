@@ -1132,11 +1132,13 @@ mod tests {
             crate::ui_ext::configure_workbench_style(&ctx);
             let palette =
                 crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-            let mut input = egui::RawInput::default();
-            input.screen_rect = Some(Rect::from_min_size(
-                egui::Pos2::ZERO,
-                Vec2::new(width, 662.0),
-            ));
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(width, 662.0),
+                )),
+                ..Default::default()
+            };
             let mut close = false;
             let mut header_rect = None;
             let mut action_rects = Vec::new();

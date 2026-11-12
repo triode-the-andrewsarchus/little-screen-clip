@@ -249,10 +249,12 @@ fn renderer_retires_hidden_slots_and_drop_removes_remaining_tmp_files() {
             access: 0,
         },
     );
-    let mut manager = little_clip_core::SlotManager::default();
-    manager.left_prior3 = Some(little_clip_core::ClipItem::from_text(
-        source.to_string_lossy(),
-    ));
+    let manager = little_clip_core::SlotManager {
+        left_prior3: Some(little_clip_core::ClipItem::from_text(
+            source.to_string_lossy(),
+        )),
+        ..Default::default()
+    };
     // The configured layout includes only two left-history cards.
     renderer.render_pixmap(&manager).unwrap();
     assert!(!directory.exists());

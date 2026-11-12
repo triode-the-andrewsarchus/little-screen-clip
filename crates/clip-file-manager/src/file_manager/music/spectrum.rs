@@ -121,7 +121,7 @@ mod tests {
         let mut bytes = std::fs::read(&path).unwrap();
         // Silence the first half and leave only the right channel in the second.
         let frames = (bytes.len() - 44) / 4;
-        for (index, frame) in bytes[44..].chunks_exact_mut(4).enumerate() {
+        for (index, frame) in bytes[44..].as_chunks_mut::<4>().0.iter_mut().enumerate() {
             frame[..2].fill(0);
             if index < frames / 2 {
                 frame.fill(0);
@@ -132,7 +132,9 @@ mod tests {
         assert_eq!((image.width, image.height), (512, 512));
         let samples: Vec<_> = super::super::decode_file(&path).unwrap().collect();
         let mono: Vec<_> = samples
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|frame| (frame[0] + frame[1]) * 0.5)
             .collect();
         let (_, _, reference) = render_hf_viewport_spectrogram(

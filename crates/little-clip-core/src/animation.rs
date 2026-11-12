@@ -241,7 +241,7 @@ fn process_image_frames(
     for &idx in &selected_indices {
         let frame = &frames[idx];
         let (numer, denom) = frame.delay().numer_denom_ms();
-        let raw_delay = if denom > 0 { numer / denom } else { 100 };
+        let raw_delay = numer.checked_div(denom).unwrap_or(100);
         let delay_ms = raw_delay.clamp(20, 1000);
         let eff_delay = (delay_ms as f64 * step) as u32;
 

@@ -27,7 +27,9 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<Monitor> {
     let blocks = 1 + bytes[126] as usize;
     if bytes.len() != blocks * 128
         || bytes
-            .chunks_exact(128)
+            .as_chunks::<128>()
+            .0
+            .iter()
             .any(|block| block.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) != 0)
     {
         return Err(invalid());
@@ -64,7 +66,7 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<Monitor> {
     if bytes[21] != 0 && bytes[22] != 0 {
         monitor.size = Some((bytes[21], bytes[22]));
     }
-    for descriptor in bytes[54..126].chunks_exact(18) {
+    for descriptor in bytes[54..126].as_chunks::<18>().0.iter() {
         if descriptor[0] == 0 && descriptor[1] == 0 {
             if descriptor[2] != 0 || descriptor[4] != 0 {
                 continue;

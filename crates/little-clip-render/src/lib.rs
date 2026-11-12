@@ -513,8 +513,10 @@ impl ScreenRenderer {
                     str_b,
                     (str_a as f32 * 0.8) as u8,
                 ));
-                let mut stroke = Stroke::default();
-                stroke.width = 1.5;
+                let stroke = Stroke {
+                    width: 1.5,
+                    ..Default::default()
+                };
                 let path = PathBuilder::from_rect(br);
                 pixmap.stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
 

@@ -44,7 +44,7 @@ pub fn extract_palette(img: &RgbaImage, target_count: usize) -> (Vec<PaletteColo
         })
         .collect();
 
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
 
     fn color_dist(r1: f32, g1: f32, b1: f32, r2: f32, g2: f32, b2: f32) -> f32 {
         let r_mean = (r1 + r2) / 2.0;
@@ -93,7 +93,7 @@ pub fn extract_palette(img: &RgbaImage, target_count: usize) -> (Vec<PaletteColo
         }
     }
 
-    selected.sort_by(|a, b| b.1.cmp(&a.1));
+    selected.sort_by_key(|a| std::cmp::Reverse(a.1));
 
     let total_counted: usize = selected.iter().map(|(_, c)| *c).sum();
     let norm_factor = if total_counted > 0 {

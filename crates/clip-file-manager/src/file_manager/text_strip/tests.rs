@@ -251,7 +251,9 @@ fn sparse_documents_expand_strokes_with_two_pixel_gaps() {
     let doc = document("notes.txt", b"example\nexample\n");
     let image = render(&doc, 300, 64, [[200; 3]; 9], &AtomicBool::new(false)).unwrap();
     let occupied = image.premultiplied_rgba[..300 * 4]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[3] > 0)
         .count();
     assert_eq!(

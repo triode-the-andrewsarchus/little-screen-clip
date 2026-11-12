@@ -396,8 +396,10 @@ mod tests {
         let default_val = 0.0f32;
 
         // Pass 1: Initial layout
-        let mut raw_input = egui::RawInput::default();
-        raw_input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0)));
+        let raw_input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
+            ..Default::default()
+        };
         let _ = ctx.run(raw_input.clone(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 render_context_slider(
@@ -526,8 +528,10 @@ mod tests {
         let mut val = 0.85f32;
         let default_val = 0.0f32;
 
-        let mut raw_input = egui::RawInput::default();
-        raw_input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0)));
+        let raw_input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
+            ..Default::default()
+        };
 
         // Pass 1: Initial layout
         let _ = ctx.run(raw_input.clone(), |ctx| {
@@ -603,8 +607,10 @@ mod tests {
         let mut seed = 500;
         let default_seed = 100;
 
-        let mut raw_input = egui::RawInput::default();
-        raw_input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0)));
+        let raw_input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
+            ..Default::default()
+        };
 
         // Pass 1: Initial layout
         let _ = ctx.run(raw_input.clone(), |ctx| {

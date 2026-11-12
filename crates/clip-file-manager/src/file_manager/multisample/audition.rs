@@ -29,7 +29,9 @@ pub(super) fn prepare(
             .ok_or("Embedded PCM is unavailable")?;
         let limit = (sample.rate as usize * 10).min(2_000_000);
         let values: Vec<f32> = data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .take(limit)
             .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
             .collect();

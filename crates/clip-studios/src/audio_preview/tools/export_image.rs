@@ -48,8 +48,10 @@ pub fn fill_rect(pixmap: &mut Pixmap, rect: Rect, color: Color) {
 pub fn stroke_rect(pixmap: &mut Pixmap, rect: Rect, color: Color, stroke_width: f32) {
     let mut paint = Paint::default();
     paint.set_color(color);
-    let mut stroke = Stroke::default();
-    stroke.width = stroke_width;
+    let stroke = Stroke {
+        width: stroke_width,
+        ..Default::default()
+    };
     let path = PathBuilder::from_rect(rect);
     pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
 }
@@ -66,8 +68,10 @@ pub fn draw_line(
 ) {
     let mut paint = Paint::default();
     paint.set_color(color);
-    let mut stroke = Stroke::default();
-    stroke.width = stroke_width;
+    let stroke = Stroke {
+        width: stroke_width,
+        ..Default::default()
+    };
     let mut pb = PathBuilder::new();
     pb.move_to(x1, y1);
     pb.line_to(x2, y2);

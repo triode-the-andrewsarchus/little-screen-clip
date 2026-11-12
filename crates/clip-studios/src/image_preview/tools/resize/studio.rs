@@ -9,7 +9,6 @@ impl ImagePreviewState {
     }
 
     /// Extracts dominant colors from current_display_image into palette_state.
-
     pub(crate) fn render_resize_toolbar(
         &mut self,
         ui: &mut egui::Ui,

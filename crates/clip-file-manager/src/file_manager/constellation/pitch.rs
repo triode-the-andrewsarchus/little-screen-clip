@@ -172,7 +172,9 @@ mod tests {
             .collect();
         let shifted = shift(&stereo, 2, 7.0).unwrap();
         let error = shifted
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|x| (x[0] + x[1]).powi(2))
             .sum::<f32>()
             / 8000.0;

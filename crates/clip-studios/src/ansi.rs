@@ -10,8 +10,10 @@ use crate::ui_ext::contrast_text_c32_on;
 
 /// Converts raw ANSI terminal escape sequences into a styled [`egui::text::LayoutJob`].
 pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
-    job.wrap = egui::text::TextWrapping::no_max_width();
+    let mut job = egui::text::LayoutJob {
+        wrap: egui::text::TextWrapping::no_max_width(),
+        ..Default::default()
+    };
 
     let palette = AppPalette::for_appearance(WorkbenchAppearance::Dark);
     let console = crate::hex_to_c32(&palette.colors.console_surface);

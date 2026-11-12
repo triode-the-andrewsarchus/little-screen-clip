@@ -13,7 +13,6 @@ pub struct PickColorState {
 
 impl ImagePreviewState {
     /// Copies the given color as a hex code string to the clipboard and tracks recent colors.
-
     pub fn copy_color_to_clipboard(&mut self, col: Color32, ctx: &egui::Context) {
         self.copy_color_to_clipboard_on(col, ctx, BackgroundJobs::global(), |text| {
             if let Err(error) = little_clip_core::copy_text_to_system_clipboard(text) {
@@ -50,7 +49,6 @@ impl ImagePreviewState {
 
     /// Records a picked swatch without changing the system clipboard. Clipboard
     /// writes are intentionally explicit through the Copy Hex action.
-
     pub(crate) fn record_picked_color(&mut self, col: Color32) {
         self.pick_color_state.last_picked = Some(col);
         if !self.pick_color_state.picked_colors.contains(&col) {
@@ -64,7 +62,6 @@ impl ImagePreviewState {
 
     /// Copies the currently displayed image to a specific clipboard hand slot (Left or Right) via daemon IPC,
     /// and simultaneously syncs to the OS clipboard through the shared adapter.
-
     pub(crate) fn render_pick_color_overlay(
         &mut self,
         ui: &mut egui::Ui,

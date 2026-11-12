@@ -1681,11 +1681,13 @@ mod tests {
             assert!(TextStyle::Button.resolve(&style).size >= BODY_FONT_SIZE);
             drop(style);
 
-            let mut input = egui::RawInput::default();
-            input.screen_rect = Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                Vec2::new(900.0, 300.0),
-            ));
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 300.0),
+                )),
+                ..Default::default()
+            };
             let mut heights = Vec::new();
             let mut input_text = String::new();
             let _ = ctx.run(input, |ctx| {

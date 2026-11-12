@@ -982,15 +982,11 @@ fn build_peak_pyramid_inner(
             b_sum += b.rgb[2] as u32;
         }
         let count = chunk.len() as u32;
-        let rgb = if count > 0 {
-            [
-                (r_sum / count) as u8,
-                (g_sum / count) as u8,
-                (b_sum / count) as u8,
-            ]
-        } else {
-            [56, 189, 248]
-        };
+        let rgb = [
+            r_sum.checked_div(count).map_or(56, |v| v as u8),
+            g_sum.checked_div(count).map_or(189, |v| v as u8),
+            b_sum.checked_div(count).map_or(248, |v| v as u8),
+        ];
         lvl1.push(PeakBlock {
             min: mn,
             max: mx,
@@ -1022,15 +1018,11 @@ fn build_peak_pyramid_inner(
             b_sum += b.rgb[2] as u32;
         }
         let count = chunk.len() as u32;
-        let rgb = if count > 0 {
-            [
-                (r_sum / count) as u8,
-                (g_sum / count) as u8,
-                (b_sum / count) as u8,
-            ]
-        } else {
-            [56, 189, 248]
-        };
+        let rgb = [
+            r_sum.checked_div(count).map_or(56, |v| v as u8),
+            g_sum.checked_div(count).map_or(189, |v| v as u8),
+            b_sum.checked_div(count).map_or(248, |v| v as u8),
+        ];
         lvl2.push(PeakBlock {
             min: mn,
             max: mx,

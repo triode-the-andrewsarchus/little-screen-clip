@@ -286,9 +286,9 @@ pub fn extract_features(samples: &[f32], sample_rate: f32) -> Option<SampleFeatu
     let mut mel_energies = [0.0f32; NUM_MEL];
 
     let mut mel_points = [0.0f32; NUM_MEL + 2];
-    for i in 0..NUM_MEL + 2 {
+    for (i, point) in mel_points.iter_mut().enumerate().take(NUM_MEL + 2) {
         let mel = (i as f32 / (NUM_MEL + 1) as f32) * max_mel;
-        mel_points[i] = 700.0 * (10.0f32.powf(mel / 2595.0) - 1.0);
+        (*point) = 700.0 * (10.0f32.powf(mel / 2595.0) - 1.0);
     }
 
     let mut bin_points = [0usize; NUM_MEL + 2];
@@ -303,32 +303,42 @@ pub fn extract_features(samples: &[f32], sample_rate: f32) -> Option<SampleFeatu
 
         let mut e = 0.0f32;
         if f_curr > f_prev {
-            for k in f_prev..f_curr.min(num_bins) {
+            for (k, magnitude) in mag
+                .iter()
+                .enumerate()
+                .take(f_curr.min(num_bins))
+                .skip(f_prev)
+            {
                 let weight = (k - f_prev) as f32 / (f_curr - f_prev) as f32;
-                e += mag[k] * weight;
+                e += (*magnitude) * weight;
             }
         }
         if f_next > f_curr {
-            for k in f_curr..f_next.min(num_bins) {
+            for (k, magnitude) in mag
+                .iter()
+                .enumerate()
+                .take(f_next.min(num_bins))
+                .skip(f_curr)
+            {
                 let weight = (f_next - k) as f32 / (f_next - f_curr) as f32;
-                e += mag[k] * weight;
+                e += (*magnitude) * weight;
             }
         }
         mel_energies[m - 1] = e.max(1e-5).ln();
     }
 
     // DCT-II
-    for i in 0..13 {
+    for (i, coefficient) in mfcc.iter_mut().enumerate() {
         let mut sum = 0.0f32;
-        for j in 0..NUM_MEL {
-            sum += mel_energies[j] * ((PI / NUM_MEL as f32) * (j as f32 + 0.5) * i as f32).cos();
+        for (j, energy) in mel_energies.iter().enumerate().take(NUM_MEL) {
+            sum += (*energy) * ((PI / NUM_MEL as f32) * (j as f32 + 0.5) * i as f32).cos();
         }
         let scale = if i == 0 {
             (1.0 / NUM_MEL as f32).sqrt()
         } else {
             (2.0 / NUM_MEL as f32).sqrt()
         };
-        mfcc[i] = sum * scale;
+        (*coefficient) = sum * scale;
     }
 
     // Pack strictly into alphabetical feature vector of 32 elements:
@@ -551,19 +561,17 @@ pub fn classify_sample(
     // Apply token prior if physically plausible
     if let Some((hint_cat, hint_weight)) = token_hint {
         let idx = hint_cat as usize;
-        let mut plausible = true;
 
         let sc = feat.spectral_centroid;
         let sub = feat.values[27]; // sub_ratio
         let duration = feat.duration;
 
-        if hint_cat == SampleCategory::Kick && (sc > 3500.0 || (sub < 0.05 && sc > 2000.0)) {
-            plausible = false;
-        } else if hint_cat == SampleCategory::HihatClosed && duration > 1.2 {
-            plausible = false;
-        } else if hint_cat == SampleCategory::Bass && sub + feat.values[5] < 0.08 {
-            plausible = false;
-        }
+        let plausible = match hint_cat {
+            SampleCategory::Kick => !(sc > 3500.0 || (sub < 0.05 && sc > 2000.0)),
+            SampleCategory::HihatClosed => !(duration > 1.2),
+            SampleCategory::Bass => !(sub + feat.values[5] < 0.08),
+            _ => true,
+        };
 
         if plausible {
             scores[idx] += 0.85 * hint_weight;

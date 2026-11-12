@@ -80,14 +80,12 @@ impl ImagePreviewState {
             }
             match process_result {
                 Ok(Some(out_rgb)) => {
-                    let Some(out_rgba) = apply_film_sim_post_adjustments_inner(
+                    let out_rgba = apply_film_sim_post_adjustments_inner(
                         &out_rgb,
                         contrast,
                         tint,
                         Some(&cancelled),
-                    ) else {
-                        return None;
-                    };
+                    )?;
                     if cancelled.load(std::sync::atomic::Ordering::Acquire) {
                         return None;
                     }
@@ -119,7 +117,6 @@ impl ImagePreviewState {
     }
 
     /// Drain any messages from the film sim background thread and thumbnail worker.
-
     pub fn poll_film_sim(&mut self) {
         let current_stamp = self.current_film_sim_render_stamp();
         if self
@@ -237,7 +234,6 @@ impl ImagePreviewState {
     }
 
     /// Commit the film sim preview into current_rgba and push to undo stack.
-
     pub fn apply_film_sim(&mut self) {
         if !self.film_sim_preview_is_current() {
             return;

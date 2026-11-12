@@ -42,8 +42,10 @@ pub(super) fn cells(bytes: &[u8]) -> io::Result<Vec<u32>> {
         ));
     }
     Ok(bytes
-        .chunks_exact(4)
-        .map(|cell| u32::from_be_bytes(cell.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|cell| u32::from_be_bytes(*cell))
         .collect())
 }
 

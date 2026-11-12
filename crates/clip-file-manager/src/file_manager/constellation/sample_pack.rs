@@ -659,7 +659,7 @@ pub fn list_saved_packs(constellation_root: &Path) -> Vec<SamplePackSummary> {
         }
     }
 
-    packs.sort_by(|a, b| b.modified.cmp(&a.modified));
+    packs.sort_by_key(|a| std::cmp::Reverse(a.modified));
     packs
 }
 

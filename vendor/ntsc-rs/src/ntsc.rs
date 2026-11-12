@@ -314,11 +314,11 @@ impl<'a> EffectCtx<'a> {
                     }
                     // Handle the remainder separately
                     let last = y[width - 1];
-                    for index in width - 2..width {
+                    for y_value in y.iter_mut().take(width).skip(width - 2) {
                         let c = last;
                         sum -= delay.push(c);
                         sum += c;
-                        y[index] = sum * 0.25;
+                        (*y_value) = sum * 0.25;
                     }
                 });
             }
@@ -874,9 +874,14 @@ impl<'a> EffectCtx<'a> {
                 let transient_intensity = (rng.random::<f32>() + 0.5) * 0.5;
                 let transient_len = 16.0 * self.horizontal_scale;
 
-                for i in copy_start..(copy_start + transient_len.ceil() as usize).min(width) {
+                for (i, sample) in row
+                    .iter_mut()
+                    .enumerate()
+                    .take((copy_start + transient_len.ceil() as usize).min(width))
+                    .skip(copy_start)
+                {
                     let x = (i - copy_start) as f32;
-                    row[i] += (1.0 - (x / transient_len)).powi(3) * transient_intensity;
+                    (*sample) += (1.0 - (x / transient_len)).powi(3) * transient_intensity;
                 }
             } else {
                 shift_row(

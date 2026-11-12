@@ -52,8 +52,8 @@ impl SpreadsheetSheet {
             let row = &self.rows[r];
             let c_limit = row.len().min(max_cols);
             let mut row_slice = Vec::with_capacity(c_limit);
-            for c in 0..c_limit {
-                row_slice.push(row[c].clone());
+            for sample in row.iter().take(c_limit) {
+                row_slice.push((*sample).clone());
             }
             slice.push(row_slice);
         }

@@ -47,7 +47,7 @@ fn validate_woff_tables(bytes: &[u8], tables: usize, declared_size: usize) -> Re
         .get(44..44 + tables * 20)
         .ok_or("Truncated WOFF table directory")?;
     let mut total = 12 + tables * 16;
-    for entry in directory.chunks_exact(20) {
+    for entry in directory.as_chunks::<20>().0.iter() {
         let compressed = word(entry, 8)? as usize;
         let original = word(entry, 12)? as usize;
         if compressed > original || original > MAX_FONT_BYTES {

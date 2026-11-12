@@ -2,7 +2,6 @@ use super::*;
 
 impl ImagePreviewState {
     /// Spawn low-priority background thread to generate 42x28 thumbnail previews for all film stocks.
-
     pub fn run_thumbnail_batch(&mut self) {
         self.run_thumbnail_batch_on(little_clip_core::BackgroundJobs::global());
     }

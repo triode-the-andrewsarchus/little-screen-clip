@@ -535,11 +535,11 @@ impl ImagePreviewState {
                 Some(Err("Image clipboard worker disconnected".into()))
             }
         };
-        if job.canvas.is_some()
+        if let Some(canvas) = job.canvas.as_ref()
             && !job.restored
             && (job.snapshot_ready.load(Ordering::Acquire) || completion.is_some())
         {
-            let mut slot = match job.canvas.as_ref().unwrap().try_lock() {
+            let mut slot = match canvas.try_lock() {
                 Ok(slot) => slot,
                 Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
                 Err(std::sync::TryLockError::WouldBlock) => return,

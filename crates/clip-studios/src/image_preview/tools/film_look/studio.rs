@@ -2,7 +2,6 @@ use super::*;
 
 impl ImagePreviewState {
     /// Full 3-panel film simulation viewport (replaces the normal render_viewport when FilmSim is active).
-
     pub(crate) fn render_film_sim_viewport(
         &mut self,
         ui: &mut egui::Ui,
@@ -880,7 +879,6 @@ impl ImagePreviewState {
 
     /// Split-view comparison painter for the Film Sim tab center canvas.
     #[allow(clippy::too_many_arguments)]
-
     pub(crate) fn render_film_sim_comparison(
         &mut self,
         ui: &mut egui::Ui,

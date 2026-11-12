@@ -678,6 +678,12 @@ pub(super) fn parse_json<'a>(
     Ok(lexer.exactly_one(Lex::ws_peek, parse_root_object)?)
 }
 
+impl<T: Settings> Default for SettingsList<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Settings> SettingsList<T> {
     /// Construct a list of all the effect settings. This isn't meant to be mutated--you should just create one instance
     /// of this to use for your entire application/plugin.

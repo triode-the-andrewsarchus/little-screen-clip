@@ -191,7 +191,9 @@ pub(in crate::file_manager) fn video_preview(
     let mut image = media_frame(path, prepared.stream, 0)?;
     let black = image
         .premultiplied_rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .all(|pixel| pixel[..3].iter().all(|component| *component <= 8));
     if black
         && prepared.duration_ms > 0

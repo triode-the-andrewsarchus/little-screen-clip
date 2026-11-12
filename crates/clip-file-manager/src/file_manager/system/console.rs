@@ -176,9 +176,11 @@ fn decode(bytes: &[u8], format: Format) -> Result<Snapshot, String> {
             snapshot.description =
                 "Unicode cells; screen geometry is not exposed by this interface.".into();
             bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|cell| {
-                    char::from_u32(u32::from_ne_bytes(cell.try_into().unwrap()))
+                    char::from_u32(u32::from_ne_bytes(*cell))
                         .filter(|c| !c.is_control())
                         .unwrap_or('\u{fffd}')
                 })
@@ -233,8 +235,8 @@ fn attribute_cells(bytes: &[u8], snapshot: &mut Snapshot) -> Result<Vec<char>, S
             .push_str(" Header dimensions may be clamped; layout is shown as a character stream.");
     }
     let mut chars = Vec::new();
-    for cell in bytes[4..].chunks_exact(2) {
-        let word = u16::from_ne_bytes(cell.try_into().unwrap());
+    for cell in bytes[4..].as_chunks::<2>().0.iter() {
+        let word = u16::from_ne_bytes(*cell);
         chars.push(glyph(word as u8));
         snapshot.attributes.push((word >> 8) as u8);
     }

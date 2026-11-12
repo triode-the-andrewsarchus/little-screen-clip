@@ -129,8 +129,8 @@ fn test_film_sim_contrast_curve() {
 
     // Neutral
     let lut_0 = compute_lut(0.0);
-    for i in 0..=255 {
-        assert_eq!(lut_0[i], i as u8);
+    for (i, lut_0_value) in lut_0.iter().enumerate() {
+        assert_eq!((*lut_0_value), i as u8);
     }
 
     // High contrast (e.g. +0.5): shadows darker, highlights brighter

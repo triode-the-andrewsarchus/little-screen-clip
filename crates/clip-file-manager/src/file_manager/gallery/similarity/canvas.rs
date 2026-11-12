@@ -1233,14 +1233,16 @@ mod lifecycle_tests {
     fn header_hit_testing_uses_painted_bounds_at_every_zoom() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("a.png"), b"fixture").unwrap();
-        let mut canvas = SimilarityCanvas::default();
-        canvas.entries = crate::file_manager::filesystem::read_directory(
-            root.path(),
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap()
-        .entries
-        .into();
+        let mut canvas = SimilarityCanvas {
+            entries: crate::file_manager::filesystem::read_directory(
+                root.path(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap()
+            .entries
+            .into(),
+            ..Default::default()
+        };
         canvas.recompute_layout();
         canvas.settle_layout();
         canvas.add_search_grid("first", false, vec![0], vec![1.0]);
@@ -1272,14 +1274,16 @@ mod lifecycle_tests {
     fn stale_layout_result_does_not_replace_newer_grid_state() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("a.png"), b"fixture").unwrap();
-        let mut canvas = SimilarityCanvas::default();
-        canvas.entries = (crate::file_manager::filesystem::read_directory(
-            root.path(),
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap()
-        .entries)
-            .into();
+        let mut canvas = SimilarityCanvas {
+            entries: (crate::file_manager::filesystem::read_directory(
+                root.path(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap()
+            .entries)
+                .into(),
+            ..Default::default()
+        };
         canvas.recompute_layout();
         assert!(
             canvas.layout_job.is_some(),
@@ -1311,14 +1315,16 @@ mod lifecycle_tests {
         let first = root.path().join("a.png");
         std::fs::write(&first, b"fixture").unwrap();
         std::fs::write(root.path().join("b.png"), b"fixture").unwrap();
-        let mut canvas = SimilarityCanvas::default();
-        canvas.entries = (crate::file_manager::filesystem::read_directory(
-            root.path(),
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap()
-        .entries)
-            .into();
+        let mut canvas = SimilarityCanvas {
+            entries: (crate::file_manager::filesystem::read_directory(
+                root.path(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap()
+            .entries)
+                .into(),
+            ..Default::default()
+        };
         canvas.insert_hash(
             first,
             FeatureVector::Dense((vec![-1.0, 0.0]).into()),
@@ -1357,11 +1363,13 @@ mod lifecycle_tests {
     #[test]
     fn timed_out_scan_clears_busy_state_and_reports_failure() {
         let pool = BackgroundJobs::new(1, 2);
-        let mut canvas = SimilarityCanvas::default();
-        canvas.scan_job = Some(
-            Task::start(&pool, Duration::from_secs(2), |_| Vec::new())
-                .with_response_deadline(Duration::ZERO),
-        );
+        let mut canvas = SimilarityCanvas {
+            scan_job: Some(
+                Task::start(&pool, Duration::from_secs(2), |_| Vec::new())
+                    .with_response_deadline(Duration::ZERO),
+            ),
+            ..Default::default()
+        };
         canvas.poll(&egui::Context::default());
         assert!(!canvas.is_scanning());
         assert!(canvas.error.as_deref().unwrap().contains("TimedOut"));
@@ -1369,9 +1377,10 @@ mod lifecycle_tests {
 
     #[test]
     fn retiring_incomplete_scan_invalidates_sync_stamp() {
-        let mut canvas = SimilarityCanvas::default();
-        canvas.current_signature =
-            Some((PathBuf::from("/photos"), 1, true, 0, false, 10_000, 16, 900));
+        let mut canvas = SimilarityCanvas {
+            current_signature: Some((PathBuf::from("/photos"), 1, true, 0, false, 10_000, 16, 900)),
+            ..Default::default()
+        };
         let pool = BackgroundJobs::new(1, 2);
         canvas.scan_job = Some(Task::start(&pool, Duration::from_secs(2), |_| Vec::new()));
         canvas.retire();

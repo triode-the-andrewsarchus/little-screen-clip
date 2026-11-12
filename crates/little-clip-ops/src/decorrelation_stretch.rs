@@ -250,23 +250,23 @@ pub fn eigen_sym3(m: [[f64; 3]; 3]) -> EigenSym3 {
                 let c = 1.0 / (t * t + 1.0).sqrt();
                 let s = t * c;
 
-                for k in 0..3 {
-                    let kp = a[k][p];
-                    let kq = a[k][q];
-                    a[k][p] = c * kp - s * kq;
-                    a[k][q] = s * kp + c * kq;
+                for a_value in &mut a {
+                    let kp = (*a_value)[p];
+                    let kq = (*a_value)[q];
+                    (*a_value)[p] = c * kp - s * kq;
+                    (*a_value)[q] = s * kp + c * kq;
                 }
-                for k in 0..3 {
-                    let pk = a[p][k];
-                    let qk = a[q][k];
-                    a[p][k] = c * pk - s * qk;
-                    a[q][k] = s * pk + c * qk;
+                let (before_q, after_q) = a.split_at_mut(q);
+                for (pk, qk) in before_q[p].iter_mut().zip(&mut after_q[0]) {
+                    let (old_p, old_q) = (*pk, *qk);
+                    *pk = c * old_p - s * old_q;
+                    *qk = s * old_p + c * old_q;
                 }
-                for k in 0..3 {
-                    let kp = v[k][p];
-                    let kq = v[k][q];
-                    v[k][p] = c * kp - s * kq;
-                    v[k][q] = s * kp + c * kq;
+                for v_value in &mut v {
+                    let kp = (*v_value)[p];
+                    let kq = (*v_value)[q];
+                    (*v_value)[p] = c * kp - s * kq;
+                    (*v_value)[q] = s * kp + c * kq;
                 }
             }
         }
@@ -313,11 +313,11 @@ pub fn build_transform(
 
     let m = match mode {
         DecorrelationMatrixMode::Correlation => {
-            for b in 0..3 {
+            for (b, pre_value) in pre.iter_mut().enumerate() {
                 if stats.sd[b] > eps {
-                    pre[b] = 1.0 / stats.sd[b];
+                    (*pre_value) = 1.0 / stats.sd[b];
                 } else {
-                    pre[b] = 0.0;
+                    (*pre_value) = 0.0;
                     let band_name = match b {
                         0 => 'R',
                         1 => 'G',
@@ -354,15 +354,15 @@ pub fn build_transform(
     let mut s = [0.0; 3];
     let mut lmax = 0.0f64;
 
-    for i in 0..3 {
+    for (i, s_value) in s.iter_mut().enumerate() {
         let l = eig.values[i];
         if l > lmax {
             lmax = l;
         }
         if l > 1e-7 * trace.max(eps) {
-            s[i] = 1.0 / l.sqrt();
+            (*s_value) = 1.0 / l.sqrt();
         } else {
-            s[i] = 0.0;
+            (*s_value) = 0.0;
             warnings.push(format!(
                 "Eigenvalue {} is ~0 (one band is a linear combination of the others); that axis collapses to the mean.",
                 i + 1
@@ -437,8 +437,8 @@ pub fn build_transform(
 
             if (hi - lo) > (eps as f32) {
                 let sc = 255.0 / (hi - lo);
-                for b in 0..3 {
-                    t[a][b] *= sc as f64;
+                for coefficient in &mut t[a] {
+                    *coefficient *= sc as f64;
                 }
                 offset[a] = (offset[a] - lo as f64) * sc as f64;
             }

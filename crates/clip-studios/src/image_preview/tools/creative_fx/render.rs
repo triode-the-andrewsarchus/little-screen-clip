@@ -238,7 +238,6 @@ impl ImagePreviewState {
     }
 
     /// Commit creative FX result into current_rgba and push to undo stack.
-
     pub fn apply_creative_fx(&mut self) {
         self.invalidate_stale_creative_fx_masks();
         if self.creative_fx_state.preview_stamp.as_ref() != Some(&self.creative_fx_render_stamp()) {

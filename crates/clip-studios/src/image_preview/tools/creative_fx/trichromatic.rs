@@ -40,9 +40,9 @@ impl ImagePreviewState {
             .trichromatic_params
             .mode
             .channel_names();
-        for i in 0..3 {
+        for (i, names_value) in names.iter().enumerate() {
             ui.label(
-                egui::RichText::new(format!("Channel {}: {}", i + 1, names[i]))
+                egui::RichText::new(format!("Channel {}: {}", i + 1, (*names_value)))
                     .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(base_c),

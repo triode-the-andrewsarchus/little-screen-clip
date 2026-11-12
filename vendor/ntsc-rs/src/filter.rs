@@ -243,8 +243,8 @@ impl TransferFunction {
             return;
         }
         // Ensure the chunks are actually of equal length
-        for i in 1..ROWS {
-            assert_eq!(signal[i].len(), width);
+        for row in signal.iter().take(ROWS).skip(1) {
+            assert_eq!((*row).len(), width);
         }
 
         let len = self.len();

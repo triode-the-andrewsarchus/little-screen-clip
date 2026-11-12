@@ -1399,7 +1399,9 @@ fn all_points_share_one_radius_at_every_zoom_in_sparse_and_dense_libraries() {
             let mesh = coarse_mesh(&mut state);
             assert_eq!(mesh.len(), count * 4);
             let radii: Vec<_> = mesh
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|vertices| vertices[1].pos.x - vertices[0].pos.x)
                 .collect();
             assert!(radii[0] > 0.0);

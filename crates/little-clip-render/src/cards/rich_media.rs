@@ -274,8 +274,10 @@ impl ScreenRenderer {
         let base_c = self.color_from_hex(&self.palette.harmonies.base);
         let bg_c = self.color_from_hex(&self.palette.colors.surface_recessed);
 
-        let mut line_stroke = Stroke::default();
-        line_stroke.width = 1.2;
+        let line_stroke = Stroke {
+            width: 1.2,
+            ..Default::default()
+        };
         let mut line_paint = Paint::default();
         let wire_c = self.color_from_hex(&self.palette.harmonies.base);
         line_paint.set_color(Color::from_rgba8(

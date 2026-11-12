@@ -58,6 +58,10 @@ impl<BaseNoise: Sampleable> Noise<BaseNoise> for Simplex {
 }
 
 #[inline(always)]
+#[expect(
+    clippy::chunks_exact_to_as_chunks,
+    reason = "generic associated chunk lengths cannot be array lengths on stable Rust"
+)]
 pub fn sample_noise_1d_inner<S: Simd, B: Sampleable<Coords = [f32; 1]>, N: Noise<B>>(
     simd: S,
     noise: &N,
@@ -82,6 +86,10 @@ pub fn sample_noise_1d_inner<S: Simd, B: Sampleable<Coords = [f32; 1]>, N: Noise
 }
 
 #[inline(always)]
+#[expect(
+    clippy::chunks_exact_to_as_chunks,
+    reason = "generic associated chunk lengths cannot be array lengths on stable Rust"
+)]
 pub fn add_noise_1d_inner<S: Simd, B: Sampleable<Coords = [f32; 1]>, N: Noise<B>>(
     simd: S,
     noise: &N,
@@ -113,6 +121,10 @@ pub fn add_noise_1d_inner<S: Simd, B: Sampleable<Coords = [f32; 1]>, N: Noise<B>
 }
 
 #[inline(always)]
+#[expect(
+    clippy::chunks_exact_to_as_chunks,
+    reason = "generic associated chunk lengths cannot be array lengths on stable Rust"
+)]
 pub fn sample_noise_2d_inner<S: Simd, B: Sampleable<Coords = [f32; 2]>, N: Noise<B>>(
     simd: S,
     noise: &N,
@@ -187,6 +199,11 @@ impl<const N: usize> ScalarCoords for [f32; N] {
     #[inline(always)]
     fn splat_x<S: Simd>(self, simd: S) -> Self::SimdCoords<S> {
         let mut coords = self.map(|c| S::f32s::splat(simd, c));
+        // Index SIMD lanes, not the outer coordinate axes.
+        #[expect(
+            clippy::needless_range_loop,
+            reason = "SIMD lanes expose indexed access, not a mutable iterator"
+        )]
         for i in 0..S::f32s::N {
             coords[0][i] += i as f32;
         }

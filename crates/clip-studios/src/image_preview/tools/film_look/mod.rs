@@ -167,8 +167,8 @@ fn white_patch_gains_inner(
     let percentile_index = pixel_count * 99 / 100;
     let white_points = histograms.map(|histogram| {
         let mut remaining = percentile_index;
-        for level in 0..=255 {
-            let count = histogram[level];
+        for (level, count) in histogram.iter().enumerate() {
+            let count = *count;
             if remaining < count {
                 return level as f32;
             }
@@ -265,8 +265,7 @@ fn process_film_image_inner(
 }
 
 /// Helper: renders a slider with full visual context (start, center, end, and default tick marks,
-/// gauge fill line from default to current, and double-click to reset to default).
-
+/// gauge fill line from default to current, and double-click to reset to default).///
 /// Applies post-processing photographic S-curve contrast and green/magenta tint.
 pub fn apply_film_sim_post_adjustments(
     out_rgb: &image::RgbImage,

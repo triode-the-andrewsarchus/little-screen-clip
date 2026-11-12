@@ -380,7 +380,9 @@ mod tests {
             assert!(
                 spectrum
                     .premultiplied_rgba
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .any(|pixel| pixel[0] > 20)
             );
             assert_eq!(wave.len(), 512);

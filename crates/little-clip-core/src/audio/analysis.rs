@@ -133,9 +133,9 @@ fn detect_pitch_yin_simd<S: Simd>(
     if tau_found == 0 {
         let mut min_val = 1.0f32;
         let mut min_tau_idx = 0;
-        for tau in min_tau..=max_tau {
-            if d_prime[tau] < min_val {
-                min_val = d_prime[tau];
+        for (tau, difference) in d_prime.iter().enumerate().take(max_tau + 1).skip(min_tau) {
+            if (*difference) < min_val {
+                min_val = *difference;
                 min_tau_idx = tau;
             }
         }
@@ -274,8 +274,8 @@ pub(crate) fn detect_transients_with_sensitivity_cancellable(
             let s_end = (s_start + hop_size).min(samples.len());
             let mut peak_sample = s_start;
             let mut peak_val = 0.0f32;
-            for i in s_start..s_end {
-                let v = samples[i].abs();
+            for (i, sample) in samples.iter().enumerate().take(s_end).skip(s_start) {
+                let v = (*sample).abs();
                 if v > peak_val {
                     peak_val = v;
                     peak_sample = i;
@@ -314,9 +314,9 @@ pub fn detect_chord_from_fft(
     let mut total_note_energy = 0.0f32;
     let mut total_full_energy = 0.0f32;
 
-    for b in 1..num_bins {
+    for (b, bin) in out_data.iter().enumerate().take(num_bins).skip(1) {
         let freq = b as f32 * sample_rate / window_size as f32;
-        let mag = (out_data[b].re * out_data[b].re + out_data[b].im * out_data[b].im).sqrt();
+        let mag = (bin.re * bin.re + bin.im * bin.im).sqrt();
         let energy = mag * mag;
         total_full_energy += energy;
 

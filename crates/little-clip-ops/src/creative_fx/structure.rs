@@ -46,9 +46,9 @@ pub fn compute_box_radii_3(sigma: f32) -> [usize; 3] {
     let m = m_ideal.round().clamp(0.0, 3.0) as usize;
 
     let mut radii = [0usize; 3];
-    for i in 0..3 {
+    for (i, radius) in radii.iter_mut().enumerate() {
         let w = if i < m { wl } else { wu };
-        radii[i] = w / 2;
+        (*radius) = w / 2;
     }
     radii
 }
@@ -83,11 +83,11 @@ fn box_blur_horizontal(
             }
             dst_row[0] = (sum * inv_w) as f32;
 
-            for x in 1..width {
+            for (x, output) in dst_row.iter_mut().enumerate().take(width).skip(1) {
                 let left_idx = ((x as isize) - r_i - 1).clamp(0, w_i - 1) as usize;
                 let right_idx = ((x as isize) + r_i).clamp(0, w_i - 1) as usize;
                 sum += (src_row[right_idx] as f64) - (src_row[left_idx] as f64);
-                dst_row[x] = (sum * inv_w) as f32;
+                (*output) = (sum * inv_w) as f32;
             }
         });
 }

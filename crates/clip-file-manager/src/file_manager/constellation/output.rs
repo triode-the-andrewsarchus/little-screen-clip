@@ -663,9 +663,11 @@ mod tests {
     fn live_threshold_and_ratio_change_linked_compression_without_restarting() {
         let (mixer, _source) = rodio::mixer::mixer(2.try_into().unwrap(), RATE.try_into().unwrap());
         let output = PadOutput::with_player(Player::connect_new(&mixer), false);
-        let mut bank = super::super::sample_pack::SamplePackBank::default();
-        bank.compressor_threshold_db = -20.0;
-        bank.compressor_ratio = 4.0;
+        let mut bank = super::super::sample_pack::SamplePackBank {
+            compressor_threshold_db: -20.0,
+            compressor_ratio: 4.0,
+            ..Default::default()
+        };
         output.set_dynamics(&bank);
         let mut glue = Glue::new(
             std::iter::empty::<f32>(),
@@ -702,11 +704,13 @@ mod tests {
     fn live_timing_controls_change_attack_and_release_envelopes() {
         let (player, _) = Player::new();
         let output = PadOutput::with_player(player, false);
-        let mut bank = super::super::sample_pack::SamplePackBank::default();
-        bank.compressor_threshold_db = -20.0;
-        bank.compressor_ratio = 4.0;
-        bank.compressor_attack_ms = 100.0;
-        bank.compressor_release_ms = 1000.0;
+        let mut bank = super::super::sample_pack::SamplePackBank {
+            compressor_threshold_db: -20.0,
+            compressor_ratio: 4.0,
+            compressor_attack_ms: 100.0,
+            compressor_release_ms: 1000.0,
+            ..Default::default()
+        };
         output.set_dynamics(&bank);
         let mut glue = Glue::new(
             std::iter::empty::<f32>(),

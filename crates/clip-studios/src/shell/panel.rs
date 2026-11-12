@@ -70,8 +70,10 @@ mod tests {
 
     #[test]
     fn right_panel_collapse_preserves_its_width() {
-        let mut state = PanelState::default();
-        state.right_width = 320.0;
+        let mut state = PanelState {
+            right_width: 320.0,
+            ..Default::default()
+        };
         state.toggle_right();
         assert_eq!(state.effective_right_width(), 0.0);
         state.toggle_right();

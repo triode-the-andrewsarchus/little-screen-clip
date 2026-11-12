@@ -21,7 +21,9 @@ impl Bits {
         }
         Some(Self {
             bytes: digits
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| (pair[0] * 16 + pair[1]) as u8)
                 .collect(),
             position: 0,

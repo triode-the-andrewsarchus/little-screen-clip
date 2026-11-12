@@ -176,12 +176,12 @@ pub(super) fn apply_trichromatic_cancellable(
 
                 // Compute source coordinates for all 3 channels
                 let mut src_coords = [(0.0_f32, 0.0_f32); 3];
-                for i in 0..3 {
+                for (i, src_coords_value) in src_coords.iter_mut().enumerate() {
                     let ch = &params.channels[i];
                     let z = ch.zoom.clamp(0.2, 5.0);
                     let xs = cx + (orig_x - cx - ch.offset_x) / z;
                     let ys = cy + (orig_y - cy - ch.offset_y) / z;
-                    src_coords[i] = (xs, ys);
+                    (*src_coords_value) = (xs, ys);
                 }
 
                 match params.mode {

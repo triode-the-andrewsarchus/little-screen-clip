@@ -704,7 +704,12 @@ impl MidiData {
                     let drum_samples = (drum_len * sample_rate as f32) as usize;
                     let end_sample = (start_sample + drum_samples).min(total_samples);
 
-                    for s in start_sample..end_sample {
+                    for (s, sample) in buffer
+                        .iter_mut()
+                        .enumerate()
+                        .take(end_sample)
+                        .skip(start_sample)
+                    {
                         let t = (s - start_sample) as f32 / sample_rate as f32;
                         rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
                         let noise = (rng_state as f32 / u32::MAX as f32) * 2.0 - 1.0;
@@ -744,7 +749,7 @@ impl MidiData {
                                 p.sin() * (-t * 18.0).exp() * 0.8
                             }
                         };
-                        buffer[s] += wave * vel_scale;
+                        (*sample) += wave * vel_scale;
                     }
                 }
                 InstrumentType::Bass => {
@@ -757,7 +762,12 @@ impl MidiData {
                     let attack_samples = (0.008 * sample_rate as f32) as usize;
                     let decay_samples = (0.06 * sample_rate as f32) as usize;
 
-                    for s in start_sample..end_sample {
+                    for (s, sample) in buffer
+                        .iter_mut()
+                        .enumerate()
+                        .take(end_sample)
+                        .skip(start_sample)
+                    {
                         let note_t = (s - start_sample) as f32 / sample_rate as f32;
                         let rel = s - start_sample;
 
@@ -776,7 +786,7 @@ impl MidiData {
                         let p = note_t * freq * std::f32::consts::TAU;
                         let wave = (p.sin() + 0.3 * (p * 2.0).sin() + 0.1 * (p * 3.0).sin())
                             .clamp(-1.0, 1.0);
-                        buffer[s] += wave * env * vel_scale * 1.1;
+                        (*sample) += wave * env * vel_scale * 1.1;
                     }
                 }
                 InstrumentType::Piano => {
@@ -788,7 +798,12 @@ impl MidiData {
 
                     let attack_samples = (0.004 * sample_rate as f32) as usize;
 
-                    for s in start_sample..end_sample {
+                    for (s, sample) in buffer
+                        .iter_mut()
+                        .enumerate()
+                        .take(end_sample)
+                        .skip(start_sample)
+                    {
                         let note_t = (s - start_sample) as f32 / sample_rate as f32;
                         let rel = s - start_sample;
 
@@ -803,7 +818,7 @@ impl MidiData {
                             + 0.5 * (p * 2.0).sin() * (-note_t * 4.5).exp()
                             + 0.25 * (p * 3.0).sin() * (-note_t * 6.0).exp()
                             + 0.12 * (p * 4.0).sin() * (-note_t * 8.0).exp();
-                        buffer[s] += wave * env * vel_scale * 0.9;
+                        (*sample) += wave * env * vel_scale * 0.9;
                     }
                 }
                 InstrumentType::StringsPad => {
@@ -815,7 +830,12 @@ impl MidiData {
 
                     let attack_samples = (0.12 * sample_rate as f32) as usize;
 
-                    for s in start_sample..end_sample {
+                    for (s, sample) in buffer
+                        .iter_mut()
+                        .enumerate()
+                        .take(end_sample)
+                        .skip(start_sample)
+                    {
                         let note_t = (s - start_sample) as f32 / sample_rate as f32;
                         let rel = s - start_sample;
 
@@ -833,7 +853,7 @@ impl MidiData {
                         let p2 = note_t * (freq * 1.002) * std::f32::consts::TAU;
                         let wave = 0.5 * (p1.sin() + p2.sin())
                             + 0.25 * ((p1 * 2.0).sin() + (p2 * 2.0).sin());
-                        buffer[s] += wave * env * vel_scale * 0.7;
+                        (*sample) += wave * env * vel_scale * 0.7;
                     }
                 }
                 InstrumentType::Organ => {
@@ -845,7 +865,12 @@ impl MidiData {
 
                     let attack_samples = (0.005 * sample_rate as f32) as usize;
 
-                    for s in start_sample..end_sample {
+                    for (s, sample) in buffer
+                        .iter_mut()
+                        .enumerate()
+                        .take(end_sample)
+                        .skip(start_sample)
+                    {
                         let note_t = (s - start_sample) as f32 / sample_rate as f32;
                         let rel = s - start_sample;
 
@@ -864,7 +889,7 @@ impl MidiData {
                             + 0.5 * (p * 2.0).sin()
                             + 0.3 * (p * 3.0).sin()
                             + 0.2 * (p * 4.0).sin();
-                        buffer[s] += wave * env * vel_scale * 0.6;
+                        (*sample) += wave * env * vel_scale * 0.6;
                     }
                 }
                 InstrumentType::GuitarPluck => {
@@ -876,7 +901,12 @@ impl MidiData {
 
                     let attack_samples = (0.002 * sample_rate as f32) as usize;
 
-                    for s in start_sample..end_sample {
+                    for (s, sample) in buffer
+                        .iter_mut()
+                        .enumerate()
+                        .take(end_sample)
+                        .skip(start_sample)
+                    {
                         let note_t = (s - start_sample) as f32 / sample_rate as f32;
                         let rel = s - start_sample;
 
@@ -888,7 +918,7 @@ impl MidiData {
 
                         let p = note_t * freq * std::f32::consts::TAU;
                         let wave = (p * 0.5).sin().signum() * 0.5 + p.sin() * 0.5;
-                        buffer[s] += wave * env * vel_scale * 0.8;
+                        (*sample) += wave * env * vel_scale * 0.8;
                     }
                 }
                 InstrumentType::LeadBrass => {
@@ -900,7 +930,12 @@ impl MidiData {
 
                     let attack_samples = (0.03 * sample_rate as f32) as usize;
 
-                    for s in start_sample..end_sample {
+                    for (s, sample) in buffer
+                        .iter_mut()
+                        .enumerate()
+                        .take(end_sample)
+                        .skip(start_sample)
+                    {
                         let note_t = (s - start_sample) as f32 / sample_rate as f32;
                         let rel = s - start_sample;
 
@@ -917,7 +952,7 @@ impl MidiData {
                         let p = note_t * freq * std::f32::consts::TAU;
                         let wave =
                             (2.0 * (p / std::f32::consts::TAU).fract() - 1.0) * 0.6 + p.sin() * 0.4;
-                        buffer[s] += wave * env * vel_scale * 0.75;
+                        (*sample) += wave * env * vel_scale * 0.75;
                     }
                 }
             }

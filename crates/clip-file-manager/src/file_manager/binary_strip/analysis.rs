@@ -182,7 +182,7 @@ fn summarize(
         file.read_exact(&mut buffer[..count])
             .map_err(|e| e.to_string())?;
         if uf2 && size / 512 <= 1_000_000 {
-            for block in buffer[..count].chunks_exact(512) {
+            for block in buffer[..count].as_chunks::<512>().0.iter() {
                 let payload = if word(block, 0) == Some(0x0a324655)
                     && word(block, 4) == Some(0x9e5d5157)
                     && word(block, 508) == Some(0x0ab16f30)
@@ -218,7 +218,7 @@ fn summarize(
     Ok((
         sums.into_iter()
             .zip(counts)
-            .map(|(sum, n)| if n == 0 { 0 } else { (sum / n) as u8 })
+            .map(|(sum, n)| sum.checked_div(n).unwrap_or(0) as u8)
             .collect(),
         format!("{:x}", hash.finalize()),
         payloads,

@@ -619,18 +619,13 @@ fn wide_rows_fit_without_horizontal_scrolling() {
         .expect("the final right-file ASCII byte should fit in the viewport");
     assert!(final_byte.0.x + final_byte.1.x <= screen_rect.max.x);
     assert!(
-        output.shapes.iter().any(|clipped| match &clipped.shape {
-            egui::Shape::Text(text)
-                if text.galley.text() == "00000000"
+        output.shapes.iter().any(|clipped| matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == "00000000"
                     && text.pos.x > final_byte.0.x
                     && clipped
                         .clip_rect
                         .contains_rect(
                             egui::Rect::from_min_size(text.pos, text.galley.size(),)
-                        ) =>
-                true,
-            _ => false,
-        }),
+                        ))),
         "the right file's row offset should remain visible after its final byte"
     );
 }

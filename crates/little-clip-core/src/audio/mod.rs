@@ -382,7 +382,7 @@ mod tests {
         let mut in_data = r2c.make_input_vec();
         let mut out_data = r2c.make_output_vec();
 
-        for i in 0..window_size {
+        for (i, input) in in_data.iter_mut().enumerate().take(window_size) {
             let t = i as f32 / sample_rate;
             let w = 0.5
                 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size - 1) as f32).cos());
@@ -390,7 +390,7 @@ mod tests {
                 + (t * e4 * 2.0 * std::f32::consts::PI).sin()
                 + (t * g4 * 2.0 * std::f32::consts::PI).sin())
                 * 0.33;
-            in_data[i] = s * w;
+            (*input) = s * w;
         }
         r2c.process(&mut in_data, &mut out_data).unwrap();
 
@@ -417,7 +417,7 @@ mod tests {
 
         // 2. Test A Minor chord: A3 (220.00 Hz) + C4 (261.63 Hz) + E4 (329.63 Hz)
         let a3 = 220.00f32;
-        for i in 0..window_size {
+        for (i, input) in in_data.iter_mut().enumerate().take(window_size) {
             let t = i as f32 / sample_rate;
             let w = 0.5
                 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size - 1) as f32).cos());
@@ -425,7 +425,7 @@ mod tests {
                 + (t * c4 * 2.0 * std::f32::consts::PI).sin()
                 + (t * e4 * 2.0 * std::f32::consts::PI).sin())
                 * 0.33;
-            in_data[i] = s * w;
+            (*input) = s * w;
         }
         r2c.process(&mut in_data, &mut out_data).unwrap();
 
@@ -648,8 +648,8 @@ mod tests {
         let sample_rate = 1000u32;
         let mut samples = vec![0.0f32; 3000]; // 3 seconds total
         // Add signal from 1.0s to 2.0s (frames 1000 to 2000)
-        for i in 1000..2000 {
-            samples[i] = 0.5;
+        for sample in samples.iter_mut().take(2000).skip(1000) {
+            (*sample) = 0.5;
         }
 
         let mut analysis = FullAudioAnalysis {

@@ -104,8 +104,10 @@ impl ScreenRenderer {
             } else {
                 1.5
             };
-            let mut stroke = Stroke::default();
-            stroke.width = stroke_width;
+            let stroke = Stroke {
+                width: stroke_width,
+                ..Default::default()
+            };
             let mut stroke_paint = Paint::default();
             stroke_paint.set_color(border_color);
             let path = PathBuilder::from_rect(cr);

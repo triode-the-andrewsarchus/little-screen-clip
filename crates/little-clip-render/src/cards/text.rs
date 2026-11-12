@@ -2,7 +2,6 @@ use super::*;
 
 impl ScreenRenderer {
     /// TrueType text width measurement with styling.
-
     pub(super) fn draw_markdown_spans(
         &self,
         pixmap: &mut Pixmap,

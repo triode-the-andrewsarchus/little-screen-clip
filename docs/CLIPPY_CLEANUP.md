@@ -4,7 +4,7 @@ The pass checks the default workspace configuration and every target with
 `cargo clippy --workspace --all-targets -- -D warnings`.
 
 - [x] Apply and review mechanical suggestions across workspace crates and local vendor patches: conditionals, redundant borrows, precision literals, arithmetic helpers and test-module placement. Replace the halftone radius's approximate square-root constant.
-- [ ] Review numeric loops, fixed-size decoding and explicit initialization.
+- [x] Review numeric loops, fixed-size decoding and explicit initialization. SIMD lane indexing and generic-associated chunk lengths retain function/loop-local expectations because the suggested iterators/array types do not express those operations correctly on stable Rust.
 - [ ] Simplify complex state types and review intentional API boundaries.
 - [ ] Resolve remaining UI, test and vendor diagnostics.
 - [ ] Run strict workspace Clippy, workspace tests, formatting and architecture comparison.

@@ -33,8 +33,8 @@ impl FileManager {
             BrowserView::List
         };
         if self.view == BrowserView::Constellation {
-            self.constellation
-                .check_and_load_folder(&self.path().to_path_buf());
+            let folder = self.path().to_path_buf();
+            self.constellation.check_and_load_folder(&folder);
         }
         let keep_constellation = self.view == BrowserView::Constellation
             && (!self.audio_entries.is_empty()

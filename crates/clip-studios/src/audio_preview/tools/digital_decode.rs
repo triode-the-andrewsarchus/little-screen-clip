@@ -12,7 +12,9 @@ use little_clip_ops::digital_decode::{
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
+#[cfg(test)]
+use std::sync::mpsc::TryRecvError;
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -227,11 +229,7 @@ impl AudioPreviewState {
             if self.digital_decode.in_progress {
                 ctx.request_repaint();
             }
-            loop {
-                let msg = match rx.try_recv() {
-                    Ok(msg) => msg,
-                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-                };
+            while let Ok(msg) = rx.try_recv() {
                 match msg {
                     DigitalDecodeMsg::Started => started = true,
                     DigitalDecodeMsg::Batch(batch) => {

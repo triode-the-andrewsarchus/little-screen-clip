@@ -586,7 +586,6 @@ impl ImagePreviewState {
 
     /// Split-view comparison painter for the Creative FX tab center canvas.
     #[allow(clippy::too_many_arguments)]
-
     pub(crate) fn render_creative_fx_comparison(
         &mut self,
         ui: &mut egui::Ui,

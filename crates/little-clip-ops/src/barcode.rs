@@ -75,8 +75,10 @@ fn rxing_detect(
         .map_err(|e| format!("Failed to create luminance source: {:?}", e))?;
     let mut bitmap = BinaryBitmap::new(HybridBinarizer::new(lum_source));
 
-    let mut hints = DecodeHints::default();
-    hints.TryHarder = Some(true);
+    let mut hints = DecodeHints {
+        TryHarder: Some(true),
+        ..Default::default()
+    };
 
     let mut formats = HashSet::new();
     formats.insert(BarcodeFormat::QR_CODE);

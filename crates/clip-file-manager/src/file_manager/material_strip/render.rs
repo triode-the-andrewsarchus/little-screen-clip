@@ -96,11 +96,11 @@ fn sphere(material: &Material, edge: u32, token: &AtomicBool) -> Option<ImageThu
                 let highlight = (-nx * 0.25 + ny * 0.36 + nz * 0.90)
                     .clamp(0.0, 1.0)
                     .powf(material.shininess.max(1.0));
-                for channel in 0..3 {
+                for (channel, component) in rgb.iter_mut().enumerate() {
                     let lit = (material.diffuse[channel] * (0.18 + 0.74 * diffuse)
                         + material.specular[channel] * highlight * 0.85)
                         .clamp(0.0, 1.0);
-                    rgb[channel] = lit * material.opacity + checker * (1.0 - material.opacity);
+                    (*component) = lit * material.opacity + checker * (1.0 - material.opacity);
                 }
             }
             let offset = ((y * edge + x) * 4) as usize;

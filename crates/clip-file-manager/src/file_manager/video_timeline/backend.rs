@@ -581,7 +581,9 @@ mod format_tests {
             assert!(
                 strip
                     .premultiplied_rgba
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .any(|pixel| pixel[0] != pixel[1])
             );
             metadata.source.check().unwrap();

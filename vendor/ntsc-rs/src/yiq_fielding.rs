@@ -747,6 +747,10 @@ impl<'a> YiqView<'a> {
         assert!(blit_info.rect.height() + blit_info.destination.1 <= self.dimensions.1);
 
         #[inline(always)]
+        #[expect(
+            clippy::chunks_exact_to_as_chunks,
+            reason = "generic associated chunk lengths cannot be array lengths on stable Rust"
+        )]
         fn write_single_row_simd_inner<S: Simd, P: PixelFormat, T: Normalize, F: PixelTransform>(
             simd: S,
             view: &YiqView,
@@ -1167,10 +1171,10 @@ mod tests {
                     );
                     return SENT;
                 }
-                for px in row.chunks_exact(4) {
-                    for c in 0..3 {
+                for px in row.as_chunks::<4>().0.iter() {
+                    for px_value in px.iter().take(3) {
                         assert!(
-                            (px[c] - row[0]).abs() <= 0.01,
+                            ((*px_value) - row[0]).abs() <= 0.01,
                             "output row not uniform gray: {row:?}"
                         );
                     }
@@ -1841,7 +1845,7 @@ mod tests {
         );
         for (r, &v) in row_values(height).iter().enumerate() {
             let row = &out[r * row_len..(r + 1) * row_len];
-            for px in row[..W * 4].chunks_exact(4) {
+            for px in row[..W * 4].as_chunks::<4>().0.iter() {
                 for c in 0..3 {
                     assert!(
                         (px[c] - v).abs() <= 0.01,
@@ -1941,7 +1945,7 @@ mod tests {
                 .iter()
                 .map(|v| unsafe { v.assume_init() })
                 .collect();
-            for px in row_data.chunks_exact(4) {
+            for px in row_data.as_chunks::<4>().0.iter() {
                 for c in 0..3 {
                     assert!(
                         (px[c] - expected).abs() <= 0.01,

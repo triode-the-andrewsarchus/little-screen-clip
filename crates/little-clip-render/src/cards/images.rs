@@ -70,8 +70,10 @@ impl ScreenRenderer {
 
                 let mut sp = Paint::default();
                 sp.set_color(self.color_from_hex(&self.palette.harmonies.base));
-                let mut stroke = Stroke::default();
-                stroke.width = 1.0;
+                let stroke = Stroke {
+                    width: 1.0,
+                    ..Default::default()
+                };
                 let path = PathBuilder::from_rect(card_r);
                 pixmap.stroke_path(&path, &sp, &stroke, Transform::identity(), None);
             }
@@ -197,8 +199,10 @@ impl ScreenRenderer {
                 bg_paint.set_color(self.color_from_hex(&self.palette.colors.surface_recessed));
                 pixmap.fill_rect(cr, &bg_paint, Transform::identity(), None);
 
-                let mut stroke = Stroke::default();
-                stroke.width = 1.0;
+                let stroke = Stroke {
+                    width: 1.0,
+                    ..Default::default()
+                };
                 let mut sp = Paint::default();
                 sp.set_color(self.color_from_hex(&self.palette.colors.surface_panel));
                 let path = PathBuilder::from_rect(cr);
@@ -272,8 +276,10 @@ impl ScreenRenderer {
                 bp.set_color(overlay_bg);
                 pixmap.fill_rect(br, &bp, Transform::identity(), None);
 
-                let mut stroke = Stroke::default();
-                stroke.width = 1.5;
+                let stroke = Stroke {
+                    width: 1.5,
+                    ..Default::default()
+                };
                 let mut sp = Paint::default();
                 sp.set_color(border_color);
                 let path = PathBuilder::from_rect(br);
@@ -419,8 +425,10 @@ impl ScreenRenderer {
 
                 let mut sp = Paint::default();
                 sp.set_color(self.color_from_hex(&self.palette.colors.surface_panel));
-                let mut stroke = Stroke::default();
-                stroke.width = 1.0;
+                let stroke = Stroke {
+                    width: 1.0,
+                    ..Default::default()
+                };
                 let path = PathBuilder::from_rect(card_r);
                 pixmap.stroke_path(&path, &sp, &stroke, Transform::identity(), None);
             }

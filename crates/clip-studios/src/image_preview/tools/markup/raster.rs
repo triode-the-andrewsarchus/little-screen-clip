@@ -31,9 +31,11 @@ pub fn rasterize_markup(base: &RgbaImage, items: &[MarkupShape]) -> RgbaImage {
                 let ex = end.x * w as f32;
                 let ey = end.y * h as f32;
 
-                let mut stroke = tiny_skia::Stroke::default();
-                stroke.width = *width;
-                stroke.line_cap = tiny_skia::LineCap::Round;
+                let stroke = tiny_skia::Stroke {
+                    width: *width,
+                    line_cap: tiny_skia::LineCap::Round,
+                    ..Default::default()
+                };
 
                 let mut pb = tiny_skia::PathBuilder::new();
                 pb.move_to(sx, sy);
@@ -87,9 +89,11 @@ pub fn rasterize_markup(base: &RgbaImage, items: &[MarkupShape]) -> RgbaImage {
                 let ex = end.x * w as f32;
                 let ey = end.y * h as f32;
 
-                let mut stroke = tiny_skia::Stroke::default();
-                stroke.width = *width;
-                stroke.line_cap = tiny_skia::LineCap::Round;
+                let stroke = tiny_skia::Stroke {
+                    width: *width,
+                    line_cap: tiny_skia::LineCap::Round,
+                    ..Default::default()
+                };
 
                 let mut pb = tiny_skia::PathBuilder::new();
                 pb.move_to(sx, sy);
@@ -182,8 +186,10 @@ pub fn rasterize_markup(base: &RgbaImage, items: &[MarkupShape]) -> RgbaImage {
                             None,
                         );
                     } else {
-                        let mut stroke = tiny_skia::Stroke::default();
-                        stroke.width = *width;
+                        let stroke = tiny_skia::Stroke {
+                            width: *width,
+                            ..Default::default()
+                        };
                         pixmap.stroke_path(
                             &path,
                             &paint,
@@ -234,8 +240,10 @@ pub fn rasterize_markup(base: &RgbaImage, items: &[MarkupShape]) -> RgbaImage {
                         None,
                     );
 
-                    let mut stroke = tiny_skia::Stroke::default();
-                    stroke.width = (badge_rad * 0.1_f32).clamp(1.5_f32, 16.0_f32);
+                    let stroke = tiny_skia::Stroke {
+                        width: (badge_rad * 0.1_f32).clamp(1.5_f32, 16.0_f32),
+                        ..Default::default()
+                    };
                     let mut border_paint = tiny_skia::Paint::default();
                     border_paint.set_color_rgba8(255, 255, 255, 220);
                     pixmap.stroke_path(
@@ -291,8 +299,10 @@ pub fn rasterize_markup(base: &RgbaImage, items: &[MarkupShape]) -> RgbaImage {
                             None,
                         );
 
-                        let mut stroke = tiny_skia::Stroke::default();
-                        stroke.width = 1.5;
+                        let stroke = tiny_skia::Stroke {
+                            width: 1.5,
+                            ..Default::default()
+                        };
                         let mut stroke_paint = tiny_skia::Paint::default();
                         stroke_paint.set_color_rgba8(75, 75, 75, 255);
                         let border_path = tiny_skia::PathBuilder::from_rect(box_rect);

@@ -354,8 +354,10 @@ impl ScreenRenderer {
             paint.set_color(bg_color);
             pixmap.fill_rect(rect, &paint, Transform::identity(), None);
 
-            let mut stroke = Stroke::default();
-            stroke.width = 1.0;
+            let stroke = Stroke {
+                width: 1.0,
+                ..Default::default()
+            };
             let mut stroke_paint = Paint::default();
             stroke_paint.set_color(border_color);
             let path = PathBuilder::from_rect(rect);
@@ -428,8 +430,10 @@ impl ScreenRenderer {
         bg_paint.set_color(bg_color);
         pixmap.fill_rect(rect, &bg_paint, Transform::identity(), None);
 
-        let mut border_stroke = Stroke::default();
-        border_stroke.width = 1.0;
+        let border_stroke = Stroke {
+            width: 1.0,
+            ..Default::default()
+        };
         let mut border_paint = Paint::default();
         let border_color = self.color_from_hex(&self.palette.colors.surface_panel);
         border_paint.set_color(border_color);
