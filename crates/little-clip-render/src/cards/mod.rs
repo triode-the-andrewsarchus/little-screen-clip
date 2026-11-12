@@ -273,10 +273,12 @@ impl ScreenRenderer {
                             .extension()
                             .and_then(|value| value.to_str())
                             .filter(|extension| {
-                                little_clip_core::diagram::Format::from_source_extension(
-                                    extension, text,
-                                )
-                                .is_none()
+                                little_clip_core::syntax::map_extension_to_language(extension)
+                                    .is_some()
+                                    && little_clip_core::diagram::Format::from_source_extension(
+                                        extension, text,
+                                    )
+                                    .is_none()
                             }),
                     ),
                 };

@@ -593,6 +593,12 @@ mod tests {
                 Format::Mermaid,
                 "flowchart LR\nA-->B\n",
             ),
+            (
+                "",
+                "box \"file.example\"; arrow; circle",
+                Format::Pikchr,
+                "box \"file.example\"; arrow; circle",
+            ),
             ("md", "```d2\na -> b\n```", Format::D2, "a -> b\n"),
             ("d2", "a -> b\n", Format::D2, "a -> b\n"),
             (
