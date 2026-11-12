@@ -20,6 +20,7 @@ enum Mode {
 /// Owns a guarded UTF-8 source editor and its live previews.
 pub struct TextSession {
     pub preview: TextPreviewState,
+    close: Option<CloseRequest>,
     mode: Mode,
     editor: Option<Editor>,
     diagram: Option<(
@@ -27,22 +28,38 @@ pub struct TextSession {
         crate::diagram_preview::Preview,
     )>,
 }
+#[derive(Default)]
+struct CloseRequest {
+    requested: bool,
+    discard: bool,
+    window: bool,
+}
+
 struct SavedText {
     source: FileSource,
     path: PathBuf,
     text: String,
     preview: Option<TextPreviewState>,
 }
+enum Delivery {
+    Saved(Box<SavedText>),
+    Copied {
+        text: String,
+        preview: Option<Box<TextPreviewState>>,
+    },
+}
+
 struct Editor {
     text: String,
     saved: String,
-    source: FileSource,
+    source: Option<FileSource>,
     path: PathBuf,
     name: String,
     save_as: bool,
+    directory: String,
     error: Option<String>,
     config: little_clip_core::AppConfig,
-    pending: Option<mpsc::Receiver<Result<Result<SavedText, String>, JobError>>>,
+    pending: Option<mpsc::Receiver<Result<Result<Delivery, String>, JobError>>>,
 }
 impl TextSession {
     pub fn load(path: &Path, config: &little_clip_core::AppConfig) -> Result<Self, String> {
@@ -63,10 +80,13 @@ impl TextSession {
                 Editor {
                     saved: text.clone(),
                     text,
-                    source,
+                    source: Some(source),
                     path: path.to_path_buf(),
                     name,
                     save_as: false,
+                    directory: little_clip_core::path_address::display_path(
+                        path.parent().unwrap_or(Path::new(".")),
+                    ),
                     error: None,
                     config: config.clone(),
                     pending: None,
@@ -76,7 +96,7 @@ impl TextSession {
             None
         };
         if let Some(editor) = &editor
-            && FileSource::capture(path)? != editor.source
+            && Some(FileSource::capture(path)?) != editor.source
         {
             return Err("Text changed while opening; open it again.".into());
         }
@@ -86,6 +106,7 @@ impl TextSession {
         let format = little_clip_core::diagram::Format::from_source_path(path, source);
         Ok(Self {
             preview,
+            close: None,
             mode: if format.is_some() {
                 Mode::Diagram
             } else {
@@ -95,6 +116,59 @@ impl TextSession {
             diagram: format.map(|format| (format, Default::default())),
         })
     }
+    /// Creates an unsaved source session for a conservatively recognized snippet.
+    ///
+    /// The exact source is retained, including its BOM and line endings.
+    /// Unrecognized text returns `None` for the host's ordinary text viewer.
+    pub fn from_clipboard(
+        content: std::sync::Arc<String>,
+        title: Option<String>,
+        config: &little_clip_core::AppConfig,
+    ) -> Option<Self> {
+        let format = little_clip_core::diagram::Format::from_snippet(&content)?;
+        let extension = format.source_extension()?;
+        let preview = TextPreviewState::from_data(
+            crate::text_preview::TextPreviewData::from_source(content.clone(), Some(extension)),
+            title,
+            config,
+        );
+        Some(Self {
+            preview,
+            close: Some(Default::default()),
+            mode: Mode::Diagram,
+            diagram: Some((format, Default::default())),
+            editor: Some(Editor {
+                text: content.as_str().to_owned(),
+                saved: content.as_str().to_owned(),
+                source: None,
+                path: PathBuf::from(format!("clipboard.{extension}")),
+                name: format!("clipboard.{extension}"),
+                save_as: false,
+                directory: little_clip_core::path_address::display_path(
+                    &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                ),
+                error: None,
+                config: config.clone(),
+                pending: None,
+            }),
+        })
+    }
+
+    /// Requests leaving without discarding a draft or accepted write.
+    ///
+    /// A `false` result requires retaining this owner. Its UI offers save,
+    /// discard and cancel after any accepted write finishes.
+    pub fn request_close(&mut self) -> bool {
+        if self.busy() {
+            return false;
+        }
+        if !self.dirty() || self.close.as_ref().is_some_and(|close| close.discard) {
+            return true;
+        }
+        self.close.get_or_insert_default().requested = true;
+        false
+    }
+
     pub fn from_markdown(
         path: &Path,
         markdown: String,
@@ -106,6 +180,7 @@ impl TextSession {
         preview.view_mode = crate::text_preview::TextViewMode::RenderedMarkdown;
         Self {
             preview,
+            close: None,
             mode: Mode::Preview,
             editor: None,
             diagram: None,
@@ -118,7 +193,9 @@ impl TextSession {
         )
     }
     pub fn file_source(&self) -> Option<FileSource> {
-        self.editor.as_ref().map(|editor| editor.source.clone())
+        self.editor
+            .as_ref()
+            .and_then(|editor| editor.source.clone())
     }
     pub fn relocate_file(&mut self, path: PathBuf, source: FileSource) {
         self.preview.title = path
@@ -129,7 +206,7 @@ impl TextSession {
         self.preview.path = Some(path.clone());
         if let Some(editor) = &mut self.editor {
             editor.path = path;
-            editor.source = source;
+            editor.source = Some(source);
         }
     }
     pub fn dirty(&self) -> bool {
@@ -143,6 +220,104 @@ impl TextSession {
             .is_some_and(|editor| editor.pending.is_some())
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
+        let was_busy = self.busy();
+        if self.close.is_some()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            if let Some(editor) = &mut self.editor
+                && editor.save_as
+            {
+                editor.save_as = false;
+            } else if self.close.as_ref().is_some_and(|request| request.requested) {
+                self.close = Some(Default::default());
+            } else {
+                *close = true;
+            }
+        }
+        self.render_editor(ui, palette, close);
+        if self.close.is_some() {
+            // A close requested during delivery must not hide its failure, even
+            // when the original clipboard source itself had no unsaved changes.
+            if was_busy
+                && !self.busy()
+                && self
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.error.is_some())
+            {
+                self.close = Some(Default::default());
+                *close = false;
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            } else {
+                self.service_close(ui, palette, close);
+            }
+        }
+    }
+
+    fn service_close(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
+        let window = ui.ctx().input(|input| input.viewport().close_requested());
+        if let Some(request) = &mut self.close {
+            request.window |= window;
+            request.requested |= window || *close;
+        }
+        if self.busy() {
+            *close = false;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ui.ctx().request_repaint_after(Duration::from_millis(30));
+            return;
+        }
+        if !self.close.as_ref().is_some_and(|request| request.requested) {
+            return;
+        }
+        if self.request_close() {
+            *close = true;
+            if self.close.as_ref().is_some_and(|request| request.window) {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            return;
+        }
+        *close = false;
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        if !self.editor.as_ref().is_some_and(|editor| editor.save_as) {
+            self.discard_dialog(ui.ctx(), palette);
+        }
+    }
+
+    fn discard_dialog(&mut self, ctx: &egui::Context, palette: &AppPalette) {
+        egui::Window::new("Keep source changes?")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Save or copy your edited source before leaving, or discard the changes.");
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(ButtonRole::Primary.button("Save…", palette))
+                        .clicked()
+                        && let Some(editor) = &mut self.editor
+                    {
+                        editor.request_save();
+                    }
+                    if ui
+                        .add(ButtonRole::Destructive.button("Discard", palette))
+                        .clicked()
+                        && let Some(request) = &mut self.close
+                    {
+                        request.discard = true;
+                    }
+                    if ui
+                        .add(ButtonRole::Secondary.button("Keep editing", palette))
+                        .clicked()
+                    {
+                        self.close = Some(Default::default());
+                    }
+                });
+            });
+    }
+
+    fn render_editor(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
         let ctx = ui.ctx().clone();
         if let Some(editor) = &mut self.editor {
             if let Some(preview) = editor.poll(&ctx) {
@@ -187,7 +362,17 @@ impl TextSession {
             }
         }
         if self.dirty() {
-            ui.label("Preview shows the last saved version. Edit text shows your draft.");
+            ui.label(
+                if self
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.source.is_some())
+                {
+                    "Preview shows the last saved version. Edit text shows your draft."
+                } else {
+                    "Preview shows the last copied version. Edit text shows your draft."
+                },
+            );
         }
         self.preview.render_ui(ui, &ctx, palette, close);
     }
@@ -205,12 +390,19 @@ impl Editor {
         };
         self.pending = None;
         match result {
-            Ok(saved) => {
-                self.source = saved.source;
+            Ok(Delivery::Saved(saved)) => {
+                self.source = Some(saved.source);
                 self.path = saved.path;
                 self.saved = saved.text;
                 self.error = None;
                 saved.preview
+            }
+            Ok(Delivery::Copied { text, preview }) => {
+                if self.source.is_none() {
+                    self.saved = text;
+                }
+                self.error = None;
+                preview.map(|preview| *preview)
             }
             Err(error) => {
                 self.error = Some(error);
@@ -218,6 +410,40 @@ impl Editor {
             }
         }
     }
+    fn copy_source(&mut self, copy: impl FnOnce(&str) -> Result<(), String> + Send + 'static) {
+        if self.pending.is_some() {
+            return;
+        }
+        let text = self.text.clone();
+        let clipboard = self.source.is_none();
+        let path = self.path.clone();
+        let config = self.config.clone();
+        let (_, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
+            copy(&text)?;
+            let preview = clipboard.then(|| {
+                Box::new(TextPreviewState::from_data(
+                    crate::text_preview::TextPreviewData::from_source(
+                        std::sync::Arc::new(text.clone()),
+                        path.extension().and_then(|extension| extension.to_str()),
+                    ),
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().into_owned()),
+                    &config,
+                ))
+            });
+            Ok(Delivery::Copied { text, preview })
+        });
+        self.pending = Some(receiver);
+    }
+
+    fn request_save(&mut self) {
+        if self.source.is_some() {
+            self.save(self.path.clone());
+        } else {
+            self.save_as = true;
+        }
+    }
+
     fn save(&mut self, path: PathBuf) {
         if self.pending.is_some() {
             return;
@@ -230,14 +456,28 @@ impl Editor {
         let source = self.source.clone();
         let config = self.config.clone();
         let (_, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
-            let source = source.write(&path, text.as_bytes())?;
+            let source = if let Some(source) = source {
+                source.write(&path, text.as_bytes())?
+            } else {
+                let directory = little_clip_core::kernel_interface::pin_content_directory(
+                    path.parent().unwrap_or(Path::new(".")),
+                )
+                .map_err(|error| error.to_string())?;
+                let installed = little_clip_core::file_source::create_file_in(
+                    &path,
+                    text.as_bytes(),
+                    &directory,
+                )?;
+                FileSource::capture_file(&installed)?
+            };
+            let path = source.path().to_path_buf();
             let preview = TextPreviewState::from_file(&path, &config);
-            Ok(SavedText {
+            Ok(Delivery::Saved(Box::new(SavedText {
                 source,
                 path,
                 text,
                 preview,
-            })
+            })))
         });
         self.pending = Some(receiver);
     }
@@ -289,13 +529,25 @@ impl Editor {
                 )
                 .clicked()
             {
-                self.save(self.path.clone());
+                self.request_save();
             }
             if ui
                 .add(ButtonRole::Secondary.button("Save As…", palette))
                 .clicked()
             {
                 self.save_as = true;
+            }
+            if ui
+                .add_enabled(
+                    self.pending.is_none(),
+                    ButtonRole::Secondary.button("Copy source", palette),
+                )
+                .clicked()
+            {
+                self.copy_source(|text| {
+                    little_clip_core::copy_text_to_system_clipboard(text)
+                        .map_err(|error| error.to_string())
+                });
             }
             if self.text != self.saved {
                 ui.label("Unsaved changes");
@@ -305,7 +557,7 @@ impl Editor {
             }
         });
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::S)) {
-            self.save(self.path.clone());
+            self.request_save();
         }
         if let Some(error) = &self.error {
             ui.label(error);
@@ -323,13 +575,12 @@ impl Editor {
             self.source_ui(ui, palette, syntax_format);
         }
         if self.save_as {
-            egui::Window::new("Save text beside source")
+            egui::Window::new("Save source to a new file")
                 .collapsible(false)
                 .resizable(false)
                 .show(ui.ctx(), |ui| {
-                    ui.label(little_clip_core::path_address::display_path(
-                        self.path.parent().unwrap_or(Path::new(".")),
-                    ));
+                    ui.label("Existing destination directory");
+                    ui.text_edit_singleline(&mut self.directory);
                     ui.label("Choose a new, unused filename.");
                     ui.text_edit_singleline(&mut self.name);
                     ui.horizontal(|ui| {
@@ -337,13 +588,16 @@ impl Editor {
                             .add(ButtonRole::Primary.button("Create file", palette))
                             .clicked()
                         {
-                            if little_clip_core::path_address::decode_file_name(&self.name).is_ok()
-                            {
-                                let path = self.path.with_file_name(&self.name);
-                                self.save(path);
-                                self.save_as = false;
-                            } else {
-                                self.error = Some("Enter a single filename.".into());
+                            match little_clip_core::path_address::decode_path(&self.directory)
+                                .and_then(|directory| {
+                                    little_clip_core::path_address::decode_file_name(&self.name)
+                                        .map(|name| directory.join(name))
+                                }) {
+                                Ok(path) => {
+                                    self.save(path);
+                                    self.save_as = false;
+                                }
+                                Err(error) => self.error = Some(error),
                             }
                         }
                         if ui
@@ -358,6 +612,22 @@ impl Editor {
     }
 }
 
+/// Supplies an owned copy gate for host lifecycle tests without using a clipboard.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn hold_clipboard_copy_for_test(session: &mut TextSession) -> mpsc::Sender<()> {
+    let (release, wait) = mpsc::channel();
+    session
+        .editor
+        .as_mut()
+        .expect("source fixture is editable")
+        .copy_source(move |_| {
+            wait.recv_timeout(Duration::from_secs(10))
+                .map_err(|error| error.to_string())
+        });
+    release
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +639,283 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    fn clipboard_graph(draft: &str) -> TextSession {
+        let mut session = TextSession::from_clipboard(
+            std::sync::Arc::new("digraph { a -> b }".into()),
+            None,
+            &Default::default(),
+        )
+        .unwrap();
+        session.editor.as_mut().unwrap().text = draft.into();
+        session
+    }
+
+    fn editor_frame(
+        context: &egui::Context,
+        session: &mut TextSession,
+        close: &mut bool,
+        input: egui::RawInput,
+    ) -> egui::FullOutput {
+        context.run(input, |context| {
+            egui::CentralPanel::default()
+                .show(context, |ui| session.ui(ui, &Default::default(), close));
+        })
+    }
+
+    #[test]
+    fn clipboard_diagrams_retain_exact_source_and_first_save_requires_a_destination() {
+        let source = std::sync::Arc::new("\u{feff}digraph { a -> b }\r\n".to_owned());
+        let mut session = TextSession::from_clipboard(
+            source.clone(),
+            Some("Clipboard graph".into()),
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(session.preview.path.is_none());
+        assert!(session.file_source().is_none());
+        assert_eq!(session.preview.content.as_str(), source.as_str());
+        assert!(session.mode == Mode::Diagram);
+        let editor = session.editor.as_mut().unwrap();
+        assert_eq!(&editor.text, source.as_ref());
+        assert_eq!(editor.name, "clipboard.gv");
+        editor.text = "digraph { a -> c }".into();
+        editor.request_save();
+        assert!(editor.save_as);
+        assert!(editor.pending.is_none());
+        assert!(session.dirty());
+        assert!(!session.request_close());
+        assert!(session.close.as_ref().unwrap().requested);
+        assert!(
+            TextSession::from_clipboard(
+                std::sync::Arc::new("ordinary text".into()),
+                None,
+                &Default::default()
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn clipboard_first_save_is_atomic_no_overwrite_and_then_tracks_file_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("graph.gv");
+        let mut session = clipboard_graph("digraph { a -> b }");
+        let editor = session.editor.as_mut().unwrap();
+        editor.text = "digraph { a -> c }".into();
+        std::fs::write(&destination, "existing source").unwrap();
+        editor.save(destination.clone());
+        wait_for_save(editor, &egui::Context::default());
+        assert!(editor.error.is_some());
+        assert!(editor.source.is_none());
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            "existing source"
+        );
+        let unused = directory.path().join("new.gv");
+        editor.save(unused.clone());
+        assert!(session.busy());
+        assert!(!session.request_close());
+        let editor = session.editor.as_mut().unwrap();
+        wait_for_save(editor, &egui::Context::default());
+        assert!(editor.error.is_none(), "{:?}", editor.error);
+        assert!(editor.source.is_some());
+        assert_eq!(editor.path, unused);
+        assert_eq!(
+            std::fs::read_to_string(&unused).unwrap(),
+            "digraph { a -> c }"
+        );
+        assert!(!session.dirty());
+        assert!(session.request_close());
+    }
+
+    #[test]
+    fn clipboard_copy_delivers_owned_snapshots_and_retains_newer_edits_until_close() {
+        let mut session = clipboard_graph("digraph { a -> b }");
+        let captured = "digraph { a -> c }";
+        session.editor.as_mut().unwrap().text = captured.into();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        session.editor.as_mut().unwrap().copy_source(move |text| {
+            started_tx.send(text.to_owned()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok(())
+        });
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            captured
+        );
+        session
+            .editor
+            .as_mut()
+            .unwrap()
+            .text
+            .push_str(" // newer draft");
+        assert!(session.busy());
+        assert!(!session.request_close());
+        let context = egui::Context::default();
+        let mut close = false;
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let output = editor_frame(&context, &mut session, &mut close, input);
+        assert!(!close);
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
+        );
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let preview = loop {
+            if let Some(preview) = session.editor.as_mut().unwrap().poll(&context) {
+                break preview;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        assert_eq!(preview.content.as_str(), captured);
+        assert!(
+            session
+                .editor
+                .as_ref()
+                .unwrap()
+                .text
+                .ends_with("// newer draft")
+        );
+        assert!(session.dirty());
+        assert!(!session.request_close());
+        session.close.as_mut().unwrap().discard = true;
+        let output = editor_frame(
+            &context,
+            &mut session,
+            &mut close,
+            egui::RawInput::default(),
+        );
+        assert!(close);
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Close))
+        );
+    }
+
+    #[test]
+    fn failed_delivery_keeps_an_unchanged_source_open_to_report_the_error() {
+        let mut session = clipboard_graph("digraph { a -> b }");
+        session
+            .editor
+            .as_mut()
+            .unwrap()
+            .copy_source(|_| Err("clipboard unavailable".into()));
+        session.close = Some(CloseRequest {
+            requested: true,
+            window: true,
+            discard: false,
+        });
+        assert!(!session.dirty());
+        let context = egui::Context::default();
+        let mut close = false;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let output = editor_frame(
+                &context,
+                &mut session,
+                &mut close,
+                egui::RawInput::default(),
+            );
+            assert!(!close);
+            if !session.busy() {
+                assert!(
+                    output.viewport_output[&egui::ViewportId::ROOT]
+                        .commands
+                        .iter()
+                        .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
+                );
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(
+            session.editor.as_ref().unwrap().error.as_deref(),
+            Some("clipboard unavailable")
+        );
+        assert!(!session.close.as_ref().unwrap().requested);
+        // A fresh explicit close is still allowed after the failure is shown.
+        assert!(session.request_close());
+    }
+
+    #[test]
+    fn copy_failure_keeps_clipboard_drafts_and_copying_files_does_not_mark_them_saved() {
+        let mut session = clipboard_graph("digraph { a -> b } // changed");
+        let context = egui::Context::default();
+        let editor = session.editor.as_mut().unwrap();
+        editor.copy_source(|_| Err("clipboard unavailable".into()));
+        wait_for_save(editor, &context);
+        assert_eq!(editor.error.as_deref(), Some("clipboard unavailable"));
+        assert!(session.dirty());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.gv");
+        std::fs::write(&path, "digraph { a -> b }").unwrap();
+        let mut session = TextSession::load(&path, &Default::default()).unwrap();
+        let editor = session.editor.as_mut().unwrap();
+        editor.text.push_str(" // changed");
+        editor.copy_source(|_| Ok(()));
+        wait_for_save(editor, &context);
+        assert!(editor.error.is_none());
+        assert!(session.dirty());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "digraph { a -> b }"
+        );
+    }
+
+    #[test]
+    fn clipboard_escape_cancels_nested_dialogs_and_protects_unsaved_drafts() {
+        let mut session = clipboard_graph("digraph { a -> b } // changed");
+        let context = egui::Context::default();
+        let mut close = false;
+        let frame = |session: &mut TextSession, close: &mut bool| {
+            editor_frame(
+                &context,
+                session,
+                close,
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+            )
+        };
+        let output = frame(&mut session, &mut close);
+        assert!(!close);
+        assert!(session.dirty());
+        assert!(session.close.as_ref().unwrap().requested);
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
+        );
+        frame(&mut session, &mut close);
+        assert!(!session.close.as_ref().unwrap().requested);
+        session.editor.as_mut().unwrap().save_as = true;
+        frame(&mut session, &mut close);
+        assert!(!session.editor.as_ref().unwrap().save_as);
+        assert!(!close);
     }
 
     #[test]

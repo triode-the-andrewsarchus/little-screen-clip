@@ -67,3 +67,14 @@ source -> compiler -> scene -> preview
 ```
 
 `order.bpmn` also demonstrates authored coordinates and namespace-qualified colors.
+
+## Clipboard sources
+
+Copy a complete raw diagram from one of these code blocks to preview it on the
+little screen, then open the captured text to edit its source with a live preview.
+Distinctive Mermaid/DOT/BPMN headers, quoted Pikchr shapes, Lini declarations,
+D2 direction headers with edges and closed SvgBob boxes are recognized. Ambiguous
+edge-only D2 stays text; use a `.d2` file or Markdown fence to select that syntax.
+Incomplete or failed inferred renders stay readable text on the little screen.
+Use Copy source to publish edits, or Save As to create a new file in an existing
+directory. Original clipboard bytes are retained until explicitly edited.

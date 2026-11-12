@@ -71,15 +71,15 @@ useful direct manipulation when practical; difficult graphical editors can be
 improved later. D2 source editing is sufficient for now. Keep the complete format
 coverage checklist; these priorities do not remove any requested renderer.
 
-- [ ] Add best-effort diagram recognition for text-only clipboard items in the
-  little-screen preview and when opening that captured text in an editor.
-- [ ] Reuse shared format identities, parser/renderer workers and editor sessions;
+- [x] Add best-effort recognition and editor opening for text-only clipboard
+  items in the implemented families; extend signatures as new adapters land.
+- [x] Reuse shared format identities, parser/renderer workers and editor sessions;
   do not create another clipboard payload or save implementation.
-- [ ] Use bounded, conservative content signatures, not merely punctuation or
+- [x] Use bounded, conservative content signatures, not merely punctuation or
   ambiguous words. Preserve the exact clipboard source.
-- [ ] Render complete recognized snippets; incomplete/unrenderable candidates
+- [x] Render complete recognized snippets; incomplete/unrenderable candidates
   fall back to text, with syntax highlighting when recognition permits it.
-- [ ] Verify ordinary prose/code, partial input, parser failure, source limits,
+- [x] Verify ordinary prose/code, partial input, parser failure, source limits,
   repeated clipboard changes, and opening an unsaved snippet in its editor.
 
 ## Front matter decision and validation
@@ -659,3 +659,51 @@ nonblocking delivery helper with no response deadline for accepted writes.
 This preparatory commit does not yet route clipboard text to the editor.
 Validation: all four relocated editor tests and the core filename test pass;
 file-manager all-target checks and workspace/all-target strict Clippy pass.
+
+
+## Opening and delivering clipboard sources
+
+Recognized clipboard diagrams now open the shared source editor on the existing
+background text-load path. Ordinary/oversized/unrecognized text retains the
+normal text viewer, and raw diagrams take precedence over delimiter-based table
+inference. The editable source retains the original BOM and line endings; no
+surrogate file is created. The existing source/live-preview/error presentation is
+used for incomplete candidates too, keeping their text editable when rendering
+fails. File-manager navigation still belongs to its own crate.
+
+Clipboard Save opens Save As with an existing output directory and unused filename;
+first creation uses core's held-directory atomic no-overwrite writer. Subsequent
+writes retain FileSource identity checks. Save As decodes reversible directory and
+filename addresses, and saved identity/path come from the installed handle. Copy
+source uses core's clipboard transport on an owned background job. It publishes the
+captured text, not later keystrokes. Successful clipboard delivery advances that
+snapshot/preview; copying a file-backed draft does not mark the disk file saved.
+Failures retain drafts and report an error, including completion failures received
+while a close was pending. Accepted writes/copies retain unbounded delivery owners
+and block close/replacement until completion. Dirty sessions offer save/discard/
+keep-editing; Escape dismisses nested dialogs before leaving the editor.
+
+Host lifecycle fixtures use the studio's explicit `test-support` copy gate rather
+than touching the real system clipboard. Tests cover byte retention, first-save
+policy, existing destinations, source identity, queued/cancelled text loads,
+changed clipboard snapshots, owned delivery, newer edits during copying, copy
+failure, file-draft cleanliness, nested Escape and window-close cancellation.
+Graphical editing priorities and the complete unimplemented-format list remain
+unchanged. This checkpoint completes the clipboard mechanism for the seven
+current non-math native families, not the broader diagram goal.
+
+
+Final clipboard checks: ten shared editor tests and all 187 workbench unit tests
+pass (three existing opt-in tests ignored); workspace/all-target strict Clippy
+passes. Earlier clipboard render and syntax checks remain green. The completed
+diff architecture comparison has no new high-complexity function and retains the
+source-painter simplification. Its one additional clone group is test/guard scaffolding,
+not another source renderer, save implementation or clipboard transport. Shared
+headless-editor fixtures removed the larger duplicated test setup. The additional
+whole-tree measurement request did not return and was ended; the diff comparison
+completed normally and supplies the before/after evidence. No result from the
+unfinished request is treated as successful measurement.
+
+The final file-manager viewer pass also succeeds (24 tests), as do all four
+actual-host worker checks, license output and formatting. No new parser library,
+web engine, clipboard payload type or unguarded save path was introduced.

@@ -131,6 +131,9 @@ impl WorkbenchApp {
             ViewerSession::Splat(state) => {
                 show_viewer_panel(ctx, |ui| state.render_ui(ui, &self.ui_palette, &mut close));
             }
+            ViewerSession::TextEditor(state) => {
+                show_viewer_panel(ctx, |ui| state.ui(ui, &self.ui_palette, &mut close));
+            }
             ViewerSession::Text(state) => {
                 show_viewer_panel(ctx, |ui| {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
@@ -349,6 +352,12 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn open_slot_text_preview(&mut self, text: String, title: &str) {
+        // A distinctive diagram header takes precedence over delimiter-based
+        // table inference, but all actual parsing/layout stays on the workers.
+        if little_clip_core::diagram::Format::from_snippet(&text).is_some() {
+            self.start_text_preview_load(text, Some(title.into()));
+            return;
+        }
         if text.len() <= MAX_FILE_PATH_TEXT_BYTES {
             let p = std::path::Path::new(text.trim());
             if p.is_file() {
