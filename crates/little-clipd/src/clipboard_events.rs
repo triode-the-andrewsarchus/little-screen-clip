@@ -27,8 +27,26 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_offer_v1 as offer, zwlr_data_control_source_v1 as source,
 };
 
-const TRANSFER_LIMIT: u64 = 256 * 1024 * 1024;
+pub(super) const TRANSFER_LIMIT: u64 = 256 * 1024 * 1024;
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
+/// Runs a read-only compatibility adapter with the native transfer timeout.
+/// Incomplete, oversized and failed reads never become clipboard content.
+pub(super) async fn read_with_tool(
+    request: little_clip_core::CommandRequest,
+    limit: usize,
+) -> Option<Vec<u8>> {
+    let request = request
+        .timeout(TRANSFER_TIMEOUT)
+        .max_output_bytes(limit)
+        .own_process_group()
+        .die_with_parent();
+    let output = tokio::task::spawn_blocking(move || request.run())
+        .await
+        .ok()?
+        .ok()?;
+    (output.status.success() && !output.stdout_truncated).then_some(output.stdout)
+}
+
 type Reply = Mutex<Option<oneshot::Sender<()>>>;
 
 pub(super) struct Incoming {

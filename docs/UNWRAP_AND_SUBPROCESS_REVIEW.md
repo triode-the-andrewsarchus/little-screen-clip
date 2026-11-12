@@ -28,6 +28,8 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Launch the native PNG optimizer through the existing command builder with parent-death ownership and hard child limits (2 GiB address space, 35 CPU seconds, 128 MiB staged-file size). Its existing cancellation/process-group owner still kills and reaps the child. Both host integration suites pass with the final launcher.
 
+- [x] Bound daemon compatibility clipboard and shell-state queries through the existing command runner. Clipboard reads require complete, successful output within five seconds and the existing transfer-size policy; shell queries have a two-second/1 MiB budget. Failed shell queries retain the current lock state. Five clipboard tests pass, including truncated, failed and missing adapters. These changes retain the optional `wl-paste`/`qs` integrations.
+
 ## Remaining review
 
 - [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.

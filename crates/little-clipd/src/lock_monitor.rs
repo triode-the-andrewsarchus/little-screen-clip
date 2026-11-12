@@ -188,13 +188,21 @@ async fn run_noctalia_watchdog(ctx: Arc<DaemonContext>) {
 
         tokio::time::sleep(sleep_duration).await;
 
-        let output = tokio::process::Command::new("qs")
-            .args(["-c", "noctalia-shell", "ipc", "call", "state", "all"])
-            .output()
-            .await;
+        let output = tokio::task::spawn_blocking(|| {
+            little_clip_core::CommandRequest::new("qs")
+                .args(["-c", "noctalia-shell", "ipc", "call", "state", "all"])
+                .timeout(Duration::from_secs(2))
+                .max_output_bytes(1024 * 1024)
+                .own_process_group()
+                .die_with_parent()
+                .run()
+        })
+        .await
+        .ok()
+        .and_then(Result::ok);
 
         match output {
-            Ok(out) if out.status.success() => {
+            Some(out) if out.status.success() && !out.stdout_truncated => {
                 consecutive_failures = 0;
                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout)
                     && let Some(is_active) = val

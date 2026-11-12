@@ -451,3 +451,30 @@ async fn poisoned_selection_state_reports_a_read_failure_instead_of_panicking() 
         "Clipboard selection state is unavailable"
     );
 }
+
+#[tokio::test]
+async fn compatibility_tool_reads_publish_only_complete_successful_output() {
+    use little_clip_core::CommandRequest;
+    let request = || CommandRequest::new("/bin/sh").args(["-c", "printf complete"]);
+    assert_eq!(
+        read_with_tool(request(), 32).await,
+        Some(b"complete".to_vec())
+    );
+    assert!(read_with_tool(request(), 3).await.is_none());
+    assert!(
+        read_with_tool(
+            CommandRequest::new("/bin/sh").args(["-c", "printf partial; exit 1"]),
+            32
+        )
+        .await
+        .is_none()
+    );
+    assert!(
+        read_with_tool(
+            CommandRequest::new("/definitely/missing/clipboard-adapter"),
+            32
+        )
+        .await
+        .is_none()
+    );
+}

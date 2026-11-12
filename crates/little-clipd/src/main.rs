@@ -1440,39 +1440,37 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
         interval.tick().await;
 
         // 1. Check clipboard MIME types
-        let types_output = tokio::process::Command::new("wl-paste")
-            .arg("--list-types")
-            .output()
-            .await;
+        let types_output = clipboard_events::read_with_tool(
+            little_clip_core::CommandRequest::new("wl-paste").arg("--list-types"),
+            16 * 1024,
+        )
+        .await;
 
-        let image_mime = types_output
-            .ok()
-            .filter(|out| out.status.success())
-            .and_then(|out| {
-                let types = String::from_utf8_lossy(&out.stdout);
-                let mut supported = types.lines().map(str::trim).filter(|mime| {
-                    little_clip_core::item::image_extension_for_mime(mime).is_some()
-                });
-                // Prefer PNG when offered, but request the actual advertised format.
-                supported
-                    .clone()
-                    .find(|mime| *mime == "image/png")
-                    .or_else(|| supported.next())
-                    .map(str::to_owned)
-            });
+        let image_mime = types_output.and_then(|out| {
+            let types = String::from_utf8_lossy(&out);
+            let mut supported = types
+                .lines()
+                .map(str::trim)
+                .filter(|mime| little_clip_core::item::image_extension_for_mime(mime).is_some());
+            // Prefer PNG when offered, but request the actual advertised format.
+            supported
+                .clone()
+                .find(|mime| *mime == "image/png")
+                .or_else(|| supported.next())
+                .map(str::to_owned)
+        });
 
         if let Some(image_mime) = image_mime {
             // Attempt reading raw image bytes
-            if let Ok(img_out) = tokio::process::Command::new("wl-paste")
-                .arg("-t")
-                .arg(&image_mime)
-                .output()
-                .await
-                && img_out.status.success()
-                && !img_out.stdout.is_empty()
+            if let Some(bytes) = clipboard_events::read_with_tool(
+                little_clip_core::CommandRequest::new("wl-paste").args(["-t", &image_mime]),
+                clipboard_events::TRANSFER_LIMIT as usize,
+            )
+            .await
+                && !bytes.is_empty()
             {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                img_out.stdout.hash(&mut hasher);
+                bytes.hash(&mut hasher);
                 let hash = hasher.finish();
 
                 let self_img_hash = *ctx.self_copied_image_hash.read().await;
@@ -1487,7 +1485,7 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
 
                     capture_clipboard_selection(
                         &ctx,
-                        img_out.stdout,
+                        bytes,
                         image_mime,
                         Some(tokio::time::Instant::now()),
                         None,
@@ -1502,12 +1500,12 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
         }
 
         // 2. Fall back to text / file URI polling
-        if let Ok(output) = tokio::process::Command::new("wl-paste")
-            .arg("-n")
-            .output()
-            .await
-            && output.status.success()
-            && let Ok(text) = String::from_utf8(output.stdout)
+        if let Some(bytes) = clipboard_events::read_with_tool(
+            little_clip_core::CommandRequest::new("wl-paste").arg("-n"),
+            clipboard_events::TRANSFER_LIMIT as usize,
+        )
+        .await
+            && let Ok(text) = String::from_utf8(bytes)
         {
             if ctx.is_self_copied_text(&text).await {
                 last_clipboard_text = text;
