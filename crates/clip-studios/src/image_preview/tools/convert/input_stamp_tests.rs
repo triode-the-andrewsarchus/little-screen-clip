@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn webp_rejects_zero_or_oversized_dimensions_before_importing_pixels() {
+    for (width, height) in [(0, 1), (1, 0), (16_384, 1), (1, 16_384)] {
+        let image = RgbaImage::new(width, height);
+        let error =
+            super::super::super::encode_webp_cancellable(&image, false, 80, None).unwrap_err();
+        assert!(error.contains("dimensions"), "{width}x{height}: {error}");
+    }
+}
+
+#[test]
 fn cancellable_webp_bytes_match_the_existing_encoder_for_lossy_and_lossless() {
     let image = RgbaImage::from_fn(37, 23, |x, y| {
         image::Rgba([
