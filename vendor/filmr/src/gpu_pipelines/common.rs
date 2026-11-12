@@ -3,32 +3,29 @@ use crate::gpu::{GpuBuffer, GpuContext};
 #[cfg(feature = "compute-gpu")]
 use futures::channel::oneshot;
 
-// Wrapper to make WGPU types Send + Sync on WASM
-#[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
-pub struct SendSyncWrapper<T>(pub T);
-
-#[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
-unsafe impl<T> Send for SendSyncWrapper<T> {}
-#[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
-unsafe impl<T> Sync for SendSyncWrapper<T> {}
-
-#[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
-impl<T> std::ops::Deref for SendSyncWrapper<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+// Native GPU handles are Send + Sync and share a process cache. Browser GPU
+// handles are thread-affine: cache them on their worker instead of overriding
+// their thread-safety traits. A successful cache deliberately lives for the
+// worker's lifetime, matching the existing static-reference API.
+#[cfg(feature = "compute-gpu")]
+macro_rules! pipeline_cache {
+    ($getter:ident, $cache:ident, $ty:ty, $context:ident => $init:expr) => {
+        #[cfg(not(target_arch = "wasm32"))]
+        pub fn $getter($context: &crate::gpu::GpuContext) -> &'static $ty {
+            static $cache: std::sync::OnceLock<$ty> = std::sync::OnceLock::new();
+            $cache.get_or_init(|| $init)
+        }
+        #[cfg(target_arch = "wasm32")]
+        pub fn $getter($context: &crate::gpu::GpuContext) -> &'static $ty {
+            thread_local! {
+                static $cache: std::cell::OnceCell<&'static $ty> = const { std::cell::OnceCell::new() };
+            }
+            $cache.with(|cache| *cache.get_or_init(|| Box::leak(Box::new($init))))
+        }
+    };
 }
-
-#[cfg(all(feature = "compute-gpu", not(target_arch = "wasm32")))]
-pub fn wrap_pipeline<T>(pipeline: T) -> T {
-    pipeline
-}
-
-#[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
-pub fn wrap_pipeline<T>(pipeline: T) -> SendSyncWrapper<T> {
-    SendSyncWrapper(pipeline)
-}
+#[cfg(feature = "compute-gpu")]
+pub(super) use pipeline_cache;
 
 #[cfg(feature = "compute-gpu")]
 pub async fn read_gpu_buffer(

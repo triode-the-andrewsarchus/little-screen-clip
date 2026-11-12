@@ -1,6 +1,5 @@
 use crate::gpu::{GpuBuffer, GpuContext};
 use image::{ImageBuffer, Rgb};
-use std::sync::OnceLock;
 use wgpu::util::DeviceExt;
 
 #[derive(Clone, Copy)]
@@ -154,21 +153,20 @@ impl ImagePass {
     }
 }
 
+super::common::pipeline_cache!(exposure_pass, EXPOSURE, ImagePass, context => ImagePass::new(context, "exposure"));
+super::common::pipeline_cache!(motion_pass, MOTION, ImagePass, context => ImagePass::new(context, "motion"));
+super::common::pipeline_cache!(output_pass, OUTPUT, ImagePass, context => ImagePass::new(context, "spectral_output"));
+
 pub fn process_image_pass(
     kind: ImagePassKind,
     image: &ImageBuffer<Rgb<f32>, Vec<f32>>,
     params: &[f32],
 ) -> Option<ImageBuffer<Rgb<f32>, Vec<f32>>> {
-    static EXPOSURE: OnceLock<ImagePass> = OnceLock::new();
-    static MOTION: OnceLock<ImagePass> = OnceLock::new();
-    static OUTPUT: OnceLock<ImagePass> = OnceLock::new();
     let context = crate::gpu::get_gpu_context()?;
-    let (cache, entry) = match kind {
-        ImagePassKind::Exposure => (&EXPOSURE, "exposure"),
-        ImagePassKind::Motion => (&MOTION, "motion"),
-        ImagePassKind::SpectralOutput => (&OUTPUT, "spectral_output"),
+    let pass = match kind {
+        ImagePassKind::Exposure => exposure_pass(context),
+        ImagePassKind::Motion => motion_pass(context),
+        ImagePassKind::SpectralOutput => output_pass(context),
     };
-    cache
-        .get_or_init(|| ImagePass::new(context, entry))
-        .process(context, image, params)
+    pass.process(context, image, params)
 }

@@ -1,7 +1,7 @@
 #[cfg(feature = "compute-gpu")]
 use tracing::info;
 
-#[cfg(feature = "compute-gpu")]
+#[cfg(all(feature = "compute-gpu", not(target_arch = "wasm32")))]
 use std::sync::OnceLock;
 
 #[cfg(feature = "compute-gpu")]
@@ -31,28 +31,25 @@ pub fn get_gpu_context() -> Option<&'static GpuContext> {
         .as_ref()
 }
 
-// WASM Implementation using Unsafe Wrapper to bypass Send/Sync check
-// Safety: This is only safe if accessed from the single worker thread where it was initialized.
+// Browser GPU objects remain local to their initializing worker. Retain one
+// context per worker for the static-reference API; never assert Send or Sync.
 #[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
-struct WasmGpuHolder(GpuContext);
-
-#[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
-unsafe impl Send for WasmGpuHolder {}
-
-#[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
-unsafe impl Sync for WasmGpuHolder {}
-
-#[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
-static WASM_GPU_CONTEXT: OnceLock<WasmGpuHolder> = OnceLock::new();
+thread_local! {
+    static WASM_GPU_CONTEXT: std::cell::OnceCell<&'static GpuContext> = const { std::cell::OnceCell::new() };
+}
 
 #[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
 pub fn init_gpu_context(context: GpuContext) {
-    let _ = WASM_GPU_CONTEXT.set(WasmGpuHolder(context));
+    WASM_GPU_CONTEXT.with(|cache| {
+        if cache.get().is_none() {
+            let _ = cache.set(Box::leak(Box::new(context)));
+        }
+    });
 }
 
 #[cfg(all(feature = "compute-gpu", target_arch = "wasm32"))]
 pub fn get_gpu_context() -> Option<&'static GpuContext> {
-    WASM_GPU_CONTEXT.get().map(|h| &h.0)
+    WASM_GPU_CONTEXT.with(|cache| cache.get().copied())
 }
 
 #[cfg(feature = "compute-gpu")]
