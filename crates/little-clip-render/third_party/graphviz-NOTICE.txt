@@ -1,0 +1,60 @@
+graphviz-pure
+===========
+
+graphviz-pure is a Rust port of Graphviz 16.1.0 (https://graphviz.org,
+https://gitlab.com/graphviz/graphviz). It follows the Graphviz C sources
+closely, function by function, and is a derivative work of Graphviz.
+
+Graphviz is Copyright (c) AT&T Corp. and the Graphviz authors, and is
+distributed under the Eclipse Public License 2.0. Its primary authors are
+John Ellson, Emden Gansner, Yifan Hu and Stephen North; the full list is in
+the AUTHORS file of the Graphviz distribution. graphviz-pure is distributed
+under the same licence; see LICENSE.
+
+The font metric tables in crates/graphviz-pure-core/src/font_tables.rs are generated
+from Graphviz's own textspan tables (lib/common/textspan_lut.c and lib/common/ps_font_equiv.h).
+
+Third-party code
+----------------
+
+crates/graphviz-pure-core/src/math/portable/pow/
+    A Rust port of CORE-MATH's binary64 pow (Tom Hubrecht, Paul Zimmermann;
+    Copyright (c) 2022-2025 CERN and Inria), MIT licence. The licence text is
+    in LICENSES/MIT-CORE-MATH.txt (and in the release archives' LICENSES/
+    directory).
+
+crates/graphviz-pure-geom/src/expat.rs
+    A Rust port of the parts of the expat XML parser 2.7.4 that HTML-like labels
+    use: its tokenizer, name tables and parsing (Copyright (c) 1998-2000 Thai
+    Open Source Software Center Ltd and Clark Cooper; Copyright (c) 2001-2025
+    Expat maintainers), MIT licence. The licence text is in
+    LICENSES/MIT-EXPAT.txt (and in the release archives' LICENSES/ directory).
+
+The libm crate (dependency)
+    rust-lang/compiler-builtins' ports of musl/fdlibm and CORE-MATH, MIT
+    licence.
+
+docs/porting/libm.md lists the provenance of everything in the math module.
+Early commits in this repository's history contained a port of Apple Libm's
+cbrt.c (from an APSL release); it was replaced and is not part of any current
+source file.
+
+crates/graphviz-pure-raster/fonts/
+    Tinos, Arimo and Cousine (https://github.com/googlefonts), Copyright 2026
+    The Tinos, Arimo and Cousine Project Authors, under the SIL Open Font
+    License 1.1 (fonts/OFL-*.txt, also in the release archives' LICENSES/
+    directory). They are compiled into the graphviz-pure binary to draw text in
+    PNG and JPEG output.
+
+JPEG output
+    This software is based in part on the work of the Independent JPEG Group
+    (through the jpeg-encoder crate).
+
+PNG and JPEG output are drawn with resvg and tiny-skia (linebender, MIT OR
+Apache-2.0 and BSD-3-Clause).
+
+Rust crate dependencies
+    The graphviz-pure binary and the graphviz-pure-wasm module are built with
+    third-party Rust crates. THIRD-PARTY-LICENSES.md lists each of them with
+    the full text of its licence and the copyright notices it carries; it is
+    generated from Cargo.lock by scripts/third-party-licenses.sh.

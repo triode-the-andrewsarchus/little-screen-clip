@@ -10,8 +10,13 @@ use std::{
     time::Duration,
 };
 
+mod graphviz;
 mod lini;
 mod mermaid;
+
+/// Owned fixtures for testing early dispatch in independently linked hosts.
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 const MAX_SOURCE: usize = 256 * 1024;
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
@@ -19,6 +24,8 @@ const MAX_SVG: usize = 2 * 1024 * 1024;
 const WIDTH: u32 = 1536;
 const HEIGHT: u32 = 1024;
 const WORKER_FLAG: &str = "--internal-diagram-worker";
+const MEMORY_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
+const CPU_LIMIT: u64 = 6;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Request {
@@ -61,8 +68,8 @@ pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Re
         .arg(WORKER_FLAG)
         .stdin_bytes(request)
         .timeout(Duration::from_secs(8))
-        .resource_limit(rustix::process::Resource::As, 2 * 1024 * 1024 * 1024)
-        .resource_limit(rustix::process::Resource::Cpu, 6)
+        .resource_limit(rustix::process::Resource::As, MEMORY_LIMIT)
+        .resource_limit(rustix::process::Resource::Cpu, CPU_LIMIT)
         .resource_limit(rustix::process::Resource::Fsize, MAX_OUTPUT as u64)
         .max_output_bytes(MAX_OUTPUT)
         .own_process_group()
@@ -84,7 +91,7 @@ pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Re
         || rendered.height > HEIGHT
         || rendered.svg.len() > MAX_SVG
         || rendered.png.len() > MAX_OUTPUT / 2
-        || rendered.warnings.len() > 17
+        || rendered.warnings.len() > 16
         || rendered
             .warnings
             .iter()
@@ -103,8 +110,7 @@ pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Re
 pub fn run_worker_cli() -> bool {
     let argument = std::env::args_os().nth(1);
     if argument.as_deref() == Some(std::ffi::OsStr::new("--diagram-licenses")) {
-        print!(
-            "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        for notice in [
             include_str!("../third_party/diagram-notices.md"),
             include_str!("../third_party/merman-MIT.txt"),
             include_str!("../third_party/merman-elk-EPL-2.0.txt"),
@@ -112,7 +118,16 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/lini-google-sans-OFL.txt"),
             include_str!("../third_party/lini-google-sans-code-OFL.txt"),
             include_str!("../third_party/lini-phosphor-MIT.txt"),
-        );
+            include_str!("../third_party/graphviz-EPL-2.0.txt"),
+            include_str!("../third_party/graphviz-NOTICE.txt"),
+            include_str!("../third_party/graphviz-core-math-MIT.txt"),
+            include_str!("../third_party/graphviz-expat-MIT.txt"),
+            include_str!("../assets/fonts/graphviz/OFL-Tinos.txt"),
+            include_str!("../assets/fonts/graphviz/OFL-Arimo.txt"),
+            include_str!("../assets/fonts/graphviz/OFL-Cousine.txt"),
+        ] {
+            println!("{notice}");
+        }
         return true;
     }
     if argument.as_deref() != Some(std::ffi::OsStr::new(WORKER_FLAG)) {
@@ -136,6 +151,20 @@ pub fn run_worker_cli() -> bool {
     true
 }
 
+// All adapters share the transport/display budget, including overflow reporting.
+fn bounded_warnings(warnings: Vec<String>) -> Vec<String> {
+    let omitted = warnings.len().saturating_sub(15);
+    let mut bounded: Vec<_> = warnings
+        .into_iter()
+        .take(15)
+        .map(|warning| warning.chars().take(1024).collect())
+        .collect();
+    if omitted > 0 {
+        bounded.push(format!("{omitted} additional diagram warnings omitted"));
+    }
+    bounded
+}
+
 fn validate_source(source: &str) -> Result<(), String> {
     if source.len() > MAX_SOURCE || source.contains('\0') {
         return Err("Diagram source exceeds 256 KiB or contains a NUL byte".into());
@@ -146,6 +175,7 @@ fn validate_source(source: &str) -> Result<(), String> {
 fn render_inline(format: Format, source: &str) -> Result<Rendered, String> {
     validate_source(source)?;
     let (svg, warnings) = match format {
+        Format::Graphviz => graphviz::svg(source)?,
         Format::Lini => lini::svg(source)?,
         Format::Mermaid => (mermaid::svg(source)?, Vec::new()),
         Format::Pikchr => (
@@ -169,14 +199,32 @@ fn render_inline(format: Format, source: &str) -> Result<Rendered, String> {
     };
     let mut rendered = rasterize_svg(svg)?;
     rendered.warnings.extend(warnings);
+    rendered.warnings = bounded_warnings(rendered.warnings);
     Ok(rendered)
 }
 
-fn rasterize_svg(svg: String) -> Result<Rendered, String> {
+fn default_fonts() -> &'static resvg::usvg::fontdb::Database {
+    static FONTS: LazyLock<resvg::usvg::fontdb::Database> = LazyLock::new(|| {
+        let mut database = resvg::usvg::fontdb::Database::new();
+        database.load_font_data(little_clip_core::font_assets::CJK_FONT_BYTES.to_vec());
+        database.load_font_data(little_clip_core::font_assets::EMOJI_FONT_BYTES.to_vec());
+        database.set_sans_serif_family("Noto Sans CJK JP");
+        database.set_serif_family("Noto Sans CJK JP");
+        database.set_monospace_family("Noto Sans CJK JP");
+        database
+    });
+    &FONTS
+}
+
+fn parse_svg(
+    svg: &str,
+    fonts: &resvg::usvg::fontdb::Database,
+    family: &str,
+) -> Result<(resvg::usvg::Tree, Vec<String>), String> {
     if svg.len() > MAX_SVG {
         return Err("Diagram SVG exceeds 2 MiB".into());
     }
-    let document = roxmltree::Document::parse(&svg).map_err(|error| error.to_string())?;
+    let document = roxmltree::Document::parse(svg).map_err(|error| error.to_string())?;
     if document.descendants().count() > 16_384
         || document
             .descendants()
@@ -185,7 +233,7 @@ fn rasterize_svg(svg: String) -> Result<Rendered, String> {
         return Err("Diagram SVG exceeds structural limits".into());
     }
     let mut options = resvg::usvg::Options {
-        font_family: "Noto Sans CJK JP".into(),
+        font_family: family.into(),
         image_href_resolver: resvg::usvg::ImageHrefResolver {
             resolve_data: Box::new(|_, _, _| None),
             resolve_string: Box::new(|_, _| None),
@@ -212,21 +260,24 @@ fn rasterize_svg(svg: String) -> Result<Rendered, String> {
         options.default_size = resvg::usvg::Size::from_wh(values[2], values[3])
             .ok_or("Diagram viewBox has non-positive dimensions")?;
     }
-    let mut tree =
-        resvg::usvg::Tree::from_str(&svg, &options).map_err(|error| error.to_string())?;
+    let mut tree = resvg::usvg::Tree::from_str(svg, &options).map_err(|error| error.to_string())?;
     if tree.size.width() > 16_384.0 || tree.size.height() > 16_384.0 {
         return Err("Diagram dimensions exceed 16384 pixels".into());
     }
-    static FONTS: LazyLock<resvg::usvg::fontdb::Database> = LazyLock::new(|| {
-        let mut database = resvg::usvg::fontdb::Database::new();
-        database.load_font_data(little_clip_core::font_assets::CJK_FONT_BYTES.to_vec());
-        database.load_font_data(little_clip_core::font_assets::EMOJI_FONT_BYTES.to_vec());
-        database.set_sans_serif_family("Noto Sans CJK JP");
-        database.set_serif_family("Noto Sans CJK JP");
-        database.set_monospace_family("Noto Sans CJK JP");
-        database
-    });
-    tree.convert_text(&FONTS);
+    tree.convert_text(fonts);
+    let warnings = if document
+        .descendants()
+        .any(|node| node.has_tag_name("image"))
+    {
+        vec!["Linked or embedded images are not displayed in diagram previews".into()]
+    } else {
+        Vec::new()
+    };
+    Ok((tree, warnings))
+}
+
+fn rasterize_svg(svg: String) -> Result<Rendered, String> {
+    let (tree, warnings) = parse_svg(&svg, default_fonts(), "Noto Sans CJK JP")?;
     let scale = (WIDTH as f32 / tree.size.width())
         .min(HEIGHT as f32 / tree.size.height())
         .min(2.0);
@@ -241,14 +292,6 @@ fn rasterize_svg(svg: String) -> Result<Rendered, String> {
         &mut pixmap.as_mut(),
     );
     let png = pixmap.encode_png().map_err(|error| error.to_string())?;
-    let warnings = if document
-        .descendants()
-        .any(|node| node.has_tag_name("image"))
-    {
-        vec!["Linked or embedded images are not displayed in diagram previews".into()]
-    } else {
-        Vec::new()
-    };
     Ok(Rendered {
         svg,
         png,
@@ -295,6 +338,30 @@ mod tests {
                 "flowchart LR\nA-->B\n",
             ),
             ("mmd", "# Doc\n```pikchr\nbox\n```", Format::Pikchr, "box\n"),
+            (
+                "md",
+                "```graphviz\ndigraph { a -> b }\n```",
+                Format::Graphviz,
+                "digraph { a -> b }\n",
+            ),
+            (
+                "gv",
+                "digraph { a -> b }\n",
+                Format::Graphviz,
+                "digraph { a -> b }\n",
+            ),
+            (
+                "dot",
+                "digraph { a -> b }\n",
+                Format::Graphviz,
+                "digraph { a -> b }\n",
+            ),
+            (
+                "graphviz",
+                "digraph { a -> b }\n",
+                Format::Graphviz,
+                "digraph { a -> b }\n",
+            ),
             (
                 "md",
                 "```lini\n|box| \"Source\"\n```",
@@ -349,6 +416,7 @@ mod tests {
             (Format::Pikchr, "box \"Read\"; arrow; circle \"Think\""),
             (Format::Mermaid, "flowchart LR\nA[Source] --> B[Preview]"),
             (Format::Lini, "|box#a| \"Read\"\n|box#b| \"Think\"\na -> b"),
+            (Format::Graphviz, "digraph { a [label=\"Source\"]; a -> b }"),
             (
                 Format::Svgbob,
                 "+------+     +------+\n| Read +---->| Think|\n+------+     +------+",

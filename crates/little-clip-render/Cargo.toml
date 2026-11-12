@@ -5,6 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 little-clip-core = { path = "../little-clip-core" }
 little-clip-scene = { path = "../little-clip-scene" }
@@ -24,6 +27,9 @@ pikchr-rs = "=0.1.0"
 svgbob = "0.7.6"
 merman = { version = "=0.10.0", features = ["system-clock", "system-timezone"] }
 lini = "=1.1.0"
+graphviz-pure = "=1.2.0"
+graphviz-pure-core = "=1.2.0"
+graphviz-pure-parser = "=1.2.0"
 
 [dev-dependencies]
 tempfile = "3.27"

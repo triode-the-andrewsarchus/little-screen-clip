@@ -20,21 +20,10 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
     }
     // Preserve warnings rather than silently accepting fallback routing or a
     // misspelled name that the language auto-created as a new box.
-    let omitted = diagnostics.len().saturating_sub(15);
-    let mut warnings: Vec<_> = diagnostics
+    let warnings = diagnostics
         .iter()
-        .take(15)
-        .map(|item| {
-            item.display_with_source(source, "diagram.lini")
-                .to_string()
-                .chars()
-                .take(1024)
-                .collect()
-        })
+        .map(|item| item.display_with_source(source, "diagram.lini").to_string())
         .collect();
-    if omitted > 0 {
-        warnings.push(format!("{omitted} additional diagram warnings omitted"));
-    }
     Ok((svg, warnings))
 }
 
@@ -85,8 +74,10 @@ mod tests {
             source.push_str(&format!(".unused{index} {{ fill: red; }}\n"));
         }
         source.push_str("}\n|box| \"Source\"\n");
-        let (svg, warnings) = svg(&source).unwrap();
-        assert!(svg.contains("<svg"));
+        let rendered =
+            super::super::render_inline(little_clip_core::diagram::Format::Lini, &source).unwrap();
+        let warnings = rendered.warnings;
+        assert!(rendered.svg.contains("<svg"));
         assert_eq!(warnings.len(), 16);
         assert!(warnings.last().unwrap().contains("25 additional"));
         assert!(

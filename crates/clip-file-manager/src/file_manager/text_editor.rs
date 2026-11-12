@@ -372,6 +372,9 @@ mod tests {
             ("mermaid", "flowchart LR\nA-->B\n", "flowchart LR\nA-->C\n"),
             ("mmd", "flowchart LR\nA-->B\n", "flowchart LR\nA-->C\n"),
             ("lini", "|box| \"Source\"\n", "|box| \"Edited\"\n"),
+            ("gv", "digraph { a -> b }", "digraph { a -> c }"),
+            ("dot", "digraph { a -> b }", "digraph { a -> c }"),
+            ("graphviz", "digraph { a -> b }", "digraph { a -> c }"),
             (
                 "pikchr",
                 "box \"Original\"\n",

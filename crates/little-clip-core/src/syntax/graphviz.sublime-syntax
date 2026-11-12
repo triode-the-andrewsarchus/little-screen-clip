@@ -1,0 +1,33 @@
+%YAML 1.2
+---
+name: Graphviz
+file_extensions: [gv, graphviz, dot]
+scope: source.graphviz
+contexts:
+  main:
+    - match: '//.*$|^\s*#.*$'
+      scope: comment.line.graphviz
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.graphviz
+      push: comment
+    - match: '"'
+      scope: punctuation.definition.string.begin.graphviz
+      push: string
+    - match: '(?i)\b(strict|digraph|graph|subgraph|node|edge)\b'
+      scope: keyword.control.graphviz
+    - match: '\b[a-zA-Z_][a-zA-Z0-9_]*(?=\s*=)'
+      scope: variable.parameter.graphviz
+    - match: '-?\b[0-9]+(?:\.[0-9]+)?\b'
+      scope: constant.numeric.graphviz
+    - match: '->|--|[{}\[\];:=,]'
+      scope: keyword.operator.graphviz
+  comment:
+    - meta_scope: comment.block.graphviz
+    - match: '\*/'
+      pop: true
+  string:
+    - meta_scope: string.quoted.double.graphviz
+    - match: '\\.'
+      scope: constant.character.escape.graphviz
+    - match: '"'
+      pop: true

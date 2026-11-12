@@ -29,6 +29,7 @@ tempfile = "3.27"
 libc = "0.2"
 
 [dev-dependencies]
+little-clip-render = { path = "../little-clip-render", features = ["test-support"] }
 webp = "0.3.1"
 rxing = { version = "0.9.4", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
 clip-studios = { path = "../clip-studios", features = ["test-support"] }

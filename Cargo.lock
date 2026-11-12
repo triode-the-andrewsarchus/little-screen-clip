@@ -3727,6 +3727,68 @@ dependencies = [
 ]
 
 [[package]]
+name = "graphviz-pure"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "274df123879e44fe3024a77ef9de6f847a32896aa26b066ac01be8c9bf35c3e8"
+dependencies = [
+ "graphviz-pure-core",
+ "graphviz-pure-geom",
+ "graphviz-pure-layout",
+ "graphviz-pure-parser",
+ "graphviz-pure-render",
+]
+
+[[package]]
+name = "graphviz-pure-core"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a5b0fee6128fbeb44cace660cc8bc6ce9465575f8ade4cd60cb750faca4dc6b"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "graphviz-pure-geom"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82ec43008f763599f3d931e675f48f952ba19e2a3e1e2d2218c66addb43d7d32"
+dependencies = [
+ "graphviz-pure-core",
+]
+
+[[package]]
+name = "graphviz-pure-layout"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e2b4450df7ebb1496a79b127b5bbd38adddf2f82ce9c6b23ea0dd2219bfcf37"
+dependencies = [
+ "graphviz-pure-core",
+ "graphviz-pure-geom",
+]
+
+[[package]]
+name = "graphviz-pure-parser"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e599b36da71ff585925d5599edecdad6316a00470c6eeb047245665105e8ac67"
+dependencies = [
+ "graphviz-pure-core",
+]
+
+[[package]]
+name = "graphviz-pure-render"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10204fb1afb0177d8f35836bb77daf3a15c39717781177738397de997d059f1a"
+dependencies = [
+ "graphviz-pure-core",
+ "graphviz-pure-geom",
+ "graphviz-pure-layout",
+ "graphviz-pure-parser",
+]
+
+[[package]]
 name = "gstreamer"
 version = "0.25.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5376,6 +5438,9 @@ name = "little-clip-render"
 version = "0.1.0"
 dependencies = [
  "fontdue",
+ "graphviz-pure",
+ "graphviz-pure-core",
+ "graphviz-pure-parser",
  "image 0.25.10",
  "lini",
  "little-clip-core",

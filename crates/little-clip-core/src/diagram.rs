@@ -9,6 +9,7 @@ pub enum Format {
     Svgbob,
     Mermaid,
     Lini,
+    Graphviz,
 }
 impl Format {
     /// Recognizes a Markdown fence's language, without executing its attributes.
@@ -23,6 +24,7 @@ impl Format {
             "svgbob" | "bob" => Some(Self::Svgbob),
             "mermaid" | "mmd" => Some(Self::Mermaid),
             "lini" => Some(Self::Lini),
+            "graphviz" | "dot" => Some(Self::Graphviz),
             _ => None,
         }
     }
@@ -41,6 +43,7 @@ impl Format {
             "svgbob" => Some(Self::Svgbob),
             "mermaid" => Some(Self::Mermaid),
             "lini" => Some(Self::Lini),
+            "gv" | "graphviz" => Some(Self::Graphviz),
             _ => None,
         }
     }
@@ -53,8 +56,13 @@ impl Format {
     /// Combines unambiguous extensions with conservative content classification.
     pub fn from_source_extension(extension: &str, source: &str) -> Option<Self> {
         Self::from_extension(extension).or_else(|| {
-            (extension.eq_ignore_ascii_case("mmd") && mermaid_signature(source))
-                .then_some(Self::Mermaid)
+            if extension.eq_ignore_ascii_case("mmd") && mermaid_signature(source) {
+                Some(Self::Mermaid)
+            } else if extension.eq_ignore_ascii_case("dot") && dot_signature(source) {
+                Some(Self::Graphviz)
+            } else {
+                None
+            }
         })
     }
 
@@ -65,6 +73,101 @@ impl Format {
             Self::Svgbob => "SvgBob",
             Self::Mermaid => "Mermaid",
             Self::Lini => "Lini",
+            Self::Graphviz => "Graphviz",
+        }
+    }
+}
+
+// Classify only the DOT header, not a guessed filename or arbitrary prose.
+fn dot_signature(source: &str) -> bool {
+    let source = &source[..source.floor_char_boundary(source.len().min(64 * 1024))];
+    let Some(mut rest) = dot_trivia(source.trim_start_matches('\u{feff}')) else {
+        return false;
+    };
+    for expected in ["strict", "graph"] {
+        let end = rest
+            .find(|value: char| !value.is_ascii_alphabetic())
+            .unwrap_or(rest.len());
+        let word = &rest[..end];
+        if expected == "strict" && !word.eq_ignore_ascii_case("strict") {
+            continue;
+        }
+        if expected == "graph"
+            && !word.eq_ignore_ascii_case("graph")
+            && !word.eq_ignore_ascii_case("digraph")
+        {
+            return false;
+        }
+        if rest[end..].starts_with(|value: char| value.is_alphanumeric() || value == '_') {
+            return false;
+        }
+        let Some(next) = dot_trivia(&rest[end..]) else {
+            return false;
+        };
+        rest = next;
+    }
+    if rest.starts_with('{') {
+        return true;
+    }
+    // Quoted graph names may contain braces and escaped quotes, or concatenate
+    // quoted parts. An opening brace inside a name is not a graph body.
+    if rest.starts_with('"') {
+        loop {
+            let mut escaped = false;
+            let mut after = None;
+            for (index, value) in rest[1..].char_indices() {
+                if escaped {
+                    escaped = false;
+                } else if value == '\\' {
+                    escaped = true;
+                } else if value == '"' {
+                    after = Some(&rest[index + 2..]);
+                    break;
+                }
+            }
+            let Some(next) = after.and_then(dot_trivia) else {
+                return false;
+            };
+            rest = next;
+            if !rest.starts_with('+') {
+                break;
+            }
+            let Some(next) = dot_trivia(&rest[1..]) else {
+                return false;
+            };
+            rest = next;
+            if !rest.starts_with('"') {
+                return false;
+            }
+        }
+    } else {
+        let end = rest
+            .find(|value: char| value.is_whitespace() || matches!(value, '{' | '/' | '#'))
+            .unwrap_or(rest.len());
+        if end == 0
+            || !rest[..end].chars().all(|value| {
+                value.is_alphanumeric() || matches!(value, '_' | '-' | '.') || !value.is_ascii()
+            })
+        {
+            return false;
+        }
+        let Some(next) = dot_trivia(&rest[end..]) else {
+            return false;
+        };
+        rest = next;
+    }
+    rest.starts_with('{')
+}
+
+fn dot_trivia(mut source: &str) -> Option<&str> {
+    loop {
+        source = source.trim_start();
+        if let Some(comment) = source.strip_prefix("/*") {
+            source = &comment[comment.find("*/")? + 2..];
+        } else if source.starts_with("//") || source.starts_with('#') {
+            source = source.split_once('\n')?.1;
+        } else {
+            return Some(source);
         }
     }
 }
@@ -121,6 +224,38 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dot_files_require_graph_headers_instead_of_claiming_word_templates() {
+        for source in [
+            "digraph { a -> b }",
+            "GRAPH network { a -- b }",
+            "\u{feff}/* note */ strict // note\ndigraph G { a -> b }",
+            "# 1 \"graph.dot\"\ndigraph \"Name { brace }\" + \"More\" { a -> b }",
+            "graph .25 { a -- b }",
+        ] {
+            assert_eq!(
+                Format::from_source_path(Path::new("graph.dot"), source),
+                Some(Format::Graphviz),
+                "{source}"
+            );
+        }
+        for source in [
+            "Word template",
+            "graph theory notes",
+            "digraphical text {sample}",
+            "digraph \"a { b\"",
+            "/* unclosed",
+            "graph name is ordinary prose { text }",
+        ] {
+            assert_eq!(
+                Format::from_source_path(Path::new("template.dot"), source),
+                None,
+                "{source}"
+            );
+        }
+        assert_eq!(Format::from_extension("dot"), None);
+        assert_eq!(Format::from_extension("graphviz"), Some(Format::Graphviz));
+    }
     #[test]
     fn mmd_files_need_diagram_headers_instead_of_extension_only_detection() {
         for source in [

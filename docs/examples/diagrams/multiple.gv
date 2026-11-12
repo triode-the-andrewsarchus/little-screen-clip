@@ -1,0 +1,11 @@
+digraph Build {
+    rankdir=LR;
+    node [shape=box, style=filled, fillcolor="lightblue:white"];
+    source -> build -> preview;
+}
+
+digraph Feedback {
+    rankdir=LR;
+    node [shape=ellipse, style=filled, fillcolor="lavender:white"];
+    edit -> preview -> inspect -> edit;
+}

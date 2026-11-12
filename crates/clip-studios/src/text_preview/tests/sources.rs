@@ -405,6 +405,7 @@ fn standalone_diagram_sources_have_loaded_native_syntax_definitions() {
         ("pikchr", "Pikchr", "box \"Source\"; arrow; circle\n"),
         ("svgbob", "SvgBob", "+----+\n|Text|\n+----+\n"),
         ("lini", "Lini", "|box#a| \"Source\"\na -> b\n"),
+        ("gv", "Graphviz", "digraph { a -> b [label=\"Source\"] }"),
     ] {
         let syntax = SYNTAX_SET.find_syntax_by_extension(extension).unwrap();
         assert_eq!(syntax.name, name);

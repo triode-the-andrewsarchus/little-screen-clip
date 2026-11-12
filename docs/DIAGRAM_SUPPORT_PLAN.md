@@ -32,7 +32,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | Mermaid | Merman 0.10.0; mermaid-rs-renderer 0.3.1; ariel-rs 0.4 | Selected Merman; native source/live previews implemented; parser-backed graphical editing pending |
 | PlantUML / C4 | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [plantuml_encoding](https://crates.io/crates/plantuml_encoding) 2.0.3; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
 | D2 | [graphs-tui](https://crates.io/crates/graphs-tui) 0.4.0; [d2-rs-target](https://crates.io/crates/d2-rs-target) 0.1.7; [d2-rs-scenebuild](https://crates.io/crates/d2-rs-scenebuild) 0.1.7 | Pending comparison / editor research |
-| Graphviz DOT | [graphviz-pure](https://crates.io/crates/graphviz-pure) 1.2.0; [graphviz-pure-cli](https://crates.io/crates/graphviz-pure-cli) 1.2.0; [graphviz-pure-core](https://crates.io/crates/graphviz-pure-core) 1.2.0 | Pending comparison / editor research |
+| Graphviz DOT | graphviz-pure 1.2.0; layout-rs 0.1.3; graphviz-rust 0.9.9 | Native Graphviz port selected; source/live preview and bounded multi-graph rendering implemented; graphical manipulation pending |
 | DBML | [dbml-language-server](https://crates.io/crates/dbml-language-server) 0.1.2; [dbml_diff_mysql](https://crates.io/crates/dbml_diff_mysql) 0.1.5; [sea-orm-dbml](https://crates.io/crates/sea-orm-dbml) 0.1.0-beta.2 | Pending comparison / editor research |
 | BPMN | [orvanta-api](https://crates.io/crates/orvanta-api) 7.0.0; [bpmn-svg](https://crates.io/crates/bpmn-svg) 0.1.0; [bpmnkit-bpmn](https://crates.io/crates/bpmnkit-bpmn) 0.2.1 | Pending comparison / editor research |
 | draw.io | [drawio-exporter](https://crates.io/crates/drawio-exporter) 1.6.0; [flowchart-mcp-server](https://crates.io/crates/flowchart-mcp-server) 0.1.0; [drawio-lc](https://crates.io/crates/drawio-lc) 0.4.0 | Pending comparison / editor research |
@@ -281,3 +281,90 @@ and [d3-graphviz](https://github.com/magjac/d3-graphviz) as interaction referenc
 node/edge insertion, selection linked to source, style changes and pan/zoom are
 more useful than embedding their browser frameworks. Their current license files
 still need checking before considering any port; no editor code has been copied.
+
+## Graphviz integration and safeguards
+
+Selected [graphviz-pure 1.2.0](https://github.com/graphviz-pure/graphviz-pure)
+over [layout-rs 0.1.3](https://crates.io/crates/layout-rs), which has its own
+layout/shape coverage, and [graphviz-rust 0.9.9](https://crates.io/crates/graphviz-rust),
+whose default execution feature launches an installed `dot`. The native port
+preserves the DOT language and eight Graphviz layout engines without C/FFI,
+installed executables or a browser. It adds six locked component packages, not
+its CLI, parallel mode, math tracing or alternate raster/PDF stack.
+
+The helper sets the library's file-loading denial switch directly before any
+layout, without changing environment variables. Image, HTML IMG and shapefile
+paths are refused before lookup. The SVG-inline output avoids document DTDs and
+stylesheet processing; its omitted namespace declarations are materialized for
+standalone parsing. Typed native-parser preflight bounds the stream to sixteen
+graphs before layout and warns about external stylesheets. The facade reparses
+for normal layout/render diagnostics; temporary preflight models are dropped.
+BOM normalization affects rendering only, leaving saved source intact. Linked
+image/shape and stylesheet resources remain an explicit preview limitation.
+
+Every graph is included; invalid syntax in later graphs rejects the request
+rather than returning an apparently complete first graph. The existing SVG parser
+now exposes its validated tree/font-materialization stage for reuse. Each graph
+is outlined and serialized with an isolated ID prefix by usvg before vertical
+composition, so gradients, clipping and label references cannot cross graphs.
+Combined vector size, geometry, raster and process limits remain enforced. This
+reuses the established renderer and avoids another XML/SVG rewriting engine.
+
+Tinos, Arimo and Cousine assets (4.4 MiB, OFL-1.1) come unchanged from the port's
+raster package; byte hashes and license texts accompany the canonical assets.
+Core `font_assets` owns their bytes. A separate Graphviz font database adds
+standard Times/Helvetica/Courier family aliases and retains existing Noto
+glyph fallbacks, without system-font discovery. Visual review caught a Helvetica
+to serif fallback; the aliases and a font-resolution test fix it. This does not
+claim pixel identity with platform Pango/Cairo renderers or perfect matching of
+arbitrary user font families.
+
+The EPL-2.0 implementation boundary remains the unmodified dependency packages.
+Original Graphviz/CORE-MATH/Expat notices, corresponding-source release links,
+and font licenses are retained and printed by `--diagram-licenses`. No editor
+code was copied. Graphviz Visual Editor's actual license is MIT; d3-graphviz is
+BSD-3-Clause. Their source-linked selection, insertion/deletion, styles and
+pan/zoom are useful native interaction references. Public renderer handles are
+opaque; parser models and JSON drawing output are available, while exact source
+span/undo correspondence still needs implementation. Graphical editing remains
+pending rather than being simulated by lossy source regeneration.
+
+`graphviz` / `dot` fences and standalone `.gv` / `.graphviz` use the shared native
+paths. Ambiguous `.dot` uses bounded header classification (comments, BOM,
+optional strict, quoted/concatenated names), excluding ordinary prose and binary
+Word-template routing. Source highlighting stays active during invalid drafts;
+existing guarded FileSource saves and Save As rules remain. Commit `e81f030`
+separately fixes content-detected diagram extensions defaulting to `edited.txt`,
+including the earlier `.mmd` case, with a regression assertion.
+
+Warning transport now has one shared count/character budget instead of an
+adapter-specific copy. The bounded warning-overflow test remains; resource
+limitations stay visible in both presentation sizes. No new UI/save owner or
+application dependency cycle was introduced. Architecture comparison reports
+small necessary growth for the adapter, format classification and test coverage.
+The SVG parser's validation complexity is shared with composition rather than
+duplicated. Worker fixtures and protocol/resource assertions are now owned by
+`diagram::test_support`, enabled only through explicit host dev-dependencies.
+Each host retains its own actual-executable test, with one fixture list for
+future adapters. This removes five of the six newly reported clone groups.
+The remaining net clone group is license text; required notices are retained.
+Manifest declarations and unchanged viewer logic are also reported by the tool,
+and unchanged Python-cycle member ordering is not a new application cycle.
+The final comparison adds 423 code lines and two Rust files over the Lini
+baseline, including the independent Save As fix and shared test helper.
+
+Validation: all eight engines, multi-graph gradient IDs, late syntax errors,
+file/stylesheet denial, stream limits, BOMs, source grammars, guarded saves and
+big/small dispatch have targeted tests. The affected core/render/studio/file-
+manager suites pass 2,017 tests (22 ignored); the subsequent font-alias regression
+and final targeted suite pass. Actual-host tests pass for file manager,
+workbench, daemon and display diagnostic under production memory/CPU limits.
+Flowchart, multi-graph and HTML-table PNGs were visually inspected; the corrected
+Helvetica rendering was checked again. Final workspace strict Clippy passes.
+
+Disk maintenance: after checking Cargo/compiler idleness, removed 137 older
+cached executables, preserving root-linked binaries, running executable inodes,
+recent variants and library dependencies. Available space rose from roughly
+111 to 136 GiB (logical removed file sizes were 89.3 GiB; filesystem savings are
+smaller). No extra target tree or dependency-cache sweep was used. User-local
+Cargo build settings remain uncommitted.

@@ -216,7 +216,7 @@
         - [x] Mermaid (`mermaid`, `mmd`) — compiled native renderer, bounded helper, large/small previews
         - [ ] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`)
         - [ ] D2 (`d2`)
-        - [ ] Graphviz DOT (`graphviz`, `dot`)
+        - [x] Graphviz DOT (`graphviz`, `dot`) — compiled Rust renderer, all eight layout engines, bounded multi-graph previews
         - [ ] DBML database markup (`dbml`)
         - [ ] BPMN business process (`bpmn`)
         - [ ] Diagrams.net / draw.io (`drawio`, `diagramsnet`)
@@ -374,7 +374,7 @@
       - [x] `.cmake` — CMake
       - [x] `.vim` — Vim script
       - [x] `.awk` — AWK
-      - [ ] `.dot`, `.gv` — Graphviz DOT graph visualization (May need disambiguation with legacy Microsoft Word templates on `.dot`)
+      - [x] `.dot`, `.gv`, `.graphviz` — native DOT source/live-preview editor with diagnostics and guarded saves; `.dot` requires a graph header to avoid claiming legacy Word templates; graphical manipulation pending
       - [ ] `.spdx` — Software Package Data Exchange (SBOM)
       - [ ] `.yang` — YANG data modeling language
     - [x] Graphics and shader languages
@@ -551,7 +551,7 @@
     - [ ] `.puml`, `.plantuml`, `.iuml` — PlantUML / C4-PlantUML diagram
     - [x] `.mmd`, `.mermaid` — native Mermaid source/live-preview editor with diagnostics and guarded saves; `.mmd` requires a Mermaid header so ordinary MultiMarkdown stays Markdown; graphical editing pending
     - [ ] `.d2` — Terrastruct D2 diagram (May need disambiguation with Diablo II game data files on `.d2`)
-    - [ ] `.dot`, `.gv` — Graphviz DOT graph visualization (May need disambiguation with legacy Microsoft Word templates on `.dot`)
+    - [x] `.dot`, `.gv`, `.graphviz` — native DOT source/live-preview editor with diagnostics and guarded saves; `.dot` requires a graph header to avoid claiming legacy Word templates; graphical manipulation pending
     - [ ] `.dbml` — Database Markup Language (May need disambiguation with Microsoft LINQ to SQL database mapping files on `.dbml`)
     - [ ] `.erd` — BurntSushi entity-relationship diagram (May need disambiguation with Eclipse ERMaster files on `.erd`)
     - [ ] `.nomnoml` — Nomnoml UML diagram

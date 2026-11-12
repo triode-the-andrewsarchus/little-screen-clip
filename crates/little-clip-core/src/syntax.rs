@@ -315,6 +315,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "md" | "markdown" | "mmd" => Some("md"),
         "mermaid" => Some("mermaid"),
         "lini" => Some("lini"),
+        "dot" | "gv" | "graphviz" => Some("graphviz"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -437,6 +438,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "svgbob" => "SvgBob",
         "mermaid" => "Mermaid",
         "lini" => "Lini",
+        "graphviz" => "Graphviz",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -547,6 +549,9 @@ pub const MERMAID_SUBLIME_SYNTAX: &str = include_str!("syntax/mermaid.sublime-sy
 
 /// Bundled Lini source grammar shared with native diagram editors.
 pub const LINI_SUBLIME_SYNTAX: &str = include_str!("syntax/lini.sublime-syntax");
+
+/// Bundled DOT source grammar shared with native graph editors.
+pub const GRAPHVIZ_SUBLIME_SYNTAX: &str = include_str!("syntax/graphviz.sublime-syntax");
 
 /// Maps a language identifier to a compatible fallback language in syntect's default syntax set.
 pub fn syntect_fallback(lang: &str) -> &'static str {
