@@ -214,6 +214,7 @@
     - [ ] XMP metadata stream (`/Metadata`)
     - [ ] Table of contents / bookmark outline hierarchy (`/Outlines`)
     - [ ] Embedded file attachments (`/EmbeddedFiles`)
+    - [ ] `.fdf`, `.xfdf` — Forms Data Format / XML Forms Data Format (submitted PDF form field values, key-value data, annotations, and referenced target PDF file)
   - [x] `.ics` — bounded read-only event agenda, clickable event strips, overlap timeline, event properties, source preview and guarded rename
     - [x] VCALENDAR properties (`PRODID`, `VERSION`, `CALSCALE`, `X-WR-CALNAME`)
     - [x] Separate all-day, UTC, floating and declared-TZID coordinates; exclusive ends, supported durations and cancellation state
@@ -426,8 +427,13 @@
   - [x] `.doc`
   - [x] `.docx`
     - [ ] OPC core, extended, and custom document properties (`docProps/core.xml`, `docProps/app.xml`: title, author, edit duration, revision)
+  - [ ] `.docm`, `.dotx`, `.dotm` — Microsoft Word macro-enabled documents and templates (OPC package inspection, VBA macro project presence, and template layout)
   - [x] `.odt`
     - [ ] OpenDocument meta properties (`meta.xml`: title, creator, creation date, statistics)
+  - [ ] `.ott`, `.odm` — OpenDocument text template and master document
+  - [ ] `.odg`, `.otg` — OpenDocument drawing and drawing template (LibreOffice / OpenOffice Draw vector illustrations, flowcharts, and diagrams)
+  - [ ] `.wpd` — Corel WordPerfect document (file format version, document body text, formatting codes, and metadata headers)
+  - [ ] `.gdoc`, `.gsheet`, `.gslides`, `.gform`, `.gdraw` — Google Drive desktop synchronized document shortcuts (JSON pointer metadata: cloud document URL, doc ID, resource key, and owning user email)
   - [x] `.rtf`
   - [x] `.epub` — bounded EPUB 2/3 reflowed reader with chapter selection, local raster illustrations, adjustable text size, clickable list chapter strips and guarded container renaming; original publication stays unchanged
     - [x] OPF package title, creators, cover resource and explicit spine order; local cover preview
@@ -440,6 +446,8 @@
   - [ ] `.djvu`, `.djv` — scanned-document format
   - [x] `.ppt`, `.pptx`, `.odp`
     - [ ] Presentation properties, slide titles, and presentation notes
+  - [ ] `.pptm`, `.potx`, `.potm`, `.ppsx`, `.pps`, `.otp` — Microsoft PowerPoint macro presentations, slide templates, slide show executables, and OpenDocument presentation templates
+  - [ ] `.mpp` — Microsoft Project plan (task hierarchy outline, Gantt chart milestones, start/finish dates, dependencies, percent complete, and resource allocations)
   - [ ] `.pages` — Apple Pages document
   - [ ] `.key` — Apple Keynote presentation (May need disambiguation with cryptographic private keys)
   - [ ] `.one`, `.onepkg` — Microsoft OneNote notebook / package
@@ -469,6 +477,11 @@
   - [x] `.tsv`
   - [x] `.xls`, `.xlsx`, `.xlsb`
     - [ ] Workbook metadata, sheet names, and author properties
+  - [ ] `.xlsm`, `.xltx`, `.xltm`, `.xlam` — Microsoft Excel macro-enabled workbooks, templates, and add-ins (VBA project stream presence, sheet/table previews without executing macro code)
+  - [ ] `.ots` — OpenDocument spreadsheet template
+  - [ ] `.ofx`, `.qfx`, `.qbo` — Open Financial Exchange / Quicken / QuickBooks financial data (bank and credit card transaction statements, account balances, and date ranges)
+  - [ ] `.iif` — Intuit Interchange Format (QuickBooks plain-text tab-delimited transaction, chart of accounts, and invoice import/export)
+  - [ ] `.accdb`, `.mdb` — Microsoft Access database (Jet / ACE database engine header, table catalogs, column data types, row counts, and relationship definitions)
   - [ ] `.numbers` — Apple Numbers spreadsheet
 - [ ] 3D and CAD
   - [ ] Mesh models
@@ -731,6 +744,10 @@
   - [ ] `.msg` — Microsoft Outlook saved message
     - [ ] Internet message headers (From, To, Cc, Bcc, Subject, Date, Message-ID, In-Reply-To)
     - [ ] Attachment metadata and extraction
+  - [ ] `winmail.dat` — Microsoft Outlook TNEF attachment (Transport Neutral Encapsulation Format; extraction of wrapped MAPI message properties, rich-text body, and encapsulated PDF/Word attachments)
+  - [ ] `.pst`, `.ost` — Microsoft Outlook Personal Storage Table and Offline Storage Table (folder trees [Inbox, Sent, Archive], message count, sender/subject indices, and unread flags)
+  - [ ] `.oft` — Microsoft Outlook email template
+  - [ ] `.vcf` — vCard electronic business card / contact (vCard 2.1/3.0/4.0 name, organization, job title, phone numbers, email addresses, postal addresses, and embedded base64 photo; distinguish from genomic Variant Call Format)
   - [ ] `.mbox` — mbox email mailbox archive
     - [ ] `From ` separator lines and per-message header indices
   - [ ] `.har` — HTTP Archive (HAR 1.2 JSON; network request/response waterfall, timing metrics, HTTP headers, cookies, query parameters, and payload inspection)
