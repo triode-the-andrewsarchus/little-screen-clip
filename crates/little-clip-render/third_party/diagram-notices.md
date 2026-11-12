@@ -72,3 +72,14 @@ Optional chemistry, emoji, Latin Modern and PNG features are disabled. The
 application supplies its existing Noto outline fonts as character fallbacks and
 uses its existing SVG rasterizer. No TeX installation or JavaScript engine is
 required, and source commands cannot select a file loader.
+
+## BPMN Kit
+
+The unmodified BPMN Kit 0.2.1 native crates (`bpmnkit-bpmn`, `bpmnkit-render`,
+`bpmnkit-layout`, `bpmnkit-dmn`, `bpmnkit-feel`, `bpmnkit-spec`, `bpmnkit-xml`)
+are used under their MIT option, reproduced in `bpmnkit-MIT.txt`.
+Source: https://github.com/bpmnkit/bpmnkit and the locked crates.io 0.2.1
+release archives. The renderer's optional Inter fonts (OFL-1.1), PNG backend,
+system-font discovery and browser editor are not compiled. SVG text uses the
+application's existing bundled fonts and rasterizer. The preview does not
+execute BPMN processes, scripts, expressions or extension elements.

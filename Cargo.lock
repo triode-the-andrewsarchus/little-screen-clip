@@ -849,6 +849,108 @@ dependencies = [
 ]
 
 [[package]]
+name = "borsh"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "553c5d846a6ba5150c65e3b1b8ec073bcf1abc20f9b7220de384a4443ea4e20a"
+dependencies = [
+ "borsh-derive",
+ "bytes",
+ "cfg_aliases 0.2.2",
+]
+
+[[package]]
+name = "borsh-derive"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12cdfe656708a01f89b451a7d36466e6fe6c414de0aa18fc54f864f6f9ca9f56"
+dependencies = [
+ "once_cell",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
+]
+
+[[package]]
+name = "bpmnkit-bpmn"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cd1cf6f4605d3fbdc10adbf70813e36059282904bf7685b88f5ea4f04e1b558"
+dependencies = [
+ "bpmnkit-feel",
+ "bpmnkit-spec",
+ "bpmnkit-xml",
+ "indexmap",
+ "serde",
+]
+
+[[package]]
+name = "bpmnkit-dmn"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6234c6cebb85ec597e7071e52a03c78deafaa181f69854e7f5596586203da464"
+dependencies = [
+ "bpmnkit-feel",
+ "bpmnkit-xml",
+ "indexmap",
+ "serde",
+]
+
+[[package]]
+name = "bpmnkit-feel"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71725710f6354eb69f306bfa4ba30488d7015802f617aec16b2a11d18a40a792"
+dependencies = [
+ "bpmnkit-spec",
+ "chrono",
+ "chrono-tz",
+ "indexmap",
+ "regex",
+ "rust_decimal",
+ "serde_json",
+]
+
+[[package]]
+name = "bpmnkit-layout"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "653d4a7df9609f38aab083fed7a0d8bbbbb9119f52d794909691478e51ecc6c3"
+dependencies = [
+ "bpmnkit-bpmn",
+ "bpmnkit-dmn",
+ "indexmap",
+]
+
+[[package]]
+name = "bpmnkit-render"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "339f7058ffe45f8d0a972ca4bc125cfc5274bae99ab2c1336940a3a331cf3ab6"
+dependencies = [
+ "bpmnkit-bpmn",
+ "indexmap",
+]
+
+[[package]]
+name = "bpmnkit-spec"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29795d577bbe97fdfde44881416cc2fe261c553836a6ecb5d0bd4438efdbf7c2"
+
+[[package]]
+name = "bpmnkit-xml"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4036d79e9247ef2fbeb28c71df3294abad09cf05319a968ee45232739d8e4e84"
+dependencies = [
+ "indexmap",
+ "quick-xml 0.41.0",
+ "serde",
+]
+
+[[package]]
 name = "brotli-decompressor"
 version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5902,6 +6004,10 @@ dependencies = [
 name = "little-clip-render"
 version = "0.1.0"
 dependencies = [
+ "bpmnkit-bpmn",
+ "bpmnkit-layout",
+ "bpmnkit-render",
+ "bpmnkit-spec",
  "d2-rs-raster",
  "d2-rs-render",
  "d2-rs-scenebuild",
@@ -9036,6 +9142,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust_decimal"
+version = "1.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7653272e75dcac41dc199fbea6f5797633994fafd339943c06c9af16bf29cd3a"
+dependencies = [
+ "arrayvec",
+ "borsh",
+ "bytes",
+ "num-traits",
+ "rand 0.8.8",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11456,6 +11579,7 @@ checksum = "a0181c14ddd6c7b8b0b0132a5f1ea2f32be0d893cd3ea97b6e3b28886b8a3d1c"
 dependencies = [
  "cfg-if",
  "rustversion",
+ "serde",
  "wasm-bindgen-macro",
  "wasm-bindgen-shared",
 ]

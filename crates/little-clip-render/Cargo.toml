@@ -39,5 +39,10 @@ d2-rs-target = "=0.1.7"
 d2-rs-scenebuild = "=0.1.7"
 d2-rs-raster = "=0.1.7"
 
+bpmnkit-bpmn = "=0.2.1"
+bpmnkit-render = { version = "=0.2.1", default-features = false }
+bpmnkit-layout = "=0.2.1"
+bpmnkit-spec = "=0.2.1"
+
 [dev-dependencies]
 tempfile = "3.27"

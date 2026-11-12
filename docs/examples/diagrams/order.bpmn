@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+ xmlns:layout="http://www.omg.org/spec/BPMN/20100524/DI"
+ xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+ xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+ xmlns:paint="http://bpmn.io/schema/bpmn/biocolor/1.0"
+ id="order_definition" targetNamespace="urn:example:orders">
+ <process id="order" isExecutable="false">
+  <startEvent id="received" name="Order received"/>
+  <userTask id="review" name="Review order"/>
+  <exclusiveGateway id="approved" name="Approved?"/>
+  <endEvent id="complete" name="Ready to ship"/>
+  <sequenceFlow id="a" sourceRef="received" targetRef="review"/>
+  <sequenceFlow id="b" sourceRef="review" targetRef="approved"/>
+  <sequenceFlow id="c" sourceRef="approved" targetRef="complete" name="Yes"/>
+ </process>
+ <layout:BPMNDiagram id="diagram">
+  <layout:BPMNPlane id="plane" bpmnElement="order">
+   <layout:BPMNShape id="received_shape" bpmnElement="received">
+    <dc:Bounds x="40" y="112" width="36" height="36"/>
+   </layout:BPMNShape>
+   <layout:BPMNShape id="review_shape" bpmnElement="review" paint:fill="#cceeff" paint:stroke="#286078">
+    <dc:Bounds x="130" y="90" width="120" height="80"/>
+   </layout:BPMNShape>
+   <layout:BPMNShape id="approved_shape" bpmnElement="approved" paint:fill="#fff0b3">
+    <dc:Bounds x="305" y="105" width="50" height="50"/>
+   </layout:BPMNShape>
+   <layout:BPMNShape id="complete_shape" bpmnElement="complete">
+    <dc:Bounds x="420" y="112" width="36" height="36"/>
+   </layout:BPMNShape>
+   <layout:BPMNEdge id="a_edge" bpmnElement="a"><di:waypoint x="76" y="130"/><di:waypoint x="130" y="130"/></layout:BPMNEdge>
+   <layout:BPMNEdge id="b_edge" bpmnElement="b"><di:waypoint x="250" y="130"/><di:waypoint x="305" y="130"/></layout:BPMNEdge>
+   <layout:BPMNEdge id="c_edge" bpmnElement="c"><di:waypoint x="355" y="130"/><di:waypoint x="420" y="130"/></layout:BPMNEdge>
+  </layout:BPMNPlane>
+ </layout:BPMNDiagram>
+</definitions>

@@ -1,6 +1,5 @@
 //! Native DOT layout, with file loading disabled before any layout begins.
-use resvg::usvg::TreeWriting;
-use std::{fmt::Write, sync::LazyLock};
+use std::sync::LazyLock;
 
 fn fonts() -> &'static resvg::usvg::fontdb::Database {
     static FONTS: LazyLock<resvg::usvg::fontdb::Database> = LazyLock::new(|| {
@@ -78,39 +77,13 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
             })
             .collect::<Vec<_>>(),
     );
-    let mut body = String::new();
-    let (mut width, mut height) = (0.0_f32, 0.0_f32);
-    for (index, svg) in diagrams.into_iter().enumerate() {
-        // The inline writer omits both namespace declarations (it expects an
-        // SVG host). Its generated root is otherwise complete. Materialize the
-        // namespaces without enabling DTDs or stylesheet processing.
-        let svg = svg.replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" ", 1);
-        let (tree, limitations) = super::parse_svg(&svg, fonts(), "Tinos")?;
-        warnings.extend(limitations);
-        width = width.max(tree.size.width());
-        let normalized = tree.to_string(&resvg::usvg::XmlOptions {
-            // Resolve references before nesting. Each graph gets its own ID
-            // namespace, including gradients, clipping and label paths.
-            id_prefix: Some(format!("graph-{index}-")),
-            ..Default::default()
-        });
-        write!(
-            body,
-            "<g transform=\"translate(0 {height})\">{normalized}</g>"
-        )
-        .map_err(|error| error.to_string())?;
-        height += tree.size.height() + 16.0;
-        if height > 16_384.0 || body.len() > super::MAX_SVG {
-            return Err("Combined DOT graphs exceed the diagram viewport budget".into());
-        }
-    }
-    height -= 16.0;
-    Ok((
-        format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\">{body}</svg>"
-        ),
-        warnings,
-    ))
+    let diagrams = diagrams.into_iter().map(|svg| {
+        // The inline writer expects an SVG host and omits its namespaces.
+        svg.replacen("<svg ", "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" ", 1)
+    });
+    let (svg, limitations) = super::compose_svg(diagrams, fonts(), "Tinos")?;
+    warnings.extend(limitations);
+    Ok((svg, warnings))
 }
 
 fn preflight(source: &str) -> Result<Vec<String>, String> {

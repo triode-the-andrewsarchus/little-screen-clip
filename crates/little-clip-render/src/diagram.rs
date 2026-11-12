@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+mod bpmn;
 mod d2;
 mod graphviz;
 mod lini;
@@ -180,6 +181,7 @@ pub fn run_worker_cli() -> bool {
     if argument.as_deref() == Some(std::ffi::OsStr::new("--diagram-licenses")) {
         for notice in [
             include_str!("../third_party/diagram-notices.md"),
+            include_str!("../third_party/bpmnkit-MIT.txt"),
             include_str!("../third_party/merman-MIT.txt"),
             include_str!("../third_party/merman-elk-EPL-2.0.txt"),
             include_str!("../third_party/lini-MIT.txt"),
@@ -263,6 +265,7 @@ fn render_inline(
             math_layout = Some(layout);
             (svg, Vec::new())
         }
+        Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
         Format::Lini => lini::svg(source)?,
         Format::Mermaid => (mermaid::svg(source)?, Vec::new()),
@@ -363,6 +366,73 @@ fn parse_svg(
         Vec::new()
     };
     Ok((tree, warnings))
+}
+
+// Outline and namespace each document before stacking, so marker, gradient and
+// clipping IDs cannot cross between independently authored diagrams.
+fn compose_svg(
+    diagrams: impl IntoIterator<Item = String>,
+    fonts: &resvg::usvg::fontdb::Database,
+    family: &str,
+) -> Result<(String, Vec<String>), String> {
+    use resvg::usvg::{NodeExt, TreeWriting};
+    use std::fmt::Write;
+    let mut body = String::new();
+    let mut warnings = Vec::new();
+    let (mut width, mut height) = (0.0_f32, 0.0_f32);
+    for (index, svg) in diagrams.into_iter().enumerate() {
+        if index >= 16 {
+            return Err("Previews support at most sixteen diagram planes".into());
+        }
+        let (mut tree, limitations) = parse_svg(&svg, fonts, family)?;
+        // Some generators size the root from shapes alone, excluding external
+        // labels. Text has been outlined, so fit its real glyph geometry before
+        // nesting rather than clipping labels or guessing a fixed text margin.
+        if let Some(bounds) = tree.root.calculate_bbox() {
+            let old = tree.view_box.rect;
+            let viewport = resvg::usvg::NonZeroRect::from_ltrb(
+                old.left().min(bounds.left() - 2.0),
+                old.top().min(bounds.top() - 2.0),
+                old.right().max(bounds.right() + 2.0),
+                old.bottom().max(bounds.bottom() + 2.0),
+            )
+            .ok_or("Invalid diagram content bounds")?;
+            if viewport.width() > 16_384.0 || viewport.height() > 16_384.0 {
+                return Err("Diagram labels exceed the viewport budget".into());
+            }
+            tree.size = resvg::usvg::Size::from_wh(
+                tree.size.width() * viewport.width() / old.width(),
+                tree.size.height() * viewport.height() / old.height(),
+            )
+            .ok_or("Invalid diagram content size")?;
+            tree.view_box.rect = viewport;
+        }
+        warnings.extend(limitations);
+        width = width.max(tree.size.width());
+        let normalized = tree.to_string(&resvg::usvg::XmlOptions {
+            id_prefix: Some(format!("graph-{index}-")),
+            ..Default::default()
+        });
+        write!(
+            body,
+            "<g transform=\"translate(0 {height})\">{normalized}</g>"
+        )
+        .map_err(|error| error.to_string())?;
+        height += tree.size.height() + 16.0;
+        if height > 16_384.0 || body.len() > MAX_SVG {
+            return Err("Combined diagrams exceed the viewport budget".into());
+        }
+    }
+    if height == 0.0 {
+        return Err("No diagram planes to render".into());
+    }
+    height -= 16.0;
+    Ok((
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\">{body}</svg>"
+        ),
+        warnings,
+    ))
 }
 
 fn rasterize_svg(svg: String, white_paper: bool) -> Result<Rendered, String> {
@@ -482,6 +552,19 @@ mod tests {
         for (extension, content, format, source) in [
             ("md", "```d2\na -> b\n```", Format::D2, "a -> b\n"),
             ("d2", "a -> b\n", Format::D2, "a -> b\n"),
+            (
+                "md",
+                "```bpmn\n<definitions/>\n```",
+                Format::Bpmn,
+                "<definitions/>\n",
+            ),
+            ("bpmn", "<definitions/>", Format::Bpmn, "<definitions/>"),
+            (
+                "xml",
+                "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL'/>",
+                Format::Bpmn,
+                "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL'/>",
+            ),
             ("md", "$x$", Format::MathInline, "x"),
             ("md", "$$x$$", Format::Math, "x"),
             ("md", "```pikchr\nbox\n```", Format::Pikchr, "box\n"),

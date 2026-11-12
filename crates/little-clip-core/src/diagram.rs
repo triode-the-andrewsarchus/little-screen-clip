@@ -11,6 +11,7 @@ pub enum Format {
     Lini,
     Graphviz,
     D2,
+    Bpmn,
     Math,
     MathInline,
 }
@@ -29,6 +30,7 @@ impl Format {
             "lini" => Some(Self::Lini),
             "graphviz" | "dot" => Some(Self::Graphviz),
             "d2" => Some(Self::D2),
+            "bpmn" | "bpmn2" => Some(Self::Bpmn),
             _ => None,
         }
     }
@@ -49,6 +51,7 @@ impl Format {
             "lini" => Some(Self::Lini),
             "gv" | "graphviz" => Some(Self::Graphviz),
             "d2" => Some(Self::D2),
+            "bpmn" | "bpmn2" => Some(Self::Bpmn),
             _ => None,
         }
     }
@@ -65,6 +68,8 @@ impl Format {
                 Some(Self::Mermaid)
             } else if extension.eq_ignore_ascii_case("dot") && dot_signature(source) {
                 Some(Self::Graphviz)
+            } else if extension.eq_ignore_ascii_case("xml") && bpmn_signature(source) {
+                Some(Self::Bpmn)
             } else {
                 None
             }
@@ -80,7 +85,27 @@ impl Format {
             Self::Lini => "Lini",
             Self::Graphviz => "Graphviz",
             Self::D2 => "D2",
+            Self::Bpmn => "BPMN",
             Self::Math | Self::MathInline => "LaTeX math",
+        }
+    }
+}
+
+// Generic XML is claimed only by its actual, namespace-resolved root. A bounded
+// prefix avoids materializing the document or reading beyond the source buffer.
+fn bpmn_signature(source: &str) -> bool {
+    use quick_xml::{events::Event, name::ResolveResult};
+    let source = &source[..source.floor_char_boundary(source.len().min(32 * 1024))];
+    let mut reader = quick_xml::NsReader::from_str(source.trim_start_matches('\u{feff}'));
+    loop {
+        match reader.read_resolved_event() {
+            Ok((ResolveResult::Bound(namespace), Event::Start(tag) | Event::Empty(tag))) => {
+                return namespace.as_ref() == b"http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    && tag.local_name().as_ref() == b"definitions";
+            }
+            Ok((_, Event::Decl(_) | Event::Comment(_) | Event::PI(_))) => (),
+            Ok((_, Event::Text(text))) if text.iter().all(u8::is_ascii_whitespace) => (),
+            _ => return false,
         }
     }
 }
@@ -231,6 +256,30 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bpmn_xml_detection_requires_the_resolved_root_namespace() {
+        let namespace = "http://www.omg.org/spec/BPMN/20100524/MODEL";
+        for source in [
+            format!("<definitions xmlns='{namespace}'/>"),
+            format!("<?xml version='1.0'?><!-- hi --><p:definitions xmlns:p='{namespace}'/>"),
+        ] {
+            assert_eq!(
+                Format::from_source_extension("xml", &source),
+                Some(Format::Bpmn)
+            );
+        }
+        for source in [
+            "<definitions/>",
+            "<definitions xmlns='urn:other'/>",
+            "<root><definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL'/></root>",
+            "<!DOCTYPE definitions><definitions/>",
+        ] {
+            assert_eq!(Format::from_source_extension("xml", source), None);
+        }
+        assert_eq!(Format::from_extension("bpmn2"), Some(Format::Bpmn));
+        assert_eq!(Format::from_language("bpmn"), Some(Format::Bpmn));
+    }
+
     #[test]
     fn dot_files_require_graph_headers_instead_of_claiming_word_templates() {
         for source in [

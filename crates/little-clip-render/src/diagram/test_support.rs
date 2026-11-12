@@ -23,6 +23,12 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         ("graphviz", "digraph { a -> b }", true),
         ("d2", "direction: right\na -> b: Preview", true),
         ("d2", "a: {", false),
+        (
+            "bpmn",
+            include_str!("../../../../docs/examples/diagrams/order.bpmn"),
+            true,
+        ),
+        ("bpmn", "<definitions/>", false),
         ("d2", "...@/etc/passwd", false),
         ("math", r"\sum_{n=1}^{\infty}\frac{1}{n^2}", true),
         ("mathinline", r"\frac{x}{y}", true),
