@@ -186,6 +186,10 @@ pub(super) fn build_minimap_lines(
 }
 
 /// Draws a VS Code-style overview from syntax-colored rectangles, not glyphs.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Studio rendering keeps source geometry, display state and host interaction outputs explicit"
+)]
 pub(super) fn render_code_minimap(
     ui: &mut egui::Ui,
     lines: &[(usize, MinimapLine)],

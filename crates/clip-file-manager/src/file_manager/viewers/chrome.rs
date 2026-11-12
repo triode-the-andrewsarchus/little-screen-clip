@@ -15,7 +15,7 @@ impl Viewers {
         // The menu is laid out from the right edge inward.
         if let Some(collection) = &mut self.gallery {
             let active = match &self.session {
-                Some(ViewerSession::Image(state)) => Some(state),
+                Some(ViewerSession::Image(state)) => Some(state.as_ref()),
                 _ => None,
             };
             collection.export_controls(ui, active, ready && self.loading.is_none(), palette);
@@ -261,7 +261,7 @@ mod tests {
         let mut state = AudioPreviewState::new(path.clone(), "audio.wav".into())
             .with_file_source(source.clone());
         state.selection = Some((0.2, 0.8));
-        let mut viewer = ViewerSession::Audio(state);
+        let mut viewer = ViewerSession::Audio(Box::new(state));
         let (destination, source) =
             super::super::super::edits::rename_file(&path, "renamed.wav", &source).unwrap();
         relocate(&mut viewer, &path, &destination, source.clone());

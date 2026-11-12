@@ -387,10 +387,10 @@ impl WorkbenchApp {
             return;
         }
         if let Some(audio_path) = item.audio_path() {
-            self.replace_viewer(Some(ViewerSession::Audio(
+            self.replace_viewer(Some(ViewerSession::Audio(Box::new(
                 AudioPreviewState::new(audio_path, item.title.clone())
                     .with_editor(self.config.audio.editor.clone()),
-            )));
+            ))));
             return;
         }
         if let Some(fp) = bounded_item_file_path(item) {

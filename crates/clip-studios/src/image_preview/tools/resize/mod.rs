@@ -32,7 +32,7 @@ impl ResizeFilter {
         }
     }
 
-    pub fn to_image_filter(&self) -> image::imageops::FilterType {
+    pub fn to_image_filter(self) -> image::imageops::FilterType {
         match self {
             ResizeFilter::Lanczos3 => image::imageops::FilterType::Lanczos3,
             ResizeFilter::Triangle => image::imageops::FilterType::Triangle,

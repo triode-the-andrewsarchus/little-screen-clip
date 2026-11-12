@@ -288,61 +288,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sample_rate: u32,
     }
 
-    let mut cases = Vec::new();
-
-    // 1. DTMF Sequences
-    cases.push(TestCase {
-        name: "dtmf_8675309",
-        samples: generate_dtmf("8675309", 8000, 0.16, 0.10),
-        sample_rate: 8000,
-    });
-    cases.push(TestCase {
-        name: "dtmf_full_keypad",
-        samples: generate_dtmf("123A456B789C*0#D", 8000, 0.12, 0.08),
-        sample_rate: 8000,
-    });
-
-    // 2. Morse / CW
-    cases.push(TestCase {
-        name: "morse_sos",
-        samples: generate_morse("SOS", 8000, 18.0, 750.0),
-        sample_rate: 8000,
-    });
-    cases.push(TestCase {
-        name: "morse_cq_de_k1abc",
-        samples: generate_morse("CQ CQ DE K1ABC", 8000, 20.0, 700.0),
-        sample_rate: 8000,
-    });
-
-    // 3. Bell 202 / APRS
-    cases.push(TestCase {
-        name: "aprs_status_beacon",
-        samples: generate_aprs_status(b"little-clip digital decode test", b"N0CALL", 7, 48000),
-        sample_rate: 48000,
-    });
-    cases.push(TestCase {
-        name: "aprs_emergency_msg",
-        samples: generate_aprs_message(
-            b"SAR-01",
-            b"TEAM EN ROUTE TO CHECKPOINT 4",
-            b"W1AW",
-            9,
-            48000,
-        ),
-        sample_rate: 48000,
-    });
-
-    // 4. Mixed Composite (DTMF + Morse)
     let mut mixed = generate_dtmf("911", 8000, 0.15, 0.10);
     mixed.extend(vec![0.0f32; 800]); // 100ms pause
     mixed.extend(generate_morse("TEST", 8000, 20.0, 800.0));
-    cases.push(TestCase {
-        name: "mixed_dtmf_morse",
-        samples: mixed,
-        sample_rate: 8000,
-    });
+
+    let cases = vec![
+        // 1. DTMF Sequences
+        TestCase {
+            name: "dtmf_8675309",
+            samples: generate_dtmf("8675309", 8000, 0.16, 0.10),
+            sample_rate: 8000,
+        },
+        TestCase {
+            name: "dtmf_full_keypad",
+            samples: generate_dtmf("123A456B789C*0#D", 8000, 0.12, 0.08),
+            sample_rate: 8000,
+        },
+        // 2. Morse / CW
+        TestCase {
+            name: "morse_sos",
+            samples: generate_morse("SOS", 8000, 18.0, 750.0),
+            sample_rate: 8000,
+        },
+        TestCase {
+            name: "morse_cq_de_k1abc",
+            samples: generate_morse("CQ CQ DE K1ABC", 8000, 20.0, 700.0),
+            sample_rate: 8000,
+        },
+        // 3. Bell 202 / APRS
+        TestCase {
+            name: "aprs_status_beacon",
+            samples: generate_aprs_status(b"little-clip digital decode test", b"N0CALL", 7, 48000),
+            sample_rate: 48000,
+        },
+        TestCase {
+            name: "aprs_emergency_msg",
+            samples: generate_aprs_message(
+                b"SAR-01",
+                b"TEAM EN ROUTE TO CHECKPOINT 4",
+                b"W1AW",
+                9,
+                48000,
+            ),
+            sample_rate: 48000,
+        },
+        // 4. Mixed Composite (DTMF + Morse)
+        TestCase {
+            name: "mixed_dtmf_morse",
+            samples: mixed,
+            sample_rate: 8000,
+        },
+    ];
 
     // Noise levels
+
     let variants = [
         ("clean", 0.00f32, "SNR > 50 dB (Pure)"),
         ("noisy", 0.10f32, "SNR ~15 dB (Moderate Static)"),

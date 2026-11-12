@@ -394,7 +394,8 @@ fn idle_audio_mode_escape_closes_to_the_originating_workbench_route() {
         let mut audio = AudioPreviewState::new(wav_path.clone(), "escape-audio.wav".into());
         audio.active_mode = mode;
         audio.is_playing = true;
-        let mut app = test_workbench_app(Some(ViewerSession::Audio(audio)), VecDeque::new());
+        let mut app =
+            test_workbench_app(Some(ViewerSession::Audio(Box::new(audio))), VecDeque::new());
         app.view = WorkbenchView::NodeMachine;
         app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
         let selected_slots = app.selected_slots.clone();

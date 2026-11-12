@@ -40,7 +40,7 @@ impl Completion {
 }
 
 enum RenderCompletion {
-    Splat(Completion),
+    Splat(Box<Completion>),
     Mesh {
         model: Arc<little_clip_core::model3d::Model3d>,
         path: PathBuf,
@@ -116,7 +116,8 @@ impl SplatViewerState {
                 let points = scene.len();
                 let renderer =
                     SplatRenderer::new(Arc::new(scene)).map_err(|error| error.to_string())?;
-                Completion::render(renderer, request, points).map(RenderCompletion::Splat)
+                Completion::render(renderer, request, points)
+                    .map(|completion| RenderCompletion::Splat(Box::new(completion)))
             })
         });
         Self {
@@ -209,7 +210,8 @@ impl SplatViewerState {
         let request = self.desired;
         let points = self.points;
         let (ticket, rx) = BackgroundJobs::global().submit(Duration::from_secs(30), move || {
-            Completion::render(renderer, request, points).map(RenderCompletion::Splat)
+            Completion::render(renderer, request, points)
+                .map(|completion| RenderCompletion::Splat(Box::new(completion)))
         });
         self.job = Some(RenderJob {
             request,

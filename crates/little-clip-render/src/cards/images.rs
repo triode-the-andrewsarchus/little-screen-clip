@@ -17,6 +17,10 @@ static PLAY_ICON: std::sync::LazyLock<Option<Pixmap>> = std::sync::LazyLock::new
 });
 
 impl ScreenRenderer {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_image_thumbnail(
         &self,
         pixmap: &mut Pixmap,
@@ -105,6 +109,10 @@ impl ScreenRenderer {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_multi_image_grid(
         &self,
         pixmap: &mut Pixmap,
@@ -299,6 +307,10 @@ impl ScreenRenderer {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_animation_thumbnail(
         &self,
         pixmap: &mut Pixmap,

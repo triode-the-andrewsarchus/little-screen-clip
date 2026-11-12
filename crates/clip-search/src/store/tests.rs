@@ -713,8 +713,9 @@ fn only_completed_directory_membership_can_retire_an_unseen_path() {
     assert_eq!(
         store
             .unseen_children(id, generation, source.path())
-            .unwrap(),
-        [entry.path.clone()]
+            .unwrap()
+            .as_slice(),
+        std::slice::from_ref(&entry.path)
     );
     store.retire_path(id, &entry.path).unwrap();
     store.finish_scan(id, None).unwrap();

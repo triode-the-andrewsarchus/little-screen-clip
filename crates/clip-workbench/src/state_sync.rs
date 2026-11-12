@@ -73,7 +73,7 @@ pub(crate) fn spawn_state_poller(ctx: egui::Context) -> Receiver<Result<Arc<Slot
     let (state_tx, state_rx) = channel();
     std::thread::spawn(move || {
         let initial = match request(&IpcRequest::GetState) {
-            Ok(IpcResponse::State(state)) => Ok(state),
+            Ok(IpcResponse::State(state)) => Ok(*state),
             Ok(_) => Err("Unexpected clipboard state response".to_owned()),
             Err(error) => Err(error.to_string()),
         };

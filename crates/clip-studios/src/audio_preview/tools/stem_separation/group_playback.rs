@@ -13,7 +13,7 @@ struct GroupInput {
 pub(super) struct GroupLoad {
     ticket: JobTicket,
     cancel: Arc<AtomicBool>,
-    receiver: Receiver<Result<Result<Vec<(usize, FileDecoder)>, String>, JobError>>,
+    receiver: little_clip_core::jobs::JobReceiver<Result<Vec<(usize, FileDecoder)>, String>>,
     inputs: Vec<GroupInput>,
 }
 impl Drop for GroupLoad {

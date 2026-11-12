@@ -81,6 +81,10 @@ pub fn draw_line(
 }
 
 /// Draws text onto a tiny-skia pixmap using fontdue.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Studio rendering keeps source geometry, display state and host interaction outputs explicit"
+)]
 pub fn draw_text_skia(
     pixmap: &mut Pixmap,
     font: &Font,
@@ -166,6 +170,10 @@ pub fn encode_pixmap_png(pixmap: &Pixmap) -> Result<Vec<u8>, String> {
 /// - Audacity stem mode when zoomed in, or peak envelope mode when zoomed out.
 /// - Respects current non-destructive edits and sample colors.
 /// - Excludes playhead, selections, and transient markers.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Studio rendering keeps source geometry, display state and host interaction outputs explicit"
+)]
 pub fn render_waveform_image(
     analysis: &FullAudioAnalysis,
     source_analysis: &FullAudioAnalysis,

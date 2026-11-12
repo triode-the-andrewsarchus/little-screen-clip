@@ -524,6 +524,10 @@ impl<'a> YiqView<'a> {
         assert!(blit_info.rect.height() + blit_info.destination.1 <= self.dimensions.1);
 
         #[inline(always)]
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "SIMD dispatch passes separate YIQ planes alongside pixel-format and source-row metadata"
+        )]
         unsafe fn blit_row_simd_inner<S: Simd, P: PixelFormat, T: Normalize, F: PixelTransform>(
             simd: S,
             y: &mut [f32],
@@ -563,6 +567,10 @@ impl<'a> YiqView<'a> {
             }
         }
 
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "SIMD dispatch passes separate YIQ planes alongside pixel-format and source-row metadata"
+        )]
         unsafe fn blit_row_simd<P: PixelFormat, T: Normalize, F: PixelTransform>(
             level: Level,
             y: &mut [f32],

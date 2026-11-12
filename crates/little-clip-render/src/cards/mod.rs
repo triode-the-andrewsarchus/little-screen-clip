@@ -49,6 +49,10 @@ pub(crate) fn find_syntax(lang: &str) -> &'static SyntaxReference {
 
 impl ScreenRenderer {
     /// Draws a single slot card on the canvas with rounded header, status badges, and content previews.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(crate) fn draw_slot_card(
         &self,
         pixmap: &mut Pixmap,
@@ -164,6 +168,10 @@ impl ScreenRenderer {
         text_preview
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     fn draw_item_content(
         &self,
         pixmap: &mut Pixmap,

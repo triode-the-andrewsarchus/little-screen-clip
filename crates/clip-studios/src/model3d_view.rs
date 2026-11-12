@@ -12,8 +12,8 @@ use little_clip_core::JobTicket;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::presentation::model3d::{Model3d, ModelFormat, Vec3};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, mpsc::Receiver};
 use std::time::Duration;
 
 const INLINE_MODEL3D_TRIANGLE_BUDGET: usize = 2_000;
@@ -48,7 +48,7 @@ pub struct Model3dViewerState {
     pub title: String,
     pub status: ModelLoadingStatus,
     pub mesh: Option<Arc<Model3d>>,
-    pub rx: Option<Receiver<Result<Result<Arc<Model3d>, String>, little_clip_core::JobError>>>,
+    pub rx: Option<little_clip_core::jobs::JobReceiver<Result<Arc<Model3d>, String>>>,
     load_ticket: Option<JobTicket>,
     pub pitch: f32, // X rotation (radians)
     pub yaw: f32,   // Y rotation (radians)
@@ -352,6 +352,10 @@ impl Model3dViewerState {
             });
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Studio rendering keeps source geometry, display state and host interaction outputs explicit"
+    )]
     fn render_error(
         &mut self,
         ui: &mut egui::Ui,
@@ -642,6 +646,10 @@ impl Model3dViewerState {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Studio rendering keeps source geometry, display state and host interaction outputs explicit"
+)]
 fn render_mesh_projection(
     mesh: &Model3d,
     painter: &egui::Painter,

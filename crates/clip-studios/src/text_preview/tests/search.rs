@@ -466,7 +466,6 @@ fn search_match_spool_requires_ordered_ranges_and_recovers_after_partial_iterati
 
     let mut ranges = spool.ranges_for_fragment(0, 10).unwrap();
     assert_eq!(ranges.next().unwrap().unwrap().1.start_byte, 2);
-    drop(ranges);
 
     spool.append(9, 10).unwrap();
     assert_eq!(spool.len(), 3);

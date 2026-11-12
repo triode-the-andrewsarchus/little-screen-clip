@@ -1435,7 +1435,8 @@ fn category_and_duration_exclusions_render_only_faint_soft_density() {
         None,
         0.5,
     ));
-    for sample in state.samples[..2].to_vec() {
+    let played_samples = state.samples[..2].to_vec();
+    for sample in played_samples {
         state.record_played_sample(&sample);
     }
     let output = render_map_frame(&ctx, &mut state, vec![], &mut |_| {});

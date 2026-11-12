@@ -749,9 +749,11 @@ fn append_highlighted_tokens(out: &mut String, ranges: &[(syntect::highlighting:
 }
 
 /// Identifies character index spans corresponding to intra-line deletions and insertions.
+type WordSpans = Vec<(usize, usize)>;
+
 fn compute_word_diff_spans<'a>(
     word_diff: &similar::TextDiff<'a, 'a, 'a, str>,
-) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+) -> (WordSpans, WordSpans) {
     let mut old_spans = Vec::new();
     let mut new_spans = Vec::new();
     let mut cur_old = 0;

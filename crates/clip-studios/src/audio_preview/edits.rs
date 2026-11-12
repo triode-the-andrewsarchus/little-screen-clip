@@ -422,7 +422,7 @@ impl AudioPreviewState {
         let max_hz = if sample_rate > 196_000.0 {
             sample_rate * 0.5
         } else {
-            (sample_rate * 0.45).min(20_000.0).max(20.0)
+            (sample_rate * 0.45).clamp(20.0, 20_000.0)
         };
         (20.0, max_hz.max(20.0))
     }

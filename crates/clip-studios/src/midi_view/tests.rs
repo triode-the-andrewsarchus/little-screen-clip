@@ -890,7 +890,6 @@ fn rendered_full_score_copy_shortcut_exports_parseable_midi_to_left_hand() {
         "rendered full-score Copy MIDI button label"
     );
     render(&mut state, vec![egui::Event::Copy]);
-    drop(render);
     assert_eq!(dispatch_count, 1, "rendered copy shortcut dispatch count");
 
     let (request, bytes) = request_rx

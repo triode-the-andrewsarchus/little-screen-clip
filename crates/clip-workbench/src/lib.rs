@@ -252,23 +252,23 @@ enum SpreadsheetLoadSource {
 enum ViewerSession {
     Diff(DiffViewerState),
     BinaryDiff(BinaryDiffViewState),
-    Audio(AudioPreviewState),
-    Image(ImagePreviewState),
+    Audio(Box<AudioPreviewState>),
+    Image(Box<ImagePreviewState>),
     ImageLoading(ImageLoadJob),
     Spreadsheet(SpreadsheetViewerState),
     Pdf(PdfEditorState),
     Midi(MidiViewerState),
     Model3d(Model3dViewerState),
-    Splat(splat_view::SplatViewerState),
+    Splat(Box<splat_view::SplatViewerState>),
     Text(TextPreviewState),
     ComponentGallery(component_gallery::ComponentGalleryState),
 }
 
 fn scene_file_viewer(path: PathBuf, config: &AppConfig) -> ViewerSession {
     if little_clip_scene::is_splat_file(&path) {
-        ViewerSession::Splat(
+        ViewerSession::Splat(Box::new(
             splat_view::SplatViewerState::from_file(path).with_config(config.model3d.clone()),
-        )
+        ))
     } else {
         ViewerSession::Model3d(
             Model3dViewerState::from_file(path).with_config(config.model3d.clone()),
@@ -282,12 +282,12 @@ fn gallery_request_to_viewer_session(
 ) -> ViewerSession {
     match request {
         component_gallery::GalleryOpenRequest::Image(source) => {
-            ViewerSession::Image(ImagePreviewState::from_decoded(
+            ViewerSession::Image(Box::new(ImagePreviewState::from_decoded(
                 source.as_ref().clone(),
                 None,
                 "Gallery image".to_owned(),
                 config,
-            ))
+            )))
         }
         component_gallery::GalleryOpenRequest::Text(source) => ViewerSession::Text(
             TextPreviewState::from_data(source, Some("Gallery text".to_owned()), config),
@@ -302,12 +302,14 @@ fn gallery_request_to_viewer_session(
             ViewerSession::Model3d(Model3dViewerState::from_shared_model(source, None))
         }
         component_gallery::GalleryOpenRequest::Audio(source, path, file_guard) => {
-            ViewerSession::Audio(AudioPreviewState::from_completed_source_with_file_guard(
-                path,
-                "Gallery audio".to_owned(),
-                None,
-                source,
-                file_guard,
+            ViewerSession::Audio(Box::new(
+                AudioPreviewState::from_completed_source_with_file_guard(
+                    path,
+                    "Gallery audio".to_owned(),
+                    None,
+                    source,
+                    file_guard,
+                ),
             ))
         }
         component_gallery::GalleryOpenRequest::Pdf(path, raster) => {
@@ -378,9 +380,15 @@ fn is_pdf_clip_item(item: &ClipItem) -> bool {
         )
 }
 
+type SpreadsheetLoadJob = (
+    JobTicket,
+    SpreadsheetLoadReceiver,
+    Option<(Arc<String>, String)>,
+);
+
 type SpreadsheetLoadReceiver =
-    Receiver<Result<Result<(SpreadsheetData, Option<PathBuf>), String>, JobError>>;
-type MidiLoadReceiver = Receiver<Result<Result<(MidiData, PathBuf), String>, JobError>>;
+    little_clip_core::jobs::JobReceiver<Result<(SpreadsheetData, Option<PathBuf>), String>>;
+type MidiLoadReceiver = little_clip_core::jobs::JobReceiver<Result<(MidiData, PathBuf), String>>;
 
 pub(crate) enum OfficeLoadResult {
     Pdf {
@@ -395,7 +403,7 @@ pub(crate) enum OfficeLoadResult {
     },
 }
 
-type OfficeDocLoadReceiver = Receiver<Result<Result<OfficeLoadResult, String>, JobError>>;
+type OfficeDocLoadReceiver = little_clip_core::jobs::JobReceiver<Result<OfficeLoadResult, String>>;
 
 enum ImageLoadSource {
     File(PathBuf),
@@ -501,12 +509,12 @@ fn image_title_for_path(path: &std::path::Path) -> String {
 struct ImageLoadJob {
     key: Option<ImageSessionKey>,
     ticket: JobTicket,
-    receiver: Receiver<Result<Result<ImageLoadResult, String>, JobError>>,
+    receiver: little_clip_core::jobs::JobReceiver<Result<ImageLoadResult, String>>,
 }
 
 struct TextPreviewLoadJob {
     ticket: JobTicket,
-    receiver: Receiver<Result<Result<TextPreviewState, String>, JobError>>,
+    receiver: little_clip_core::jobs::JobReceiver<Result<TextPreviewState, String>>,
 }
 
 struct RollingEditorLoadJob {
@@ -613,17 +621,13 @@ struct WorkbenchApp {
     in_app_prompt: Option<InAppPromptState>,
     viewer: Option<ViewerSession>,
     active_image_key: Option<ImageSessionKey>,
-    retained_image_session: Option<(ImageSessionKey, ImagePreviewState)>,
+    retained_image_session: Option<(ImageSessionKey, Box<ImagePreviewState>)>,
     pending_image_close: bool,
     startup_viewers: VecDeque<ViewerSession>,
     startup_file_loads: VecDeque<StartupFileLoad>,
     image_load_job: Option<ImageLoadJob>,
     text_load_job: Option<TextPreviewLoadJob>,
-    spreadsheet_load_job: Option<(
-        JobTicket,
-        SpreadsheetLoadReceiver,
-        Option<(Arc<String>, String)>,
-    )>,
+    spreadsheet_load_job: Option<SpreadsheetLoadJob>,
     midi_load_job: Option<(JobTicket, MidiLoadReceiver)>,
     pub(crate) office_load_job: Option<(JobTicket, OfficeDocLoadReceiver)>,
     rolling_editor_job: Option<RollingEditorLoadJob>,
@@ -1133,7 +1137,7 @@ pub fn run_workbench() -> Result<(), eframe::Error> {
 
     if is_last {
         let state = match send_ipc_request(&IpcRequest::GetState) {
-            Ok(IpcResponse::State(s)) => s,
+            Ok(IpcResponse::State(s)) => *s,
             _ => SlotManager::default(),
         };
 

@@ -367,10 +367,9 @@ fn u32_at(bytes: &[u8], at: usize) -> Result<u32, String> {
     let b = bytes.get(at..at + 4).ok_or("Truncated SoundFont field")?;
     Ok(u32::from_le_bytes(b.try_into().unwrap()))
 }
-fn chunks(
-    bytes: &[u8],
-    range: std::ops::Range<usize>,
-) -> Result<Vec<([u8; 4], std::ops::Range<usize>)>, String> {
+type RiffChunk = ([u8; 4], std::ops::Range<usize>);
+
+fn chunks(bytes: &[u8], range: std::ops::Range<usize>) -> Result<Vec<RiffChunk>, String> {
     let mut at = range.start;
     let mut chunks = Vec::new();
     while at < range.end {

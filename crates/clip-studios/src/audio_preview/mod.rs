@@ -666,7 +666,7 @@ pub struct AudioPreviewState {
     /// Session-specific transient markers recomputed from sensitivity controls.
     session_transients: Option<Arc<[f32]>>,
     pub analysis_rx: Option<Receiver<AudioAnalysisProgress>>,
-    analysis_job_rx: Option<Receiver<Result<(), JobError>>>,
+    analysis_job_rx: Option<little_clip_core::jobs::JobReceiver<()>>,
     analysis_ticket: Option<JobTicket>,
     analysis_cancel: Option<Arc<AtomicBool>>,
     analysis_retry_at: Option<Instant>,
@@ -675,7 +675,7 @@ pub struct AudioPreviewState {
     pub loading_start_time: Instant,
     pub duration_sec: f32,
     edit_analysis_rx: Option<Receiver<AudioAnalysisProgress>>,
-    edit_analysis_job_rx: Option<Receiver<Result<(), JobError>>>,
+    edit_analysis_job_rx: Option<little_clip_core::jobs::JobReceiver<()>>,
     edit_analysis_ticket: Option<JobTicket>,
     edit_analysis_cancel: Option<Arc<AtomicBool>>,
     edit_analysis_retry_at: Option<Instant>,
@@ -768,7 +768,7 @@ pub struct AudioPreviewState {
 
 struct AudioSaveJob {
     ticket: JobTicket,
-    receiver: Receiver<Result<Result<AudioSaveOutcome, String>, JobError>>,
+    receiver: little_clip_core::jobs::JobReceiver<Result<AudioSaveOutcome, String>>,
     destination_name: String,
     stem_export: bool,
 }
@@ -806,7 +806,7 @@ struct AudioSaveOutcome {
 struct AudioSliceCopyJob {
     ticket: JobTicket,
     cancelled: Arc<AtomicBool>,
-    receiver: Receiver<Result<Result<String, String>, JobError>>,
+    receiver: little_clip_core::jobs::JobReceiver<Result<String, String>>,
 }
 
 impl Drop for AudioSliceCopyJob {
@@ -875,7 +875,7 @@ fn submit_session_analysis(
     Arc<AtomicBool>,
     JobTicket,
     Receiver<AudioAnalysisProgress>,
-    Receiver<Result<(), JobError>>,
+    little_clip_core::jobs::JobReceiver<()>,
 ) {
     let cancelled = Arc::new(AtomicBool::new(false));
     let job_cancelled = Arc::clone(&cancelled);

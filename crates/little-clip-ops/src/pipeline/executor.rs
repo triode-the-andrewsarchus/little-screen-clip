@@ -73,6 +73,8 @@ pub struct PipelineExecutor<'a> {
     pub single_prompt_override: Option<String>,
 }
 
+type NodeOutputs = (Vec<(String, PortValue)>, Option<String>);
+
 impl<'a> PipelineExecutor<'a> {
     /// Constructs an evaluator that creates isolated scratch space for each execution.
     pub fn new(graph: &'a NodeGraph, slot_mgr: &'a SlotManager) -> Self {
@@ -172,7 +174,7 @@ impl<'a> PipelineExecutor<'a> {
         inputs: &HashMap<String, PortValue>,
         result: &mut PipelineExecutionResult,
         workspace: &Workspace,
-    ) -> Result<(Vec<(String, PortValue)>, Option<String>), PipelineError> {
+    ) -> Result<NodeOutputs, PipelineError> {
         let temp_dir = workspace.path();
         let mut out = Vec::new();
         #[allow(unused_assignments)]

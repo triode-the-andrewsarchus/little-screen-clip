@@ -19,7 +19,7 @@ use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 const INLINE_MIDI_MAX_NOTES_SCANNED: usize = 512;
@@ -199,6 +199,8 @@ impl InlineMidiPreview {
     }
 }
 
+type SynthesizedTrack = (Option<usize>, Arc<[u8]>);
+
 /// Interactive UI state for piano roll inspection and MIDI playback.
 pub struct MidiViewerState {
     pub path: Option<PathBuf>,
@@ -225,13 +227,13 @@ pub struct MidiViewerState {
     pub play_stop_time: Option<f32>,
     pub is_synthesizing: bool,
     pub pending_play: bool,
-    synth_rx: Option<Receiver<Result<(Option<usize>, Arc<[u8]>), JobError>>>,
+    synth_rx: Option<little_clip_core::jobs::JobReceiver<SynthesizedTrack>>,
     synth_ticket: Option<JobTicket>,
     export_job: Option<MidiExportJob>,
 }
 
 struct MidiExportJob {
-    receiver: Receiver<Result<Result<MidiExportArtifact, String>, JobError>>,
+    receiver: little_clip_core::jobs::JobReceiver<Result<MidiExportArtifact, String>>,
 }
 
 #[derive(Debug)]

@@ -54,7 +54,7 @@ fn recursive_copy_preserves_links_and_source_data() {
         vec![folder.clone()],
     );
     assert!(report.failed.is_empty());
-    assert_eq!(report.completed, [folder.clone()]);
+    assert_eq!(report.completed.as_slice(), std::slice::from_ref(&folder));
     let copied = fixture.destination.join("tree");
     assert_eq!(
         fs::read(copied.join("nested/data")).unwrap(),

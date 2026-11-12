@@ -31,7 +31,7 @@ pub(super) enum Metadata {
     },
 }
 pub(super) enum Renderer {
-    Gaussian(SplatRenderer),
+    Gaussian(Box<SplatRenderer>),
     Mesh {
         model: Model3d,
         rasterizer: Box<little_clip_render::ScreenRenderer>,
@@ -88,7 +88,7 @@ fn load_renderer(
                 };
                 let renderer =
                     SplatRenderer::new(Arc::new(scene)).map_err(|error| error.to_string())?;
-                return Ok((Renderer::Gaussian(renderer), metadata));
+                return Ok((Renderer::Gaussian(Box::new(renderer)), metadata));
             }
             Err(little_clip_scene::SceneError::MeshGlb) => {}
             Err(error) => return Err(error.to_string()),

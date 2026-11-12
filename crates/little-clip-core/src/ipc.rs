@@ -158,7 +158,7 @@ pub enum IpcResponse {
         status: ClipboardRouteStatus,
     },
     /// Current full slot state.
-    State(SlotManager),
+    State(Box<SlotManager>),
     /// Lightweight slot cards and selection state suitable for frequent polling.
     StateSummary(SlotStateSummary),
     /// Completed orbits; clients must acquire their own temporary file links.
@@ -326,7 +326,7 @@ mod tests {
             ..Default::default()
         };
         let summary = super::SlotStateSummary::from_manager(&manager);
-        let response = super::IpcResponse::State(manager.clone());
+        let response = super::IpcResponse::State(Box::new(manager.clone()));
         let super::IpcResponse::State(mut restored) =
             serde_json::from_str(&serde_json::to_string(&response).unwrap()).unwrap()
         else {

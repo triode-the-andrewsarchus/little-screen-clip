@@ -9,6 +9,10 @@ impl WorkbenchApp {
         self.status_msg = None;
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Startup arguments mirror independent CLI launch modes shared by the desktop host"
+    )]
     pub(crate) fn new(
         ctx: egui::Context,
         start_with_diff: bool,
@@ -45,7 +49,7 @@ impl WorkbenchApp {
         let rolling_audio_strip = Some(RollingAudioStripState::new());
         let mut startup_viewers = VecDeque::new();
         if let Some(audio) = audio_preview {
-            startup_viewers.push_back(ViewerSession::Audio(audio));
+            startup_viewers.push_back(ViewerSession::Audio(Box::new(audio)));
         }
         if let Some(path) = initial_image {
             startup_viewers.push_back(ViewerSession::ImageLoading(ImageLoadJob::new(

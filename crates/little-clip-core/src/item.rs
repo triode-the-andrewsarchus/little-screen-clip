@@ -570,7 +570,8 @@ impl ClipItem {
         if path.is_dir() {
             return Self::from_directory(path.to_path_buf());
         }
-        let media: [(bool, fn(&Path) -> Option<Self>); 7] = [
+        type MediaLoader = fn(&Path) -> Option<ClipItem>;
+        let media: [(bool, MediaLoader); 7] = [
             (crate::animation::is_video_path(path), |p| {
                 Self::from_video(p.to_path_buf())
             }),

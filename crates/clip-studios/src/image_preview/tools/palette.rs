@@ -13,8 +13,7 @@ pub fn extract_palette(img: &RgbaImage, target_count: usize) -> (Vec<PaletteColo
     let mut bucket_counts: HashMap<u16, (usize, u64, u64, u64)> = HashMap::with_capacity(4096);
     let mut sampled_valid_pixels = 0usize;
 
-    let mut i = 0;
-    for pixel in img.pixels() {
+    for (i, pixel) in img.pixels().enumerate() {
         if i % sample_stride == 0 && pixel[3] >= 64 {
             sampled_valid_pixels += 1;
             let r = pixel[0] as u64;
@@ -27,7 +26,6 @@ pub fn extract_palette(img: &RgbaImage, target_count: usize) -> (Vec<PaletteColo
             entry.2 += g;
             entry.3 += b;
         }
-        i += 1;
     }
 
     if sampled_valid_pixels == 0 {

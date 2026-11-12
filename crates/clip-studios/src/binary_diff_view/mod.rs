@@ -15,7 +15,6 @@ use little_clip_ops::binary_diff::{
     AlignedCell, BinaryDiffMode, BinaryDiffResult, DiffKind, byte_to_ascii_char,
     compute_binary_diff_shared, search_rows,
 };
-use std::sync::mpsc::Receiver;
 
 /// Very lightly colors each byte along a smooth, subtle gradient:
 /// 0x00: slightly blue (140, 175, 230)
@@ -175,7 +174,7 @@ pub struct BinaryDiffViewState {
     pub result: Option<BinaryDiffResult>,
     pub is_computing: bool,
     pub current_generation: u64,
-    pub receiver: Option<Receiver<Result<(u64, BinaryDiffResult), little_clip_core::JobError>>>,
+    pub receiver: Option<little_clip_core::jobs::JobReceiver<(u64, BinaryDiffResult)>>,
     compute_ticket: Option<JobTicket>,
     // Navigation & search state
     pub search_query: String,
@@ -187,7 +186,7 @@ pub struct BinaryDiffViewState {
     pub panel_state: PanelState,
     handoff: Option<(
         JobTicket,
-        Receiver<Result<Result<String, String>, little_clip_core::JobError>>,
+        little_clip_core::jobs::JobReceiver<Result<String, String>>,
     )>,
     handoff_cancel: Option<HandoffCancelGuard>,
 }
@@ -201,6 +200,10 @@ impl Drop for BinaryDiffViewState {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Comparison painter receives both inputs, comparison controls and host UI state together"
+)]
 fn submit_binary_diff(
     generation: u64,
     left_label: String,
@@ -212,7 +215,7 @@ fn submit_binary_diff(
     jobs: &BackgroundJobs,
 ) -> (
     JobTicket,
-    Receiver<Result<(u64, BinaryDiffResult), little_clip_core::JobError>>,
+    little_clip_core::jobs::JobReceiver<(u64, BinaryDiffResult)>,
 ) {
     jobs.submit(std::time::Duration::MAX, move || {
         let result = compute_binary_diff_shared(

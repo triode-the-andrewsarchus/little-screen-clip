@@ -236,6 +236,10 @@ fn position(
         pan,
     )
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+)]
 fn paint(
     ui: &mut egui::Ui,
     rect: egui::Rect,

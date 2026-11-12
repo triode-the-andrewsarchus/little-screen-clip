@@ -1,5 +1,7 @@
 use super::super::*;
 
+type ProgressCallback<'a> = Option<&'a dyn Fn(f32, &str)>;
+
 #[derive(Debug)]
 pub enum BgRemovalMsg {
     Progress(String),
@@ -227,7 +229,7 @@ pub(crate) fn clear_image_tool_pid_if_owned(
 pub fn run_native_background_removal_with_progress(
     image: &RgbaImage,
     model_path: &std::path::Path,
-    on_progress: Option<&dyn Fn(f32, &str)>,
+    on_progress: ProgressCallback<'_>,
 ) -> Result<RgbaImage, String> {
     let (orig_w, orig_h) = image.dimensions();
     if orig_w == 0 || orig_h == 0 {
@@ -335,7 +337,7 @@ pub fn run_native_background_removal(
 pub fn run_native_depth_map_with_progress(
     image: &RgbaImage,
     model_path: &std::path::Path,
-    on_progress: Option<&dyn Fn(f32, &str)>,
+    on_progress: ProgressCallback<'_>,
 ) -> Result<RgbaImage, String> {
     let (orig_w, orig_h) = image.dimensions();
     if orig_w == 0 || orig_h == 0 {

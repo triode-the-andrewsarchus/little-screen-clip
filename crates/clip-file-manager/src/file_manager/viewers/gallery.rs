@@ -164,7 +164,7 @@ impl Viewers {
             return;
         };
         let active = match &mut self.session {
-            Some(ViewerSession::Image(state)) => Some(state),
+            Some(ViewerSession::Image(state)) => Some(state.as_mut()),
             _ => None,
         };
         let mut active = active;
@@ -213,7 +213,7 @@ impl Viewers {
             return;
         }
         if let Some(ViewerSession::Image(state)) = self.session.take() {
-            collection.photos[collection.index].session = Some(Box::new(state));
+            collection.photos[collection.index].session = Some(state);
         }
         collection.index = target;
         collection.reveal_active = true;
@@ -222,7 +222,7 @@ impl Viewers {
         self.source_guard = collection.photos[target].guard.clone();
         if let Some(state) = collection.photos[target].session.take() {
             self.path = state.path.clone();
-            self.session = Some(ViewerSession::Image(*state));
+            self.session = Some(ViewerSession::Image(state));
         } else {
             let path = collection.photos[target].path.clone();
             self.open(path);

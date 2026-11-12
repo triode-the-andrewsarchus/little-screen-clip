@@ -1,6 +1,10 @@
 use super::*;
 
 impl ScreenRenderer {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_midi_card(
         &self,
         pixmap: &mut Pixmap,
@@ -107,6 +111,10 @@ impl ScreenRenderer {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_model3d_card(
         &self,
         pixmap: &mut Pixmap,
@@ -265,7 +273,12 @@ impl ScreenRenderer {
             }
 
             let avg_z = (p1z + p2z + p3z) / 3.0;
-            let diff = rotated_normal.dot(light_dir).max(0.18).min(1.0);
+            let cosine = rotated_normal.dot(light_dir);
+            let diff = if cosine.is_nan() {
+                0.18
+            } else {
+                cosine.clamp(0.18, 1.0)
+            };
             projected.push((avg_z, diff, tri.color, (p1x, p1y), (p2x, p2y), (p3x, p3y)));
         }
 

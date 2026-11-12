@@ -57,6 +57,10 @@ impl<'a> ListPreviews<'a> {
             file_row(ui, rect, entry, marked, self.columns, lines, colors)
         }
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     fn row(
         &mut self,
         ui: &mut Ui,

@@ -769,7 +769,7 @@ pub(super) fn paint(
         return;
     }
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-    let visible = topology.nodes.len().min(6).max(1);
+    let visible = topology.nodes.len().clamp(1, 6);
     let width = rect.width() / visible as f32;
     for (index, node) in topology.nodes.iter().take(6).enumerate() {
         let cell = egui::Rect::from_min_size(

@@ -25,7 +25,7 @@ mod video;
 mod video_audio;
 
 enum Loaded {
-    System(super::system::Document),
+    System(Box<super::system::Document>),
     Font(super::font_strip::viewer::Viewer),
     Notebook(super::notebook::viewer::Viewer),
     Book(super::ebook::Viewer),
@@ -34,10 +34,10 @@ enum Loaded {
     Database(super::database::Viewer),
     Geography(super::geography::Viewer),
     Toolpath(super::gcode::Viewer),
-    Multisample(super::multisample::Viewer),
+    Multisample(Box<super::multisample::Viewer>),
     Image(DecodedImageData, FileSource),
     Audio(Option<little_clip_core::audio::AudioMetadata>, FileSource),
-    Text(super::text_editor::TextSession),
+    Text(Box<super::text_editor::TextSession>),
     Sheet(little_clip_core::presentation::spreadsheet::SpreadsheetData),
     Midi(little_clip_core::presentation::midi::MidiData),
     OfficePdf {
@@ -61,9 +61,9 @@ enum ViewerSession {
     Geography(super::geography::Viewer),
     Toolpath(super::gcode::Viewer),
     Multisample(super::multisample::Viewer),
-    Image(ImagePreviewState),
+    Image(Box<ImagePreviewState>),
     Text(super::text_editor::TextSession),
-    Audio(AudioPreviewState),
+    Audio(Box<AudioPreviewState>),
     Pdf(PdfEditorState),
     Sheet(SpreadsheetViewerState),
     Midi(MidiViewerState),
@@ -75,7 +75,7 @@ struct Loading {
     response_deadline: Option<std::time::Instant>,
     ticket: JobTicket,
     path: PathBuf,
-    receiver: mpsc::Receiver<Result<Result<(Loaded, Option<FileSource>), String>, JobError>>,
+    receiver: little_clip_core::jobs::JobReceiver<Result<(Loaded, Option<FileSource>), String>>,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl Drop for Loading {
@@ -91,7 +91,7 @@ pub(super) struct Viewers {
     source_path: Option<PathBuf>,
     source_request: Option<(
         PathBuf,
-        mpsc::Receiver<Result<Result<FileSource, String>, JobError>>,
+        little_clip_core::jobs::JobReceiver<Result<FileSource, String>>,
     )>,
     rename: rename::Rename,
     renamed: Vec<(PathBuf, PathBuf)>,
@@ -185,7 +185,7 @@ impl Viewers {
             super::search::SourceGuard::read_checked(guard.as_ref(), &worker, || {
                 if system {
                     super::system::collect(&source, &worker)
-                        .map(|document| (Loaded::System(document), None))
+                        .map(|document| (Loaded::System(Box::new(document)), None))
                 } else {
                     let identity = FileSource::capture(&source);
                     let loaded = if video_audio {
@@ -592,7 +592,7 @@ fn load(
         .semantic()
     {
         return super::system::collect(path, &std::sync::atomic::AtomicBool::new(false))
-            .map(Loaded::System);
+            .map(|document| Loaded::System(Box::new(document)));
     }
     little_clip_core::kernel_interface::require_content(path).map_err(|e| e.to_string())?;
     let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
@@ -600,9 +600,9 @@ fn load(
         return Err("Only regular files can be inspected".into());
     }
     if let Some(document) = super::multisample::read_if_identified(path, cancelled) {
-        return Ok(Loaded::Multisample(
+        return Ok(Loaded::Multisample(Box::new(
             super::multisample::Viewer::from_identified(path, document),
-        ));
+        )));
     }
     let kind = kind(path);
     let limit = match kind {
@@ -617,9 +617,8 @@ fn load(
         ));
     }
     match kind {
-        Kind::Document(Format::Multisample) => {
-            super::multisample::Viewer::load(path, cancelled).map(Loaded::Multisample)
-        }
+        Kind::Document(Format::Multisample) => super::multisample::Viewer::load(path, cancelled)
+            .map(|viewer| Loaded::Multisample(Box::new(viewer))),
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Document(Format::Geography) => {
             super::geography::Viewer::load(path).map(Loaded::Geography)
@@ -669,11 +668,12 @@ fn load(
             }),
             little_clip_core::document::PreparedOfficePreview::Markdown(md) => {
                 let text_session = super::text_editor::TextSession::from_markdown(path, md, config);
-                Ok(Loaded::Text(text_session))
+                Ok(Loaded::Text(Box::new(text_session)))
             }
         },
         Kind::Text | Kind::Document(Format::Subtitle) => {
-            super::text_editor::TextSession::load(path, config).map(Loaded::Text)
+            super::text_editor::TextSession::load(path, config)
+                .map(|state| Loaded::Text(Box::new(state)))
         }
         Kind::Video => video::prepare(path).map(Loaded::Video),
         Kind::External => Ok(Loaded::External),
@@ -690,15 +690,15 @@ fn session(
     match loaded {
         Loaded::Notebook(viewer) => ViewerSession::Notebook(viewer),
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
-        Loaded::Multisample(viewer) => ViewerSession::Multisample(viewer),
+        Loaded::Multisample(viewer) => ViewerSession::Multisample(*viewer),
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(viewer),
         Loaded::Database(viewer) => ViewerSession::Database(viewer),
         Loaded::Calendar(viewer) => ViewerSession::Calendar(viewer),
         Loaded::Mail(viewer) => ViewerSession::Mail(viewer),
         Loaded::Font(viewer) => ViewerSession::Font(viewer),
-        Loaded::System(document) => ViewerSession::System(super::system::Inspector::new(document)),
-        Loaded::Image(data, source) => ViewerSession::Image(
+        Loaded::System(document) => ViewerSession::System(super::system::Inspector::new(*document)),
+        Loaded::Image(data, source) => ViewerSession::Image(Box::new(
             ImagePreviewState::from_decoded(
                 data,
                 Some(path.clone()),
@@ -706,15 +706,15 @@ fn session(
                 config,
             )
             .with_file_source(source),
-        ),
+        )),
         Loaded::Video(prepared) => ViewerSession::Video(video::Video::new(
             path,
             prepared,
             video_start,
             config.file_manager.video_subtitles_enabled,
         )),
-        Loaded::VideoAudio(prepared) => ViewerSession::Audio(prepared.studio(config)),
-        Loaded::Text(state) => ViewerSession::Text(state),
+        Loaded::VideoAudio(prepared) => ViewerSession::Audio(Box::new(prepared.studio(config))),
+        Loaded::Text(state) => ViewerSession::Text(*state),
         Loaded::Sheet(data) => ViewerSession::Sheet(SpreadsheetViewerState::new(data, Some(path))),
         Loaded::Midi(data) => ViewerSession::Midi(MidiViewerState::from_parsed_file(path, data)),
         Loaded::OfficePdf {
@@ -733,7 +733,7 @@ fn session(
                     .with_protected_outputs(),
             )
         }
-        Loaded::Audio(metadata, source) => ViewerSession::Audio(
+        Loaded::Audio(metadata, source) => ViewerSession::Audio(Box::new(
             AudioPreviewState::new_with_metadata_checked(
                 path.clone(),
                 super::display_path(&path),
@@ -742,7 +742,7 @@ fn session(
             )
             .with_editor(config.audio.editor.clone())
             .with_file_source(source),
-        ),
+        )),
         _ if little_clip_core::pdf::is_pdf_path(&path) => {
             ViewerSession::Pdf(PdfEditorState::new_checked(path, check).with_protected_outputs())
         }
@@ -1142,7 +1142,7 @@ mod tests {
         .with_file_source(source);
         state.mark_pixels_changed();
         let mut viewers = Viewers {
-            session: Some(ViewerSession::Image(state)),
+            session: Some(ViewerSession::Image(Box::new(state))),
             path: Some(path.clone()),
             ..Viewers::default()
         };

@@ -90,7 +90,7 @@ impl SpreadsheetViewerState {
                         crate::ui_ext::CONTROL_ICON_SIZE,
                         crate::hex_to_c32(&palette.colors.text_secondary),
                     );
-                    let search_width = ui.available_width().min(160.0).max(0.0);
+                    let search_width = ui.available_width().clamp(0.0, 160.0);
                     ui.add_sized(
                         [search_width, crate::ui_ext::CONTROL_HEIGHT],
                         egui::TextEdit::singleline(&mut self.search_query)

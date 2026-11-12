@@ -175,6 +175,10 @@ pub(super) fn write_unique_midi_export_in(
     unreachable!("u32 collision suffix space exhausted")
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Export boundary keeps the source, selected interval, destination and cancellation owner explicit"
+)]
 pub(super) fn write_midi_export(
     data: &MidiData,
     start_sec: f32,

@@ -50,7 +50,9 @@ struct PdfPreviewMsg {
 struct PdfPageDecodeSlot {
     raster: Arc<PdfPageRasterResource>,
     ticket: JobTicket,
-    rx: Receiver<Result<Result<(Arc<PdfPageRasterResource>, egui::ColorImage), String>, JobError>>,
+    rx: little_clip_core::jobs::JobReceiver<
+        Result<(Arc<PdfPageRasterResource>, egui::ColorImage), String>,
+    >,
     ready: Option<egui::ColorImage>,
     cancelled: bool,
 }
@@ -538,13 +540,13 @@ pub struct PdfEditorState {
     protect_outputs: bool,
     info_job: Option<(
         JobTicket,
-        Receiver<Result<Result<PdfInfo, String>, JobError>>,
+        little_clip_core::jobs::JobReceiver<Result<PdfInfo, String>>,
     )>,
     preview_rx: Option<Receiver<PdfPreviewMsg>>,
-    preview_job: Option<(JobTicket, Receiver<Result<(), JobError>>)>,
+    preview_job: Option<(JobTicket, little_clip_core::jobs::JobReceiver<()>)>,
     preview_cancel: Option<Arc<AtomicBool>>,
     previews_loading: bool,
-    edit_rx: Option<Receiver<Result<PdfEditMsg, JobError>>>,
+    edit_rx: Option<little_clip_core::jobs::JobReceiver<PdfEditMsg>>,
     edit_ticket: Option<JobTicket>,
     edit_in_progress: bool,
     raster_cache: Option<std::sync::Arc<tempfile::TempDir>>,

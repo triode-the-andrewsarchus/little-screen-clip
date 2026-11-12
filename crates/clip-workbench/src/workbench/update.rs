@@ -172,7 +172,7 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(audio_btn).clicked() {
-                                self.replace_viewer(Some(ViewerSession::Audio(AudioPreviewState::new(path, title).with_editor(self.config.audio.editor.clone()))));
+                                self.replace_viewer(Some(ViewerSession::Audio(Box::new(AudioPreviewState::new(path, title).with_editor(self.config.audio.editor.clone())))));
                             }
                         }
 

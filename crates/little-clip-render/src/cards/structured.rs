@@ -1,6 +1,10 @@
 use super::*;
 
 impl ScreenRenderer {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_unit_conversion_card(
         &self,
         pixmap: &mut Pixmap,
@@ -97,6 +101,10 @@ impl ScreenRenderer {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_network_preview_card(
         &self,
         pixmap: &mut Pixmap,
@@ -260,6 +268,10 @@ impl ScreenRenderer {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_timestamp_card(
         &self,
         pixmap: &mut Pixmap,
@@ -352,6 +364,10 @@ impl ScreenRenderer {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_spreadsheet_card(
         &self,
         pixmap: &mut Pixmap,

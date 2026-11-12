@@ -11,6 +11,12 @@ const DEFAULT_QUEUE: usize = 16;
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
+/// Receives a background task's value or its scheduling/cancellation error.
+///
+/// Domain failures remain part of `T`, for example `JobReceiver<Result<Image, String>>`.
+/// The receiver does not own cancellation; retain the accompanying [`JobTicket`].
+pub type JobReceiver<T> = mpsc::Receiver<Result<T, JobError>>;
+
 /// Reports why a background job did not produce a value.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum JobError {

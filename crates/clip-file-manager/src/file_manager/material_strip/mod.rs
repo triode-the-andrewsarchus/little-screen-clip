@@ -44,6 +44,10 @@ impl Previews {
             .retain(&self.spheres.values().map(|(_, id)| *id).collect());
         self.hover.retain(|source| visible.contains(&source));
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub fn show(
         &mut self,
         ui: &mut Ui,

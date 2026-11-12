@@ -384,6 +384,10 @@ pub(super) fn line_highlight_ranges_from_spool(
         .collect()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Studio rendering keeps source geometry, display state and host interaction outputs explicit"
+)]
 pub(super) fn paint_code_selection(
     ui: &egui::Ui,
     galley: &egui::Galley,

@@ -945,6 +945,10 @@ impl ImagePreviewState {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Studio rendering keeps source geometry, display state and host interaction outputs explicit"
+    )]
     pub(crate) fn render_decorrelation_stretch_comparison(
         &mut self,
         ui: &mut egui::Ui,

@@ -781,8 +781,7 @@ where
             // Spectrogram column (Audacity-style Inferno heatmap)
             let mut spec_col_rgba = vec![0u8; num_freq_bins * 4];
             for (b, bin) in out_data.iter().enumerate().take(num_freq_bins) {
-                let mag = (bin.re * bin.re + bin.im * bin.im).sqrt()
-                    / (window_size as f32 * 0.5);
+                let mag = (bin.re * bin.re + bin.im * bin.im).sqrt() / (window_size as f32 * 0.5);
                 let db = 20.0 * (mag + 1e-6).log10();
                 let norm_db = ((db + 80.0) / 80.0).clamp(0.0, 1.0);
                 let col = inferno_colormap(norm_db);

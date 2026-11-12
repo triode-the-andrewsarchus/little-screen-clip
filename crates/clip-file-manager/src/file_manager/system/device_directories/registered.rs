@@ -205,6 +205,10 @@ fn interface(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Registration collection keeps the observed document, topology, source context and read budget explicit"
+)]
 fn add_registration(
     document: &mut Document,
     topology: &mut Topology,

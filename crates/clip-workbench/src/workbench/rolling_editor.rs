@@ -104,7 +104,7 @@ impl WorkbenchApp {
             Ok(prepared) => {
                 let editor = prepared.into_preview(job.title).with_editor(job.editor);
                 self.status_msg = None;
-                self.replace_viewer(Some(ViewerSession::Audio(editor)));
+                self.replace_viewer(Some(ViewerSession::Audio(Box::new(editor))));
             }
             Err(error) => {
                 self.set_status_message(format!("Could not open rolling audio selection: {error}"))

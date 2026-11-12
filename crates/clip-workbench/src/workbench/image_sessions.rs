@@ -106,11 +106,13 @@ impl WorkbenchApp {
                 self.viewer = None;
                 self.active_image_key = None;
                 self.retained_image_session = None;
-                self.viewer = Some(ViewerSession::Image(ImagePreviewState::from_decoded(
-                    loaded.data,
-                    loaded.path,
-                    loaded.title,
-                    &self.config,
+                self.viewer = Some(ViewerSession::Image(Box::new(
+                    ImagePreviewState::from_decoded(
+                        loaded.data,
+                        loaded.path,
+                        loaded.title,
+                        &self.config,
+                    ),
                 )));
                 self.active_image_key = key;
                 self.status_msg = None;

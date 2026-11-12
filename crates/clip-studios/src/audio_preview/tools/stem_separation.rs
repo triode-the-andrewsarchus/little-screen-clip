@@ -136,7 +136,7 @@ pub(crate) struct StemSeparationState {
     pub(crate) in_progress: bool,
     pub(crate) status: Option<String>,
     pub(crate) error: Option<String>,
-    result_rx: Option<Receiver<Result<Result<Vec<StemOutput>, String>, JobError>>>,
+    result_rx: Option<little_clip_core::jobs::JobReceiver<Result<Vec<StemOutput>, String>>>,
     job_ticket: Option<JobTicket>,
     process_control: Option<Arc<crate::image_preview::ImageToolProcessControl>>,
     retry_at: Option<Instant>,

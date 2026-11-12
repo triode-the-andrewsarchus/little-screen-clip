@@ -2,6 +2,10 @@ use super::*;
 
 impl ScreenRenderer {
     /// TrueType text width measurement with styling.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_markdown_spans(
         &self,
         pixmap: &mut Pixmap,
@@ -100,6 +104,10 @@ impl ScreenRenderer {
         cx
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_markdown_preview(
         &self,
         pixmap: &mut Pixmap,
@@ -311,6 +319,10 @@ impl ScreenRenderer {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(super) fn draw_text_preview(
         &self,
         pixmap: &mut Pixmap,

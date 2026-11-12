@@ -28,6 +28,10 @@ impl<'a, T> Tab<'a, T> {
         self
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     fn show(
         &self,
         ui: &mut Ui,

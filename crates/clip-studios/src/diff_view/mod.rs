@@ -154,11 +154,8 @@ pub struct DiffViewerState {
     pub textures_loaded: bool,
     pub decode_error: Option<String>,
     pub status_toast: Option<(crate::ui_ext::StatusMessage, f64)>, // (text, timestamp)
-    pub image_receiver: Option<
-        std::sync::mpsc::Receiver<
-            Result<Result<ImageDiffResult, String>, little_clip_core::JobError>,
-        >,
-    >,
+    pub image_receiver:
+        Option<little_clip_core::jobs::JobReceiver<Result<ImageDiffResult, String>>>,
     pub text_receiver: Option<
         std::sync::mpsc::Receiver<
             Result<(DiffResult, egui::text::LayoutJob), little_clip_core::JobError>,
@@ -169,7 +166,7 @@ pub struct DiffViewerState {
     pub compute_start_time: std::time::Instant,
     handoff: Option<(
         JobTicket,
-        std::sync::mpsc::Receiver<Result<Result<String, String>, little_clip_core::JobError>>,
+        little_clip_core::jobs::JobReceiver<Result<String, String>>,
     )>,
     handoff_cancel: Option<HandoffCancelGuard>,
 }
@@ -183,20 +180,18 @@ impl Drop for DiffViewerState {
     }
 }
 
+type ImageDiffJob = (
+    Option<JobTicket>,
+    Option<little_clip_core::jobs::JobReceiver<Result<ImageDiffResult, String>>>,
+    Option<String>,
+);
+
 fn spawn_image_diff_worker(
     lhs: &DiffTarget,
     rhs: &DiffTarget,
     options: ImageDiffOptions,
     jobs: &BackgroundJobs,
-) -> (
-    Option<JobTicket>,
-    Option<
-        std::sync::mpsc::Receiver<
-            Result<Result<ImageDiffResult, String>, little_clip_core::JobError>,
-        >,
-    >,
-    Option<String>,
-) {
+) -> ImageDiffJob {
     if let (Some(b1), Some(b2)) = (lhs.image_bytes(), rhs.image_bytes()) {
         if b1.is_empty() || b2.is_empty() {
             let mut missing = Vec::new();
@@ -246,9 +241,7 @@ fn spawn_text_diff_worker(
     jobs: &BackgroundJobs,
 ) -> (
     JobTicket,
-    std::sync::mpsc::Receiver<
-        Result<(DiffResult, egui::text::LayoutJob), little_clip_core::JobError>,
-    >,
+    little_clip_core::jobs::JobReceiver<(DiffResult, egui::text::LayoutJob)>,
 ) {
     let lhs = lhs.clone();
     let rhs = rhs.clone();

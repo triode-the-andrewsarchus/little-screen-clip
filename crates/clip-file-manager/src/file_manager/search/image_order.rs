@@ -30,156 +30,6 @@ pub(in crate::file_manager) struct ImageOrder {
     priority: Vec<PathBuf>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::AtomicBool;
-
-    #[test]
-    fn encoded_color_and_version_fields_are_not_part_of_dhash() {
-        let parse = crate::file_manager::image_strip::parse_dhash;
-        let bits = 0x0123_4567_89ab_cdef;
-        assert_eq!(parse(&format!("1000{bits:016x}")), Some(bits));
-        assert_eq!(parse(&format!("1fff{bits:016x}")), Some(bits));
-        assert_eq!(parse(&format!("2000{bits:016x}")), None);
-        assert_eq!(parse("1fff000000000000000g"), None);
-        assert_eq!(parse("0000000000000000"), None);
-    }
-
-    fn fixture() -> (tempfile::TempDir, Directory) {
-        let folder = tempfile::tempdir().unwrap();
-        for name in [
-            "reference.png",
-            "near.png",
-            "foo_2.png",
-            "foo_10.png",
-            "bad.png",
-            "pending.png",
-        ] {
-            std::fs::write(folder.path().join(name), "fixture").unwrap();
-        }
-        let directory =
-            crate::file_manager::filesystem::read_directory(folder.path(), &AtomicBool::new(false))
-                .unwrap();
-        (folder, directory)
-    }
-    #[test]
-    fn distance_orders_xor_bits_and_keeps_missing_last_in_both_directions() {
-        let (_folder, directory) = fixture();
-        let reference = directory
-            .entries
-            .iter()
-            .find(|entry| entry.name == "reference.png")
-            .unwrap();
-        let query = Query::parse(":image;sort:similarity;ref:selected").unwrap();
-        let mut order = ImageOrder::default();
-        order
-            .begin(
-                &query,
-                &directory,
-                &BTreeSet::from([reference.path.clone()]),
-            )
-            .unwrap();
-        order.reference_checked = true;
-        for entry in &directory.entries {
-            let value = match entry.name.as_str() {
-                "reference.png" => Ok(u64::MAX),
-                "near.png" => Ok(u64::MAX ^ 1),
-                "foo_2.png" | "foo_10.png" => Ok(0),
-                "bad.png" => Err("decoder unavailable".into()),
-                _ => continue,
-            };
-            order.values.insert(ImageOrder::key(entry), value);
-        }
-        let mut visible = (0..directory.entries.len()).collect::<Vec<_>>();
-        order.order(&directory, &mut visible, false);
-        let names = |indices: &[usize]| {
-            indices
-                .iter()
-                .map(|&index| directory.entries[index].name.as_str())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            names(&visible),
-            [
-                "reference.png",
-                "near.png",
-                "foo_2.png",
-                "foo_10.png",
-                "bad.png",
-                "pending.png"
-            ]
-        );
-        assert_eq!(order.cell(reference), "0 / 64");
-        order.order(&directory, &mut visible, true);
-        assert_eq!(
-            names(&visible),
-            [
-                "foo_2.png",
-                "foo_10.png",
-                "near.png",
-                "reference.png",
-                "bad.png",
-                "pending.png"
-            ]
-        );
-    }
-    #[test]
-    fn raw_hash_order_is_unsigned_and_an_invalid_reference_keeps_the_prior_request() {
-        let (_folder, directory) = fixture();
-        let mut order = ImageOrder::default();
-        order
-            .begin(
-                &Query::parse(":image;sort:dhash").unwrap(),
-                &directory,
-                &BTreeSet::new(),
-            )
-            .unwrap();
-        let a = &directory.entries[0];
-        let b = &directory.entries[1];
-        order.values.insert(ImageOrder::key(a), Ok(u64::MAX));
-        order.values.insert(ImageOrder::key(b), Ok(1_u64 << 63));
-        let mut visible = vec![0, 1];
-        order.order(&directory, &mut visible, false);
-        assert_eq!(visible, [1, 0]);
-        let query = Query::parse(":image;sort:similarity;ref:selected").unwrap();
-        assert!(order.begin(&query, &directory, &BTreeSet::new()).is_err());
-        assert!(order.active());
-        assert_eq!(order.heading(), "dHash");
-        assert_eq!(order.value(a), Some(u64::MAX));
-    }
-    #[test]
-    fn refreshing_a_replaced_reference_invalidates_instead_of_switching_reference() {
-        let (_folder, mut directory) = fixture();
-        let reference = directory.entries[0].clone();
-        let mut order = ImageOrder::default();
-        order
-            .begin(
-                &Query::parse(":image;sort:similarity;ref:selected").unwrap(),
-                &directory,
-                &BTreeSet::from([reference.path.clone()]),
-            )
-            .unwrap();
-        directory.entries[0].revision = reference.revision.wrapping_add(1);
-        let visible = (0..directory.entries.len()).collect::<Vec<_>>();
-        let pool = BackgroundJobs::new(1, 2);
-        let (changed, error) = order.tick(
-            &directory,
-            &directory,
-            &visible,
-            &EntryPreviews::default(),
-            &pool,
-        );
-        assert!(changed);
-        assert!(error.unwrap().contains("Reference changed"));
-        assert!(order.invalid);
-        assert!(order.pending.is_empty());
-        assert_eq!(
-            order.reference.as_ref().unwrap().revision,
-            reference.revision
-        );
-    }
-}
 impl ImageOrder {
     pub fn begin(
         &mut self,
@@ -455,5 +305,156 @@ impl ImageOrder {
             self.pending.push((entry.clone(), task));
         }
         self.values.len() != previous
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn encoded_color_and_version_fields_are_not_part_of_dhash() {
+        let parse = crate::file_manager::image_strip::parse_dhash;
+        let bits = 0x0123_4567_89ab_cdef;
+        assert_eq!(parse(&format!("1000{bits:016x}")), Some(bits));
+        assert_eq!(parse(&format!("1fff{bits:016x}")), Some(bits));
+        assert_eq!(parse(&format!("2000{bits:016x}")), None);
+        assert_eq!(parse("1fff000000000000000g"), None);
+        assert_eq!(parse("0000000000000000"), None);
+    }
+
+    fn fixture() -> (tempfile::TempDir, Directory) {
+        let folder = tempfile::tempdir().unwrap();
+        for name in [
+            "reference.png",
+            "near.png",
+            "foo_2.png",
+            "foo_10.png",
+            "bad.png",
+            "pending.png",
+        ] {
+            std::fs::write(folder.path().join(name), "fixture").unwrap();
+        }
+        let directory =
+            crate::file_manager::filesystem::read_directory(folder.path(), &AtomicBool::new(false))
+                .unwrap();
+        (folder, directory)
+    }
+    #[test]
+    fn distance_orders_xor_bits_and_keeps_missing_last_in_both_directions() {
+        let (_folder, directory) = fixture();
+        let reference = directory
+            .entries
+            .iter()
+            .find(|entry| entry.name == "reference.png")
+            .unwrap();
+        let query = Query::parse(":image;sort:similarity;ref:selected").unwrap();
+        let mut order = ImageOrder::default();
+        order
+            .begin(
+                &query,
+                &directory,
+                &BTreeSet::from([reference.path.clone()]),
+            )
+            .unwrap();
+        order.reference_checked = true;
+        for entry in &directory.entries {
+            let value = match entry.name.as_str() {
+                "reference.png" => Ok(u64::MAX),
+                "near.png" => Ok(u64::MAX ^ 1),
+                "foo_2.png" | "foo_10.png" => Ok(0),
+                "bad.png" => Err("decoder unavailable".into()),
+                _ => continue,
+            };
+            order.values.insert(ImageOrder::key(entry), value);
+        }
+        let mut visible = (0..directory.entries.len()).collect::<Vec<_>>();
+        order.order(&directory, &mut visible, false);
+        let names = |indices: &[usize]| {
+            indices
+                .iter()
+                .map(|&index| directory.entries[index].name.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&visible),
+            [
+                "reference.png",
+                "near.png",
+                "foo_2.png",
+                "foo_10.png",
+                "bad.png",
+                "pending.png"
+            ]
+        );
+        assert_eq!(order.cell(reference), "0 / 64");
+        order.order(&directory, &mut visible, true);
+        assert_eq!(
+            names(&visible),
+            [
+                "foo_2.png",
+                "foo_10.png",
+                "near.png",
+                "reference.png",
+                "bad.png",
+                "pending.png"
+            ]
+        );
+    }
+    #[test]
+    fn raw_hash_order_is_unsigned_and_an_invalid_reference_keeps_the_prior_request() {
+        let (_folder, directory) = fixture();
+        let mut order = ImageOrder::default();
+        order
+            .begin(
+                &Query::parse(":image;sort:dhash").unwrap(),
+                &directory,
+                &BTreeSet::new(),
+            )
+            .unwrap();
+        let a = &directory.entries[0];
+        let b = &directory.entries[1];
+        order.values.insert(ImageOrder::key(a), Ok(u64::MAX));
+        order.values.insert(ImageOrder::key(b), Ok(1_u64 << 63));
+        let mut visible = vec![0, 1];
+        order.order(&directory, &mut visible, false);
+        assert_eq!(visible, [1, 0]);
+        let query = Query::parse(":image;sort:similarity;ref:selected").unwrap();
+        assert!(order.begin(&query, &directory, &BTreeSet::new()).is_err());
+        assert!(order.active());
+        assert_eq!(order.heading(), "dHash");
+        assert_eq!(order.value(a), Some(u64::MAX));
+    }
+    #[test]
+    fn refreshing_a_replaced_reference_invalidates_instead_of_switching_reference() {
+        let (_folder, mut directory) = fixture();
+        let reference = directory.entries[0].clone();
+        let mut order = ImageOrder::default();
+        order
+            .begin(
+                &Query::parse(":image;sort:similarity;ref:selected").unwrap(),
+                &directory,
+                &BTreeSet::from([reference.path.clone()]),
+            )
+            .unwrap();
+        directory.entries[0].revision = reference.revision.wrapping_add(1);
+        let visible = (0..directory.entries.len()).collect::<Vec<_>>();
+        let pool = BackgroundJobs::new(1, 2);
+        let (changed, error) = order.tick(
+            &directory,
+            &directory,
+            &visible,
+            &EntryPreviews::default(),
+            &pool,
+        );
+        assert!(changed);
+        assert!(error.unwrap().contains("Reference changed"));
+        assert!(order.invalid);
+        assert!(order.pending.is_empty());
+        assert_eq!(
+            order.reference.as_ref().unwrap().revision,
+            reference.revision
+        );
     }
 }

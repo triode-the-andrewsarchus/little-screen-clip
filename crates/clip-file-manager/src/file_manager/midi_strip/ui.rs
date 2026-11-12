@@ -6,6 +6,10 @@ pub(in crate::file_manager) fn focus_id() -> Id {
     Id::new("files_midi_strip_focus")
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+)]
 pub(in crate::file_manager) fn show(
     ui: &mut Ui,
     row: Rect,

@@ -568,8 +568,12 @@ pub fn classify_sample(
 
         let plausible = match hint_cat {
             SampleCategory::Kick => !(sc > 3500.0 || (sub < 0.05 && sc > 2000.0)),
-            SampleCategory::HihatClosed => !(duration > 1.2),
-            SampleCategory::Bass => !(sub + feat.values[5] < 0.08),
+            SampleCategory::HihatClosed => {
+                duration.partial_cmp(&1.2) != Some(std::cmp::Ordering::Greater)
+            }
+            SampleCategory::Bass => {
+                (sub + feat.values[5]).partial_cmp(&0.08) != Some(std::cmp::Ordering::Less)
+            }
             _ => true,
         };
 

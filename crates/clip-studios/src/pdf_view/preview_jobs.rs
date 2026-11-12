@@ -198,6 +198,10 @@ impl PdfEditorState {
         ctx.request_repaint();
     }
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Worker captures source identity, page selection, cache ownership, delivery and cancellation together"
+)]
 pub(super) fn spawn_preview_worker<F>(
     jobs: &BackgroundJobs,
     path: PathBuf,

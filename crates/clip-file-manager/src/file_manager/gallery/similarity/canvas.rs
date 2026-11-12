@@ -272,6 +272,18 @@ struct HashJob {
     batch_rx: mpsc::Receiver<Vec<(PathBuf, u64, FeatureVector)>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScanSignature {
+    directory: PathBuf,
+    revision: u64,
+    recurse: bool,
+    visible_count: usize,
+    show_hidden: bool,
+    photo_limit: usize,
+    max_depth: usize,
+    timeout_seconds: u64,
+}
+
 /// Interactive 2D canvas displaying clustered photo similarity grids.
 pub(in crate::file_manager) struct SimilarityCanvas {
     pub pan: egui::Vec2,
@@ -283,7 +295,7 @@ pub(in crate::file_manager) struct SimilarityCanvas {
     pub grid_cols: usize,
     pub grid_rows: usize,
     pub(in crate::file_manager) hashes: HashMap<PathBuf, (FeatureVector, u64)>, // path -> (feature, revision)
-    current_signature: Option<(PathBuf, u64, bool, usize, bool, usize, usize, u64)>,
+    current_signature: Option<ScanSignature>,
     timeout_seconds: u64,
     scan_job: Option<Task<Vec<Entry>>>,
     hash_job: Option<HashJob>,
@@ -351,7 +363,7 @@ impl SimilarityCanvas {
     pub fn is_current_directory(&self, directory: &std::path::Path) -> bool {
         self.current_signature
             .as_ref()
-            .is_some_and(|signature| signature.0 == directory)
+            .is_some_and(|signature| signature.directory == directory)
     }
 
     /// Resets panning and zoom state.
@@ -658,6 +670,10 @@ impl SimilarityCanvas {
     }
 
     /// Synchronizes entries with the active directory or launches recursive scan.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Scan admission takes the directory snapshot and independent user-configured scan limits"
+    )]
     pub(in crate::file_manager) fn sync(
         &mut self,
         directory: &Directory,
@@ -668,16 +684,16 @@ impl SimilarityCanvas {
         max_depth: usize,
         timeout_seconds: u64,
     ) {
-        let sig = (
-            directory.path.clone(),
-            directory.signature,
+        let sig = ScanSignature {
+            directory: directory.path.clone(),
+            revision: directory.signature,
             recurse,
-            visible_indices.len(),
+            visible_count: visible_indices.len(),
             show_hidden,
             photo_limit,
             max_depth,
             timeout_seconds,
-        );
+        };
         if self.current_signature.as_ref() == Some(&sig) {
             return;
         }
@@ -1378,7 +1394,16 @@ mod lifecycle_tests {
     #[test]
     fn retiring_incomplete_scan_invalidates_sync_stamp() {
         let mut canvas = SimilarityCanvas {
-            current_signature: Some((PathBuf::from("/photos"), 1, true, 0, false, 10_000, 16, 900)),
+            current_signature: Some(ScanSignature {
+                directory: PathBuf::from("/photos"),
+                revision: 1,
+                recurse: true,
+                visible_count: 0,
+                show_hidden: false,
+                photo_limit: 10_000,
+                max_depth: 16,
+                timeout_seconds: 900,
+            }),
             ..Default::default()
         };
         let pool = BackgroundJobs::new(1, 2);

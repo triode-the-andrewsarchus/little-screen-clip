@@ -136,9 +136,7 @@ pub struct ImagePreviewState {
     // Palette State
     pub palette_state: PaletteState,
     pub(crate) palette_ticket: Option<JobTicket>,
-    pub(crate) palette_rx: Option<
-        std::sync::mpsc::Receiver<Result<(Vec<PaletteColor>, usize), little_clip_core::JobError>>,
-    >,
+    pub(crate) palette_rx: Option<little_clip_core::jobs::JobReceiver<(Vec<PaletteColor>, usize)>>,
     pub(crate) palette_request_stamp: Option<ImageInputStamp>,
     pub(crate) palette_request_count: Option<usize>,
     pub(crate) palette_results_stamp: Option<ImageInputStamp>,
@@ -180,7 +178,7 @@ pub struct ImagePreviewState {
 
     // File Size Optimizer Async Worker
     pub optimizer_rx: Option<std::sync::mpsc::Receiver<OptimizerMsg>>,
-    optimizer_job_rx: Option<std::sync::mpsc::Receiver<Result<(), little_clip_core::JobError>>>,
+    optimizer_job_rx: Option<little_clip_core::jobs::JobReceiver<()>>,
     optimizer_ticket: Option<JobTicket>,
     pub(crate) optimizer_retry_at: Option<std::time::Instant>,
     optimizer_retry_stamp: Option<OptimizerRequestStamp>,
@@ -191,7 +189,7 @@ pub struct ImagePreviewState {
     // Background Removal Async Worker & State
     pub bg_removal_in_progress: bool,
     pub bg_removal_rx: Option<std::sync::mpsc::Receiver<BgRemovalMsg>>,
-    bg_removal_job_rx: Option<std::sync::mpsc::Receiver<Result<(), JobError>>>,
+    bg_removal_job_rx: Option<little_clip_core::jobs::JobReceiver<()>>,
     bg_removal_ticket: Option<JobTicket>,
     bg_removal_request: Option<BgRemovalRequest>,
     pub(crate) bg_removal_retry_at: Option<std::time::Instant>,
@@ -223,7 +221,7 @@ pub struct ImagePreviewState {
     // Multi-Model Document OCR
     pub ocr_state: OcrState,
     pub ocr_rx: Option<std::sync::mpsc::Receiver<OcrMsg>>,
-    ocr_job_rx: Option<std::sync::mpsc::Receiver<Result<(), little_clip_core::JobError>>>,
+    ocr_job_rx: Option<little_clip_core::jobs::JobReceiver<()>>,
     ocr_ticket: Option<JobTicket>,
     ocr_request: Option<OcrRequest>,
     pub(crate) ocr_retry_at: Option<std::time::Instant>,
@@ -233,8 +231,7 @@ pub struct ImagePreviewState {
 
     // Barcode / QR / DataMatrix Decoder
     pub barcode_state: BarcodeScanState,
-    pub barcode_rx:
-        Option<std::sync::mpsc::Receiver<Result<BarcodeScanMsg, little_clip_core::JobError>>>,
+    pub barcode_rx: Option<little_clip_core::jobs::JobReceiver<BarcodeScanMsg>>,
     pub(crate) barcode_cancel: Option<std::sync::Arc<ImageToolProcessControl>>,
     pub(crate) barcode_ticket: Option<JobTicket>,
     pub(crate) barcode_input_stamp: Option<ImageInputStamp>,

@@ -89,6 +89,10 @@ fn pack_with_lookahead(
     layout
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Bounded packing search carries its position, occupancy, lookahead and two separate memo tables"
+)]
 fn future(
     aspects: &[f32],
     index: usize,

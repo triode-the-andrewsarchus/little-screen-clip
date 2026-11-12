@@ -188,6 +188,10 @@ impl ScreenRenderer {
     }
 
     /// Draws TrueType text onto the pixmap using the specified style, size, and right clipping boundary.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub fn draw_text_styled_clipped(
         &self,
         pixmap: &mut Pixmap,
@@ -270,6 +274,10 @@ impl ScreenRenderer {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(crate) fn draw_text_clipped(
         &self,
         pixmap: &mut Pixmap,
@@ -289,6 +297,10 @@ impl ScreenRenderer {
         self.draw_text_styled_clipped(pixmap, text, x, y, size, color, style, clip_right)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(crate) fn draw_elided_text_clipped(
         &self,
         pixmap: &mut Pixmap,
@@ -376,6 +388,10 @@ impl ScreenRenderer {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(crate) fn draw_pill_badge(
         &self,
         pixmap: &mut Pixmap,
@@ -448,6 +464,10 @@ impl ScreenRenderer {
         Some(rect)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Drawing keeps target, geometry, content and palette explicit without allocating a per-call context"
+    )]
     pub(crate) fn draw_text(
         &self,
         pixmap: &mut Pixmap,

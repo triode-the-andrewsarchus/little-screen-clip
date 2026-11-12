@@ -681,7 +681,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 info!("Processing GetState...");
                 let mgr = ctx.manager.read().await;
                 info!("Got manager read lock for GetState");
-                IpcResponse::State(mgr.clone())
+                IpcResponse::State(Box::new(mgr.clone()))
             }
             Ok(IpcRequest::GetStateSummary) => {
                 let mgr = ctx.manager.read().await;

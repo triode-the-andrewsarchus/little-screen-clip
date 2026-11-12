@@ -20,6 +20,8 @@ pub(super) fn strip_slots(count: usize, capacity: usize) -> Vec<Option<usize>> {
         .chain((count - last + 1..=count).map(Some))
         .collect()
 }
+type RasterCacheKey = (u32, u32, Vec<[u8; 3]>);
+
 #[derive(Default)]
 pub(super) struct EntryPreviews {
     context: super::search::PreviewContext,
@@ -29,7 +31,7 @@ pub(super) struct EntryPreviews {
     identities: BTreeMap<std::path::PathBuf, (u64, uuid::Uuid)>,
     gallery_sizes: BTreeMap<std::path::PathBuf, u32>,
     rasters: Previews,
-    raster_sizes: BTreeMap<uuid::Uuid, ((u32, u32, Vec<[u8; 3]>), uuid::Uuid)>,
+    raster_sizes: BTreeMap<uuid::Uuid, (RasterCacheKey, uuid::Uuid)>,
     image_hover: super::image_strip::Hover,
     scenes: super::scene_strip::Previews,
     materials: super::material_strip::Previews,
@@ -439,7 +441,7 @@ impl EntryPreviews {
         ui: &egui::Ui,
         rect: egui::Rect,
         id: uuid::Uuid,
-        key: (u32, u32, Vec<[u8; 3]>),
+        key: RasterCacheKey,
         source: Source,
     ) {
         if self

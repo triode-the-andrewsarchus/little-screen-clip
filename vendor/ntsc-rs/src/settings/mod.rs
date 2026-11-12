@@ -1,6 +1,7 @@
+#[path = "settings.rs"]
+mod descriptors;
 pub mod easy;
-mod settings;
 pub mod standard;
 
-pub use settings::*;
+pub use descriptors::*;
 pub use standard::*;

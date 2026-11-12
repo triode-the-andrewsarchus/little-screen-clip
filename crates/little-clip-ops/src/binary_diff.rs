@@ -230,10 +230,13 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
     }
 }
 
+/// A display label and the captured bytes supplied to a binary diff.
+pub type BinaryDiffInput = (String, Vec<u8>);
+
 /// Checks if a ClipItem represents two files (e.g. FileBatch with 2+ files or newline-separated paths).
 pub fn resolve_two_files_from_single_item(
     item: &ClipItem,
-) -> Option<((String, Vec<u8>), (String, Vec<u8>))> {
+) -> Option<(BinaryDiffInput, BinaryDiffInput)> {
     match &item.payload {
         ClipPayload::FileBatch(paths) if paths.len() >= 2 => {
             let b1 = read_binary_diff_file(&paths[0])?;
@@ -300,7 +303,7 @@ pub fn resolve_two_files_from_single_item(
 pub fn resolve_binary_diff_pair(
     selected_items: &[&ClipItem],
     state: &SlotManager,
-) -> Option<((String, Vec<u8>), (String, Vec<u8>))> {
+) -> Option<(BinaryDiffInput, BinaryDiffInput)> {
     if selected_items.len() >= 2 {
         let (l_lbl, l_bytes) = get_item_binary_bytes(selected_items[0]);
         let (r_lbl, r_bytes) = get_item_binary_bytes(selected_items[1]);

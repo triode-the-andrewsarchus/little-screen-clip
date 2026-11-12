@@ -183,7 +183,6 @@ fn rendered_save_as_dialog_writes_reloadable_recipe_in_private_directory() {
             modifiers: egui::Modifiers::NONE,
         },
     ]);
-    drop(render);
 
     let saved_path = canvas
         .current_recipe_file

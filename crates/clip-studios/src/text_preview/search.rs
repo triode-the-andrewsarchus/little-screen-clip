@@ -293,7 +293,7 @@ impl TextPreviewState {
                     let search_edit = egui::TextEdit::singleline(&mut self.find_query)
                         .hint_text("Find in text (Enter for next, Shift+Enter for prev)...");
 
-                    let search_width = ui.available_width().min(280.0).max(120.0);
+                    let search_width = ui.available_width().clamp(120.0, 280.0);
                     let response =
                         ui.add_sized([search_width, crate::ui_ext::CONTROL_HEIGHT], search_edit);
                     if self.focus_find_input {

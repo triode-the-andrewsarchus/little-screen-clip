@@ -8,7 +8,7 @@ fn image_session_suspension_retains_edited_state_for_matching_clipboard_item() {
     image.undo_stack.push(Arc::clone(&image.original_rgba));
     let edited_pixels = Arc::clone(&image.current_rgba);
 
-    let mut app = test_workbench_app(Some(ViewerSession::Image(image)), VecDeque::new());
+    let mut app = test_workbench_app(Some(ViewerSession::Image(Box::new(image))), VecDeque::new());
     app.active_image_key = Some(key.clone());
     app.retain_current_image_session();
 
@@ -79,7 +79,7 @@ fn image_session_cache_drops_entry_for_a_different_clipboard_item() {
     let retained_key = ImageSessionKey::ClipboardItem(uuid::Uuid::new_v4());
     let requested_key = ImageSessionKey::ClipboardItem(uuid::Uuid::new_v4());
     let mut app = test_workbench_app(None, VecDeque::new());
-    app.retained_image_session = Some((retained_key, test_image_preview_state()));
+    app.retained_image_session = Some((retained_key, Box::new(test_image_preview_state())));
 
     assert!(!app.restore_image_session(&requested_key));
     assert!(app.retained_image_session.is_none());
@@ -89,7 +89,7 @@ fn image_session_cache_drops_entry_for_a_different_clipboard_item() {
 #[test]
 fn image_session_retention_skips_unmodified_image_state() {
     let key = ImageSessionKey::ClipboardItem(uuid::Uuid::new_v4());
-    let app_viewer = ViewerSession::Image(test_image_preview_state());
+    let app_viewer = ViewerSession::Image(Box::new(test_image_preview_state()));
     let mut app = test_workbench_app(Some(app_viewer), VecDeque::new());
     app.active_image_key = Some(key);
 
@@ -347,7 +347,10 @@ fn workbench_retirement_waits_for_copy_even_without_edits_or_owned_pixels() {
     // Encoded copies never borrow the canvas, so snapshot readiness alone
     // must not allow the host to discard their completion receiver.
     assert!(image.poll_session_snapshots());
-    let mut app = test_workbench_app(Some(ViewerSession::Image(image)), Default::default());
+    let mut app = test_workbench_app(
+        Some(ViewerSession::Image(Box::new(image))),
+        Default::default(),
+    );
     assert!(!app.retain_current_image_session());
     let Some(ViewerSession::Image(image)) = &mut app.viewer else {
         panic!("pending copy lost its owner");

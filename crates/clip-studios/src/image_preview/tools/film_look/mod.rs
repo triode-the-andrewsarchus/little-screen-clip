@@ -408,7 +408,7 @@ impl LightLeakPreset {
         }
     }
 
-    pub fn to_config(&self) -> LightLeakConfig {
+    pub fn to_config(self) -> LightLeakConfig {
         match self {
             Self::None => LightLeakConfig {
                 enabled: false,

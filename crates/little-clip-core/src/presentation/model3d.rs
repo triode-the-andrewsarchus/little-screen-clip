@@ -229,6 +229,22 @@ pub struct Vec3 {
     pub z: f32,
 }
 
+impl std::ops::Add for Vec3 {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        Vec3::add(self, rhs)
+    }
+}
+
+impl std::ops::Sub for Vec3 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self {
+        Vec3::sub(self, rhs)
+    }
+}
+
 impl Vec3 {
     /// Zero vector constant.
     pub const ZERO: Self = Self {
@@ -243,11 +259,19 @@ impl Vec3 {
     }
 
     /// Subtracts vector `other` from `self`.
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "retain the named vector API alongside the Sub operator implementation"
+    )]
     pub fn sub(self, other: Vec3) -> Vec3 {
         Vec3::new(self.x - other.x, self.y - other.y, self.z - other.z)
     }
 
     /// Adds vector `other` to `self`.
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "retain the named vector API alongside the Add operator implementation"
+    )]
     pub fn add(self, other: Vec3) -> Vec3 {
         Vec3::new(self.x + other.x, self.y + other.y, self.z + other.z)
     }

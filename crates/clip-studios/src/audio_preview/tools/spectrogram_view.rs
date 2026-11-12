@@ -237,6 +237,10 @@ pub fn paint_spectrogram_surface(
 }
 
 /// Paints horizontal frequency grid lines across the track and frequency labels in the gutter.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Studio rendering keeps source geometry, display state and host interaction outputs explicit"
+)]
 pub fn paint_frequency_axis_and_grid(
     painter: &egui::Painter,
     spec_rect: Rect,

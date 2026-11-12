@@ -353,6 +353,10 @@ pub fn rasterize_markup(base: &RgbaImage, items: &[MarkupShape]) -> RgbaImage {
     out
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Studio rendering keeps source geometry, display state and host interaction outputs explicit"
+)]
 pub(super) fn draw_text_skia(
     pixmap: &mut tiny_skia::Pixmap,
     font: &little_clip_render::fontdue::Font,

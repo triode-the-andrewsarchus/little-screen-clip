@@ -335,6 +335,10 @@ impl DiffViewerState {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Comparison painter receives both inputs, comparison controls and host UI state together"
+    )]
     pub(super) fn render_image_column(
         &self,
         ui: &mut egui::Ui,
