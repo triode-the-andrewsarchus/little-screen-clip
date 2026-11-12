@@ -1,6 +1,6 @@
 ---
 title: Native diagram previews
-tags: [Pikchr, SvgBob, Mermaid, Lini, Graphviz, D2]
+tags: [Pikchr, SvgBob, Mermaid, Lini, Graphviz, D2, BPMN]
 ---
 
 # From source to preview
@@ -55,3 +55,15 @@ scene: Native scene { style: { fill: "#efe7ff"; stroke: "#573790" } }
 preview: Preview { style: { fill: "#fff1d7"; stroke: "#935f0b" } }
 source -> compiler -> scene -> preview
 ```
+
+## A process without authored layout
+
+```bpmn
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" id="review_definition" targetNamespace="urn:example">
+ <process id="review"><startEvent id="start"/><userTask id="task" name="Review order"/><endEvent id="end"/>
+  <sequenceFlow id="first" sourceRef="start" targetRef="task"/><sequenceFlow id="last" sourceRef="task" targetRef="end"/>
+ </process>
+</definitions>
+```
+
+`order.bpmn` also demonstrates authored coordinates and namespace-qualified colors.

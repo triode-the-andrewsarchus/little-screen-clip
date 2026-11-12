@@ -377,6 +377,21 @@ mod tests {
             ("graphviz", "digraph { a -> b }", "digraph { a -> c }"),
             ("d2", "a -> b: Original", "a -> b: Edited"),
             (
+                "bpmn",
+                "<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" targetNamespace=\"urn:test\"><process id=\"p\" name=\"Original\"/></definitions>",
+                "<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" targetNamespace=\"urn:test\"><process id=\"p\" name=\"Edited\"/></definitions>",
+            ),
+            (
+                "bpmn2",
+                "<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" targetNamespace=\"urn:test\"><process id=\"p\" name=\"Original\"/></definitions>",
+                "<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" targetNamespace=\"urn:test\"><process id=\"p\" name=\"Edited\"/></definitions>",
+            ),
+            (
+                "xml",
+                "<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" targetNamespace=\"urn:test\"><process id=\"p\" name=\"Original\"/></definitions>",
+                "<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" targetNamespace=\"urn:test\"><process id=\"p\" name=\"Edited\"/></definitions>",
+            ),
+            (
                 "pikchr",
                 "box \"Original\"\n",
                 "box \"Edited\"; arrow; circle\n",

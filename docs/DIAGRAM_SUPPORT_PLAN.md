@@ -34,7 +34,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | D2 | d2-rs 0.1.7 pipeline; d2-render 0.1.0; graphs-tui 0.4.0; official Go D2 | Native compiler/layout and scene renderer integrated; flat-board Markdown/standalone previews and highlighted guarded saves implemented; graphical editing/board selection pending |
 | Graphviz DOT | graphviz-pure 1.2.0; layout-rs 0.1.3; graphviz-rust 0.9.9 | Native Graphviz port selected; source/live preview and bounded multi-graph rendering implemented; graphical manipulation pending |
 | DBML | [dbml-language-server](https://crates.io/crates/dbml-language-server) 0.1.2; [dbml_diff_mysql](https://crates.io/crates/dbml_diff_mysql) 0.1.5; [sea-orm-dbml](https://crates.io/crates/sea-orm-dbml) 0.1.0-beta.2 | Pending comparison / editor research |
-| BPMN | [orvanta-api](https://crates.io/crates/orvanta-api) 7.0.0; [bpmn-svg](https://crates.io/crates/bpmn-svg) 0.1.0; [bpmnkit-bpmn](https://crates.io/crates/bpmnkit-bpmn) 0.2.1 | Pending comparison / editor research |
+| BPMN | BPMN Kit 0.2.1 native model/layout/SVG; bpmn-svg 0.1.0; bpmn-js and BPMNKit graphical editors | Native authored-DI and automatic-layout previews; highlighted source editor; direct manipulation optional follow-up |
 | draw.io | [drawio-exporter](https://crates.io/crates/drawio-exporter) 1.6.0; [flowchart-mcp-server](https://crates.io/crates/flowchart-mcp-server) 0.1.0; [drawio-lc](https://crates.io/crates/drawio-lc) 0.4.0 | Pending comparison / editor research |
 | Excalidraw | [excalidraw-image](https://crates.io/crates/excalidraw-image) 0.2.0; [gpui-excalidraw](https://crates.io/crates/gpui-excalidraw) 0.1.9; [excalidraw-render-cli](https://crates.io/crates/excalidraw-render-cli) 0.1.0 | Pending comparison / editor research |
 | WaveDrom | [wavedrom](https://crates.io/crates/wavedrom) 0.1.0; [mdbook-wavedrom-rs](https://crates.io/crates/mdbook-wavedrom-rs) 0.1.0; [mdbook-wavedrom](https://crates.io/crates/mdbook-wavedrom) 0.10.0 | Pending comparison / editor research |
@@ -61,6 +61,26 @@ Additional promising Mermaid alternatives: [mermaid-rs-renderer](https://github.
 [Bret Victor’s linked-representations examples](https://worrydream.com/MediaForThinkingTheUnthinkable/) suggest that the useful interaction is connecting source, structure and visible result. Keep source authoritative; selection in one view should explain the corresponding objects in the other. Do not force all formats into generic boxes and arrows or replace rich formats with an undocumented subset.
 
 Existing shared Markdown parsing/rendering lives in `little-clip-render::markdown`, with native screen painting in `cards::text`. `clip-studios::text_preview::markdown` consumes the same parsed lines. File-manager text sessions already own guarded edits/saves. Extend these mechanisms rather than creating a second file-save or Markdown implementation. Native renderers may need disposable host workers if their runtime cannot be cooperatively bounded; a compiled worker is distinct from an independently installed tool.
+
+## Updated editing and clipboard priorities
+
+The graphical-editor priorities are **WireViz, WaveDrom, Mermaid and Excalidraw**.
+Excalidraw needs actual canvas editing, not just a document preview. For the other
+formats, retain source/highlighting/live preview/errors as the baseline and add
+useful direct manipulation when practical; difficult graphical editors can be
+improved later. D2 source editing is sufficient for now. Keep the complete format
+coverage checklist; these priorities do not remove any requested renderer.
+
+- [ ] Add best-effort diagram recognition for text-only clipboard items in the
+  little-screen preview and when opening that captured text in an editor.
+- [ ] Reuse shared format identities, parser/renderer workers and editor sessions;
+  do not create another clipboard payload or save implementation.
+- [ ] Use bounded, conservative content signatures, not merely punctuation or
+  ambiguous words. Preserve the exact clipboard source.
+- [ ] Render complete recognized snippets; incomplete/unrenderable candidates
+  fall back to text, with syntax highlighting when recognition permits it.
+- [ ] Verify ordinary prose/code, partial input, parser failure, source limits,
+  repeated clipboard changes, and opening an unsaved snippet in its editor.
 
 ## Front matter decision and validation
 
@@ -551,3 +571,52 @@ claim. Imported images remain unavailable placeholders with a warning; source
 imports report an error. Isometric output, selecting child boards, exact source
 correspondence and native graphical operations remain open work. These are not
 silently treated as completed by this integration.
+
+## BPMN decision and implementation
+
+Compared [bpmn-svg](https://crates.io/crates/bpmn-svg/0.1.0), which explicitly
+ignores authored BPMN-DI, with [BPMN Kit](https://github.com/bpmnkit/bpmnkit)'s
+native 0.2.1 model, layout and SVG crates. BPMN Kit preserves authored coordinates,
+labels, pools/lanes and element geometry; it is the stronger foundation for later
+hit-testing. SVG rendering reuses the application's bundled fonts, rasterizer,
+worker protocol and limits; no optional font bundle, extra rasterizer, browser
+engine or BPMN execution runtime is enabled. The MIT license is retained verbatim
+in a separate commit before application integration.
+
+The [BPMNKit editor](https://bpmnkit.com) demonstrates palette/property/canvas
+interaction but uses browser UI. [bpmn-js](https://github.com/bpmn-io/bpmn-js) is
+another mature graphical reference; its bpmn.io license has a visible watermark
+requirement and must not be treated as plain MIT. No browser editor code is
+copied. Native direct manipulation is optional after the newly prioritized editors.
+
+Standalone `.bpmn`/`.bpmn2` and Markdown `bpmn`/`bpmn2` fences use the same native
+engine. Generic `.xml` is recognized only by a bounded, namespace-resolved BPMN
+`definitions` root, so ordinary XML is not claimed. Authored diagram planes are
+all rendered (up to sixteen), with isolated SVG reference IDs. Missing shape
+layouts use automatic layout and disclose that choice; missing displayed geometry
+is reported. Automatic layout currently uses the first collaboration. The upstream
+parser requires a definitions ID; a missing root ID is represented as empty only
+in its private parser input, preserving the original editable source. Namespace and finite-geometry validation runs
+before semantic parsing, DTDs are rejected, and vendor extension trees stay inert.
+Color attributes are resolved by namespace rather than assumed prefix names.
+Edits/save use the original XML text, not a normalizing model serialization.
+
+
+Validation: 40 focused core/render/studio/file-manager tests pass, including seven
+BPMN cases, XML classification, Markdown/screen routing, highlighting, draft edits
+and guarded saves. All four independently linked host worker checks and license
+output pass under the production resource limits. Workspace/all-target strict
+Clippy and formatting pass. A rendered authored-layout example was inspected;
+this caught cropped external labels. Shared multi-SVG composition now fits actual
+outlined glyph bounds before stacking, with the existing viewport budget, fixing
+that clipping for BPMN and retaining Graphviz coverage.
+
+Architecture comparison against `native-diagrams-after-d2` reports 12 fewer clone
+groups and unchanged maximum complexity. The initial oversized preflight and
+render orchestration were separated into geometry validation and parser adaptation
+responsibilities; no new function exceeds the CCN threshold. The tool still flags
+unchanged handler/test bodies in files that gained only registry/fixture entries,
+and repeated MIT license text. Those are not new application mechanisms; the
+verbatim license is intentionally retained. Existing widget/callback bodies were
+not rewritten to improve the score. Graphviz and BPMN share SVG composition
+rather than duplicating outlining, reference isolation and viewport limits.

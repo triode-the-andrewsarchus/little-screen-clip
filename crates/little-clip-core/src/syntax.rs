@@ -317,6 +317,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "lini" => Some("lini"),
         "dot" | "gv" | "graphviz" => Some("graphviz"),
         "d2" => Some("d2"),
+        "bpmn" | "bpmn2" => Some("bpmn"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -441,6 +442,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "lini" => "Lini",
         "graphviz" => "Graphviz",
         "d2" => "D2",
+        "bpmn" => "BPMN",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -557,11 +559,15 @@ pub const GRAPHVIZ_SUBLIME_SYNTAX: &str = include_str!("syntax/graphviz.sublime-
 /// Native D2 source highlighting, shared by document and standalone editors.
 pub const D2_SUBLIME_SYNTAX: &str = include_str!("syntax/d2.sublime-syntax");
 
+/// BPMN XML highlighting for native source/live-preview sessions.
+pub const BPMN_SUBLIME_SYNTAX: &str = include_str!("syntax/bpmn.sublime-syntax");
+
 /// Maps a language identifier to a compatible fallback language in syntect's default syntax set.
 pub fn syntect_fallback(lang: &str) -> &'static str {
     match lang {
         "ts" | "tsx" | "mts" | "cts" => "js",
         "toml" | "kdl" | "ini" | "cfg" | "conf" | "env" => "yaml",
+        "bpmn" | "bpmn2" => "xml",
         "objc" | "mm" => "m",
         "swift" => "rs",
         "bazel" | "bzl" => "py",

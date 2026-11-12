@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: BPMN
+file_extensions: [bpmn, bpmn2]
+scope: text.xml.bpmn
+contexts:
+  main:
+    - include: scope:text.xml

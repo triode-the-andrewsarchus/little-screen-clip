@@ -55,6 +55,7 @@ pub static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
         little_clip_core::syntax::LINI_SUBLIME_SYNTAX,
         little_clip_core::syntax::GRAPHVIZ_SUBLIME_SYNTAX,
         little_clip_core::syntax::D2_SUBLIME_SYNTAX,
+        little_clip_core::syntax::BPMN_SUBLIME_SYNTAX,
         little_clip_core::syntax::MERMAID_SUBLIME_SYNTAX,
     ] {
         match syntect::parsing::SyntaxDefinition::load_from_str(definition, true, None) {

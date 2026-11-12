@@ -218,7 +218,7 @@
         - [x] D2 (`d2`) — native flat-board previews, Dagre/ELK/TALA, `.d2` highlighted source/live preview and diagnostics
         - [x] Graphviz DOT (`graphviz`, `dot`) — compiled Rust renderer, all eight layout engines, bounded multi-graph previews
         - [ ] DBML database markup (`dbml`)
-        - [ ] BPMN business process (`bpmn`)
+        - [x] BPMN business process (`bpmn`, `bpmn2`) — native authored-DI/automatic layout, bounded large/small previews and diagnostics
         - [ ] Diagrams.net / draw.io (`drawio`, `diagramsnet`)
         - [ ] Excalidraw whiteboards (`excalidraw`)
         - [ ] WaveDrom digital timing diagrams (`wavedrom`)
@@ -545,7 +545,7 @@
     - [ ] `.excalidraw`, `.excalidraw.json` — Excalidraw whiteboard drawing
     - [ ] `.uxf` — UMLet eXchange Format
   - [ ] Business process and architecture modeling
-    - [ ] `.bpmn`, `.bpmn2` — Business Process Model and Notation (BPMN 2.0 XML)
+    - [x] `.bpmn`, `.bpmn2` — BPMN 2.0 XML with highlighted source, live preview, diagnostics and guarded saves
     - [ ] `.structurizr`, `.dsl` — Structurizr architecture DSL (May need disambiguation with generic DSL scripts and Lingvo dictionary files on `.dsl`)
   - [ ] Diagram as code (declarative architecture, flow, and schema DSLs)
     - [ ] `.puml`, `.plantuml`, `.iuml` — PlantUML / C4-PlantUML diagram
