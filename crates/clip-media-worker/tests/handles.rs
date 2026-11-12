@@ -907,7 +907,7 @@ mod playback {
         };
         send(&mut player, 1, 1000, false, &options);
         let (selected, subtitled) = player.until(|p| p.epoch == 1 && p.bytes > 0);
-        assert_eq!(selected.tracks.unwrap().current_audio, Some(1));
+        assert_eq!(selected.tracks.unwrap().audio.len(), 2);
         let bright = |pixels: &[u8]| {
             pixels
                 .as_chunks::<4>()

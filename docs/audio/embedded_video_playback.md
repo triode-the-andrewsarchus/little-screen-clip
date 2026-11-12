@@ -169,3 +169,11 @@ clone groups remain 1,521, and duplication falls from 4.26% to 4.25%. The tool
 still labels existing clone patterns in modified files as regressions; the
 introduced overlay/test duplication and oversized video UI method were revised.
 No newly introduced high-complexity function remains in the comparison.
+
+- [x] Fix the live audio-track switch stall exposed by captured output. The
+  legacy selector could deadlock when immediately followed by a flushing seek.
+  Playback now uses playbin3 stream collections and acknowledged stream IDs;
+  temporary muted preroll lets paused track changes complete before restoring
+  the requested frame. Software fallback excludes hardware decoder factories
+  in this disposable process, because decodebin3 ignores the legacy software flag.
+  Worker/reference tests and the eleven-format host matrix pass afterward.

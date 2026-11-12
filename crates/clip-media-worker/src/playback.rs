@@ -137,12 +137,32 @@ struct Engine {
     stream_start_ms: u64,
     options: Options,
     tracks_pending: bool,
+    streams: Vec<gst::Stream>,
+    selected: Vec<String>,
+    video_stream: u32,
+    silent: bool,
 }
 
 impl Engine {
     fn new(source: &Source, settings: &Settings, software: bool) -> Result<Self> {
+        if software {
+            // Each disposable worker owns one pipeline. Decodebin3 does not
+            // implement playbin2's force-sw flag; keep hardware decoders out of
+            // this process's candidate list before any decoder is constructed.
+            for factory in gst::ElementFactory::factories_with_type(
+                gst::ElementFactoryType::DECODER,
+                gst::Rank::NONE,
+            ) {
+                if factory
+                    .metadata("klass")
+                    .is_some_and(|class| class.split('/').any(|part| part == "Hardware"))
+                {
+                    factory.set_rank(gst::Rank::NONE);
+                }
+            }
+        }
         let (video, sink) = video_sink(settings, source.gpu_scale && !software)?;
-        let player = gst::ElementFactory::make("playbin")
+        let player = gst::ElementFactory::make("playbin3")
             .build()
             .map_err(message)?;
         // filesrc supports pull-mode indexing needed by MXF and other seek-heavy
@@ -158,7 +178,9 @@ impl Engine {
         } else {
             "video+audio+soft-volume+deinterlace".to_owned()
         };
-        flags.push_str("+text");
+        if settings.options.subtitles_enabled {
+            flags.push_str("+text");
+        }
         if software {
             flags.push_str("+force-sw-decoders");
         }
@@ -194,6 +216,10 @@ impl Engine {
             stream_start_ms: source.start_ms,
             options: settings.options.clone(),
             tracks_pending: true,
+            streams: Vec::new(),
+            selected: Vec::new(),
+            video_stream: settings.stream,
+            silent: settings.silent,
         })
     }
 
@@ -233,11 +259,7 @@ impl Engine {
             .ok_or("No initial video preroll")?;
         self.origin_ms = stream_time(&first).ok_or("Initial video timestamp unavailable")? as i64
             - self.stream_start_ms as i64;
-        if settings.stream as i32 >= self.player.property::<i32>("n-video") {
-            return Err("Selected video stream unavailable".into());
-        }
-        self.player
-            .set_property("current-video", settings.stream as i32);
+        self.events(output)?;
         self.apply_tracks()?;
         self.seek(settings.start_ms, output)?;
         self.player
@@ -249,6 +271,7 @@ impl Engine {
     fn events(&mut self, output: &mut impl Write) -> Result<()> {
         let bus = self.player.bus().ok_or("Playback bus unavailable")?;
         for event in bus.iter() {
+            self.observe_tracks(&event);
             match event.view() {
                 gst::MessageView::Error(error) => {
                     return Err(format!("{} ({:?})", error.error(), error.debug()));
@@ -314,6 +337,13 @@ impl Engine {
         }
         let changed = self.options != control.options;
         if changed {
+            // Stream selection needs data flow even when the viewer is paused.
+            // Mute this internal preroll, then restore the exact requested frame
+            // and playing state with the flushing seek below.
+            self.player.set_property("mute", true);
+            self.player
+                .set_state(gst::State::Playing)
+                .map_err(message)?;
             self.options = control.options;
             self.apply_tracks()?;
             self.tracks_pending = true;
@@ -326,6 +356,7 @@ impl Engine {
             self.seek(position, output)?;
         }
         self.player.set_property("volume", control.volume);
+        self.player.set_property("mute", false);
         self.player
             .set_state(if control.playing {
                 gst::State::Playing
@@ -358,28 +389,75 @@ impl Engine {
         }
     }
 
-    fn apply_tracks(&self) -> Result<()> {
-        for (kind, requested) in [
-            ("audio", self.options.audio_track),
-            ("text", self.options.subtitle_track),
+    fn streams_of(&self, kind: gst::StreamType) -> impl Iterator<Item = &gst::Stream> {
+        self.streams
+            .iter()
+            .filter(move |s| s.stream_type().contains(kind))
+    }
+
+    fn observe_tracks(&mut self, event: &gst::MessageRef) {
+        match event.view() {
+            gst::MessageView::StreamCollection(collection) => {
+                self.streams = collection.stream_collection().iter().take(192).collect();
+                self.tracks_pending = true;
+            }
+            gst::MessageView::StreamsSelected(selected) => {
+                self.selected = selected
+                    .streams()
+                    .filter_map(|s| s.stream_id().map(|s| s.to_string()))
+                    .take(192)
+                    .collect();
+                self.tracks_pending = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn desired_streams(&self) -> Result<Vec<String>> {
+        let mut desired = Vec::new();
+        for (kind, requested, enabled) in [
+            (gst::StreamType::VIDEO, Some(self.video_stream), true),
+            (
+                gst::StreamType::AUDIO,
+                self.options.audio_track,
+                !self.silent,
+            ),
+            (
+                gst::StreamType::TEXT,
+                self.options.subtitle_track,
+                self.options.subtitles_enabled,
+            ),
         ] {
-            if let Some(index) = requested {
-                if index as i32 >= self.player.property::<i32>(&format!("n-{kind}")) {
-                    return Err(format!("Selected {kind} track unavailable"));
-                }
-                self.player
-                    .set_property(&format!("current-{kind}"), index as i32);
+            if !enabled {
+                continue;
+            }
+            let streams = self.streams_of(kind).take(64).collect::<Vec<_>>();
+            let index = requested.map(|n| n as usize).unwrap_or_else(|| {
+                streams
+                    .iter()
+                    .position(|s| {
+                        s.stream_id().is_some_and(|id| {
+                            self.selected.iter().any(|selected| selected == id.as_str())
+                        })
+                    })
+                    .unwrap_or(0)
+            });
+            if let Some(stream) = streams.get(index) {
+                desired.push(
+                    stream
+                        .stream_id()
+                        .ok_or("Missing playback stream identity")?
+                        .to_string(),
+                );
+            } else if requested.is_some() {
+                return Err("Selected playback track unavailable".into());
             }
         }
-        // Keep text decoding available, but suppress rendering when disabled.
-        self.player.set_property(
-            "current-text",
-            if self.options.subtitles_enabled && self.player.property::<i32>("n-text") > 0 {
-                self.options.subtitle_track.unwrap_or(0) as i32
-            } else {
-                -1
-            },
-        );
+        Ok(desired)
+    }
+
+    fn apply_tracks(&mut self) -> Result<()> {
+        let desired = self.desired_streams()?;
         let flags = self.player.property_value("flags");
         let class =
             gst::glib::FlagsClass::with_type(flags.type_()).ok_or("Missing playback flags")?;
@@ -390,23 +468,36 @@ impl Engine {
         }
         .map_err(|_| "Missing subtitle playback flag")?;
         self.player.set_property("flags", flags);
+        if !self.player.send_event(gst::event::SelectStreams::new(
+            desired.iter().map(String::as_str),
+        )) {
+            return Err("Playback stream selection failed".into());
+        }
+        let bus = self.player.bus().ok_or("Playback bus unavailable")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !desired.iter().all(|id| self.selected.contains(id)) {
+            if Instant::now() >= deadline {
+                return Err("Playback track selection timed out".into());
+            }
+            if let Some(event) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
+                self.observe_tracks(&event);
+                if let gst::MessageView::Error(error) = event.view() {
+                    return Err(message(error.error()));
+                }
+            }
+        }
+        self.tracks_pending = true;
         Ok(())
     }
 
     fn tracks(&self) -> Tracks {
-        let collect = |kind: &str| {
-            let count = self
-                .player
-                .property::<i32>(&format!("n-{kind}"))
-                .clamp(0, 64);
-            (0..count)
-                .map(|index| {
-                    let tags = self.player.emit_by_name::<Option<gst::TagList>>(
-                        &format!("get-{kind}-tags"),
-                        &[&index],
-                    );
-                    let label = tags
-                        .as_ref()
+        let collect = |kind| {
+            self.streams_of(kind)
+                .take(64)
+                .enumerate()
+                .map(|(index, stream)| {
+                    let label = stream
+                        .tags()
                         .map(|tags| {
                             [
                                 tags.get::<gst::tags::Title>().map(|v| v.get().to_owned()),
@@ -431,11 +522,20 @@ impl Engine {
                 })
                 .collect()
         };
+        let current = |kind| {
+            self.streams_of(kind)
+                .position(|s| {
+                    s.stream_id().is_some_and(|id| {
+                        self.selected.iter().any(|selected| selected == id.as_str())
+                    })
+                })
+                .map(|n| n as u32)
+        };
         Tracks {
-            audio: collect("audio"),
-            subtitles: collect("text"),
-            current_audio: u32::try_from(self.player.property::<i32>("current-audio")).ok(),
-            current_subtitle: u32::try_from(self.player.property::<i32>("current-text")).ok(),
+            audio: collect(gst::StreamType::AUDIO),
+            subtitles: collect(gst::StreamType::TEXT),
+            current_audio: current(gst::StreamType::AUDIO),
+            current_subtitle: current(gst::StreamType::TEXT),
         }
     }
 

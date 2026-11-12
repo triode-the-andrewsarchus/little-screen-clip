@@ -116,7 +116,7 @@ Migration status and the eventual playback-framework recommendation live in
 
 ## Streaming playback
 
-`playback` uses GStreamer `playbin` with an application video sink, never a native
+`playback` uses GStreamer `playbin3` with an application video sink, never a native
 window sink. The worker owns the playback clock/audio output; hover disables
 audio decoding and device acquisition. Source preflight shares the existing
 format allowlist and pixel budget. Small H.264 uses software decoding; other
@@ -133,3 +133,11 @@ pixel count, sinks retain one newest frame, and seek epochs reject stale frames
 in the parent. Pause, EOF, duration and failures also produce state updates.
 The parent must pump control/output off its UI thread, retain source guards and
 kill/reap on cancellation; closing stdin also retires the worker.
+
+Session options select embedded audio/subtitle tracks, enable or suppress text,
+set a positive playback rate and loop only the current file. The track catalogue
+is capped at 64 tracks of each type with bounded labels; state headers are capped
+at 64 KiB independently of the raw frame budget. Subtitle rendering requires the
+GStreamer text/subtitle overlay plugins and fonts (including `pango` for text
+tracks). The optional `scaletempo` audio filter preserves pitch at changed rates
+when the audiofx plugin is installed. Options never write application settings.
