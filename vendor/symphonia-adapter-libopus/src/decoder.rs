@@ -26,22 +26,30 @@ pub(crate) struct Decoder {
 
 impl Drop for Decoder {
     fn drop(&mut self) {
+        // SAFETY: successful construction uniquely owns a non-null libopus
+        // decoder. No native use can overlap Drop, which destroys it once.
         unsafe {
             opusic_sys::opus_decoder_destroy(self.ptr);
         }
     }
 }
 
+// SAFETY: libopus decoder state has no thread affinity; moving unique ownership
+// does not race it, and every native operation requires &mut Decoder.
 unsafe impl Send for Decoder {}
+// SAFETY: shared references expose no native state reads or mutation. Decoding,
+// control and destruction require exclusive access; the raw pointer stays private.
 unsafe impl Sync for Decoder {}
 
 impl Decoder {
     pub(crate) fn new(sample_rate: u32, channels: u32) -> Result<Self> {
         let mut error = 0;
+        // SAFETY: error points to initialized writable storage. The scalar
+        // arguments are validated by libopus; success returns a new owned decoder.
         let ptr = unsafe {
             opusic_sys::opus_decoder_create(sample_rate as i32, channels as c_int, &mut error)
         };
-        if error != opusic_sys::OPUS_OK {
+        if error != opusic_sys::OPUS_OK || ptr.is_null() {
             let error_str = error_code_to_str(error);
             error!("decoder failed to create with error code {error}: {error_str}");
             return Err(Error::DecodeError("opus: error creating decoder"));
@@ -54,6 +62,10 @@ impl Decoder {
             0 => std::ptr::null(),
             _ => input.as_ptr(),
         };
+        // SAFETY: self owns live decoder state and &mut self excludes other calls.
+        // input is readable for its checked C-int length (null requests concealment).
+        // output is writable for frame_size*channels floats, bounded by its slice;
+        // the accepted decoder configuration has one or two nonzero channels.
         let len = unsafe {
             opusic_sys::opus_decode_float(
                 self.ptr,
@@ -73,6 +85,8 @@ impl Decoder {
     }
 
     pub(crate) fn reset(&mut self) {
+        // SAFETY: reset is the no-extra-argument OPUS_RESET_STATE request on
+        // uniquely borrowed live decoder state; libopus retains no Rust pointers.
         let result =
             unsafe { opusic_sys::opus_decoder_ctl(self.ptr, opusic_sys::OPUS_RESET_STATE) };
 
