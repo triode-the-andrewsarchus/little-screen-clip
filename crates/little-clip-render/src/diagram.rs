@@ -393,6 +393,77 @@ mod tests {
     use super::*;
 
     #[test]
+    fn math_cache_keeps_theme_identity_and_screen_rows_reserve_fraction_height() {
+        use crate::markdown::parse_markdown_spans;
+        let renderer = crate::ScreenRenderer::fallback(Default::default());
+        let foreground = [30, 210, 90];
+        let color = tiny_skia::Color::from_rgba8(30, 210, 90, 255);
+        let source = r"\frac{1}{\frac{x}{y}}";
+        let rendered = render_inline(Format::MathInline, source, Some(foreground)).unwrap();
+        let thumbnail = std::sync::Arc::new(Thumbnail {
+            math: rendered.math,
+            image: little_clip_core::ImageThumbnail::generate(&rendered.png, WIDTH, HEIGHT)
+                .unwrap(),
+            warnings: Vec::new(),
+        });
+        let mut cache = renderer.diagram_previews.lock().unwrap();
+        for (foreground, result) in [
+            (Some(foreground), Ok(thumbnail.clone())),
+            (Some([200; 3]), Err("Other theme".into())),
+        ] {
+            cache.0.push_back(Cached {
+                format: Format::MathInline,
+                source: source.into(),
+                foreground,
+                result,
+                prepared: std::time::Instant::now(),
+            });
+        }
+        assert!(std::sync::Arc::ptr_eq(
+            &thumbnail,
+            &cache
+                .thumbnail_colored(Format::MathInline, source, Some(foreground))
+                .unwrap()
+        ));
+        assert_eq!(
+            cache
+                .thumbnail_colored(Format::MathInline, source, Some([200; 3]))
+                .unwrap_err(),
+            "Other theme"
+        );
+        drop(cache);
+        let spans = parse_markdown_spans(&format!("Value ${source}$ end"));
+        let mut pixmap = tiny_skia::Pixmap::new(500, 180).unwrap();
+        let height = renderer.draw_markdown_spans(
+            &mut pixmap,
+            &spans,
+            10.0,
+            10.0,
+            20.0,
+            color,
+            490.0,
+            150.0,
+            Some(("• ", color)),
+        );
+        assert!(
+            height > 32.0,
+            "fraction needs more than an ordinary row: {height}"
+        );
+        let painted_bottom = pixmap
+            .pixels()
+            .chunks(500)
+            .rposition(|row| row.iter().any(|pixel| pixel.alpha() > 0))
+            .unwrap();
+        assert!((painted_bottom as f32) < 10.0 + height);
+        assert!(
+            pixmap
+                .pixels()
+                .iter()
+                .any(|p| p.alpha() > 150 && p.green() > 150 && p.red() < 60)
+        );
+    }
+
+    #[test]
     fn responsive_svg_keeps_its_viewbox_aspect_ratio() {
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 400 100"><rect width="400" height="100" fill="black"/></svg>"#;
         let rendered = rasterize_svg(svg.into(), true).unwrap();
@@ -404,6 +475,8 @@ mod tests {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
         let directory = tempfile::tempdir().unwrap();
         for (extension, content, format, source) in [
+            ("md", "$x$", Format::MathInline, "x"),
+            ("md", "$$x$$", Format::Math, "x"),
             ("md", "```pikchr\nbox\n```", Format::Pikchr, "box\n"),
             ("pikchr", "box\n", Format::Pikchr, "box\n"),
             (
@@ -465,6 +538,12 @@ mod tests {
             let path = directory.path().join(format!("drawing.{extension}"));
             std::fs::write(&path, content).unwrap();
             let renderer = crate::ScreenRenderer::fallback(Default::default());
+            let math = matches!(format, Format::Math | Format::MathInline);
+            let color = renderer.color_from_hex(&renderer.palette.colors.text_muted);
+            let foreground = math.then(|| {
+                [color.red(), color.green(), color.blue()]
+                    .map(|value| (value * 255.0).round() as u8)
+            });
             let image = image::RgbaImage::from_pixel(32, 16, image::Rgba([255, 0, 0, 255]));
             renderer
                 .diagram_previews
@@ -473,10 +552,16 @@ mod tests {
                 .0
                 .push_back(Cached {
                     format,
+                    foreground,
                     source: source.into(),
                     result: Ok(std::sync::Arc::new(Thumbnail {
                         image: little_clip_core::ImageThumbnail::from_rgba(image),
                         warnings: Vec::new(),
+                        math: math.then_some(MathLayout {
+                            width_em: 4.0,
+                            height_em: 1.0,
+                            baseline_em: 0.8,
+                        }),
                     })),
                     prepared: std::time::Instant::now(),
                 });
@@ -559,12 +644,28 @@ mod tests {
 
 struct Cached {
     format: Format,
+    foreground: Option<[u8; 3]>,
     source: String,
     result: Result<std::sync::Arc<Thumbnail>, String>,
     prepared: std::time::Instant,
 }
 
+impl Cached {
+    fn fresh(&self) -> bool {
+        let ttl = if self.result.is_err() {
+            Some(Duration::from_secs(10))
+        } else if self.format == Format::Mermaid {
+            Some(Duration::from_secs(60))
+        } else {
+            None
+        };
+        ttl.is_none_or(|ttl| self.prepared.elapsed() < ttl)
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct Thumbnail {
+    pub math: Option<MathLayout>,
     pub image: little_clip_core::ImageThumbnail,
     pub warnings: Vec<String>,
 }
@@ -577,14 +678,20 @@ impl Cache {
         format: Format,
         source: &str,
     ) -> Result<std::sync::Arc<Thumbnail>, String> {
+        self.thumbnail_colored(format, source, None)
+    }
+
+    pub(crate) fn thumbnail_colored(
+        &mut self,
+        format: Format,
+        source: &str,
+        foreground: Option<[u8; 3]>,
+    ) -> Result<std::sync::Arc<Thumbnail>, String> {
         if let Some(index) = self.0.iter().position(|entry| {
-            entry.format == format
+            entry.foreground == foreground
+                && entry.format == format
                 && entry.source == source
-                && ((entry.result.is_ok()
-                    && (format != Format::Mermaid
-                        || entry.prepared.elapsed() < Duration::from_secs(60)))
-                    || (entry.result.is_err()
-                        && entry.prepared.elapsed() < Duration::from_secs(10)))
+                && entry.fresh()
         }) {
             let entry = self.0.remove(index).ok_or("Diagram cache changed")?;
             let result = entry.result.clone();
@@ -592,23 +699,49 @@ impl Cache {
             return result;
         }
         validate_source(source)?;
-        self.0
-            .retain(|entry| entry.format != format || entry.source != source);
-        let result = render(format, source, &AtomicBool::new(false)).and_then(|rendered| {
-            little_clip_core::ImageThumbnail::generate(&rendered.png, WIDTH, HEIGHT)
-                .map(|image| {
-                    std::sync::Arc::new(Thumbnail {
-                        image,
-                        warnings: rendered.warnings,
-                    })
-                })
-                .ok_or_else(|| "Invalid diagram raster".into())
+        self.0.retain(|entry| {
+            entry.format != format || entry.source != source || entry.foreground != foreground
         });
-        if self.0.len() >= 8 {
-            self.0.pop_front();
+        let result = render_request(format, source, foreground, &AtomicBool::new(false)).and_then(
+            |rendered| {
+                little_clip_core::ImageThumbnail::generate(&rendered.png, WIDTH, HEIGHT)
+                    .map(|image| {
+                        std::sync::Arc::new(Thumbnail {
+                            image,
+                            warnings: rendered.warnings,
+                            math: rendered.math,
+                        })
+                    })
+                    .ok_or_else(|| "Invalid diagram raster".into())
+            },
+        );
+        // Many small inline formulas share this cache with large diagrams.
+        // Bound both entry count and retained pixels instead of evicting every
+        // formula in a dense visible row on each screen refresh.
+        let incoming = result
+            .as_ref()
+            .map_or(0, |preview| preview.image.premultiplied_rgba.len());
+        while self.0.len() >= 32
+            || self
+                .0
+                .iter()
+                .map(|entry| {
+                    entry
+                        .result
+                        .as_ref()
+                        .map_or(0, |preview| preview.image.premultiplied_rgba.len())
+                })
+                .sum::<usize>()
+                + incoming
+                > 48 * 1024 * 1024
+        {
+            if self.0.pop_front().is_none() {
+                break;
+            }
         }
         self.0.push_back(Cached {
             format,
+            foreground,
             source: source.to_owned(),
             result: result.clone(),
             prepared: std::time::Instant::now(),

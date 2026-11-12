@@ -1,6 +1,6 @@
 # Native diagram previews and editing
 
-Initial branch: `feat/native-diagram-previews` (merged); continuation: `feat/native-diagram-previews-next`; baseline: `native-diagram-previews` at `c9cbf22`.
+Initial branch: `feat/native-diagram-previews` (merged); continuations: `feat/native-diagram-previews-next` (merged), `feat/native-math-previews`; baseline: `native-diagram-previews` at `c9cbf22`.
 
 ## Required outcome
 
@@ -14,7 +14,7 @@ Preserve FileSource identity checks, atomic save/Save As semantics, accepted wri
 - [x] Shared bounded native worker/render contract and diagnostics, reusing command ownership and raster dependencies.
 - [ ] Per-element source spans and exact edit correspondence for graphical editing.
 - [ ] Native renderer adapters, compared against representative upstream fixtures.
-- [ ] Markdown fenced/inline math rendering in both output paths.
+- [x] Markdown inline/display math rendering in both output paths.
 - [ ] Standalone format detection (including ambiguous/compound extensions), source + live-preview + diagnostics editor and guarded saves.
 - [ ] Format-specific graphical interactions, with exact source edits or explicit unsupported-operation diagnostics; preserve unknown source content.
 - [ ] Full validation, visual review at both sizes, examples, license records and accurate checklist updates.
@@ -28,7 +28,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | Requested family | Initial native candidates / alternatives to investigate | Status |
 | --- | --- | --- |
 | Front matter | [frontmatter](https://crates.io/crates/frontmatter) 0.4.0; [frontmatter-gen](https://crates.io/crates/frontmatter-gen) 0.0.12; [mdbook-frontmatter-fix](https://crates.io/crates/mdbook-frontmatter-fix) 0.4.0 | Pending comparison / editor research |
-| LaTeX math | [latex-rust](https://crates.io/crates/latex-rust) 3.0.3; [retex-svg](https://crates.io/crates/retex-svg) 1.9.0; [tex2svg](https://crates.io/crates/tex2svg) 0.1.0 | Pending comparison / editor research |
+| LaTeX math | Mathra 1.12.0; latex-rust 2.1.1 / 3.0.3; retex-svg 1.9.0; KaTeX; MathLive editor reference | Native Mathra selected; inline/display previews implemented in both viewers; structured graphical editing pending |
 | Mermaid | Merman 0.10.0; mermaid-rs-renderer 0.3.1; ariel-rs 0.4 | Selected Merman; native source/live previews implemented; parser-backed graphical editing pending |
 | PlantUML / C4 | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [plantuml_encoding](https://crates.io/crates/plantuml_encoding) 2.0.3; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
 | D2 | [graphs-tui](https://crates.io/crates/graphs-tui) 0.4.0; [d2-rs-target](https://crates.io/crates/d2-rs-target) 0.1.7; [d2-rs-scenebuild](https://crates.io/crates/d2-rs-scenebuild) 0.1.7 | Pending comparison / editor research |
@@ -373,7 +373,7 @@ Cargo build settings remain uncommitted.
 ## Native math backend (Markdown presentation pending)
 
 Compared [Mathra 1.12.0](https://github.com/matheusmota-dev-br/mathra),
-[latex-rust 2.1.1](https://github.com/jscarr64/LaTeX-Rust/tree/v2.1.1) and
+[latex-rust 2.1.1](https://crates.io/crates/latex-rust/2.1.1) and
 KaTeX's JavaScript/HTML approach. Mathra is selected: its compiled AST/layout/SVG
 pipeline exposes baseline and em measurements, strict diagnostics, accessible
 SVG metadata and outlined glyphs. It can also share the math engine with later
@@ -412,3 +412,53 @@ host PNGs for an infinite sum and a matrix were visually inspected. Architecture
 comparison adds no high-complexity application function or cycle: the two new
 clone groups are the required verbatim MIT/OFL license texts; reported Python
 cycle changes contain the same pre-existing members in another order.
+
+
+## Markdown math presentation
+
+Inline `$...$` and display `$$...$$` now use the native backend in the large text
+viewer and little-screen renderer. The existing CommonMark dependency handles
+inline escapes, code exclusion, emphasis and links. A separate bounded display
+framing pass preserves formulas whose lines look like Markdown lists, rules or
+fences; unfinished blocks show an explicit diagnostic and never render a partial
+formula. The compact preview may extend its ordinary prefix through a real
+closing delimiter, up to the same 256 KiB source budget as other native previews.
+
+Both surfaces use equation em dimensions and a shared prose/equation baseline,
+reserving ascent and descent for fractions and matrices. Standalone display
+rows are centered at natural text size, fitting available bounds rather than
+stretching every equation to the panel width. Explicit LaTeX colors remain
+intact; transparent rasters and foreground-aware cache/source identities adapt
+to the surrounding theme. Lists and quotes retain their native presentation.
+
+The desktop path reuses the existing preview task/debounce/cancellation owner.
+Only a visible equation can admit or poll its render task, after wrapping has
+located its actual rectangle; hidden previews release textures and keep their
+geometry. Errors are visible in the document, and equation hover exposes bounded
+source text. The small renderer shares its existing thumbnail cache, now bounded
+by both 32 entries and 48 MiB of retained pixel data to accommodate dense rows of
+small formulas. No second decoder, browser, TeX installation or external service
+is added.
+
+Validation: the four affected library suites pass with 2,029 tests and 22 ignored
+when serialized. The initial parallel file-manager run hit shared admission
+contention; its full serialized rerun passed. All four executable dispatch checks
+and embedded-license checks pass, strict workspace/all-target Clippy passes, and
+formatting/whitespace checks pass. Additional checks cover exact document-route
+painting, theme cache identity, inline emphasis/code/links, multiline display
+framing, unclosed/budget-limited source, natural-size/centered desktop image
+bounds and clearance before the following paragraph. A final Markdown-focused
+rerun verifies the consolidated heading/rule parser. Actual native equation PNGs
+and a font-loaded little-screen document render were inspected visually.
+
+Architecture comparison against `native-math-backend` reduces clone groups by
+one, keeps maximum/average complexity unchanged, and reduces `parse_body` from
+CCN 17 to 15 and the original preview `show` from 21 to 11. Reported remaining
+clones are unchanged portions of touched files; reported Python cycles contain
+the same members in a different order. No new application cycle is introduced.
+
+See `docs/examples/diagrams/math.md`. General TeX documents and structured math
+editing are still separate work, as are exact source correspondence and the
+remaining diagram families. Compact overflow badges still count physical source
+lines; precise block/source accounting should accompany source correspondence.
+The overall goal remains incomplete.

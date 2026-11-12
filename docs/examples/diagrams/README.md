@@ -42,3 +42,6 @@ digraph Preview {
     source -> renderer -> preview;
 }
 ```
+
+[Native equation examples](math.md) exercise inline/display math, matrices,
+emphasis, lists, quotes, literal dollars and source diagnostics.

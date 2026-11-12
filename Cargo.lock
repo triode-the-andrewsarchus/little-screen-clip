@@ -5448,6 +5448,7 @@ dependencies = [
  "mathra",
  "merman",
  "pikchr-rs",
+ "pulldown-cmark 0.13.6",
  "resvg",
  "roxmltree 0.20.0",
  "rustix 1.1.6",

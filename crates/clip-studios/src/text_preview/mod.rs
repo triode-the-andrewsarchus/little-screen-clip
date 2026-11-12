@@ -478,7 +478,7 @@ pub struct TextPreviewState {
     pub content: Arc<String>,
     character_count: usize,
     markdown: Arc<OnceLock<Vec<markdown::MarkdownBlock>>>,
-    diagram_previews: std::collections::HashMap<usize, crate::diagram_preview::Preview>,
+    diagram_previews: markdown::Previews,
     pub path: Option<PathBuf>,
     pub language: &'static str,
     pub is_markdown: bool,

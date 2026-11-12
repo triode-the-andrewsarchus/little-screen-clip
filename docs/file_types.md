@@ -211,7 +211,7 @@
       - [ ] Embedded JSON-LD structured data (`<script type="application/ld+json">`)
     - [x] `.md`, `.markdown` — Markdown syntax highlighting
       - [x] Front matter parsing (YAML `---`, TOML `+++`, JSON `;;;` / `{...}`) — shared bounded metadata with diagnostics and large/small Markdown presentation
-      - [ ] Embedded LaTeX math blocks (`$...$`, `$$...$$`)
+      - [x] Embedded LaTeX math blocks (`$...$`, `$$...$$`) — native bounded rendering, text baselines, transparent theme colors and diagnostics in both previews
       - [ ] Inline diagram block rendering (Kroki-compatible)
         - [x] Mermaid (`mermaid`, `mmd`) — compiled native renderer, bounded helper, large/small previews
         - [ ] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`)
