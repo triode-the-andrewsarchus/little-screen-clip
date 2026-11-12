@@ -36,7 +36,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | DBML | [dbml-language-server](https://crates.io/crates/dbml-language-server) 0.1.2; [dbml_diff_mysql](https://crates.io/crates/dbml_diff_mysql) 0.1.5; [sea-orm-dbml](https://crates.io/crates/sea-orm-dbml) 0.1.0-beta.2 | Pending comparison / editor research |
 | BPMN | BPMN Kit 0.2.1 native model/layout/SVG; bpmn-svg 0.1.0; bpmn-js and BPMNKit graphical editors | Native authored-DI and automatic-layout previews; highlighted source editor; direct manipulation optional follow-up |
 | draw.io | [drawio-exporter](https://crates.io/crates/drawio-exporter) 1.6.0; [flowchart-mcp-server](https://crates.io/crates/flowchart-mcp-server) 0.1.0; [drawio-lc](https://crates.io/crates/drawio-lc) 0.4.0 | Pending comparison / editor research |
-| Excalidraw | [excalidraw-image](https://crates.io/crates/excalidraw-image) 0.2.0; [gpui-excalidraw](https://crates.io/crates/gpui-excalidraw) 0.1.9; [excalidraw-render-cli](https://crates.io/crates/excalidraw-render-cli) 0.1.0 | Pending comparison / editor research |
+| Excalidraw | excalidraw-render 0.1.0; excalidraw-document 0.2.0; gpui-excalidraw 0.1.9; excalidraw-image 0.2.0 | Native renderer and preserving model selected for integration; graphical canvas pending |
 | WaveDrom | Canonical 3.8.0; native wavedrom 0.1.0 and current Rust main; WavePaint graphical reference | Canonical engine embedded without a browser; timing/register/logic source previews integrated; direct timing painting and lane naming integrated; advanced operations stay in source |
 | Structurizr | [oak-structurizr](https://crates.io/crates/oak-structurizr) 0.0.11; [dendryform-export](https://crates.io/crates/dendryform-export) 0.1.0; [cadastre](https://crates.io/crates/cadastre) 0.4.0 | Pending comparison / editor research |
 | BlockDiag / SeqDiag / ActDiag / NwDiag / PacketDiag / RackDiag | [xio_job_to_blockdiag](https://crates.io/crates/xio_job_to_blockdiag) 0.8.0 | Pending comparison / editor research |
@@ -799,3 +799,60 @@ free; no separate target directory or cleanup sweep was used. User-local Cargo
 settings remain uncommitted. The full run also exposed an insertion-order-sensitive
 front-matter schema hash; its separate fix canonicalizes only structured front
 matter, preserving ordered prose behavior and the former default schema ordering.
+
+## Excalidraw native canvas research
+
+Compared published source for four independent roles/implementations:
+
+- [excalidraw-render 0.1.0](https://github.com/sagikazarmark/excalidraw-render)
+  is a genuine Rust renderer targeting Excalidraw 0.18.1, with Rough/freehand
+  paths, bundled fonts, image handling, compatibility diagnostics and explicit
+  semantic resource limits. Select its library SVG path, with optional PNG/PDF
+  backends disabled, inside the existing disposable diagram worker. Its rendering
+  snapshot is not an authoring model.
+- [excalidraw-document 0.2.0](https://github.com/sagikazarmark/excaliplot)
+  supplies a typed preserving scene/library model and transactional authoring.
+  Duplicate keys are rejected; unknown fields, resources, tombstones, exact
+  numbers and malformed entries are retained. It preserves JSON semantics,
+  not original whitespace/key order/number spelling. Use this as the prospective
+  scene-editing owner rather than inventing another lossy serde scene struct.
+  Its Rust 1.97 minimum fits the installed 1.98.1 toolchain. The published README
+  contains older repository/example paths; provenance uses the package metadata
+  and its recorded VCS revision instead.
+- [gpui-excalidraw 0.1.9](https://github.com/LittleGuest/gpui-excalidraw)
+  is an MIT native editor with selection, shape creation, freehand, move/resize,
+  rotation, snapping, bindings, undo and property panels. Its GPUI Kit dependency
+  is unconditional and the library exposes its UI together with its core. It
+  is a useful interaction/geometry reference; importing another GUI framework
+  is unnecessary. Any source extraction/port would require a separate pristine
+  import before modifications. No such code has been copied.
+- [excalidraw-image 0.2.0](https://github.com/rickardp/excalidraw-image)
+  is self-contained but its actual engine uses `deno_core`/V8, a JavaScript bundle,
+  polyfills, async event-loop pumping and optional cache-helper subprocesses.
+  This is not the same implementation tradeoff as a Rust renderer. Prefer the
+  native candidate above instead of adding that runtime.
+
+Pristine renderer/font license bundles and the document model's root MIT/Apache
+licenses are retained before integration. Renderer source revision:
+`2f4c461ea40ba6850e143f70f310a25a6a50f94d`; document revision:
+`29392d10d9c504ec22d67f37a4dd545a63d5b371`. Font catalog version is
+`0.1.0+excalidraw.0.18.1`, not a download named just `0.1.0`.
+
+Integration must preserve actual fonts and embedded images. Native SVG carries
+WOFF2 subset faces and sometimes effective aliases; the existing compositor
+does not honor CSS font-face loading and intentionally disables image resolution.
+Do not silently substitute the generic font database or discard scene images.
+The public bundled font catalog exposes verified source/predecoded programs,
+reviewed decode sizes/hashes and family names, allowing a worker-only font database
+without system discovery. The existing WOFF decoder is currently file-manager
+private; the renderer must not depend on that application. Trusted bundled-font
+decode can call the same native decoder directly. Embedded raster admission
+needs explicit size/pixel/aggregate limits; paths, network assets and executable
+SVG content remain unavailable. Retain compatibility warnings.
+
+The canvas should reuse the shared editor's guarded delivery and undo ownership,
+and use worker-prepared typed scene snapshots with revision checks. Direct
+manipulation needs immediate native feedback during gestures, followed by one
+transactional source edit on release. Preserve unknown data; document any source
+reformatting explicitly. Existing image markup/transform code is a reuse
+candidate for geometry and handles, not a second file-save implementation.
