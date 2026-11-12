@@ -95,22 +95,23 @@ fn stream_metadata(stream: ffmpeg::Stream<'_>) -> serde_json::Value {
     // SAFETY: Parameters owns a live AVCodecParameters allocation, and
     // this immutable borrow does not outlive it or mutate the context.
     let raw = unsafe { &*parameters.as_ptr() };
-    let mut layout = [0_i8; 128];
+    let mut layout = [0_u8; 128];
     // SAFETY: the layout belongs to the live parameters; the output is
     // an initialized writable buffer with the specified capacity.
     let layout_result = unsafe {
-        ffmpeg::ffi::av_channel_layout_describe(&raw.ch_layout, layout.as_mut_ptr(), layout.len())
+        ffmpeg::ffi::av_channel_layout_describe(
+            &raw.ch_layout,
+            layout.as_mut_ptr().cast(),
+            layout.len(),
+        )
     };
     let layout = if raw.ch_layout.order != ffmpeg::ffi::AVChannelOrder::AV_CHANNEL_ORDER_UNSPEC
         && layout_result >= 0
         && (layout_result as usize) < layout.len()
     {
-        // SAFETY: a successful non-truncated describe writes a NUL terminator.
-        Some(
-            unsafe { std::ffi::CStr::from_ptr(layout.as_ptr()) }
-                .to_string_lossy()
-                .into_owned(),
-        )
+        std::ffi::CStr::from_bytes_until_nul(&layout)
+            .ok()
+            .map(|name| name.to_string_lossy().into_owned())
     } else {
         None
     };

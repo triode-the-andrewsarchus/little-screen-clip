@@ -169,33 +169,36 @@ fn open(bytes: &[u8]) -> rusqlite::Result<Connection> {
             steps > 2_000_000 || Instant::now() >= deadline
         }),
     );
-    // https://www.sqlite.org/c3ref/deserialize.html specifies a 20-byte allocation margin.
-    // SAFETY: malloc64 owns at least len+20 bytes, initialized here. OwnedData transfers
-    // that sqlite allocation to the connection, which frees it even on deserialize failure.
+    // https://www.sqlite.org/c3ref/deserialize.html advises a 20-byte allocation
+    // margin for untrusted content. The safe stream loader allocates only len.
+    let allocation_size = bytes
+        .len()
+        .checked_add(20)
+        .filter(|size| *size <= isize::MAX as usize)
+        .ok_or(rusqlite::Error::InvalidQuery)?;
+    // SAFETY: the scalar size is bounded above; SQLite returns null or a new
+    // allocation of that size, subsequently transferred once through OwnedData.
     let pointer = NonNull::new(
-        unsafe { rusqlite::ffi::sqlite3_malloc64((bytes.len() + 20) as u64) }.cast::<u8>(),
+        unsafe { rusqlite::ffi::sqlite3_malloc64(allocation_size as u64) }.cast::<u8>(),
     )
     .ok_or(rusqlite::Error::InvalidQuery)?;
-    // SAFETY: the successful SQLite allocator returned a distinct len+20 byte
-    // allocation. Initialize it before copying len source bytes (no overlap),
-    // and modify header offsets only when they are in bounds. OwnedData adopts
-    // the SQLite allocation once; FREEONCLOSE also frees it on native failure.
-    // rusqlite's safe stream loader allocates only len bytes, without the advised
-    // margin for malformed databases, so it cannot replace this boundary yet.
-    unsafe {
-        std::ptr::write_bytes(pointer.as_ptr(), 0, bytes.len() + 20);
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer.as_ptr(), bytes.len());
-        // Inspect the checkpointed main file only. Never open or combine a sidecar.
+    {
+        // SAFETY: the checked non-null allocation owns allocation_size writable
+        // bytes, within isize::MAX and disjoint from bytes. This borrow ends
+        // before ownership is handed to SQLite, including its cleanup authority.
+        let buffer = unsafe { std::slice::from_raw_parts_mut(pointer.as_ptr(), allocation_size) };
+        buffer.fill(0);
+        buffer[..bytes.len()].copy_from_slice(bytes);
+        // Inspect only the checkpointed main file, without opening sidecars.
         if bytes.len() > 19 {
-            *pointer.as_ptr().add(18) = 1;
-            *pointer.as_ptr().add(19) = 1;
+            buffer[18..20].fill(1);
         }
-        connection.deserialize(
-            DatabaseName::Main,
-            OwnedData::from_raw_nonnull(pointer, bytes.len()),
-            true,
-        )?;
     }
+    // SAFETY: pointer is uniquely SQLite-allocated, len bytes plus an initialized
+    // margin. OwnedData transfers it exactly once; FREEONCLOSE frees it on native
+    // failure too. DatabaseName::Main cannot fail schema-name conversion.
+    let snapshot = unsafe { OwnedData::from_raw_nonnull(pointer, bytes.len()) };
+    connection.deserialize(DatabaseName::Main, snapshot, true)?;
     connection.execute_batch(
         "PRAGMA query_only=ON; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-4096;",
     )?;
