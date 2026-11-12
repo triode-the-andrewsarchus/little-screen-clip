@@ -244,11 +244,17 @@ pub(super) fn run_optipng_optimization(
     let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
     let output = directory.path().join("optimized.png");
     let program = std::env::current_exe().map_err(|error| error.to_string())?;
-    let mut command = Command::new(program);
-    command
+    let mut command = little_clip_core::CommandRequest::new(program.into_os_string())
+        .resource_limit(rustix::process::Resource::As, 2_147_483_648)
+        .resource_limit(rustix::process::Resource::Cpu, 35)
+        .resource_limit(rustix::process::Resource::Fsize, 128 * 1024 * 1024)
+        .own_process_group()
+        .die_with_parent()
         .arg("--internal-png-optimize-worker")
-        .arg(&temp_path)
-        .arg(&output)
+        .arg(temp_path.as_os_str())
+        .arg(output.as_os_str())
+        .build_command();
+    command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());

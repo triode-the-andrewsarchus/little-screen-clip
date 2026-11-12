@@ -26,6 +26,8 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Replace `blender-thumbnailer` with a bounded native saved-preview reader in core, sharing existing gzip/Zstd libraries. Read only REND/TEST prefix blocks, support legacy endian/pointer layouts and Blender 5 headers, cap compressed/decoded prefix reads at 8 MiB, the decoder window at 32 MiB and thumbnails at 1024 pixels per edge, and retain source checks/cancellation. [Blender’s header definitions](https://github.com/blender/blender/blob/main/source/blender/blenloader_core/BLO_core_blend_header.hh) and [block layout](https://github.com/blender/blender/blob/main/source/blender/blenloader_core/BLO_core_bhead.hh) define the wire format; the implementation is independent. A whole-scene parser such as [`blend`](https://docs.rs/blend/latest/blend/) is unnecessary and documents trusted-file assumptions. Four tests cover header variants, compression, sparse large files, malformed/truncated inputs and budgets. A downloaded [Assimp test scene](https://raw.githubusercontent.com/assimp/assimp/master/test/models/BLEND/SuzanneSubdiv_252.blend) also matches the installed thumbnailer pixel-for-pixel (the optional reference test was run explicitly). No scene rendering or scripts are executed.
 
+- [x] Launch the native PNG optimizer through the existing command builder with parent-death ownership and hard child limits (2 GiB address space, 35 CPU seconds, 128 MiB staged-file size). Its existing cancellation/process-group owner still kills and reaps the child. Both host integration suites pass with the final launcher.
+
 ## Remaining review
 
 - [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.
