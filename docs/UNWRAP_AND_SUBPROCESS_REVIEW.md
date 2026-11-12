@@ -16,6 +16,8 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Replace three `niri msg` launches with a bounded native Unix-socket client, using existing Rustix/Serde dependencies. [Niri’s IPC documentation](https://docs.rs/niri-ipc/latest/niri_ipc/) specifies newline-framed JSON requests and result-wrapped responses. Preserve the 250 ms total deadline, bounded response bytes, fixed popup geometry, PID/window-size matching and fallback behavior. A full connection backlog fails promptly. Validate reply framing, split packets, application errors, malformed/oversized/incomplete responses, trickle deadlines and window/output payloads (nine popup tests). Read-only queries against the live compositor also returned the documented response variants.
 
+- [x] Report poisoned clipboard-selection state through the read result and tolerate poisoned one-shot acknowledgement ownership during teardown. Recovery only takes an optional sender; it does not revive a selection or change clipboard routing. Validation: four private-compositor/selection tests pass, including the poisoned-reader regression.
+
 ## Remaining review
 
 - [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.

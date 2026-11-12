@@ -429,3 +429,25 @@ async fn a_lost_selection_connection_rejects_new_routes() {
         .await;
     assert!(matches!(response, IpcResponse::Error { .. }));
 }
+
+#[tokio::test]
+async fn poisoned_selection_state_reports_a_read_failure_instead_of_panicking() {
+    let incoming = Incoming {
+        serial: 1,
+        observed: tokio::time::Instant::now(),
+        initial: false,
+        mime: "text/plain".into(),
+        reader: Mutex::new(None),
+    };
+    assert!(
+        std::panic::catch_unwind(|| {
+            let _guard = incoming.reader.lock().unwrap();
+            panic!("simulate a selection-state failure");
+        })
+        .is_err()
+    );
+    assert_eq!(
+        incoming.read().await.unwrap_err(),
+        "Clipboard selection state is unavailable"
+    );
+}

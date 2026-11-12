@@ -45,7 +45,7 @@ impl Incoming {
         let reader = self
             .reader
             .lock()
-            .unwrap()
+            .map_err(|_| "Clipboard selection state is unavailable")?
             .take()
             .ok_or("Selection already read")?;
         reader
@@ -381,7 +381,13 @@ impl Dispatch<wl_callback::WlCallback, Reply> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let Some(reply) = reply.lock().unwrap().take() {
+        // The option only owns a one-shot acknowledgement, so taking it is
+        // safe even if an earlier callback panicked while holding the guard.
+        if let Some(reply) = reply
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
             let _ = reply.send(());
         }
     }
