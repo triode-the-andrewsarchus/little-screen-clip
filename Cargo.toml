@@ -14,6 +14,7 @@ members = [
     "crates/clip-file-manager",
     "crates/clipctl",
     "crates/little-clip-nki",
+    "crates/little-clip-cdp",
     "crates/clip-media-worker",
     "crates/clip-media-protocol",
 ]

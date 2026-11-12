@@ -1,0 +1,13 @@
+[package]
+name = "little-clip-cdp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license = "LGPL-2.1-only"
+publish = false
+description = "Isolated LGPL-2.1 Composers Desktop Project (CDP8) audio/spectral processing helper"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tempfile = "3.27"
