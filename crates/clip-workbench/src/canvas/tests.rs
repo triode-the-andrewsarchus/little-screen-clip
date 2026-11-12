@@ -113,7 +113,9 @@ fn rendered_save_as_dialog_writes_reloadable_recipe_in_private_directory() {
         script_editors: HashMap::new(),
         selected_node: None,
         dragging_from: None,
+        pending_wire_connect: None,
         node_previews: HashMap::new(),
+        node_telemetry: HashMap::new(),
         catalog_open: false,
         catalog_search: String::new(),
         catalog_category: "All".to_owned(),
@@ -209,6 +211,7 @@ fn daemon_pipeline_response_restores_previews_and_output_status() {
     let node_id = canvas.graph.nodes[0].id;
     canvas.apply_pipeline_response(little_clip_core::ipc::IpcResponse::PipelineExecuted {
         node_previews: [(node_id, "preview".to_owned())].into_iter().collect(),
+        node_telemetry: Default::default(),
         output_title: Some("once".to_owned()),
         duration_ms: 17,
     });
@@ -658,14 +661,26 @@ fn node_card_frame(
 ) -> (egui::FullOutput, Rect) {
     let rect = Rect::from_min_size(
         Pos2::new(20.0, 20.0),
-        Vec2::new(250.0, estimate_node_height(node)) * zoom,
+        Vec2::new(250.0, estimate_node_height_with_telemetry(node, None)) * zoom,
     );
     let output = egui::Context::default().run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             let painter = ui.painter_at(rect);
+            let empty_telemetry = HashMap::new();
             render_node_card(
-                zoom, previews, &mut None, &mut None, &mut None, ui, &painter, node, rect, false,
-                &mut None, palette,
+                zoom,
+                previews,
+                &empty_telemetry,
+                &mut None,
+                &mut None,
+                &mut None,
+                ui,
+                &painter,
+                node,
+                rect,
+                false,
+                &mut None,
+                palette,
             );
         });
     });

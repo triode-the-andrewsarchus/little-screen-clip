@@ -1,4 +1,5 @@
 use super::*;
+use little_clip_ops::pipeline::NodeTemplate;
 
 impl NodeCanvasState {
     pub(super) fn render_toolbar(
@@ -18,6 +19,7 @@ impl NodeCanvasState {
                 self.catalog_open = true;
                 self.catalog_search.clear();
                 self.spawn_node_pos = None;
+                self.pending_wire_connect = None;
             }
 
             ui.separator();
@@ -281,6 +283,7 @@ impl NodeCanvasState {
                                         ));
                                     if ui.add(close_btn).clicked() {
                                         self.catalog_open = false;
+                                        self.pending_wire_connect = None;
                                     }
                                 },
                             );
@@ -313,12 +316,43 @@ impl NodeCanvasState {
                             }
                         });
 
+                        if let Some(ref pending) = self.pending_wire_connect {
+                            ui.add_space(crate::ui_ext::SPACE_XS);
+                            ui.label(
+                                egui::RichText::new(if pending.is_output {
+                                    format!(
+                                        "Showing nodes accepting {:?} from '{}'",
+                                        pending.port_type, pending.pin_name
+                                    )
+                                } else {
+                                    format!(
+                                        "Showing nodes outputting {:?} into '{}'",
+                                        pending.port_type, pending.pin_name
+                                    )
+                                })
+                                .color(hex_to_c32(&palette.harmonies.base))
+                                .small(),
+                            );
+                        }
+
                         ui.add_space(crate::ui_ext::SPACE_SM);
                         ui.separator();
 
-                        // Filtered Node List
-                        let filtered =
-                            search_templates(&self.catalog_search, Some(&self.catalog_category));
+                        // Filtered Node List (respecting pending wire port compatibility)
+                        let pending_filter = self.pending_wire_connect.clone();
+                        let filtered: Vec<&'static NodeTemplate> =
+                            search_templates(&self.catalog_search, Some(&self.catalog_category))
+                                .into_iter()
+                                .filter(|t| match &pending_filter {
+                                    None => true,
+                                    Some(p) if p.is_output => {
+                                        t.first_compatible_input(p.port_type).is_some()
+                                    }
+                                    Some(p) => t.first_compatible_output(p.port_type).is_some(),
+                                })
+                                .collect();
+
+                        let mut chosen_template: Option<&'static NodeTemplate> = None;
 
                         egui::ScrollArea::vertical()
                             .max_height(260.0)
@@ -329,6 +363,35 @@ impl NodeCanvasState {
                                             .color(hex_to_c32(&palette.colors.text_muted))
                                             .italics(),
                                     );
+                                } else if self.catalog_search.trim().is_empty() {
+                                    let mut root = MenuBranch::default();
+                                    for &template in &filtered {
+                                        root.insert(template.menu_path().split('/'), template);
+                                    }
+                                    if self.catalog_category.eq_ignore_ascii_case("all") {
+                                        render_menu_branch(
+                                            ui,
+                                            &root,
+                                            palette,
+                                            &mut chosen_template,
+                                        );
+                                    } else if let Some(branch) =
+                                        root.submenus.get(self.catalog_category.as_str())
+                                    {
+                                        render_menu_branch(
+                                            ui,
+                                            branch,
+                                            palette,
+                                            &mut chosen_template,
+                                        );
+                                    } else {
+                                        render_menu_branch(
+                                            ui,
+                                            &root,
+                                            palette,
+                                            &mut chosen_template,
+                                        );
+                                    }
                                 } else {
                                     for template in filtered {
                                         let frame = egui::Frame::none()
@@ -351,7 +414,7 @@ impl NodeCanvasState {
                                                 ui.label(
                                                     egui::RichText::new(format!(
                                                         "[{}]",
-                                                        template.category
+                                                        template.menu_path().replace('/', " ▸ ")
                                                     ))
                                                     .color(hex_to_c32(&palette.colors.text_muted))
                                                     .size(BODY_FONT_SIZE),
@@ -365,57 +428,7 @@ impl NodeCanvasState {
                                                             clip_ui::buttons::ButtonRole::Primary
                                                                 .button("+ Add", palette);
                                                         if ui.add(add_btn).clicked() {
-                                                            let spawn_pos = self
-                                                                .spawn_node_pos
-                                                                .take()
-                                                                .unwrap_or_else(|| {
-                                                                    let center_world =
-                                                                        screen_to_world(
-                                                                            parent_rect,
-                                                                            self.graph.pan,
-                                                                            self.graph.zoom,
-                                                                            parent_rect.center(),
-                                                                        );
-                                                                    [center_world.x, center_world.y]
-                                                                });
-                                                            self.snapshot_undo();
-                                                            let mut new_node = instantiate_template(
-                                                                template, spawn_pos,
-                                                            );
-
-                                                            // Generate script scaffolding for python / bash script nodes
-                                                            if template.kind
-                                                                == NodeKind::PythonScript
-                                                            {
-                                                                if let Ok(fname) =
-                                                                    create_script_file_scaffold(
-                                                                        &self.selected_recipe_name,
-                                                                        true,
-                                                                    )
-                                                                {
-                                                                    new_node.props.insert(
-                                                                        "script_file".to_string(),
-                                                                        fname,
-                                                                    );
-                                                                    new_node.props.remove("script");
-                                                                }
-                                                            } else if template.kind
-                                                                == NodeKind::BashCommand
-                                                                && let Ok(fname) =
-                                                                    create_script_file_scaffold(
-                                                                        &self.selected_recipe_name,
-                                                                        false,
-                                                                    )
-                                                            {
-                                                                new_node.props.insert(
-                                                                    "script_file".to_string(),
-                                                                    fname,
-                                                                );
-                                                                new_node.props.remove("command");
-                                                            }
-
-                                                            self.graph.nodes.push(new_node);
-                                                            self.catalog_open = false;
+                                                            chosen_template = Some(template);
                                                         }
                                                     },
                                                 );
@@ -432,8 +445,63 @@ impl NodeCanvasState {
                                     }
                                 }
                             });
+
+                        if let Some(template) = chosen_template {
+                            self.spawn_template_node(template, parent_rect);
+                        }
                     });
             });
+    }
+
+    fn spawn_template_node(&mut self, template: &'static NodeTemplate, parent_rect: Rect) {
+        let spawn_pos = self.spawn_node_pos.take().unwrap_or_else(|| {
+            let center_world = screen_to_world(
+                parent_rect,
+                self.graph.pan,
+                self.graph.zoom,
+                parent_rect.center(),
+            );
+            [center_world.x, center_world.y]
+        });
+        self.snapshot_undo();
+        let mut new_node = instantiate_template(template, spawn_pos);
+
+        if template.kind == NodeKind::PythonScript {
+            if let Ok(fname) = create_script_file_scaffold(&self.selected_recipe_name, true) {
+                new_node.props.insert("script_file".to_string(), fname);
+                new_node.props.remove("script");
+            }
+        } else if template.kind == NodeKind::BashCommand
+            && let Ok(fname) = create_script_file_scaffold(&self.selected_recipe_name, false)
+        {
+            new_node.props.insert("script_file".to_string(), fname);
+            new_node.props.remove("command");
+        }
+
+        let new_id = new_node.id;
+        self.graph.nodes.push(new_node);
+
+        if let Some(pending) = self.pending_wire_connect.take() {
+            if pending.is_output {
+                if let Some(target_pin) = template.first_compatible_input(pending.port_type) {
+                    self.graph.connections.push(Connection {
+                        from_node: pending.node_id,
+                        from_pin: pending.pin_name,
+                        to_node: new_id,
+                        to_pin: target_pin.to_string(),
+                    });
+                }
+            } else if let Some(source_pin) = template.first_compatible_output(pending.port_type) {
+                self.graph.connections.push(Connection {
+                    from_node: new_id,
+                    from_pin: source_pin.to_string(),
+                    to_node: pending.node_id,
+                    to_pin: pending.pin_name,
+                });
+            }
+        }
+
+        self.catalog_open = false;
     }
 
     pub(super) fn render_save_window(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
@@ -515,5 +583,66 @@ impl NodeCanvasState {
                     }
                 });
             });
+    }
+}
+
+#[derive(Default)]
+struct MenuBranch {
+    submenus: std::collections::BTreeMap<&'static str, MenuBranch>,
+    leaves: Vec<&'static NodeTemplate>,
+}
+
+impl MenuBranch {
+    fn insert<'a>(
+        &mut self,
+        mut path: impl Iterator<Item = &'a str>,
+        template: &'static NodeTemplate,
+    ) {
+        if let Some(segment) = path.next() {
+            if let Some(static_seg) = static_menu_segment(segment, template.menu_path()) {
+                self.submenus
+                    .entry(static_seg)
+                    .or_default()
+                    .insert(path, template);
+            } else {
+                self.leaves.push(template);
+            }
+        } else {
+            self.leaves.push(template);
+        }
+    }
+}
+
+fn static_menu_segment(segment: &str, full_path: &'static str) -> Option<&'static str> {
+    let offset = (segment.as_ptr() as usize).checked_sub(full_path.as_ptr() as usize)?;
+    full_path.get(offset..offset + segment.len())
+}
+
+fn render_menu_branch(
+    ui: &mut egui::Ui,
+    branch: &MenuBranch,
+    palette: &AppPalette,
+    chosen: &mut Option<&'static NodeTemplate>,
+) {
+    for (name, sub) in &branch.submenus {
+        ui.menu_button(
+            egui::RichText::new(*name).color(hex_to_c32(&palette.colors.text_primary)),
+            |ui| {
+                render_menu_branch(ui, sub, palette, chosen);
+            },
+        );
+    }
+    let mut leaves = branch.leaves.clone();
+    leaves.sort_by_key(|t| t.name);
+    for template in leaves {
+        let resp = ui
+            .button(
+                egui::RichText::new(template.name).color(hex_to_c32(&palette.colors.text_primary)),
+            )
+            .on_hover_text(template.description);
+        if resp.clicked() {
+            *chosen = Some(template);
+            ui.close_menu();
+        }
     }
 }

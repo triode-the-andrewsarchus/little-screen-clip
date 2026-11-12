@@ -288,6 +288,7 @@ pub(super) struct NodeCardResponse {
 pub(super) fn render_node_card(
     zoom: f32,
     node_previews: &HashMap<Uuid, String>,
+    node_telemetry: &HashMap<Uuid, little_clip_core::ipc::NodeTelemetry>,
     dragging_from: &mut Option<(Uuid, String, bool)>,
     socket_to_disconnect: &mut Option<(Uuid, String, bool)>,
     script_to_edit: &mut Option<Uuid>,
@@ -464,15 +465,28 @@ pub(super) fn render_node_card(
     }
 
     // Inline editable properties inside card (strictly placed below pins, no overlap!)
-    let response = if is_script_node || !node.props.is_empty() {
+    let has_custom_preview = node_telemetry.contains_key(&node.id);
+    let response = if is_script_node || !node.props.is_empty() || has_custom_preview {
         let content_min = Pos2::new(rect.min.x + 12.0 * zoom, props_top);
-        let content_max = Pos2::new(rect.max.x - 12.0 * zoom, rect.max.y - 8.0 * zoom);
+        let bottom_pad = if node_previews.contains_key(&node.id) {
+            22.0 * zoom
+        } else {
+            8.0 * zoom
+        };
+        let content_max = Pos2::new(rect.max.x - 12.0 * zoom, rect.max.y - bottom_pad);
         let content_rect = Rect::from_min_max(content_min, content_max);
 
         let mut child_ui = ui.child_ui(content_rect, egui::Layout::top_down(egui::Align::Min));
-        child_ui.set_clip_rect(content_rect);
+        child_ui.set_clip_rect(content_rect.intersect(ui.clip_rect()));
 
-        render_node_properties(&mut child_ui, node, zoom, palette, script_to_edit)
+        render_node_properties(
+            &mut child_ui,
+            node,
+            node_telemetry.get(&node.id),
+            zoom,
+            palette,
+            script_to_edit,
+        )
     } else {
         NodeCardResponse::default()
     };
@@ -504,6 +518,7 @@ pub(super) fn render_node_card(
 fn render_node_properties(
     ui: &mut egui::Ui,
     node: &NodeInstance,
+    telemetry: Option<&little_clip_core::ipc::NodeTelemetry>,
     zoom: f32,
     palette: &AppPalette,
     script_to_edit: &mut Option<Uuid>,
@@ -551,34 +566,330 @@ fn render_node_properties(
         if ui.add(edit_btn).clicked() {
             *script_to_edit = Some(node.id);
         }
-    } else {
-        for (key, val) in &node.props {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(key.replace('_', " "))
-                        .color(hex_to_c32(&palette.colors.text_muted))
-                        .small(),
-                );
-                let field_width = ui.available_width() * 0.95;
-                let mut value = std::borrow::Cow::Borrowed(val.as_str());
-                let field = ui.add_sized(
-                    [field_width, CONTROL_HEIGHT],
-                    egui::TextEdit::singleline(&mut value)
-                        .desired_width(field_width)
-                        .font(egui::TextStyle::Body),
-                );
-                if field.has_focus() {
-                    response.focused_property = Some(field.id);
-                }
-                if field.changed() {
-                    response
-                        .property_edits
-                        .push((key.clone(), value.into_owned()));
-                }
-            });
+        super::custom_ui::render_script_custom_ui(ui, node, telemetry, palette, &mut response);
+    } else if node.kind == NodeKind::CdpProcess {
+        if let Some(pid) = node.props.get("process_id")
+            && let Some(meta) = little_clip_ops::pipeline::find_cdp_meta(pid)
+        {
+            render_cdp_node_properties(ui, node, meta, telemetry, zoom, palette, &mut response);
+        } else {
+            render_generic_properties(ui, node, palette, &mut response);
         }
+    } else if matches!(
+        node.kind,
+        NodeKind::AudioNormalize
+            | NodeKind::AudioTrimSilence
+            | NodeKind::AudioAdjustGain
+            | NodeKind::AudioConcat
+    ) {
+        super::custom_ui::render_core_audio_custom_ui(
+            ui,
+            node,
+            telemetry,
+            zoom,
+            palette,
+            &mut response,
+        );
+    } else if matches!(
+        node.kind,
+        NodeKind::ImagePadFrame
+            | NodeKind::ImageAddTitle
+            | NodeKind::ImageCrop
+            | NodeKind::ImageResize
+            | NodeKind::ImageConvertWebp
+            | NodeKind::ImageRotate
+            | NodeKind::ImageStitch
+            | NodeKind::ImageStripExif
+            | NodeKind::ImageDiff
+    ) {
+        super::custom_ui::render_image_custom_ui(ui, node, telemetry, zoom, palette, &mut response);
+    } else if matches!(
+        node.kind,
+        NodeKind::TextTrim
+            | NodeKind::TextSlugify
+            | NodeKind::TextCase
+            | NodeKind::TextRegexReplace
+            | NodeKind::TextSplitLines
+            | NodeKind::TextJoin
+            | NodeKind::TextJsonQuery
+            | NodeKind::TextBase64
+    ) {
+        super::custom_ui::render_text_custom_ui(ui, node, telemetry, palette, &mut response);
+    } else if matches!(
+        node.kind,
+        NodeKind::LeftHandSource
+            | NodeKind::RightHandSource
+            | NodeKind::SlotSource(_)
+            | NodeKind::ConstantText
+            | NodeKind::ConstantNumber
+            | NodeKind::PromptOrHandText
+    ) {
+        super::custom_ui::render_source_custom_ui(
+            ui,
+            node,
+            telemetry,
+            zoom,
+            palette,
+            &mut response,
+        );
+    } else if matches!(
+        node.kind,
+        NodeKind::FileSha256 | NodeKind::FileZip | NodeKind::FileExtractName
+    ) {
+        super::custom_ui::render_file_custom_ui(ui, node, telemetry, palette, &mut response);
+    } else if matches!(
+        node.kind,
+        NodeKind::SetLeftHand
+            | NodeKind::SetRightHand
+            | NodeKind::SaveToDisk
+            | NodeKind::PasteToApp
+    ) {
+        super::custom_ui::render_sink_custom_ui(ui, node, telemetry, zoom, palette, &mut response);
+    } else if matches!(
+        node.kind,
+        NodeKind::AutomationLfo
+            | NodeKind::AutomationEnvelope
+            | NodeKind::AutomationDraw
+            | NodeKind::AutomationSteps
+    ) {
+        super::custom_ui::render_automation_custom_ui(ui, node, zoom, palette, &mut response);
+    } else {
+        super::custom_ui::render_chain_custom_ui(ui, node, telemetry, zoom, palette, &mut response);
     }
     response
+}
+
+pub(super) fn render_generic_properties(
+    ui: &mut egui::Ui,
+    node: &NodeInstance,
+    palette: &AppPalette,
+    response: &mut NodeCardResponse,
+) {
+    for (key, val) in &node.props {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(key.replace('_', " "))
+                    .color(hex_to_c32(&palette.colors.text_muted))
+                    .small(),
+            );
+            let field_width = ui.available_width() * 0.95;
+            let mut value = std::borrow::Cow::Borrowed(val.as_str());
+            let field = ui.add_sized(
+                [field_width, CONTROL_HEIGHT],
+                egui::TextEdit::singleline(&mut value)
+                    .desired_width(field_width)
+                    .font(egui::TextStyle::Body),
+            );
+            if field.has_focus() {
+                response.focused_property = Some(field.id);
+            }
+            if field.changed() {
+                response
+                    .property_edits
+                    .push((key.clone(), value.into_owned()));
+            }
+        });
+    }
+}
+
+fn render_cdp_node_properties(
+    ui: &mut egui::Ui,
+    node: &NodeInstance,
+    meta: &little_clip_ops::pipeline::CdpProcessMeta,
+    telemetry: Option<&little_clip_core::ipc::NodeTelemetry>,
+    zoom: f32,
+    palette: &AppPalette,
+    response: &mut NodeCardResponse,
+) {
+    if super::custom_ui::render_cdp_custom_graph(ui, node, meta, telemetry, zoom, response) {
+        ui.add_space(4.0);
+    } else if let Some(tel) = telemetry
+        && (!tel.waveform_peaks.is_empty() || !tel.after_spectrum_db.is_empty())
+    {
+        super::custom_ui::render_audio_telemetry_strip(ui, node, tel, zoom, response);
+        ui.add_space(4.0);
+    }
+
+    if meta.allowbypass {
+        let mut bypassed = node
+            .props
+            .get("bypass")
+            .is_some_and(|v| matches!(v.trim(), "1" | "true" | "True"));
+        if ui.checkbox(&mut bypassed, "Bypass").changed() {
+            response.property_edits.push((
+                "bypass".to_string(),
+                if bypassed { "true" } else { "false" }.to_string(),
+            ));
+        }
+    }
+
+    let slider_params: Vec<_> = meta
+        .parameters
+        .iter()
+        .filter(|p| p.uitype == "hslider")
+        .collect();
+    if !slider_params.is_empty() {
+        let current_target = node
+            .props
+            .get("mod_target")
+            .map(String::as_str)
+            .unwrap_or_else(|| slider_params[0].key.as_str());
+        let current_name = slider_params
+            .iter()
+            .find(|p| p.key == current_target)
+            .map(|p| p.paramname.as_str())
+            .unwrap_or(current_target);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Mod ->")
+                    .color(hex_to_c32(&palette.colors.text_muted))
+                    .small(),
+            );
+            egui::ComboBox::from_id_source((node.id, "cdp_mod_target"))
+                .selected_text(current_name)
+                .show_ui(ui, |ui| {
+                    for sp in &slider_params {
+                        if ui
+                            .selectable_label(current_target == sp.key, &sp.paramname)
+                            .clicked()
+                        {
+                            response
+                                .property_edits
+                                .push(("mod_target".into(), sp.key.clone()));
+                        }
+                    }
+                });
+        });
+    }
+
+    for param in &meta.parameters {
+        let current_str = node
+            .props
+            .get(&param.key)
+            .cloned()
+            .unwrap_or_else(|| param.default_prop_string());
+        let label = if param.paramname.is_empty() {
+            param.key.as_str()
+        } else {
+            param.paramname.as_str()
+        };
+
+        ui.horizontal(|ui| {
+            let lbl_resp = ui.label(
+                egui::RichText::new(label)
+                    .color(hex_to_c32(&palette.colors.text_muted))
+                    .small(),
+            );
+            if !param.paramdescription.is_empty() {
+                lbl_resp.on_hover_text(&param.paramdescription);
+            }
+
+            match param.uitype.as_str() {
+                "hslider" => {
+                    let min = param.minrange.unwrap_or(0.0);
+                    let max = param.maxrange.unwrap_or_else(|| (min + 100.0).max(1.0));
+                    let mut val = current_str
+                        .trim()
+                        .parse::<f64>()
+                        .unwrap_or_else(|_| param.default_value.as_f64().unwrap_or(min));
+                    let mut slider = egui::Slider::new(&mut val, min..=max);
+                    if param.exponential && min > 0.0 && max > min {
+                        slider = slider.logarithmic(true);
+                    }
+                    if let Some(step) = param.step.as_f64()
+                        && step > 0.0
+                    {
+                        slider = slider.step_by(step);
+                    }
+                    let slider_resp = ui.add(slider);
+                    if !param.paramdescription.is_empty() {
+                        slider_resp.clone().on_hover_text(&param.paramdescription);
+                    }
+                    if slider_resp.changed() {
+                        response
+                            .property_edits
+                            .push((param.key.clone(), format!("{val:.4}")));
+                    }
+                }
+                "checkbutton" | "toggle" => {
+                    let mut checked = matches!(current_str.trim(), "1" | "true" | "True");
+                    let cb = ui.checkbox(&mut checked, "");
+                    if cb.changed() {
+                        response.property_edits.push((
+                            param.key.clone(),
+                            if checked { "true" } else { "false" }.to_string(),
+                        ));
+                    }
+                }
+                "optionbutton" => {
+                    let options = param.options();
+                    let selected_idx = current_str.trim().parse::<usize>().unwrap_or(0);
+                    let selected_label = options
+                        .get(selected_idx)
+                        .cloned()
+                        .unwrap_or_else(|| current_str.clone());
+                    egui::ComboBox::from_id_source((node.id, &param.key))
+                        .selected_text(selected_label)
+                        .show_ui(ui, |ui| {
+                            for (idx, opt) in options.iter().enumerate() {
+                                if ui.selectable_label(idx == selected_idx, opt).clicked() {
+                                    response
+                                        .property_edits
+                                        .push((param.key.clone(), idx.to_string()));
+                                }
+                            }
+                        });
+                }
+                _ => {
+                    let field_width = ui.available_width() * 0.95;
+                    let mut value = std::borrow::Cow::Owned(current_str);
+                    let field = ui.add_sized(
+                        [field_width, CONTROL_HEIGHT],
+                        egui::TextEdit::singleline(&mut value)
+                            .desired_width(field_width)
+                            .font(egui::TextStyle::Body),
+                    );
+                    if field.has_focus() {
+                        response.focused_property = Some(field.id);
+                    }
+                    if field.changed() {
+                        response
+                            .property_edits
+                            .push((param.key.clone(), value.into_owned()));
+                    }
+                }
+            }
+        });
+
+        if param.automatable {
+            let brk_key = format!("brk_{}", param.key);
+            let has_brk = node.props.contains_key(&brk_key);
+            let min = param.minrange.unwrap_or(0.0);
+            let max = param.maxrange.unwrap_or_else(|| (min + 100.0).max(1.0));
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button(if has_brk { "~ Hide Curve" } else { "~ Curve" })
+                    .clicked()
+                {
+                    if has_brk {
+                        response
+                            .property_edits
+                            .push((brk_key.clone(), String::new()));
+                    } else {
+                        let def = format!("[[0.0, {min:.3}], [1.0, {max:.3}]]");
+                        response.property_edits.push((brk_key.clone(), def));
+                    }
+                }
+            });
+            if let Some(brk_val) = node.props.get(&brk_key)
+                && !brk_val.trim().is_empty()
+            {
+                super::custom_ui::render_breakfile_editor(
+                    ui, &param.key, min, max, brk_val, zoom, response,
+                );
+            }
+        }
+    }
 }
 
 #[expect(
@@ -640,7 +951,10 @@ pub(super) fn screen_to_world(canvas_rect: Rect, pan: [f32; 2], zoom: f32, pt: P
     Pos2::new((rel.x - pan[0]) / zoom, (rel.y - pan[1]) / zoom)
 }
 
-pub(super) fn estimate_node_height(node: &NodeInstance) -> f32 {
+pub(super) fn estimate_node_height_with_telemetry(
+    node: &NodeInstance,
+    telemetry: Option<&little_clip_core::ipc::NodeTelemetry>,
+) -> f32 {
     let header_h = NODE_HEADER_HEIGHT;
     let pin_row_h = 24.0;
     let max_pins = node.inputs.len().max(node.outputs.len());
@@ -657,7 +971,8 @@ pub(super) fn estimate_node_height(node: &NodeInstance) -> f32 {
     } else {
         0.0
     };
-    (header_h + pins_h + props_h + 10.0).max(65.0)
+    let custom_h = super::custom_ui::extra_custom_ui_height(node, telemetry);
+    (header_h + pins_h + props_h + custom_h + 10.0).max(65.0)
 }
 
 pub(super) fn get_pin_pos(
@@ -732,18 +1047,26 @@ pub(super) fn get_node_category_color(kind: &NodeKind, palette: &AppPalette) -> 
         | NodeKind::ImageRotate
         | NodeKind::ImageStitch
         | NodeKind::ImageStripExif
-        | NodeKind::ImageDiff => hex_to_c32(&palette.harmonies.split_comp_1),
+        | NodeKind::ImageDiff
+        | NodeKind::ImageMagickChain => hex_to_c32(&palette.harmonies.split_comp_1),
 
         NodeKind::AudioNormalize
         | NodeKind::AudioTrimSilence
         | NodeKind::AudioAdjustGain
-        | NodeKind::AudioConcat => hex_to_c32(&palette.harmonies.base),
+        | NodeKind::AudioConcat
+        | NodeKind::AudioFilterChain
+        | NodeKind::CdpProcess => hex_to_c32(&palette.harmonies.base),
 
         NodeKind::FileSha256 | NodeKind::FileZip | NodeKind::FileExtractName => {
             hex_to_c32(&palette.diff_mod)
         }
 
         NodeKind::PythonScript | NodeKind::BashCommand => hex_to_c32(&palette.harmonies.triadic_1),
+
+        NodeKind::AutomationLfo
+        | NodeKind::AutomationEnvelope
+        | NodeKind::AutomationDraw
+        | NodeKind::AutomationSteps => Color32::from_rgb(20, 184, 166),
 
         NodeKind::SetLeftHand
         | NodeKind::SetRightHand

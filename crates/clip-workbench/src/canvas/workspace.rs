@@ -55,8 +55,10 @@ impl NodeCanvasState {
             self.graph.zoom = (self.graph.zoom * zoom_factor).clamp(0.4, 2.2);
         }
 
-        // Clip painter to canvas bounds
+        // Clip painter and node child UIs to canvas bounds
         let painter = ui.painter_at(canvas_rect);
+        let mut canvas_ui = ui.child_ui(canvas_rect, egui::Layout::top_down(egui::Align::Min));
+        canvas_ui.set_clip_rect(canvas_rect.intersect(ui.clip_rect()));
 
         // 1. Draw Background Grid
         render_grid(
@@ -77,7 +79,9 @@ impl NodeCanvasState {
                 Pos2::new(node.pos[0], node.pos[1]),
             );
             let width = 250.0 * self.graph.zoom;
-            let height = estimate_node_height(node) * self.graph.zoom;
+            let height =
+                estimate_node_height_with_telemetry(node, self.node_telemetry.get(&node.id))
+                    * self.graph.zoom;
             node_screen_rects.insert(
                 node.id,
                 Rect::from_min_size(screen_pos, Vec2::new(width, height)),
@@ -153,10 +157,11 @@ impl NodeCanvasState {
             let card = render_node_card(
                 zoom,
                 &self.node_previews,
+                &self.node_telemetry,
                 &mut self.dragging_from,
                 &mut socket_to_disconnect,
                 &mut script_to_edit,
-                ui,
+                &mut canvas_ui,
                 &painter,
                 node,
                 screen_rect,
@@ -251,25 +256,53 @@ impl NodeCanvasState {
             }
         }
 
-        // 6. Handle Pin Drop Connection
+        // 6. Handle Pin Drop Connection (or open filtered catalog on empty space)
         if ui.input(|i| i.pointer.any_released())
             && let Some((from_node, from_pin, is_out)) = self.dragging_from.take()
-            && let Some(target) = snapped_candidate
         {
-            if is_out {
-                connection_to_add = Some(Connection {
-                    from_node,
-                    from_pin,
-                    to_node: target.node_id,
-                    to_pin: target.pin_name,
+            if let Some(target) = snapped_candidate {
+                if is_out {
+                    connection_to_add = Some(Connection {
+                        from_node,
+                        from_pin,
+                        to_node: target.node_id,
+                        to_pin: target.pin_name,
+                    });
+                } else {
+                    connection_to_add = Some(Connection {
+                        from_node: target.node_id,
+                        from_pin: target.pin_name,
+                        to_node: from_node,
+                        to_pin: from_pin,
+                    });
+                }
+            } else if let Some(port_type) = self
+                .graph
+                .nodes
+                .iter()
+                .find(|n| n.id == from_node)
+                .and_then(|n| {
+                    let pins = if is_out { &n.outputs } else { &n.inputs };
+                    pins.iter()
+                        .find(|p| p.name == from_pin)
+                        .map(|p| p.port_type)
+                })
+            {
+                let mouse_pos = ui
+                    .input(|i| i.pointer.hover_pos())
+                    .unwrap_or(canvas_rect.center());
+                let world_pos =
+                    screen_to_world(canvas_rect, self.graph.pan, self.graph.zoom, mouse_pos);
+                self.spawn_node_pos = Some([world_pos.x, world_pos.y]);
+                self.pending_wire_connect = Some(super::PendingWireConnect {
+                    node_id: from_node,
+                    pin_name: from_pin,
+                    is_output: is_out,
+                    port_type,
                 });
-            } else {
-                connection_to_add = Some(Connection {
-                    from_node: target.node_id,
-                    from_pin: target.pin_name,
-                    to_node: from_node,
-                    to_pin: from_pin,
-                });
+                self.catalog_open = true;
+                self.catalog_search.clear();
+                self.catalog_category = "All".to_string();
             }
         }
 
@@ -337,6 +370,7 @@ impl NodeCanvasState {
                 let world_pos =
                     screen_to_world(canvas_rect, self.graph.pan, self.graph.zoom, mouse_pos);
                 self.spawn_node_pos = Some([world_pos.x, world_pos.y]);
+                self.pending_wire_connect = None;
                 self.catalog_open = true;
                 self.catalog_search.clear();
             }

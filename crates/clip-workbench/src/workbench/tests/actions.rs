@@ -552,6 +552,7 @@ fn background_pipeline_completion_reaches_canvas_after_view_switch() {
         |_| {
             Ok(IpcResponse::PipelineExecuted {
                 node_previews: Default::default(),
+                node_telemetry: Default::default(),
                 output_title: Some("output".into()),
                 duration_ms: 17,
             })

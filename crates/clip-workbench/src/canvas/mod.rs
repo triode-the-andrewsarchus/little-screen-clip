@@ -3,6 +3,7 @@
 //! Provides interactive drag-and-drop node graph design, wire connections, parameter tweaking,
 //! recipe loading/saving, and live graph execution.
 
+mod custom_ui;
 mod drawing;
 mod panels;
 mod workspace;
@@ -32,13 +33,24 @@ pub enum CanvasAction {
     RunPipeline { yaml: String },
 }
 
+/// Wire drag dropped into empty canvas space, awaiting node selection.
+#[derive(Debug, Clone)]
+pub struct PendingWireConnect {
+    pub node_id: Uuid,
+    pub pin_name: String,
+    pub is_output: bool,
+    pub port_type: PortType,
+}
+
 /// Interactive state for the visual node pipeline graph editor canvas.
 pub struct NodeCanvasState {
     pub script_editors: HashMap<Uuid, crate::script_editor::ScriptEditor>,
     pub graph: NodeGraph,
     pub selected_node: Option<Uuid>,
     pub dragging_from: Option<(Uuid, String, bool)>, // (node_id, pin_name, is_output)
+    pub pending_wire_connect: Option<PendingWireConnect>,
     pub node_previews: HashMap<Uuid, String>,
+    pub node_telemetry: HashMap<Uuid, little_clip_core::ipc::NodeTelemetry>,
     pub catalog_open: bool,
     pub catalog_search: String,
     pub catalog_category: String,
@@ -87,7 +99,9 @@ impl NodeCanvasState {
             script_editors: HashMap::new(),
             selected_node: None,
             dragging_from: None,
+            pending_wire_connect: None,
             node_previews: HashMap::new(),
+            node_telemetry: HashMap::new(),
             catalog_open: false,
             catalog_search: String::new(),
             catalog_category: "All".to_string(),
@@ -199,10 +213,12 @@ impl NodeCanvasState {
         match response {
             little_clip_core::ipc::IpcResponse::PipelineExecuted {
                 node_previews,
+                node_telemetry,
                 output_title,
                 duration_ms,
             } => {
                 self.node_previews = node_previews;
+                self.node_telemetry = node_telemetry;
                 self.last_run_duration_ms = Some(duration_ms);
                 let output = output_title.as_deref().unwrap_or("Done");
                 self.status_message = Some((
