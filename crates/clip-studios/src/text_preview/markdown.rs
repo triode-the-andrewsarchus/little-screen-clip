@@ -41,12 +41,19 @@ pub(super) fn prepare_blocks(lines: impl IntoIterator<Item = MarkdownLine>) -> V
 }
 
 impl TextPreviewState {
+    /// Retires read-only diagram jobs when the document presentation is hidden.
+    pub fn cancel_diagram_previews(&mut self) {
+        self.diagram_previews.clear();
+    }
+
     /// Renders styled markdown view.
     pub(super) fn render_markdown_view(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let blocks = self.markdown.get_or_init(|| parse_blocks(&self.content));
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| render_blocks(ui, blocks, palette));
+            .show(ui, |ui| {
+                render_blocks(ui, blocks, palette, Some(&mut self.diagram_previews))
+            });
     }
 }
 
@@ -55,16 +62,32 @@ pub fn render_lines(
     parsed: impl IntoIterator<Item = MarkdownLine>,
     palette: &AppPalette,
 ) {
-    render_blocks(ui, &prepare_blocks(parsed), palette);
+    render_blocks(ui, &prepare_blocks(parsed), palette, None);
 }
 
-fn render_blocks(ui: &mut egui::Ui, blocks: &[MarkdownBlock], palette: &AppPalette) {
+fn render_blocks(
+    ui: &mut egui::Ui,
+    blocks: &[MarkdownBlock],
+    palette: &AppPalette,
+    mut previews: Option<&mut std::collections::HashMap<usize, crate::diagram_preview::Preview>>,
+) {
     ui.spacing_mut().item_spacing = Vec2::new(0.0, 6.0);
-    for block in blocks {
+    for (index, block) in blocks.iter().enumerate() {
         match block {
             MarkdownBlock::Line(line) => render_markdown_element(ui, line, palette),
             MarkdownBlock::Code { language, text } => {
-                render_styled_code_block(ui, text, language, palette)
+                if let Some(format) = little_clip_core::diagram::Format::from_language(language)
+                    && let Some(previews) = previews.as_deref_mut()
+                {
+                    previews.entry(index).or_default().show(ui, format, text);
+                    egui::CollapsingHeader::new("Diagram source")
+                        .id_source(index)
+                        .show(ui, |ui| {
+                            render_styled_code_block(ui, text, language, palette);
+                        });
+                } else {
+                    render_styled_code_block(ui, text, language, palette);
+                }
             }
         }
     }

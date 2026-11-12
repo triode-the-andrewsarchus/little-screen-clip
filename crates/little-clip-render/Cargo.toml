@@ -9,13 +9,19 @@ license.workspace = true
 little-clip-core = { path = "../little-clip-core" }
 little-clip-scene = { path = "../little-clip-scene" }
 tiny-skia.workspace = true
-resvg = { version = "0.37", default-features = false }
+resvg = { version = "0.37", default-features = false, features = ["text"] }
 fontdue.workspace = true
 ttf-parser = "0.25"
 image.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 syntect.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+roxmltree = "0.20"
+pikchr-rs = "=0.1.0"
+svgbob = "0.7.6"
 
 [dev-dependencies]
 tempfile = "3.27"

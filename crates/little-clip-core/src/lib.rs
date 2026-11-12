@@ -9,6 +9,7 @@ pub mod calendar;
 pub mod clipboard;
 pub mod color;
 pub mod config;
+pub mod diagram;
 pub mod document;
 pub mod ebook;
 pub mod email;

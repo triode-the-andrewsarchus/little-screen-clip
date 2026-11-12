@@ -11,7 +11,8 @@ Preserve FileSource identity checks, atomic save/Save As semantics, accepted wri
 ## Implementation sequence
 
 - [x] Shared metadata framing/parsing and both Markdown presentations.
-- [ ] Shared bounded diagram source/render contract, source spans and diagnostics; reuse existing raster and worker ownership.
+- [x] Shared bounded native worker/render contract and diagnostics, reusing command ownership and raster dependencies.
+- [ ] Per-element source spans and exact edit correspondence for graphical editing.
 - [ ] Native renderer adapters, compared against representative upstream fixtures.
 - [ ] Markdown fenced/inline math rendering in both output paths.
 - [ ] Standalone format detection (including ambiguous/compound extensions), source + live-preview + diagnostics editor and guarded saves.
@@ -43,8 +44,8 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | Ditaa | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [ansicht](https://crates.io/crates/ansicht) 0.1.0; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
 | Erd | [rusterd](https://crates.io/crates/rusterd) 0.3.1; [erd_rs](https://crates.io/crates/erd_rs) 0.1.0; [fastbreak](https://crates.io/crates/fastbreak) 0.5.0 | Pending comparison / editor research |
 | Nomnoml | [silica](https://crates.io/crates/silica) 0.0.1; [squaredb](https://crates.io/crates/squaredb) 0.2.0 | Pending comparison / editor research |
-| Pikchr | [pikchr](https://crates.io/crates/pikchr) 0.1.4; [pikchr-rs](https://crates.io/crates/pikchr-rs) 0.1.0; [pikchr-sys](https://crates.io/crates/pikchr-sys) 0.1.1 | Pending comparison / editor research |
-| Svgbob | [svgbob](https://crates.io/crates/svgbob) 0.7.6; [mdbook-svgbob](https://crates.io/crates/mdbook-svgbob) 0.3.1; [mdbook-svgbob2](https://crates.io/crates/mdbook-svgbob2) 0.3.0 | Pending comparison / editor research |
+| Pikchr | [pikchr](https://crates.io/crates/pikchr) 0.1.4; [pikchr-rs](https://crates.io/crates/pikchr-rs) 0.1.0; [pikchr-sys](https://crates.io/crates/pikchr-sys) 0.1.1 | Selected pikchr-rs; source/live previews implemented; direct manipulation pending |
+| Svgbob | [svgbob](https://crates.io/crates/svgbob) 0.7.6; [mdbook-svgbob](https://crates.io/crates/mdbook-svgbob) 0.3.1; [mdbook-svgbob2](https://crates.io/crates/mdbook-svgbob2) 0.3.0 | Selected original SvgBob; source/live previews implemented; cell editor and .bob disambiguation pending |
 | GoAT | [aasvg](https://crates.io/crates/aasvg) 1.0.0; [formulaa](https://crates.io/crates/formulaa) 0.1.0 | Pending comparison / editor research |
 | Lini | [lini](https://crates.io/crates/lini) 1.1.0; [mdbook-lini](https://crates.io/crates/mdbook-lini) 0.5.5; [hrdf-parser](https://crates.io/crates/hrdf-parser) 0.10.0 | Pending comparison / editor research |
 | TikZ / PGF | [mdbook-tikz](https://crates.io/crates/mdbook-tikz) 0.2.8; [tikra](https://crates.io/crates/tikra) 1.9.2; [tikra-cli](https://crates.io/crates/tikra-cli) 1.9.2 | Pending comparison / editor research |
@@ -63,7 +64,7 @@ Existing shared Markdown parsing/rendering lives in `little-clip-render::markdow
 
 ## Front matter decision and validation
 
-Compared [gray_matter](https://docs.rs/gray_matter/latest/gray_matter/) (multiple engines, owned custom Pod), [frontmatter-gen](https://github.com/sebastienrousseau/frontmatter-gen) (broader generation/SSG facilities), and [frontmatter-lossless](https://github.com/osdlc/osdlc) (YAML framing only). The shared core reader needs original byte offsets, TOML/JSON delimiters, bare JSON objects, bounded diagnostics and bounded YAML expansion. Its small framing layer reuses existing Serde JSON/TOML; [serde-saphyr](https://docs.rs/serde-saphyr/2.1.1/serde_saphyr/) supplies YAML with explicit depth/event/node/alias/scalar budgets and includes disabled. Deserialize-only features avoid serializer/comment facilities. License: MIT OR Apache-2.0; five newly locked packages, no executable dependency.
+Compared [gray_matter](https://docs.rs/gray_matter/latest/gray_matter/) (multiple engines, owned custom Pod), [frontmatter-gen](https://github.com/sebastienrousseau/frontmatter-gen) (broader generation/SSG facilities), and [frontmatter-lossless](https://github.com/osdlc/osdlc) (YAML framing only). The shared core reader needs original byte offsets, TOML/JSON delimiters, bare JSON objects, bounded diagnostics and bounded YAML expansion. Its small framing layer reuses existing Serde JSON/TOML; [serde-saphyr](https://docs.rs/serde-saphyr/2.1.1/serde_saphyr/) supplies YAML with explicit depth/event/node/alias/scalar budgets and includes disabled. Deserialize-only features avoid serializer/comment facilities. License: MIT OR Apache-2.0; four newly locked packages, no executable dependency.
 
 The large viewer exposes expandable metadata fields; screen cards show format and a compact field summary. Source remains unchanged. Framing failures leave the body visible and closed malformed metadata reports its error. Parsing is capped at 64 KiB; presentation bounds field count and text length.
 
@@ -72,3 +73,29 @@ Validation: five core metadata tests; six studio Markdown/source tests and seven
 ## Build compatibility
 
 The added native parser dependency graph exposes an ambiguous `ImageBuffer::as_mut()` inference in the existing SAM mask blender. The buffer is explicitly typed as `&mut [u8]`; pixel behavior is unchanged. All three actual-host diagram dispatch tests compile and pass with that annotation.
+
+## First native diagram adapters
+
+Pikchr and SvgBob now share a compiled rendering worker inside the file manager, workbench, daemon and display diagnostic executable. It dispatches before UI/runtime/hardware startup. JSON stdin contains only syntax and source; output contains SVG, a PNG and bounded dimensions. No input/output path is accepted. Core CommandRequest owns the process group, parent-death handling, cancellation, eight-second wall timeout, six CPU seconds, 2 GiB address space and bounded stdout. SVG image resolvers are disabled; fonts come from the existing bundled fallback. The source cap is 256 KiB; SvgBob additionally bounds the cell plane to 256 × 128; vector structure/dimensions and raster allocation are bounded.
+
+The large Markdown viewer prepares only visible diagrams on cancellable/debounced jobs. Hidden work is cancelled and GPU images are released while retaining layout geometry. Standalone `.pikchr` / `.svgbob` sessions use the existing guarded editor/save path with highlighted source, live preview and diagnostics. Small-screen cards render fenced diagrams and standalone source, reuse up to eight prepared images and retry transient failures after ten seconds. A visible fenced diagram may read beyond the normal text prefix to obtain its complete source within the diagram budget. Copied `.md` files now use rendered Markdown instead of accidentally falling through to highlighted raw text.
+
+### Pikchr comparison and editor direction
+
+Compared [pikchr-rs 0.1.0](https://github.com/gzivdo/pikchr-rs) (MIT; safe Rust grammar/geometry port, upstream corpus-parity tests) with [pikchr 0.1.4](https://docs.rs/pikchr/0.1.4/pikchr/) (bundled upstream C, mature token budget, FFI). Source inspection found the latter’s destructor tests for a null pointer before freeing, leaving a successful allocation unfreed. The Rust port is selected, pinned and contained in the bounded worker because macro depth alone does not bound expanded work. This avoids adding application unsafe code or an installed renderer. Normal source errors preserve the engine diagnostic.
+
+The official [Pikchr editor](https://pikchr.org/home/help/www/pikchrshow) is a source/preview application rather than a native bidirectional editor. Its client-side rendering and immediate diagnostics are useful interaction references. Numeric scrubbing and object/source correspondence are still pending; no editor implementation was copied.
+
+### SvgBob comparison and editor direction
+
+Compared [SvgBob 0.7.6](https://github.com/ivanceras/svgbob) (Apache-2.0, exact target language) and [aasvg-rs](https://github.com/bearcove/aasvg-rs) (BSD-2-Clause, related Markdeep/GoAT dialect). The latter is not a substitute for SvgBob syntax, so the original native renderer is selected. Its static Sauron SVG writer pins futures 0.3.30, incompatible with the current workspace. `vendor/sauron-core` retains upstream 0.61.9 library source/license, with only the dependency constraint and one explicit return lifetime changed. DOM/browser features remain disabled; this is a static SVG node writer, not a browser engine.
+
+[svgbob-gui](https://github.com/qqn2/svgbob-gui) (MIT, with separately licensed dependencies) and [AsciiGrid](https://github.com/mbarkhau/asciigrid) demonstrate grid editing, rectangular selections, box/arrow tools and movement/resizing while keeping ASCII authoritative. A native cell editor is a better fit than translating their browser UI frameworks. Graphical grid editing and ambiguous `.bob` content classification remain pending; only unambiguous `.svgbob` is routed automatically so far.
+
+### Current evidence and remaining work
+
+Native vectors and raster output for both adapters pass tests and were visually inspected with the [example files](examples/diagrams/README.md). Three worker-dispatch suites pass across all four actual host executables, including the display diagnostic, under the production address-space/CPU limits. Preview cancellation, loaded source syntaxes, guarded diagram saves, complete diagram fences and actual small-screen `.md` / standalone routing have targeted tests. Workspace strict Clippy passes. These results do not claim graphical editing or completion of the remaining format families.
+
+The architecture comparison flags additional complexity: native protocol/parser/raster validation and preview ownership add necessary domain behavior, and the source-vendored Sauron writer accounts for most of the roughly 9,800 newly measured lines (including upstream DOM code that is not enabled). No app dependency cycle was added; reported Python cycle changes only reorder members of untouched scripts. Diagram presentation adds branches to existing text painting; final review must keep these bounded as more adapters arrive rather than duplicating format-specific painting.
+
+First-adapter validation: `cargo test -p little-clip-render -p clip-studios -p clip-file-manager -j4 --lib -- --test-threads=1` passes 1,688 tests (19 ignored); the subsequent viewer-route test and metadata doctest pass. Actual worker integration tests pass across all four executables under the same address-space/CPU limits. `cargo fmt --all --check`, `git diff --check` and final `cargo clippy --workspace --all-targets -j4 -- -D warnings` pass. User-local `.cargo/config.toml` remains excluded. Approximately 125 GiB remains available; no additional target directory or cleanup sweep was used.

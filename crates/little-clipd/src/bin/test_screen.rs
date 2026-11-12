@@ -5,6 +5,9 @@ use little_clip_driver::TrofeoDriver;
 use little_clip_render::ScreenRenderer;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if little_clip_render::diagram::run_worker_cli() {
+        return Ok(());
+    }
     tracing_subscriber::fmt::init();
     println!("Testing Trofeo Vision USB Driver...");
     let mut driver = TrofeoDriver::open()?;

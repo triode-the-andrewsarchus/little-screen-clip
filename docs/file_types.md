@@ -228,8 +228,8 @@
         - [ ] Ditaa ASCII art diagrams (`ditaa`)
         - [ ] Erd entity-relationship diagrams (`erd`)
         - [ ] Nomnoml UML diagrams (`nomnoml`)
-        - [ ] Pikchr diagrams (`pikchr`)
-        - [ ] Svgbob ASCII art diagrams (`svgbob`)
+        - [x] Pikchr diagrams (`pikchr`) — compiled Rust renderer, bounded native helper, large/small previews
+        - [x] Svgbob ASCII art diagrams (`svgbob`) — native SVG/raster output, large/small previews
         - [ ] GoAT ASCII diagrams (`goat`)
         - [ ] Lini text diagrams (`lini`)
         - [ ] TikZ / PGF diagrams (`tikz`, `pgf`)
@@ -555,7 +555,7 @@
     - [ ] `.dbml` — Database Markup Language (May need disambiguation with Microsoft LINQ to SQL database mapping files on `.dbml`)
     - [ ] `.erd` — BurntSushi entity-relationship diagram (May need disambiguation with Eclipse ERMaster files on `.erd`)
     - [ ] `.nomnoml` — Nomnoml UML diagram
-    - [ ] `.pikchr` — Pikchr diagram markup
+    - [x] `.pikchr` — native Pikchr previews, highlighted source/live preview/errors and guarded saves
     - [ ] `.diag`, `.blockdiag`, `.seqdiag`, `.actdiag`, `.nwdiag`, `.packetdiag`, `.rackdiag` — BlockDiag family diagram (May need disambiguation with system diagnostic log files on `.diag`)
   - [ ] Hardware, electrical, and packet layout diagrams
     - [ ] `.bytefield`, `.bf` — Bytefield-SVG network/binary packet layout (May need disambiguation with Brainfuck source files on `.bf`)
@@ -565,6 +565,8 @@
   - [ ] ASCII-art and text-to-vector diagram tools
     - [ ] `.ditaa` — Ditaa ASCII art diagram
     - [ ] `.bob`, `.svgbob` — Svgbob ASCII-to-SVG diagram (May need disambiguation with BOB raytracer / CAD files on `.bob`)
+      - [x] `.svgbob` — native previews, highlighted source/live preview/errors and guarded saves
+      - [ ] `.bob` content disambiguation and graphical cell editing
     - [ ] `.goat` — GoAT ASCII diagram
     - [ ] `.lini` — Lini text diagram
   - [ ] Scientific and statistical charting specifications

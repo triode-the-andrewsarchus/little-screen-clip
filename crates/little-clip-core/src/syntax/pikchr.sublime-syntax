@@ -1,0 +1,28 @@
+%YAML 1.2
+---
+name: Pikchr
+file_extensions: [pikchr]
+scope: source.pikchr
+contexts:
+  main:
+    - match: '#.*$|//.*$'
+      scope: comment.line.pikchr
+    - match: '"'
+      scope: punctuation.definition.string.begin.pikchr
+      push: string
+    - match: '\b(box|circle|ellipse|line|arrow|arc|spline|move|dot|diamond|cylinder|file|oval|text|define|print|assert)\b'
+      scope: keyword.control.pikchr
+    - match: '\b(at|from|to|then|with|same|as|right|left|up|down|above|below|of|last|first|fill|color|radius|rad|width|height|thickness|fit|dashed|dotted|invis|chop|heading)\b'
+      scope: storage.modifier.pikchr
+    - match: '\b[0-9]+(?:\.[0-9]+)?(?:px|pt|in|cm|mm|%)?'
+      scope: constant.numeric.pikchr
+    - match: '\b[A-Z][A-Za-z0-9_]*\b'
+      scope: entity.name.type.pikchr
+  string:
+    - match: '\\.'
+      scope: constant.character.escape.pikchr
+    - match: '"'
+      scope: punctuation.definition.string.end.pikchr
+      pop: true
+    - match: '[^"\\]+'
+      scope: string.quoted.double.pikchr

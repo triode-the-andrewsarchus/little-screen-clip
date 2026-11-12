@@ -61,6 +61,7 @@ pub enum RenderError {
     ImageEncode(String),
 }
 
+pub mod diagram;
 pub mod markdown;
 mod scene_preview;
 
@@ -192,6 +193,7 @@ pub enum FontStyle {
 /// Canvas rasterizer for rendering slot cards, thumbnails, waveforms, and code blocks onto a tiny-skia Pixmap.
 #[derive(Clone)]
 pub struct ScreenRenderer {
+    pub(crate) diagram_previews: std::sync::Arc<std::sync::Mutex<diagram::Cache>>,
     pub(crate) file_previews: std::sync::Arc<std::sync::Mutex<file_preview::Cache>>,
     pub(crate) scene_previews: std::sync::Arc<std::sync::Mutex<scene_preview::PreviewCache>>,
     pub(crate) scene_preview_source: Option<scene_preview::SharedSource>,
@@ -217,6 +219,7 @@ impl ScreenRenderer {
             font_mono: font_mono.map(std::sync::Arc::new),
             config,
             palette,
+            diagram_previews: Default::default(),
             file_previews: Default::default(),
             scene_previews: Default::default(),
             scene_preview_source: None,
@@ -233,6 +236,7 @@ impl ScreenRenderer {
             font_mono: None,
             config,
             palette,
+            diagram_previews: Default::default(),
             file_previews: Default::default(),
             scene_previews: Default::default(),
             scene_preview_source: None,

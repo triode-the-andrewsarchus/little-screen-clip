@@ -1,0 +1,15 @@
+%YAML 1.2
+---
+name: SvgBob
+file_extensions: [svgbob, bob]
+scope: source.svgbob
+contexts:
+  main:
+    - match: '[+|/\\<>^]'
+      scope: keyword.operator.svgbob
+    - match: '[-_=]{2,}|[─━│┃┌┐└┘├┤┬┴┼╭╮╰╯]'
+      scope: punctuation.separator.svgbob
+    - match: '"[^"\n]*"'
+      scope: string.quoted.double.svgbob
+    - match: '\b[0-9]+(?:\.[0-9]+)?\b'
+      scope: constant.numeric.svgbob

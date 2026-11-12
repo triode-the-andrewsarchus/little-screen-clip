@@ -58,6 +58,7 @@ opt-level = 3
 
 # egui 0.27 requests physical startup dimensions before Wayland knows output scale.
 [patch.crates-io]
+sauron-core = { path = "vendor/sauron-core" }
 symphonia = { path = "vendor/symphonia" }
 symphonia-adapter-libopus = { path = "vendor/symphonia-adapter-libopus" }
 egui-winit = { path = "vendor/egui-winit" }

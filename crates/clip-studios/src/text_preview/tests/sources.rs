@@ -380,3 +380,16 @@ fn subtitle_raw_source_handles_cr_without_normalizing_the_file_bytes() {
         assert_eq!(state.center_source_line, Some(3));
     }
 }
+
+#[test]
+fn standalone_diagram_sources_have_loaded_native_syntax_definitions() {
+    for (extension, name, source) in [
+        ("pikchr", "Pikchr", "box \"Source\"; arrow; circle\n"),
+        ("svgbob", "SvgBob", "+----+\n|Text|\n+----+\n"),
+    ] {
+        let syntax = SYNTAX_SET.find_syntax_by_extension(extension).unwrap();
+        assert_eq!(syntax.name, name);
+        let layout = build_highlighted_layout_job(source, syntax, &AppPalette::default(), &[]);
+        assert!(layout.sections.len() > 1);
+    }
+}

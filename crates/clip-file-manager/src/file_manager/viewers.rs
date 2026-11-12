@@ -549,7 +549,8 @@ enum Kind {
     External,
 }
 fn kind(path: &Path) -> Kind {
-    if super::text_strip::is_typescript_source(path)
+    if little_clip_core::diagram::Format::from_path(path).is_some()
+        || super::text_strip::is_typescript_source(path)
         || little_clip_core::subtitles::is_subtitle_path(path)
     {
         Kind::Text
@@ -789,6 +790,13 @@ mod tests {
             viewers.poll(ctx);
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn native_diagram_extensions_select_guarded_text_studios() {
+        for name in ["drawing.pikchr", "drawing.svgbob", "DRAWING.PIKCHR"] {
+            assert_eq!(kind(Path::new(name)), Kind::Text);
         }
     }
 

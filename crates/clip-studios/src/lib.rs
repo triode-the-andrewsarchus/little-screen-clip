@@ -39,3 +39,5 @@ pub fn send_ipc_request_with_timeout(
 ) -> Result<IpcResponse, Box<dyn std::error::Error>> {
     desktop_ipc::request(req, timeout, u64::MAX, usize::MAX)
 }
+
+pub mod diagram_preview;

@@ -313,6 +313,8 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "html" | "htm" | "xhtml" => Some("html"),
         "css" | "scss" | "sass" | "less" => Some("css"),
         "md" | "markdown" => Some("md"),
+        "pikchr" => Some("pikchr"),
+        "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
         "xml" | "svg" | "xsd" => Some("xml"),
         "go" => Some("go"),
@@ -429,6 +431,8 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "html" => "HTML",
         "css" => "CSS",
         "md" => "Markdown",
+        "pikchr" => "Pikchr",
+        "svgbob" => "SvgBob",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -528,6 +532,11 @@ pub const CONFIG_SUBLIME_SYNTAX: &str = include_str!("syntax/config.sublime-synt
 
 /// Bundled Sublime Syntax definition for TypeScript and TSX formats.
 pub const TYPESCRIPT_SUBLIME_SYNTAX: &str = include_str!("syntax/typescript.sublime-syntax");
+
+/// Bundled Pikchr syntax for source and fenced-block editing.
+pub const PIKCHR_SUBLIME_SYNTAX: &str = include_str!("syntax/pikchr.sublime-syntax");
+/// Bundled ASCII diagram syntax for source and fenced-block editing.
+pub const SVGBOB_SUBLIME_SYNTAX: &str = include_str!("syntax/svgbob.sublime-syntax");
 
 /// Maps a language identifier to a compatible fallback language in syntect's default syntax set.
 pub fn syntect_fallback(lang: &str) -> &'static str {

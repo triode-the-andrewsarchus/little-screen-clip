@@ -355,8 +355,15 @@ fn load_last_action_from_disk() -> Option<little_clip_core::ipc::LastAction> {
     }
 }
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if little_clip_render::diagram::run_worker_cli() {
+        return Ok(());
+    }
+    run_daemon()
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()

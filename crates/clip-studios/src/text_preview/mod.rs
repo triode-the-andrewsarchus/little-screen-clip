@@ -50,6 +50,8 @@ pub static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
     for definition in [
         little_clip_core::syntax::CONFIG_SUBLIME_SYNTAX,
         little_clip_core::syntax::TYPESCRIPT_SUBLIME_SYNTAX,
+        little_clip_core::syntax::PIKCHR_SUBLIME_SYNTAX,
+        little_clip_core::syntax::SVGBOB_SUBLIME_SYNTAX,
     ] {
         match syntect::parsing::SyntaxDefinition::load_from_str(definition, true, None) {
             Ok(syntax) => builder.add(syntax),
@@ -476,6 +478,7 @@ pub struct TextPreviewState {
     pub content: Arc<String>,
     character_count: usize,
     markdown: Arc<OnceLock<Vec<markdown::MarkdownBlock>>>,
+    diagram_previews: std::collections::HashMap<usize, crate::diagram_preview::Preview>,
     pub path: Option<PathBuf>,
     pub language: &'static str,
     pub is_markdown: bool,
@@ -619,6 +622,7 @@ impl TextPreviewState {
             content: Arc::clone(&data.content),
             character_count: data.character_count,
             markdown: Arc::clone(&data.markdown),
+            diagram_previews: Default::default(),
             path,
             language: data.language,
             is_markdown: data.is_markdown,

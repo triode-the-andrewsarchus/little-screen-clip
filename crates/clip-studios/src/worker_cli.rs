@@ -3,6 +3,9 @@
 /// Handles a studio worker invocation before normal application argument parsing.
 /// Worker failures exit with status 2; unrelated arguments return false.
 pub fn run() -> bool {
+    if little_clip_render::diagram::run_worker_cli() {
+        return true;
+    }
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let Some(flag) = args.first().and_then(|arg| arg.to_str()) else {
         return false;

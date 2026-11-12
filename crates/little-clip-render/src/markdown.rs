@@ -80,24 +80,36 @@ pub fn parse_markdown(input: &str) -> Vec<MarkdownLine> {
 fn parse_body(input: &str) -> Vec<MarkdownLine> {
     let input = input.trim_start_matches('\u{feff}');
     let mut lines = Vec::new();
-    let mut in_code_fence = false;
+    let mut fence: Option<(char, usize)> = None;
 
     for raw_line in input.lines() {
         let trimmed_start = raw_line.trim_start();
         let trimmed = raw_line.trim();
 
-        if trimmed.starts_with("```") {
-            in_code_fence = !in_code_fence;
-            let lang = trimmed.trim_start_matches('`').trim().to_string();
-            lines.push(MarkdownLine::CodeFence { language: lang });
+        if let Some((marker, minimum)) = fence {
+            let run = trimmed.chars().take_while(|value| *value == marker).count();
+            if run >= minimum && trimmed.chars().skip(run).all(char::is_whitespace) {
+                fence = None;
+                lines.push(MarkdownLine::CodeFence {
+                    language: String::new(),
+                });
+            } else {
+                lines.push(MarkdownLine::CodeLine {
+                    line: raw_line.to_string(),
+                });
+            }
             continue;
         }
-
-        if in_code_fence {
-            lines.push(MarkdownLine::CodeLine {
-                line: raw_line.to_string(),
-            });
-            continue;
+        if let Some(marker @ ('`' | '~')) = trimmed.chars().next() {
+            let run = trimmed.chars().take_while(|value| *value == marker).count();
+            let language = &trimmed[run..];
+            if run >= 3 && (marker != '`' || !language.contains('`')) {
+                fence = Some((marker, run));
+                lines.push(MarkdownLine::CodeFence {
+                    language: language.trim().to_string(),
+                });
+                continue;
+            }
         }
 
         if trimmed.is_empty() {
@@ -210,7 +222,36 @@ pub(crate) fn parse_markdown_preview(input: &str) -> (Vec<MarkdownLine>, usize) 
     if let Some(metadata) = metadata {
         lines.push(MarkdownLine::FrontMatter(Box::new(metadata)));
     }
-    lines.extend(parse_body(&body[..end]));
+    let mut prepared = parse_body(&body[..end]);
+    let mut open = None;
+    for (index, line) in prepared.iter().enumerate() {
+        if let MarkdownLine::CodeFence { language } = line {
+            open = if open.is_some() {
+                None
+            } else {
+                Some((index, language.as_str()))
+            };
+        }
+    }
+    if let Some((index, language)) = open
+        && little_clip_core::diagram::Format::from_language(language).is_some()
+    {
+        // A visible diagram needs its complete source, not a misleading partial parse.
+        let mut limit = body.len().min(256 * 1024);
+        while !body.is_char_boundary(limit) {
+            limit -= 1;
+        }
+        let expanded = parse_body(&body[..limit]);
+        if let Some(last) = expanded
+            .iter()
+            .enumerate()
+            .skip(index + 1)
+            .find_map(|(end, line)| matches!(line, MarkdownLine::CodeFence { .. }).then_some(end))
+        {
+            prepared = expanded.into_iter().take(last + 1).collect();
+        }
+    }
+    lines.extend(prepared);
     (lines, total)
 }
 
@@ -314,6 +355,25 @@ pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagram_fences_obey_marker_lengths_and_keep_complete_screen_source() {
+        let input = "~~~~pikchr\nbox \"``` is text\"\n~~~\ncircle\n~~~~\n# Body";
+        let lines = parse_markdown(input);
+        assert!(matches!(&lines[2], MarkdownLine::CodeLine { line } if line == "~~~"));
+        assert!(matches!(&lines[4], MarkdownLine::CodeFence { language } if language.is_empty()));
+        assert!(matches!(&lines[5], MarkdownLine::Heading { text, .. } if text == "Body"));
+        let source = format!("```pikchr\n# {}\nbox\n```\n", "x".repeat(6000));
+        let (compact, _) = parse_markdown_preview(&source);
+        assert!(
+            matches!(compact.last(), Some(MarkdownLine::CodeFence { language }) if language.is_empty())
+        );
+        assert!(
+            compact
+                .iter()
+                .any(|line| matches!(line, MarkdownLine::CodeLine { line } if line == "box"))
+        );
+    }
 
     #[test]
     fn metadata_is_shared_without_parsing_truncated_front_matter() {

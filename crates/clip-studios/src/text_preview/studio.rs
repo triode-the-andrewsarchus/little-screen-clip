@@ -92,6 +92,10 @@ impl TextPreviewState {
         palette: &AppPalette,
         close: &mut bool,
     ) {
+        if self.view_mode != TextViewMode::RenderedMarkdown {
+            self.cancel_diagram_previews();
+        }
+
         let now = crate::ui_ext::feedback_time();
 
         self.handle_shortcuts(ctx, close);

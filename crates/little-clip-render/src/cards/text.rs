@@ -131,7 +131,11 @@ impl ScreenRenderer {
         let max_y = ry + rh - 22.0;
         let mut y = ry + 124.0;
 
+        let mut skipped_until = 0;
         for (idx, line) in lines.iter().enumerate() {
+            if idx < skipped_until {
+                continue;
+            }
             let is_near_bottom = y + 26.0 > max_y;
             let has_more = idx + 1 < total_lines;
 
@@ -144,6 +148,38 @@ impl ScreenRenderer {
 
             if y > max_y {
                 break;
+            }
+
+            if let MarkdownLine::CodeFence { language } = line
+                && let Some(format) = little_clip_core::diagram::Format::from_language(language)
+                && let Some(last) =
+                    lines
+                        .iter()
+                        .enumerate()
+                        .skip(idx + 1)
+                        .find_map(|(end, line)| {
+                            matches!(line, MarkdownLine::CodeFence { .. }).then_some(end)
+                        })
+            {
+                let mut source = String::new();
+                for line in &lines[idx + 1..last] {
+                    if let MarkdownLine::CodeLine { line } = line {
+                        source.push_str(line);
+                        source.push('\n');
+                    }
+                }
+                y += self.draw_diagram_preview(
+                    pixmap,
+                    format,
+                    &source,
+                    content_x,
+                    y,
+                    max_content_w,
+                    (max_y - y - 4.0).max(1.0),
+                    body_color,
+                );
+                skipped_until = last + 1;
+                continue;
             }
 
             match line {
@@ -371,9 +407,36 @@ impl ScreenRenderer {
         rw: f32,
         rh: f32,
         is_hero: bool,
-        _elision_color: Color,
+        elision_color: Color,
         collect_previews: bool,
     ) -> Option<crate::PreparedTextPreview> {
+        if ext_hint.and_then(little_clip_core::syntax::map_extension_to_language) == Some("md") {
+            self.draw_markdown_preview(
+                pixmap,
+                text,
+                rx,
+                ry,
+                rw,
+                rh,
+                is_hero,
+                self.color_from_hex(&self.palette.harmonies.base),
+                elision_color,
+            );
+            return None;
+        }
+        if let Some(format) = ext_hint.and_then(little_clip_core::diagram::Format::from_extension) {
+            self.draw_diagram_preview(
+                pixmap,
+                format,
+                text,
+                rx + 14.0,
+                ry + 124.0,
+                (rw - 28.0).max(1.0),
+                (rh - 150.0).max(1.0),
+                self.color_from_hex(&self.palette.colors.text_primary),
+            );
+            return None;
+        }
         let clean_text = text.trim_start_matches(is_zero_width_or_bom);
         let trimmed = clean_text.trim();
 
@@ -536,5 +599,65 @@ impl ScreenRenderer {
             line_y += line_height;
         }
         prepared
+    }
+}
+
+impl ScreenRenderer {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Raster target, source, bounds and palette remain explicit at the drawing boundary"
+    )]
+    fn draw_diagram_preview(
+        &self,
+        pixmap: &mut Pixmap,
+        format: little_clip_core::diagram::Format,
+        source: &str,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        foreground: Color,
+    ) -> f32 {
+        let result = self
+            .diagram_previews
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .thumbnail(format, source);
+        match result {
+            Ok(thumbnail) => {
+                let scale = (width / thumbnail.width as f32).min(height / thumbnail.height as f32);
+                let drawn_width = thumbnail.width as f32 * scale;
+                let drawn_height = thumbnail.height as f32 * scale;
+                if let Some(image) = PixmapRef::from_bytes(
+                    &thumbnail.premultiplied_rgba,
+                    thumbnail.width,
+                    thumbnail.height,
+                ) {
+                    pixmap.draw_pixmap(
+                        0,
+                        0,
+                        image,
+                        &PixmapPaint::default(),
+                        Transform::from_scale(scale, scale)
+                            .post_translate(x + (width - drawn_width) / 2.0, y),
+                        None,
+                    );
+                }
+                drawn_height + 10.0
+            }
+            Err(error) => {
+                self.draw_text_styled_clipped(
+                    pixmap,
+                    &format!("{}: {error}", format.name()),
+                    x,
+                    y,
+                    13.0,
+                    foreground,
+                    FontStyle::Regular,
+                    x + width,
+                );
+                20.0
+            }
+        }
     }
 }
