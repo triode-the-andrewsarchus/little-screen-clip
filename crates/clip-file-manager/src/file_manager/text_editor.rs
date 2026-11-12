@@ -52,21 +52,24 @@ impl TextSession {
             let source = FileSource::capture(path)?;
             let bytes = crate::file_source::read_file_bytes(path, 2 * 1024 * 1024, true, true)
                 .map_err(|e| e.to_string())?;
-            String::from_utf8(bytes).ok().map(|text| Editor {
-                saved: text.clone(),
-                text,
-                source,
-                path: path.to_path_buf(),
-                name: little_clip_core::diagram::Format::from_path(path)
+            String::from_utf8(bytes).ok().map(|text| {
+                let name = little_clip_core::diagram::Format::from_source_path(path, &text)
                     .and_then(|_| path.extension().and_then(|extension| extension.to_str()))
                     .map_or_else(
                         || "edited.txt".into(),
                         |extension| format!("edited.{extension}"),
-                    ),
-                save_as: false,
-                error: None,
-                config: config.clone(),
-                pending: None,
+                    );
+                Editor {
+                    saved: text.clone(),
+                    text,
+                    source,
+                    path: path.to_path_buf(),
+                    name,
+                    save_as: false,
+                    error: None,
+                    config: config.clone(),
+                    pending: None,
+                }
             })
         } else {
             None
@@ -384,6 +387,10 @@ mod tests {
             std::fs::write(&path, original).unwrap();
             let mut session = TextSession::load(&path, &Default::default()).unwrap();
             assert!(session.mode == Mode::Diagram);
+            assert_eq!(
+                session.editor.as_ref().unwrap().name,
+                format!("edited.{extension}")
+            );
             assert!(session.diagram.is_some());
             session.editor.as_mut().unwrap().text = edited.into();
             assert!(session.dirty());
