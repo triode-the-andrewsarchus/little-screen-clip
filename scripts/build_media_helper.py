@@ -38,7 +38,7 @@ def build(output=None, skip_build=False, profile='release'):
                  '\n[workspace.package]']
         lines += [f'{key} = {json.dumps(value)}' for key, value in workspace['package'].items()]
         lines += ['\n[workspace.dependencies]']
-        lines += [line for line in manifest.splitlines() if line.startswith(('serde = ', 'serde_json = '))]
+        lines += [line for line in manifest.splitlines() if line.startswith(('serde = ', 'serde_json = ', 'rustix = '))]
         lines += ['\n[profile.dev]', 'debug = "line-tables-only"', 'incremental = false']
         (source / 'Cargo.toml').write_text('\n'.join(lines) + '\n')
         shutil.copyfile(repo / 'Cargo.lock', source / 'Cargo.lock')

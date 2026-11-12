@@ -39,6 +39,11 @@ class MediaDelivery(unittest.TestCase):
             workspace = tomllib.loads((package / 'source/Cargo.toml').read_text())
             self.assertEqual(len(workspace['workspace']['members']), 2)
             self.assertNotIn('little-clip-core', str(workspace['workspace']['members']))
+            for name in ['clip-media-worker', 'clip-media-protocol']:
+                manifest = tomllib.loads((package / f'source/crates/{name}/Cargo.toml').read_text())
+                for dependency, specification in manifest.get('dependencies', {}).items():
+                    if isinstance(specification, dict) and specification.get('workspace'):
+                        self.assertIn(dependency, workspace['workspace']['dependencies'])
             config = tomllib.loads((package / 'source/.cargo/config.toml').read_text())
             self.assertEqual(config['source']['vendored-sources']['directory'], 'vendor')
 
