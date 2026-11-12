@@ -190,7 +190,7 @@ mod tests {
             let (svg, _) = svg(&source).unwrap_or_else(|error| panic!("{engine}: {error}"));
             assert!(svg.contains("<path"));
             assert!(!svg.contains("<text"));
-            super::super::rasterize_svg(svg).unwrap();
+            super::super::rasterize_svg(svg, true).unwrap();
         }
         assert!(svg("\u{feff}digraph { a -> b }").is_ok());
     }
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(ids.len(), distinct.len());
         assert!(ids.iter().any(|id| id.starts_with("graph-0-")));
         assert!(ids.iter().any(|id| id.starts_with("graph-1-")));
-        super::super::rasterize_svg(svg).unwrap();
+        super::super::rasterize_svg(svg, true).unwrap();
         assert!(
             self::svg("digraph { a -> b }\ndigraph { c -> }").is_err(),
             "errors after the first graph must not disappear"

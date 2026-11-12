@@ -12,6 +12,7 @@ use std::{
 
 mod graphviz;
 mod lini;
+mod math;
 mod mermaid;
 
 /// Owned fixtures for testing early dispatch in independently linked hosts.
@@ -31,6 +32,25 @@ const CPU_LIMIT: u64 = 6;
 struct Request {
     format: Format,
     source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    foreground: Option<[u8; 3]>,
+}
+
+/// Natural equation dimensions relative to the surrounding text's font size.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MathLayout {
+    pub width_em: f32,
+    pub height_em: f32,
+    /// Distance from the top edge to the text baseline, in em.
+    pub baseline_em: f32,
+}
+impl MathLayout {
+    fn valid(self) -> bool {
+        [self.width_em, self.height_em, self.baseline_em]
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0 && *value <= 512.0)
+            && self.baseline_em <= self.height_em
+    }
 }
 
 /// An immutable rendered diagram, retaining vectors for export and source inspection.
@@ -43,6 +63,32 @@ pub struct Rendered {
     /// Non-fatal renderer limitations, retained alongside the image.
     #[serde(default)]
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math: Option<MathLayout>,
+}
+
+impl Rendered {
+    fn validate(&self, format: Format) -> Result<(), String> {
+        let expects_math = matches!(format, Format::Math | Format::MathInline);
+        if self.math.is_some() != expects_math || self.math.is_some_and(|layout| !layout.valid()) {
+            return Err("Invalid equation layout in worker response".into());
+        }
+        if self.width == 0
+            || self.height == 0
+            || self.width > WIDTH
+            || self.height > HEIGHT
+            || self.svg.len() > MAX_SVG
+            || self.png.len() > MAX_OUTPUT / 2
+            || self.warnings.len() > 16
+            || self
+                .warnings
+                .iter()
+                .any(|warning| warning.chars().count() > 1024)
+        {
+            return Err("Diagram worker exceeded output limits".into());
+        }
+        Ok(())
+    }
 }
 
 /// Renders diagram text in a bounded, owned copy of the current host executable.
@@ -54,6 +100,39 @@ pub struct Rendered {
 /// # Errors
 /// Returns source-budget, admission/spawn, cancellation, parse/render or protocol errors.
 pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Rendered, String> {
+    render_request(format, source, None, cancelled)
+}
+
+/// Renders a transparent equation with native text metrics and the requested ink.
+///
+/// Run on a preview worker, like [`render`]. Explicit LaTeX colors are preserved.
+///
+/// # Errors
+/// Returns the same bounded worker and source errors as [`render`].
+pub fn render_math(
+    source: &str,
+    display: bool,
+    foreground: [u8; 3],
+    cancelled: &AtomicBool,
+) -> Result<Rendered, String> {
+    render_request(
+        if display {
+            Format::Math
+        } else {
+            Format::MathInline
+        },
+        source,
+        Some(foreground),
+        cancelled,
+    )
+}
+
+fn render_request(
+    format: Format,
+    source: &str,
+    foreground: Option<[u8; 3]>,
+    cancelled: &AtomicBool,
+) -> Result<Rendered, String> {
     validate_source(source)?;
     if cancelled.load(Ordering::Relaxed) {
         return Err("Diagram preview cancelled".into());
@@ -61,6 +140,7 @@ pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Re
     let request = serde_json::to_vec(&Request {
         format,
         source: source.to_owned(),
+        foreground,
     })
     .map_err(|error| error.to_string())?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -85,20 +165,7 @@ pub fn render(format: Format, source: &str, cancelled: &AtomicBool) -> Result<Re
     let result: Result<Rendered, String> = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("Invalid diagram worker response: {error}"))?;
     let rendered = result.map_err(|error| error.chars().take(4096).collect::<String>())?;
-    if rendered.width == 0
-        || rendered.height == 0
-        || rendered.width > WIDTH
-        || rendered.height > HEIGHT
-        || rendered.svg.len() > MAX_SVG
-        || rendered.png.len() > MAX_OUTPUT / 2
-        || rendered.warnings.len() > 16
-        || rendered
-            .warnings
-            .iter()
-            .any(|warning| warning.chars().count() > 1024)
-    {
-        return Err("Diagram worker exceeded output limits".into());
-    }
+    rendered.validate(format)?;
     Ok(rendered)
 }
 
@@ -118,6 +185,8 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/lini-google-sans-OFL.txt"),
             include_str!("../third_party/lini-google-sans-code-OFL.txt"),
             include_str!("../third_party/lini-phosphor-MIT.txt"),
+            include_str!("../third_party/mathra-MIT.txt"),
+            include_str!("../third_party/mathra-stix-OFL.txt"),
             include_str!("../third_party/graphviz-EPL-2.0.txt"),
             include_str!("../third_party/graphviz-NOTICE.txt"),
             include_str!("../third_party/graphviz-core-math-MIT.txt"),
@@ -140,7 +209,7 @@ pub fn run_worker_cli() -> bool {
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
         let request: Request = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-        render_inline(request.format, &request.source)
+        render_inline(request.format, &request.source, request.foreground)
     })();
     if let Err(error) = serde_json::to_writer(std::io::stdout().lock(), &response)
         .and_then(|_| std::io::stdout().flush().map_err(serde_json::Error::io))
@@ -172,9 +241,23 @@ fn validate_source(source: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn render_inline(format: Format, source: &str) -> Result<Rendered, String> {
+fn render_inline(
+    format: Format,
+    source: &str,
+    foreground: Option<[u8; 3]>,
+) -> Result<Rendered, String> {
     validate_source(source)?;
+    let mut math_layout = None;
     let (svg, warnings) = match format {
+        Format::Math | Format::MathInline => {
+            let (svg, layout) = math::svg(
+                source,
+                format == Format::Math,
+                foreground.unwrap_or([17; 3]),
+            )?;
+            math_layout = Some(layout);
+            (svg, Vec::new())
+        }
         Format::Graphviz => graphviz::svg(source)?,
         Format::Lini => lini::svg(source)?,
         Format::Mermaid => (mermaid::svg(source)?, Vec::new()),
@@ -197,7 +280,8 @@ fn render_inline(format: Format, source: &str) -> Result<Rendered, String> {
             (svgbob::to_svg(source), Vec::new())
         }
     };
-    let mut rendered = rasterize_svg(svg)?;
+    let mut rendered = rasterize_svg(svg, math_layout.is_none())?;
+    rendered.math = math_layout;
     rendered.warnings.extend(warnings);
     rendered.warnings = bounded_warnings(rendered.warnings);
     Ok(rendered)
@@ -276,7 +360,7 @@ fn parse_svg(
     Ok((tree, warnings))
 }
 
-fn rasterize_svg(svg: String) -> Result<Rendered, String> {
+fn rasterize_svg(svg: String, white_paper: bool) -> Result<Rendered, String> {
     let (tree, warnings) = parse_svg(&svg, default_fonts(), "Noto Sans CJK JP")?;
     let scale = (WIDTH as f32 / tree.size.width())
         .min(HEIGHT as f32 / tree.size.height())
@@ -286,7 +370,9 @@ fn rasterize_svg(svg: String) -> Result<Rendered, String> {
     let mut pixmap =
         tiny_skia::Pixmap::new(width, height).ok_or("Diagram raster allocation failed")?;
     // White paper preserves renderer-defined colors in either application theme.
-    pixmap.fill(tiny_skia::Color::WHITE);
+    if white_paper {
+        pixmap.fill(tiny_skia::Color::WHITE);
+    }
     resvg::Tree::from_usvg(&tree).render(
         tiny_skia::Transform::from_scale(scale, scale),
         &mut pixmap.as_mut(),
@@ -298,6 +384,7 @@ fn rasterize_svg(svg: String) -> Result<Rendered, String> {
         width,
         height,
         warnings,
+        math: None,
     })
 }
 
@@ -308,7 +395,7 @@ mod tests {
     #[test]
     fn responsive_svg_keeps_its_viewbox_aspect_ratio() {
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 400 100"><rect width="400" height="100" fill="black"/></svg>"#;
-        let rendered = rasterize_svg(svg.into()).unwrap();
+        let rendered = rasterize_svg(svg.into(), true).unwrap();
         assert_eq!((rendered.width, rendered.height), (800, 200));
     }
 
@@ -422,7 +509,7 @@ mod tests {
                 "+------+     +------+\n| Read +---->| Think|\n+------+     +------+",
             ),
         ] {
-            let rendered = render_inline(format, source).unwrap();
+            let rendered = render_inline(format, source, None).unwrap();
             assert!(rendered.svg.contains("<svg"));
             let pixels = image::load_from_memory(&rendered.png).unwrap().to_rgba8();
             assert_eq!(pixels.dimensions(), (rendered.width, rendered.height));
@@ -437,17 +524,18 @@ mod tests {
 
     #[test]
     fn malformed_inputs_and_resource_exhaustion_are_errors() {
-        assert!(render_inline(Format::Lini, "|box").is_err());
-        assert!(render_inline(Format::Pikchr, "box at invalid nonsense").is_err());
-        assert!(render_inline(Format::Pikchr, "\0").is_err());
-        assert!(render_inline(Format::Pikchr, &"x".repeat(MAX_SOURCE + 1)).is_err());
-        assert!(render_inline(Format::Svgbob, &"+".repeat(257)).is_err());
-        assert!(render_inline(Format::Svgbob, &"x\n".repeat(129)).is_err());
+        assert!(render_inline(Format::Lini, "|box", None).is_err());
+        assert!(render_inline(Format::Pikchr, "box at invalid nonsense", None).is_err());
+        assert!(render_inline(Format::Pikchr, "\0", None).is_err());
+        assert!(render_inline(Format::Pikchr, &"x".repeat(MAX_SOURCE + 1), None).is_err());
+        assert!(render_inline(Format::Svgbob, &"+".repeat(257), None).is_err());
+        assert!(render_inline(Format::Svgbob, &"x\n".repeat(129), None).is_err());
     }
 
     #[test]
     fn diagrams_keep_warnings_in_the_raster_result() {
-        let rendered = render_inline(Format::Lini, "|box#cat| \"cat\"\ncta -> bird\n").unwrap();
+        let rendered =
+            render_inline(Format::Lini, "|box#cat| \"cat\"\ncta -> bird\n", None).unwrap();
         assert!(
             rendered
                 .warnings
@@ -457,6 +545,7 @@ mod tests {
         let rendered = render_inline(
             Format::Lini,
             "|image| { src: \"https://example.invalid/photo.png\"; width: 40; height: 40 }",
+            None,
         )
         .unwrap();
         assert!(

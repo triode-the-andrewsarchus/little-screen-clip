@@ -5445,6 +5445,7 @@ dependencies = [
  "lini",
  "little-clip-core",
  "little-clip-scene",
+ "mathra",
  "merman",
  "pikchr-rs",
  "resvg",
@@ -5736,6 +5737,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
+]
+
+[[package]]
+name = "mathra"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f5a8b5eebb4e4072178c603e9c4706deec733741dcdc5d933c37960acb7bb5"
+dependencies = [
+ "roxmltree 0.20.0",
+ "serde",
+ "serde_json",
+ "ttf-parser 0.25.1",
 ]
 
 [[package]]

@@ -27,6 +27,7 @@ pikchr-rs = "=0.1.0"
 svgbob = "0.7.6"
 merman = { version = "=0.10.0", features = ["system-clock", "system-timezone"] }
 lini = "=1.1.0"
+mathra = { version = "=1.12.0", default-features = false }
 graphviz-pure = "=1.2.0"
 graphviz-pure-core = "=1.2.0"
 graphviz-pure-parser = "=1.2.0"

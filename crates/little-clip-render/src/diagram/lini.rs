@@ -75,7 +75,8 @@ mod tests {
         }
         source.push_str("}\n|box| \"Source\"\n");
         let rendered =
-            super::super::render_inline(little_clip_core::diagram::Format::Lini, &source).unwrap();
+            super::super::render_inline(little_clip_core::diagram::Format::Lini, &source, None)
+                .unwrap();
         let warnings = rendered.warnings;
         assert!(rendered.svg.contains("<svg"));
         assert_eq!(warnings.len(), 16);

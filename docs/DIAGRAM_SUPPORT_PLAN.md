@@ -197,8 +197,8 @@ strict errors, a STIX Two Math asset (OFL-1.1), and no source-driven file loader
 Its base SVG API can use our existing rasterizer without its optional PNG stack.
 Compare latex-rust 2.1.1 (MSRV 1.76); its 3.0.x releases require Rust 1.99, beyond
 the installed 1.98.1. retex-svg 1.9.0 is a PDF-to-SVG component, not itself a
-LaTeX parser, so it is not an equivalent standalone math renderer. No math adapter
-has been selected or added yet.
+LaTeX parser, so it is not an equivalent standalone math renderer. The subsequent
+selection and integration status are recorded below.
 
 ## Lini integration
 
@@ -368,3 +368,47 @@ recent variants and library dependencies. Available space rose from roughly
 111 to 136 GiB (logical removed file sizes were 89.3 GiB; filesystem savings are
 smaller). No extra target tree or dependency-cache sweep was used. User-local
 Cargo build settings remain uncommitted.
+
+
+## Native math backend (Markdown presentation pending)
+
+Compared [Mathra 1.12.0](https://github.com/matheusmota-dev-br/mathra),
+[latex-rust 2.1.1](https://github.com/jscarr64/LaTeX-Rust/tree/v2.1.1) and
+KaTeX's JavaScript/HTML approach. Mathra is selected: its compiled AST/layout/SVG
+pipeline exposes baseline and em measurements, strict diagnostics, accessible
+SVG metadata and outlined glyphs. It can also share the math engine with later
+TikZ support. The older latex-rust release fits our compiler and has an exact
+rational layout model, but its optional egui backend targets a different egui
+version; current releases require a newer compiler. KaTeX would require an
+additional runtime and HTML/MathML layout. retex-svg is not a math parser.
+
+The unmodified Mathra dependency disables optional chemistry, alternate fonts
+and PNG features. The existing bounded native helper, SVG validation/rasterizer,
+source/resource limits, cancellation and real-host fixtures are reused. Equations
+carry validated em width/height/baseline metrics and transparent pixels; requested
+text colors and explicit LaTeX colors coexist. SVG uses a physical outer viewport
+so font-unit coordinates do not require relaxing shared dimension limits. Source
+commands do not select filesystem resources. MIT and STIX font OFL notices are
+embedded in every diagram-capable executable.
+
+[MathLive](https://github.com/arnog/mathlive) is a useful MIT-licensed structured
+math editor reference (selection of expressions, keyboard navigation, insertion
+palette, source synchronization). It is a DOM component, not a native widget we
+can import. No editor code is copied. Native direct manipulation and source
+correspondence remain follow-up work.
+
+This commit supplies the renderer backend only: Markdown dollar-delimiter
+parsing, inline baseline-aware layout, display blocks and theme-aware preview
+cache keys still need integration in **both** output surfaces before checking off
+math support. General `.tex` documents are not classified as equations; the math
+engine does not implement whole-document TeX.
+
+Backend validation: 18 renderer/diagram tests pass, including four math tests
+for baseline/empty/phantom layouts, transparency, theme/explicit colors, malformed
+commands and invalid worker metrics. Real-host dispatch tests pass for file
+manager, workbench, daemon and test_screen; the license query includes Mathra
+and STIX notices. Strict Clippy passes for core/render across all targets. Actual
+host PNGs for an infinite sum and a matrix were visually inspected. Architecture
+comparison adds no high-complexity application function or cycle: the two new
+clone groups are the required verbatim MIT/OFL license texts; reported Python
+cycle changes contain the same pre-existing members in another order.

@@ -10,6 +10,8 @@ pub enum Format {
     Mermaid,
     Lini,
     Graphviz,
+    Math,
+    MathInline,
 }
 impl Format {
     /// Recognizes a Markdown fence's language, without executing its attributes.
@@ -74,6 +76,7 @@ impl Format {
             Self::Mermaid => "Mermaid",
             Self::Lini => "Lini",
             Self::Graphviz => "Graphviz",
+            Self::Math | Self::MathInline => "LaTeX math",
         }
     }
 }

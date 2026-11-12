@@ -27,6 +27,8 @@ fn diagram_license_notices_are_available_without_host_startup() {
     assert!(notices.contains("Abbas Monfared"));
     assert!(notices.contains("SIL OPEN FONT LICENSE"));
     assert!(notices.contains("CORE-MATH"));
+    assert!(notices.contains("Matheus Mota"));
+    assert!(notices.contains("STIX Fonts Project Authors"));
     assert!(notices.contains("234fc35f116bceca2c34579879a6e6893112ccf8"));
     assert!(notices.contains("e0e75bcab2fa8e39dd7a09465b7f2e035eda82ef"));
 }

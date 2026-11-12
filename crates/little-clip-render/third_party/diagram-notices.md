@@ -1,6 +1,6 @@
 # Native diagram renderer notices
 
-These notices cover the Merman, Lini and Graphviz rendering families, not the complete workspace dependency inventory.
+These notices cover the Merman, Lini, Graphviz and Mathra rendering families, not the complete workspace dependency inventory.
 
 Merman 0.10.0 and its MIT/Apache-2.0 components are used under the MIT license
 (reproduced in `merman-MIT.txt`). Upstream: https://github.com/Latias94/merman.
@@ -57,3 +57,18 @@ Tinos, Arimo and Cousine font assets are copied unchanged from
 under `assets/fonts/graphviz/OFL-*.txt` and printed by `--diagram-licenses`.
 These fonts supply the corresponding Times, Helvetica and Courier metric
 families. The existing Noto fonts remain fallbacks for other glyphs.
+
+## Mathra
+
+Mathra 1.12.0 is an unmodified native dependency used under MIT, with its STIX
+Two Math subset under SIL OFL 1.1. The full upstream texts are reproduced in
+`mathra-MIT.txt` and `mathra-stix-OFL.txt` and embedded by `--diagram-licenses`.
+Corresponding source:
+
+- https://crates.io/api/v1/crates/mathra/1.12.0/download
+- https://github.com/matheusmota-dev-br/mathra/tree/48a36964c7ee62171a77063a1572166d5f0fe337
+
+Optional chemistry, emoji, Latin Modern and PNG features are disabled. The
+application supplies its existing Noto outline fonts as character fallbacks and
+uses its existing SVG rasterizer. No TeX installation or JavaScript engine is
+required, and source commands cannot select a file loader.

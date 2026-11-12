@@ -21,6 +21,9 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         ),
         ("svgbob", "+----+\n|Hi! |\n+----+", true),
         ("graphviz", "digraph { a -> b }", true),
+        ("math", r"\sum_{n=1}^{\infty}\frac{1}{n^2}", true),
+        ("mathinline", r"\frac{x}{y}", true),
+        ("math", r"\input{/etc/passwd}", false),
         ("pikchr", "box at invalid nonsense", false),
         ("mermaid", "flowchart LR\nA[", false),
     ] {
@@ -52,6 +55,10 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         );
         if let Ok(rendered) = response {
             assert!(rendered.svg.contains("<svg"));
+            assert_eq!(rendered.math.is_some(), format.starts_with("math"));
+            if let Some(layout) = rendered.math {
+                assert!(layout.valid());
+            }
             assert!(rendered.svg.len() <= MAX_SVG);
             assert!(rendered.png.starts_with(b"\x89PNG\r\n\x1a\n"));
             assert!(rendered.png.len() <= MAX_OUTPUT / 2);
