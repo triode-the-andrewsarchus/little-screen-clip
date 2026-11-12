@@ -30,6 +30,8 @@ Subprocess review includes both direct `Command::new` and shared `CommandRequest
 
 - [x] Bound daemon compatibility clipboard and shell-state queries through the existing command runner. Clipboard reads require complete, successful output within five seconds and the existing transfer-size policy; shell queries have a two-second/1 MiB budget. Failed shell queries retain the current lock state. Five clipboard tests pass, including truncated, failed and missing adapters. These changes retain the optional `wl-paste`/`qs` integrations.
 
+- [x] Make answer-type labels an exhaustive constant match, with parser options derived from those labels. Adding an enum variant now requires defining its label instead of risking a failed table lookup. All five query tests pass.
+
 ## Remaining review
 
 - [ ] Finish per-site production unwrap decisions, including helper code and deliberate invariants.

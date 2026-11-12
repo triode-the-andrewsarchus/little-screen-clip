@@ -21,17 +21,18 @@ pub enum AnswerType {
 }
 impl AnswerType {
     pub const OPTIONS: &'static [(&'static str, Self)] = &[
-        ("text", Self::Text),
-        ("number", Self::Number),
-        ("date", Self::Date),
-        ("boolean", Self::Boolean),
+        (Self::Text.name(), Self::Text),
+        (Self::Number.name(), Self::Number),
+        (Self::Date.name(), Self::Date),
+        (Self::Boolean.name(), Self::Boolean),
     ];
-    pub fn name(self) -> &'static str {
-        Self::OPTIONS
-            .iter()
-            .find(|(_, value)| *value == self)
-            .unwrap()
-            .0
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Number => "number",
+            Self::Date => "date",
+            Self::Boolean => "boolean",
+        }
     }
     fn parse(text: &str) -> Result<Self, String> {
         Self::OPTIONS
