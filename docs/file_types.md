@@ -564,6 +564,8 @@
       - [x] Initial native pin/wire/shield/loop/mating previews, Markdown fences, conservative generic YAML/clipboard inference, source/live-preview editor and rendered list strips
       - [ ] Template instances, automatic color-code palettes and remaining presentation compatibility
       - [ ] Graphical harness editing with source-preserving circuit transactions
+        - [x] Backend pin-label and wire-color transactions, reference repair, circuit/alias guards and lossless source tests
+        - [ ] Native inspector, pin/conductor interactions and connect/disconnect transactions
     - [ ] `.sym` — Symbolator circuit component pinout diagram (May need disambiguation with compiler debug symbol files on `.sym`)
   - [ ] ASCII-art and text-to-vector diagram tools
     - [ ] `.ditaa` — Ditaa ASCII art diagram

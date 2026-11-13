@@ -130,7 +130,7 @@ fn numbered_pins(
         pins.push(Pin {
             id,
             label: optional_text(labels.get(index), "pin label")?,
-            color: optional_text(colors.get(index), "pin color")?,
+            color: optional_color(colors.get(index), "pin color")?,
         });
     }
     Ok(pins)
@@ -157,7 +157,7 @@ fn cable(name: &str, attrs: &Mapping) -> Result<Cable, String> {
         };
         wires.push(Wire {
             label: optional_text(labels.get(index), "wire label")?,
-            color: optional_text(color, "wire color")?,
+            color: optional_color(color, "wire color")?,
         });
     }
     let bundle = match text(attrs, "category")?.as_deref() {
@@ -180,11 +180,16 @@ fn shield(attrs: &Mapping) -> Result<Option<String>, String> {
     match attrs.get_str("shield") {
         None | Some(Value::Bool(false)) => Ok(None),
         Some(Value::Bool(true)) => Ok(Some("BK".into())),
-        Some(value) => value
-            .as_str()
-            .map(|s| Some(s.to_owned()))
-            .ok_or("Cable shield must be a boolean or color".into()),
+        Some(value) => optional_color(Some(value), "Cable shield"),
     }
+}
+
+fn optional_color(value: Option<&Value>, context: &str) -> Result<Option<String>, String> {
+    let color = optional_text(value, context)?;
+    if let Some(color) = &color {
+        colors::bands(color)?;
+    }
+    Ok(color)
 }
 
 fn list<'a>(attrs: &'a Mapping, key: &str) -> Result<&'a [Value], String> {

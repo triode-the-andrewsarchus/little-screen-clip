@@ -29,6 +29,11 @@ const COLORS: &[(&str, [u8; 3])] = &[
 /// # Errors
 /// Rejects unknown abbreviations, malformed RGB triplets and excessive bands.
 pub fn bands(source: &str) -> Result<Vec<[u8; 3]>, String> {
+    // Eight #RRGGBB bands plus seven separators; reject before splitting or
+    // allocating a list, including calls made directly by graphical controls.
+    if source.len() > 63 {
+        return Err("Too many wire color bands".into());
+    }
     if source.starts_with('#') {
         let parts: Vec<_> = source.split(':').collect();
         if parts.len() > 8 {

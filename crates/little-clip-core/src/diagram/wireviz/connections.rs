@@ -134,11 +134,7 @@ fn selections(value: &Value) -> Result<Vec<Value>, String> {
     };
     let mut result = Vec::new();
     for value in items {
-        let range = value
-            .as_str()
-            .and_then(|s| s.split_once('-'))
-            .and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)));
-        if let Some((start, end)) = range {
+        if let Some((start, end)) = numeric_range(value) {
             if start.abs_diff(end) as usize >= MAX_PINS {
                 return Err("Pin/wire range exceeds the expansion budget".into());
             }
@@ -159,6 +155,11 @@ fn selections(value: &Value) -> Result<Vec<Value>, String> {
         return Err("Empty pin/wire selection".into());
     }
     Ok(result)
+}
+
+pub(super) fn numeric_range(value: &Value) -> Option<(u32, u32)> {
+    let (a, b) = value.as_str()?.split_once('-')?;
+    Some((a.parse().ok()?, b.parse().ok()?))
 }
 
 fn arrow(text: &str, body: bool) -> Option<Direction> {

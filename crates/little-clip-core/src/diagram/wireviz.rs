@@ -9,6 +9,7 @@ use std::collections::HashSet;
 mod attributes;
 pub mod colors;
 mod connections;
+pub mod edits;
 
 const MAX_SOURCE: usize = 256 * 1024;
 const MAX_COMPONENTS: usize = 256;
@@ -234,6 +235,11 @@ pub struct Harness {
 /// unsupported-feature errors. Template expansion and automatic cable color
 /// codes are not implemented yet and are explicitly refused.
 pub fn parse(source: &str) -> Result<Harness, String> {
+    let (_, value) = document(source)?;
+    model(&value)
+}
+
+fn document(source: &str) -> Result<(Document, Value), String> {
     if source.len() > MAX_SOURCE || source.contains('\0') {
         return Err("WireViz exceeds the source budget or contains NUL".into());
     }
@@ -250,7 +256,11 @@ pub fn parse(source: &str) -> Result<Harness, String> {
     let document = Document::parse_with(source, &settings).map_err(|e| e.to_string())?;
     let value = document.to_value().map_err(|e| e.to_string())?;
     reject_tags(&value)?;
-    let root = mapping(&value, "WireViz document")?;
+    Ok((document, value))
+}
+
+fn model(value: &Value) -> Result<Harness, String> {
+    let root = mapping(value, "WireViz document")?;
     let mut harness = attributes::read(root)?;
     connections::read(root, &mut harness)?;
     Ok(harness)
