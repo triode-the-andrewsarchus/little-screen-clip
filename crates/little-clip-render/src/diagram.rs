@@ -20,6 +20,7 @@ mod dbml;
 mod ditaa;
 mod erd;
 mod excalidraw;
+pub use excalidraw::measure_text as measure_drawing_text;
 mod fonts;
 mod goat;
 mod graphviz;

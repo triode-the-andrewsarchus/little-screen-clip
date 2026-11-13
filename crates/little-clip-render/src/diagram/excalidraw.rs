@@ -4,6 +4,16 @@ use excalidraw_render::{
     OutputFormat, RenderRequest, Renderer, ResourceLimits, SceneDocument, Sizing,
 };
 
+/// Measures native unwrapped drawing text on the caller's bounded edit worker.
+pub fn measure_text(
+    text: &str,
+    font_family: i32,
+    font_size: f64,
+    line_height: f64,
+) -> Result<[f64; 2], String> {
+    excalidraw_render::measure_text(text, font_family, font_size, line_height)
+}
+
 pub(super) fn render(source: &str) -> Result<Rendered, String> {
     let scene = SceneDocument::parse(source.trim_start_matches('\u{feff}').as_bytes())
         .map_err(|error| error.to_string())?;
@@ -76,6 +86,66 @@ fn attribution(svg: &str) -> Result<Option<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_text_measurement_uses_shaping_advances_and_canonical_line_metrics() {
+        for family in [1, 2, 3, 5, 6, 7, 8, 9] {
+            let one = measure_text("AV", family, 20.0, 1.25).unwrap();
+            let two = measure_text("AV", family, 40.0, 1.25).unwrap();
+            assert!((two[0] - 2.0 * one[0]).abs() < 1e-6);
+            assert_eq!(one[1], 25.0);
+            let multiline = measure_text("AV\r\nAV", family, 20.0, 1.25).unwrap();
+            assert_eq!(multiline, [one[0], 50.0]);
+        }
+        assert!(measure_text("Text", 99, 20.0, 1.25).is_err());
+        assert!(measure_text(&"x".repeat(4097), 5, 20.0, 1.25).is_err());
+        assert!(measure_text("Text", 5, f64::INFINITY, 1.25).is_err());
+        let unicode = measure_text("Capture 漢字 😀", 5, 24.0, 1.25).unwrap();
+        assert!(unicode[0] > 100.0);
+    }
+
+    #[test]
+    fn measured_native_text_transactions_render_with_unchanged_assets_and_source_ids() {
+        use little_clip_core::diagram::drawing::{
+            Change, Number, Scene, Style, TextContent, TextCreation, TextStyle,
+        };
+        let source = include_str!("../../../../docs/examples/diagrams/drawing.excalidraw");
+        let model = Scene::parse(source).unwrap();
+        let font = TextStyle::default();
+        let size =
+            measure_text("New native text", font.family, font.size, font.line_height).unwrap();
+        let edited = model
+            .apply(Change::CreateText(TextCreation {
+                id: "native-text".into(),
+                position: [20.0, 350.0],
+                content: TextContent::plain(
+                    "New native text",
+                    Number::from_f64(size[0]).unwrap(),
+                    Number::from_f64(size[1]).unwrap(),
+                ),
+                font,
+                style: Style::default(),
+                container: None,
+            }))
+            .unwrap()
+            .unwrap();
+        let rendered = render(&edited).unwrap();
+        let tree = super::super::retained::prepare(&rendered.svg).unwrap().tree;
+        let group = tree.node_by_id("graph-0-drawing-element-6e61746976652d74657874").unwrap();
+        let usvg_vector::Node::Group(group) = group else { panic!("source identity must remain a group"); };
+        assert!(group.transform().is_identity(), "resize affines rely on an identity source wrapper: {:?}", group.transform());
+        assert!(
+            tree.node_by_id("graph-0-drawing-element-6e61746976652d74657874")
+                .unwrap()
+                .abs_bounding_box()
+                .width()
+                > 100.0
+        );
+        assert!(rendered.drawing.unwrap().size[1] > 350.0);
+        let old: serde_json::Value = serde_json::from_str(source).unwrap();
+        let new: serde_json::Value = serde_json::from_str(&edited).unwrap();
+        assert_eq!(old["files"], new["files"]);
+    }
+
     #[test]
     fn source_groups_keep_unicode_identities_and_own_all_their_vector_paths() {
         let id = "Capture<&\" 🙂";

@@ -534,4 +534,4 @@ pub const fn license_bundle() -> &'static str {
 }
 
 #[cfg(feature = "svg-source-groups")]
-pub use render::interactive::LinearPreview;
+pub use render::interactive::{LinearPreview, measure_text};

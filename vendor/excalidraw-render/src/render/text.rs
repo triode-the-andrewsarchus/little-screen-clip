@@ -1814,6 +1814,51 @@ fn shape_text(
     crate::shaping::shape(face, &features, text, direction)
 }
 
+/// Reuse the actual fallback/bidi shaper and its advance calculation for editor bounds.
+pub(super) fn measure_unwrapped(
+    text: &str,
+    family: i32,
+    size: f64,
+    line_height: f64,
+) -> Result<[f64; 2], LabelError> {
+    let mut loader = FontLoader::default();
+    let mut fonts = vec![OfficialFont::load_with_loader(family, text, &mut loader)?];
+    let (resolved, _) = layout_with_loader(
+        0,
+        &mut fonts,
+        text,
+        TextLayout {
+            width: 0.0,
+            font_size: size,
+            line_height,
+            text_align: "left",
+            font_family: family,
+            outline_limit: 0,
+        },
+        CjkSubsetTrigger::evaluate([text]),
+        &mut loader,
+    )?;
+    if !resolved.missing_codepoints.is_empty() {
+        return Err(LabelError::InvalidFont);
+    }
+    let mut width: f64 = 1.0;
+    for line in &resolved.lines {
+        let mut advance = 0.0;
+        for run in &line.runs {
+            advance += fonts
+                .get(run.font_index)
+                .ok_or(LabelError::InvalidFont)?
+                .advance(
+                    &run.display_text,
+                    size,
+                    ShapeDirection::Run { rtl: run.rtl },
+                )?;
+        }
+        width = width.max(advance);
+    }
+    Ok([width, line_count(text) as f64 * size * line_height])
+}
+
 /// The direction text is shaped in.
 #[derive(Clone, Copy)]
 enum ShapeDirection {

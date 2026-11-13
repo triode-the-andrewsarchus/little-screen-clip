@@ -138,3 +138,24 @@ impl LinearPreview {
         Ok(svg)
     }
 }
+
+/// Measures unwrapped authored text using the exporter's bundled faces and shaping.
+/// Run off the UI thread; no scene normalization, output rendering or I/O occurs.
+pub fn measure_text(
+    text: &str,
+    font_family: i32,
+    font_size: f64,
+    line_height: f64,
+) -> Result<[f64; 2], String> {
+    if text.chars().count() > 4096
+        || text.contains('\0')
+        || !font_size.is_finite()
+        || !(1.0..=512.0).contains(&font_size)
+        || !line_height.is_finite()
+        || !(0.5..=4.0).contains(&line_height)
+    {
+        return Err("Text measurement exceeds the character/font limits".into());
+    }
+    super::text::measure_unwrapped(text, font_family, font_size, line_height)
+        .map_err(|error| format!("Text cannot be measured with the selected bundled font: {error:?}; use Source for unsupported text"))
+}
