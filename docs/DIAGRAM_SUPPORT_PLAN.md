@@ -1168,6 +1168,13 @@ after the higher-priority graphical editors. Format routing, syntax highlighting
 Markdown/standalone rendering, clipboard recognition and actual bounded-worker
 validation are still pending; the import is not a format-support completion.
 
+After reviewing the code sizes and ongoing compatibility costs, the user accepted
+retaining the upstream JavaScript engines instead of maintaining Rust ports.
+Keep their versions pinned, original sources/licenses separate from adapters,
+and the interpreter hostless and bounded. Canonical WaveDrom is already active;
+Nomnoml/Graphre integration is still pending. The native canvas and file-manager
+preview corrections take priority over adding that adapter.
+
 ## Canvas interaction corrections
 
 - [x] Select ellipses and diamonds by their actual rotated geometry rather than
@@ -1179,3 +1186,45 @@ validation are still pending; the import is not a format-support completion.
   model. Escape also handles egui's automatic focus loss and clears captured
   gesture feedback without discarding accepted edits. All eight drawing-related
   studio tests pass, including actual input with stale preview pixels.
+
+## Desktop review requirements: vectors and browser strips
+
+The user's review identified two gaps in the current implementation. These are
+required follow-up work, alongside the remaining format coverage:
+
+- [ ] Replace the editor's raster-image canvas with direct antialiased vector
+  drawing. Curves, handwritten strokes and outlined glyphs must remain crisp
+  through zoom. Bitmap assets remain bitmap assets.
+- [ ] Draw the actual styled artwork during gestures, rather than moving only
+  selection outlines until a worker finishes. Retain object identities, paint
+  order, bindings, opacity, clipping and image crops; keep parsing/preparation
+  bounded and off the UI thread. Source/history commits remain one per gesture.
+- [ ] Use the supplied editor screenshots as interaction references: compact
+  icon tools and contextual style/selection controls. Text and resize remain
+  essential; the reference's AI tools, Mermaid conversion and web embeds are
+  outside the requested scope.
+- [ ] Render standalone diagram strips in the file-manager list, with enlarged
+  rendered hover previews. WaveDrom should prioritize the actual waveforms over
+  decorative heading text. Preserve useful scale, clip vertically when needed,
+  and reuse existing cache admission, revision checks and hidden-row retirement.
+- [ ] Give Markdown front matter a compact metadata area beside a smaller text
+  minimap. Prioritize supplied Hugo fields (`title`, `date`, `draft`, `tags`,
+  categories and related dates/weight) without increasing row height. Do not
+  infer publication state or project timezone from those fields.
+- [ ] Replace Markdown's syntax-only hover excerpt with a rendered view at the
+  hovered source position, including equations and diagrams. Preserve useful
+  source-position mapping and bounded work for large documents.
+
+The [Hugo front-matter reference](https://gohugo.io/content-management/front-matter/)
+confirms the reserved page fields, taxonomy arrays and unquoted TOML datetimes.
+Its build/cascade configuration is not evaluated by a passive file preview.
+
+Vector backend candidates inspected: `lyon_tessellation` 1.0.23 provides robust
+path fills/strokes but leaves antialiasing, clipping and group compositing to its
+host; Grafia 0.7.0 targets egui 0.37 and is not directly compatible with this
+workspace's egui 0.27; FemtoVG 0.28.0 provides native antialiased GPU paths,
+transforms and compositing and fits the installed Rust version. Both applications
+already use eframe's OpenGL backend and expose its function loader at creation.
+Evaluate retaining the native renderer's vector paths/glyphs with per-element
+identity, and a host-owned GPU lifetime, rather than repeatedly increasing a
+cached PNG's resolution. No backend has been integrated at this checkpoint.
