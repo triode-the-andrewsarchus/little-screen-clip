@@ -1,9 +1,9 @@
-//! Build the pinned GoAT engine without module downloads or a runtime install.
+//! Build pinned local engines and publish immutable companion artifacts.
 use std::{
     collections::hash_map::DefaultHasher,
     env, fs,
     hash::{Hash, Hasher},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
 };
 
@@ -14,10 +14,20 @@ fn main() {
         "scripts/goat-renderer",
         "vendor/goat",
         "vendor/tdewolff-parse",
+        "vendor/ditaa",
+        "vendor/umlet",
+        "crates/little-clip-render/assets/fonts/graphviz/Cousine-Bold.ttf",
+        "crates/little-clip-render/assets/fonts/graphviz/Cousine-Regular.ttf",
+        "crates/little-clip-render/assets/fonts/graphviz/Tinos-Regular.ttf",
+        "crates/little-clip-render/assets/fonts/graphviz/Arimo[wght].ttf",
+        "crates/little-clip-render/assets/fonts/graphviz/OFL-Cousine.txt",
+        "crates/little-clip-render/assets/fonts/graphviz/OFL-Tinos.txt",
+        "crates/little-clip-render/assets/fonts/graphviz/OFL-Arimo.txt",
     ] {
         println!("cargo:rerun-if-changed={}", root.join(path).display());
     }
     println!("cargo:rerun-if-env-changed=LITTLE_CLIP_GO");
+    println!("cargo:rerun-if-env-changed=LITTLE_CLIP_JAVAC");
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo output directory"));
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo target OS");
     let go_os = match target_os.as_str() {
@@ -63,23 +73,45 @@ fn main() {
         "Bundled GoAT build failed (Go 1.25+ required):\n{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    // Versioned sidecars avoid replacing an executable in use and let older
+    publish(&binary, &out, "clip-goat", "GOAT");
+    for (family, directory) in [("DITAA", "ditaa"), ("UMLET", "umlet")] {
+        let companion = out.join(format!("clip-{directory}.jar"));
+        let result = Command::new("python3")
+            .arg(root.join(format!("vendor/{directory}/build.py")))
+            .arg(&companion)
+            .output()
+            .expect("Building diagram companions requires Python 3 and a local JDK 11+");
+        assert!(
+            result.status.success(),
+            "Bundled {family} build failed (local JDK 11+ required; LITTLE_CLIP_JAVAC selects javac):\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        publish(&companion, &out, &format!("clip-{directory}"), family);
+    }
+}
+
+fn publish(artifact: &Path, out: &Path, stem: &str, family: &str) {
+    // Versioned sidecars avoid replacing an artifact in use and let older
     // running applications keep their exact helper during a rebuild. Cargo's
     // retained build directory is also a development/test fallback.
-    let bytes = fs::read(&binary).expect("Compiled GoAT helper");
+    let bytes = fs::read(artifact).expect("Built diagram companion");
     let mut hash = DefaultHasher::new();
     bytes.hash(&mut hash);
-    let name = format!("clip-goat-{:016x}{suffix}", hash.finish());
+    let suffix = artifact
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy()))
+        .unwrap_or_default();
+    let name = format!("{stem}-{:016x}{suffix}", hash.finish());
     let profile = out.ancestors().nth(3).expect("Cargo profile directory");
     let bundled = profile.join(&name);
     if !bundled.exists() {
         let staging = profile.join(format!("{name}.tmp-{}", std::process::id()));
-        fs::copy(&binary, &staging).expect("Stage bundled GoAT helper");
-        fs::rename(staging, bundled).expect("Publish bundled GoAT helper");
+        fs::copy(artifact, &staging).expect("Stage bundled diagram companion");
+        fs::rename(staging, bundled).expect("Publish bundled diagram companion");
     }
-    println!("cargo:rustc-env=LITTLE_CLIP_GOAT_HELPER_NAME={name}");
+    println!("cargo:rustc-env=LITTLE_CLIP_{family}_HELPER_NAME={name}");
     println!(
-        "cargo:rustc-env=LITTLE_CLIP_GOAT_HELPER_PATH={}",
-        binary.display()
+        "cargo:rustc-env=LITTLE_CLIP_{family}_HELPER_PATH={}",
+        artifact.display()
     );
 }
