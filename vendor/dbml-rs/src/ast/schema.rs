@@ -11,6 +11,8 @@ pub struct SchemaBlock<'a> {
   pub input: &'a str,
   /// A vector of top-level blocks comprising the parsed DBML structure.
   pub blocks: Vec<TopLevelBlock>,
+  /// Original authored blocks before partial expansion and record attachment.
+  pub authored_blocks: Vec<TopLevelBlock>,
 }
 
 /// An enum representing various top-level blocks in a parsed DBML file.
@@ -18,6 +20,8 @@ pub struct SchemaBlock<'a> {
 pub enum TopLevelBlock {
   /// Represents a project block in the DBML file.
   Project(ProjectBlock),
+  TablePartial(TablePartial),
+  Records(RecordsBlock),
   /// Represents a table block in the DBML file.
   Table(TableBlock),
   /// Represents a table group block in the DBML file.

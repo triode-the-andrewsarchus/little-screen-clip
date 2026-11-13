@@ -94,7 +94,10 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
             .iter()
             .any(|r| r.name.is_some() || r.settings.is_some())
     {
-        warnings.push("Authored presentation settings, relationship names and referential actions remain available in source; edge symbols show maximum one/many cardinality, not minimum participation.".into());
+        warnings.push("Authored presentation settings, relationship names and referential actions remain available in source; edge symbols retain explicit optional endpoints. Nullable-column inference is not added to unmarked operators.".into());
+    }
+    if tables.nodes.iter().any(|table| !table.records.is_empty()) {
+        warnings.push("Records are displayed as authored sample values and never executed. Numeric/boolean forms, row shape and required values are checked; date normalization and custom SQL types retain their source spelling without SQL-engine validation.".into());
     }
     Ok((svg, warnings))
 }
@@ -130,6 +133,7 @@ fn dot(ast: &SchemaBlock<'_>, tables: &Tables<'_>) -> Result<String, String> {
             &relation.lhs,
             &relation.rhs,
             &relation.rel,
+            (relation.lhs_optional, relation.rhs_optional),
             &mut count,
         )?;
     }
@@ -154,6 +158,7 @@ fn dot(ast: &SchemaBlock<'_>, tables: &Tables<'_>) -> Result<String, String> {
                         &lhs,
                         &reference.rhs,
                         &reference.rel,
+                        (reference.lhs_optional, reference.rhs_optional),
                         &mut count,
                     )?;
                 }
@@ -224,8 +229,51 @@ fn render_table(dot: &mut String, index: usize, table: &TableBlock) {
     if let Some(text) = &table.note {
         note(dot, &text.value.value.to_string());
     }
+    render_records(dot, table);
     dot.push_str("</TABLE>>];\n");
 }
+fn render_records(dot: &mut String, table: &TableBlock) {
+    for records in &table.records {
+        note(
+            dot,
+            if records.example {
+                "RECORDS [example]"
+            } else {
+                "RECORDS"
+            },
+        );
+        let columns = if records.columns.is_empty() {
+            table
+                .cols
+                .iter()
+                .map(|c| c.name.to_string.as_str())
+                .collect::<Vec<_>>()
+        } else {
+            records
+                .columns
+                .iter()
+                .map(|c| c.to_string.as_str())
+                .collect::<Vec<_>>()
+        };
+        note(dot, &columns.join(" | "));
+        for row in &records.rows {
+            note(
+                dot,
+                &row.iter()
+                    .map(|cell| {
+                        if cell.raw.is_empty() {
+                            "NULL"
+                        } else {
+                            cell.raw.as_str()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            );
+        }
+    }
+}
+
 fn header(dot: &mut String, title: &str, kind: &str) {
     write!(dot, "<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"6\" BGCOLOR=\"#f4f7fa\"><TR><TD COLSPAN=\"3\" BGCOLOR=\"#22384d\"><FONT COLOR=\"white\"><B>{}</B> | {kind}</FONT></TD></TR>", label(title)).unwrap();
 }
@@ -246,6 +294,7 @@ fn links(
     left: &RefIdent,
     right: &RefIdent,
     relation: &Relation,
+    optional: (bool, bool),
     count: &mut usize,
 ) -> Result<(), String> {
     let left = tables.endpoint(left)?;
@@ -259,6 +308,16 @@ fn links(
         Relation::Many2One => ("crow", "tee"),
         Relation::Many2Many => ("crow", "crow"),
         Relation::Undef => return Err("Unknown DBML relationship cardinality".into()),
+    };
+    let tail = if optional.0 {
+        format!("odot{tail}")
+    } else {
+        tail.into()
+    };
+    let head = if optional.1 {
+        format!("odot{head}")
+    } else {
+        head.into()
     };
     // Ports on opposite outer cells keep edges outside the type/flags text;
     // a port on the name cell alone would draw through the rest of the row.
@@ -276,6 +335,12 @@ fn links(
 #[cfg(test)]
 mod tests {
     use super::*;
+    const CARDINALITIES: [(&str, &str, &str); 4] = [
+        ("<", "tee", "crow"),
+        (">", "crow", "tee"),
+        ("-", "tee", "tee"),
+        ("<>", "crow", "crow"),
+    ];
     const SOURCE: &str = "Table core.users as U {\n id int [pk]\n name varchar(50) [not null]\n}\nTable posts {\n id int [pk]\n user_id int [ref: > U.id]\n title varchar [default: 'draft']\n}\n";
     #[test]
     fn native_tables_fields_and_alias_references_use_the_actual_column_ports() {
@@ -327,12 +392,7 @@ mod tests {
     }
     #[test]
     fn all_four_maximum_cardinalities_keep_their_authored_direction() {
-        for (operator, tail, head) in [
-            ("<", "tee", "crow"),
-            (">", "crow", "tee"),
-            ("-", "tee", "tee"),
-            ("<>", "crow", "crow"),
-        ] {
+        for (operator, tail, head) in CARDINALITIES {
             let source = format!(
                 "Table a {{ id int [pk] }}\nTable b {{ id int [pk] }}\nRef: a.id {operator} b.id"
             );
@@ -351,13 +411,71 @@ mod tests {
     }
 
     #[test]
+    fn current_partials_and_sample_records_render_resolved_fields_and_literal_values() {
+        let source = include_str!("../../../../docs/examples/diagrams/modern-schema.dbml");
+        let ast = dbml_rs::parse_dbml(source).unwrap();
+        let dot = dot(&ast, &Tables::new(ast.tables())).unwrap();
+        assert!(dot.contains("varchar(100)"));
+        assert!(!dot.contains("varchar(50)"));
+        assert!(dot.contains("RECORDS [example]"));
+        assert!(dot.contains("created_at | name | state"));
+        assert!(dot.contains("Alice, O"));
+        assert!(dot.contains("`now()`"));
+        assert!(dot.contains("NULL |"));
+        assert!(dot.contains("arrowtail=crow, arrowhead=odottee"));
+        let (svg, warnings) = svg(source).unwrap();
+        assert!(svg.contains("dbml-table-0") && svg.contains("dbml-table-1"));
+        assert!(svg.contains("dbml-ref-1") && svg.contains("<path"));
+        assert!(!svg.contains("<text"));
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("never executed"))
+        );
+        let rendered =
+            super::super::render_inline(little_clip_core::diagram::Format::Dbml, source, None)
+                .unwrap();
+        let image = image::load_from_memory(&rendered.png).unwrap().to_rgba8();
+        assert!(image.width() > 100 && image.height() > 100);
+        assert!(
+            image
+                .pixels()
+                .filter(|pixel| pixel[0] < 100 && pixel[1] < 130 && pixel[2] < 160 && pixel[3] > 0)
+                .count()
+                > 500
+        );
+    }
+
+    #[test]
+    fn explicit_optional_markers_preserve_both_ends_for_every_operator() {
+        for (operator, tail, head) in CARDINALITIES {
+            let source = format!(
+                "Table a {{ id int [pk] }} Table b {{ id int [pk] }} Ref: a.id ?{operator}? b.id"
+            );
+            let ast = dbml_rs::parse_dbml(&source).unwrap();
+            let dot = dot(&ast, &Tables::new(ast.tables())).unwrap();
+            assert!(dot.contains(&format!("arrowtail=odot{tail}, arrowhead=odot{head}")));
+            let (svg, _) = svg(&source).unwrap();
+            let tree = super::super::retained::prepare(&svg).unwrap().tree;
+            let edge = tree
+                .node_by_id("graph-0-dbml-ref-1")
+                .unwrap()
+                .abs_bounding_box();
+            assert!(
+                edge.width() > 20.0 && edge.height() > 4.0,
+                "{operator}: optional endpoint glyphs must have visible geometry"
+            );
+        }
+    }
+
+    #[test]
     fn invalid_or_unsupported_schema_never_becomes_a_silently_partial_preview() {
         for source in [
             "Table broken {",
             "Table users { id int }\nRef: users.id > missing.id",
             "Table users { id int id text }",
-            "TablePartial base { id int }\nTable users { ~base }",
-            "Table users { id int }\nRecords users(id) { 1 }",
+            "TablePartial base { id int }\nTable users { ~missing }",
+            "Table users { id int }\nRecords users(missing) { 1 }",
         ] {
             assert!(svg(source).is_err(), "{source}");
         }

@@ -311,7 +311,7 @@ impl IndexedRef {
     ref_blocks
       .into_iter()
       .map(|ref_block| {
-        let RefInline { span_range, rel, rhs } = ref_block;
+        let RefInline { span_range, rel, rhs, .. } = ref_block;
 
         let lhs = RefIdent {
           span_range: span_range.clone(),

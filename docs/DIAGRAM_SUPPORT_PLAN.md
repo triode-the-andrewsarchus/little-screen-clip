@@ -2937,3 +2937,14 @@ being rewritten to improve metrics.
 New standalone and Markdown fixtures are also in
 `/home/vega/Documents/type_testing/md_extensions/`. Native GUI acceptance remains
 pending; their presence is not a claim that the review has passed.
+
+### DBML compatibility extension
+
+The native parser now retains authored blocks and resolves ordered TablePartial
+injections, inline/standalone CSV records and explicit optional reference ends.
+No compiler/runtime dependency was replaced. Six parser and eight renderer tests,
+strict package Clippy and actual rendered-output inspection pass. This supersedes
+the earlier partials/records/optional-operator limitation; module imports and
+further upstream syntax remain explicitly unsupported. See
+[the comparison and qualification](diagrams/dbml-research.md). Shared host rebuild
+and native GUI review of the modern fixture remain part of this integration pass.

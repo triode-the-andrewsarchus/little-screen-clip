@@ -6,14 +6,14 @@ single_line_comment = { "//" ~ (!NEWLINE ~ ANY)* }
 multi_line_comment = { "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
 
 // literals
-double_quoted_value = @{ (!"\"" ~ ANY)* }
-double_quoted_string = { "\"" ~ double_quoted_value ~ "\"" }
-single_quoted_value = @{ (!"'" ~ ANY)* }
-single_quoted_string = { "'" ~ single_quoted_value ~ "'"}
+double_quoted_value = @{ ("\\" ~ ANY | !"\"" ~ ANY)* }
+double_quoted_string = ${ "\"" ~ double_quoted_value ~ "\"" }
+single_quoted_value = @{ ("\\" ~ ANY | !"'" ~ ANY)* }
+single_quoted_string = ${ "'" ~ single_quoted_value ~ "'"}
 backquoted_quoted_value = @{ (!"`" ~ ANY)* }
-backquoted_quoted_string = { "`" ~ backquoted_quoted_value ~ "`" }
+backquoted_quoted_string = ${ "`" ~ backquoted_quoted_value ~ "`" }
 triple_quoted_value = @{ (!"'''" ~ ANY)* }
-triple_quoted_string = { "'''" ~ triple_quoted_value ~ "'''" }
+triple_quoted_string = ${ "'''" ~ triple_quoted_value ~ "'''" }
 
 var = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 spaced_var = @{ ASCII_ALPHA ~ (" "? ~ (ASCII_ALPHANUMERIC | "_"))* }
@@ -38,7 +38,7 @@ value = { string_value | backquoted_quoted_string | boolean_value | number_value
 decl_ident = { ident ~ ("." ~ ident)? }
 
 // ref block
-relation = @{ "<>" | "-" | ">" | "<" }
+relation = @{ "?"? ~ ("<>" | "-" | ">" | "<") ~ "?"? }
 rel_settings = { "[" ~ (attribute ~ ("," ~ attribute)*)? ~ "]" }
 ref_composition = { ident | ("(" ~ ident ~ ("," ~ ident)* ~ ")") }
 ref_ident = { ident ~ "." ~ (ident ~ ".")? ~ ref_composition }
@@ -77,9 +77,29 @@ col_type_unquoted = ${ var ~ col_type_arg? ~ col_type_array* }
 col_type_quoted = ${ "\"" ~ spaced_var ~ col_type_arg? ~ col_type_array* ~ "\"" ~ col_type_array* }
 col_type = ${ (ident ~ ".")? ~ (col_type_quoted | col_type_unquoted ) }
 table_col = { ident ~ col_type ~ col_settings? }
-table_block = { "{" ~ (table_col | note_decl | indexes_decl)* ~ "}" }
+table_block = { "{" ~ (partial_injection | records_inline | table_col | note_decl | indexes_decl)* ~ "}" }
 table_alias = { ^"as " ~ ident }
 table_decl = { ^"Table " ~ decl_ident ~ table_alias? ~ block_settings?  ~ table_block }
+
+// Partial definitions share the table body grammar; semantic validation rejects
+// records/injections inside a partial rather than silently expanding a subset.
+partial_injection = { "~" ~ ident }
+partial_decl = { ^"TablePartial " ~ ident ~ block_settings? ~ table_block }
+
+// Records use explicit horizontal whitespace and row separators. Compound atomic
+// bodies prevent the schema-wide newline skipper from merging CSV rows.
+records_columns = { "(" ~ ident ~ ("," ~ ident)* ~ ")" }
+records_inline = { ^"records" ~ records_columns? ~ block_settings? ~ records_body }
+records_decl = { ^"records " ~ decl_ident ~ records_columns ~ block_settings? ~ records_body }
+record_space = _{ " " | "\t" | multi_line_comment }
+record_gap = _{ record_space | NEWLINE | single_line_comment | multi_line_comment }
+record_bare = @{ !(record_space | "," | NEWLINE | "}" | "//") ~ ANY ~ (!("," | NEWLINE | "}" | "//" | "/*") ~ ANY)* }
+record_enum = { ident ~ "." ~ ident ~ ("." ~ ident)? }
+record_value = { single_quoted_string | backquoted_quoted_string | record_enum | record_bare }
+record_comma = { "," }
+record_end = _{ record_space* ~ single_line_comment? ~ (NEWLINE | &"}") }
+record_row = { (record_value? ~ (record_space* ~ record_comma ~ record_space* ~ record_value?)+ | record_value) ~ record_end }
+records_body = ${ "{" ~ record_gap* ~ (record_row ~ record_gap*)* ~ "}" }
 
 // table group block
 table_group_block = { "{" ~ (note_decl | decl_ident)* ~ "}" }
@@ -89,4 +109,4 @@ table_group_decl = { ^"TableGroup " ~ ident ~ block_settings? ~ table_group_bloc
 project_block = { "{" ~ (note_decl | property)* ~ "}" }
 project_decl = { ^"Project " ~ ident ~ project_block }
 
-schema = { SOI ~ (project_decl | table_decl | enum_decl | ref_decl | table_group_decl | note_decl)* ~ EOI }
+schema = { SOI ~ (project_decl | partial_decl | table_decl | records_decl | enum_decl | ref_decl | table_group_decl | note_decl)* ~ EOI }

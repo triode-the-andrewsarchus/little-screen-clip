@@ -1,5 +1,7 @@
 mod err;
 mod helper;
+mod modern;
+pub(crate) use modern::resolve;
 
 use alloc::string::{
   String,
@@ -76,6 +78,8 @@ fn parse_schema<'a>(pair: Pair<Rule>, input: &'a str) -> ParserResult<SchemaBloc
     match p1.as_rule() {
       Rule::project_decl => acc.blocks.push(TopLevelBlock::Project(parse_project_decl(p1)?)),
       Rule::table_decl => acc.blocks.push(TopLevelBlock::Table(parse_table_decl(p1)?)),
+      Rule::partial_decl => acc.blocks.push(TopLevelBlock::TablePartial(modern::parse_partial(p1)?)),
+      Rule::records_decl => acc.blocks.push(TopLevelBlock::Records(modern::parse_records(p1)?)),
       Rule::enum_decl => acc.blocks.push(TopLevelBlock::Enum(parse_enum_decl(p1)?)),
       Rule::ref_decl => acc.blocks.push(TopLevelBlock::Ref(parse_ref_decl(p1)?)),
       Rule::note_decl => acc.blocks.push(TopLevelBlock::Note(parse_note_decl(p1)?)),
@@ -157,6 +161,7 @@ fn parse_table_decl(pair: Pair<Rule>) -> ParserResult<TableBlock> {
         acc.ident.name = name;
         acc.ident.schema = schema;
       }
+      Rule::ident => acc.ident.name = parse_ident(p1)?,
       Rule::table_alias => {
         for p2 in p1.into_inner() {
           match p2.as_rule() {
@@ -169,6 +174,12 @@ fn parse_table_decl(pair: Pair<Rule>) -> ParserResult<TableBlock> {
         for p2 in p1.into_inner() {
           match p2.as_rule() {
             Rule::table_col => acc.cols.push(parse_table_col(p2)?),
+            Rule::partial_injection => {
+              let span_range = s2r(p2.as_span());
+              let name = parse_ident(p2.into_inner().next().expect("injection identifier"))?;
+              acc.partials.push(PartialInjection { span_range, name, order: acc.cols.len() + acc.partials.len() });
+            }
+            Rule::records_inline => acc.records.push(modern::parse_records(p2)?),
             Rule::note_decl => acc.note = Some(parse_note_decl(p2)?),
             Rule::indexes_decl => acc.indexes = Some(parse_indexes_decl(p2)?),
             _ => throw_rules(&[Rule::table_col, Rule::note_decl, Rule::indexes_decl], p2)?,
@@ -455,7 +466,9 @@ fn parse_ref_stmt(pair: Pair<Rule>) -> ParserResult<RefBlock> {
   pair.into_inner().try_fold(init, |mut acc, p1| {
     match p1.as_rule() {
       Rule::relation => {
-        acc.rel = match Relation::from_str(p1.as_str()) {
+        acc.lhs_optional = p1.as_str().starts_with('?');
+        acc.rhs_optional = p1.as_str().ends_with('?');
+        acc.rel = match Relation::from_str(p1.as_str().trim_matches('?')) {
           Ok(rel) => rel,
           Err(err) => throw_msg(err, p1)?,
         }
@@ -486,7 +499,9 @@ fn parse_ref_inline(pair: Pair<Rule>) -> ParserResult<RefInline> {
   pair.into_inner().try_fold(init, |mut acc, p1| {
     match p1.as_rule() {
       Rule::relation => {
-        acc.rel = match Relation::from_str(p1.as_str()) {
+        acc.lhs_optional = p1.as_str().starts_with('?');
+        acc.rhs_optional = p1.as_str().ends_with('?');
+        acc.rel = match Relation::from_str(p1.as_str().trim_matches('?')) {
           Ok(rel) => rel,
           Err(err) => throw_msg(err, p1)?,
         }
@@ -804,7 +819,7 @@ fn parse_string_value(pair: Pair<Rule>) -> ParserResult<String> {
       Rule::single_quoted_string => {
         for p2 in p1.into_inner() {
           match p2.as_rule() {
-            Rule::single_quoted_value => out = p2.as_str().to_string(),
+            Rule::single_quoted_value => out = modern::unescape(p2.as_str()),
             _ => throw_rules(&[Rule::single_quoted_value], p2)?,
           }
         }
@@ -915,7 +930,7 @@ fn parse_ident(pair: Pair<Rule>) -> ParserResult<Ident> {
       Ident {
         span_range: s2r(p1.as_span()),
         raw: p1.as_str().to_string(),
-        to_string: p1.into_inner().as_str().to_string(),
+        to_string: modern::unescape(p1.into_inner().as_str()),
       }
     }
     _ => throw_rules(&[Rule::var, Rule::double_quoted_string], p1)?,

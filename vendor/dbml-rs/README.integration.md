@@ -22,3 +22,14 @@ Private upstream analysis/optional-utility modules retain their unused helper
 APIs under scoped `dead_code` allowances. The published dependency hides these
 through Cargo dependency lint caps; the local path patch otherwise emits four
 pre-existing warnings. Application and adapter warnings remain enabled.
+
+The local grammar/AST extension adds `TablePartial` and ordered `~name`
+injections, inline/standalone CSV `records` with `[example]`, and explicit `?`
+relationship endpoints. It uses the existing Pest grammar and native analyzer;
+there is no source rewriting or second application parser. Checked parsing keeps
+`authored_blocks` before deriving effective tables, so inherited definitions do
+not erase local/partial source identities. Original input and spans are retained.
+Records preserve raw scalar/expression spellings; no SQL is executed. Row shape,
+column/partial identities and numeric/boolean/declared-enum forms are checked;
+date normalization and custom database type coercion are intentionally unclaimed
+and visibly disclosed. See `docs/diagrams/dbml-research.md` for scope and limits.

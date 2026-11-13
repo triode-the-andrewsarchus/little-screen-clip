@@ -61,7 +61,8 @@ pub const DEFAULT_SCHEMA: &str = "public";
 /// }
 /// ```
 pub fn parse_dbml(input: &str) -> Result<SchemaBlock<'_>, ParseError<parser::Rule>> {
-  let ast = parse_dbml_unchecked(input)?;
+  let mut ast = parse_dbml_unchecked(input)?;
+  parser::resolve(&mut ast)?;
 
   analyze(&ast).map(|_| ast)
 }

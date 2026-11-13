@@ -17,6 +17,10 @@ pub struct TableBlock {
   pub note: Option<NoteBlock>,
   /// The indexes block.
   pub indexes: Option<IndexesBlock>,
+  /// Authored partial injections, in body order relative to local columns.
+  pub partials: Vec<PartialInjection>,
+  /// Inline record declarations (one at most after validation).
+  pub records: Vec<RecordsBlock>,
   /// The settings for the table.
   pub settings: Option<TableSettings>,
 }
@@ -198,4 +202,31 @@ pub struct TableIdent {
   pub schema: Option<Ident>,
   /// The alias for the table.
   pub alias: Option<Ident>,
+}
+
+/// A partial injection at an authored table-body position.
+#[derive(Debug, Clone, Default)]
+pub struct PartialInjection {
+  pub span_range: SpanRange,
+  pub name: Ident,
+  pub order: usize,
+}
+
+/// A named, reusable table definition. Its authored fields are never discarded.
+#[derive(Debug, Clone, Default)]
+pub struct TablePartial {
+  pub span_range: SpanRange,
+  pub name: Ident,
+  pub definition: TableBlock,
+}
+
+/// CSV records retain raw literals and expression text; nothing is executed.
+#[derive(Debug, Clone, Default)]
+pub struct RecordsBlock {
+  pub span_range: SpanRange,
+  pub table: Option<TableIdent>,
+  pub columns: Vec<Ident>,
+  pub rows: Vec<Vec<Literal>>,
+  pub settings: Vec<Attribute>,
+  pub example: bool,
 }

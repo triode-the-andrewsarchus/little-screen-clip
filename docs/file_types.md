@@ -217,7 +217,7 @@
         - [x] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`) — native Rust renderer, bundled C4/themes, outlined previews and source/live editor; external includes refused
         - [x] D2 (`d2`) — native flat-board previews, Dagre/ELK/TALA, `.d2` highlighted source/live preview and diagnostics
         - [x] Graphviz DOT (`graphviz`, `dot`) — compiled Rust renderer, all eight layout engines, bounded multi-graph previews
-        - [ ] DBML database markup (`dbml`) — native tables/columns/enums/relationships and source/live previews; newer partials/records/optional relations pending
+        - [x] DBML database markup (`dbml`) — native schemas, ordered table partials, sample records and explicit optional relationships; highlighted source/live previews and diagnostics (no SQL execution or module imports)
         - [x] BPMN business process (`bpmn`, `bpmn2`) — native authored-DI/automatic layout, bounded large/small previews and diagnostics
         - [x] Diagrams.net / draw.io (`drawio`, `diagramsnet`) — native pages, highlighted source/live preview/errors; external stencil collections remain unsupported.
         - [x] Excalidraw whiteboards (`excalidraw`) — native bounded rendering with handwriting, raster assets and diagnostics; initial vector canvas editing implemented, parity work pending
@@ -552,7 +552,7 @@
     - [x] `.mmd`, `.mermaid` — native Mermaid source/live-preview editor with diagnostics and guarded saves; `.mmd` requires a Mermaid header so ordinary MultiMarkdown stays Markdown; graphical editing pending
     - [ ] `.d2` — Terrastruct D2 diagram (May need disambiguation with Diablo II game data files on `.d2`)
     - [x] `.dot`, `.gv`, `.graphviz` — native DOT source/live-preview editor with diagnostics and guarded saves; `.dot` requires a graph header to avoid claiming legacy Word templates; graphical manipulation pending
-    - [x] `.dbml` — native core schema preview and highlighted editor; XML mapping files stay XML, newer DBML syntax remains pending
+    - [x] `.dbml` — native schema/partial/sample-record preview and highlighted editor; XML mapping files stay XML; unsupported newer syntax reports errors
     - [x] `.er`, `.erd` — canonical Erd schema previews and highlighted source/live editor; Eclipse ERMaster XML retains XML presentation
     - [x] `.nomnoml`, `.noml` — Nomnoml UML diagram; highlighted source/live preview, rendered list strips and enlarged hover
     - [x] `.pikchr` — native Pikchr previews, highlighted source/live preview/errors and guarded saves
