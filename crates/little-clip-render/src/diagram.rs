@@ -32,6 +32,7 @@ mod mermaid;
 mod nomnoml;
 mod plantuml;
 mod script;
+mod structurizr;
 mod wavedrom;
 mod wireviz;
 
@@ -237,6 +238,8 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/erd-notices.md"),
             include_str!("../third_party/plantuml-notices.md"),
             include_str!("../third_party/drawio-notices.md"),
+            include_str!("../third_party/structurizr-notices.md"),
+            include_str!("../../../vendor/structurizr-rs/LICENSE-MIT"),
             include_str!("../../../vendor/document-svg-drawio/LICENSE-MIT"),
             include_str!("../../../vendor/document-svg-drawio/LICENSE-APACHE"),
             include_str!("../../../vendor/plantuml-core/LICENSE"),
@@ -360,6 +363,7 @@ fn render_inline(
         Format::Erd => erd::svg(source)?,
         Format::Plantuml => plantuml::svg(source)?,
         Format::Drawio => drawio::svg(source)?,
+        Format::Structurizr => structurizr::svg(source)?,
         Format::Wireviz => wireviz::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
@@ -674,6 +678,8 @@ mod tests {
     #[test]
     fn markdown_files_and_raw_diagram_files_use_the_screen_diagram_route() {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
+        const STRUCTURIZR: &str =
+            include_str!("../../../docs/examples/diagrams/architecture.structurizr");
         const DRAWIO: &str = include_str!("../../../docs/examples/diagrams/pipeline.drawio");
         const PUML: &str = include_str!("../../../docs/examples/diagrams/sequence.puml");
         const C4: &str = include_str!("../../../docs/examples/diagrams/architecture.puml");
@@ -708,6 +714,9 @@ mod tests {
                 Format::Nomnoml,
                 "[Source] -> [Preview]\n",
             ),
+            ("", STRUCTURIZR, Format::Structurizr, STRUCTURIZR),
+            ("structurizr", STRUCTURIZR, Format::Structurizr, STRUCTURIZR),
+            ("dsl", STRUCTURIZR, Format::Structurizr, STRUCTURIZR),
             ("", DRAWIO, Format::Drawio, DRAWIO),
             ("drawio", DRAWIO, Format::Drawio, DRAWIO),
             ("dio", DRAWIO, Format::Drawio, DRAWIO),

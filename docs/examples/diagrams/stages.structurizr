@@ -1,0 +1,11 @@
+workspace "Work stages" {
+    model {
+        source = element "Source" "Input" "An authored file"
+        preview = element "Preview" "Output" "A rendered view"
+        source -> preview "Render"
+    }
+    views {
+        custom "Stages" "Work stages" { include * autoLayout lr }
+        styles { element "Element" { background "#295f98" color "#ffffff" } }
+    }
+}

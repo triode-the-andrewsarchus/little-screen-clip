@@ -334,6 +334,8 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "bytefield" => Some("bytefield"),
         "er" | "erd" => Some("erd"),
         "plantuml" | "puml" | "pu" | "iuml" | "c4plantuml" => Some("plantuml"),
+        "structurizr" => Some("structurizr"),
+        "dsl" => Some("txt"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -469,6 +471,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "bytefield" => "Bytefield",
         "erd" => "Erd",
         "plantuml" => "PlantUML",
+        "structurizr" => "Structurizr",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -618,6 +621,9 @@ pub const ERD_SUBLIME_SYNTAX: &str = include_str!("syntax/erd.sublime-syntax");
 /// PlantUML directives, entities, messages and preprocessing forms.
 pub const PLANTUML_SUBLIME_SYNTAX: &str = include_str!("syntax/plantuml.sublime-syntax");
 
+/// Native architecture DSL highlighting for source/live-preview sessions.
+pub const STRUCTURIZR_SUBLIME_SYNTAX: &str = include_str!("syntax/structurizr.sublime-syntax");
+
 /// XML highlighting for native mxGraph source/live-preview sessions.
 pub const DRAWIO_SUBLIME_SYNTAX: &str = include_str!("syntax/drawio.sublime-syntax");
 
@@ -636,6 +642,7 @@ pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     D2_SUBLIME_SYNTAX,
     BPMN_SUBLIME_SYNTAX,
     DRAWIO_SUBLIME_SYNTAX,
+    STRUCTURIZR_SUBLIME_SYNTAX,
     WIREVIZ_SUBLIME_SYNTAX,
     WAVEDROM_SUBLIME_SYNTAX,
     EXCALIDRAW_SUBLIME_SYNTAX,

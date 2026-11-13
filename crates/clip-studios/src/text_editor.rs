@@ -1223,6 +1223,10 @@ mod tests {
                 Format::Wireviz,
                 "shield: true\nnotes: 'example'\n# comment\n",
             ),
+            (
+                Format::Structurizr,
+                r#"workspace { model { app = softwareSystem "Library" } }"#,
+            ),
             (Format::Drawio, "<mxCell id=\"a\" value=\"Source\"/>\n"),
         ] {
             let syntax = crate::text_preview::SYNTAX_SET

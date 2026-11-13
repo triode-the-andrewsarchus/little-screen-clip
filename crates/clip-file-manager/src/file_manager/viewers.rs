@@ -549,7 +549,10 @@ enum Kind {
     External,
 }
 fn kind(path: &Path) -> Kind {
-    if little_clip_core::diagram::Format::from_path(path).is_some()
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("dsl"))
+        || little_clip_core::diagram::Format::from_path(path).is_some()
         || super::text_strip::is_typescript_source(path)
         || little_clip_core::subtitles::is_subtitle_path(path)
     {
@@ -815,6 +818,8 @@ mod tests {
             "schema.erd",
             "sequence.puml",
             "class.plantuml",
+            "architecture.structurizr",
+            "architecture.dsl",
             "drawing.drawio",
             "drawing.dio",
             "drawing.drawio.xml",

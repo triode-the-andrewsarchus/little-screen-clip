@@ -34,7 +34,7 @@ impl Document {
             .is_some_and(|value| {
                 matches!(
                     value.to_ascii_lowercase().as_str(),
-                    "json" | "json5" | "dot" | "mmd" | "xml" | "yaml" | "yml" | "edn"
+                    "json" | "json5" | "dot" | "mmd" | "xml" | "yaml" | "yml" | "edn" | "dsl"
                 )
             });
         if explicit.is_none() && !ambiguous {
@@ -162,7 +162,8 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
             | Format::Dbml
             | Format::Erd
             | Format::Plantuml
-            | Format::Drawio,
+            | Format::Drawio
+            | Format::Structurizr,
         ) => rect.height() / texture.size_vec2().y,
         _ => 0.5,
     };
@@ -257,6 +258,11 @@ mod tests {
             ("shape.goat", ".----.\n| hi |\n'----'", Format::Goat),
             ("packet.bytefield", "(draw-box 0)", Format::Bytefield),
             ("packet.edn", "(draw-box 0)", Format::Bytefield),
+            (
+                "architecture.dsl",
+                r#"workspace { model { app = softwareSystem "Library" } }"#,
+                Format::Structurizr,
+            ),
             ("schema.er", "[Person]\n*name", Format::Erd),
             ("schema.erd", "[Person]\n*name", Format::Erd),
             (

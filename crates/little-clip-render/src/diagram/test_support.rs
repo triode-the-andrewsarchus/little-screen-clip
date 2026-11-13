@@ -13,6 +13,12 @@ use std::{ffi::OsStr, time::Duration};
 pub fn assert_worker(executable: impl AsRef<OsStr>) {
     for (format, source, success) in [
         (
+            "structurizr",
+            include_str!("../../../../docs/examples/diagrams/architecture.structurizr"),
+            true,
+        ),
+        ("structurizr", "workspace { model {", false),
+        (
             "drawio",
             include_str!("../../../../docs/examples/diagrams/pipeline.drawio"),
             true,

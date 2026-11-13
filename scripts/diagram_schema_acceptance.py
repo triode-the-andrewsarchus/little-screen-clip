@@ -9,6 +9,7 @@ from text_strip_acceptance import hover_observation
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "docs/examples/diagrams"
 FAMILIES = {
+    "structurizr": ("Structurizr", "architecture.structurizr", (41, 95, 152), "workspace { model {"),
     "drawio": ("draw.io", "pipeline.drawio", (218, 232, 252), "<mxfile><diagram>broken!</diagram></mxfile>"),
     "nomnoml": ("Nomnoml", "pipeline.nomnoml", (144, 238, 144), "[Broken"),
     "dbml": ("DBML", "schema.dbml", (34, 56, 77), "Table broken {"),

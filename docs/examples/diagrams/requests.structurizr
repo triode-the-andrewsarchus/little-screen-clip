@@ -1,0 +1,15 @@
+workspace "Request flow" {
+    model {
+        user = person "Reader"
+        app = softwareSystem "File manager"
+        user -> app "Browses" "Desktop"
+    }
+    views {
+        dynamic * "Requests" {
+            title "Request and reply"
+            user -> app "Open a file"
+            app -> user "Show preview"
+        }
+        styles { element "Software System" { background "#295f98" color "#ffffff" } }
+    }
+}

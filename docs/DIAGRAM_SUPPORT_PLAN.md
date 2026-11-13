@@ -2470,8 +2470,10 @@ creating another build cache.
 - [x] Compile both native candidates and compare actual view/error behavior.
 - [x] Import pristine selected libraries separately from local adaptation.
 - [x] Adapt and test a bounded, memory-only parser/rendering foundation.
-- [ ] Integrate native Markdown/little-screen/file/clipboard routes and source UI.
-- [ ] Validate rendered strips, hover, editor, errors and Markdown in both themes.
+- [x] Integrate initial native C4/dynamic/filtered/custom Markdown, little-screen,
+  file/clipboard routes and source UI; remaining view families stay open.
+- [x] Validate initial architecture strips, hover, editor, errors and Markdown
+  in both themes; complete remaining Structurizr view qualification separately.
 
 Architecture review of this import/adaptation reports roughly 15,942 added
 lines, all in the selected upstream libraries and their preview-boundary tests.
@@ -2822,3 +2824,61 @@ the existing workspace builder's required conversion loop/mode selection growth
 (+3 CCN), with no new complexity hotspot. Shared metadata construction avoids a
 second annotation converter. This baseline also contains the in-progress host
 adapter; its independent checks and UI validation are recorded below when done.
+
+
+### Initial Structurizr host previews ready for review
+
+The shared diagram registry now routes `structurizr` fences, explicit
+`.structurizr` files, content-matched `.dsl` files and distinctive clipboard
+workspaces through the existing bounded native worker. Generic DSL and JSON
+remain ordinary text/data; in particular, canonical workspace JSON is not
+claimed. Standalone files use the existing highlighted source/live-preview/error
+session, guarded save and source identity handling. Browser rows use the same
+bounded text-row cache and enlarged hover owner as other diagrams. `.dsl` remains
+a text candidate even when its contents are another language or dictionary.
+
+Native system landscape, context, container, component, dynamic, filtered and
+custom views become separate titled SVG planes, with unique keys, a sixteen-view
+limit and the shared cumulative SVG budget. The shared metric-font/image-policy
+composer and rasterizer remain the sole downstream owners. Titles are escaped;
+external images/includes/themes are not fetched. External themes receive an
+explicit fallback warning. Workspaces without views receive a clearly disclosed
+generated system landscape. Deployment and image views currently produce an
+explicit unsupported-preview error for the workspace, rather than silently
+omitting views or displaying an unqualified deployment model.
+
+The little-screen route test caught a missing code-file extension registration;
+registering the native syntax and generic `.dsl` text candidate fixes actual
+prepared-thumbnail painting. The source grammar is bundled under the format's
+name so the native editor resolves highlighted strings, keywords and comments.
+The shared protocol fixture exercises real rendering in both application worker
+entrypoints, before either GUI starts. No additional file reader, rendering
+process type, cache, browser engine or JVM is introduced.
+
+Validation: 58 core diagram tests, 15 syntax tests, 77 shared renderer tests,
+the shared source-highlighting regression, three file-strip tests and the native
+extension viewer test pass. The real-host worker checks pass in both applications
+(four file-manager tests and one workbench test); strict all-target Clippy passes
+for core, render, studios and both desktop hosts. Both desktop binaries build
+without warnings. Native light/dark acceptance each passes nine observations,
+including rendered strips, enlarged popout, invalid-source fallback, highlighted
+source/live preview, embedded Markdown, source affordance and unchanged input
+bytes. Screenshots were inspected in addition to checking OCR and actual authored
+color pixels. This validates the initial route, not every syntax/view capability.
+
+Review files in `/home/vega/Documents/type_testing/md_extensions/`:
+`architecture.structurizr`, the same source as `architecture.dsl`,
+`requests.structurizr`, `stages.structurizr` and `structurizr.md`.
+The combined Markdown review file also includes the architecture example.
+Deployment/image rendering, extended grammar/styles, diagram density/typography
+and native graphical manipulation remain explicit work. The full Structurizr
+checkbox and the broader diagram goal remain open.
+
+Architecture comparison against `before-structurizr-host-preview` leaves clone
+count, maximum complexity and cycles unchanged, and lowers duplication by 0.01
+percentage points. The native dispatch and generic DSL admission add one required
+branch each. The filtered workspace conversion (+3 CCN) is the separately
+committed correctness fix above. All three baseline source-editor clone fragments
+and all three viewer fragments remain byte-identical; remaining warnings concern
+those touched declarations. This change extends the existing registry/worker/
+composer/session mechanisms instead of creating parallel preview infrastructure.

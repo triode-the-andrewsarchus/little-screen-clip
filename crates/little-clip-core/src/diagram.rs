@@ -37,6 +37,7 @@ pub enum Format {
     Erd,
     Plantuml,
     Drawio,
+    Structurizr,
     Math,
     MathInline,
 }
@@ -66,6 +67,7 @@ impl Format {
             "erd" | "er" => Some(Self::Erd),
             "plantuml" | "puml" | "c4plantuml" => Some(Self::Plantuml),
             "drawio" | "diagramsnet" => Some(Self::Drawio),
+            "structurizr" => Some(Self::Structurizr),
             _ => None,
         }
     }
@@ -129,6 +131,7 @@ impl Format {
             "erd" | "er" => Some(Self::Erd),
             "plantuml" | "puml" | "pu" | "iuml" => Some(Self::Plantuml),
             "drawio" | "dio" => Some(Self::Drawio),
+            "structurizr" => Some(Self::Structurizr),
             _ => None,
         }
     }
@@ -161,6 +164,7 @@ impl Format {
                         .starts_with('<')
             })
             .or_else(|| match extension.to_ascii_lowercase().as_str() {
+                "dsl" => structurizr_signature(source).then_some(Self::Structurizr),
                 "edn" => bytefield_signature(source).then_some(Self::Bytefield),
                 "mmd" => mermaid_signature(source).then_some(Self::Mermaid),
                 "dot" => dot_signature(source).then_some(Self::Graphviz),
@@ -206,6 +210,7 @@ impl Format {
             (Self::Erd, erd_signature),
             (Self::Plantuml, plantuml_signature),
             (Self::Drawio, drawio_signature),
+            (Self::Structurizr, structurizr_signature),
         ];
         signatures
             .iter()
@@ -234,6 +239,7 @@ impl Format {
             Self::Erd => Some("er"),
             Self::Plantuml => Some("puml"),
             Self::Drawio => Some("drawio"),
+            Self::Structurizr => Some("structurizr"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -258,9 +264,31 @@ impl Format {
             Self::Erd => "Erd",
             Self::Plantuml => "PlantUML",
             Self::Drawio => "draw.io",
+            Self::Structurizr => "Structurizr",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
+}
+
+fn structurizr_signature(source: &str) -> bool {
+    static HEADER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?s)^workspace(?:\s+"(?:\\.|[^"\\])*"){0,2}\s*\{"#)
+            .expect("static Structurizr signature")
+    });
+    let Some(source) = dot_trivia(source.trim_start_matches('\u{feff}')) else {
+        return false;
+    };
+    let Some(header) = HEADER.find(source) else {
+        return false;
+    };
+    let Some(body) = dot_trivia(&source[header.end()..]) else {
+        return false;
+    };
+    ["model", "views"].iter().any(|keyword| {
+        body.strip_prefix(keyword)
+            .and_then(dot_trivia)
+            .is_some_and(|body| body.starts_with('{'))
+    })
 }
 
 fn excalidraw_signature(source: &str) -> bool {
@@ -704,6 +732,41 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn architecture_dsl_uses_content_hints_without_claiming_unrelated_dsl_or_json() {
+        let source = include_str!("../../../docs/examples/diagrams/architecture.structurizr");
+        for name in ["architecture.structurizr", "architecture.dsl"] {
+            assert_eq!(
+                Format::from_source_path(Path::new(name), source),
+                Some(Format::Structurizr)
+            );
+        }
+        assert_eq!(
+            Format::from_language("structurizr"),
+            Some(Format::Structurizr)
+        );
+        assert_eq!(Format::from_snippet(source), Some(Format::Structurizr));
+        assert_eq!(
+            Format::from_snippet(&format!("/* authored */\n{source}")),
+            Some(Format::Structurizr)
+        );
+        assert_eq!(Format::from_extension("dsl"), None);
+        assert_eq!(
+            Format::from_source_extension("dsl", "workspace { projects { alpha } }"),
+            None
+        );
+        assert_eq!(
+            Format::from_snippet("workspace { projects { alpha } }"),
+            None
+        );
+        assert_eq!(
+            Format::from_source_extension("json", r#"{"workspace": {"model": {}}}"#),
+            None
+        );
+        assert_eq!(Format::Structurizr.source_extension(), Some("structurizr"));
+        assert_eq!(Format::Structurizr.name(), "Structurizr");
+    }
+
     #[test]
     fn drawio_routes_explicit_files_and_only_distinctive_xml_roots() {
         let source =

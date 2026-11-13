@@ -222,7 +222,7 @@
         - [x] Diagrams.net / draw.io (`drawio`, `diagramsnet`) — native pages, highlighted source/live preview/errors; external stencil collections remain unsupported.
         - [x] Excalidraw whiteboards (`excalidraw`) — native bounded rendering with handwriting, raster assets and diagnostics; initial vector canvas editing implemented, parity work pending
         - [x] WaveDrom digital timing diagrams (`wavedrom`)
-        - [ ] Structurizr software architecture (`structurizr`)
+        - [ ] Structurizr software architecture (`structurizr`) — initial native C4/dynamic/filtered/custom previews and source editor available; deployment/image views and further compatibility remain pending
         - [ ] BlockDiag family (`blockdiag`, `seqdiag`, `actdiag`, `nwdiag`, `packetdiag`, `rackdiag`)
         - [x] Bytefield packet layouts (`bytefield`) — pinned upstream Clojure DSL in bounded hostless QuickJS; shared source/live and rendered previews
         - [ ] Ditaa ASCII art diagrams (`ditaa`)
