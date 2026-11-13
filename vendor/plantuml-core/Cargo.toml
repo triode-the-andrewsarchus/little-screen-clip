@@ -74,7 +74,7 @@ path = "tests/member_links.rs"
 version = "0.20.0"
 
 [dependencies.graphviz-pure]
-version = "=1.1.0"
+version = "=1.2.0"
 
 [dependencies.log]
 version = "0.4"
