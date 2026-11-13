@@ -140,6 +140,22 @@ impl Limits {
     }
 }
 
+pub use excalidraw_render::LinearPreview;
+
+/// Prepares native linear styling for live drawing connections on a worker.
+///
+/// # Errors
+///
+/// Returns an error for invalid/oversized drawing source or failed normalization.
+pub fn drawing_lines(source: &str) -> Result<HashMap<String, LinearPreview>, String> {
+    if source.len() > super::MAX_DRAWING_SOURCE {
+        return Err("Drawing source exceeds the preview budget.".into());
+    }
+    let scene = excalidraw_render::SceneDocument::parse(source.as_bytes())
+        .map_err(|error| error.to_string())?;
+    LinearPreview::prepare(&scene)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +194,93 @@ mod tests {
                 .pixels()
                 .any(|pixel| pixel[2] > 120 && pixel[1] > 70 && pixel[0] < 90)
         }));
+    }
+
+    #[test]
+    fn live_connection_paths_match_the_committed_native_export() {
+        use little_clip_core::diagram::drawing::{Change, Scene};
+        let original = include_str!("../../../../docs/examples/diagrams/drawing.excalidraw");
+        let mut source: serde_json::Value = serde_json::from_str(original).unwrap();
+        for (head, style, roughness) in [
+            ("arrow", "solid", 0.0),
+            ("diamond", "dotted", 1.0),
+            ("circle", "dashed", 2.0),
+        ] {
+            source["elements"][2]["endArrowhead"] = serde_json::json!(head);
+            source["elements"][2]["strokeStyle"] = serde_json::json!(style);
+            source["elements"][2]["roughness"] = serde_json::json!(roughness);
+            let text = source.to_string();
+            let model = Scene::parse(&text).unwrap();
+            let ids = vec!["capture".into()];
+            let movement = model.movement(&ids, [-75.0, 43.0]).unwrap();
+            let lines = drawing_lines(&text).unwrap();
+            let svg = lines["connection"]
+                .svg(&movement.paths["connection"].points)
+                .unwrap();
+            let live = prepare(&svg).unwrap();
+            let committed = model
+                .apply(Change::Move {
+                    ids,
+                    by: [-75.0, 43.0],
+                })
+                .unwrap()
+                .unwrap();
+            let exported = super::super::excalidraw::render(&committed).unwrap();
+            let retained = prepare(&exported.svg).unwrap();
+            fn paths(group: &usvg_vector::Group) -> Vec<&usvg_vector::Path> {
+                group
+                    .children()
+                    .iter()
+                    .flat_map(|node| match node {
+                        usvg_vector::Node::Path(path) => vec![path.as_ref()],
+                        usvg_vector::Node::Group(group) => paths(group),
+                        _ => Vec::new(),
+                    })
+                    .collect()
+            }
+            let encoded = "connection"
+                .bytes()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let id = format!("graph-0-drawing-geometry-{encoded}");
+            let usvg_vector::Node::Group(group) = retained.tree.node_by_id(&id).unwrap() else {
+                panic!("Missing retained geometry group")
+            };
+            let expected = paths(group);
+            let actual = paths(live.tree.root());
+            assert_eq!(actual.len(), expected.len(), "{head}/{style}");
+            for (actual, expected) in actual.iter().zip(expected) {
+                let actual_data = actual.data();
+                let expected_data = expected.data();
+                assert_eq!(actual_data.points().len(), expected_data.points().len());
+                for (a, b) in actual_data.points().iter().zip(expected_data.points()) {
+                    assert!(
+                        (a.x - b.x).abs() < 0.001 && (a.y - b.y).abs() < 0.001,
+                        "{head}/{style}: {a:?} != {b:?}"
+                    );
+                }
+                assert_eq!(
+                    actual_data
+                        .segments()
+                        .map(|segment| std::mem::discriminant(&segment))
+                        .collect::<Vec<_>>(),
+                    expected_data
+                        .segments()
+                        .map(|segment| std::mem::discriminant(&segment))
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    format!("{:?}", actual.stroke()),
+                    format!("{:?}", expected.stroke()),
+                    "{head}/{style}"
+                );
+                assert_eq!(
+                    format!("{:?}", actual.fill()),
+                    format!("{:?}", expected.fill()),
+                    "{head}/{style}"
+                );
+            }
+        }
     }
 
     #[test]

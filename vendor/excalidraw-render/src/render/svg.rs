@@ -12,6 +12,8 @@ pub(super) use sink::SvgSink;
 pub(super) use write::freedraw_path_data;
 #[cfg(test)]
 pub(super) use write::push_rough_path;
+#[cfg(feature = "svg-source-groups")]
+pub(super) use write::push_svg_drawing;
 
 use std::sync::Arc;
 

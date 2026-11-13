@@ -60,6 +60,34 @@ impl Scene {
         ids: &[String],
         by: [f64; 2],
     ) -> Result<(), Error> {
+        let movement = self.movement(ids, by)?;
+        for item in &self.items {
+            if let Some(delta) = movement.offsets.get(&item.id) {
+                move_to(
+                    document,
+                    item,
+                    [item.bounds.x + delta[0], item.bounds.y + delta[1]],
+                )?;
+            }
+            if let Some(path) = movement.paths.get(&item.id) {
+                edit(document, item.index, |shape| {
+                    shape.set(element::X, Number::from_f64(path.origin[0])?)?;
+                    shape.set(element::Y, Number::from_f64(path.origin[1])?)?;
+                    set_path(shape, path.points.clone())
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolves a drag without changing source, versions, or editor history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for locked dependents or unsupported path routing,
+    /// exactly as committing the same move would.
+    pub fn movement(&self, ids: &[String], by: [f64; 2]) -> Result<Movement, Error> {
+        let mut movement = Movement::default();
         if !by
             .into_iter()
             .all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE)
@@ -67,38 +95,31 @@ impl Scene {
             return Err(invalid("Invalid movement"));
         }
         if by == [0.0; 2] {
-            return Ok(());
+            return Ok(movement);
         }
         let selected = self.selection(ids)?;
         let original = elements(&self.document)?;
         for item in &self.items {
-            if !selected.contains(&item.index) || matches!(item.kind, Kind::Arrow) {
-                continue;
+            if selected.contains(&item.index)
+                && item.kind != Kind::Arrow
+                && arrow_container(&original[item.index], &self.items).is_none()
+            {
+                movement.offsets.insert(item.id.clone(), by);
             }
-            // Arrow labels follow the changed path center below, including when
-            // their arrow belongs to the selected group. Never move them twice.
-            if arrow_container(&original[item.index], &self.items).is_some() {
-                continue;
-            }
-            move_to(
-                document,
-                item,
-                [item.bounds.x + by[0], item.bounds.y + by[1]],
-            )?;
         }
         let moved_ids: HashSet<_> = selected
             .iter()
             .filter_map(|i| original[*i].get("id").and_then(Value::as_str))
             .collect();
         for arrow in self.items.iter().filter(|item| item.kind == Kind::Arrow) {
-            self.move_arrow(document, arrow, &selected, &moved_ids, by)?;
+            self.move_arrow(&mut movement, arrow, &selected, &moved_ids, by)?;
         }
-        Ok(())
+        Ok(movement)
     }
 
     fn move_arrow(
         &self,
-        document: &mut Document,
+        movement: &mut Movement,
         arrow: &Item,
         selected: &BTreeSet<usize>,
         moved_ids: &HashSet<&str>,
@@ -130,19 +151,15 @@ impl Scene {
             if delta == [0.0; 2] {
                 return Ok(());
             }
-            move_to(
-                document,
-                arrow,
-                [arrow.bounds.x + delta[0], arrow.bounds.y + delta[1]],
-            )?;
-            return self.move_arrow_labels(document, arrow, delta);
+            movement.offsets.insert(arrow.id.clone(), delta);
+            return self.move_arrow_labels(movement, arrow, delta);
         }
-        self.stretch_arrow(document, arrow, value, base, endpoint_delta)
+        self.stretch_arrow(movement, arrow, value, base, endpoint_delta)
     }
 
     fn stretch_arrow(
         &self,
-        document: &mut Document,
+        movement: &mut Movement,
         arrow: &Item,
         value: &Value,
         base: [f64; 2],
@@ -184,17 +201,19 @@ impl Scene {
             .into_iter()
             .map(|point| [point[0] - origin[0], point[1] - origin[1]])
             .collect();
-        edit(document, arrow.index, |shape| {
-            shape.set(element::X, Number::from_f64(origin[0])?)?;
-            shape.set(element::Y, Number::from_f64(origin[1])?)?;
-            set_path(shape, local)
-        })?;
-        self.move_arrow_labels(document, arrow, center_delta)
+        movement.paths.insert(
+            arrow.id.clone(),
+            MovedPath {
+                origin,
+                points: local,
+            },
+        );
+        self.move_arrow_labels(movement, arrow, center_delta)
     }
 
     fn move_arrow_labels(
         &self,
-        document: &mut Document,
+        movement: &mut Movement,
         arrow: &Item,
         delta: [f64; 2],
     ) -> Result<(), Error> {
@@ -211,11 +230,7 @@ impl Scene {
                 if label.locked {
                     return Err(invalid("A connected label is locked"));
                 }
-                move_to(
-                    document,
-                    label,
-                    [label.bounds.x + delta[0], label.bounds.y + delta[1]],
-                )?;
+                movement.offsets.insert(label.id.clone(), delta);
             }
         }
         Ok(())

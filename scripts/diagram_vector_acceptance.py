@@ -54,6 +54,16 @@ def exercise(session, root):
         # This crosses the original export plane's left edge while remaining
         # inside the editor widget. Export dimensions must not clip the artwork.
         assert all(abs((b - a) - delta) <= 3 for a, b, delta in zip(before, during, (-200, 35, -200, 35))), (before, during)
+        # The connecting line must leave the moved box and reach the stationary
+        # ellipse while the drag is held. This midpoint was blank in the old
+        # view, whose arrow stayed at the original position until release.
+        midpoint = ((during[2] + green_during[0]) // 2,
+                    (during[1] + during[3] + green_during[1] + green_during[3]) // 4)
+        with Image.open(session.output / "04-held-artwork.png").convert("RGB") as held:
+            px, py = midpoint
+            dark = sum(max(held.getpixel((x, y))) < 100
+                       for x in range(px - 5, px + 6) for y in range(py - 6, py + 7))
+            assert dark >= 5, "bound arrow must follow the object before pointer release"
         assert path.read_text() == SOURCE, "a held gesture cannot mutate the source file"
     finally:
         drag.communicate("release\n", timeout=12)

@@ -232,10 +232,14 @@ impl DrawingEditor {
                 if distance(start, current) * self.camera.scale >= 2.0 {
                     // Keep the old vector scene in place through source/model
                     // publication until the replacement scene arrives.
-                    self.retained_move = Some(Gesture::Move {
-                        start,
-                        current,
-                        ids: ids.clone(),
+                    self.retained_move = self.model.as_ref().map(|model| super::RetainedMove {
+                        gesture: Gesture::Move {
+                            start,
+                            current,
+                            ids: ids.clone(),
+                        },
+                        model: model.clone(),
+                        lines: self.lines.clone(),
                     });
                     self.queue(Change::Move {
                         ids,

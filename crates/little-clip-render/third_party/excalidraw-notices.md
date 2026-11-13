@@ -38,6 +38,14 @@ geometry or resource loader and leaves the upstream writer unchanged when off.
 It supplies object correspondence for the native vector canvas; it is not itself
 a replacement for the previous raster canvas.
 
+The same opt-in extension identifies each rough geometry group and exposes a
+small `LinearPreview` adapter. It calls the existing normalizer, seeded Rough
+and arrowhead generators, decoration paint helpers and SVG path writer; it does
+not copy those algorithms into the application. Preparation and regeneration run
+on bounded application workers. Regenerated local paths replace their original
+geometry group inside the retained scene's existing transforms and clipping.
+Default upstream output/API behavior remains unchanged when the feature is off.
+
 The unmodified document-model dependency is from
 https://github.com/sagikazarmark/excaliplot/tree/29392d10d9c504ec22d67f37a4dd545a63d5b371
 and the locked crates.io 0.2.0 release. Its root MIT and Apache license texts are

@@ -20,6 +20,20 @@ pub struct Scene {
     images: HashMap<usize, Arc<image::RgbaImage>>,
     clips: HashMap<usize, ClipPaths>,
 }
+/// Per-frame translations and ready replacement geometry for named SVG groups.
+#[derive(Clone, Default)]
+pub struct Changes {
+    pub translations: HashMap<String, [f32; 2]>,
+    pub replacements: HashMap<String, Replacement>,
+}
+
+/// Worker-prepared local geometry placed within the original group's clipping.
+#[derive(Clone)]
+pub struct Replacement {
+    pub scene: Arc<Scene>,
+    pub offset: [f32; 2],
+}
+
 impl Scene {
     /// Adopts a canonical, outlined tree and its admitted decoded PNG assets.
     ///
@@ -58,7 +72,7 @@ impl Scene {
         }))
     }
 
-    /// Paints the scene with optional per-group translations for live gestures.
+    /// Paints the scene with optional per-group live translations and geometry.
     ///
     /// `image_rect` places normalized SVG coordinates inside the clipped widget.
     /// Translations are in SVG units and keyed by retained SVG group IDs.
@@ -71,16 +85,13 @@ impl Scene {
         ui: &egui::Ui,
         rect: egui::Rect,
         image_rect: egui::Rect,
-        motion: HashMap<String, [f32; 2]>,
+        motion: Changes,
     ) -> Result<(), String> {
         let scene = self.clone();
         super::paint_with(ui, rect, move |canvas, scenes| {
-            let cached = scenes.entry(scene.id).or_insert_with(|| Cached {
-                scene: Arc::downgrade(&scene),
-                paths: HashMap::new(),
-                textures: HashMap::new(),
-                clips: HashMap::new(),
-            });
+            let cached = scenes
+                .entry(scene.id)
+                .or_insert_with(|| Cached::new(&scene));
             canvas.save();
             canvas.translate(image_rect.left(), image_rect.top());
             canvas.scale(
@@ -181,14 +192,28 @@ pub(super) struct Cached {
     paths: HashMap<usize, Path>,
     textures: HashMap<usize, vg::ImageId>,
     clips: HashMap<usize, Vec<(Path, FillRule)>>,
+    replacements: HashMap<u64, Cached>,
 }
 impl Cached {
+    fn new(scene: &Arc<Scene>) -> Self {
+        Self {
+            scene: Arc::downgrade(scene),
+            paths: HashMap::new(),
+            textures: HashMap::new(),
+            clips: HashMap::new(),
+            replacements: HashMap::new(),
+        }
+    }
+
     pub(super) fn alive(&self) -> bool {
         self.scene.strong_count() > 0
     }
     pub(super) fn release(&self, canvas: &mut Canvas<OpenGl>) {
         for image in self.textures.values() {
             canvas.delete_image(*image);
+        }
+        for replacement in self.replacements.values() {
+            replacement.release(canvas);
         }
     }
 
@@ -197,11 +222,11 @@ impl Cached {
         canvas: &mut Canvas<OpenGl>,
         group: &usvg::Group,
         scene: &Scene,
-        motion: &HashMap<String, [f32; 2]>,
+        motion: &Changes,
     ) -> Result<(), String> {
         canvas.save();
         apply_transform(canvas, group.transform());
-        if let Some([x, y]) = motion.get(group.id()) {
+        if let Some([x, y]) = motion.translations.get(group.id()) {
             canvas.translate(*x, *y);
         }
         if let Some(clip) = group.clip_path() {
@@ -211,7 +236,11 @@ impl Cached {
         let captured = !layer
             || canvas.begin_layer(&vg::LayerEffects::new().with_opacity(group.opacity().get()));
         let result = if captured {
-            self.children(canvas, group, scene, motion)
+            if let Some(replacement) = motion.replacements.get(group.id()) {
+                self.replacement(canvas, replacement)
+            } else {
+                self.children(canvas, group, scene, motion)
+            }
         } else {
             Err("Native SVG opacity layer allocation failed.".into())
         };
@@ -222,12 +251,38 @@ impl Cached {
         result
     }
 
+    fn replacement(
+        &mut self,
+        canvas: &mut Canvas<OpenGl>,
+        replacement: &Replacement,
+    ) -> Result<(), String> {
+        self.replacements.retain(|_, cached| {
+            if cached.alive() {
+                true
+            } else {
+                cached.release(canvas);
+                false
+            }
+        });
+        let cached = self
+            .replacements
+            .entry(replacement.scene.id)
+            .or_insert_with(|| Cached::new(&replacement.scene));
+        canvas.translate(replacement.offset[0], replacement.offset[1]);
+        cached.group(
+            canvas,
+            replacement.scene.tree.root(),
+            &replacement.scene,
+            &Changes::default(),
+        )
+    }
+
     fn children(
         &mut self,
         canvas: &mut Canvas<OpenGl>,
         group: &usvg::Group,
         scene: &Scene,
-        motion: &HashMap<String, [f32; 2]>,
+        motion: &Changes,
     ) -> Result<(), String> {
         for node in group.children() {
             match node {

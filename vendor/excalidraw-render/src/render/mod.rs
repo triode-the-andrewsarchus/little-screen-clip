@@ -1,5 +1,7 @@
 mod accounting;
 mod asset;
+#[cfg(feature = "svg-source-groups")]
+pub(crate) mod interactive;
 #[cfg(test)]
 pub(crate) use asset::{with_cms_failure, with_cms_failure_after, CmsSite};
 #[cfg(test)]

@@ -1467,8 +1467,10 @@ Follow-up from the user's first native review, to be fixed in separate commits:
 - [x] Remove export-viewport clipping from the native interactive canvas. Dragging past
   the old drawing bounds must remain visible, while authored frame/image clips
   remain intentional.
-- [ ] Update bound arrows during pointer movement, including endpoint and label
-  geometry, instead of waiting for the source operation to finish.
+- [x] Update supported bound arrows during pointer movement, including endpoint
+  and label movement, instead of waiting for the source operation to finish.
+  Rotated/elbowed path stretching and unsupported mask effects remain explicit
+  limitations of the current editor, not claims of complete editor parity.
 
 During this work, a serialized cleanup removed 323 superseded hashed debug/test
 executables. It retained the newest two per target, top-level application and
@@ -1497,3 +1499,42 @@ frame clip. Strict render all-target Clippy and both desktop builds pass. The
 baseline's eight studio drawing lifecycle/input tests also passed after its commit.
 Architecture comparison adds no clone group or hotspot and retains the cycle
 count; reported cycle replacements only reorder untouched Python members.
+
+### Review fix: live bound connections
+
+The core movement plan now supplies both source transactions and live previews:
+rigid object/label offsets and changed connection origins/points. This keeps
+bound endpoints, grouped movement and label centers consistent with the saved
+result without mutating source/history during pointer movement.
+
+A small local native-renderer adapter reuses its existing normalization, seeded
+Rough geometry, arrowhead construction and SVG paint writer. It prepares styling
+once per source revision, then regenerates only changed connection geometry on
+the existing bounded worker pool. One request is in flight; newer pointer
+positions coalesce. Results are tied to their immutable model identity; hidden,
+cancelled and replaced work retires normally. Source/element, geometry, work and
+aggregate output budgets apply, with cooperative cancellation between arrows.
+The native scene replaces the identified geometry group inside its existing
+paint order and clipping. It does not stretch arrowhead pixels or parse SVG on
+the UI thread. The old model/geometry remains owned through publication until
+the canonical replacement arrives. Existing unsupported rotated/elbowed routing
+still fails atomically with its existing diagnostic; mask/filter fallback is
+unchanged and remains part of broader native editor parity work.
+
+Validation: nine core movement tests pass; eight existing drawing/editor tests
+and the new connection cancellation/placement test pass. A native geometry test
+compares three arrowhead/stroke/roughness combinations against committed exports
+(with sub-millipixel tolerance for the normalizer's floating-point round trip).
+The held-drag visual assertion fails on the previous binary and passes in light
+and dark themes with the fix, alongside guarded save, exact-source/asset undo,
+stationary-object checks, movement beyond old export bounds and 1600% zoom.
+Both desktop binaries build; strict all-target Clippy for core/render/UI/studios
+passes. Software OpenGL acceptance is not a hardware-driver parity claim.
+
+Architecture review: maximum complexity and cycle count remain unchanged. The
+writer adds one feature-gated source-identity call; ID encoding is shared with
+the existing source-group writer. The remaining short clones are common task
+result handling and independent coordinate admission at the model/renderer
+boundaries; introducing a new cross-domain abstraction for them would add more
+coupling. Pre-existing upstream documentation/backend clones and reordered
+members of unchanged Python cycles are not new implementations.

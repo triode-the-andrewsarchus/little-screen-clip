@@ -532,3 +532,6 @@ pub mod wasm_tests {
 pub const fn license_bundle() -> &'static str {
     include_str!("../LICENSE-BUNDLE.txt")
 }
+
+#[cfg(feature = "svg-source-groups")]
+pub use render::interactive::LinearPreview;

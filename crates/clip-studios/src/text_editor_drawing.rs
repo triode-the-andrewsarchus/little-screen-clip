@@ -16,12 +16,20 @@ use std::{
 };
 
 mod canvas;
+mod connections;
 use canvas::{Camera, Gesture};
+use connections::{Connections, Lines, group_id};
 
 struct Update {
     source: String,
     scene: Arc<Scene>,
     publish: bool,
+    lines: Arc<Lines>,
+}
+struct RetainedMove {
+    gesture: Gesture,
+    model: Arc<Scene>,
+    lines: Arc<Lines>,
 }
 struct PendingEdit {
     change: Change,
@@ -48,7 +56,9 @@ pub(crate) struct DrawingEditor {
     selected: Vec<String>,
     gesture: Option<Gesture>,
     ghost: Option<Gesture>,
-    retained_move: Option<Gesture>,
+    retained_move: Option<RetainedMove>,
+    lines: Arc<Lines>,
+    connections: Connections,
     style: Style,
     focus: Option<egui::Id>,
 }
@@ -70,6 +80,7 @@ impl DrawingEditor {
 
     pub(crate) fn suspend(&mut self) {
         self.gesture = None;
+        self.connections.clear();
         // Accepted edits keep their owner and publish through Editor::poll even
         // after switching tabs. Hidden read-only model preparation can retire.
         if !self.busy() {
@@ -84,6 +95,7 @@ impl DrawingEditor {
             self.queued = None;
             self.source = None;
             self.model = None;
+            self.connections.clear();
             self.gesture = None;
             self.ghost = None;
             self.retained_move = None;
@@ -123,6 +135,7 @@ impl DrawingEditor {
                         self.style = item.style.clone();
                     }
                     self.model = Some(update.scene);
+                    self.lines = update.lines;
                     self.source = Some(Arc::from(update.source.as_str()));
                     self.parse_error = None;
                     ctx.request_repaint();
@@ -194,6 +207,9 @@ impl DrawingEditor {
                     source: source.to_string(),
                     scene,
                     publish: false,
+                    lines: Arc::new(little_clip_render::diagram::retained::drawing_lines(
+                        &source,
+                    )?),
                 })
             },
         ));
@@ -251,7 +267,7 @@ impl DrawingEditor {
             let vector = frame
                 .vector
                 .as_ref()
-                .map(|scene| scene.paint(ui, rect, image, self.vector_motion()));
+                .map(|scene| scene.paint(ui, rect, image, self.vector_motion(ui.ctx())));
             if let Some(Err(error)) = &vector {
                 self.parse_error = Some(error.clone());
             }
@@ -277,32 +293,44 @@ impl DrawingEditor {
             .show(ui, |ui| preview.status_ui(ui, Format::Excalidraw));
     }
 
-    fn vector_motion(&self) -> std::collections::HashMap<String, [f32; 2]> {
-        let mut motion = std::collections::HashMap::new();
-        if let Some(Gesture::Move {
-            start,
-            current,
-            ids,
-        }) = self
+    fn vector_motion(&mut self, ctx: &egui::Context) -> clip_ui::vectors::svg::Changes {
+        let mut changes = clip_ui::vectors::svg::Changes::default();
+        let retained = self.retained_move.as_ref();
+        let gesture = self
             .gesture
             .as_ref()
             .or(self.ghost.as_ref())
-            .or(self.retained_move.as_ref())
+            .or(retained.map(|retained| &retained.gesture));
+        let model = retained
+            .map(|retained| &retained.model)
+            .or(self.model.as_ref());
+        let lines = retained.map_or(&self.lines, |retained| &retained.lines);
+        if let (
+            Some(Gesture::Move {
+                start,
+                current,
+                ids,
+            }),
+            Some(model),
+        ) = (gesture, model)
         {
-            let delta = [
-                (current[0] - start[0]) as f32,
-                (current[1] - start[1]) as f32,
-            ];
-            for id in ids {
-                let encoded = id
-                    .as_bytes()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>();
-                motion.insert(format!("graph-0-drawing-element-{encoded}"), delta);
+            let delta = [current[0] - start[0], current[1] - start[1]];
+            match model.movement(ids, delta) {
+                Ok(movement) => {
+                    changes.translations = movement
+                        .offsets
+                        .into_iter()
+                        .map(|(id, [x, y])| (group_id("element", &id), [x as f32, y as f32]))
+                        .collect();
+                    changes.replacements =
+                        self.connections.update(ctx, model, lines, movement.paths);
+                }
+                Err(error) => self.edit_error = Some(error.to_string()),
             }
+        } else {
+            self.connections.clear();
         }
-        motion
+        changes
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
@@ -387,7 +415,11 @@ impl DrawingEditor {
         }
     }
     fn footer(&self, ui: &mut egui::Ui) {
-        if let Some(error) = &self.parse_error {
+        if let Some(error) = self
+            .parse_error
+            .as_ref()
+            .or(self.connections.error.as_ref())
+        {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
         if self.busy() {
@@ -401,14 +433,21 @@ impl DrawingEditor {
 fn edit_source(model: Arc<Scene>, change: Change) -> Result<Update, String> {
     if let Some(source) = model.apply(change).map_err(|error| error.to_string())? {
         let scene = Arc::new(Scene::parse(&source).map_err(|error| error.to_string())?);
+        let lines = Arc::new(little_clip_render::diagram::retained::drawing_lines(
+            &source,
+        )?);
         Ok(Update {
             source,
             scene,
             publish: true,
+            lines,
         })
     } else {
         Ok(Update {
             source: model.source().into(),
+            lines: Arc::new(little_clip_render::diagram::retained::drawing_lines(
+                model.source(),
+            )?),
             scene: model,
             publish: false,
         })

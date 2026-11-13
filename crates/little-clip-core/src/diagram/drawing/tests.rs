@@ -265,3 +265,30 @@ fn rotated_geometry_round_trips_and_quarter_turn_has_the_expected_corners() {
         assert!((restored[1] - local[1]).abs() < 1e-8);
     }
 }
+
+#[test]
+fn live_movement_matches_committed_bound_endpoints_and_labels() {
+    let original = fixture();
+    let scene = Scene::parse(&original.to_string()).unwrap();
+    for ids in [
+        vec!["capture".into()],
+        vec!["capture".into(), "explore".into()],
+    ] {
+        let by = [-75.0, 43.0];
+        let preview = scene.movement(&ids, by).unwrap();
+        let committed = apply(&original, Change::Move { ids, by });
+        for element in &scene.items {
+            let value = item(&committed, &element.id);
+            if let Some(delta) = preview.offsets.get(&element.id) {
+                assert_eq!(value["x"].as_f64(), Some(element.bounds.x + delta[0]));
+                assert_eq!(value["y"].as_f64(), Some(element.bounds.y + delta[1]));
+            }
+            if let Some(path) = preview.paths.get(&element.id) {
+                assert_eq!(value["x"].as_f64(), Some(path.origin[0]));
+                assert_eq!(value["y"].as_f64(), Some(path.origin[1]));
+                assert_eq!(value["points"], json!(path.points));
+            }
+        }
+        assert_eq!(scene.source(), original.to_string());
+    }
+}

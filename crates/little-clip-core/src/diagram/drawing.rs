@@ -2,7 +2,7 @@
 use excalidraw_document::{Document, Element, Number, Profile, element};
 pub use excalidraw_document::{ElementKind as Kind, Error};
 use serde_json::{Value, json};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 mod edits;
 
@@ -111,6 +111,22 @@ impl Item {
             index,
         })
     }
+}
+
+/// Resolved live movement, also used by the committed document transaction.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Movement {
+    /// Source-space offsets for rigid elements and bound labels.
+    pub offsets: HashMap<String, [f64; 2]>,
+    /// Changed arrow paths, keyed by source identity.
+    pub paths: HashMap<String, MovedPath>,
+}
+
+/// New source-space origin and local points of a stretched arrow.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MovedPath {
+    pub origin: [f64; 2],
+    pub points: Vec<[f64; 2]>,
 }
 
 /// Basic paint controls. Existing advanced properties are preserved by edits.

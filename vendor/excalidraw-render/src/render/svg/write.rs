@@ -491,6 +491,8 @@ impl SvgPlan {
                         svg.push_str(")\">");
                     }
                     svg.push_str("<g stroke-linecap=\"round\"");
+                    #[cfg(feature = "svg-source-groups")]
+                    push_source_identity(&mut svg, "geometry", source.id())?;
                     svg.push_str(" transform=\"translate(");
                     push_svg_number(&mut svg, transform.translation_x, "SVG translation x")?;
                     svg.push(' ');
@@ -1092,20 +1094,32 @@ fn push_source_group<W: SvgSink + ?Sized>(
 ) -> Result<(), FormatEncodeError> {
     svg.push_str("<g");
     if let Some(id) = id {
-        svg.push_str(" id=\"drawing-element-");
-        for byte in id.as_bytes() {
-            write!(svg, "{byte:02x}").map_err(|_| {
-                FormatEncodeError::Encoding("failed to write SVG source identity".to_owned())
-            })?;
-        }
-        svg.push('"');
+        push_source_identity(svg, "element", id)?;
     }
     svg.push('>');
     Ok(())
 }
 
+#[cfg(feature = "svg-source-groups")]
+fn push_source_identity<W: SvgSink + ?Sized>(
+    svg: &mut W,
+    kind: &str,
+    id: &str,
+) -> Result<(), FormatEncodeError> {
+    svg.push_str(" id=\"drawing-");
+    svg.push_str(kind);
+    svg.push('-');
+    for byte in id.as_bytes() {
+        write!(svg, "{byte:02x}").map_err(|_| {
+            FormatEncodeError::Encoding("failed to write SVG source identity".to_owned())
+        })?;
+    }
+    svg.push('"');
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
-fn push_svg_drawing<W: SvgSink + ?Sized>(
+pub(in crate::render) fn push_svg_drawing<W: SvgSink + ?Sized>(
     output: &mut W,
     drawing: &Drawing,
     stroke_color: CanonicalColor,
