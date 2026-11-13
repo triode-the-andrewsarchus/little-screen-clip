@@ -224,6 +224,7 @@ fn filtered_views_cannot_admit_elements_outside_their_base_selection() {
         "",
     );
     let renderer = SvgRenderer::default();
+    assert_eq!(workspace.views().filtered_views.len(), 3);
     for (view, expected) in
         workspace
             .views()
@@ -270,6 +271,7 @@ fn filtered_relationship_tags_retain_only_requested_edges() {
         "",
     );
     let renderer = SvgRenderer::default();
+    assert_eq!(workspace.views().filtered_views.len(), 2);
     for (view, edges) in workspace.views().filtered_views.iter().zip([0, 1]) {
         let svg = renderer.render_filtered(&workspace, view).unwrap();
         assert_eq!(
@@ -278,7 +280,7 @@ fn filtered_relationship_tags_retain_only_requested_edges() {
                 .into_iter()
                 .collect()
         );
-        assert_eq!(svg.matches("data-source=").count(), edges);
+        assert_eq!(svg.matches("class=\"relationship\"").count(), edges);
     }
 }
 

@@ -3052,6 +3052,29 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
             workspace.views_mut().add_deployment_view(view);
         }
 
+        for view in views_node.filtered {
+            let (properties, selection) = build_view_properties(
+                view.properties,
+                format!("Filtered-{}", view.base_view),
+            );
+            if !selection.is_empty() {
+                return Err(Error::Parse(ParseError {
+                    message: "Filtered views inherit membership from their base view".into(),
+                    location: None,
+                }));
+            }
+            let mode = match view.mode {
+                crate::ast::FilterMode::Include => structurizr_core::view::FilterMode::Include,
+                crate::ast::FilterMode::Exclude => structurizr_core::view::FilterMode::Exclude,
+            };
+            workspace.views_mut().filtered_views.push(FilteredView {
+                properties,
+                base_view_key: view.base_view,
+                mode,
+                tags: view.tags,
+            });
+        }
+
         // Process styles
         if let Some(styles_node) = views_node.styles {
             for elem_style in styles_node.elements {

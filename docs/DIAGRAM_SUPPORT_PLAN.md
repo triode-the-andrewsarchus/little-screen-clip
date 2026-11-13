@@ -2799,3 +2799,26 @@ relationship traversal duplicated loops across model containers; it was replaced
 by shared iterator chains, removing that new hotspot. The remaining new parser
 entity warning is the required environment declaration-versus-relationship arm,
 which reuses the existing parser. No new reader, preview worker or cache exists.
+
+
+### Structurizr filtered-view construction correction
+
+Host integration exposed a missing AST-to-workspace step: the parser retained
+filtered AST views but never added them to the workspace. Filtered views now
+retain their keys, annotations, tags and include/exclude mode through the shared
+metadata converter. Additional membership statements fail rather than overriding
+the base view's membership.
+
+Two earlier selection tests iterated filtered views without asserting their
+count, so an empty vector could pass. Those tests now assert three/two constructed
+views before checking actual SVG membership and relationship paths. The edge
+assertion counts relationship geometry rather than also counting its text label.
+All 179 backend unit/integration tests plus one core rustdoc test pass. The
+earlier static/filtered renderer changes remain in place; this correction makes
+their parser-to-SVG regressions actually exercise filtered rendering.
+
+Architecture comparison against `before-structurizr-filtered-build` finds only
+the existing workspace builder's required conversion loop/mode selection growth
+(+3 CCN), with no new complexity hotspot. Shared metadata construction avoids a
+second annotation converter. This baseline also contains the in-progress host
+adapter; its independent checks and UI validation are recorded below when done.

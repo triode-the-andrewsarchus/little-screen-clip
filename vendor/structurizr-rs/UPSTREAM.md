@@ -66,3 +66,7 @@ commits, separate from this pristine import.
   explicit-link precedence and a 16384-link expansion budget. Retain authored
   environment/nested/grouped relationships through shared checked builders;
   report unknown nested endpoints instead of silently dropping links.
+
+- Retain filtered AST views during workspace construction using shared metadata
+  conversion. Strengthen parser/SVG tests with explicit view counts and actual
+  relationship-geometry counts so an empty collection cannot pass vacuously.
