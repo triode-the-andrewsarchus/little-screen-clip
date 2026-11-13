@@ -26,6 +26,7 @@ pub enum Format {
     Bpmn,
     Wavedrom,
     Excalidraw,
+    Wireviz,
     Math,
     MathInline,
 }
@@ -47,6 +48,7 @@ impl Format {
             "bpmn" | "bpmn2" => Some(Self::Bpmn),
             "wavedrom" | "wavejson" => Some(Self::Wavedrom),
             "excalidraw" => Some(Self::Excalidraw),
+            "wireviz" => Some(Self::Wireviz),
             _ => None,
         }
     }
@@ -56,12 +58,17 @@ impl Format {
     /// Ambiguous `.bob` files need content classification and are not claimed here.
     pub fn from_path(path: &Path) -> Option<Self> {
         let name = path.file_name()?.as_encoded_bytes();
-        let suffix = b".excalidraw.json";
-        if name
-            .get(name.len().saturating_sub(suffix.len())..)
-            .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
-        {
-            return Some(Self::Excalidraw);
+        for (suffix, format) in [
+            (b".excalidraw.json".as_slice(), Self::Excalidraw),
+            (b".wire.yaml".as_slice(), Self::Wireviz),
+            (b".wire.yml".as_slice(), Self::Wireviz),
+        ] {
+            if name
+                .get(name.len().saturating_sub(suffix.len())..)
+                .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+            {
+                return Some(format);
+            }
         }
         Self::from_extension(path.extension()?.to_str()?)
     }
@@ -71,6 +78,7 @@ impl Format {
     pub fn source_extension_hint(path: &Path) -> Option<&str> {
         match Self::from_path(path) {
             Some(Self::Excalidraw) => Some("excalidraw"),
+            Some(Self::Wireviz) => Some("wireviz"),
             _ => path.extension()?.to_str(),
         }
     }
@@ -87,6 +95,7 @@ impl Format {
             "bpmn" | "bpmn2" => Some(Self::Bpmn),
             "wavedrom" | "wavejson" => Some(Self::Wavedrom),
             "excalidraw" => Some(Self::Excalidraw),
+            "wireviz" => Some(Self::Wireviz),
             _ => None,
         }
     }
@@ -112,6 +121,10 @@ impl Format {
                 && wavejson::signature(source)
             {
                 Some(Self::Wavedrom)
+            } else if matches!(extension.to_ascii_lowercase().as_str(), "yaml" | "yml")
+                && wireviz::signature(source)
+            {
+                Some(Self::Wireviz)
             } else {
                 None
             }
@@ -134,6 +147,7 @@ impl Format {
             (Self::Bpmn, bpmn_signature),
             (Self::Wavedrom, wavejson::signature),
             (Self::Excalidraw, excalidraw_signature),
+            (Self::Wireviz, wireviz::signature),
             (Self::Pikchr, pikchr_signature),
             (Self::Lini, lini_signature),
             (Self::D2, d2_signature),
@@ -158,6 +172,7 @@ impl Format {
             Self::Bpmn => Some("bpmn"),
             Self::Wavedrom => Some("json5"),
             Self::Excalidraw => Some("excalidraw"),
+            Self::Wireviz => Some("wireviz"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -174,6 +189,7 @@ impl Format {
             Self::Bpmn => "BPMN",
             Self::Wavedrom => "WaveDrom",
             Self::Excalidraw => "Excalidraw",
+            Self::Wireviz => "WireViz",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }

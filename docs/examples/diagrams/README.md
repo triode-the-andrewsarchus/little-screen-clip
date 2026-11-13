@@ -1,11 +1,15 @@
 ---
 title: Native diagram previews
-tags: [Pikchr, SvgBob, Mermaid, Lini, Graphviz, D2, BPMN]
+tags: [Pikchr, SvgBob, Mermaid, Lini, Graphviz, D2, BPMN, WireViz]
 ---
 
 # From source to preview
 
 These diagrams also have standalone source files beside this document.
+
+[Harness overview](harness.md) embeds the neighboring `harness.wireviz` example:
+quoted pin identities, reversed parallel wiring, striped conductors and a
+single-ended cable shield.
 
 ```pikchr
 box "Source"; arrow; box "Native renderer"; arrow; box "Preview"

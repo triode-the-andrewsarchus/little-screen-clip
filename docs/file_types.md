@@ -561,6 +561,9 @@
     - [ ] `.bytefield`, `.bf` — Bytefield-SVG network/binary packet layout (May need disambiguation with Brainfuck source files on `.bf`)
     - [x] `.json`/`.json5` with distinctive WaveJSON content, `.wavejson`, `.wavedrom` — WaveDrom timing/register/logic diagrams (source editor and basic signal-cell painter; advanced operations stay in source)
     - [ ] `.wireviz`, `.wire.yaml`, `.wire.yml` — WireViz cable and wiring harness diagram (conventional compound extension for YAML)
+      - [x] Initial native pin/wire/shield/loop/mating previews, Markdown fences, conservative generic YAML/clipboard inference, source/live-preview editor and rendered list strips
+      - [ ] Template instances, automatic color-code palettes and remaining presentation compatibility
+      - [ ] Graphical harness editing with source-preserving circuit transactions
     - [ ] `.sym` — Symbolator circuit component pinout diagram (May need disambiguation with compiler debug symbol files on `.sym`)
   - [ ] ASCII-art and text-to-vector diagram tools
     - [ ] `.ditaa` — Ditaa ASCII art diagram

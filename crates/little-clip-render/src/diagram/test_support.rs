@@ -21,6 +21,12 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         ),
         ("svgbob", "+----+\n|Hi! |\n+----+", true),
         ("graphviz", "digraph { a -> b }", true),
+        (
+            "wireviz",
+            include_str!("../../../../docs/examples/diagrams/harness.wireviz"),
+            true,
+        ),
+        ("wireviz", "connectors: {}\nconnections: []", false),
         ("d2", "direction: right\na -> b: Preview", true),
         ("d2", "a: {", false),
         ("wavedrom", "{signal:[{name:'clk',wave:'p...'}]}", true),

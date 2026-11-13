@@ -321,6 +321,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "bpmn" | "bpmn2" => Some("bpmn"),
         "wavejson" | "wavedrom" => Some("wavejson"),
         "excalidraw" => Some("excalidraw"),
+        "wireviz" => Some("wireviz"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -449,6 +450,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "bpmn" => "BPMN",
         "wavejson" | "wavedrom" => "WaveDrom",
         "excalidraw" => "Excalidraw",
+        "wireviz" => "WireViz",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -568,6 +570,9 @@ pub const D2_SUBLIME_SYNTAX: &str = include_str!("syntax/d2.sublime-syntax");
 /// BPMN XML highlighting for native source/live-preview sessions.
 pub const BPMN_SUBLIME_SYNTAX: &str = include_str!("syntax/bpmn.sublime-syntax");
 
+/// YAML highlighting for native harness source/live-preview sessions.
+pub const WIREVIZ_SUBLIME_SYNTAX: &str = include_str!("syntax/wireviz.sublime-syntax");
+
 /// JSON5 highlighting shared by data files and WaveJSON source editing.
 pub const JSON5_SUBLIME_SYNTAX: &str = include_str!("syntax/json5.sublime-syntax");
 
@@ -585,6 +590,7 @@ pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     GRAPHVIZ_SUBLIME_SYNTAX,
     D2_SUBLIME_SYNTAX,
     BPMN_SUBLIME_SYNTAX,
+    WIREVIZ_SUBLIME_SYNTAX,
     WAVEDROM_SUBLIME_SYNTAX,
     EXCALIDRAW_SUBLIME_SYNTAX,
     MERMAID_SUBLIME_SYNTAX,
@@ -596,6 +602,7 @@ pub fn syntect_fallback(lang: &str) -> &'static str {
         "ts" | "tsx" | "mts" | "cts" => "js",
         "toml" | "kdl" | "ini" | "cfg" | "conf" | "env" => "yaml",
         "bpmn" | "bpmn2" => "xml",
+        "wireviz" => "yaml",
         "json5" | "wavejson" | "wavedrom" | "excalidraw" => "json",
         "objc" | "mm" => "m",
         "swift" => "rs",

@@ -7,6 +7,7 @@ use oneyaml::{Compat, Document, Limits, Mapping, Value};
 use std::collections::HashSet;
 
 mod attributes;
+pub mod colors;
 mod connections;
 
 const MAX_SOURCE: usize = 256 * 1024;
@@ -253,6 +254,19 @@ pub fn parse(source: &str) -> Result<Harness, String> {
     let mut harness = attributes::read(root)?;
     connections::read(root, &mut harness)?;
     Ok(harness)
+}
+
+/// Recognizes a small, complete harness in generic YAML or clipboard text.
+///
+/// This deliberately excludes incomplete, empty and unsupported diagrams. Their
+/// explicit extensions and Markdown fences remain available for diagnostics.
+pub fn signature(source: &str) -> bool {
+    source.len() <= 32 * 1024
+        && source.contains("connections:")
+        && (source.contains("connectors:") || source.contains("cables:"))
+        && parse(source).is_ok_and(|harness| {
+            harness.connectors.iter().any(|c| c.used) || harness.cables.iter().any(|c| c.used)
+        })
 }
 
 fn mapping<'a>(value: &'a Value, context: &str) -> Result<&'a Mapping, String> {

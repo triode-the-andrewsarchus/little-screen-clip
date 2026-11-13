@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: WireViz
+file_extensions: [wireviz]
+scope: source.yaml.wireviz
+contexts:
+  main:
+    - include: scope:source.yaml

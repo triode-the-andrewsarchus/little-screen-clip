@@ -25,6 +25,46 @@ connections:
 ";
 
 #[test]
+fn classifies_explicit_paths_and_only_distinctive_complete_yaml() {
+    use crate::diagram::Format;
+    use std::path::Path;
+    for path in ["test.wireviz", "test.wire.yaml", "test.WIRE.YML"] {
+        assert_eq!(Format::from_path(Path::new(path)), Some(Format::Wireviz));
+        assert_eq!(
+            Format::source_extension_hint(Path::new(path)),
+            Some("wireviz")
+        );
+    }
+    for extension in ["yaml", "yml"] {
+        assert_eq!(Format::from_extension(extension), None);
+        assert_eq!(
+            Format::from_source_extension(extension, HARNESS),
+            Some(Format::Wireviz)
+        );
+        for source in [
+            "connectors: {}\nconnections: []",
+            "connectors: [other]\nconnections: database",
+            "title: Notes\ndraft: false",
+            "connectors: {A: {pincount: 2}}\nconnections: [",
+        ] {
+            assert_eq!(Format::from_source_extension(extension, source), None);
+        }
+    }
+    assert_eq!(Format::from_language("wireviz"), Some(Format::Wireviz));
+    assert_eq!(Format::from_snippet(HARNESS), Some(Format::Wireviz));
+    let commented = format!("# Harness comment\n{HARNESS}");
+    assert!(
+        matches!(crate::ClipItem::from_text(&commented).payload, crate::ClipPayload::Text(text) if text == commented)
+    );
+    assert_eq!(crate::syntax::syntect_fallback("wireviz"), "yaml");
+    assert_eq!(
+        crate::syntax::detect_language(HARNESS, Some("wireviz")),
+        "wireviz"
+    );
+    assert!(!signature(&format!("{}{}", " ".repeat(32 * 1024), HARNESS)));
+}
+
+#[test]
 fn normalizes_parallel_paths_ranges_and_one_ended_shields() {
     let harness = parse(HARNESS).unwrap();
     assert_eq!(harness.links.len(), 7);

@@ -34,7 +34,7 @@ impl Document {
             .is_some_and(|value| {
                 matches!(
                     value.to_ascii_lowercase().as_str(),
-                    "json" | "json5" | "dot" | "mmd" | "xml"
+                    "json" | "json5" | "dot" | "mmd" | "xml" | "yaml" | "yml"
                 )
             });
         if explicit.is_none() && !ambiguous {
@@ -146,13 +146,20 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
     let Some(texture) = &ready.texture else {
         return false;
     };
-    let timing = ready
+    let format = ready
         .data
         .document
         .as_ref()
         .and_then(|doc| doc.diagram.as_ref())
-        .is_some_and(|diagram| diagram.format == Format::Wavedrom);
-    paint(ui, rect, texture, if timing { 0.25 } else { 0.5 });
+        .map(|diagram| diagram.format);
+    let scale = match format {
+        Some(Format::Wavedrom) => 0.25,
+        // A harness is an overview of paths between components. Cropping its
+        // top would show only connector titles and hide all electrical links.
+        Some(Format::Wireviz) => rect.height() / texture.size_vec2().y,
+        _ => 0.5,
+    };
+    paint(ui, rect, texture, scale);
     if super::ui::preview_hovered(ui, rect) {
         egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new(("diagram_strip_hover", id)), |ui| {
             hover(ui, ready);

@@ -1111,6 +1111,37 @@ mod tests {
     }
 
     #[test]
+    fn harness_clipboard_editor_keeps_source_and_uses_yaml_highlighting() {
+        let source = std::sync::Arc::new(
+            include_str!("../../../docs/examples/diagrams/harness.wireviz").to_owned(),
+        );
+        let session =
+            TextSession::from_clipboard(source.clone(), None, &Default::default()).unwrap();
+        assert!(session.mode == Mode::Diagram);
+        let editor = session.editor.as_ref().unwrap();
+        assert_eq!(editor.name, "clipboard.wireviz");
+        assert_eq!(&editor.text, source.as_ref());
+        let syntax = crate::text_preview::SYNTAX_SET
+            .find_syntax_by_name("WireViz")
+            .unwrap();
+        let job = crate::text_preview::build_highlighted_layout_job(
+            "shield: true\nnotes: 'example'\n# comment\n",
+            syntax,
+            &Default::default(),
+            &[],
+        );
+        let colors: std::collections::HashSet<_> = job
+            .sections
+            .iter()
+            .map(|section| section.format.color)
+            .collect();
+        assert!(
+            colors.len() > 1,
+            "harness source must use YAML highlighting"
+        );
+    }
+
+    #[test]
     fn clipboard_diagrams_retain_exact_source_and_first_save_requires_a_destination() {
         let source = std::sync::Arc::new("\u{feff}digraph { a -> b }\r\n".to_owned());
         let mut session = TextSession::from_clipboard(

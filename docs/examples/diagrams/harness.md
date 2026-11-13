@@ -1,0 +1,24 @@
+# Harness overview
+
+```wireviz
+# Preview harness; preserve this source exactly.
+connectors:
+  INPUT:
+    pins: ["01", 2, 3]
+    pinlabels: [RETURN, POWER, DATA]
+    type: Sensor input
+  OUTPUT:
+    pincount: 3
+    pinlabels: [RETURN, POWER, DATA]
+cables:
+  LOOM:
+    colors: [BK, RD, GNYE]
+    wirelabels: [Ground, Supply, Signal]
+    shield: true
+connections:
+  - - INPUT: ["01", 2, 3]
+    - LOOM: [1-3]
+    - OUTPUT: [3-1]
+  - - INPUT: RETURN
+    - LOOM: s
+```

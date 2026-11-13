@@ -25,6 +25,7 @@ mod lini;
 mod math;
 mod mermaid;
 mod wavedrom;
+mod wireviz;
 
 /// Owned fixtures for testing early dispatch in independently linked hosts.
 #[cfg(feature = "test-support")]
@@ -323,6 +324,7 @@ fn render_inline(
             (svg, Vec::new())
         }
         Format::Wavedrom => wavedrom::svg(source)?,
+        Format::Wireviz => wireviz::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
         Format::Lini => lini::svg(source)?,
@@ -631,8 +633,19 @@ mod tests {
     #[test]
     fn markdown_files_and_raw_diagram_files_use_the_screen_diagram_route() {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
+        const HARNESS: &str = include_str!("../../../docs/examples/diagrams/harness.wireviz");
         let directory = tempfile::tempdir().unwrap();
         for (extension, content, format, source) in [
+            ("", HARNESS, Format::Wireviz, HARNESS),
+            ("wireviz", HARNESS, Format::Wireviz, HARNESS),
+            ("wire.yaml", HARNESS, Format::Wireviz, HARNESS),
+            ("yaml", HARNESS, Format::Wireviz, HARNESS),
+            (
+                "md",
+                include_str!("../../../docs/examples/diagrams/harness.md"),
+                Format::Wireviz,
+                HARNESS,
+            ),
             (
                 "",
                 "flowchart LR\nA-->B",

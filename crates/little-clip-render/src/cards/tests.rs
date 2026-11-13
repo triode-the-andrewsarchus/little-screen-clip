@@ -409,6 +409,7 @@ fn failed_clipboard_diagrams_remain_readable_highlighted_text() {
         ("d2", "D2"),
         ("graphviz", "Graphviz"),
         ("bpmn", "BPMN"),
+        ("wireviz", "WireViz"),
     ] {
         assert_eq!(find_syntax(language).name, expected);
     }
