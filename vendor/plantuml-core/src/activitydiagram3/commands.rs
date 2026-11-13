@@ -1,0 +1,1327 @@
+//! Commands of activity diagrams (`activitydiagram3/command`), in the order of
+//! `ActivityDiagramFactory3.initCommandsList`.
+
+use super::rainbow::LinkRendering;
+use super::rainbow::Rainbow;
+use super::stereogroup::Stereogroup;
+use super::ActivityDiagram3;
+use crate::activitydiagram3::ftile::box_style::BoxStyle;
+use crate::command::{Command, CommandExecutionResult, MultiLineCommand, SingleLineCommand};
+use crate::decoration::usymbol::USymbol;
+use crate::klimt::color::colors::ColorType;
+use crate::klimt::color::parser::ColorParser;
+use crate::klimt::creole::display::Display;
+use crate::regex::{IRegex, RegexResult};
+use crate::stereo;
+use crate::style::{queries, SName};
+use crate::text::{BlocLines, MultilinesStrategy};
+use crate::url::{self, UrlBuilder, UrlMode};
+use std::rc::Rc;
+
+type Cmd = Box<dyn Command<ActivityDiagram3>>;
+
+/// `-[...]->`: a color or line style list (`CommandLinkElement.STYLE_COLORS_MULTIPLES`).
+const STYLE_COLORS_MULTIPLES: &str = concat!(
+    r"-\[(",
+    r"(?:#\w+|dotted|dashed|plain|bold|hidden|norank|single|node|thickness=\d+)",
+    r"(?:,#\w+|,dotted|,dashed|,plain|,bold|,hidden|,norank|,single|,node|,thickness=\d+)*",
+    r"(?:(?:;",
+    r"(?:#\w+|dotted|dashed|plain|bold|hidden|norank|single|node|thickness=\d+)",
+    r"(?:,#\w+|,dotted|,dashed|,plain|,bold|,hidden|,norank|,single|,node|,thickness=\d+)*",
+    r")*)",
+    r"*)\]->"
+);
+
+fn single(
+    parts: Vec<IRegex>,
+    f: impl Fn(&mut ActivityDiagram3, &RegexResult) -> CommandExecutionResult + 'static,
+) -> Cmd {
+    Box::new(SingleLineCommand::new(
+        IRegex::concat(parts),
+        move |d: &mut ActivityDiagram3, _, arg, _| f(d, arg),
+    ))
+}
+
+fn url_of(d: &ActivityDiagram3, text: Option<&str>) -> Option<crate::url::Url> {
+    let text = text?;
+    UrlBuilder::new(d.skin().get_value("topurl"), UrlMode::Strict).url(text)
+}
+
+/// First line of a multi-line note (`CommandNoteLong3`).
+fn note_long_start() -> IRegex {
+    IRegex::concat(vec![
+        IRegex::start(),
+        IRegex::named("TYPE", "(note|floating note)"),
+        IRegex::space_zero_or_more(),
+        IRegex::named("POSITION", "(left|right)?"),
+        IRegex::space_zero_or_more(),
+        crate::stereo::optional_pattern("STEREO"),
+        color_regex(),
+        IRegex::end(),
+    ])
+}
+
+fn color_regex() -> IRegex {
+    ColorParser::simple_color(ColorType::Back).regex()
+}
+
+/// `start`, `stop` and `end` share their shape.
+fn node_command(
+    word: &'static str,
+    f: fn(&mut ActivityDiagram3, crate::klimt::color::colors::Colors),
+) -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf(word),
+            IRegex::leaf(";?"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        move |d, arg| {
+            let colors = Stereogroup::build(arg).inner_colors();
+            f(d, colors);
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// The arrow around a `backward` box: its colour and label (`getBackRendering`).
+fn back_rendering(d: &ActivityDiagram3, arg: &RegexResult, key: &str) -> LinkRendering {
+    let space = d.skin().as_int("colorarrowseparationspace", 0);
+    let rainbow = match arg.get(&format!("{key}_COLOR"), 0) {
+        Some(color) => Rainbow::build(d.skin(), color, space),
+        None => Rainbow::none(),
+    };
+    let link = LinkRendering::create(rainbow);
+    match arg.get(key, 0).filter(|t| !t.is_empty()) {
+        Some(text) => link.with_display(Display::with_newlines(Some(text))),
+        None => link,
+    }
+}
+
+/// `backward :label;`: a box on the way back of a loop (`CommandBackward3`).
+fn backward() -> Cmd {
+    let arrow = |key: &'static str| {
+        IRegex::optional(IRegex::group(vec![
+            IRegex::leaf(r"\("),
+            IRegex::optional(IRegex::or(vec![
+                IRegex::leaf("->"),
+                IRegex::named(&format!("{key}_COLOR"), STYLE_COLORS_MULTIPLES),
+            ])),
+            IRegex::named(key, "(.*?)"),
+            IRegex::leaf(r"\)"),
+        ]))
+    };
+    single(
+        vec![
+            IRegex::start(),
+            arrow("INCOMING"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf("backward"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf(":"),
+            IRegex::named("LABEL", "(.*?)"),
+            IRegex::leaf(";"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::space_zero_or_more(),
+            arrow("OUTCOMING"),
+            IRegex::space_zero_or_more(),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let stereogroup = Stereogroup::build(arg);
+            let incoming = back_rendering(d, arg, "INCOMING");
+            let outcoming = back_rendering(d, arg, "OUTCOMING");
+            d.backward(
+                Display::with_newlines(arg.get("LABEL", 0)),
+                stereogroup.box_style(),
+                incoming,
+                outcoming,
+                stereogroup.build_stereotype(),
+            )
+        },
+    )
+}
+
+fn arrow_regex(label: &str) -> Vec<IRegex> {
+    vec![
+        IRegex::start(),
+        IRegex::or(vec![
+            IRegex::leaf("->"),
+            IRegex::named("COLOR", STYLE_COLORS_MULTIPLES),
+        ]),
+        IRegex::space_zero_or_more(),
+        IRegex::or(vec![IRegex::named("LABEL", label), IRegex::leaf("")]),
+        IRegex::end(),
+    ]
+}
+
+fn apply_arrow_color(d: &mut ActivityDiagram3, arg: &RegexResult) {
+    if let Some(color) = arg.get("COLOR", 0) {
+        let space = d.skin().as_int("colorarrowseparationspace", 0);
+        let rainbow = Rainbow::build(d.skin(), color, space);
+        d.set_color_next_arrow(rainbow);
+    }
+}
+
+fn activity_end_parts() -> Vec<IRegex> {
+    vec![
+        IRegex::space_zero_or_more(),
+        Stereogroup::optional_stereogroup(),
+        IRegex::space_zero_or_more(),
+        url::optional(),
+        IRegex::end(),
+    ]
+}
+
+fn multiline_end() -> IRegex {
+    let mut parts = vec![
+        IRegex::start(),
+        IRegex::named("TEXT", "(.*)"),
+        IRegex::leaf(";"),
+    ];
+    parts.extend(activity_end_parts());
+    IRegex::concat(parts)
+}
+
+fn add_long_activity(d: &mut ActivityDiagram3, lines: &BlocLines) -> CommandExecutionResult {
+    let lines = lines.remove_empty_columns();
+    let first = lines.first().expect("first line").trimmed();
+    let start = IRegex::concat(vec![
+        IRegex::start(),
+        color_regex(),
+        IRegex::leaf(":"),
+        IRegex::named("DATA", "(.*)"),
+        IRegex::end(),
+    ]);
+    let line0 = start.matcher(first.string()).expect("start line");
+    let last = multiline_end()
+        .matcher(lines.last().string())
+        .expect("end line");
+    if let Some(color) = line0.get("COLOR", 0) {
+        d.base.add_warning(vec![format!(
+            "This syntax is deprecated, you must add <<{color}>> at the end of the line, after the ';'"
+        )]);
+    }
+    let url = url_of(d, last.get(url::URL_KEY, 0));
+    let stereogroup = Stereogroup::build(&last);
+    let style = stereogroup.box_style();
+    let lines = lines.remove_starting_and_ending(line0.get("DATA", 0).unwrap_or(""), 0);
+    let lines = lines.override_last_line(last.get("TEXT", 0).unwrap_or(""));
+    d.add_activity(
+        Display::create(&lines.as_strings()),
+        style,
+        url,
+        &stereogroup,
+    )
+}
+
+fn group_symbol(kind: &str) -> Rc<dyn USymbol> {
+    use crate::decoration::usymbol::usymbols;
+    match kind.to_lowercase().as_str() {
+        "partition" => usymbols::partition(),
+        "package" => usymbols::package(),
+        "rectangle" => usymbols::rectangle(),
+        "card" => usymbols::card(),
+        _ => usymbols::group(),
+    }
+}
+
+/// `partition Name {`, `group G {`, `package`, `rectangle` or `card`.
+fn open_group() -> Cmd {
+    let back1 = ColorParser::simple_color_id(ColorType::Back, "BACK1");
+    let back2 = ColorParser::simple_color_id(ColorType::Back, "BACK2");
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::named("TYPE", "(partition|package|rectangle|card|group)"),
+            IRegex::space_one_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                back1.regex(),
+                IRegex::space_one_or_more(),
+            ])),
+            IRegex::named("NAME", "([%g][^%g]+[%g]|.*?)"),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::space_one_or_more(),
+                back2.regex(),
+            ])),
+            crate::stereo::optional_pattern("STEREO"),
+            IRegex::named("BRACKET", r"(\{?)"),
+            IRegex::end(),
+        ],
+        move |d, arg| {
+            let name = crate::string_utils::eventually_remove_starting_and_ending_double_quote(
+                arg.get("NAME", 0).unwrap_or("").trim(),
+            );
+            let kind = arg.get("TYPE", 0).unwrap_or("group");
+            let symbol = group_symbol(kind);
+            let parser = if arg.get("BACK1", 0).is_some() {
+                ColorParser::simple_color_id(ColorType::Back, "BACK1")
+            } else {
+                ColorParser::simple_color_id(ColorType::Back, "BACK2")
+            };
+            let Some(colors) = parser.colors(arg) else {
+                return CommandExecutionResult::bad_color();
+            };
+            let stereotype = arg.get("STEREO", 0).map(crate::stereo::Stereotype::build);
+            let query = queries::ACTIVITYDIAG
+                .add_all(&symbol.snames())
+                .add(SName::Composite)
+                .with_stereotype_obj(stereotype.as_ref());
+            let style = d
+                .skin()
+                .style_builder()
+                .merged_style(&query)
+                .expect("group style");
+            let back = colors
+                .color(ColorType::Back)
+                .cloned()
+                .unwrap_or_else(|| style.value(crate::style::PName::BackGroundColor).as_color());
+            if arg.get("BRACKET", 0).unwrap_or("").is_empty() {
+                let mut rebased = kind.to_string();
+                if let Some(c) = arg.get("BACK1", 0) {
+                    rebased.push(' ');
+                    rebased.push_str(c);
+                }
+                rebased.push(' ');
+                rebased.push_str(arg.get("NAME", 0).unwrap_or("").trim());
+                if let Some(c) = arg.get("BACK2", 0) {
+                    rebased.push(' ');
+                    rebased.push_str(c);
+                }
+                if let Some(c) = arg.get("STEREO", 0) {
+                    rebased.push(' ');
+                    rebased.push_str(c);
+                }
+                d.base.add_warning(vec![format!(
+                    "Missing '{{': write '{rebased} {{' and close it with '}}'"
+                )]);
+            }
+            d.start_group(
+                Display::with_newlines(Some(&name)),
+                Some(back),
+                symbol,
+                style,
+            );
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// `}` closes the current group (`CommandCloseGroup3`).
+fn close_group() -> Cmd {
+    single(
+        vec![IRegex::start(), IRegex::leaf(r"\}"), IRegex::end()],
+        |d, _| d.close_group(),
+    )
+}
+
+/// `end group` / `group end` closes the current group (`CommandCloseGroupLegacy3`).
+fn close_group_legacy() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::named("CMD", "(end ?group|group ?end)"),
+            IRegex::leaf(";?"),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let cmd = arg.get("CMD", 0).unwrap_or("end group");
+            d.base.add_warning(vec![format!(
+                "'{cmd}' is deprecated: close the group with '}}' instead"
+            )]);
+            d.close_group()
+        },
+    )
+}
+
+/// `fork`: start parallel branches.
+fn fork() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("fork"),
+            IRegex::leaf(";?"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let colors = Stereogroup::build(arg).inner_colors();
+            d.fork(colors);
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// `fork again`: start the next parallel branch.
+fn fork_again() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("fork"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf("again"),
+            IRegex::leaf(";?"),
+            IRegex::end(),
+        ],
+        |d, _| d.fork_again(),
+    )
+}
+
+/// `end fork` / `fork end` / `end merge` / `end split` / `split end`: close the parallel branches.
+fn end_fork() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::named(
+                "STYLE",
+                "(end[%s]*fork|fork[%s]*end|end[%s]*merge|end[%s]*split|split[%s]*end)",
+            ),
+            IRegex::space_zero_or_more(),
+            IRegex::named("LABEL", r"(\{.+\})?"),
+            IRegex::leaf(";?"),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let style = arg.get("STYLE", 0).unwrap_or("").to_lowercase();
+            d.end_fork(style.contains("merge"))
+        },
+    )
+}
+
+/// `split` and `split again`: thin-line parallel branches (`CommandSplit3`, `CommandSplitAgain3`).
+fn split_commands() -> Vec<Cmd> {
+    vec![
+        single(
+            vec![
+                IRegex::start(),
+                IRegex::leaf("split"),
+                IRegex::leaf(";?"),
+                IRegex::end(),
+            ],
+            |d, _| {
+                d.split();
+                CommandExecutionResult::ok()
+            },
+        ),
+        single(
+            vec![
+                IRegex::start(),
+                IRegex::leaf("split"),
+                IRegex::space_zero_or_more(),
+                IRegex::leaf("again"),
+                IRegex::leaf(";?"),
+                IRegex::end(),
+            ],
+            |d, _| d.fork_again(),
+        ),
+    ]
+}
+
+/// The legacy `(*) --> Activity` start of a flow.
+fn legacy_start() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf(r"\(\*\)"),
+            IRegex::space_zero_or_more(),
+            IRegex::named("ARROW", "(-->|->)"),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::leaf(r"\["),
+                IRegex::named("LABEL", r"([^]]*)"),
+                IRegex::leaf(r"\]"),
+                IRegex::space_zero_or_more(),
+            ])),
+            IRegex::named("NAME", "(.+)"),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            d.start(crate::klimt::color::colors::Colors::empty());
+            if let Some(label) = arg.get("LABEL", 0) {
+                d.set_label_next_arrow(Display::with_newlines(Some(label)));
+            }
+            add_legacy_activity(d, arg.get("NAME", 0));
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+fn add_legacy_activity(d: &mut ActivityDiagram3, name: Option<&str>) {
+    if let Some(name) = name {
+        d.add_activity(
+            Display::with_newlines(Some(name.trim())),
+            BoxStyle::Plain,
+            None,
+            &Stereogroup::default(),
+        );
+    }
+}
+
+/// A line that is only a spot name (`===Y1===`).
+fn legacy_spot() -> Cmd {
+    single(
+        vec![IRegex::start(), IRegex::leaf(r"===.*==="), IRegex::end()],
+        |_, _| CommandExecutionResult::ok(),
+    )
+}
+
+/// `===Y1=== --> Activity`: the spot is transparent, the activity follows.
+fn legacy_spot_arrow() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf(r"===.*==="),
+            IRegex::space_zero_or_more(),
+            IRegex::named("ARROW", "(-->|->)"),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::leaf(r"\["),
+                IRegex::named("LABEL", r"([^]]*)"),
+                IRegex::leaf(r"\]"),
+                IRegex::space_zero_or_more(),
+            ])),
+            IRegex::named("NAME", "(.+)"),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            if let Some(label) = arg.get("LABEL", 0) {
+                d.set_label_next_arrow(Display::with_newlines(Some(label)));
+            }
+            add_legacy_activity(d, arg.get("NAME", 0));
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// `--> (*)`: the legacy end of a flow.
+fn legacy_stop() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::named("ARROW", "(-->|->)"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf(r"\(\*\)"),
+            IRegex::end(),
+        ],
+        |d, _| {
+            d.stop(crate::klimt::color::colors::Colors::empty());
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// `--> ===Y1===`: a trailing arrow to a transparent spot.
+fn legacy_arrow_spot() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::named("ARROW", "(-->|->)"),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::leaf(r"\["),
+                IRegex::named("LABEL", r"([^]]*)"),
+                IRegex::leaf(r"\]"),
+                IRegex::space_zero_or_more(),
+            ])),
+            IRegex::leaf(r"===.*==="),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            if let Some(label) = arg.get("LABEL", 0) {
+                d.set_label_next_arrow(Display::with_newlines(Some(label)));
+            }
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// `--> Activity`: the legacy activity declaration after an arrow.
+fn legacy_arrow_activity() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::named("ARROW", "(-->|->)"),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::leaf(r"\["),
+                IRegex::named("LABEL", r"([^]]*)"),
+                IRegex::leaf(r"\]"),
+            ])),
+            IRegex::space_zero_or_more(),
+            IRegex::named("NAME", "([^;]+)"),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            if let Some(label) = arg.get("LABEL", 0) {
+                d.set_label_next_arrow(Display::with_newlines(Some(label)));
+            }
+            add_legacy_activity(d, arg.get("NAME", 0));
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// `switch (test)`: start a switch.
+fn switch_start() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            crate::klimt::color::parser::exp4(),
+            IRegex::leaf("switch"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf(r"\("),
+            IRegex::named("TEST", "(.*?)"),
+            IRegex::leaf(r"\)"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            if let Some(color) = arg.get("COLOR", 0) {
+                d.base.add_warning(vec![format!(
+                    "This syntax is deprecated, you must add <<{color}>> at the end of the line"
+                )]);
+            }
+            let colors = Stereogroup::build(arg).inner_colors();
+            let back = colors.color(ColorType::Back).cloned();
+            d.start_switch(Display::with_newlines(arg.get("TEST", 0)), back);
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// `case (value)`: add a branch to the switch.
+fn switch_case() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("case"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf(r"\("),
+            IRegex::named("TEST", "(.*?)"),
+            IRegex::leaf(r"\)"),
+            IRegex::space_zero_or_more(),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let label = arg
+                .get("TEST", 0)
+                .filter(|t| !t.is_empty())
+                .map(|t| Display::with_newlines(Some(t)));
+            d.switch_case(label)
+        },
+    )
+}
+
+/// `endswitch`: close the switch.
+fn end_switch() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("endswitch"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        |d, _| d.end_switch(),
+    )
+}
+
+/// `if (test) then (yes)` or `if (test) is (yes) then`.
+fn if_start() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            crate::klimt::color::parser::exp4(),
+            IRegex::leaf("if"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf(r"\("),
+            IRegex::named("TEST", "(.*?)"),
+            IRegex::leaf(r"\)"),
+            IRegex::space_zero_or_more(),
+            IRegex::named("KEYWORD", "(then|is)"),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::leaf(r"\("),
+                IRegex::named("YES", "(.+?)"),
+                IRegex::leaf(r"\)"),
+            ])),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::leaf("then")),
+            IRegex::leaf(";?"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            if let Some(color) = arg.get("COLOR", 0) {
+                d.base.add_warning(vec![format!(
+                    "This syntax is deprecated, you must add <<{color}>> at the end of the line"
+                )]);
+            }
+            let colors = Stereogroup::build(arg).inner_colors();
+            let back = colors.color(ColorType::Back).cloned();
+            d.start_if(
+                Display::with_newlines(arg.get("TEST", 0)),
+                arg.get("YES", 0).map(|y| Display::with_newlines(Some(y))),
+                back,
+            );
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// Legacy `if TEST then` without parentheses around the test.
+fn if_legacy() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("if"),
+            IRegex::space_one_or_more(),
+            IRegex::named("TEST", "(.*?)"),
+            IRegex::space_one_or_more(),
+            IRegex::leaf("then"),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::leaf(r"\("),
+                IRegex::named("YES", "(.+?)"),
+                IRegex::leaf(r"\)"),
+            ])),
+            IRegex::leaf(";?"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let colors = Stereogroup::build(arg).inner_colors();
+            let back = colors.color(ColorType::Back).cloned();
+            let test = match arg.get("TEST", 0) {
+                Some("\"\"") | None => Display::with_newlines(None),
+                other => Display::with_newlines(other),
+            };
+            d.start_if(
+                test,
+                arg.get("YES", 0).map(|y| Display::with_newlines(Some(y))),
+                back,
+            );
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// `else (label)`: add a branch to the current `if`.
+fn else_branch() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("else"),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::leaf(r"\("),
+                IRegex::named("WHEN", "(.*?)"),
+                IRegex::leaf(r"\)"),
+            ])),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf(";?"),
+            IRegex::end(),
+        ],
+        |d, arg| d.else_branch(arg.get("WHEN", 0).map(|w| Display::with_newlines(Some(w)))),
+    )
+}
+
+/// `elseif (test) then (yes)`: add a branch to the current `if`.
+fn elseif_branch() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            crate::klimt::color::parser::exp4(),
+            IRegex::leaf("elseif"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf(r"\("),
+            IRegex::named("TEST", "(.*?)"),
+            IRegex::leaf(r"\)"),
+            IRegex::space_zero_or_more(),
+            IRegex::named("KEYWORD", "(then|is)"),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::leaf(r"\("),
+                IRegex::named("YES", "(.+?)"),
+                IRegex::leaf(r"\)"),
+            ])),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::leaf("then")),
+            IRegex::leaf(";?"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            if let Some(color) = arg.get("COLOR", 0) {
+                d.base.add_warning(vec![format!(
+                    "This syntax is deprecated, you must add <<{color}>> at the end of the line"
+                )]);
+            }
+            let colors = Stereogroup::build(arg).inner_colors();
+            let test = match arg.get("TEST", 0) {
+                Some("") | None => Display::null(),
+                other => Display::with_newlines(other),
+            };
+            d.else_if(
+                None,
+                test,
+                arg.get("YES", 0).map(|y| Display::with_newlines(Some(y))),
+                colors.color(ColorType::Back).cloned(),
+            )
+        },
+    )
+}
+
+/// `endif`: close the `if`.
+fn end_if() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("end"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf("if"),
+            IRegex::leaf(";?"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        |d, _| d.end_if(),
+    )
+}
+
+/// `repeat [:label;]`: start a repeat loop.
+fn repeat_start() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            crate::klimt::color::parser::exp4(),
+            IRegex::leaf("repeat"),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::leaf(":"),
+                IRegex::named("LABEL", "(.*?)"),
+                IRegex::leaf(";"),
+                IRegex::space_zero_or_more(),
+            ])),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let label = arg.get("LABEL", 0).map(|l| Display::with_newlines(Some(l)));
+            if let Some(color) = arg.get("COLOR", 0) {
+                let mut suggested = "repeat".to_string();
+                if let Some(label) = &label {
+                    let text = label.text_at(0);
+                    suggested.push_str(" :");
+                    suggested.push_str(&text);
+                    suggested.push(';');
+                }
+                if let Some(stereo) = arg.get("STEREOGROUP", 0) {
+                    suggested.push(' ');
+                    suggested.push_str(stereo);
+                }
+                let mut original = format!("{color}:repeat");
+                if let Some(label) = &label {
+                    let text = label.text_at(0);
+                    original.push_str(" :");
+                    original.push_str(&text);
+                    original.push(';');
+                }
+                d.base.add_warning(vec![format!(
+                    "This syntax is deprecated and the color is ignored: write '{suggested} <<{color}>>' instead of '{original}'"
+                )]);
+            }
+            let stereogroup = Stereogroup::build(arg);
+            let colors = stereogroup.inner_colors();
+            let back = colors.color(ColorType::Back).cloned();
+            d.do_repeat(label, colors, back);
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// `repeat while (test) [is (yes)] [not (out)] [-> label]`: close the loop (`CommandRepeatWhile3`).
+fn repeat_while() -> Cmd {
+    let paren =
+        |name: &'static str, inner: &'static str| IRegex::named(name, &format!(r"\({inner}\)"));
+    let keyword = |word: &'static str| IRegex::leaf(word);
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("repeat"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf("while"),
+            IRegex::space_zero_or_more(),
+            IRegex::or(vec![
+                IRegex::group(vec![
+                    paren("TEST3", "(.*?)"),
+                    IRegex::space_zero_or_more(),
+                    IRegex::leaf("(is|equals?)"),
+                    IRegex::space_zero_or_more(),
+                    paren("WHEN3", "(.+?)"),
+                    IRegex::space_zero_or_more(),
+                    keyword("(not)"),
+                    IRegex::space_zero_or_more(),
+                    paren("OUT3", "(.+?)"),
+                ]),
+                IRegex::group(vec![
+                    paren("TEST4", "(.*?)"),
+                    IRegex::space_zero_or_more(),
+                    keyword("(not)"),
+                    IRegex::space_zero_or_more(),
+                    paren("OUT4", "(.+?)"),
+                ]),
+                IRegex::group(vec![
+                    paren("TEST2", "(.*?)"),
+                    IRegex::space_zero_or_more(),
+                    IRegex::leaf("(is|equals?)"),
+                    IRegex::space_zero_or_more(),
+                    paren("WHEN2", "(.+?)"),
+                ]),
+                IRegex::optional(paren("TEST1", "(.*)")),
+            ]),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::or(vec![
+                    IRegex::leaf("->"),
+                    IRegex::named("XCOLOR", STYLE_COLORS_MULTIPLES),
+                ]),
+                IRegex::space_zero_or_more(),
+                IRegex::or(vec![IRegex::named("LABEL", "(.*)"), IRegex::leaf("")]),
+            ])),
+            IRegex::leaf(";?"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let lazy = |keys: [&str; 4]| keys.iter().find_map(|k| arg.get_lazzy(k, 0));
+            let test = lazy(["TEST3", "TEST4", "TEST2", "TEST1"]);
+            let yes = lazy(["WHEN3", "WHEN2", "WHEN2", "WHEN3"]);
+            let out = lazy(["OUT3", "OUT4", "OUT3", "OUT4"]);
+            let space = d.skin().as_int("colorarrowseparationspace", 0);
+            let rainbow = match arg.get("XCOLOR", 0) {
+                Some(c) => Rainbow::build(d.skin(), c, space),
+                None => Rainbow::none(),
+            };
+            let link = LinkRendering::create(rainbow);
+            let link = match arg.get("LABEL", 0).filter(|l| !l.is_empty()) {
+                Some(l) => link.with_display(Display::with_newlines(Some(l))),
+                None => link,
+            };
+            let colors = Stereogroup::build(arg).inner_colors();
+            d.end_repeat(
+                Display::with_newlines(test),
+                yes.map(|y| Display::with_newlines(Some(y))),
+                out.map(|o| Display::with_newlines(Some(o))),
+                link,
+                colors.color(ColorType::Back).cloned(),
+            )
+        },
+    )
+}
+
+/// `while (test)`: start a loop.
+fn while_start() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            crate::klimt::color::parser::exp4(),
+            IRegex::leaf("while"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf(r"\("),
+            IRegex::named("TEST", "(.*?)"),
+            IRegex::leaf(r"\)"),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::space_zero_or_more(),
+                IRegex::named("IS", "(is|equals?)"),
+                IRegex::space_zero_or_more(),
+                IRegex::named("YES", r"\((.+?)\)"),
+            ])),
+            IRegex::leaf(";?"),
+            IRegex::space_zero_or_more(),
+            Stereogroup::optional_stereogroup(),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            if let Some(color) = arg.get("COLOR", 0) {
+                d.base.add_warning(vec![format!(
+                    "This syntax is deprecated, you must add <<{color}>> at the end of the line"
+                )]);
+            }
+            let colors = Stereogroup::build(arg).inner_colors();
+            let back = colors.color(ColorType::Back).cloned();
+            d.do_while(
+                Display::with_newlines(arg.get("TEST", 0)),
+                arg.get("YES", 0).map(|y| Display::with_newlines(Some(y))),
+                back,
+            );
+            CommandExecutionResult::ok()
+        },
+    )
+}
+
+/// `endwhile`: close the loop.
+fn while_end() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::or(vec![
+                IRegex::leaf("end[%s]*while"),
+                IRegex::leaf("while[%s]*end"),
+            ]),
+            IRegex::space_zero_or_more(),
+            IRegex::optional(IRegex::named("OUT", r"\((.+?)\)")),
+            IRegex::leaf(";?"),
+            IRegex::end(),
+        ],
+        |d, arg| d.end_while(arg.get("OUT", 0).map(|o| Display::with_newlines(Some(o)))),
+    )
+}
+
+/// The background of a lane given by `|#color|name|` (`HColorSet.getColor`).
+fn lane_colors(arg: &RegexResult) -> Option<crate::klimt::color::colors::Colors> {
+    let color = arg.get("COLOR", 0)?;
+    crate::klimt::color::colors::Colors::parse(color, ColorType::Back)
+}
+
+fn lane_label(arg: &RegexResult) -> Option<Display> {
+    arg.get("LABEL", 0).map(|l| Display::with_newlines(Some(l)))
+}
+
+/// `|name|label|` (`CommandSwimlane`).
+fn swimlane() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf(r"\|"),
+            crate::klimt::color::parser::exp6(),
+            IRegex::named("SWIMLANE", "([^|]+)"),
+            IRegex::leaf(r"\|"),
+            IRegex::named("LABEL", "([^|]+)?"),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let name = arg.get("SWIMLANE", 0).unwrap_or("");
+            d.swimlane(name, lane_colors(arg), lane_label(arg))
+        },
+    )
+}
+
+/// `swimlane name as label` (`CommandSwimlane2`).
+fn swimlane2() -> Cmd {
+    single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("swimlane"),
+            IRegex::space_one_or_more(),
+            crate::klimt::color::parser::exp7(),
+            IRegex::space_zero_or_more(),
+            IRegex::named("SWIMLANE", "([^|]+?)"),
+            IRegex::optional(IRegex::group(vec![
+                IRegex::space_one_or_more(),
+                IRegex::leaf("as"),
+                IRegex::space_one_or_more(),
+                IRegex::named("LABEL", "([^|]+)"),
+            ])),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let name = arg.get("SWIMLANE", 0).unwrap_or("");
+            d.swimlane(name, lane_colors(arg), lane_label(arg))
+        },
+    )
+}
+
+pub fn commands() -> Vec<Cmd> {
+    let mut cmds: Vec<Cmd> = Vec::new();
+    // CommandFootboxIgnored
+    cmds.push(single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("(?:hide|show)?"),
+            IRegex::space_zero_or_more(),
+            IRegex::leaf("footbox"),
+            IRegex::end(),
+        ],
+        |_, _| CommandExecutionResult::ok(),
+    ));
+    cmds.extend(crate::command::common::common_commands());
+    cmds.push(swimlane());
+    cmds.push(swimlane2());
+    cmds.push(open_group());
+    cmds.push(close_group());
+    cmds.push(close_group_legacy());
+    cmds.push(fork());
+    cmds.push(fork_again());
+    cmds.extend(split_commands());
+    cmds.push(end_fork());
+    cmds.push(while_start());
+    cmds.push(while_end());
+    cmds.push(repeat_start());
+    cmds.push(repeat_while());
+    cmds.push(if_start());
+    cmds.push(if_legacy());
+    cmds.push(else_branch());
+    cmds.push(elseif_branch());
+    cmds.push(end_if());
+    cmds.push(switch_start());
+    cmds.push(switch_case());
+    cmds.push(end_switch());
+
+    // CommandArrow3
+    cmds.push(single(arrow_regex("(.*);"), |d, arg| {
+        apply_arrow_color(d, arg);
+        if let Some(label) = arg.get("LABEL", 0).filter(|l| !l.is_empty()) {
+            d.set_label_next_arrow(Display::with_newlines(Some(label)));
+        }
+        CommandExecutionResult::ok()
+    }));
+    // CommandArrowLong3
+    cmds.push(Box::new(MultiLineCommand::new(
+        IRegex::concat(vec![
+            IRegex::start(),
+            IRegex::or(vec![
+                IRegex::leaf("->"),
+                IRegex::named("COLOR", STYLE_COLORS_MULTIPLES),
+            ]),
+            IRegex::space_zero_or_more(),
+            IRegex::named("LABEL", "(.*)"),
+            IRegex::end(),
+        ]),
+        MultilinesStrategy::RemoveStartingQuote,
+        crate::command::Trim::Both,
+        "^(.*);$",
+        |d: &mut ActivityDiagram3, lines, _| {
+            let lines = lines.remove_empty_columns();
+            let start = IRegex::concat(vec![
+                IRegex::start(),
+                IRegex::or(vec![
+                    IRegex::leaf("->"),
+                    IRegex::named("COLOR", STYLE_COLORS_MULTIPLES),
+                ]),
+                IRegex::space_zero_or_more(),
+                IRegex::named("LABEL", "(.*)"),
+                IRegex::end(),
+            ]);
+            let first = lines.first().expect("first line").trimmed();
+            let line0 = start.matcher(first.string()).expect("start line");
+            apply_arrow_color(d, &line0);
+            let lines = lines.remove_starting_and_ending(line0.get("LABEL", 0).unwrap_or(""), 1);
+            d.set_label_next_arrow(Display::create(&lines.as_strings()));
+            CommandExecutionResult::ok()
+        },
+    )));
+    // CommandRepeat3 comes here.
+
+    // CommandActivity3
+    cmds.push(single(
+        {
+            let mut parts = vec![
+                IRegex::start(),
+                color_regex(),
+                stereo::optional_pattern("IGNORED"),
+                IRegex::leaf(":"),
+                IRegex::named("LABEL", "(.*?)"),
+                IRegex::leaf(";"),
+            ];
+            parts.extend(activity_end_parts());
+            parts
+        },
+        |d, arg| {
+            let url = url_of(d, arg.get(url::URL_KEY, 0));
+            let stereogroup = Stereogroup::build(arg);
+            let label = arg.get("LABEL", 0).unwrap_or("");
+            if let Some(ignored) = arg.get("IGNORED", 0) {
+                d.base.add_warning(vec![format!(
+                    "The stereotype {ignored} before the ':' is ignored: write ':{label}; {ignored}' instead"
+                )]);
+            }
+            if let Some(color) = arg.get("COLOR", 0) {
+                d.base.add_warning(vec![format!(
+                    "This syntax is deprecated and the color is ignored: write ':{label}; <<{color}>>' instead of '{color}:{label};'"
+                )]);
+            }
+            d.add_activity(
+                Display::with_newlines(Some(label)),
+                stereogroup.box_style(),
+                url,
+                &stereogroup,
+            )
+        },
+    ));
+    // CommandIf4, CommandIf2, CommandIfLegacy1, CommandElseIf3, CommandElseIf2, CommandElse3,
+    // CommandElseLegacy1, CommandEndif3, CommandSwitch, CommandCase, CommandEndSwitch,
+    // CommandRepeatWhile3, CommandBackward3, CommandWhile3, CommandWhileEnd3, CommandFork3,
+    // CommandForkAgain3, CommandForkEnd3, CommandSplit3, CommandSplitAgain3, CommandSplitEnd3.
+
+    cmds.push(node_command("start", ActivityDiagram3::start));
+    cmds.push(node_command("stop", ActivityDiagram3::stop));
+    // CommandCircleSpot3
+    cmds.push(backward());
+    cmds.push(single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("break"),
+            IRegex::leaf(";?"),
+            IRegex::end(),
+        ],
+        |d, _| {
+            d.break_instruction();
+            CommandExecutionResult::ok()
+        },
+    ));
+    cmds.push(node_command("end", ActivityDiagram3::end));
+    // CommandKill3
+    cmds.push(single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("kill|detach"),
+            IRegex::leaf(";?"),
+            IRegex::end(),
+        ],
+        |d, _| d.kill(),
+    ));
+
+    // CommandLink3
+    cmds.push(single(
+        vec![
+            IRegex::start(),
+            IRegex::leaf("link"),
+            IRegex::space_one_or_more(),
+            IRegex::named("COLOR", r"(#\w+)"),
+            IRegex::leaf(";?"),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            if let Some(c) = arg
+                .get("COLOR", 0)
+                .and_then(crate::klimt::color::HColor::parse)
+            {
+                d.set_color_next_arrow(Rainbow::from_color(Some(c), None));
+            }
+            CommandExecutionResult::ok()
+        },
+    ));
+    // CommandNote3
+    cmds.push(single(
+        vec![
+            IRegex::start(),
+            IRegex::named("TYPE", "(note|floating note)"),
+            IRegex::space_zero_or_more(),
+            IRegex::named("POSITION", "(left|right)?"),
+            IRegex::space_zero_or_more(),
+            color_regex(),
+            IRegex::space_zero_or_more(),
+            crate::stereo::optional_pattern("STEREO"),
+            IRegex::leaf(":"),
+            IRegex::space_zero_or_more(),
+            IRegex::named("NOTE", "(.*)"),
+            IRegex::end(),
+        ],
+        |d, arg| {
+            let colors = ColorParser::simple_color(ColorType::Back).colors(arg);
+            d.add_note(
+                Display::with_newlines(arg.get("NOTE", 0)),
+                arg.get("POSITION", 0) != Some("right"),
+                arg.get("TYPE", 0)
+                    .is_some_and(|t| t.starts_with("floating")),
+                colors,
+                arg.get("STEREO", 0).map(crate::stereo::Stereotype::build),
+            )
+        },
+    ));
+    // CommandNoteLong3
+    cmds.push(Box::new(MultiLineCommand::new(
+        note_long_start(),
+        MultilinesStrategy::RemoveStartingQuote,
+        crate::command::Trim::Both,
+        "^end[%s]?note$",
+        |d: &mut ActivityDiagram3, lines, _| {
+            let first = lines.first().expect("first line").trimmed();
+            let Some(line0) = note_long_start().matcher(first.string()) else {
+                return CommandExecutionResult::error("Cannot parse the note");
+            };
+            let body = lines.sub_extract(1, 1).remove_empty_columns();
+            let colors = ColorParser::simple_color(ColorType::Back).colors(&line0);
+            d.add_note(
+                Display::create(&body.as_strings()),
+                line0.get("POSITION", 0) != Some("right"),
+                line0
+                    .get("TYPE", 0)
+                    .is_some_and(|t| t.starts_with("floating")),
+                colors,
+                line0.get("STEREO", 0).map(crate::stereo::Stereotype::build),
+            )
+        },
+    )));
+
+    // CommandActivityLong3
+    cmds.push(Box::new(MultiLineCommand::new(
+        IRegex::concat(vec![
+            IRegex::start(),
+            color_regex(),
+            IRegex::leaf(":"),
+            IRegex::named("DATA", "(.*)"),
+            IRegex::end(),
+        ]),
+        MultilinesStrategy::RemoveStartingQuote,
+        crate::command::Trim::None,
+        &multiline_end().pattern(),
+        |d: &mut ActivityDiagram3, lines, _| add_long_activity(d, lines),
+    )));
+    // CommandActivityList
+    cmds.push(single(
+        {
+            let mut parts = vec![
+                IRegex::start(),
+                IRegex::leaf("[-*]"),
+                IRegex::space_zero_or_one(),
+                IRegex::named("LABEL", "(.*?)"),
+            ];
+            parts.extend(activity_end_parts());
+            parts
+        },
+        |d, arg| {
+            let stereogroup = Stereogroup::build(arg);
+            let url = url_of(d, arg.get(url::URL_KEY, 0));
+            d.add_activity(
+                Display::with_newlines(arg.get("LABEL", 0)),
+                super::ftile::box_style::BoxStyle::Plain,
+                url,
+                &stereogroup,
+            )
+        },
+    ));
+    // CommandLabel, CommandGoto
+    for word in ["label", "goto"] {
+        cmds.push(single(
+            vec![
+                IRegex::start(),
+                IRegex::leaf(word),
+                IRegex::space_one_or_more(),
+                IRegex::named("NAME", "([%pLN_.]+)"),
+                IRegex::leaf(";?"),
+                IRegex::end(),
+            ],
+            move |d, _| d.add_jump(word == "goto"),
+        ));
+    }
+    // Legacy arrows are tried last so that the multi-line arrow commands win.
+    cmds.push(legacy_start());
+    cmds.push(legacy_spot());
+    cmds.push(legacy_spot_arrow());
+    cmds.push(legacy_stop());
+    cmds.push(legacy_arrow_spot());
+    cmds.push(legacy_arrow_activity());
+    cmds
+}
