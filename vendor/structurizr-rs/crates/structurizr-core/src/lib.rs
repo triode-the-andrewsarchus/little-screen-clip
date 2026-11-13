@@ -3,6 +3,7 @@
 //! This crate provides the core data structures for representing software
 //! architecture using the C4 model.
 
+pub mod deployment;
 pub mod error;
 pub mod model;
 pub mod navigation;

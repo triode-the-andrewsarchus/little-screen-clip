@@ -2501,8 +2501,10 @@ Further qualification found correctness work that must precede host integration:
   actual layout direction and sibling axis, keeping arrowheads outside nodes.
 - [x] Resolve deployment instances to correctly typed model elements with unique
   placement identities, retaining per-instance and infrastructure metadata.
-- [ ] Resolve deployment environment/scope/selection, render deployed instances
-  and their relationships, and qualify additional DSL forms.
+- [x] Resolve deployment environments/aliases, scopes and ordered selections
+  through one shared containment/placement inventory.
+- [ ] Make deployment rendering consume resolved placements/relationships,
+  preserve containment, replicate static instance links and qualify additional DSL forms.
 - [ ] Implement deployment-group relationship constraints; explicit diagnostics
   currently reject them rather than silently ignoring their meaning.
 
@@ -2719,3 +2721,46 @@ gains the missing unnamed instance branch (+2); neither adds a new mechanism.
 Remaining clone flags include existing model/parser declarations and the two
 corresponding optional instance-description fields. They do not justify merging
 the distinct serialized container/software-system instance types.
+
+
+### Structurizr deployment scope and selection
+
+Core now owns one borrowed deployment inventory with placement identity,
+referenced static identity, immediate parent and inherited environment. The
+parser uses this inventory instead of another tree traversal. Nested objects
+inherit the nearest environment; bare roots use `Default`. Environment aliases
+in model/view declarations and valid empty environments are preserved. Unknown
+scopes, non-system scopes, unknown environments, foreign-environment members and
+unsupported selectors fail instead of falling back to an unscoped diagram.
+
+Deployment selections retain authored include/exclude order. Including a leaf
+adds its containing nodes; including a node selects the permitted branch;
+excluding a node removes its descendants. Empty selections stay empty. Scoped
+wildcards retain the system's container placements and applicable infrastructure,
+without adding unrelated hosts. System/container abstraction conflicts are
+rejected for explicit selections. Wildcards preserve an already chosen
+abstraction and choose within the requested branch, so a system placement on
+another host cannot suppress that branch's container placement. Properties,
+annotations, layout and exact selected relationship IDs are retained.
+
+The [language reference](https://docs.structurizr.com/dsl/language#deployment-view)
+and official deployment-view implementation at revision
+`ad34036c5a1227535fc9adea9a0f97de5962189d19` informed the scope, parent inclusion,
+branch removal and abstraction rules; no Java source was imported. Six new
+parser-selection regressions plus a core inventory test cover aliases, inherited
+and overridden environments, default/empty environments, placement/base identity,
+scoped wildcards, parent closure, ordering, empty selections, exact relationship
+membership, metadata and invalid inputs. All 174 unit/integration tests and one
+core rustdoc test pass. Strict all-target Clippy for the application's shared
+renderer passes.
+
+Architecture comparison against `before-structurizr-deployment-views` leaves
+clone count, maximum complexity and cycle count unchanged; duplication decreases
+by 0.01 percentage points. Shared metadata conversion replaces the deployment
+builder's repeated construction. A typed selection session owns mutable
+membership with borrowed context; no new parser, worker or preview cache is
+introduced. The only reported complexity increase is the existing model parser's
+required environment-alias arm (+1); new inventory/selection functions remain
+below the hotspot threshold. Of 27 baseline parser clone fragments, 26 remain
+byte-identical; the old deployment construction is removed. Host rendering is
+still pending and the format checkbox stays open.

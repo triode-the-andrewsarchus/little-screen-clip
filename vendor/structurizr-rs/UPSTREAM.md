@@ -55,3 +55,9 @@ commits, separate from this pristine import.
   static declarations exist. Preserve instance descriptions, type/inline tags,
   properties and inert health checks, plus infrastructure technology/properties.
   Diagnose unsupported deployment groups instead of silently dropping them.
+
+- Share a borrowed deployment containment/environment inventory in core. Resolve
+  environment aliases, validate view scope/environment and preserve ordered
+  branch/leaf selections, parent closure, empty views, annotations and exact
+  selected relationships. Diagnose instance abstraction conflicts and cover
+  wildcard branch/previous-selection behavior with regression tests.

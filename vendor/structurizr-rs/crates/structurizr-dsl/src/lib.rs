@@ -25,6 +25,7 @@
 
 pub mod error;
 pub mod lexer;
+mod deployment;
 pub mod parser;
 pub mod ast;
 pub mod validation;

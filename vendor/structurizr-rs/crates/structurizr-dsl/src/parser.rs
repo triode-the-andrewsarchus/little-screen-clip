@@ -536,7 +536,7 @@ impl Parser {
                 }
                 Some(TokenKind::DeploymentEnvironment) => {
                     self.advance();
-                    let env = self.parse_deployment_environment()?;
+                    let env = self.parse_deployment_environment(None)?;
                     model.deployment_environments.push(env);
                 }
                 Some(TokenKind::Group) => {
@@ -572,6 +572,10 @@ impl Parser {
                         self.skip_newlines_and_comments();
 
                         match self.current_kind() {
+                            Some(TokenKind::DeploymentEnvironment) => {
+                                self.advance();
+                                model.deployment_environments.push(self.parse_deployment_environment(Some(id))?);
+                            }
                             Some(TokenKind::Person) => {
                                 self.advance();
                                 let element = self.parse_element(ElementKind::Person, Some(id))?;
@@ -1057,7 +1061,7 @@ impl Parser {
         Ok(EnterpriseNode { name, elements, groups })
     }
 
-    fn parse_deployment_environment(&mut self) -> Result<DeploymentEnvironmentNode> {
+    fn parse_deployment_environment(&mut self, identifier: Option<String>) -> Result<DeploymentEnvironmentNode> {
         self.skip_newlines_and_comments();
         let name = self.expect_string()?;
 
@@ -1135,7 +1139,7 @@ impl Parser {
             }
         }
 
-        Ok(DeploymentEnvironmentNode { name, children })
+        Ok(DeploymentEnvironmentNode { identifier, name, children })
     }
 
     fn parse_views(&mut self) -> Result<ViewsNode> {
@@ -1674,7 +1678,7 @@ impl Parser {
             None
         };
 
-        let environment = self.expect_string()?;
+        let environment = self.expect_identifier_or_string()?;
         let properties = self.parse_view_properties()?;
 
         Ok(DeploymentViewNode {
@@ -2778,7 +2782,7 @@ fn resolve_static_selection(
 }
 
 /// Normalize common authored view annotations without evaluating selectors.
-fn build_view_properties(
+pub(crate) fn build_view_properties(
     source: ViewPropertiesNode,
     fallback_key: String,
 ) -> (ViewProperties, Vec<SelectionOperation>) {
@@ -2889,6 +2893,8 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
     // Build identifier mapping
     let mut identifiers: HashMap<String, ElementId> = HashMap::new();
 
+    let mut environments = HashMap::from([("Default".to_owned(), "Default".to_owned())]);
+
     // Process model
     if let Some(model_node) = ast.model {
         for element in &model_node.elements {
@@ -2926,6 +2932,10 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
 
         // Build deployment environments
         for env in &model_node.deployment_environments {
+            environments.insert(env.name.clone(), env.name.clone());
+            if let Some(identifier) = &env.identifier {
+                environments.insert(identifier.clone(), env.name.clone());
+            }
             for child in &env.children {
                 if child.kind == ElementKind::DeploymentNode {
                     let mut node = build_deployment_node(child, workspace.model(), &mut identifiers)?;
@@ -3040,47 +3050,9 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
             workspace.views_mut().add_dynamic_view(dynamic);
         }
 
-        // Process deployment views
         for view in views_node.deployment {
-            let mut v = if let Some(ref scope_id) = view.scope {
-                if let Some(&system_id) = identifiers.get(scope_id) {
-                    DeploymentView::for_system(
-                        view.properties.key.unwrap_or_else(|| format!("Deployment-{}-{}", scope_id, view.environment)),
-                        system_id,
-                        &view.environment,
-                    )
-                } else {
-                    // Scope system not found - create unscoped view
-                    DeploymentView::new(
-                        view.properties.key.unwrap_or_else(|| format!("Deployment-{}", view.environment)),
-                        &view.environment,
-                    )
-                }
-            } else {
-                DeploymentView::new(
-                    view.properties.key.unwrap_or_else(|| format!("Deployment-{}", view.environment)),
-                    &view.environment,
-                )
-            };
-
-            // Apply view properties
-            if let Some(title) = view.properties.title {
-                v.properties = v.properties.with_title(title);
-            }
-            if let Some(description) = view.properties.description {
-                v.properties = v.properties.with_description(description);
-            }
-            if let Some(auto_layout) = view.properties.auto_layout {
-                v.properties = v.properties.with_auto_layout(convert_auto_layout(auto_layout));
-            }
-            if let Some(background) = view.properties.background {
-                v.properties = v.properties.with_background(background);
-            }
-            if view.properties.default {
-                v.properties = v.properties.with_default(true);
-            }
-
-            workspace.views_mut().add_deployment_view(v);
+            let view = crate::deployment::build_view(workspace.model(), view, &identifiers, &environments)?;
+            workspace.views_mut().add_deployment_view(view);
         }
 
         // Process styles
