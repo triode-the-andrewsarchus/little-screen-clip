@@ -219,7 +219,7 @@
         - [x] Graphviz DOT (`graphviz`, `dot`) — compiled Rust renderer, all eight layout engines, bounded multi-graph previews
         - [ ] DBML database markup (`dbml`) — native tables/columns/enums/relationships and source/live previews; newer partials/records/optional relations pending
         - [x] BPMN business process (`bpmn`, `bpmn2`) — native authored-DI/automatic layout, bounded large/small previews and diagnostics
-        - [ ] Diagrams.net / draw.io (`drawio`, `diagramsnet`)
+        - [x] Diagrams.net / draw.io (`drawio`, `diagramsnet`) — native pages, highlighted source/live preview/errors; external stencil collections remain unsupported.
         - [x] Excalidraw whiteboards (`excalidraw`) — native bounded rendering with handwriting, raster assets and diagnostics; initial vector canvas editing implemented, parity work pending
         - [x] WaveDrom digital timing diagrams (`wavedrom`)
         - [ ] Structurizr software architecture (`structurizr`)
@@ -540,7 +540,7 @@
     - [ ] `.vsd`, `.vsdx`, `.vdx` — Microsoft Visio drawing
     - [ ] `.vss` — Microsoft Visio stencil
     - [ ] `.vst` — Microsoft Visio template (May need disambiguation with VST audio plugins)
-    - [ ] `.drawio`, `.dio` — diagrams.net / draw.io diagram (May need disambiguation with digital I/O data on `.dio`; also commonly saved as compound `.drawio.xml`, `.drawio.svg`, `.drawio.png`)
+    - [x] `.drawio`, `.dio` — native diagrams.net / draw.io previews; `.dio` requires a matching XML root. Compound `.drawio.xml` / `.dio.xml` supported; `.drawio.svg` / `.drawio.png` remain ordinary images, without embedded diagram editing.
       - [ ] XML root metadata (`<mxfile>`: agent, version, etag, modified, compressed/raw boolean, page IDs/names)
     - [x] `.excalidraw`, `.excalidraw.json` — native rendering, highlighted source/live preview and guarded saves; graphical canvas pending
     - [ ] `.uxf` — UMLet eXchange Format

@@ -14,8 +14,16 @@ fn compressed(source: &str) -> String {
 fn plain_compressed_and_multiple_pages_preserve_shapes_labels_and_ids() {
     let model = &BASIC[BASIC.find("<mxGraphModel>").unwrap()..BASIC.find("</diagram>").unwrap()];
     let body = compressed(model);
+    let encoded = model
+        .bytes()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect::<String>();
+    let uri_packed = format!(
+        "<mxfile><diagram>{}</diagram></mxfile>",
+        compressed(&encoded)
+    );
     let packed = format!("<mxfile><diagram>{body}</diagram></mxfile>");
-    for source in [BASIC, model, packed.as_str()] {
+    for source in [BASIC, model, packed.as_str(), uri_packed.as_str()] {
         let report = render(source.as_bytes(), Limits::default()).unwrap();
         assert_eq!(report.pages.len(), 1);
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);

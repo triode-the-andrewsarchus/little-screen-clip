@@ -12,6 +12,16 @@ use std::{ffi::OsStr, time::Duration};
 /// resource/protocol bounds, fails a valid fixture or accepts malformed source.
 pub fn assert_worker(executable: impl AsRef<OsStr>) {
     for (format, source, success) in [
+        (
+            "drawio",
+            include_str!("../../../../docs/examples/diagrams/pipeline.drawio"),
+            true,
+        ),
+        (
+            "drawio",
+            "<mxfile><diagram>broken!</diagram></mxfile>",
+            false,
+        ),
         ("pikchr", "box \"Source\"; arrow; circle \"Preview\"", true),
         ("mermaid", "flowchart LR\nA[Source] --> B[Preview]", true),
         (

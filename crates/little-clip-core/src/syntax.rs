@@ -337,7 +337,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
-        "xml" | "svg" | "xsd" => Some("xml"),
+        "xml" | "svg" | "xsd" | "drawio" | "dio" | "diagramsnet" => Some("xml"),
         "go" => Some("go"),
         "rb" | "ruby" => Some("rb"),
         "php" => Some("php"),
@@ -618,6 +618,9 @@ pub const ERD_SUBLIME_SYNTAX: &str = include_str!("syntax/erd.sublime-syntax");
 /// PlantUML directives, entities, messages and preprocessing forms.
 pub const PLANTUML_SUBLIME_SYNTAX: &str = include_str!("syntax/plantuml.sublime-syntax");
 
+/// XML highlighting for native mxGraph source/live-preview sessions.
+pub const DRAWIO_SUBLIME_SYNTAX: &str = include_str!("syntax/drawio.sublime-syntax");
+
 /// Shared native diagram grammars used by both screen and desktop source views.
 pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     NOMNOML_SUBLIME_SYNTAX,
@@ -632,6 +635,7 @@ pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     GRAPHVIZ_SUBLIME_SYNTAX,
     D2_SUBLIME_SYNTAX,
     BPMN_SUBLIME_SYNTAX,
+    DRAWIO_SUBLIME_SYNTAX,
     WIREVIZ_SUBLIME_SYNTAX,
     WAVEDROM_SUBLIME_SYNTAX,
     EXCALIDRAW_SUBLIME_SYNTAX,

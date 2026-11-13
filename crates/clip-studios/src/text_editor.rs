@@ -1208,7 +1208,7 @@ mod tests {
     }
 
     #[test]
-    fn harness_clipboard_editor_keeps_source_and_uses_yaml_highlighting() {
+    fn harness_clipboard_and_drawio_source_editors_keep_syntax_highlighting() {
         let source = std::sync::Arc::new(
             include_str!("../../../docs/examples/diagrams/harness.wireviz").to_owned(),
         );
@@ -1218,24 +1218,33 @@ mod tests {
         let editor = session.editor.as_ref().unwrap();
         assert_eq!(editor.name, "clipboard.wireviz");
         assert_eq!(&editor.text, source.as_ref());
-        let syntax = crate::text_preview::SYNTAX_SET
-            .find_syntax_by_name("WireViz")
-            .unwrap();
-        let job = crate::text_preview::build_highlighted_layout_job(
-            "shield: true\nnotes: 'example'\n# comment\n",
-            syntax,
-            &Default::default(),
-            &[],
-        );
-        let colors: std::collections::HashSet<_> = job
-            .sections
-            .iter()
-            .map(|section| section.format.color)
-            .collect();
-        assert!(
-            colors.len() > 1,
-            "harness source must use YAML highlighting"
-        );
+        for (format, source) in [
+            (
+                Format::Wireviz,
+                "shield: true\nnotes: 'example'\n# comment\n",
+            ),
+            (Format::Drawio, "<mxCell id=\"a\" value=\"Source\"/>\n"),
+        ] {
+            let syntax = crate::text_preview::SYNTAX_SET
+                .find_syntax_by_name(format.name())
+                .unwrap();
+            let job = crate::text_preview::build_highlighted_layout_job(
+                source,
+                syntax,
+                &Default::default(),
+                &[],
+            );
+            let colors: std::collections::HashSet<_> = job
+                .sections
+                .iter()
+                .map(|section| section.format.color)
+                .collect();
+            assert!(
+                colors.len() > 1,
+                "{} source must use highlighting",
+                format.name()
+            );
+        }
     }
 
     #[test]

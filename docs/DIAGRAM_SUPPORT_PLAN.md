@@ -2335,3 +2335,77 @@ dispatch branches add format selection and embedded-raster policy. No additional
 application cache, save owner, browser/runtime process or second Graphviz copy
 is introduced. Existing lookup-table and touched-file clones remain; unchanged
 acceptance helpers' graph centrality shifts are not source-code regressions.
+
+## Draw.io native renderer selection and integration
+
+Compared the native [`document-svg` 2.0.2](https://github.com/ryusui-hiro/document-svg)
+reader/renderer with [`diagram-ir` 0.1.0](https://github.com/DreamLab-AI/diagram-ir),
+[`drawio-exporter` 1.6.0](https://github.com/rlespinasse/drawio-exporter),
+`drawio-lc` 0.4.0 and
+[`flowchart-mcp` 0.1.0](https://github.com/zavora-ai/flowchart-mcp).
+Diagram-ir extracts nodes/edges but does not render; the exporter tools invoke
+the draw.io desktop application. Flowchart authoring is not a general mxGraph
+reader. Document-svg supplies the most useful native geometry implementation
+among these candidates: compressed containers, groups, ports, connector routes,
+HTML-like labels, inline stencils, gradients and a substantial shape vocabulary.
+
+Its full package also includes unrelated Office/PDF/CAD/font/CLI dependencies.
+A focused MIT/Apache-2.0 library retains the draw.io sources, page IR, SVG writer,
+XML helpers and embedded-SVG validator instead. The pristine selected source is
+committed separately from adaptations. The local library accepts memory only;
+external stencil file discovery and the unrelated converters are removed.
+The host's existing disposable worker, guarded reader, cancellation, SVG/font
+composition, image policy and caches retain their responsibilities. The public
+page IR retains source IDs and semantic metadata for future direct editing.
+
+The diagrams.net graphical editor itself is browser-based. Its interaction
+patterns remain useful reference material, but embedding its application would
+violate the no-browser requirement. This integration provides highlighted XML,
+live native preview and errors in the existing shared editor. Direct editing is
+still future work; previewing does not rewrite the compressed source.
+
+- [x] Import pristine upstream source separately from local modifications.
+- [x] Adapt memory-only rendering with bounded source/inflate/XML/page/SVG work.
+- [x] Route `drawio` / `diagramsnet` fences, explicit `.drawio`, compound
+  `.drawio.xml` / `.dio.xml`, and distinctive generic XML/clipboard roots.
+  `.dio` requires a matching mxfile/mxGraphModel root so unrelated digital-I/O
+  data stays ordinary text. Generic XML requires the actual root, not a nested
+  or quoted example, and does not inherit another namespace.
+- [x] Connect shared standalone source/live preview, Markdown, list strips and
+  enlarged hover through the existing mechanisms.
+- [x] Complete actual desktop-worker and native light/dark acceptance checks.
+
+Unsupported named libraries/shapes and external images produce compatibility
+warnings. Inline shapes are retained; no stencil collection is downloaded.
+Embedded raster images use the existing bounded PNG/JPEG/WebP policy; unsupported
+embedded image types remain diagnosed. Compound SVG/PNG files currently remain
+ordinary images, rather than silently claiming editable diagram content.
+Extended shape-fidelity qualification remains separate from this initial
+integration, particularly proprietary/cloud shape libraries and rich HTML text.
+
+Architecture comparison against `before-drawio` reports approximately 12,791
+additional lines, dominated by the upstream renderer, with unchanged maximum
+complexity and slightly lower total duplication (7.4% to 7.3%). Its upstream
+shape dispatch and SVG writer account for the new hotspots/clone groups; keeping
+the maintained geometry avoids recreating that substantial implementation.
+The host adds one renderer dispatch arm; XML signature checking now shares the
+existing root/namespace mechanism instead of introducing a second parser loop.
+The isolated crate's bounded writer cannot depend on desktop IPC helpers; it
+protects its public API independently. Existing viewer declaration clones and
+reordered members of unchanged Python cycles are not newly duplicated logic.
+
+Validation: four focused library tests cover plain/raw/URI-compressed models,
+multiple pages, malformed containers, source/inflate/event/page/output limits
+and external image warnings. The 57 core diagram tests, 17 selected syntax
+tests, 74 selected render/diagram tests, standalone viewer routing, and both
+desktop-worker protocol suites pass. Explicit little-screen routing includes
+clipboard, `.drawio`, content-checked `.dio` and generic XML sources. The shared
+source-editor highlighting test now covers both XML and YAML without duplicating
+its assertion mechanism. Strict all-target Clippy and desktop builds pass.
+
+Native light/dark acceptance passes rendered strips, enlarged hover, invalid
+source diagnostics, source/live preview, embedded Markdown, source affordances
+and unchanged source hashes. Screenshot inspection caught an initially missing
+editor grammar-name mapping; the final XML colors are verified by both the
+shared source-editor test and screenshots. Examples `pipeline.drawio` and
+`drawio.md` are in `docs/examples/diagrams/` and the user's review folder.

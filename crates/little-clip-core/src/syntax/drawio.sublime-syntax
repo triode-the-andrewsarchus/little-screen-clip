@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: draw.io
+file_extensions: [drawio, dio]
+scope: text.xml.drawio
+contexts:
+  main:
+    - include: scope:text.xml

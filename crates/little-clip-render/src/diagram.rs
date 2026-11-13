@@ -25,6 +25,7 @@ mod graphviz;
 mod images;
 pub mod retained;
 use images::Policy as ImagePolicy;
+mod drawio;
 mod lini;
 mod math;
 mod mermaid;
@@ -235,6 +236,9 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/bytefield-notices.md"),
             include_str!("../third_party/erd-notices.md"),
             include_str!("../third_party/plantuml-notices.md"),
+            include_str!("../third_party/drawio-notices.md"),
+            include_str!("../../../vendor/document-svg-drawio/LICENSE-MIT"),
+            include_str!("../../../vendor/document-svg-drawio/LICENSE-APACHE"),
             include_str!("../../../vendor/plantuml-core/LICENSE"),
             include_str!("../../../vendor/plantuml-core/stdlib/c4/LICENSE"),
             include_str!("../../../vendor/erd-reference/UNLICENSE"),
@@ -355,6 +359,7 @@ fn render_inline(
         Format::Bytefield => bytefield::svg(source)?,
         Format::Erd => erd::svg(source)?,
         Format::Plantuml => plantuml::svg(source)?,
+        Format::Drawio => drawio::svg(source)?,
         Format::Wireviz => wireviz::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
@@ -379,7 +384,7 @@ fn render_inline(
             (svgbob::to_svg(source), Vec::new())
         }
     };
-    let images = if format == Format::Plantuml {
+    let images = if matches!(format, Format::Plantuml | Format::Drawio) {
         ImagePolicy::EmbeddedRaster
     } else {
         ImagePolicy::Block
@@ -669,6 +674,7 @@ mod tests {
     #[test]
     fn markdown_files_and_raw_diagram_files_use_the_screen_diagram_route() {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
+        const DRAWIO: &str = include_str!("../../../docs/examples/diagrams/pipeline.drawio");
         const PUML: &str = include_str!("../../../docs/examples/diagrams/sequence.puml");
         const C4: &str = include_str!("../../../docs/examples/diagrams/architecture.puml");
         const ERD: &str = include_str!("../../../docs/examples/diagrams/people.er");
@@ -702,6 +708,10 @@ mod tests {
                 Format::Nomnoml,
                 "[Source] -> [Preview]\n",
             ),
+            ("", DRAWIO, Format::Drawio, DRAWIO),
+            ("drawio", DRAWIO, Format::Drawio, DRAWIO),
+            ("dio", DRAWIO, Format::Drawio, DRAWIO),
+            ("xml", DRAWIO, Format::Drawio, DRAWIO),
             ("", PUML, Format::Plantuml, PUML),
             ("puml", PUML, Format::Plantuml, PUML),
             ("", C4, Format::Plantuml, C4),

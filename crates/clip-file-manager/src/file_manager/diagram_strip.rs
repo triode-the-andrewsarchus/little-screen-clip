@@ -156,9 +156,14 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
         Some(Format::Wavedrom) => 0.25,
         // Component overviews need their relations and compartments visible.
         // Cropping the top can show only titles or the outer paper margin.
-        Some(Format::Wireviz | Format::Nomnoml | Format::Dbml | Format::Erd | Format::Plantuml) => {
-            rect.height() / texture.size_vec2().y
-        }
+        Some(
+            Format::Wireviz
+            | Format::Nomnoml
+            | Format::Dbml
+            | Format::Erd
+            | Format::Plantuml
+            | Format::Drawio,
+        ) => rect.height() / texture.size_vec2().y,
         _ => 0.5,
     };
     paint(ui, rect, texture, scale);

@@ -36,6 +36,7 @@ pub enum Format {
     Bytefield,
     Erd,
     Plantuml,
+    Drawio,
     Math,
     MathInline,
 }
@@ -64,6 +65,7 @@ impl Format {
             "bytefield" => Some(Self::Bytefield),
             "erd" | "er" => Some(Self::Erd),
             "plantuml" | "puml" | "c4plantuml" => Some(Self::Plantuml),
+            "drawio" | "diagramsnet" => Some(Self::Drawio),
             _ => None,
         }
     }
@@ -77,6 +79,8 @@ impl Format {
         let name = path.file_name()?.as_encoded_bytes();
         for (suffix, format) in [
             (b".excalidraw.json".as_slice(), Self::Excalidraw),
+            (b".drawio.xml".as_slice(), Self::Drawio),
+            (b".dio.xml".as_slice(), Self::Drawio),
             (b".wire.yaml".as_slice(), Self::Wireviz),
             (b".wire.yml".as_slice(), Self::Wireviz),
         ] {
@@ -96,6 +100,11 @@ impl Format {
         match Self::from_path(path) {
             Some(Self::Excalidraw) => Some("excalidraw"),
             Some(Self::Wireviz) => Some("wireviz"),
+            Some(Self::Drawio) => Some(if path.extension()?.eq_ignore_ascii_case("dio") {
+                "dio"
+            } else {
+                "drawio"
+            }),
             _ => path.extension()?.to_str(),
         }
     }
@@ -119,6 +128,7 @@ impl Format {
             "bytefield" => Some(Self::Bytefield),
             "erd" | "er" => Some(Self::Erd),
             "plantuml" | "puml" | "pu" | "iuml" => Some(Self::Plantuml),
+            "drawio" | "dio" => Some(Self::Drawio),
             _ => None,
         }
     }
@@ -128,7 +138,7 @@ impl Format {
         if let Some(extension) = path.extension().and_then(|ext| ext.to_str())
             && matches!(
                 extension.to_ascii_lowercase().as_str(),
-                "dbml" | "erd" | "er"
+                "dbml" | "erd" | "er" | "dio"
             )
         {
             return Self::from_source_extension(extension, source);
@@ -140,6 +150,7 @@ impl Format {
     /// Combines unambiguous extensions with conservative content classification.
     pub fn from_source_extension(extension: &str, source: &str) -> Option<Self> {
         Self::from_extension(extension)
+            .filter(|_| !extension.eq_ignore_ascii_case("dio") || drawio_signature(source))
             .filter(|format| {
                 // Microsoft LINQ-to-SQL and ERMaster share DBML/Erd suffixes.
                 // Incomplete XML drafts also remain in the ordinary XML viewer.
@@ -153,7 +164,13 @@ impl Format {
                 "edn" => bytefield_signature(source).then_some(Self::Bytefield),
                 "mmd" => mermaid_signature(source).then_some(Self::Mermaid),
                 "dot" => dot_signature(source).then_some(Self::Graphviz),
-                "xml" => bpmn_signature(source).then_some(Self::Bpmn),
+                "xml" => {
+                    if bpmn_signature(source) {
+                        Some(Self::Bpmn)
+                    } else {
+                        drawio_signature(source).then_some(Self::Drawio)
+                    }
+                }
                 "json" if excalidraw_signature(source) => Some(Self::Excalidraw),
                 "json" | "json5" => wavejson::signature(source).then_some(Self::Wavedrom),
                 "yaml" | "yml" => wireviz::signature(source).then_some(Self::Wireviz),
@@ -188,6 +205,7 @@ impl Format {
             (Self::Bytefield, bytefield_signature),
             (Self::Erd, erd_signature),
             (Self::Plantuml, plantuml_signature),
+            (Self::Drawio, drawio_signature),
         ];
         signatures
             .iter()
@@ -215,6 +233,7 @@ impl Format {
             Self::Bytefield => Some("bytefield"),
             Self::Erd => Some("er"),
             Self::Plantuml => Some("puml"),
+            Self::Drawio => Some("drawio"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -238,6 +257,7 @@ impl Format {
             Self::Bytefield => "Bytefield",
             Self::Erd => "Erd",
             Self::Plantuml => "PlantUML",
+            Self::Drawio => "draw.io",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
@@ -505,14 +525,31 @@ fn lini_declaration(line: &str) -> bool {
 // Generic XML is claimed only by its actual, namespace-resolved root. A bounded
 // prefix avoids materializing the document or reading beyond the source buffer.
 fn bpmn_signature(source: &str) -> bool {
+    xml_root_matches(
+        source,
+        Some(b"http://www.omg.org/spec/BPMN/20100524/MODEL"),
+        &[b"definitions"],
+    )
+}
+
+fn drawio_signature(source: &str) -> bool {
+    xml_root_matches(source, None, &[b"mxfile", b"mxGraphModel"])
+}
+
+// Check the first real root only; a quoted/nested diagram is ordinary XML.
+fn xml_root_matches(source: &str, namespace: Option<&[u8]>, names: &[&[u8]]) -> bool {
     use quick_xml::{events::Event, name::ResolveResult};
     let source = &source[..source.floor_char_boundary(source.len().min(32 * 1024))];
     let mut reader = quick_xml::NsReader::from_str(source.trim_start_matches('\u{feff}'));
     loop {
         match reader.read_resolved_event() {
-            Ok((ResolveResult::Bound(namespace), Event::Start(tag) | Event::Empty(tag))) => {
-                return namespace.as_ref() == b"http://www.omg.org/spec/BPMN/20100524/MODEL"
-                    && tag.local_name().as_ref() == b"definitions";
+            Ok((resolved, Event::Start(tag) | Event::Empty(tag))) => {
+                let namespace_matches = match (namespace, resolved) {
+                    (Some(expected), ResolveResult::Bound(actual)) => actual.as_ref() == expected,
+                    (None, ResolveResult::Unbound) => true,
+                    _ => false,
+                };
+                return namespace_matches && names.contains(&tag.local_name().as_ref());
             }
             Ok((_, Event::Decl(_) | Event::Comment(_) | Event::PI(_))) => (),
             Ok((_, Event::Text(text))) if text.iter().all(u8::is_ascii_whitespace) => (),
@@ -667,6 +704,51 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drawio_routes_explicit_files_and_only_distinctive_xml_roots() {
+        let source =
+            include_str!("../../../vendor/document-svg-drawio/tests/fixtures/basic.drawio");
+        for name in [
+            "drawing.drawio",
+            "drawing.dio",
+            "drawing.DRAWIO.XML",
+            "drawing.dio.xml",
+        ] {
+            let path = std::path::Path::new(name);
+            assert_eq!(Format::from_source_path(path, source), Some(Format::Drawio));
+            let hint = if name == "drawing.dio" {
+                "dio"
+            } else {
+                "drawio"
+            };
+            assert_eq!(Format::source_extension_hint(path), Some(hint));
+        }
+        for language in ["drawio", "diagramsnet"] {
+            assert_eq!(Format::from_language(language), Some(Format::Drawio));
+        }
+        for source in [
+            source,
+            "<?xml version=\"1.0\"?><!-- test --><mxGraphModel><root/></mxGraphModel>",
+        ] {
+            assert_eq!(
+                Format::from_source_extension("xml", source),
+                Some(Format::Drawio)
+            );
+            assert_eq!(Format::from_snippet(source), Some(Format::Drawio));
+        }
+        for source in [
+            "<ordinary><mxfile/></ordinary>",
+            "text <mxfile/>",
+            "<mxlibrary/>",
+            "<mxfile xmlns=\"urn:unrelated\"/>",
+            "<svg/>",
+        ] {
+            assert_eq!(Format::from_source_extension("xml", source), None);
+            assert_eq!(Format::from_source_extension("dio", source), None);
+            assert_eq!(Format::from_snippet(source), None);
+        }
+    }
+
     #[test]
     fn plantuml_aliases_and_complete_clipboard_blocks_share_the_native_format() {
         for language in ["plantuml", "puml", "c4plantuml"] {
