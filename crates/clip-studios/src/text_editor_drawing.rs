@@ -115,12 +115,8 @@ impl DrawingEditor {
             .is_some_and(|edit| edit.started.elapsed() > Duration::from_secs(3))
         {
             self.pending = None;
-            self.queued = None;
-            self.ghost = None;
-            self.retained_move = None;
-            self.edit_error =
-                Some("The canvas edit timed out; the source was kept unchanged.".into());
-            return Some(Poll::Failed);
+            return self
+                .task_error("The canvas edit timed out; the source was kept unchanged.".into());
         }
         if self.busy() && self.pending.is_none() {
             self.start_edit();
@@ -130,7 +126,9 @@ impl DrawingEditor {
             self.pending = None;
             match result {
                 Ok(Ok(update)) => {
-                    self.queued = None;
+                    if let Some(edit) = self.queued.take() {
+                        self.accept_text(edit.change);
+                    }
                     self.selected
                         .retain(|id| update.scene.items.iter().any(|item| &item.id == id));
                     if self.tool.is_none()
@@ -166,8 +164,8 @@ impl DrawingEditor {
     }
 
     fn task_error(&mut self, error: String) -> Option<Poll> {
-        if self.busy() {
-            self.queued = None;
+        if let Some(edit) = self.queued.take() {
+            self.reject_text(edit.change);
             self.ghost = None;
             self.retained_move = None;
             self.edit_error = Some(error);

@@ -2,7 +2,7 @@
 use super::*;
 use little_clip_core::diagram::drawing::{TextContent, TextCreation, TextStyle};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(super) enum TextTarget {
     Existing(String),
     New {
@@ -19,7 +19,7 @@ impl TextTarget {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(super) struct TextDraft {
     pub target: TextTarget,
     pub value: String,
@@ -100,6 +100,23 @@ fn excalidraw_number(value: f64) -> Result<little_clip_core::diagram::drawing::N
 }
 
 impl DrawingEditor {
+    pub(super) fn accept_text(&mut self, action: Action) {
+        if let Action::Text(draft) = action
+            && self.text_draft.as_ref() == Some(&draft)
+        {
+            self.text_draft = None;
+        }
+    }
+
+    pub(super) fn reject_text(&mut self, action: Action) {
+        if let Action::Text(draft) = action
+            && self.text_draft.is_none()
+            && self.text_selection.as_deref() == Some(draft.target.id())
+        {
+            self.text_draft = Some(draft);
+        }
+    }
+
     pub(super) fn new_text(&mut self, at: [f64; 2], container: Option<String>) {
         let id = uuid::Uuid::new_v4().to_string();
         self.text_selection = Some(id.clone());
@@ -128,6 +145,7 @@ impl DrawingEditor {
         }
         if self.tool.is_none()
             && !self.busy()
+            && self.text_draft.is_none()
             && let (Some(model), Some(id)) = (&self.model, self.selected.first())
         {
             match model.text_info(id) {
@@ -137,15 +155,6 @@ impl DrawingEditor {
                         target: TextTarget::Existing(info.id),
                         value: info.text,
                     });
-                }
-                Ok(None) => {
-                    if self
-                        .text_draft
-                        .as_ref()
-                        .is_some_and(|draft| matches!(draft.target, TextTarget::Existing(_)))
-                    {
-                        self.text_draft = None;
-                    }
                 }
                 Err(error) => {
                     self.text_notice = Some(error.to_string());
@@ -171,7 +180,7 @@ impl DrawingEditor {
             self.selected = vec![id];
             self.queue(Action::Text(draft.clone()));
             self.tool = None;
-            self.text_draft = None;
+            self.text_draft = Some(draft);
         } else if open {
             self.text_draft = Some(draft);
         } else {
@@ -183,6 +192,146 @@ impl DrawingEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const SOURCE: &str = include_str!("../../../../docs/examples/diagrams/drawing.excalidraw");
+
+    fn draft(value: &str) -> TextDraft {
+        TextDraft {
+            target: TextTarget::Existing("capture-label".into()),
+            value: value.into(),
+        }
+    }
+
+    fn editor(draft: &TextDraft) -> DrawingEditor {
+        DrawingEditor {
+            source: Some(Arc::from(SOURCE)),
+            model: Some(Arc::new(Scene::parse(SOURCE).unwrap())),
+            selected: vec![draft.target.id().into()],
+            text_selection: Some(draft.target.id().into()),
+            text_draft: Some(draft.clone()),
+            ..Default::default()
+        }
+    }
+
+    fn complete(editor: &mut DrawingEditor) -> Option<Poll> {
+        let context = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while editor.busy() {
+            let result = editor.poll(&context, SOURCE);
+            if result.is_some() {
+                return result;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "accepted drawing edit did not settle"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        None
+    }
+
+    #[test]
+    fn failed_validation_and_measurement_retain_exact_submitted_text() {
+        for value in [
+            "This label is much too wide for its rectangular container",
+            "bad\0text",
+        ] {
+            let submitted = draft(value);
+            let mut editor = editor(&submitted);
+            editor.queue(Action::Text(submitted.clone()));
+            assert!(matches!(complete(&mut editor), Some(Poll::Failed)));
+            assert!(editor.text_draft.as_ref() == Some(&submitted));
+            assert!(editor.edit_error.is_some());
+            assert!(!editor.busy());
+            assert_eq!(editor.source.as_deref(), Some(SOURCE));
+            assert_eq!(editor.model.as_ref().unwrap().source(), SOURCE);
+        }
+    }
+
+    #[test]
+    fn timeout_recovers_dismissed_text_but_never_replaces_a_newer_draft() {
+        let submitted = draft("Retain this exact replacement\nwith two lines");
+        for newer in [None, Some(draft("A newer unsubmitted replacement"))] {
+            let mut editor = editor(&submitted);
+            editor.queued = Some(PendingEdit {
+                change: Action::Text(submitted.clone()),
+                started: Instant::now() - Duration::from_secs(4),
+            });
+            editor.text_draft = newer.clone();
+            assert!(matches!(
+                editor.poll(&egui::Context::default(), SOURCE),
+                Some(Poll::Failed)
+            ));
+            assert!(editor.text_draft.as_ref() == Some(newer.as_ref().unwrap_or(&submitted)));
+            assert!(!editor.busy());
+            assert_eq!(editor.model.as_ref().unwrap().source(), SOURCE);
+        }
+    }
+
+    #[test]
+    fn failed_text_does_not_reopen_over_a_newer_selection_or_source_revision() {
+        let submitted = draft("Submitted replacement");
+        let mut editor = editor(&submitted);
+        editor.queued = Some(PendingEdit {
+            change: Action::Text(submitted),
+            started: Instant::now(),
+        });
+        editor.text_draft = None;
+        editor.text_selection = Some("a-newer-dismissed-draft".into());
+        assert!(matches!(
+            editor.task_error("validation failed".into()),
+            Some(Poll::Failed)
+        ));
+        assert!(editor.text_draft.is_none());
+
+        let submitted = draft("Must not reach a different source");
+        let mut editor = self::editor(&submitted);
+        editor.queued = Some(PendingEdit {
+            change: Action::Text(submitted),
+            started: Instant::now() - Duration::from_secs(4),
+        });
+        assert!(matches!(
+            editor.poll(&egui::Context::default(), "a newer source"),
+            Some(Poll::Replaced)
+        ));
+        assert!(editor.text_draft.is_none());
+        assert!(editor.queued.is_none());
+        assert!(editor.pending.is_none());
+    }
+
+    #[test]
+    fn successful_no_op_closes_only_its_matching_draft_without_source_changes() {
+        for newer in [None, Some(draft("Keep this newer input"))] {
+            let submitted = draft("Capture");
+            let mut editor = editor(&submitted);
+            editor.queue(Action::Text(submitted));
+            if let Some(newer) = &newer {
+                editor.text_draft = Some(newer.clone());
+            }
+            assert!(complete(&mut editor).is_none());
+            assert!(editor.text_draft.as_ref() == newer.as_ref());
+            assert!(editor.edit_error.is_none());
+            assert!(!editor.busy());
+            assert_eq!(editor.source.as_deref(), Some(SOURCE));
+            assert_eq!(editor.model.as_ref().unwrap().source(), SOURCE);
+        }
+    }
+
+    #[test]
+    fn form_refresh_cannot_replace_a_newer_draft_with_selected_source_text() {
+        let mut editor = editor(&draft("Submitted"));
+        let newer = TextDraft {
+            target: TextTarget::Existing("caption".into()),
+            value: "Newer exact input\nfor a different target".into(),
+        };
+        editor.text_selection = Some("caption".into());
+        editor.text_draft = Some(newer.clone());
+        let context = egui::Context::default();
+        let _ = context.run(egui::RawInput::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| editor.text_controls(ui));
+        });
+        assert!(editor.text_draft.as_ref() == Some(&newer));
+    }
+
     #[test]
     fn text_requests_measure_inside_the_existing_edit_job_and_keep_the_shared_model_owner() {
         let source = include_str!("../../../../docs/examples/diagrams/drawing.excalidraw");
