@@ -68,7 +68,11 @@ Corresponding source:
 - https://crates.io/api/v1/crates/mathra/1.12.0/download
 - https://github.com/matheusmota-dev-br/mathra/tree/48a36964c7ee62171a77063a1572166d5f0fe337
 
-Optional chemistry, emoji, Latin Modern and PNG features are disabled. The
+Optional chemistry, emoji and PNG features are disabled. TikZ labels enable the
+Latin Modern Math feature under the GUST Font License, reproduced from Mathra
+in `vendor/tikra/third_party/` and embedded by `--diagram-licenses`. The base
+[LPPL 1.3c](https://www.latex-project.org/lppl/lppl-1-3c.txt) text is retained
+verbatim as `mathra-lppl-1.3c.txt`, together with the upstream font README. The
 application supplies its existing Noto outline fonts as character fallbacks and
 uses its existing SVG rasterizer. No TeX installation or JavaScript engine is
 required, and source commands cannot select a file loader.

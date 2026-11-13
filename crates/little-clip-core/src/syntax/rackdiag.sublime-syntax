@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: RackDiag
+file_extensions: [rackdiag]
+scope: source.rackdiag
+contexts:
+  main:
+    - include: scope:source.blockdiag

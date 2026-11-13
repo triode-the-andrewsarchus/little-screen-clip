@@ -1,0 +1,12 @@
+nwdiag {
+  network public {
+    address = "192.0.2.0/24";
+    gateway [address = "192.0.2.1"];
+    web [address = "192.0.2.20", color = "#d9e8fb"];
+  }
+  network internal {
+    address = "10.0.0.0/24";
+    web [address = "10.0.0.20"];
+    database [address = "10.0.0.30", color = "#d9f0df"];
+  }
+}

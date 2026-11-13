@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: PacketDiag
+file_extensions: [packetdiag]
+scope: source.packetdiag
+contexts:
+  main:
+    - include: scope:source.blockdiag

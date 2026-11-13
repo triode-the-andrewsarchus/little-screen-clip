@@ -1,0 +1,9 @@
+packetdiag {
+  colwidth = 32;
+  node_height = 64;
+  0-3: Version [color = "#d9e8fb"];
+  4-7: Flags;
+  8-15: Length [color = "#d9f0df"];
+  16-31: Identifier;
+  32-63: Payload;
+}

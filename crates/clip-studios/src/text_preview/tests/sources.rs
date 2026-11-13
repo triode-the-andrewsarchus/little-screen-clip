@@ -397,6 +397,54 @@ fn subtitle_raw_source_handles_cr_without_normalizing_the_file_bytes() {
 #[test]
 fn standalone_diagram_sources_have_loaded_native_syntax_definitions() {
     for (extension, name, source) in [
+        ("vega", "Vega", "{\"marks\":[],\"data\":[]}"),
+        (
+            "vegalite",
+            "Vega-Lite",
+            "{\"mark\":\"bar\",\"encoding\":{}}",
+        ),
+        (
+            "tikz",
+            "TikZ / PGF",
+            "\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}",
+        ),
+        (
+            "umlet",
+            "UMLet",
+            "<diagram><element><id>UMLClass</id></element></diagram>",
+        ),
+        (
+            "symbolator",
+            "Symbolator",
+            "module example(input wire clk); endmodule",
+        ),
+        ("ditaa", "Ditaa", "+-----+\n|cBLU |\n+-----+"),
+        (
+            "blockdiag",
+            "BlockDiag",
+            "blockdiag { a -> b [label=\"Preview\"]; }",
+        ),
+        (
+            "seqdiag",
+            "SeqDiag",
+            "seqdiag { a -> b [label=\"Preview\"]; }",
+        ),
+        (
+            "actdiag",
+            "ActDiag",
+            "actdiag { a -> b [label=\"Preview\"]; }",
+        ),
+        ("nwdiag", "NwDiag", "nwdiag { a -> b [label=\"Preview\"]; }"),
+        (
+            "packetdiag",
+            "PacketDiag",
+            "packetdiag { a -> b [label=\"Preview\"]; }",
+        ),
+        (
+            "rackdiag",
+            "RackDiag",
+            "rackdiag { a -> b [label=\"Preview\"]; }",
+        ),
         (
             "mermaid",
             "Mermaid",

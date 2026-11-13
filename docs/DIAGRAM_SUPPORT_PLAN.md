@@ -47,20 +47,20 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | Excalidraw | excalidraw-render 0.1.0; excalidraw-document 0.2.0; gpui-excalidraw 0.1.9; excalidraw-image 0.2.0 | Native SVG renderer and preserving graphical transactions integrated; initial drawing/selection/movement canvas works; text editing and resize handles pending |
 | WaveDrom | Canonical 3.8.0; native wavedrom 0.1.0 and current Rust main; WavePaint graphical reference | Canonical engine embedded without a browser; timing/register/logic source previews integrated; direct timing painting and lane naming integrated; advanced operations stay in source |
 | Structurizr | oak-structurizr; dendryform-export; Cadastre; tree-sitter; StructurizrX; structurizr-rs | Native candidates probed; selected memory-only libraries prepared; host integration pending (qualification below) |
-| BlockDiag / SeqDiag / ActDiag / NwDiag / PacketDiag / RackDiag | [xio_job_to_blockdiag](https://crates.io/crates/xio_job_to_blockdiag) 0.8.0 | Pending comparison / editor research |
+| BlockDiag / SeqDiag / ActDiag / NwDiag / PacketDiag / RackDiag | [xio_job_to_blockdiag](https://crates.io/crates/xio_job_to_blockdiag) 0.8.0 | Canonical Python grammars/layouts via shared bounded child; [comparison](diagrams/blockdiag-research.md). Renderer tests pass; native host validation pending. |
 | Bytefield | Canonical Bytefield-SVG 1.11/1.12; ProtoViz; Framegram; unrelated native bitfield crates | Pin canonical 1.11 after differential helper-function regression; bounded hostless rendering, shared Markdown/clipboard/source/list paths implemented |
-| Ditaa | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [ansicht](https://crates.io/crates/ansicht) 0.1.0; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
+| Ditaa | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [ansicht](https://crates.io/crates/ansicht) 0.1.0; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Separate canonical Java SVG companion; [comparison](diagrams/ditaa-research.md). Differential probes and shared renderer tests pass; native host validation pending. |
 | Erd | rusterd 0.3.1; erd_rs 0.1; erd-rs; erd-go; original Haskell grammar | Native canonical bracket/entity parser, styled Graphviz rendering and shared Markdown/source/list routes implemented; graphical editing pending |
 | Nomnoml | Canonical Nomnoml 1.7.0 with Graphre 0.1.3; crates.io hits silica/squaredb inspected and unrelated | Hostless canonical rendering, standalone/Markdown/clipboard routes and source/live editor implemented; graphical editing pending |
 | Pikchr | [pikchr](https://crates.io/crates/pikchr) 0.1.4; [pikchr-rs](https://crates.io/crates/pikchr-rs) 0.1.0; [pikchr-sys](https://crates.io/crates/pikchr-sys) 0.1.1 | Selected pikchr-rs; source/live previews implemented; direct manipulation pending |
 | Svgbob | [svgbob](https://crates.io/crates/svgbob) 0.7.6; [mdbook-svgbob](https://crates.io/crates/mdbook-svgbob) 0.3.1; [mdbook-svgbob2](https://crates.io/crates/mdbook-svgbob2) 0.3.0 | Selected original SvgBob; source/live previews implemented; cell editor and .bob disambiguation pending |
 | GoAT | aasvg 1.0.0, SvgBob, upstream GoAT 0.5.1; differential upstream fixtures | Pinned upstream static companion, ASCII/Unicode rendering and shared source/strip routes implemented; cell editing pending |
 | Lini | Original lini 1.1.0 compiler; mdbook-lini and lini-wasm integrations of the same compiler; specification reimplementation | Original native compiler selected; highlighted source/live previews implemented, graphical editing pending |
-| TikZ / PGF | [mdbook-tikz](https://crates.io/crates/mdbook-tikz) 0.2.8; [tikra](https://crates.io/crates/tikra) 1.9.2; [tikra-cli](https://crates.io/crates/tikra-cli) 1.9.2 | Pending comparison / editor research |
-| UMLet | No direct crates.io match; compare upstream implementation and format specification. | Pending comparison / editor research |
-| Vega / Vega-Lite | [vega](https://crates.io/crates/vega) 0.0.1; [vega-view](https://crates.io/crates/vega-view) 0.1.0; [encdr](https://crates.io/crates/encdr) 0.9.0 | Pending comparison / editor research |
+| TikZ / PGF | [mdbook-tikz](https://crates.io/crates/mdbook-tikz) 0.2.8; [tikra](https://crates.io/crates/tikra) 1.9.2; [tikra-cli](https://crates.io/crates/tikra-cli) 1.9.2 | Native Tikra with disabled external resolver and shared SVG pipeline; [comparison](diagrams/tikz-research.md). Renderer/reference tests pass; native host validation pending. |
+| UMLet | No direct crates.io match; compare upstream implementation and format specification. | Separate canonical data-only Java SVG companion; [comparison](diagrams/umlet-research.md). Differential probes and renderer tests pass; native host validation pending. |
+| Vega / Vega-Lite | [vega](https://crates.io/crates/vega) 0.0.1; [vega-view](https://crates.io/crates/vega-view) 0.1.0; [encdr](https://crates.io/crates/encdr) 0.9.0 | Canonical pinned bundles in existing bounded QuickJS; [comparison](diagrams/vega-research.md). Production routes and tests pass; native host validation pending. |
 | WireViz | [wirebug](https://crates.io/crates/wirebug) 0.1.0; oneyaml/yaml-edit source-preserving parsers; existing native Graphviz tables/ports | Native harness model, initial rendered previews, shared routes and source/live editor implemented. Template/palette compatibility and graphical harness transactions remain pending. |
-| Symbolator | No verified native candidate yet; compare canonical Symbolator with HDL parser libraries | Pending compatibility, license and editor research; unrelated graphics crates are not format implementations |
+| Symbolator | No verified native candidate yet; compare canonical Symbolator with HDL parser libraries | Canonical interface extraction and symbol geometry via shared Python boundary; [comparison](diagrams/symbolator-research.md). Renderer tests pass; native host validation pending. |
 
 Additional promising Mermaid alternatives: [mermaid-rs-renderer](https://github.com/1jehuang/mermaid-rs-renderer), [merman](https://docs.rs/merman/latest/merman/) and [ariel-rs](https://docs.rs/ariel-rs/latest/ariel_rs/). Compare typed models/source correspondence, compatibility, dependencies and bounded execution, rather than advertised benchmarks alone.
 
@@ -2910,3 +2910,30 @@ all-target shared-renderer Clippy passes. Scoped measurement reports zero clones
 and maximum CCN 13; separating evaluation from promise settlement removes the
 initial CCN-17 implementation. Single-file cycle measurement is unavailable;
 the complete application-level comparison remains part of batch integration.
+
+### Companion and registry integration checkpoint
+
+- [x] Commit pristine upstream inputs independently from local adaptations.
+- [x] Package immutable Ditaa/UMLet companions, retaining source and notices;
+  the same publication mechanism preserves GoAT discovery.
+- [x] Verify all six BlockDiag grammars, Symbolator interfaces, native TikZ/PGF,
+  Vega/Vega-Lite and nested Structurizr deployment through shared SVG rendering.
+  The combined renderer suite passes 108 tests; core diagram tests pass 66.
+- [ ] Finish studio/host-worker tests, warning checks and native light/dark review
+  of the newly registered families before marking their format checkboxes done.
+- [ ] Qualify the new parser-backed Mermaid canvas in the actual desktop host.
+
+The full architecture comparison includes 142,225 lines of retained upstream
+sources, so it reports vendor clone groups/cycles. The application adds no new
+preview/cache/process owner or dependency cycle. Direct format dispatch grows
+from CCN 23 to 35 because it names the new engines; those branches are required
+registry behavior. The Vega clone shim initially had CCN 17; separating intrinsic
+payload cloning from recursive containers reduces its maximum to 13 with zero
+clones. Mermaid's owned modules measure at most CCN 15; repeated rectangle
+projection now uses the existing shared Camera owner. Identical license texts,
+upstream companion overlays and small policy calls remain explicit rather than
+being rewritten to improve metrics.
+
+New standalone and Markdown fixtures are also in
+`/home/vega/Documents/type_testing/md_extensions/`. Native GUI acceptance remains
+pending; their presence is not a claim that the review has passed.

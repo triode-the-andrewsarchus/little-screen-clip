@@ -1,0 +1,7 @@
+seqdiag {
+  default_fontsize = 14;
+  browser -> service [label = "GET /preview"];
+  service -> cache [label = "Find source"];
+  service <-- cache [label = "Cached diagram"];
+  browser <-- service [label = "SVG preview"];
+}

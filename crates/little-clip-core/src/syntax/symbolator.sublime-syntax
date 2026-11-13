@@ -1,0 +1,15 @@
+%YAML 1.2
+---
+name: Symbolator
+file_extensions: [symbolator]
+scope: source.symbolator
+contexts:
+  main:
+    - match: '--.*$|//.*$'
+      scope: comment.line.symbolator
+    - match: '(?i:\b(entity|component|is|port|generic|in|out|inout|end|module|endmodule|input|output|parameter|wire|reg|logic|std_logic|std_logic_vector)\b)'
+      scope: keyword.control.symbolator
+    - match: '"[^"\n]*"'
+      scope: string.quoted.double.symbolator
+    - match: '\b\d+\b'
+      scope: constant.numeric.symbolator

@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: TikZ / PGF
+file_extensions: [tikz]
+scope: source.tikz
+contexts:
+  main:
+    - include: scope:text.tex.latex

@@ -6291,6 +6291,7 @@ dependencies = [
  "syntect",
  "tempfile",
  "thiserror 1.0.69",
+ "tikra",
  "tiny-skia 0.11.4",
  "tracing",
  "ttf-parser 0.25.1",
@@ -11204,6 +11205,15 @@ dependencies = [
  "quick-error",
  "weezl 0.1.12",
  "zune-jpeg",
+]
+
+[[package]]
+name = "tikra"
+version = "1.9.2"
+dependencies = [
+ "mathra",
+ "serde_json",
+ "ttf-parser 0.25.1",
 ]
 
 [[package]]

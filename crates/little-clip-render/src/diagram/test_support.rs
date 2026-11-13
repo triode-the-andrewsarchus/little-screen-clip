@@ -13,6 +13,75 @@ use std::{ffi::OsStr, time::Duration};
 pub fn assert_worker(executable: impl AsRef<OsStr>) {
     for (format, source, success) in [
         (
+            "blockdiag",
+            include_str!("../../../../docs/examples/diagrams/pipeline.blockdiag"),
+            true,
+        ),
+        (
+            "seqdiag",
+            include_str!("../../../../docs/examples/diagrams/request.seqdiag"),
+            true,
+        ),
+        (
+            "actdiag",
+            include_str!("../../../../docs/examples/diagrams/review.actdiag"),
+            true,
+        ),
+        (
+            "nwdiag",
+            include_str!("../../../../docs/examples/diagrams/service.nwdiag"),
+            true,
+        ),
+        (
+            "packetdiag",
+            include_str!("../../../../docs/examples/diagrams/header.packetdiag"),
+            true,
+        ),
+        (
+            "rackdiag",
+            include_str!("../../../../docs/examples/diagrams/server.rackdiag"),
+            true,
+        ),
+        (
+            "ditaa",
+            include_str!("../../../../docs/examples/diagrams/pipeline.ditaa"),
+            true,
+        ),
+        (
+            "tikz",
+            include_str!("../../../../docs/examples/diagrams/native-tikz.tikz"),
+            true,
+        ),
+        (
+            "tikz",
+            include_str!("../../../../docs/examples/diagrams/native-pgf.pgf"),
+            true,
+        ),
+        (
+            "tikz",
+            include_str!("../../../../docs/examples/diagrams/native-pgfplots.pgfplots"),
+            true,
+        ),
+        (
+            "umlet",
+            include_str!("../../../../docs/examples/diagrams/umlet/class-relations.uxf"),
+            true,
+        ),
+        (
+            "symbolator",
+            include_str!("../../../../docs/examples/diagrams/entity.symbolator.vhdl"),
+            true,
+        ),
+        ("blockdiag", "blockdiag {", false),
+        ("ditaa", "@startditaa\n+---+", false),
+        (
+            "tikz",
+            r"\input{Cargo.toml}\begin{tikzpicture}\draw (0,0)--(1,1);\end{tikzpicture}",
+            false,
+        ),
+        ("umlet", "<diagram>", false),
+        ("symbolator", "module", false),
+        (
             "vega",
             include_str!("../../../../docs/examples/diagrams/native-vega.vega.json"),
             true,

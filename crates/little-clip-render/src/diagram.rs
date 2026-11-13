@@ -17,22 +17,29 @@ mod bpmn;
 mod bytefield;
 mod d2;
 mod dbml;
+mod ditaa;
 mod erd;
 mod excalidraw;
 mod fonts;
 mod goat;
 mod graphviz;
 mod images;
+mod java;
 pub mod retained;
+mod umlet;
 use images::Policy as ImagePolicy;
+mod blockdiag;
 mod drawio;
 mod lini;
 mod math;
 mod mermaid;
 mod nomnoml;
 mod plantuml;
+mod python;
 mod script;
 mod structurizr;
+mod symbolator;
+mod tikz;
 mod vega;
 mod wavedrom;
 mod wireviz;
@@ -241,6 +248,28 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/drawio-notices.md"),
             include_str!("../third_party/structurizr-notices.md"),
             include_str!("../third_party/vega-notices.md"),
+            include_str!("../../../vendor/tikra/LICENSE-MIT"),
+            include_str!(
+                "../../../vendor/tikra/third_party/mathra-fonts-GUST-FONT-LICENSE-LatinModernMath.txt"
+            ),
+            include_str!("../../../vendor/tikra/third_party/mathra-fonts-README.md"),
+            include_str!("../third_party/mathra-lppl-1.3c.txt"),
+            include_str!("../../../vendor/tikra/ADAPTATIONS.md"),
+            include_str!("../../../vendor/symbolator/upstream/LICENSE"),
+            include_str!("../../../vendor/symbolator/ADAPTATIONS.md"),
+            include_str!("diagram/blockdiag/parser-MIT.txt"),
+            include_str!("../../../vendor/blockdiag-family/blockdiag/LICENSE"),
+            include_str!("../../../vendor/blockdiag-family/seqdiag/LICENSE"),
+            include_str!("../../../vendor/blockdiag-family/actdiag/LICENSE"),
+            include_str!("../../../vendor/blockdiag-family/nwdiag/LICENSE"),
+            include_str!("../../../vendor/blockdiag-family/funcparserlib/LICENSE"),
+            include_str!("../../../vendor/blockdiag-family/webcolors/LICENSE"),
+            include_str!("../../../vendor/ditaa/licenses/GPL-3.0.txt"),
+            include_str!("../../../vendor/ditaa/upstream/LICENSE"),
+            include_str!("../../../vendor/umlet/upstream/LICENCE.txt"),
+            include_str!("../../../vendor/umlet/jlibeps-pristine/license.txt"),
+            include_str!("../../../vendor/ditaa/ADAPTATIONS.md"),
+            include_str!("../../../vendor/umlet/ADAPTATIONS.md"),
             include_str!("../../../vendor/structurizr-rs/LICENSE-MIT"),
             include_str!("../../../vendor/document-svg-drawio/LICENSE-MIT"),
             include_str!("../../../vendor/document-svg-drawio/LICENSE-APACHE"),
@@ -368,6 +397,16 @@ fn render_inline(
         Format::Structurizr => structurizr::svg(source)?,
         Format::Vega => vega::svg(source, false)?,
         Format::VegaLite => vega::svg(source, true)?,
+        Format::Blockdiag => blockdiag::svg("blockdiag", source)?,
+        Format::Seqdiag => blockdiag::svg("seqdiag", source)?,
+        Format::Actdiag => blockdiag::svg("actdiag", source)?,
+        Format::Nwdiag => blockdiag::svg("nwdiag", source)?,
+        Format::Packetdiag => blockdiag::svg("packetdiag", source)?,
+        Format::Rackdiag => blockdiag::svg("rackdiag", source)?,
+        Format::Ditaa => ditaa::svg(source)?,
+        Format::Tikz => tikz::svg(source)?,
+        Format::Umlet => umlet::svg(source)?,
+        Format::Symbolator => symbolator::svg(source)?,
         Format::Wireviz => wireviz::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,

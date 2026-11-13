@@ -1,0 +1,63 @@
+# Umlet previews
+
+Local source and rendered views of the same diagrams.
+
+## umlet/class-relations.uxf
+
+```umlet
+<?xml version="1.0" encoding="UTF-8"?>
+<diagram program="umlet" version="15.1">
+  <zoom_level>10</zoom_level>
+  <element>
+    <id>UMLClass</id>
+    <coordinates><x>40</x><y>40</y><w>180</w><h>120</h></coordinates>
+    <panel_attributes>FileSource
+--
+-revision: Identity
+--
++read(): Bytes
+bg=#e8f1ff</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLClass</id>
+    <coordinates><x>360</x><y>40</y><w>180</w><h>120</h></coordinates>
+    <panel_attributes>Preview
+--
+-geometry: Scene
+--
++render(): Image
+bg=#e7f7ed</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates><x>210</x><y>70</y><w>170</w><h>50</h></coordinates>
+    <panel_attributes>lt=-&gt;
+m1=1
+m2=*
+supplies</panel_attributes>
+    <additional_attributes>10;20;150;20</additional_attributes>
+  </element>
+  <element>
+    <id>UMLNote</id>
+    <coordinates><x>40</x><y>220</y><w>230</w><h>80</h></coordinates>
+    <panel_attributes>Source and geometry
+stay locally editable.
+bg=yellow</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLActor</id>
+    <coordinates><x>360</x><y>210</y><w>80</w><h>110</h></coordinates>
+    <panel_attributes>Reader</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLUseCase</id>
+    <coordinates><x>500</x><y>230</y><w>160</w><h>60</h></coordinates>
+    <panel_attributes>Inspect a diagram</panel_attributes>
+    <additional_attributes/>
+  </element>
+</diagram>
+```

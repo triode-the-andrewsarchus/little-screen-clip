@@ -58,5 +58,7 @@ structurizr-core = { path = "../../vendor/structurizr-rs/crates/structurizr-core
 structurizr-dsl = { path = "../../vendor/structurizr-rs/crates/structurizr-dsl" }
 structurizr-render = { path = "../../vendor/structurizr-rs/crates/structurizr-render" }
 
+tikra = { path = "../../vendor/tikra", default-features = false }
+
 [dev-dependencies]
 tempfile = "3.27"

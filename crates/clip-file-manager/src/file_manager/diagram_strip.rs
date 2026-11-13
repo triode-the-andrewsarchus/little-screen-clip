@@ -34,7 +34,17 @@ impl Document {
             .is_some_and(|value| {
                 matches!(
                     value.to_ascii_lowercase().as_str(),
-                    "json" | "json5" | "dot" | "mmd" | "xml" | "yaml" | "yml" | "edn" | "dsl"
+                    "json"
+                        | "json5"
+                        | "dot"
+                        | "mmd"
+                        | "xml"
+                        | "yaml"
+                        | "yml"
+                        | "edn"
+                        | "dsl"
+                        | "diag"
+                        | "tex"
                 )
             });
         if explicit.is_none() && !ambiguous {
@@ -165,7 +175,16 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
             | Format::Drawio
             | Format::Structurizr
             | Format::Vega
-            | Format::VegaLite,
+            | Format::VegaLite
+            | Format::Blockdiag
+            | Format::Seqdiag
+            | Format::Actdiag
+            | Format::Nwdiag
+            | Format::Packetdiag
+            | Format::Rackdiag
+            | Format::Tikz
+            | Format::Umlet
+            | Format::Symbolator,
         ) => rect.height() / texture.size_vec2().y,
         _ => 0.5,
     };

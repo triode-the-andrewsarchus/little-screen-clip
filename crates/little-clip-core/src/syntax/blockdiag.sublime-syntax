@@ -1,0 +1,17 @@
+%YAML 1.2
+---
+name: BlockDiag
+file_extensions: [blockdiag]
+scope: source.blockdiag
+contexts:
+  main:
+    - match: '//.*$|#.*$'
+      scope: comment.line.blockdiag
+    - match: '"[^"\n]*"'
+      scope: string.quoted.double.blockdiag
+    - match: '\b(blockdiag|seqdiag|actdiag|nwdiag|packetdiag|rackdiag|group|network|rack|description|label|color|shape|width|height|style|numbered|span|fontsize)\b'
+      scope: keyword.control.blockdiag
+    - match: '[-=]+>|[{}\[\];=,]'
+      scope: keyword.operator.blockdiag
+    - match: '\b[0-9]+\b'
+      scope: constant.numeric.blockdiag

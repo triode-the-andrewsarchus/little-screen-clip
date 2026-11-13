@@ -14,7 +14,7 @@ fn diagram_license_notices_are_available_without_host_startup() {
     let output = CommandRequest::new(env!("CARGO_BIN_EXE_clip-file-manager"))
         .arg("--diagram-licenses")
         .timeout(Duration::from_secs(5))
-        .max_output_bytes(512 * 1024)
+        .max_output_bytes(2 * 1024 * 1024)
         .own_process_group()
         .die_with_parent()
         .run()
@@ -50,6 +50,10 @@ fn diagram_license_notices_are_available_without_host_startup() {
     assert!(notices.contains("Fuzzy Bubbles Project Authors"));
     assert!(notices.contains("Matheus Mota"));
     assert!(notices.contains("STIX Fonts Project Authors"));
+    assert!(notices.contains("LPPL Version 1.3c"));
+    assert!(notices.contains("GNU LESSER GENERAL PUBLIC LICENSE"));
+    assert!(notices.contains("Symbolator"));
+    assert!(notices.contains("Vega-Lite"));
     assert!(notices.contains("234fc35f116bceca2c34579879a6e6893112ccf8"));
     assert!(notices.contains("e0e75bcab2fa8e39dd7a09465b7f2e035eda82ef"));
 }

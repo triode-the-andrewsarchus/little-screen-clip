@@ -40,6 +40,16 @@ pub enum Format {
     Structurizr,
     Vega,
     VegaLite,
+    Blockdiag,
+    Seqdiag,
+    Actdiag,
+    Nwdiag,
+    Packetdiag,
+    Rackdiag,
+    Ditaa,
+    Tikz,
+    Umlet,
+    Symbolator,
     Math,
     MathInline,
 }
@@ -72,6 +82,16 @@ impl Format {
             "structurizr" => Some(Self::Structurizr),
             "vega" => Some(Self::Vega),
             "vegalite" | "vega-lite" => Some(Self::VegaLite),
+            "blockdiag" => Some(Self::Blockdiag),
+            "seqdiag" => Some(Self::Seqdiag),
+            "actdiag" => Some(Self::Actdiag),
+            "nwdiag" => Some(Self::Nwdiag),
+            "packetdiag" => Some(Self::Packetdiag),
+            "rackdiag" => Some(Self::Rackdiag),
+            "ditaa" => Some(Self::Ditaa),
+            "tikz" | "pgf" | "pgfplots" => Some(Self::Tikz),
+            "umlet" | "uxf" => Some(Self::Umlet),
+            "symbolator" => Some(Self::Symbolator),
             _ => None,
         }
     }
@@ -94,6 +114,10 @@ impl Format {
             (b".dio.xml".as_slice(), Self::Drawio),
             (b".wire.yaml".as_slice(), Self::Wireviz),
             (b".wire.yml".as_slice(), Self::Wireviz),
+            (b".symbolator.v".as_slice(), Self::Symbolator),
+            (b".symbolator.vlog".as_slice(), Self::Symbolator),
+            (b".symbolator.vhd".as_slice(), Self::Symbolator),
+            (b".symbolator.vhdl".as_slice(), Self::Symbolator),
         ] {
             if name
                 .get(name.len().saturating_sub(suffix.len())..)
@@ -113,6 +137,7 @@ impl Format {
             Some(Self::Wireviz) => Some("wireviz"),
             Some(Self::Vega) => Some("vega"),
             Some(Self::VegaLite) => Some("vegalite"),
+            Some(Self::Symbolator) => Some("symbolator"),
             Some(Self::Drawio) => Some(if path.extension()?.eq_ignore_ascii_case("dio") {
                 "dio"
             } else {
@@ -145,6 +170,16 @@ impl Format {
             "structurizr" => Some(Self::Structurizr),
             "vega" => Some(Self::Vega),
             "vegalite" => Some(Self::VegaLite),
+            "blockdiag" => Some(Self::Blockdiag),
+            "seqdiag" => Some(Self::Seqdiag),
+            "actdiag" => Some(Self::Actdiag),
+            "nwdiag" => Some(Self::Nwdiag),
+            "packetdiag" => Some(Self::Packetdiag),
+            "rackdiag" => Some(Self::Rackdiag),
+            "ditaa" => Some(Self::Ditaa),
+            "tikz" | "pgf" | "pgfplots" => Some(Self::Tikz),
+            "umlet" | "uxf" => Some(Self::Umlet),
+            "symbolator" => Some(Self::Symbolator),
             _ => None,
         }
     }
@@ -154,7 +189,7 @@ impl Format {
         if let Some(extension) = path.extension().and_then(|ext| ext.to_str())
             && matches!(
                 extension.to_ascii_lowercase().as_str(),
-                "dbml" | "erd" | "er" | "dio"
+                "dbml" | "erd" | "er" | "dio" | "pgf"
             )
         {
             return Self::from_source_extension(extension, source);
@@ -167,6 +202,7 @@ impl Format {
     pub fn from_source_extension(extension: &str, source: &str) -> Option<Self> {
         Self::from_extension(extension)
             .filter(|_| !extension.eq_ignore_ascii_case("dio") || drawio_signature(source))
+            .filter(|_| !extension.eq_ignore_ascii_case("pgf") || tex_source(source))
             .filter(|format| {
                 // Microsoft LINQ-to-SQL and ERMaster share DBML/Erd suffixes.
                 // Incomplete XML drafts also remain in the ordinary XML viewer.
@@ -178,12 +214,16 @@ impl Format {
             })
             .or_else(|| match extension.to_ascii_lowercase().as_str() {
                 "dsl" => structurizr_signature(source).then_some(Self::Structurizr),
+                "tex" => tikz_signature(source).then_some(Self::Tikz),
+                "diag" => blockdiag_format(source),
                 "edn" => bytefield_signature(source).then_some(Self::Bytefield),
                 "mmd" => mermaid_signature(source).then_some(Self::Mermaid),
                 "dot" => dot_signature(source).then_some(Self::Graphviz),
                 "xml" => {
                     if bpmn_signature(source) {
                         Some(Self::Bpmn)
+                    } else if umlet_signature(source) {
+                        Some(Self::Umlet)
                     } else {
                         drawio_signature(source).then_some(Self::Drawio)
                     }
@@ -226,11 +266,15 @@ impl Format {
             (Self::Plantuml, plantuml_signature),
             (Self::Drawio, drawio_signature),
             (Self::Structurizr, structurizr_signature),
+            (Self::Tikz, tikz_signature),
+            (Self::Umlet, umlet_signature),
+            (Self::Ditaa, ditaa_signature),
         ];
         signatures
             .iter()
             .find_map(|(format, signature)| signature(source).then_some(*format))
             .or_else(|| vega_format(source))
+            .or_else(|| blockdiag_format(source))
     }
 
     /// Returns the preferred source extension, excluding inline math.
@@ -258,6 +302,17 @@ impl Format {
             Self::Structurizr => Some("structurizr"),
             Self::Vega => Some("vega"),
             Self::VegaLite => Some("vegalite"),
+            Self::Blockdiag => Some("blockdiag"),
+            Self::Seqdiag => Some("seqdiag"),
+            Self::Actdiag => Some("actdiag"),
+            Self::Nwdiag => Some("nwdiag"),
+            Self::Packetdiag => Some("packetdiag"),
+            Self::Rackdiag => Some("rackdiag"),
+            Self::Ditaa => Some("ditaa"),
+            Self::Tikz => Some("tikz"),
+            Self::Umlet => Some("uxf"),
+            Self::Symbolator => Some("symbolator"),
+
             Self::Math | Self::MathInline => None,
         }
     }
@@ -285,9 +340,67 @@ impl Format {
             Self::Structurizr => "Structurizr",
             Self::Vega => "Vega",
             Self::VegaLite => "Vega-Lite",
+            Self::Blockdiag => "BlockDiag",
+            Self::Seqdiag => "SeqDiag",
+            Self::Actdiag => "ActDiag",
+            Self::Nwdiag => "NwDiag",
+            Self::Packetdiag => "PacketDiag",
+            Self::Rackdiag => "RackDiag",
+            Self::Ditaa => "Ditaa",
+            Self::Tikz => "TikZ / PGF",
+            Self::Umlet => "UMLet",
+            Self::Symbolator => "Symbolator",
+
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
+}
+
+// PGF also names a binary image format. Only actual TeX text selects this editor.
+fn tex_source(source: &str) -> bool {
+    source
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('%'))
+        .is_some_and(|line| line.starts_with('\\'))
+}
+
+fn tikz_signature(source: &str) -> bool {
+    tex_source(source)
+        && [r"\begin{tikzpicture}", r"\begin{pgfpicture}"]
+            .iter()
+            .any(|marker| source.contains(marker))
+}
+
+fn umlet_signature(source: &str) -> bool {
+    xml_root_matches(source, None, &[b"diagram"])
+        && source.contains("<element>")
+        && source.contains("<panel_attributes>")
+        && source.contains("<coordinates>")
+}
+
+fn ditaa_signature(source: &str) -> bool {
+    source.starts_with("@startditaa") && source.lines().any(|line| line.trim() == "@endditaa")
+}
+
+fn blockdiag_format(source: &str) -> Option<Format> {
+    let source = &source[..source.floor_char_boundary(source.len().min(32 * 1024))];
+    let source = dot_trivia(source.trim_start_matches('\u{feff}'))?;
+    let end = source.find(|c: char| !c.is_ascii_alphabetic())?;
+    let format = match &source[..end] {
+        "blockdiag" => Format::Blockdiag,
+        "seqdiag" => Format::Seqdiag,
+        "actdiag" => Format::Actdiag,
+        "nwdiag" => Format::Nwdiag,
+        "packetdiag" => Format::Packetdiag,
+        "rackdiag" => Format::Rackdiag,
+        _ => return None,
+    };
+    // Reuse the DOT header scanner for the same optional quoted/unquoted name
+    // and comment rules; this remains a bounded hint, never a second parser.
+    let header = format!("digraph{}", &source[end..]);
+    dot_signature(&header).then_some(format)
 }
 
 fn vega_format(source: &str) -> Option<Format> {
@@ -840,6 +953,94 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn extended_diagram_sources_share_fences_paths_and_conservative_hints() {
+        for (language, name) in [
+            ("blockdiag", "pipeline.blockdiag"),
+            ("seqdiag", "request.seqdiag"),
+            ("actdiag", "review.actdiag"),
+            ("nwdiag", "service.nwdiag"),
+            ("packetdiag", "header.packetdiag"),
+            ("rackdiag", "server.rackdiag"),
+            ("ditaa", "pipeline.ditaa"),
+            ("tikz", "native-tikz.tikz"),
+            ("pgf", "native-pgf.pgf"),
+            ("pgfplots", "native-pgfplots.pgfplots"),
+            ("umlet", "umlet/class-relations.uxf"),
+            ("symbolator", "entity.symbolator.vhdl"),
+        ] {
+            let format = Format::from_language(language).unwrap();
+            let source = std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../docs/examples/diagrams")
+                    .join(name),
+            )
+            .unwrap();
+            assert_eq!(
+                Format::from_source_path(Path::new(name), &source),
+                Some(format),
+                "{name}"
+            );
+            assert_eq!(
+                Format::from_language(format.source_extension().unwrap()),
+                Some(format)
+            );
+        }
+        assert_eq!(Format::from_path(Path::new("ordinary.vhdl")), None);
+        assert_eq!(
+            Format::from_source_path(Path::new("interface.symbolator.vhdl"), "broken"),
+            Some(Format::Symbolator)
+        );
+        assert_eq!(
+            Format::source_extension_hint(Path::new("interface.symbolator.vhdl")),
+            Some("symbolator")
+        );
+        for language in [
+            "blockdiag",
+            "seqdiag",
+            "actdiag",
+            "nwdiag",
+            "packetdiag",
+            "rackdiag",
+        ] {
+            let source = format!("// diagram\n{language} named {{ a -> b; }}");
+            let format = Format::from_language(language);
+            assert_eq!(Format::from_snippet(&source), format);
+            assert_eq!(Format::from_source_extension("diag", &source), format);
+        }
+        assert_eq!(
+            Format::from_source_extension("diag", "System diagnostic log\nerror: packetdiag"),
+            None
+        );
+        assert_eq!(
+            Format::from_source_extension("pgf", "PGF binary image header"),
+            None
+        );
+        assert_eq!(
+            Format::from_source_path(Path::new("image.pgf"), "PGF binary image header"),
+            None
+        );
+        assert_eq!(
+            Format::from_source_extension(
+                "tex",
+                r"\documentclass{article}\begin{document}hello\end{document}"
+            ),
+            None
+        );
+        assert_eq!(
+            Format::from_source_extension("xml", "<diagram><name>ordinary</name></diagram>"),
+            None
+        );
+        assert_eq!(
+            Format::from_snippet("a quoted `blockdiag { a -> b; }` example"),
+            None
+        );
+        assert_eq!(
+            Format::from_snippet("@startditaa\n+---+\n| a |\n+---+\n@endditaa"),
+            Some(Format::Ditaa)
+        );
+    }
+
     #[test]
     fn chart_schemas_compound_names_and_distinctive_clipboard_specs_share_routes() {
         let vega = include_str!("../../../docs/examples/diagrams/native-vega.vega.json");

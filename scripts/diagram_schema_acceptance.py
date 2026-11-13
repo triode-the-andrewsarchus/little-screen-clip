@@ -9,6 +9,15 @@ from text_strip_acceptance import hover_observation
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "docs/examples/diagrams"
 FAMILIES = {
+    'blockdiag': ('BlockDiag', 'pipeline.blockdiag', (217, 232, 251), 'blockdiag {'),
+    'actdiag': ('ActDiag', 'review.actdiag', (217, 232, 251), 'actdiag {'),
+    'nwdiag': ('NwDiag', 'service.nwdiag', (217, 232, 251), 'nwdiag {'),
+    'packetdiag': ('PacketDiag', 'header.packetdiag', (217, 232, 251), 'packetdiag {'),
+    'rackdiag': ('RackDiag', 'server.rackdiag', (217, 232, 251), 'rackdiag {'),
+    'ditaa': ('Ditaa', 'pipeline.ditaa', (85, 85, 187), '@startditaa\n+---+'),
+    'umlet': ('UMLet', 'umlet/class-relations.uxf', (232, 241, 255), '<diagram>'),
+    'symbolator': ('Symbolator', 'entity.symbolator.vhdl', (231, 253, 186), 'entity missing is'),
+    'tikz': ('TikZ / PGF', 'native-tikz.tikz', (234, 239, 245), '\\input{Cargo.toml}\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}'),
     "vega": ("Vega", "native-vega.vega.json", (41, 95, 152), "{"),
     "vegalite": ("Vega-Lite", "native-vega-lite.vl.json", (41, 95, 152), "{"),
     "structurizr": ("Structurizr", "architecture.structurizr", (41, 95, 152), "workspace { model {"),

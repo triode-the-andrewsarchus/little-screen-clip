@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: UMLet
+file_extensions: [umlet]
+scope: source.umlet
+contexts:
+  main:
+    - include: scope:text.xml
