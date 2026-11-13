@@ -4,22 +4,31 @@
 if (typeof structuredClone === 'undefined') {
     globalThis.structuredClone = value => {
         const seen = new Map();
+        // Leaf objects have intrinsic payloads rather than enumerable children.
+        // Buffer views reuse the same memoized cloned buffer as sibling views.
+        const copyLeaf = item => {
+            if (item instanceof Date) return new Date(item.getTime());
+            if (item instanceof RegExp) return new RegExp(item.source, item.flags);
+            if (item instanceof ArrayBuffer) return item.slice(0);
+            if (ArrayBuffer.isView(item)) {
+                const buffer = copy(item.buffer);
+                return item instanceof DataView
+                    ? new DataView(buffer, item.byteOffset, item.byteLength)
+                    : new item.constructor(buffer, item.byteOffset, item.length);
+            }
+        };
         const copy = item => {
             if (typeof item === 'function' || typeof item === 'symbol') {
                 throw Error('Vega-Lite cannot clone executable values');
             }
             if (item === null || typeof item !== 'object') return item;
             if (seen.has(item)) return seen.get(item);
-            let result;
-            if (item instanceof Date) result = new Date(item.getTime());
-            else if (item instanceof RegExp) result = new RegExp(item.source, item.flags);
-            else if (item instanceof ArrayBuffer) result = item.slice(0);
-            else if (ArrayBuffer.isView(item)) {
-                const buffer = copy(item.buffer);
-                result = item instanceof DataView
-                    ? new DataView(buffer, item.byteOffset, item.byteLength)
-                    : new item.constructor(buffer, item.byteOffset, item.length);
-            } else if (item instanceof Map) {
+            let result = copyLeaf(item);
+            if (result !== undefined) {
+                seen.set(item, result);
+                return result;
+            }
+            if (item instanceof Map) {
                 result = new Map();
                 seen.set(item, result);
                 for (const [key, value] of item) result.set(copy(key), copy(value));
