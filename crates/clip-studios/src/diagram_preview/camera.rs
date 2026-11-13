@@ -67,6 +67,10 @@ impl Camera {
             ),
         )
     }
+    pub fn pan(&mut self, delta: egui::Vec2) {
+        self.center[0] -= f64::from(delta.x) / self.scale;
+        self.center[1] -= f64::from(delta.y) / self.scale;
+    }
     pub fn input(&mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect) {
         if response.hovered() {
             let scroll = ui.input(|input| input.raw_scroll_delta.y);
@@ -84,9 +88,7 @@ impl Camera {
             }
         }
         if response.dragged_by(egui::PointerButton::Middle) {
-            let delta = ui.input(|input| input.pointer.delta());
-            self.center[0] -= f64::from(delta.x) / self.scale;
-            self.center[1] -= f64::from(delta.y) / self.scale;
+            self.pan(ui.input(|input| input.pointer.delta()));
         }
     }
 }

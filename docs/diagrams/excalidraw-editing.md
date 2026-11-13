@@ -1,7 +1,7 @@
 # Native drawing text and resizing
 
 The Text tool creates standalone text at the clicked canvas position. The
-Drawing text form edits existing standalone text and reciprocal rectangular
+docked Text section edits existing standalone text and reciprocal rectangular
 labels; Add label creates both binding directions on a selected empty rectangle.
 Apply uses the existing accepted-edit worker, shared undo/save ordering and
 source identity. Unchanged text is a semantic no-op.
@@ -38,3 +38,15 @@ against rebuilt hosts.
   `/tmp/diagram-text-resize-dark-20261113-4/report.json` and
   `/tmp/diagram-text-resize-light-20261113-3/report.json` pass32 observations each,
   with actual held artwork, source/metadata preservation and exact Undo/Save.
+
+## Fixed controls follow-up
+
+The tools occupy one centered icon row with keyboard shortcuts: H pans, V
+selects, R/D/O draw shapes, A/L draw connections, P draws freehand and T creates
+text. Stroke/background swatches, line widths, sloppiness and opacity live in a
+fixed left sidebar. Text drafts use that same sidebar, retaining the existing
+Apply/rejection/undo semantics; no detached inspector window is created.
+
+Zoom, actual size and Fit controls sit below the canvas. The host keeps its
+existing Save and Undo/Redo owners. Properties scroll inside their own bounds
+when the host is short; the artwork never moves behind the sidebar.

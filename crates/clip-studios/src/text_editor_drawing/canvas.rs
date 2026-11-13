@@ -117,8 +117,24 @@ impl DrawingEditor {
                 self.retained_move = None;
                 self.selected.clear();
                 self.tool = None;
+                self.panning = false;
                 self.text_draft = None;
                 self.text_selection = None;
+            }
+            for (key, tool, pan) in [
+                (egui::Key::H, None, true),
+                (egui::Key::V, None, false),
+                (egui::Key::R, Some(Kind::Rectangle), false),
+                (egui::Key::D, Some(Kind::Diamond), false),
+                (egui::Key::O, Some(Kind::Ellipse), false),
+                (egui::Key::A, Some(Kind::Arrow), false),
+                (egui::Key::L, Some(Kind::Line), false),
+                (egui::Key::P, Some(Kind::Freedraw), false),
+                (egui::Key::T, Some(Kind::Text), false),
+            ] {
+                if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)) {
+                    self.choose_tool(tool, pan, ui.ctx());
+                }
             }
             let delete = ui.input_mut(|input| {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::Delete)

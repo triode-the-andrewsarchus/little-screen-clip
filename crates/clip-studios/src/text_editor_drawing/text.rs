@@ -120,6 +120,7 @@ impl DrawingEditor {
     pub(super) fn new_text(&mut self, at: [f64; 2], container: Option<String>) {
         let id = uuid::Uuid::new_v4().to_string();
         self.text_selection = Some(id.clone());
+        self.text_focus = true;
         self.text_draft = Some(TextDraft {
             target: TextTarget::New {
                 id,
@@ -163,17 +164,39 @@ impl DrawingEditor {
             }
         }
         let Some(mut draft) = self.text_draft.take() else {
+            self.text_focus = false;
             return;
         };
-        let mut open = true;
+        ui.separator();
+        ui.label(egui::RichText::new("Text").strong());
         let mut apply = false;
-        egui::Window::new("Drawing text").id(egui::Id::new("drawing_text_inspector")).open(&mut open).collapsible(false).resizable(false).default_width(320.0).default_pos(ui.min_rect().right_top() + egui::vec2(-340.0, 40.0)).show(ui.ctx(), |ui| {
-            ui.add_enabled_ui(!self.busy(), |ui| {
-                ui.add(egui::TextEdit::multiline(&mut draft.value).desired_width(300.0).desired_rows(3));
-                if draft.value.chars().count() > 4096 { ui.colored_label(ui.visuals().error_fg_color, "Text is limited to 4096 characters"); }
-                apply = ui.add_enabled(draft.value.chars().count() <= 4096, egui::Button::new("Apply text")).clicked();
-                ui.small("Uses the drawing's bundled font. Wrapped or unsupported bindings stay in Source.");
+        let mut cancel = false;
+        ui.add_enabled_ui(!self.busy(), |ui| {
+            let output = egui::TextEdit::multiline(&mut draft.value)
+                .desired_width(f32::INFINITY)
+                .desired_rows(4)
+                .show(ui);
+            if self.text_focus {
+                output.response.request_focus();
+                output.response.scroll_to_me(Some(egui::Align::Min));
+                self.text_focus = false;
+            }
+            let valid = draft.value.chars().count() <= 4096;
+            if !valid {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    "Text is limited to 4096 characters",
+                );
+            }
+            ui.horizontal(|ui| {
+                apply = ui
+                    .add_enabled(valid, egui::Button::new("Apply text"))
+                    .clicked();
+                cancel = ui.button("Cancel").clicked();
             });
+            output
+                .response
+                .on_hover_text("Wrapped or unsupported bindings can be edited in Source.");
         });
         if apply {
             let id = draft.target.id().to_owned();
@@ -181,7 +204,7 @@ impl DrawingEditor {
             self.queue(Action::Text(draft.clone()));
             self.tool = None;
             self.text_draft = Some(draft);
-        } else if open {
+        } else if !cancel {
             self.text_draft = Some(draft);
         } else {
             self.tool = None;

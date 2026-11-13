@@ -5,7 +5,7 @@ use little_clip_core::{
     BackgroundJobs, JobError,
     diagram::{
         Format,
-        drawing::{Bounds, Change, Item, Kind, Paint, Scene, Style, TOOLS},
+        drawing::{Bounds, Change, Item, Kind, Paint, Scene, Style},
     },
     jobs::task::Task,
     palette::AppPalette,
@@ -17,6 +17,7 @@ use std::{
 
 mod canvas;
 mod connections;
+mod controls;
 mod resize;
 mod text;
 use crate::diagram_preview::Camera;
@@ -53,6 +54,7 @@ pub(crate) struct DrawingEditor {
     edit_error: Option<String>,
     camera: Camera,
     tool: Option<Kind>,
+    panning: bool,
     selected: Vec<String>,
     gesture: Option<Gesture>,
     ghost: Option<Gesture>,
@@ -61,6 +63,7 @@ pub(crate) struct DrawingEditor {
     connections: Connections,
     style: Style,
     text_draft: Option<TextDraft>,
+    text_focus: bool,
     text_selection: Option<String>,
     resize_available: bool,
     text_notice: Option<String>,
@@ -241,10 +244,54 @@ impl DrawingEditor {
     ) {
         self.prepare_model(source);
         self.toolbar(ui, palette);
-        let size = Vec2::new(
-            ui.available_width().max(1.0),
-            (ui.available_height() - 88.0).max(1.0),
-        );
+        let height = (ui.available_height() - 110.0).max(80.0);
+        ui.horizontal_top(|ui| {
+            let sidebar = (ui.available_width() * 0.28).clamp(180.0, 216.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(sidebar, height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::Frame::group(ui.style())
+                        .rounding(8.0)
+                        .inner_margin(12.0)
+                        .show(ui, |ui| {
+                            ui.set_width((sidebar - 26.0).max(1.0));
+                            egui::ScrollArea::vertical()
+                                .id_source("drawing_properties")
+                                .min_scrolled_height(0.0)
+                                .max_height(height - 26.0)
+                                .show(ui, |ui| {
+                                    self.text_controls(ui);
+                                    self.properties(ui, palette);
+                                });
+                        });
+                },
+            );
+            self.canvas_ui(
+                ui,
+                Vec2::new(ui.available_width().max(1.0), height),
+                source,
+                preview,
+                palette,
+            );
+        });
+        self.navigation(ui, palette);
+        self.footer(ui);
+        egui::ScrollArea::vertical()
+            .id_source("drawing_notices")
+            .min_scrolled_height(0.0)
+            .max_height(64.0)
+            .show(ui, |ui| preview.status_ui(ui, Format::Excalidraw));
+    }
+
+    fn canvas_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        size: Vec2,
+        source: &str,
+        preview: &mut Preview,
+        palette: &AppPalette,
+    ) {
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         self.focus = Some(response.id);
         let frame = preview.native_frame(ui, Format::Excalidraw, source);
@@ -265,7 +312,15 @@ impl DrawingEditor {
                 self.ghost = None;
                 self.retained_move = None;
             }
-            if ready {
+            if self.panning {
+                if response.dragged_by(egui::PointerButton::Primary) {
+                    self.camera.pan(ui.input(|input| input.pointer.delta()));
+                }
+                if response.clicked() {
+                    response.request_focus();
+                }
+                response.clone().on_hover_cursor(egui::CursorIcon::Grab);
+            } else if ready {
                 self.interact(ui, &response, rect);
             }
             let motion = self.vector_motion(ui.ctx(), frame.layout.origin);
@@ -279,13 +334,6 @@ impl DrawingEditor {
             }
         }
         self.keyboard(ui, &response);
-        self.text_controls(ui);
-        self.footer(ui);
-        egui::ScrollArea::vertical()
-            .id_source("drawing_notices")
-            .min_scrolled_height(0.0)
-            .max_height(64.0)
-            .show(ui, |ui| preview.status_ui(ui, Format::Excalidraw));
     }
 
     fn vector_motion(
@@ -341,92 +389,6 @@ impl DrawingEditor {
         changes
     }
 
-    fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .selectable_value(&mut self.tool, None, "Select")
-                .changed()
-            {
-                self.text_draft = None;
-                self.text_selection = None;
-            }
-            for kind in TOOLS {
-                let label = match kind {
-                    Kind::Rectangle => "Box",
-                    Kind::Freedraw => "Pencil",
-                    _ => kind.as_str(),
-                };
-                if ui
-                    .selectable_value(&mut self.tool, Some(kind.clone()), label)
-                    .changed()
-                {
-                    self.selected.clear();
-                    self.text_draft = None;
-                    self.text_selection = None;
-                }
-            }
-            if ui
-                .selectable_value(&mut self.tool, Some(Kind::Text), "Text")
-                .changed()
-            {
-                self.selected.clear();
-                self.text_draft = None;
-            }
-            if ui
-                .small_button("Add label")
-                .on_hover_text("Add a label to a selected rectangle that has no label")
-                .clicked()
-                && let Some(id) = self.selected.first().cloned()
-            {
-                self.new_text([0.0; 2], Some(id));
-            }
-            if ui
-                .add(
-                    clip_ui::buttons::ButtonRole::Secondary
-                        .button("Fit", palette)
-                        .small(),
-                )
-                .clicked()
-            {
-                self.camera.fitted = false;
-            }
-            if self.camera.fitted {
-                ui.small(format!("{:.0}%", self.camera.zoom_percent()));
-            }
-            ui.separator();
-            for (label, color) in [
-                ("Ink", "#1e1e1e"),
-                ("Blue", "#1971c2"),
-                ("Red", "#e03131"),
-                ("Green", "#2f9e44"),
-            ] {
-                if ui.small_button(label).clicked() {
-                    self.paint_control(Paint::Stroke(color.into()));
-                }
-            }
-            if ui.small_button("Fill").clicked() {
-                let fill = if self.style.fill == "transparent" {
-                    "#d0ebff"
-                } else {
-                    "transparent"
-                };
-                self.paint_control(Paint::Fill(fill.into()));
-            }
-            egui::ComboBox::from_id_source("drawing_width")
-                .width(36.0)
-                .selected_text(format!("{} px", self.style.width))
-                .show_ui(ui, |ui| {
-                    for width in [1.0, 2.0, 4.0, 8.0] {
-                        if ui
-                            .selectable_label(self.style.width == width, format!("{width} px"))
-                            .clicked()
-                        {
-                            self.paint_control(Paint::Width(width));
-                        }
-                    }
-                });
-        });
-    }
     fn paint_control(&mut self, paint: Paint) {
         if self.busy() {
             return;
@@ -471,7 +433,7 @@ impl DrawingEditor {
         if self.busy() {
             ui.small("Applying gesture…");
         } else {
-            ui.small("Click to select · Shift adds to selection · drag to draw or move · corner handles resize · wheel zooms · middle-drag pans · Delete removes");
+            ui.small("Wheel zooms · middle-drag pans · Shift selects more · Delete removes");
         }
     }
 }
