@@ -1932,9 +1932,60 @@ baseline. No browser UI code has been copied.
 - [x] Fix an upstream analyzer panic on valid bare string types with defaults;
   bound checks use optional length arguments and count Unicode characters.
   The focused parser regression and four native renderer probes pass.
-- [ ] Finish file/Markdown/clipboard routing and native strip/editor validation.
+- [x] Finish file/Markdown/clipboard routing and native strip/editor validation.
 - [ ] Expand modern DBML syntax compatibility and investigate direct editing.
 
 The vendored integration record gives the upstream revision, published checksum
 and exact patch. Original licenses remain intact. Parser expressions/defaults are
 text; no SQL or database access is performed.
+
+### Initial native DBML integration
+
+`.dbml` files, `dbml` fences and distinctive table-declaration clipboard snippets
+use the shared format registry, guarded highlighted source editor, bounded live
+preview, Markdown/little-screen rendering and file-manager strip/hover caches.
+Generic enum declarations and SQL are not claimed as DBML snippets. Failed
+inference remains highlighted text. Review fixtures `schema.dbml` and `dbml.md`
+are also available under `/home/vega/Documents/type_testing/md_extensions/`.
+
+The adapter shows schema-qualified tables, columns/types, PK/UQ/NN/AUTO flags,
+defaults, column/table notes, indexes (including composite primary keys) and enum
+values. Aliases resolve to their real tables. All four relationship directions
+and composite column pairs use actual field ports; separate incoming/outgoing
+outer-cell ports prevent arrows from crossing the field's type/flag text. A
+retained-SVG geometry regression verifies that edges stay between table borders.
+Symbols describe maximum one/many cardinality, not minimum participation.
+
+Source parsing is complete, not a filter that drops unsupported blocks. Partials,
+records and newer optional relationship syntax still report errors and remain
+required compatibility work. Project/group/free-note context and unpainted
+presentation settings/ref metadata produce visible limitations. No database,
+expression or SQL execution is provided. Render limits are 128 tables/enums,
+2,048 fields/enum values, 2,048 column edges and 1 MiB of generated DOT inside the
+existing source, process, SVG and raster budgets. The original native Graphviz
+HTML-label escaper is now shared with harness diagrams.
+
+Validation includes 46 core diagram tests, 59 renderer/diagram tests, six focused
+DBML tests, the upstream analyzer regression, actual helper/notice tests for both
+hosts, browser strip/source-retirement tests and clipboard fallback/highlighting.
+Both desktop binaries build without warnings and strict affected-crate all-targets
+Clippy and workspace formatting pass. One schema acceptance scenario now covers
+both Nomnoml and DBML, rather than adding a duplicate native UI script.
+
+Architecture measurements include the newly vendored upstream parser: its three
+existing high-complexity functions and ten internal clone groups account for most
+of the reported regression. The DBML adapter itself has no duplicate groups and
+maximum complexity 12. The renderer's exhaustive format dispatch gains one case
+(CCN 15 to 16), which is necessary registry growth, not another rendering mechanism.
+Other flagged viewer clones already existed in the touched test module. Keep the
+upstream parser intact beyond the recorded fix instead of restructuring third-party
+code to improve our metrics. Current DBML format checkboxes remain open for the
+explicit newer-syntax and richer visualization work above.
+
+Native schema acceptance passes in both light and dark themes for DBML and
+Nomnoml, including source-retaining navigation and painted-artwork checks in the
+normal strip, enlarged popout, source/live preview and embedded Markdown views.
+Microsoft LINQ-to-SQL `.dbml` XML is explicitly excluded from diagram inference
+and keeps XML highlighting; malformed XML drafts are excluded too. The shared
+extension/source dispatch is now a direct per-extension match, retaining the
+existing Mermaid/DOT/BPMN/JSON/YAML classification tests.

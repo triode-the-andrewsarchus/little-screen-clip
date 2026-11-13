@@ -17,3 +17,8 @@ into application modules.
 The application uses the native parser in its existing disposable diagram worker;
 DBML expressions are text, never executed. Newer language constructs unsupported
 by this release must report parse errors rather than being stripped from input.
+
+Private upstream analysis/optional-utility modules retain their unused helper
+APIs under scoped `dead_code` allowances. The published dependency hides these
+through Cargo dependency lint caps; the local path patch otherwise emits four
+pre-existing warnings. Application and adapter warnings remain enabled.

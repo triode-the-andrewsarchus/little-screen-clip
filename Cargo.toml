@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["vendor/excalidraw-render", "vendor/spark/rust"]
+exclude = ["vendor/excalidraw-render", "vendor/spark/rust", "vendor/dbml-rs"]
 resolver = "2"
 members = [
     "crates/little-clip-core",
@@ -59,6 +59,7 @@ opt-level = 3
 
 # egui 0.27 requests physical startup dimensions before Wayland knows output scale.
 [patch.crates-io]
+dbml-rs = { path = "vendor/dbml-rs" }
 excalidraw-render = { path = "vendor/excalidraw-render" }
 sauron-core = { path = "vendor/sauron-core" }
 symphonia = { path = "vendor/symphonia" }

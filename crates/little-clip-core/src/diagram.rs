@@ -28,6 +28,7 @@ pub enum Format {
     Excalidraw,
     Wireviz,
     Nomnoml,
+    Dbml,
     Math,
     MathInline,
 }
@@ -51,11 +52,14 @@ impl Format {
             "excalidraw" => Some(Self::Excalidraw),
             "wireviz" => Some(Self::Wireviz),
             "nomnoml" | "noml" => Some(Self::Nomnoml),
+            "dbml" => Some(Self::Dbml),
             _ => None,
         }
     }
 
-    /// Recognizes unambiguous standalone extensions.
+    /// Recognizes standalone extension candidates.
+    ///
+    /// DBML candidates still need XML disambiguation once source is available.
     ///
     /// Ambiguous `.bob` files need content classification and are not claimed here.
     pub fn from_path(path: &Path) -> Option<Self> {
@@ -85,7 +89,7 @@ impl Format {
         }
     }
 
-    /// Recognizes an unambiguous extension without treating fence aliases as paths.
+    /// Recognizes extension candidates without treating fence aliases as paths.
     pub fn from_extension(extension: &str) -> Option<Self> {
         match extension.to_ascii_lowercase().as_str() {
             "pikchr" => Some(Self::Pikchr),
@@ -99,39 +103,44 @@ impl Format {
             "excalidraw" => Some(Self::Excalidraw),
             "wireviz" => Some(Self::Wireviz),
             "nomnoml" | "noml" => Some(Self::Nomnoml),
+            "dbml" => Some(Self::Dbml),
             _ => None,
         }
     }
 
     /// Uses content signatures for extensions shared with ordinary Markdown.
     pub fn from_source_path(path: &Path, source: &str) -> Option<Self> {
+        if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("dbml"))
+        {
+            return Self::from_source_extension("dbml", source);
+        }
         Self::from_path(path)
             .or_else(|| Self::from_source_extension(path.extension()?.to_str()?, source))
     }
 
     /// Combines unambiguous extensions with conservative content classification.
     pub fn from_source_extension(extension: &str, source: &str) -> Option<Self> {
-        Self::from_extension(extension).or_else(|| {
-            if extension.eq_ignore_ascii_case("mmd") && mermaid_signature(source) {
-                Some(Self::Mermaid)
-            } else if extension.eq_ignore_ascii_case("dot") && dot_signature(source) {
-                Some(Self::Graphviz)
-            } else if extension.eq_ignore_ascii_case("xml") && bpmn_signature(source) {
-                Some(Self::Bpmn)
-            } else if extension.eq_ignore_ascii_case("json") && excalidraw_signature(source) {
-                Some(Self::Excalidraw)
-            } else if matches!(extension.to_ascii_lowercase().as_str(), "json" | "json5")
-                && wavejson::signature(source)
-            {
-                Some(Self::Wavedrom)
-            } else if matches!(extension.to_ascii_lowercase().as_str(), "yaml" | "yml")
-                && wireviz::signature(source)
-            {
-                Some(Self::Wireviz)
-            } else {
-                None
-            }
-        })
+        Self::from_extension(extension)
+            .filter(|format| {
+                // Microsoft LINQ-to-SQL files share .dbml but contain XML.
+                // Incomplete XML drafts also remain in the ordinary XML viewer.
+                *format != Self::Dbml
+                    || !source
+                        .trim_start_matches('\u{feff}')
+                        .trim_start()
+                        .starts_with('<')
+            })
+            .or_else(|| match extension.to_ascii_lowercase().as_str() {
+                "mmd" => mermaid_signature(source).then_some(Self::Mermaid),
+                "dot" => dot_signature(source).then_some(Self::Graphviz),
+                "xml" => bpmn_signature(source).then_some(Self::Bpmn),
+                "json" if excalidraw_signature(source) => Some(Self::Excalidraw),
+                "json" | "json5" => wavejson::signature(source).then_some(Self::Wavedrom),
+                "yaml" | "yml" => wireviz::signature(source).then_some(Self::Wireviz),
+                _ => None,
+            })
     }
 
     /// Recognizes distinctive diagram syntax in extensionless clipboard text.
@@ -152,6 +161,7 @@ impl Format {
             (Self::Excalidraw, excalidraw_signature),
             (Self::Wireviz, wireviz::signature),
             (Self::Nomnoml, nomnoml_signature),
+            (Self::Dbml, dbml_signature),
             (Self::Pikchr, pikchr_signature),
             (Self::Lini, lini_signature),
             (Self::D2, d2_signature),
@@ -178,6 +188,7 @@ impl Format {
             Self::Excalidraw => Some("excalidraw"),
             Self::Wireviz => Some("wireviz"),
             Self::Nomnoml => Some("nomnoml"),
+            Self::Dbml => Some("dbml"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -196,6 +207,7 @@ impl Format {
             Self::Excalidraw => "Excalidraw",
             Self::Wireviz => "WireViz",
             Self::Nomnoml => "Nomnoml",
+            Self::Dbml => "DBML",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
@@ -213,6 +225,18 @@ fn excalidraw_signature(source: &str) -> bool {
                     .is_some_and(serde_json::Value::is_array)
         },
     )
+}
+
+fn dbml_signature(source: &str) -> bool {
+    // Table declarations distinguish DBML from SQL/prose without claiming
+    // generic enum declarations in Rust or C++. Parsing can still fail later.
+    source.len() <= 32 * 1024
+        && source.lines().take(32).any(|line| {
+            let Some((keyword, rest)) = line.trim_start().split_once(char::is_whitespace) else {
+                return false;
+            };
+            keyword.eq_ignore_ascii_case("table") && rest.contains('{')
+        })
 }
 
 fn nomnoml_signature(source: &str) -> bool {
@@ -459,6 +483,37 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dbml_files_fences_and_table_snippets_do_not_claim_generic_enum_source() {
+        assert_eq!(Format::from_extension("DBML"), Some(Format::Dbml));
+        assert_eq!(Format::from_language("dbml"), Some(Format::Dbml));
+        assert_eq!(Format::Dbml.source_extension(), Some("dbml"));
+        let mapping = "\u{feff} <?xml version='1.0'?><Database xmlns='http://schemas.microsoft.com/linqtosql/dbml/2007'/>";
+        assert_eq!(
+            Format::from_source_path(Path::new("legacy.DBML"), mapping),
+            None
+        );
+        assert_eq!(Format::from_source_extension("dbml", "<Database"), None);
+        assert_eq!(crate::syntax::detect_language(mapping, Some("dbml")), "xml");
+        assert_eq!(
+            Format::from_source_path(Path::new("draft.dbml"), "Table broken {"),
+            Some(Format::Dbml)
+        );
+
+        assert_eq!(
+            Format::from_snippet("// schema\nTable users { id int [pk] }"),
+            Some(Format::Dbml)
+        );
+        for text in [
+            "enum Color { Red }",
+            "Table of contents",
+            "table users",
+            "CREATE TABLE users (id int)",
+        ] {
+            assert_eq!(Format::from_snippet(text), None, "{text}");
+        }
+    }
+
     #[test]
     fn nomnoml_names_and_distinctive_relations_route_without_claiming_markdown_links() {
         for extension in ["nomnoml", "noml", "NOMNOML"] {

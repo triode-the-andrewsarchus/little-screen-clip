@@ -13,10 +13,14 @@ extern crate pest_derive;
 #[macro_use]
 extern crate alloc;
 
+// Keep upstream optional introspection types intact. This integration consumes
+// validation, not the private analysis result or optional relation utilities.
+#[allow(dead_code)]
 pub(crate) mod analyzer;
 pub mod ast;
 pub(crate) mod parser;
 #[cfg(not(feature = "utils"))]
+#[allow(dead_code)]
 pub(crate) mod utils;
 #[cfg(feature = "utils")]
 pub mod utils;

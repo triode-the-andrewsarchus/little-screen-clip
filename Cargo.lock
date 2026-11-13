@@ -305,6 +305,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ar_archive_writer"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "523e5e187fff36fcb8d1d19ccf0ca4ca43ec3d158316057f66dc6f72716bc5ec"
+dependencies = [
+ "object 0.39.1",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1412,7 +1421,7 @@ dependencies = [
  "little-clip-scene",
  "midir",
  "ndarray",
- "object",
+ "object 0.40.0",
  "ort",
  "raw-cpuid",
  "raw-window-handle 0.6.2",
@@ -2597,6 +2606,15 @@ name = "data-url"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
+
+[[package]]
+name = "dbml-rs"
+version = "1.0.1"
+dependencies = [
+ "derive_more",
+ "pest",
+ "pest_derive",
+]
 
 [[package]]
 name = "debug_unsafe"
@@ -6206,6 +6224,7 @@ dependencies = [
  "d2-rs-target",
  "d2-rs-wasm",
  "data-url",
+ "dbml-rs",
  "excalidraw-render",
  "fontdue",
  "graphviz-pure",
@@ -7533,6 +7552,15 @@ dependencies = [
 
 [[package]]
 name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "object"
 version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd229a0361b9d0d4396176e02d65897f487eebeab7caa6d443855ee152ca0b9c"
@@ -8048,6 +8076,59 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "pest"
+version = "2.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ec53fd1d256900a9a771bf2720d42cef6f8bc91b4e25065fbd291e3e7222576"
+dependencies = [
+ "memchr",
+ "pest_stack_guard",
+ "ucd-trie",
+]
+
+[[package]]
+name = "pest_derive"
+version = "2.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adcf794fd301ddc20818a6b4de85ed507f4b45300245cec948982e69e12e3bd7"
+dependencies = [
+ "pest",
+ "pest_generator",
+]
+
+[[package]]
+name = "pest_generator"
+version = "2.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3073afae5db334c25dea9fc3e230a4f191e920c1df080cb9c0b37c9ce1dbb41"
+dependencies = [
+ "pest",
+ "pest_meta",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
+]
+
+[[package]]
+name = "pest_meta"
+version = "2.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bc7f614b3742541642af1685faaa910bf6333e3cd3729c2cccd118146a57327"
+dependencies = [
+ "pest",
+]
+
+[[package]]
+name = "pest_stack_guard"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ac6154fd4418b8f0b82532c59c26f303f9ca59a64c883e8ce3971fd82733439"
+dependencies = [
+ "psm",
+ "stacker",
+]
 
 [[package]]
 name = "petgraph"
@@ -8573,6 +8654,16 @@ checksum = "4488a4a36b9a4ba6b9334a32a39971f77c1436ec82c38707bce707699cc3bbcb"
 dependencies = [
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "psm"
+version = "0.1.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
+dependencies = [
+ "ar_archive_writer",
+ "cc",
 ]
 
 [[package]]
@@ -10398,6 +10489,19 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "stacker"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "707f49d46706bacf8a2b00d51dace3f9de527c13eec3778f570c411f89e69967"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "psm",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "static_assertions"

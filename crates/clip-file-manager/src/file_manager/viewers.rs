@@ -808,6 +808,7 @@ mod tests {
             "drawing.wavedrom",
             "drawing.nomnoml",
             "drawing.noml",
+            "schema.dbml",
             "drawing.excalidraw",
             "drawing.excalidraw.json",
             "DRAWING.PIKCHR",

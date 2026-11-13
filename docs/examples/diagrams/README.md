@@ -114,3 +114,13 @@ upstream estimated text metrics. Browser strips show the whole diagram height.
 [Source|+read()] -> [Worker|+render()]
 [Worker] -> [Preview|+inspect()]
 ```
+
+## Database schema
+
+[DBML example](dbml.md) embeds `schema.dbml`. Tables, fields, enums, primary/index
+keys and real column relationships use a native Rust parser and the existing
+native Graphviz renderer. Expressions and defaults are inert text. `.dbml` files
+open highlighted source/live preview; standalone strips show the whole schema.
+Unsupported newer DBML constructs report errors, and metadata not drawn in the
+initial diagram has visible limitations. Partials, records and optional relationship
+operators remain compatibility work.

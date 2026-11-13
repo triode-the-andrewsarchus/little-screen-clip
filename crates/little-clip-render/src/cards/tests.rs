@@ -380,6 +380,7 @@ fn failed_clipboard_diagrams_remain_readable_highlighted_text() {
         "flowchart LR\nA[",
         "direction: right\na -> {",
         "[A] -> [B]\n[Unclosed",
+        "Table broken {",
         "box \"unterminated",
     ] {
         let mut pixmap = Pixmap::new(500, 400).unwrap();
@@ -412,6 +413,7 @@ fn failed_clipboard_diagrams_remain_readable_highlighted_text() {
         ("bpmn", "BPMN"),
         ("wireviz", "WireViz"),
         ("nomnoml", "Nomnoml"),
+        ("dbml", "DBML"),
     ] {
         assert_eq!(find_syntax(language).name, expected);
     }

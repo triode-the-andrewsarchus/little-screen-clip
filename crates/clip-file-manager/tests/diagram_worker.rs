@@ -34,6 +34,7 @@ fn diagram_license_notices_are_available_without_host_startup() {
     assert!(notices.contains("29392d10d9c504ec22d67f37a4dd545a63d5b371"));
     assert!(notices.contains("D2 and TALA"));
     assert!(notices.contains("2020 Daniel Kallin"));
+    assert!(notices.contains("2022 Apisit Ritreungroj"));
     assert!(notices.contains("2012-2014 Chris Pettitt"));
     assert!(notices.contains("Fuzzy Bubbles Project Authors"));
     assert!(notices.contains("Matheus Mota"));

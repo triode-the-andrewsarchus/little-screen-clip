@@ -15,7 +15,13 @@ pub use classifier::classify_snippet;
 pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
     // 1. If explicit extension hint is provided, normalize and map it
     if let Some(lang) = check_extension_hint(ext_hint) {
-        return lang;
+        return if lang == "dbml"
+            && crate::diagram::Format::from_source_extension("dbml", content).is_none()
+        {
+            "xml"
+        } else {
+            lang
+        };
     }
 
     let trimmed = content.trim();
@@ -323,6 +329,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "excalidraw" => Some("excalidraw"),
         "wireviz" => Some("wireviz"),
         "nomnoml" | "noml" => Some("nomnoml"),
+        "dbml" => Some("dbml"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -453,6 +460,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "excalidraw" => "Excalidraw",
         "wireviz" => "WireViz",
         "nomnoml" => "Nomnoml",
+        "dbml" => "DBML",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -587,9 +595,13 @@ pub const EXCALIDRAW_SUBLIME_SYNTAX: &str = include_str!("syntax/excalidraw.subl
 /// Nomnoml classifiers, relations, comments and layout directives.
 pub const NOMNOML_SUBLIME_SYNTAX: &str = include_str!("syntax/nomnoml.sublime-syntax");
 
+/// Database schema declarations and inert SQL expressions.
+pub const DBML_SUBLIME_SYNTAX: &str = include_str!("syntax/dbml.sublime-syntax");
+
 /// Shared native diagram grammars used by both screen and desktop source views.
 pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     NOMNOML_SUBLIME_SYNTAX,
+    DBML_SUBLIME_SYNTAX,
     PIKCHR_SUBLIME_SYNTAX,
     SVGBOB_SUBLIME_SYNTAX,
     LINI_SUBLIME_SYNTAX,

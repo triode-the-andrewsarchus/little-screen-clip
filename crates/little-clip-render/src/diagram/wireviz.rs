@@ -1,8 +1,8 @@
 //! Harness tables and conductor paths laid out by the existing native engine.
+use super::graphviz::label;
 use little_clip_core::diagram::wireviz::{
     self, Cable, Conductor, Connector, Direction, Endpoint, Harness, Link, LinkKind, PinId,
 };
-use quick_xml::escape::escape;
 use std::fmt::Write;
 
 pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
@@ -203,14 +203,6 @@ fn footer(table: &mut String, notes: Option<&str>) {
         .unwrap();
     }
     table.push_str("</TABLE>");
-}
-
-fn label(text: &str) -> String {
-    // Names and notes are text, never Graphviz HTML or DOT source. All port,
-    // node and edge identities above are generated from bounded indices.
-    escape(text)
-        .replace('\r', "")
-        .replace('\n', "<BR ALIGN=\"LEFT\"/>")
 }
 
 fn port(endpoint: Endpoint, side: &str) -> String {

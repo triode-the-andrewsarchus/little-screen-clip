@@ -1,0 +1,42 @@
+%YAML 1.2
+---
+name: DBML
+file_extensions: [dbml]
+scope: source.dbml
+contexts:
+  main:
+    - match: '//.*$'
+      scope: comment.line.dbml
+    - match: '/\*'
+      push:
+        - meta_scope: comment.block.dbml
+        - match: '\*/'
+          pop: true
+    - match: "'''"
+      push:
+        - meta_scope: string.quoted.triple.dbml
+        - match: "'''"
+          pop: true
+    - match: "'"
+      push:
+        - meta_scope: string.quoted.single.dbml
+        - match: "\\\\."
+          scope: constant.character.escape.dbml
+        - match: "'"
+          pop: true
+    - match: '`'
+      push:
+        - meta_scope: string.interpolated.dbml
+        - match: '`'
+          pop: true
+    - match: '"'
+      push:
+        - meta_scope: entity.name.dbml
+        - match: '"'
+          pop: true
+    - match: '(?i)\b(Table|TableGroup|TablePartial|Project|Enum|Ref|Note|Indexes|Records|as)\b'
+      scope: keyword.control.dbml
+    - match: '(?i)\b(pk|primary key|unique|not null|null|default|increment|ref)\b'
+      scope: storage.modifier.dbml
+    - match: '[<>{}\[\]:]'
+      scope: punctuation.section.dbml

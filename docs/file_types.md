@@ -217,7 +217,7 @@
         - [ ] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`)
         - [x] D2 (`d2`) — native flat-board previews, Dagre/ELK/TALA, `.d2` highlighted source/live preview and diagnostics
         - [x] Graphviz DOT (`graphviz`, `dot`) — compiled Rust renderer, all eight layout engines, bounded multi-graph previews
-        - [ ] DBML database markup (`dbml`)
+        - [ ] DBML database markup (`dbml`) — native tables/columns/enums/relationships and source/live previews; newer partials/records/optional relations pending
         - [x] BPMN business process (`bpmn`, `bpmn2`) — native authored-DI/automatic layout, bounded large/small previews and diagnostics
         - [ ] Diagrams.net / draw.io (`drawio`, `diagramsnet`)
         - [x] Excalidraw whiteboards (`excalidraw`) — native bounded rendering with handwriting, raster assets and diagnostics; graphical canvas pending
@@ -552,7 +552,7 @@
     - [x] `.mmd`, `.mermaid` — native Mermaid source/live-preview editor with diagnostics and guarded saves; `.mmd` requires a Mermaid header so ordinary MultiMarkdown stays Markdown; graphical editing pending
     - [ ] `.d2` — Terrastruct D2 diagram (May need disambiguation with Diablo II game data files on `.d2`)
     - [x] `.dot`, `.gv`, `.graphviz` — native DOT source/live-preview editor with diagnostics and guarded saves; `.dot` requires a graph header to avoid claiming legacy Word templates; graphical manipulation pending
-    - [ ] `.dbml` — Database Markup Language (May need disambiguation with Microsoft LINQ to SQL database mapping files on `.dbml`)
+    - [x] `.dbml` — native core schema preview and highlighted editor; XML mapping files stay XML, newer DBML syntax remains pending
     - [ ] `.erd` — BurntSushi entity-relationship diagram (May need disambiguation with Eclipse ERMaster files on `.erd`)
     - [x] `.nomnoml`, `.noml` — Nomnoml UML diagram; highlighted source/live preview, rendered list strips and enlarged hover
     - [x] `.pikchr` — native Pikchr previews, highlighted source/live preview/errors and guarded saves

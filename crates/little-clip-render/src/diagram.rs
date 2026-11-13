@@ -15,6 +15,7 @@ use std::{
 
 mod bpmn;
 mod d2;
+mod dbml;
 mod excalidraw;
 mod fonts;
 mod graphviz;
@@ -226,6 +227,8 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/excalidraw-document-LICENSE-APACHE.txt"),
             include_str!("../../../vendor/wavedrom/LICENSE"),
             include_str!("../../../vendor/nomnoml/LICENSE"),
+            include_str!("../third_party/dbml-rs-MIT.txt"),
+            include_str!("../third_party/dbml-rs-APACHE.txt"),
             include_str!("../../../vendor/graphre/LICENSE"),
             include_str!("../third_party/wavedrom-onml-LICENSE"),
             include_str!("../third_party/wavedrom-tspan-LICENSE"),
@@ -329,6 +332,7 @@ fn render_inline(
         }
         Format::Wavedrom => wavedrom::svg(source)?,
         Format::Nomnoml => nomnoml::svg(source)?,
+        Format::Dbml => dbml::svg(source)?,
         Format::Wireviz => wireviz::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
@@ -638,6 +642,7 @@ mod tests {
     #[test]
     fn markdown_files_and_raw_diagram_files_use_the_screen_diagram_route() {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
+        const SCHEMA: &str = include_str!("../../../docs/examples/diagrams/schema.dbml");
         const HARNESS: &str = include_str!("../../../docs/examples/diagrams/harness.wireviz");
         let directory = tempfile::tempdir().unwrap();
         for (extension, content, format, source) in [
@@ -658,6 +663,14 @@ mod tests {
                 "```nomnoml\n[Source] -> [Preview]\n```",
                 Format::Nomnoml,
                 "[Source] -> [Preview]\n",
+            ),
+            ("", SCHEMA, Format::Dbml, SCHEMA),
+            ("dbml", SCHEMA, Format::Dbml, SCHEMA),
+            (
+                "md",
+                include_str!("../../../docs/examples/diagrams/dbml.md"),
+                Format::Dbml,
+                SCHEMA,
             ),
             ("", HARNESS, Format::Wireviz, HARNESS),
             ("wireviz", HARNESS, Format::Wireviz, HARNESS),

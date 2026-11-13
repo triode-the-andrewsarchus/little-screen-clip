@@ -23,6 +23,12 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         ("graphviz", "digraph { a -> b }", true),
         ("nomnoml", "[Source] -> [Preview]", true),
         ("nomnoml", "[Unclosed", false),
+        (
+            "dbml",
+            include_str!("../../../../docs/examples/diagrams/schema.dbml"),
+            true,
+        ),
+        ("dbml", "Table broken {", false),
         ("nomnoml", "#import: /etc/passwd\n[A]", false),
         (
             "wireviz",

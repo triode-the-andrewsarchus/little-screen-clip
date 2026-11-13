@@ -81,6 +81,13 @@ fn preflight(source: &str) -> Result<Vec<String>, String> {
     )
 }
 
+/// Escapes authored text for generated DOT HTML labels; identities stay ordinal.
+pub(super) fn label(text: &str) -> String {
+    quick_xml::escape::escape(text)
+        .replace('\r', "")
+        .replace('\n', "<BR ALIGN=\"LEFT\"/>")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

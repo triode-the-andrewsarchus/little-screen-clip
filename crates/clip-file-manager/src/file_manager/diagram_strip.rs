@@ -156,7 +156,9 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
         Some(Format::Wavedrom) => 0.25,
         // Component overviews need their relations and compartments visible.
         // Cropping the top can show only titles or the outer paper margin.
-        Some(Format::Wireviz | Format::Nomnoml) => rect.height() / texture.size_vec2().y,
+        Some(Format::Wireviz | Format::Nomnoml | Format::Dbml) => {
+            rect.height() / texture.size_vec2().y
+        }
         _ => 0.5,
     };
     paint(ui, rect, texture, scale);
@@ -246,6 +248,7 @@ mod tests {
             ("flow.mmd", "flowchart LR\n A --> B", Format::Mermaid),
             ("uml.nomnoml", "[Source] -> [Preview]", Format::Nomnoml),
             ("draft.noml", "[Unclosed", Format::Nomnoml),
+            ("schema.dbml", "Table users { id int }", Format::Dbml),
             (
                 "drawing.excalidraw.json",
                 "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}",
@@ -265,6 +268,10 @@ mod tests {
             ("data.json", "{\"title\":\"ordinary data\"}"),
             ("page.mmd", "# Ordinary Markdown\n\nWords here."),
             ("data.xml", "<ordinary/>"),
+            (
+                "legacy.dbml",
+                r#"<Database xmlns="http://schemas.microsoft.com/linqtosql/dbml/2007"/>"#,
+            ),
             ("notes.txt", "digraph { A -> B }"),
         ] {
             assert!(load(name, source).diagram.is_none(), "{name}");
