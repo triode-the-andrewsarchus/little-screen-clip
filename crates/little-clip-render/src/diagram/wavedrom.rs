@@ -36,6 +36,7 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
     let input = serde_json::to_string(&value).map_err(|error| error.to_string())?;
     let svg = super::script::Program {
         name: "WaveDrom",
+        stack_bytes: 512 * 1024,
         scripts: &[ENGINE, SKINS[0], SKINS[1], SKINS[2], SKINS[3], SKINS[4]],
         bridge: BRIDGE,
         entry: "__renderWave",

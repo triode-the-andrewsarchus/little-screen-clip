@@ -37,6 +37,7 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
     let source = source.trim_start_matches('\u{feff}');
     let svg = super::script::Program {
         name: "Nomnoml",
+        stack_bytes: 512 * 1024,
         scripts: &[
             include_str!("../../../../vendor/graphre/dist/graphre.js"),
             include_str!("../../../../vendor/nomnoml/dist/nomnoml.js"),

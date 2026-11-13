@@ -4,15 +4,31 @@ use std::time::{Duration, Instant};
 
 pub(super) struct Program<'a> {
     pub name: &'a str,
+    pub stack_bytes: usize,
     pub scripts: &'a [&'a str],
     pub bridge: &'a str,
     pub entry: &'a str,
 }
 impl Program<'_> {
     pub fn call(&self, input: &str) -> Result<String, String> {
+        // Interpreter stack use varies with the embedded language (SCI has
+        // deeper frames than the diagram-only bundles). Give QuickJS a known
+        // native stack even when called from Rust's smaller test/worker threads.
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("diagram-script".into())
+                .stack_size(self.stack_bytes + 1024 * 1024)
+                .spawn_scoped(scope, || self.evaluate(input))
+                .map_err(|error| format!("{}: {error}", self.name))?
+                .join()
+                .map_err(|_| format!("{}: interpreter thread failed", self.name))?
+        })
+    }
+
+    fn evaluate(&self, input: &str) -> Result<String, String> {
         let runtime = Runtime::new().map_err(|error| error.to_string())?;
         runtime.set_memory_limit(128 * 1024 * 1024);
-        runtime.set_max_stack_size(512 * 1024);
+        runtime.set_max_stack_size(self.stack_bytes);
         let started = Instant::now();
         runtime.set_interrupt_handler(Some(Box::new(move || {
             started.elapsed() > Duration::from_secs(3)
@@ -56,6 +72,7 @@ mod tests {
     fn calls_are_isolated_data_only_and_have_no_external_host() {
         let program = Program {
             name: "fixture",
+            stack_bytes: 512 * 1024,
             scripts: &[],
             entry: "render",
             bridge: r#"globalThis.render = input => {
@@ -74,6 +91,7 @@ mod tests {
     fn interrupts_nonterminating_layout_and_bounds_generated_output() {
         let mut program = Program {
             name: "fixture",
+            stack_bytes: 512 * 1024,
             scripts: &[],
             entry: "render",
             bridge: "globalThis.render = () => { while(true) {} };",
