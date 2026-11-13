@@ -412,6 +412,16 @@ fn hit(item: &Item, point: [f64; 2], tolerance: f64) -> bool {
         });
     }
     let b = item.bounds;
+    let radii = [b.width / 2.0 + tolerance, b.height / 2.0 + tolerance];
+    if radii.into_iter().all(|radius| radius > 0.0) {
+        let x = (p[0] - b.width / 2.0).abs() / radii[0];
+        let y = (p[1] - b.height / 2.0).abs() / radii[1];
+        match item.kind {
+            Kind::Ellipse => return x * x + y * y <= 1.0,
+            Kind::Diamond => return x + y <= 1.0,
+            _ => {}
+        }
+    }
     inside(
         p,
         [-tolerance, -tolerance],
@@ -422,6 +432,32 @@ fn hit(item: &Item, point: [f64; 2], tolerance: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drawing_curved_shape_selection_follows_rotated_geometry_instead_of_box_corners() {
+        for kind in ["ellipse", "diamond"] {
+            let source = serde_json::json!({
+                "type": "excalidraw", "version": 2,
+                "elements": [{"id": "shape", "type": kind, "x": 80, "y": -40,
+                    "width": 120, "height": 60, "angle": std::f64::consts::FRAC_PI_2}]
+            });
+            let scene = Scene::parse(&source.to_string()).unwrap();
+            let shape = &scene.items[0];
+            for local in [[60.0, 30.0], [60.0, 0.0], [0.0, 30.0]] {
+                assert!(
+                    hit(shape, shape.bounds.to_world(local), 0.01),
+                    "{kind} {local:?}"
+                );
+            }
+            for local in [[2.0, 2.0], [118.0, 58.0], [62.0, -10.0]] {
+                assert!(
+                    !hit(shape, shape.bounds.to_world(local), 1.0),
+                    "{kind} {local:?}"
+                );
+            }
+            assert!(hit(shape, shape.bounds.to_world([60.0, -3.0]), 4.0));
+        }
+    }
 
     #[test]
     fn drawing_camera_keeps_source_precision_and_round_trips_large_origins() {

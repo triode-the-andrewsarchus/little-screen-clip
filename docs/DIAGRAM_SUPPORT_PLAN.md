@@ -1167,3 +1167,10 @@ source editor as the baseline and investigate source-linked direct operations
 after the higher-priority graphical editors. Format routing, syntax highlighting,
 Markdown/standalone rendering, clipboard recognition and actual bounded-worker
 validation are still pending; the import is not a format-support completion.
+
+## Canvas interaction corrections
+
+- [x] Select ellipses and diamonds by their actual rotated geometry rather than
+  their bounding-box corners. The regression test covers interior points,
+  edge tolerance and empty corners after a 90-degree rotation; it passes in the
+  studio test target. Native paths retain their existing segment-distance hits.
