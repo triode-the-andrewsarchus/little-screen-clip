@@ -47,6 +47,47 @@ fn apply_explicit_positions(nodes: &mut Vec<LayoutNode>, explicit_positions: &Ha
     }
 }
 
+/// Validate the model binding for every interaction before painting any output.
+fn dynamic_relationships<'a>(
+    model: &'a structurizr_core::model::Model,
+    view: &DynamicView,
+) -> Result<Vec<&'a structurizr_core::model::Relationship>> {
+    view.steps
+        .iter()
+        .map(|step| {
+            let relationship = step
+                .relationship_id
+                .and_then(|id| {
+                    model
+                        .relationships
+                        .iter()
+                        .find(|relationship| relationship.id == id)
+                })
+                .ok_or_else(|| {
+                    crate::error::Error::Render(
+                        "Dynamic interaction has no model relationship".into(),
+                    )
+                })?;
+            let endpoints = if step.response {
+                (relationship.destination_id, relationship.source_id)
+            } else {
+                (relationship.source_id, relationship.destination_id)
+            };
+            if endpoints != (step.source_id, step.destination_id) {
+                return Err(crate::error::Error::Render(
+                    "Dynamic interaction endpoints do not match its model relationship".into(),
+                ));
+            }
+            for id in [step.source_id, step.destination_id] {
+                if model.find_element(id).is_none() {
+                    return Err(crate::error::Error::ElementNotFound(id.to_string()));
+                }
+            }
+            Ok(relationship)
+        })
+        .collect()
+}
+
 /// Tracks the bounding box of all content in the SVG.
 /// Used to calculate dynamic viewBox dimensions.
 #[derive(Debug, Clone, Copy)]
@@ -728,14 +769,15 @@ impl SvgRenderer {
 
     /// Render a dynamic view to SVG.
     /// Dynamic views show interactions/sequences between elements.
-    pub fn render_dynamic(
-        &self,
-        workspace: &Workspace,
-        view: &DynamicView,
-    ) -> Result<String> {
+    pub fn render_dynamic(&self, workspace: &Workspace, view: &DynamicView) -> Result<String> {
         let model = workspace.model();
         let styles = workspace.styles();
         let style_resolver = StyleResolver::new(styles);
+        let relationships = dynamic_relationships(model, view)?;
+        let step_styles: Vec<_> = relationships
+            .iter()
+            .map(|relationship| style_resolver.resolve_relationship(&relationship.tags))
+            .collect();
 
         // Collect unique elements from steps
         let mut element_ids: Vec<ElementId> = Vec::new();
@@ -762,7 +804,8 @@ impl SvgRenderer {
         let num_elements = element_ids.len().max(1);
         let num_steps = view.steps.len().max(1);
 
-        let content_width = start_x + ((num_elements - 1) as f64 * element_spacing) + element_width + padding;
+        let content_width =
+            start_x + ((num_elements - 1) as f64 * element_spacing) + element_width + padding;
         let content_height = step_start_y + ((num_steps - 1) as f64 * step_spacing) + padding * 2.0;
 
         let bounds = ContentBounds {
@@ -780,22 +823,24 @@ impl SvgRenderer {
         // SVG header with dynamic viewBox
         svg.push_str(&format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{}" width="{:.0}" height="{:.0}">"#,
-            bounds.to_viewbox(), view_width, view_height
+            bounds.to_viewbox(),
+            view_width,
+            view_height
         ));
         svg.push('\n');
 
-        // Defs for markers - JointJS-compatible filled triangles
-        let default_rel_style = style_resolver.resolve_relationship(&["Relationship".to_string()]);
-        let marker_id = color_to_marker_id(&default_rel_style.color);
-        svg.push_str(&format!(
-            r##"  <defs>
-    <marker id="{}" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="{}"/>
-    </marker>
-  </defs>
-"##,
-            marker_id, default_rel_style.color
-        ));
+        let mut colors: Vec<_> = step_styles
+            .iter()
+            .map(|style| style.color.clone())
+            .collect();
+        colors.sort();
+        colors.dedup();
+        svg.push_str("  <defs>\n");
+        for color in colors {
+            svg.push_str(&format!(r#"    <marker id="{}" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 10 5 L 0 10 z" fill="{}"/></marker>"#,
+                color_to_marker_id(&color), color));
+        }
+        svg.push_str("\n  </defs>\n");
 
         // Background - transparent to allow CSS theming
         svg.push_str(&format!(
@@ -805,7 +850,8 @@ impl SvgRenderer {
         svg.push('\n');
 
         // Map element IDs to positions
-        let mut element_positions: std::collections::HashMap<ElementId, (f64, f64)> = std::collections::HashMap::new();
+        let mut element_positions: std::collections::HashMap<ElementId, (f64, f64)> =
+            std::collections::HashMap::new();
         for (idx, id) in element_ids.iter().enumerate() {
             let x = start_x + (idx as f64) * element_spacing;
             element_positions.insert(*id, (x, start_y));
@@ -828,7 +874,11 @@ impl SvgRenderer {
 
                 let bounds = Bounds::new(x, y, element_width, element_height);
                 svg.push_str("    ");
-                svg.push_str(&render_shape(resolved_style.shape, &bounds, &resolved_style));
+                svg.push_str(&render_shape(
+                    resolved_style.shape,
+                    &bounds,
+                    &resolved_style,
+                ));
                 svg.push('\n');
 
                 // Element name
@@ -855,34 +905,65 @@ impl SvgRenderer {
 
         // Render interaction arrows (steps) with data attributes for JS targeting
         for (idx, step) in view.steps.iter().enumerate() {
-            if let (Some(&(src_x, _)), Some(&(dst_x, _))) =
-                (element_positions.get(&step.source_id), element_positions.get(&step.destination_id))
-            {
+            if let (Some(&(src_x, _)), Some(&(dst_x, _))) = (
+                element_positions.get(&step.source_id),
+                element_positions.get(&step.destination_id),
+            ) {
                 let y = step_start_y + (idx as f64) * step_spacing;
                 let src_center = src_x + element_width / 2.0;
                 let dst_center = dst_x + element_width / 2.0;
 
-                // Arrow line with data attributes for step index and element IDs
-                svg.push_str(&format!(
-                    r#"  <line data-step-index="{}" data-source-id="{}" data-dest-id="{}" x1="{:.0}" y1="{:.0}" x2="{:.0}" y2="{:.0}" stroke="{}" stroke-width="2" marker-end="url(#{})"/>"#,
-                    idx, step.source_id, step.destination_id,
-                    src_center, y, dst_center, y, default_rel_style.color, marker_id
-                ));
+                let style = &step_styles[idx];
+                let dash = if step.response {
+                    Some("6,4")
+                } else {
+                    style.stroke_dasharray()
+                }
+                .map(|pattern| format!(" stroke-dasharray=\"{pattern}\""))
+                .unwrap_or_default();
+                let attributes = format!(
+                    r#"data-step-index="{}" data-source-id="{}" data-dest-id="{}" stroke="{}" stroke-width="{}" opacity="{}" marker-end="url(#{})"{}"#,
+                    idx,
+                    step.source_id,
+                    step.destination_id,
+                    style.color,
+                    style.thickness,
+                    style.opacity as f64 / 100.0,
+                    color_to_marker_id(&style.color),
+                    dash
+                );
+                let self_call = step.source_id == step.destination_id;
+                if self_call {
+                    svg.push_str(&format!(
+                        r#"  <path {} d="M {} {} h 50 v 24 h -50" fill="none"/>"#,
+                        attributes, src_center, y
+                    ));
+                } else {
+                    svg.push_str(&format!(
+                        r#"  <line {} x1="{:.0}" y1="{:.0}" x2="{:.0}" y2="{:.0}"/>"#,
+                        attributes, src_center, y, dst_center, y
+                    ));
+                }
                 svg.push('\n');
 
-                // Step number and description with data attribute
-                let label_x = (src_center + dst_center) / 2.0;
-                let label = format!("{}. {}", step.order, step.description.as_deref().unwrap_or(""));
+                let label_x = if self_call {
+                    src_center + 65.0
+                } else {
+                    (src_center + dst_center) / 2.0
+                };
+                let label = format!(
+                    "{}. {}",
+                    step.order,
+                    step.description.as_deref().unwrap_or("")
+                );
                 svg.push_str(&format!(
                     r#"  <text data-step-index="{}" x="{:.0}" y="{:.0}" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="{}">{}</text>"#,
-                    idx, label_x, y - 8.0, default_rel_style.color, escape_xml(&label)
+                    idx, label_x, y - 8.0, style.color, escape_xml(&label)
                 ));
                 svg.push('\n');
 
                 // Technology (if available) - render below the arrow with padding
-                let technology = model.relationships.iter()
-                    .find(|r| r.source_id == step.source_id && r.destination_id == step.destination_id)
-                    .and_then(|r| r.technology.as_ref());
+                let technology = relationships[idx].technology.as_ref();
                 if let Some(tech) = technology {
                     svg.push_str(&format!(
                         r##"  <text data-step-index="{}" x="{:.0}" y="{:.0}" text-anchor="middle" font-family="monospace" font-size="10" fill="#888888">{}</text>"##,

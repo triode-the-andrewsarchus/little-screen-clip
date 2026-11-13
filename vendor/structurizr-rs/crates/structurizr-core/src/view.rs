@@ -425,8 +425,14 @@ pub struct DynamicViewStep {
     pub destination_id: ElementId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Order string supporting hierarchical notation (e.g., "1", "2", "2.1", "2.2" for parallel sequences)
+    /// Authored or generated order label for this interaction.
     pub order: String,
+    /// The model declaration this interaction instantiates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship_id: Option<ElementId>,
+    /// Whether this is a reply using the reverse of an earlier request.
+    #[serde(default)]
+    pub response: bool,
 }
 
 /// Dynamic view showing interactions over time.

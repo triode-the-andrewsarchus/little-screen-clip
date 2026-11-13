@@ -1220,6 +1220,44 @@ impl Parser {
         Ok(views)
     }
 
+    /// Consume one common view annotation, leaving interaction/selection grammar to its owner.
+    fn parse_common_view_property(&mut self, properties: &mut ViewPropertiesNode) -> Result<bool> {
+        match self.current_kind().cloned() {
+            Some(TokenKind::AutoLayout) => {
+                self.advance();
+                properties.auto_layout = Some(self.parse_auto_layout()?);
+            }
+            Some(TokenKind::Properties) => {
+                self.advance();
+                properties.properties.extend(self.parse_properties_block()?);
+            }
+            Some(TokenKind::Title) => {
+                self.advance();
+                properties.title = Some(self.expect_string()?);
+            }
+            Some(TokenKind::Description) => {
+                self.advance();
+                properties.description = Some(self.expect_string()?);
+            }
+            Some(TokenKind::Default) => {
+                self.advance();
+                properties.default = true;
+            }
+            Some(TokenKind::Identifier(name))
+                if name.eq_ignore_ascii_case("background")
+                    && !self
+                        .tokens
+                        .get(self.position + 1)
+                        .is_some_and(|token| token.kind == TokenKind::Arrow) =>
+            {
+                self.advance();
+                properties.background = Some(self.expect_string()?);
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
     /// Read one selection statement without consuming the next physical line.
     fn parse_selection_operation(&mut self) -> Result<SelectionOperation> {
         let adding = self.check(&TokenKind::Include);
@@ -1273,6 +1311,7 @@ impl Parser {
 
             loop {
                 self.skip_newlines_and_comments();
+                if self.parse_common_view_property(&mut props)? { continue; }
 
                 match self.current_kind().cloned() {
                     Some(TokenKind::CloseBrace) => {
@@ -1282,31 +1321,10 @@ impl Parser {
                     Some(TokenKind::Include | TokenKind::Exclude) => {
                         props.selection.push(self.parse_selection_operation()?);
                     }
-                    Some(TokenKind::AutoLayout) => {
-                        self.advance();
-                        props.auto_layout = Some(self.parse_auto_layout()?);
-                    }
                     Some(TokenKind::Animation) => {
                         self.advance();
                         let step = self.parse_animation_step()?;
                         props.animations.push(step);
-                    }
-                    Some(TokenKind::Properties) => {
-                        self.advance();
-                        props.properties.extend(self.parse_properties_block()?);
-                    }
-                    Some(TokenKind::Title) => {
-                        self.advance();
-                        props.title = Some(self.expect_string()?);
-                    }
-                    Some(TokenKind::Description) => {
-                        self.advance();
-                        props.description = Some(self.expect_string()?);
-                    }
-                    Some(TokenKind::Default) => {
-                        // default keyword - marks this as the default view of its type
-                        self.advance();
-                        props.default = true;
                     }
                     Some(TokenKind::Identifier(ref id)) => {
                         match id.to_lowercase().as_str() {
@@ -1493,6 +1511,9 @@ impl Parser {
     ) -> Result<()> {
         loop {
             self.skip_newlines_and_comments();
+            if self.parse_common_view_property(props)? {
+                continue;
+            }
 
             match self.current_kind().cloned() {
                 Some(TokenKind::CloseBrace) => {
@@ -1508,13 +1529,8 @@ impl Parser {
                 Some(TokenKind::Include | TokenKind::Exclude) => {
                     props.selection.push(self.parse_selection_operation()?);
                 }
-                Some(TokenKind::AutoLayout) => {
-                    self.advance();
-                    props.auto_layout = Some(self.parse_auto_layout()?);
-                }
-                Some(TokenKind::Properties) => {
-                    self.advance();
-                    props.properties.extend(self.parse_properties_block()?);
+                Some(TokenKind::Number(_)) => {
+                    content.push(DynamicContent::Step(self.parse_ordered_dynamic_step()?));
                 }
                 Some(TokenKind::Identifier(source)) => {
                     self.advance();
@@ -1526,16 +1542,10 @@ impl Parser {
                         let step = self.parse_dynamic_step(source)?;
                         content.push(DynamicContent::Step(step));
                     } else {
-                        // Handle other identifier-based properties like "background"
-                        match source.to_lowercase().as_str() {
-                            "background" => {
-                                props.background = Some(self.expect_string()?);
-                            }
-                            _ => {
-                                // Unknown identifier, break out
-                                break;
-                            }
-                        }
+                        return Err(Error::Parse(ParseError {
+                            message: "Expected -> after dynamic source (relationship references are not supported)".into(),
+                            location: self.current().map(|token| token.location),
+                        }));
                     }
                 }
                 _ => break,
@@ -1564,6 +1574,9 @@ impl Parser {
                     let nested = self.parse_parallel_sequence()?;
                     content.push(DynamicContent::ParallelSequence(nested));
                 }
+                Some(TokenKind::Number(_)) => {
+                    content.push(DynamicContent::Step(self.parse_ordered_dynamic_step()?));
+                }
                 Some(TokenKind::Identifier(source)) => {
                     self.advance();
                     self.skip_newlines_and_comments();
@@ -1573,8 +1586,10 @@ impl Parser {
                         let step = self.parse_dynamic_step(source)?;
                         content.push(DynamicContent::Step(step));
                     } else {
-                        // Unknown identifier in parallel block
-                        break;
+                        return Err(Error::Parse(ParseError {
+                            message: "Expected -> after parallel interaction source".into(),
+                            location: self.current().map(|token| token.location),
+                        }));
                     }
                 }
                 _ => break,
@@ -1586,15 +1601,47 @@ impl Parser {
 
     /// Parse a single dynamic step: destination "description"
     /// (source was already consumed and is passed in)
+    fn parse_ordered_dynamic_step(&mut self) -> Result<DynamicStepNode> {
+        let mut order = String::new();
+        loop {
+            match self.current_kind().cloned() {
+                Some(TokenKind::Number(value)) => {
+                    order.push_str(&value.to_string());
+                    self.advance();
+                }
+                _ => {
+                    return Err(Error::Parse(ParseError {
+                        message: "Expected numeric dynamic order".into(),
+                        location: self.current().map(|token| token.location),
+                    }))
+                }
+            }
+            if !self.check(&TokenKind::Dot) {
+                break;
+            }
+            self.advance();
+            order.push('.');
+        }
+        self.expect(TokenKind::Colon)?;
+        let source = self.expect_identifier()?;
+        self.expect(TokenKind::Arrow)?;
+        let mut step = self.parse_dynamic_step(source)?;
+        step.order = Some(order);
+        Ok(step)
+    }
+
     fn parse_dynamic_step(&mut self, source: String) -> Result<DynamicStepNode> {
         self.skip_newlines_and_comments();
         let destination = self.expect_identifier()?;
         let description = self.maybe_string();
+        let technology = self.maybe_string();
 
         Ok(DynamicStepNode {
             source,
             destination,
             description,
+            technology,
+            order: None,
         })
     }
 
@@ -2188,6 +2235,7 @@ impl Parser {
             TokenKind::Arrow => "->".to_string(),
             TokenKind::Equals => "=".to_string(),
             TokenKind::Colon => ":".to_string(),
+            TokenKind::Dot => ".".to_string(),
             TokenKind::Comma => ",".to_string(),
             TokenKind::OpenParen => "(".to_string(),
             TokenKind::CloseParen => ")".to_string(),
@@ -2616,7 +2664,7 @@ fn default_static_elements(
 }
 
 /// Resolve a named selection term to a permitted model element.
-fn resolve_static_name(
+fn resolve_view_element(
     model: &Model,
     kind: ViewType,
     scope: Option<ElementId>,
@@ -2625,7 +2673,7 @@ fn resolve_static_name(
 ) -> Result<ElementId> {
     let id = *identifiers.get(name).ok_or_else(|| {
         Error::Parse(ParseError {
-            message: format!("Unknown element or unsupported static view expression: '{name}'"),
+            message: format!("Unknown element or unsupported view expression: '{name}'"),
             location: None,
         })
     })?;
@@ -2661,7 +2709,7 @@ fn resolve_static_selection(
                 IncludeExclude::All if adding => selected.extend(defaults.iter().copied()),
                 IncludeExclude::All => selected.clear(),
                 IncludeExclude::Identifier(name) | IncludeExclude::Expression(name) => {
-                    let id = resolve_static_name(model, view_type, scope_id, name, identifiers)?;
+                    let id = resolve_view_element(model, view_type, scope_id, name, identifiers)?;
                     if adding {
                         selected.insert(id);
                     } else {
@@ -2704,6 +2752,21 @@ fn resolve_static_selection(
     Ok((elements, relationships))
 }
 
+/// Normalize common authored view annotations without evaluating selectors.
+fn build_view_properties(
+    source: ViewPropertiesNode,
+    fallback_key: String,
+) -> (ViewProperties, Vec<SelectionOperation>) {
+    let mut properties = ViewProperties::new(source.key.unwrap_or(fallback_key));
+    properties.title = source.title;
+    properties.description = source.description;
+    properties.background = source.background;
+    properties.default = source.default;
+    properties.auto_layout = source.auto_layout.map(convert_auto_layout);
+    properties.properties = source.properties;
+    (properties, source.selection)
+}
+
 /// Preserve common authored properties and resolve static selections once.
 fn build_static_properties(
     model: &Model,
@@ -2713,15 +2776,9 @@ fn build_static_properties(
     identifiers: &HashMap<String, ElementId>,
     fallback_key: String,
 ) -> Result<ViewProperties> {
-    let mut properties = ViewProperties::new(source.key.unwrap_or(fallback_key));
-    properties.title = source.title;
-    properties.description = source.description;
-    properties.background = source.background;
-    properties.default = source.default;
-    properties.auto_layout = source.auto_layout.map(convert_auto_layout);
-    properties.properties = source.properties;
+    let (mut properties, selection) = build_view_properties(source, fallback_key);
     (properties.elements, properties.relationships) =
-        resolve_static_selection(model, kind, scope, &source.selection, identifiers)?;
+        resolve_static_selection(model, kind, scope, &selection, identifiers)?;
     Ok(properties)
 }
 
@@ -2945,47 +3002,9 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
             });
         }
 
-        // Process dynamic views
         for view in views_node.dynamic {
-            let mut v = if let Some(ref scope_id) = view.scope {
-                if let Some(&element_id) = identifiers.get(scope_id) {
-                    DynamicView::for_element(
-                        view.properties.key.unwrap_or_else(|| format!("Dynamic-{}", scope_id)),
-                        element_id,
-                    )
-                } else {
-                    // Scope element not found - create unscoped view
-                    DynamicView::new(
-                        view.properties.key.unwrap_or_else(|| "Dynamic".to_string()),
-                    )
-                }
-            } else {
-                DynamicView::new(
-                    view.properties.key.unwrap_or_else(|| "Dynamic".to_string()),
-                )
-            };
-
-            // Apply view properties
-            if let Some(title) = view.properties.title {
-                v.properties = v.properties.with_title(title);
-            }
-            if let Some(description) = view.properties.description {
-                v.properties = v.properties.with_description(description);
-            }
-            if let Some(auto_layout) = view.properties.auto_layout {
-                v.properties = v.properties.with_auto_layout(convert_auto_layout(auto_layout));
-            }
-            if let Some(background) = view.properties.background {
-                v.properties = v.properties.with_background(background);
-            }
-            if view.properties.default {
-                v.properties = v.properties.with_default(true);
-            }
-
-            // Convert content from AST nodes to core types with proper ordering
-            v.steps = flatten_dynamic_content(&view.content, &identifiers);
-
-            workspace.views_mut().add_dynamic_view(v);
+            let dynamic = build_dynamic_view(workspace.model(), view, &identifiers)?;
+            workspace.views_mut().add_dynamic_view(dynamic);
         }
 
         // Process deployment views
@@ -3462,165 +3481,183 @@ fn build_element_relationships(
     Ok(())
 }
 
-/// Tracks the current sequence number for dynamic view ordering.
-/// Supports hierarchical numbering like "1", "2", "2.1", "2.2", "3" for parallel sequences.
-struct SequenceCounter {
-    /// Stack of sequence levels. Each level tracks the current index.
-    /// e.g., [2, 1] represents "2.1"
-    levels: Vec<u32>,
-    /// Counter for parallel branches at the current level
-    parallel_counter: u32,
-    /// Whether we're currently processing parallel blocks
-    in_parallel: bool,
-}
-
-impl SequenceCounter {
-    fn new() -> Self {
-        Self {
-            levels: vec![0],
-            parallel_counter: 0,
-            in_parallel: false,
-        }
-    }
-
-    /// Advance to the next sequential step and return its order string.
-    fn next(&mut self) -> String {
-        self.levels[0] += 1;
-        self.parallel_counter = 0; // Reset parallel counter for new sequence
-        self.current()
-    }
-
-    /// Start processing a parallel branch. Returns the order string for this branch.
-    fn start_parallel_branch(&mut self) {
-        if !self.in_parallel {
-            // First parallel block at this level - increment main sequence
-            self.levels[0] += 1;
-            self.in_parallel = true;
-        }
-        self.parallel_counter += 1;
-        self.levels.push(self.parallel_counter);
-    }
-
-    /// End a parallel branch, returning to the parent level.
-    fn end_parallel_branch(&mut self) {
-        if self.levels.len() > 1 {
-            self.levels.pop();
-        }
-    }
-
-    /// Signal that all parallel blocks at this level are done.
-    fn finish_parallel_group(&mut self) {
-        self.in_parallel = false;
-    }
-
-    /// Get current order as a string (e.g., "2" or "2.1")
-    fn current(&self) -> String {
-        self.levels
-            .iter()
-            .map(|n| n.to_string())
-            .collect::<Vec<_>>()
-            .join(".")
-    }
-}
-
-/// Flatten DynamicContent tree into a flat list of DynamicViewStep with order strings.
-fn flatten_dynamic_content(
-    content: &[DynamicContent],
+/// Resolve a dynamic scope and every step before publishing a complete view.
+fn build_dynamic_view(
+    model: &Model,
+    source: DynamicViewNode,
     identifiers: &HashMap<String, ElementId>,
-) -> Vec<DynamicViewStep> {
+) -> Result<DynamicView> {
+    let scope = source
+        .scope
+        .as_ref()
+        .map(|name| {
+            identifiers
+                .get(name)
+                .copied()
+                .ok_or_else(|| Error::UndefinedIdentifier(name.clone()))
+        })
+        .transpose()?;
+    let kind = match scope.map(|id| model.find_element(id)) {
+        None => ViewType::SystemLandscape,
+        Some(Some(ElementRef::SoftwareSystem(_))) => ViewType::Container,
+        Some(Some(ElementRef::Container(_))) => ViewType::Component,
+        _ => {
+            return Err(Error::Parse(ParseError {
+                message: "Invalid dynamic view scope".into(),
+                location: None,
+            }))
+        }
+    };
+    let (properties, selection) = build_view_properties(source.properties, "Dynamic".into());
+    if !selection.is_empty() {
+        return Err(Error::Parse(ParseError {
+            message: "Dynamic views select interactions, not include/exclude terms".into(),
+            location: None,
+        }));
+    }
     let mut steps = Vec::new();
-    let mut counter = SequenceCounter::new();
-
-    flatten_content_recursive(content, identifiers, &mut steps, &mut counter);
-
-    steps
-}
-
-fn flatten_content_recursive(
-    content: &[DynamicContent],
-    identifiers: &HashMap<String, ElementId>,
-    steps: &mut Vec<DynamicViewStep>,
-    counter: &mut SequenceCounter,
-) {
-    // Group consecutive parallel blocks together
-    let mut i = 0;
-    while i < content.len() {
-        match &content[i] {
-            DynamicContent::Step(step) => {
-                // If we were in a parallel group, finish it
-                counter.finish_parallel_group();
-
-                // Regular sequential step
-                if let (Some(&src), Some(&dst)) = (
-                    identifiers.get(&step.source),
-                    identifiers.get(&step.destination),
-                ) {
-                    let order = counter.next();
-                    steps.push(DynamicViewStep {
-                        source_id: src,
-                        destination_id: dst,
-                        description: step.description.clone(),
-                        order,
-                    });
-                }
-                i += 1;
-            }
-            DynamicContent::ParallelSequence(_) => {
-                // Collect all consecutive parallel blocks
-                let parallel_start = i;
-                while i < content.len() {
-                    if matches!(&content[i], DynamicContent::ParallelSequence(_)) {
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                // Process each parallel block
-                for j in parallel_start..i {
-                    if let DynamicContent::ParallelSequence(parallel) = &content[j] {
-                        counter.start_parallel_branch();
-                        // Recursively process content within the parallel block
-                        flatten_parallel_content(&parallel.content, identifiers, steps, counter);
-                        counter.end_parallel_branch();
-                    }
-                }
-
-                counter.finish_parallel_group();
-            }
+    flatten_dynamic_sequence(
+        &source.content,
+        identifiers,
+        model,
+        scope,
+        kind,
+        0,
+        &mut steps,
+    )?;
+    let members: HashSet<_> = steps
+        .iter()
+        .flat_map(|step| [step.source_id, step.destination_id])
+        .collect();
+    for id in &members {
+        if model
+            .ancestor_ids(*id)
+            .iter()
+            .any(|parent| members.contains(parent))
+        {
+            return Err(Error::Parse(ParseError {
+                message: "A dynamic view cannot contain both an element and its ancestor".into(),
+                location: None,
+            }));
         }
     }
+    Ok(DynamicView {
+        properties,
+        element_id: scope,
+        steps,
+    })
 }
 
-/// Flatten content within a parallel sequence block.
-fn flatten_parallel_content(
+/// Visit each authored sequence. Nested parallel branches share their parent's
+/// starting ordinal; an outer grouping block advances the following sequence.
+fn flatten_dynamic_sequence(
     content: &[DynamicContent],
     identifiers: &HashMap<String, ElementId>,
+    model: &Model,
+    scope: Option<ElementId>,
+    kind: ViewType,
+    mut ordinal: u32,
     steps: &mut Vec<DynamicViewStep>,
-    counter: &mut SequenceCounter,
-) {
+) -> Result<(u32, bool)> {
+    let mut direct_steps = false;
     for item in content {
         match item {
             DynamicContent::Step(step) => {
-                if let (Some(&src), Some(&dst)) = (
-                    identifiers.get(&step.source),
-                    identifiers.get(&step.destination),
-                ) {
-                    let order = counter.current();
-                    steps.push(DynamicViewStep {
-                        source_id: src,
-                        destination_id: dst,
-                        description: step.description.clone(),
-                        order,
-                    });
-                }
+                ordinal += 1;
+                direct_steps = true;
+                let order = step.order.clone().unwrap_or_else(|| ordinal.to_string());
+                append_dynamic_step(model, identifiers, kind, scope, step, order, steps)?;
             }
-            DynamicContent::ParallelSequence(nested) => {
-                // Nested parallel - recurse
-                flatten_parallel_content(&nested.content, identifiers, steps, counter);
+            DynamicContent::ParallelSequence(branch) => {
+                let (end, direct) = flatten_dynamic_sequence(
+                    &branch.content,
+                    identifiers,
+                    model,
+                    scope,
+                    kind,
+                    ordinal,
+                    steps,
+                )?;
+                if !direct {
+                    ordinal = end + 1;
+                }
             }
         }
     }
+    Ok((ordinal, direct_steps))
+}
+
+/// Bind an interaction to its actual model declaration, including technology
+/// disambiguation and replies to an earlier request. Never drop unknown endpoints.
+fn append_dynamic_step(
+    model: &Model,
+    identifiers: &HashMap<String, ElementId>,
+    kind: ViewType,
+    scope: Option<ElementId>,
+    step: &DynamicStepNode,
+    order: String,
+    steps: &mut Vec<DynamicViewStep>,
+) -> Result<()> {
+    let source = resolve_view_element(model, kind, scope, &step.source, identifiers)?;
+    let destination = resolve_view_element(model, kind, scope, &step.destination, identifiers)?;
+    let forward = matching_dynamic_relationship(model, source, destination, step);
+    let reverse = || {
+        model.relationships.iter().find(|relationship| {
+            relationship.source_id == destination
+                && relationship.destination_id == source
+                && step.technology.is_none()
+                && steps
+                    .iter()
+                    .any(|previous| previous.relationship_id == Some(relationship.id))
+        })
+    };
+    let relationship = forward.or_else(reverse).ok_or_else(|| {
+        Error::Parse(ParseError {
+            message: format!(
+                "No matching model relationship or earlier request for '{}' -> '{}'",
+                step.source, step.destination
+            ),
+            location: None,
+        })
+    })?;
+    steps.push(DynamicViewStep {
+        source_id: source,
+        destination_id: destination,
+        description: step
+            .description
+            .clone()
+            .filter(|description| !description.is_empty())
+            .or_else(|| relationship.description.clone()),
+        order,
+        relationship_id: Some(relationship.id),
+        response: relationship.source_id != source,
+    });
+    Ok(())
+}
+
+/// Prefer the authored description among matching forward declarations, falling
+/// back to the first technology-compatible declaration without allocating a list.
+fn matching_dynamic_relationship<'a>(
+    model: &'a Model,
+    source: ElementId,
+    destination: ElementId,
+    step: &DynamicStepNode,
+) -> Option<&'a Relationship> {
+    let mut candidates = model.relationships.iter().filter(|relationship| {
+        relationship.source_id == source
+            && relationship.destination_id == destination
+            && step
+                .technology
+                .as_ref()
+                .is_none_or(|technology| relationship.technology.as_ref() == Some(technology))
+    });
+    let first = candidates.next()?;
+    if step.description.is_none() || first.description == step.description {
+        return Some(first);
+    }
+    candidates
+        .find(|relationship| relationship.description == step.description)
+        .or(Some(first))
 }
 
 fn convert_auto_layout(node: AutoLayoutNode) -> AutoLayout {

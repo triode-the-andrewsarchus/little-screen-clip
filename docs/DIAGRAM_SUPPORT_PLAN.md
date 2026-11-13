@@ -2493,7 +2493,9 @@ Further qualification found correctness work that must precede host integration:
   [official include rules](https://docs.structurizr.com/dsl/language#include).
 - [x] Qualify static component/filtered selections and diagnose unsupported
   selector expressions instead of silently omitting them.
-- [ ] Qualify dynamic/deployment/custom view behavior and additional DSL forms.
+- [x] Qualify dynamic interactions, model relationship binding, replies and
+  parallel/explicit ordering; preserve annotations and diagnose invalid scopes.
+- [ ] Qualify deployment/custom view behavior and additional DSL forms.
 
 The format checkbox remains open while these and host integration are pending.
 
@@ -2565,3 +2567,43 @@ a larger generic framework. Unchanged Python cycles are not new dependencies.
 This is a backend correction, committed separately from the implied-relationship
 fix. Host routing, graphical UI and native acceptance remain pending; the
 Structurizr format checkbox stays open.
+
+
+### Structurizr dynamic interaction correction
+
+Dynamic views now resolve each interaction against an existing model relationship,
+with technology disambiguation and description preference. Unknown scopes,
+endpoints, incompatible abstraction levels and missing relationships fail rather
+than disappearing or becoming placeholder nodes. Replies bind to an earlier
+request's model declaration, retaining its technology; self-calls draw a loop.
+Model relationship styles apply to the actual selected declaration. The renderer
+also rejects inconsistent runtime bindings instead of painting misleading links.
+
+Authored dotted orders are retained. Parallel groups follow the documented
+sequence behavior (the standard nested example is `1, 2, 2, 3`), without invented
+hierarchical numbers. Overflowing numeric tokens report a lexer error. Static and
+dynamic views share annotation parsing/conversion; dynamic include/exclude terms
+fail because this view selects interactions. Forward-declaration selection uses
+a bounded iterator rather than allocating a temporary candidate vector.
+
+Five end-to-end regressions cover parallel and explicit orders, scoped endpoints,
+technology selection, replies, self-calls, annotations, malformed scopes/relations,
+integer overflow and corrupted runtime bindings. All 157 unit/integration tests
+and one core rustdoc test pass. Strict all-target Clippy for the application's
+shared renderer passes. A rendered native SVG was rasterized and inspected to
+confirm interaction order, dashed reply and visible self-call geometry.
+
+Architecture comparison against `before-structurizr-dynamic` reduces clone groups
+by three and duplication by 0.01 percentage points. Maximum complexity and cycle
+count are unchanged; common annotation parsing removes the dynamic-body hotspot.
+The initially flagged relationship-selection complexity was simplified into its
+independent forward-selection rule; no new complexity hotspot remains. Raw
+classification still flags clones in touched upstream parser/lexer/renderer
+files. Both lexer fragments and all 13 renderer fragments exist byte-for-byte in
+the baseline; parser declaration patterns remain, while repeated annotation
+construction was removed. No additional host worker, cache or layout framework
+was introduced.
+
+This backend fix is separate from static selection corrections. Deployment and
+custom views, remaining DSL compatibility, host routing and native UI acceptance
+are still pending; the full format checkbox remains open.

@@ -351,6 +351,8 @@ pub struct DynamicStepNode {
     pub source: String,
     pub destination: String,
     pub description: Option<String>,
+    pub technology: Option<String>,
+    pub order: Option<String>,
 }
 
 /// Deployment view.

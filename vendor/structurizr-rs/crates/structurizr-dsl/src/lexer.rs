@@ -85,6 +85,7 @@ pub enum TokenKind {
     Equals,
     Comma,
     Colon,
+    Dot,
     Star,        // *
 
     // Literals
@@ -293,7 +294,7 @@ impl<'a> Lexer<'a> {
         s
     }
 
-    fn read_number(&mut self, first: char) -> i64 {
+    fn read_number(&mut self, first: char) -> Result<i64> {
         let mut s = String::new();
         s.push(first);
 
@@ -306,7 +307,10 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        s.parse().unwrap_or(0)
+        s.parse().map_err(|_| Error::Lexer {
+            message: "Integer exceeds the supported range".into(),
+            location: self.current_location(),
+        })
     }
 
     fn keyword_or_identifier(&self, s: &str) -> TokenKind {
@@ -414,6 +418,7 @@ impl<'a> Lexer<'a> {
             Some((_, ')')) => Ok(Token::new(TokenKind::CloseParen, location, 1)),
             Some((_, '=')) => Ok(Token::new(TokenKind::Equals, location, 1)),
             Some((_, ',')) => Ok(Token::new(TokenKind::Comma, location, 1)),
+            Some((_, '.')) => Ok(Token::new(TokenKind::Dot, location, 1)),
             Some((_, ':')) => Ok(Token::new(TokenKind::Colon, location, 1)),
             Some((_, '*')) => Ok(Token::new(TokenKind::Star, location, 1)),
 
@@ -479,7 +484,7 @@ impl<'a> Lexer<'a> {
             }
 
             Some((_, c)) if c.is_ascii_digit() => {
-                let n = self.read_number(c);
+                let n = self.read_number(c)?;
                 Ok(Token::new(TokenKind::Number(n), location, 1))
             }
 

@@ -35,3 +35,8 @@ commits, separate from this pristine import.
   empty/disconnected selections, and report unsupported terms. Core owns static
   element enumeration/metadata. Native static and filtered renderers share one
   layout/paint path, consuming resolved elements and relationships directly.
+
+- Bind dynamic interactions to model relationships with scope validation,
+  technology selection and replies; preserve explicit/parallel ordering and
+  shared annotations. Render model styles and self-call loops, reject corrupt
+  bindings, and report overflowing numeric tokens. Add end-to-end regressions.
