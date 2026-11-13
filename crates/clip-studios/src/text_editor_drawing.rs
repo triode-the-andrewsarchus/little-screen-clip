@@ -253,6 +253,7 @@ impl DrawingEditor {
                 self.camera.fit(frame.layout, rect);
             }
         }
+        self.keyboard(ui, &response);
         self.footer(ui);
         egui::ScrollArea::vertical()
             .id_source("drawing_notices")

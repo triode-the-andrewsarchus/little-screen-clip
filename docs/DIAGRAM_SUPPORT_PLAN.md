@@ -1174,3 +1174,8 @@ validation are still pending; the import is not a format-support completion.
   their bounding-box corners. The regression test covers interior points,
   edge tolerance and empty corners after a 90-degree rotation; it passes in the
   studio test target. Native paths retain their existing segment-distance hits.
+- [x] Keep Delete and Escape responsive while canonical drawing pixels refresh.
+  Pointer hits still require fresh geometry; selection commands use the current
+  model. Escape also handles egui's automatic focus loss and clears captured
+  gesture feedback without discarding accepted edits. All eight drawing-related
+  studio tests pass, including actual input with stale preview pixels.

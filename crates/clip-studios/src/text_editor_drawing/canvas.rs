@@ -135,9 +135,22 @@ impl DrawingEditor {
         {
             self.finish(&model, gesture);
         }
-        if response.has_focus() {
+    }
+
+    pub(super) fn keyboard(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
+        // Selection commands use the current model, not rendered geometry.
+        // Pointer hits stay gated on fresh pixels, but a preview refresh must
+        // not swallow Delete or prevent cancelling a captured gesture.
+        // egui clears focus before UI dispatch on Escape. Admit that loss only
+        // when no other widget took focus, then keep the canvas keyboard owner.
+        let escaped_focus = response.lost_focus()
+            && ui.memory(|memory| memory.focused().is_none())
+            && ui.input(|input| input.key_pressed(egui::Key::Escape));
+        if response.has_focus() || escaped_focus {
             if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                response.request_focus();
                 self.gesture = None;
+                self.ghost = None;
                 self.selected.clear();
                 self.tool = None;
             }
@@ -146,6 +159,8 @@ impl DrawingEditor {
                     || input.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
             });
             if delete && !self.selected.is_empty() {
+                self.gesture = None;
+                self.ghost = None;
                 self.queue(Change::Delete {
                     ids: self.selected.clone(),
                 });
@@ -433,6 +448,79 @@ fn hit(item: &Item, point: [f64; 2], tolerance: f64) -> bool {
 mod tests {
     use super::*;
 
+    fn ui_frame(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        mut paint: impl FnMut(&mut egui::Ui),
+    ) {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, &mut paint);
+            },
+        );
+    }
+
+    #[test]
+    fn drawing_keyboard_edits_current_selection_while_canonical_pixels_are_stale() {
+        let ctx = egui::Context::default();
+        let source = r#"{"type":"excalidraw","version":2,"elements":[{"id":"box","type":"rectangle","x":0,"y":0,"width":80,"height":60}]}"#;
+        let mut editor = DrawingEditor {
+            source: Some(Arc::from(source)),
+            model: Some(Arc::new(Scene::parse(source).unwrap())),
+            selected: vec!["box".into()],
+            ..Default::default()
+        };
+        let mut preview = Preview::drawing_fixture(&ctx, "older drawing");
+        let frame = |editor: &mut DrawingEditor, preview: &mut Preview, events| {
+            ui_frame(&ctx, events, |ui| {
+                editor.show(ui, source, preview, &AppPalette::default());
+                assert!(!preview.drawing_frame(ui, source).unwrap().fresh);
+            });
+        };
+        frame(&mut editor, &mut preview, Vec::new());
+        ctx.memory_mut(|memory| memory.request_focus(editor.focus.unwrap()));
+        editor.gesture = Some(Gesture::Move {
+            start: [0.0; 2],
+            current: [5.0; 2],
+            ids: editor.selected.clone(),
+        });
+        for key in [egui::Key::Escape, egui::Key::Delete] {
+            editor.selected = vec!["box".into()];
+            frame(
+                &mut editor,
+                &mut preview,
+                vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }],
+            );
+            assert!(editor.gesture.is_none());
+        }
+        assert!(
+            editor.busy(),
+            "Delete must reach the current model during rendering"
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(Poll::Changed(updated)) = editor.poll(&ctx, source) {
+                assert!(Scene::parse(&updated).unwrap().items.is_empty());
+                assert!(editor.selected.is_empty());
+                break;
+            }
+            assert!(Instant::now() < deadline, "{:?}", editor.edit_error);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        preview.suspend();
+    }
+
     #[test]
     fn drawing_curved_shape_selection_follows_rotated_geometry_instead_of_box_corners() {
         for kind in ["ellipse", "diamond"] {
@@ -494,23 +582,14 @@ mod tests {
             rect,
         );
         let frame = |editor: &mut DrawingEditor, events| {
-            let _ = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
-                    events,
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let response = ui.interact(
-                            rect,
-                            egui::Id::new("drawing pointer fixture"),
-                            egui::Sense::click_and_drag(),
-                        );
-                        editor.interact(ui, &response, rect);
-                    });
-                },
-            );
+            ui_frame(&ctx, events, |ui| {
+                let response = ui.interact(
+                    rect,
+                    egui::Id::new("drawing pointer fixture"),
+                    egui::Sense::click_and_drag(),
+                );
+                editor.interact(ui, &response, rect);
+            });
         };
         let a = egui::pos2(150.0, 150.0);
         let b = egui::pos2(510.0, 410.0);
