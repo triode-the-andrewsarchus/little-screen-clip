@@ -1288,3 +1288,52 @@ still paints a PNG until the GPU backend is integrated. FemtoVG's context-sharin
 prototype is the next gate. The user also identified future VCV Rack previews as
 a reuse opportunity for that renderer. Keep its host/context lifetime reusable,
 and validate coexistence with egui before enabling it in the studios.
+
+## Shared vector context validation
+
+The development-only `clip-ui` example `vector_context_probe` now exercises
+FemtoVG 0.28.0 inside eframe 0.27's existing current OpenGL context. It uses
+eframe's function loader; the two glow versions are function tables for that
+same context, not separate rendering surfaces. GPU objects remain on the
+creating UI thread and are destroyed in eframe's current-context exit hook.
+Callbacks capture only thread-safe input and metrics, with no unsafe Send/Sync
+implementations. The few GL calls document their current-context requirements.
+
+The private desktop acceptance scenario covers arbitrary rounded clipping,
+an even-odd hole, stroked curves, 1600% zoom, pointer panning, repeated frames,
+egui controls painted after vectors, window shrinking/restoration, and renderer
+destruction. Light and dark runs pass with zero reported GL errors or layer
+allocation failures. Screenshots confirm crisp enlarged curves and intact
+surrounding controls. This runner uses software OpenGL; these results do not
+claim testing every hardware driver or multi-window context configuration.
+
+The prototype explicitly scales logical coordinates by egui's pixels per point,
+uses an offscreen layer with its own stencil attachment, restores egui's
+framebuffer after painting, and disables stencil testing before returning to
+egui. Initial runs caught a harness window-ID mismatch and ambiguous OCR button
+matching; dedicated IDs and a distinct control label resolve those. Private
+compositor resize crossfades are disabled for unambiguous screenshots. The
+example continuously repaints to exercise interleaving during asynchronous
+native resizes; this is a development stress test, not a production repaint policy.
+
+Validation commands:
+
+```sh
+cargo build -j4 -p clip-ui --example vector_context_probe
+cargo clippy -j4 -p clip-ui --example vector_context_probe -- -D warnings
+cargo fmt --all --check
+TESSDATA_PREFIX=/home/vega/.local/share/tessdata python3 scripts/vector_context_acceptance.py --appearance light --output-dir /tmp/vector-context-light-final
+TESSDATA_PREFIX=/home/vega/.local/share/tessdata python3 scripts/vector_context_acceptance.py --appearance dark --output-dir /tmp/vector-context-dark-final
+```
+
+Architecture comparison leaves maximum complexity and dependency cycles
+unchanged. Its two new clone groups are verbatim MIT license paragraphs, which
+must remain intact; it reports no duplicated application logic in the prototype.
+
+FemtoVG remains a development dependency until the retained scene and host
+lifetime are connected to studios. The production owner must distinguish
+contexts, handle unavailable GL explicitly, and preserve the callback's actual
+framebuffer target. The current example owns one native window, so it does not
+establish a multi-context registry. SVG preparation, per-object live transforms,
+glyph/image fidelity and the actual studio integration remain pending. The
+editor still paints its existing raster preview at this checkpoint.
