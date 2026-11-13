@@ -3042,3 +3042,64 @@ samples were not overwritten. Native text/resize and wiring fixtures are also
 available there. Pristine upstream imports remain committed independently from
 local adaptations and editor changes. The personal Cargo configuration is not
 part of these commits.
+
+
+## Vector previews and fixed drawing controls follow-up
+
+User review found bounded PNGs being enlarged in passive Pikchr/svgbob views
+and Mermaid's standard shadow forcing a raster fallback. All desktop diagram
+previews should attempt retained vector painting, including Markdown, source
+preview, file-manager strips and hover. The physical little screen still needs
+its final framebuffer raster; it does not have a desktop OpenGL surface.
+
+- [x] Reuse the existing worker-prepared SVG scene and host vector runtime for
+  every diagram family, including inline/display equations.
+- [x] Preserve authored passive viewport crops independently from the drawing
+  editor's expandable export plane; keep image admission and geometry budgets.
+- [x] Reuse the existing rasterizer's real bundled-font outlines for raw SVG
+  text from Pikchr/svgbob and other small engines, preserving native glyphs.
+- [x] Paint Mermaid's standard hard shadow at the current device resolution,
+  preserving its filter bounds, source alpha and group opacity.
+- [x] Bound native shadow replay depth on the worker before painting.
+- [x] Validate real Pikchr, svgbob and Mermaid artwork at high native zoom and
+  check ordinary document/strip/hover routes in both themes.
+- [x] Replace drawing text's detached window with a fixed properties sidebar;
+  use a compact icon tool row, color swatches and visible zoom controls.
+- [x] Requalify text creation/editing, rejected-label recovery and live resizing
+  after the layout change; run affected tests, strict Clippy and architecture
+  comparison before closing this follow-up.
+
+Masks, arbitrary filter graphs, SVG patterns and repeating gradients currently
+retain explicit raster fallbacks. No SVG effects are discarded to force vector
+admission. The fallback PNG also remains available for desktop hosts without a
+healthy native vector renderer. Embedded photographs remain raster assets inside
+otherwise vector artwork. No browser engine or new rendering dependency is added.
+
+Final qualification for this follow-up:
+
+- Drawing UI checks pass in both themes, 31 observations each:
+  `/tmp/drawing-sidebar-dark-20261113-final2/report.json` and
+  `/tmp/drawing-sidebar-light-20261113-final2/report.json`. Exact draft clipboard
+  checks complement pixel evidence when OCR interleaves wrapped text and artwork.
+- Pikchr/svgbob/DBML strip, popout, invalid fallback, source and Markdown checks
+  pass in both themes, 26 observations each:
+  `/tmp/vector-strips-dark-20261113-final2/report.json` and
+  `/tmp/vector-strips-light-20261113-final2/report.json`. The two newly qualified
+  hover cases require enlarged paper outside the row, not just a type-name match.
+- Canonical Pikchr, svgbob and Mermaid pass native 1600% zoom, resizing, egui
+  interleaving and teardown with zero GL/renderer errors:
+  `/tmp/vector-pikchr-dark-20261113-1/vector-context.json`,
+  `/tmp/vector-svgbob-light-20261113-1/vector-context.json` and
+  `/tmp/vector-mermaid-dark-20261113-2/vector-context.json`.
+- [x] Bound footer/help/error text together below the canvas; status messages
+  cannot grow a second unbounded strip over the surrounding host content.
+- [x] Retain the source identity check after all pixel/vector preparation before
+  publishing a file-manager preview.
+
+Workspace Clippy and desktop builds are warning-free. The workspace suite passes
+3,171 tests with one media seek case explicitly filtered and 36 tests ignored;
+the filtered case passes separately. Its two unfiltered workspace failures are
+recorded rather than hidden by changing media code or deadlines. See
+[vector previews](diagrams/vector-previews.md) for commands and precise fallback
+limits, and [architecture review](diagrams/architecture-review.md) for measured
+size/complexity changes and reviewed flags.

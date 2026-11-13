@@ -50,3 +50,10 @@ Apply/rejection/undo semantics; no detached inspector window is created.
 Zoom, actual size and Fit controls sit below the canvas. The host keeps its
 existing Save and Undo/Redo owners. Properties scroll inside their own bounds
 when the host is short; the artwork never moves behind the sidebar.
+
+The fixed-control follow-up passes the real light/dark text/resize scenarios in
+`/tmp/drawing-sidebar-dark-20261113-final2/report.json` and
+`/tmp/drawing-sidebar-light-20261113-final2/report.json` (31 observations each).
+These cover exact draft input, rejected-label recovery, held artwork and exact
+Undo/Save restoration. Help/errors share one bounded status scroller below the
+zoom controls, so extra messages do not grow over the surrounding host content.

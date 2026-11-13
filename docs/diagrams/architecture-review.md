@@ -81,3 +81,29 @@ have separate commits and regression checks.
   including rejected-Apply recovery and exact source restoration.
 - Native wiring scenarios pass in both themes (16 observations each), retaining
   electrical/source and held-artwork proofs rather than only matching source words.
+
+
+## Vector preview and fixed-control follow-up
+
+Compared with `before-vector-preview-ui`, source lines grow by 578 and functions
+by 18. Duplication decreases by 0.01 percentage points, average CCN is unchanged at
+the displayed precision, maximum CCN remains 274, and structural health changes
+by -0.03. No rendering dependency or application dependency cycle is introduced.
+
+The initial new properties coordinator and retained preparation coordinator were
+simplified: selection actions have their own UI subsection, and all retained
+clip/mask/pattern definitions share one geometry-validation traversal. The final
+comparison reports no new excessive-complexity function. Existing short
+preview/camera/worker tails and text-test fixtures remain explicit; no new
+parser, cache, font stack, write owner or generic editor framework is added.
+
+The tool still labels the comparison REGRESSION. Its Python-cycle additions and
+removals have identical members in a different order, in untouched files. Its
+acceptance-script locator scores reflect new test callers, not application
+coupling. The remaining clone flags touch existing editor lifecycle sequences
+and unchanged test setup. Those flags do not justify a second abstraction layer
+for this bounded UI/painting change. The necessary controls and native shadow
+composition are accepted with source-preservation and real GL validation.
+
+Current validation, including the isolated media-seek test qualification, is
+recorded in [vector previews](vector-previews.md).
