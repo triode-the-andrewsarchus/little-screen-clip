@@ -72,15 +72,16 @@ fn prepare_viewport(svg: &str, expand_export_planes: bool) -> Result<Svg, String
     }
     let mut limits = Limits::default();
     limits.group(tree.root(), 0)?;
-    // A retained definition is counted once, even when many elements use it.
-    for clip in tree.clip_paths() {
-        limits.group(clip.root(), 0)?;
-    }
-    for mask in tree.masks() {
-        limits.group(mask.root(), 0)?;
-    }
-    for pattern in tree.patterns() {
-        limits.group(pattern.root(), 0)?;
+    // All retained definitions share the same depth/geometry policy and are
+    // counted once, even when many elements reference them.
+    for group in tree
+        .clip_paths()
+        .iter()
+        .map(|clip| clip.root())
+        .chain(tree.masks().iter().map(|mask| mask.root()))
+        .chain(tree.patterns().iter().map(|pattern| pattern.root()))
+    {
+        limits.group(group, 0)?;
     }
     drop(options);
     let images = std::mem::take(

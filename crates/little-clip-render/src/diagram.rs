@@ -609,7 +609,28 @@ fn compose_svg(
 }
 
 fn rasterize_svg(svg: String, white_paper: bool, images: ImagePolicy) -> Result<Rendered, String> {
-    let (tree, warnings) = parse_svg(&svg, default_fonts(), "Noto Sans CJK JP", images)?;
+    let (tree, mut warnings) = parse_svg(&svg, default_fonts(), "Noto Sans CJK JP", images)?;
+    // Some small engines return text-bearing SVG rather than going through the
+    // compositor. Reuse the exact bundled-font outlines already used for PNG
+    // painting, so desktop views need neither a second font stack nor a scaled
+    // thumbnail. Already outlined exports keep their interactive plane wrappers.
+    let svg = if svg_document(&svg)?
+        .descendants()
+        .any(|node| node.has_tag_name("text"))
+    {
+        use resvg::usvg::TreeWriting;
+        let outlined = tree.to_string(&resvg::usvg::XmlOptions::default());
+        if outlined.len() <= MAX_SVG {
+            outlined
+        } else {
+            warnings.push(
+                "Native glyph outlines exceed the vector budget; using the raster preview.".into(),
+            );
+            svg
+        }
+    } else {
+        svg
+    };
     let scale = (WIDTH as f32 / tree.size.width())
         .min(HEIGHT as f32 / tree.size.height())
         .min(2.0);
@@ -1073,6 +1094,14 @@ mod tests {
         ] {
             let rendered = render_inline(format, source, None).unwrap();
             assert!(rendered.svg.contains("<svg"));
+            assert!(
+                !svg_document(&rendered.svg)
+                    .unwrap()
+                    .descendants()
+                    .any(|node| node.has_tag_name("text")),
+                "{format:?} must share the rasterizer's real glyph outlines"
+            );
+            retained::prepare_preview(&rendered.svg).unwrap();
             let pixels = image::load_from_memory(&rendered.png).unwrap().to_rgba8();
             assert_eq!(pixels.dimensions(), (rendered.width, rendered.height));
             assert!(
