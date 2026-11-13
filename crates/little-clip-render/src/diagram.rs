@@ -14,6 +14,7 @@ use std::{
 };
 
 mod bpmn;
+mod bytefield;
 mod d2;
 mod dbml;
 mod excalidraw;
@@ -229,6 +230,12 @@ pub fn run_worker_cli() -> bool {
             include_str!("../../../vendor/wavedrom/LICENSE"),
             include_str!("../../../vendor/nomnoml/LICENSE"),
             include_str!("../../../vendor/goat/LICENSE"),
+            include_str!("../third_party/bytefield-notices.md"),
+            include_str!("../../../vendor/bytefield-svg/LICENSE"),
+            include_str!("../../../vendor/bytefield-svg/licenses/sci-LICENSE"),
+            include_str!("../../../vendor/bytefield-svg/licenses/clojurescript-LICENSE"),
+            include_str!("../../../vendor/bytefield-svg/licenses/tools.reader-LICENSE"),
+            include_str!("../../../vendor/bytefield-svg/licenses/closure-LICENSE"),
             include_str!("../../../vendor/tdewolff-parse/LICENSE.md"),
             include_str!("../third_party/go-runtime-LICENSE.txt"),
             include_str!("../third_party/dbml-rs-MIT.txt"),
@@ -338,6 +345,7 @@ fn render_inline(
         Format::Nomnoml => nomnoml::svg(source)?,
         Format::Dbml => dbml::svg(source)?,
         Format::Goat => goat::svg(source)?,
+        Format::Bytefield => bytefield::svg(source)?,
         Format::Wireviz => wireviz::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
@@ -647,6 +655,7 @@ mod tests {
     #[test]
     fn markdown_files_and_raw_diagram_files_use_the_screen_diagram_route() {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
+        const BYTEFIELD: &str = include_str!("../../../docs/examples/diagrams/packet.bytefield");
         const GOAT: &str = include_str!("../../../docs/examples/diagrams/pipeline.goat");
         const SCHEMA: &str = include_str!("../../../docs/examples/diagrams/schema.dbml");
         const HARNESS: &str = include_str!("../../../docs/examples/diagrams/harness.wireviz");
@@ -675,6 +684,15 @@ mod tests {
                 "```nomnoml\n[Source] -> [Preview]\n```",
                 Format::Nomnoml,
                 "[Source] -> [Preview]\n",
+            ),
+            ("", BYTEFIELD, Format::Bytefield, BYTEFIELD),
+            ("bytefield", BYTEFIELD, Format::Bytefield, BYTEFIELD),
+            ("edn", BYTEFIELD, Format::Bytefield, BYTEFIELD),
+            (
+                "md",
+                include_str!("../../../docs/examples/diagrams/bytefield.md"),
+                Format::Bytefield,
+                BYTEFIELD,
             ),
             ("", GOAT, Format::Goat, GOAT),
             ("goat", GOAT, Format::Goat, GOAT),

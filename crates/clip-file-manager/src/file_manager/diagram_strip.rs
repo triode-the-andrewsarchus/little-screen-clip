@@ -34,7 +34,7 @@ impl Document {
             .is_some_and(|value| {
                 matches!(
                     value.to_ascii_lowercase().as_str(),
-                    "json" | "json5" | "dot" | "mmd" | "xml" | "yaml" | "yml"
+                    "json" | "json5" | "dot" | "mmd" | "xml" | "yaml" | "yml" | "edn"
                 )
             });
         if explicit.is_none() && !ambiguous {
@@ -250,6 +250,8 @@ mod tests {
             ("draft.noml", "[Unclosed", Format::Nomnoml),
             ("schema.dbml", "Table users { id int }", Format::Dbml),
             ("shape.goat", ".----.\n| hi |\n'----'", Format::Goat),
+            ("packet.bytefield", "(draw-box 0)", Format::Bytefield),
+            ("packet.edn", "(draw-box 0)", Format::Bytefield),
             (
                 "drawing.excalidraw.json",
                 "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}",

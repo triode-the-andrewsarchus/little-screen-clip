@@ -40,6 +40,9 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
             true,
         ),
         ("goat", "a\tb", false),
+        ("bytefield", "(draw-column-headers) (draw-box 0)", true),
+        ("bytefield", "(draw-box", false),
+        ("bytefield", "(slurp \"/etc/passwd\")", false),
         ("nomnoml", "#import: /etc/passwd\n[A]", false),
         (
             "wireviz",

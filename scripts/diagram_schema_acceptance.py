@@ -12,6 +12,7 @@ FAMILIES = {
     "nomnoml": ("Nomnoml", "pipeline.nomnoml", (144, 238, 144), "[Broken"),
     "dbml": ("DBML", "schema.dbml", (34, 56, 77), "Table broken {"),
     "goat": ("GoAT", "pipeline.goat", (17, 17, 17), "a\tb"),
+    "bytefield": ("Bytefield", "packet.bytefield", (184, 216, 236), "(draw-box"),
 }
 
 
@@ -34,7 +35,7 @@ def rendered(session, name, expected, color, minimum=200):
 def exercise(session, root):
     # Family filenames are verified inside each addressed folder below. The
     # initial light-theme folder labels are ambiguous to OCR (nomnoml/momnoml).
-    session.observe("00-families", [f"{len(FAMILIES)} folders"])
+    session.observe("00-families", [f"{len(FAMILIES)} folder"])
     session.click(647, 160)  # Collapse Shelf once in the fixed private viewport.
     for syntax, (title, example, color, _) in FAMILIES.items():
         folder = root / syntax
@@ -57,7 +58,10 @@ def exercise(session, root):
         x, y = session.word(prefix + "05-return", "c-overview.md")
         session.click(x + 20, y)
         session.key("Return")
-        rendered(session, prefix + "06-markdown", ["Schema overview", "Diagram source"], color)
+        rendered(session, prefix + "06-markdown", ["Schema overview"], color)
+        # Tall diagrams can legitimately place the source action below the
+        # viewport. Verify artwork first, then scroll to the source affordance.
+        session.scroll_to_visible(prefix + "06-markdown-source", ["Diagram source"])
         session.click(1120, 71)
         session.observe(prefix + "07-folder", [valid, "c-overview.md"])
         after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.iterdir()}
@@ -65,7 +69,12 @@ def exercise(session, root):
 
 
 if __name__ == "__main__":
-    args = application_arguments(__doc__, Path("target/debug/clip-file-manager"))
+    args = application_arguments(
+        __doc__, Path("target/debug/clip-file-manager"),
+        configure=lambda parser: parser.add_argument("--family", action="append", choices=list(FAMILIES)),
+    )
+    if args.family:
+        FAMILIES = {name: FAMILIES[name] for name in args.family}
     output, root = media_fixture_directory(args)
     for syntax, (_, example, _, invalid) in FAMILIES.items():
         folder = root / syntax

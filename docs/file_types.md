@@ -220,11 +220,11 @@
         - [ ] DBML database markup (`dbml`) — native tables/columns/enums/relationships and source/live previews; newer partials/records/optional relations pending
         - [x] BPMN business process (`bpmn`, `bpmn2`) — native authored-DI/automatic layout, bounded large/small previews and diagnostics
         - [ ] Diagrams.net / draw.io (`drawio`, `diagramsnet`)
-        - [x] Excalidraw whiteboards (`excalidraw`) — native bounded rendering with handwriting, raster assets and diagnostics; graphical canvas pending
+        - [x] Excalidraw whiteboards (`excalidraw`) — native bounded rendering with handwriting, raster assets and diagnostics; initial vector canvas editing implemented, parity work pending
         - [x] WaveDrom digital timing diagrams (`wavedrom`)
         - [ ] Structurizr software architecture (`structurizr`)
         - [ ] BlockDiag family (`blockdiag`, `seqdiag`, `actdiag`, `nwdiag`, `packetdiag`, `rackdiag`)
-        - [ ] Bytefield packet layouts (`bytefield`)
+        - [x] Bytefield packet layouts (`bytefield`) — pinned upstream Clojure DSL in bounded hostless QuickJS; shared source/live and rendered previews
         - [ ] Ditaa ASCII art diagrams (`ditaa`)
         - [ ] Erd entity-relationship diagrams (`erd`)
         - [x] Nomnoml UML diagrams (`nomnoml`) — pinned upstream renderer in bounded embedded QuickJS, native SVG/raster previews and diagnostics
@@ -572,6 +572,7 @@
     - [ ] `.bob`, `.svgbob` — Svgbob ASCII-to-SVG diagram (May need disambiguation with BOB raytracer / CAD files on `.bob`)
       - [x] `.svgbob` — native previews, highlighted source/live preview/errors and guarded saves
       - [ ] `.bob` content disambiguation and graphical cell editing
+    - [x] `.bytefield` — explicit Bytefield source association; upstream `.edn` uses conservative drawing-content detection; native previews and highlighted source/live editor
     - [x] `.goat` — GoAT ASCII/Unicode diagram; highlighted source/live preview, list strips and enlarged hover
     - [x] `.lini` — native highlighted source/live-preview editor with diagnostics and guarded saves; graphical manipulation pending
   - [ ] Scientific and statistical charting specifications

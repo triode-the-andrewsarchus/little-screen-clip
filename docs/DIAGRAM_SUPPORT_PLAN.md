@@ -41,20 +41,20 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | PlantUML / C4 | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [plantuml_encoding](https://crates.io/crates/plantuml_encoding) 2.0.3; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
 | D2 | d2-rs 0.1.7 pipeline; d2-render 0.1.0; graphs-tui 0.4.0; official Go D2 | Native compiler/layout and scene renderer integrated; flat-board Markdown/standalone previews and highlighted guarded saves implemented; graphical editing/board selection pending |
 | Graphviz DOT | graphviz-pure 1.2.0; layout-rs 0.1.3; graphviz-rust 0.9.9 | Native Graphviz port selected; source/live preview and bounded multi-graph rendering implemented; graphical manipulation pending |
-| DBML | [dbml-language-server](https://crates.io/crates/dbml-language-server) 0.1.2; [dbml_diff_mysql](https://crates.io/crates/dbml_diff_mysql) 0.1.5; [sea-orm-dbml](https://crates.io/crates/sea-orm-dbml) 0.1.0-beta.2 | Pending comparison / editor research |
+| DBML | dbml-rs 1.0.1, dbml-language-server, dbml_diff_mysql, sea-orm-dbml | Native parser/Graphviz adapter and shared source/list routes implemented; newer syntax and graphical editing pending |
 | BPMN | BPMN Kit 0.2.1 native model/layout/SVG; bpmn-svg 0.1.0; bpmn-js and BPMNKit graphical editors | Native authored-DI and automatic-layout previews; highlighted source editor; direct manipulation optional follow-up |
 | draw.io | [drawio-exporter](https://crates.io/crates/drawio-exporter) 1.6.0; [flowchart-mcp-server](https://crates.io/crates/flowchart-mcp-server) 0.1.0; [drawio-lc](https://crates.io/crates/drawio-lc) 0.4.0 | Pending comparison / editor research |
 | Excalidraw | excalidraw-render 0.1.0; excalidraw-document 0.2.0; gpui-excalidraw 0.1.9; excalidraw-image 0.2.0 | Native SVG renderer and preserving graphical transactions integrated; initial drawing/selection/movement canvas works; text editing and resize handles pending |
 | WaveDrom | Canonical 3.8.0; native wavedrom 0.1.0 and current Rust main; WavePaint graphical reference | Canonical engine embedded without a browser; timing/register/logic source previews integrated; direct timing painting and lane naming integrated; advanced operations stay in source |
 | Structurizr | [oak-structurizr](https://crates.io/crates/oak-structurizr) 0.0.11; [dendryform-export](https://crates.io/crates/dendryform-export) 0.1.0; [cadastre](https://crates.io/crates/cadastre) 0.4.0 | Pending comparison / editor research |
 | BlockDiag / SeqDiag / ActDiag / NwDiag / PacketDiag / RackDiag | [xio_job_to_blockdiag](https://crates.io/crates/xio_job_to_blockdiag) 0.8.0 | Pending comparison / editor research |
-| Bytefield | [bytefield](https://crates.io/crates/bytefield) 0.1.0; [wiry-core](https://crates.io/crates/wiry-core) 0.1.0; [wiry-capture](https://crates.io/crates/wiry-capture) 0.1.0 | Pending comparison / editor research |
+| Bytefield | Canonical Bytefield-SVG 1.11/1.12; ProtoViz; Framegram; unrelated native bitfield crates | Pin canonical 1.11 after differential helper-function regression; bounded hostless rendering, shared Markdown/clipboard/source/list paths implemented |
 | Ditaa | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [ansicht](https://crates.io/crates/ansicht) 0.1.0; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
 | Erd | [rusterd](https://crates.io/crates/rusterd) 0.3.1; [erd_rs](https://crates.io/crates/erd_rs) 0.1.0; [fastbreak](https://crates.io/crates/fastbreak) 0.5.0 | Pending comparison / editor research |
-| Nomnoml | Canonical Nomnoml 1.7.0 with Graphre 0.1.3; crates.io hits silica/squaredb inspected and unrelated | Hostless SVG prototype works; pristine MIT engines imported separately; renderer/editor integration pending |
+| Nomnoml | Canonical Nomnoml 1.7.0 with Graphre 0.1.3; crates.io hits silica/squaredb inspected and unrelated | Hostless canonical rendering, standalone/Markdown/clipboard routes and source/live editor implemented; graphical editing pending |
 | Pikchr | [pikchr](https://crates.io/crates/pikchr) 0.1.4; [pikchr-rs](https://crates.io/crates/pikchr-rs) 0.1.0; [pikchr-sys](https://crates.io/crates/pikchr-sys) 0.1.1 | Selected pikchr-rs; source/live previews implemented; direct manipulation pending |
 | Svgbob | [svgbob](https://crates.io/crates/svgbob) 0.7.6; [mdbook-svgbob](https://crates.io/crates/mdbook-svgbob) 0.3.1; [mdbook-svgbob2](https://crates.io/crates/mdbook-svgbob2) 0.3.0 | Selected original SvgBob; source/live previews implemented; cell editor and .bob disambiguation pending |
-| GoAT | [aasvg](https://crates.io/crates/aasvg) 1.0.0; [formulaa](https://crates.io/crates/formulaa) 0.1.0 | Pending comparison / editor research |
+| GoAT | aasvg 1.0.0, SvgBob, upstream GoAT 0.5.1; differential upstream fixtures | Pinned upstream static companion, ASCII/Unicode rendering and shared source/strip routes implemented; cell editing pending |
 | Lini | Original lini 1.1.0 compiler; mdbook-lini and lini-wasm integrations of the same compiler; specification reimplementation | Original native compiler selected; highlighted source/live previews implemented, graphical editing pending |
 | TikZ / PGF | [mdbook-tikz](https://crates.io/crates/mdbook-tikz) 0.2.8; [tikra](https://crates.io/crates/tikra) 1.9.2; [tikra-cli](https://crates.io/crates/tikra-cli) 1.9.2 | Pending comparison / editor research |
 | UMLet | No direct crates.io match; compare upstream implementation and format specification. | Pending comparison / editor research |
@@ -2080,3 +2080,86 @@ The final light-theme run also passed all 22 observations. Its first attempt
 failed on OCR of the initial folder names despite a correct rendered list; the
 harness now checks the initial folder count, then still verifies each family's
 actual filenames, artwork, popout and editor after directly addressing its folder.
+
+## Bytefield selection and integration
+
+Compared the requested [Bytefield-SVG](https://github.com/Deep-Symmetry/bytefield-svg)
+Clojure DSL with the Rust `bytefield` crate (unrelated bitfield storage), native
+[ProtoViz](https://github.com/danielstuart14/protoviz) and Python
+[Framegram](https://github.com/czarnota/framegram). The latter two draw binary
+structures from different input models, not Bytefield programs. Existing
+WaveDrom register rendering likewise does not implement this Clojure language.
+Reimplementing Bytefield would require a Lisp evaluator, helper functions,
+attribute inheritance, nested SVG content, gaps and layout semantics. Instead,
+reuse the existing bounded hostless QuickJS adapter for the original compiled
+upstream bundle. No Node process, browser engine or installed runtime is added.
+
+Evaluated upstream 1.12.0 and 1.11.0 under both Node (reference only) and QuickJS.
+The released 1.12.0 bundle fails `(defn field [s n] (draw-box (str/upper-case s)
+{:span n})) (field "Type" 2)` under Node too. Pin 1.11.0, where that helper and
+all seven shipped protocol/sample fixtures render. The original sources and
+bundles were committed independently before application changes. No upstream
+algorithm changes were made. Source/package hashes, original EPL-2.0 license,
+EPL-1.0 runtime notices and Apache-2.0 Closure attribution are retained in
+`bytefield-notices.md` and the combined `--diagram-licenses` output.
+
+- [x] Shared `bytefield` Markdown fences, both large/small previews, best-effort
+  clipboard hints, `.bytefield` standalone source/live preview/errors, rendered
+  list strips and enlarged popouts.
+- [x] Recognize the upstream `.edn` extension by actual drawing list heads;
+  generic EDN/Clojure data and quoted examples retain ordinary text behavior.
+  Ordinary Clojure program suffixes keep their code viewer association.
+  `.bytefield` is the explicit application association, not a claim that upstream
+  standardizes a separate filename suffix.
+- [x] Reuse the same guarded source, history/save, asynchronous rendering and
+  preview cache owners. No new file reader or save mechanism.
+- [x] Keep a fresh interpreter per call, 128 MiB heap, three-second deadline,
+  2 MiB SVG transport and existing outer helper limits. SCI 1.11 also uses its
+  termination-safe preset and 10,000 realization cap. A known-size scoped native
+  thread gives the Clojure evaluator a bounded 4 MiB interpreter stack; the
+  diagram-only engines retain 512 KiB. This prevents fixture failures caused by
+  differing Rust caller-thread stacks, without unsafe stack manipulation.
+- [x] Preserve line/column SCI errors as readable text instead of opaque QuickJS
+  object addresses. Use complete namespaced SVG output, bundled metric fonts,
+  outlined text and image blocking. Invalid XML labels produce an actionable
+  diagnostic: upstream expects XML escaping for literal `<` and `&`.
+- [ ] Source-linked field resizing/selection where a literal source call exists;
+  arbitrary Clojure helper output must not be rewritten as if it were a literal.
+
+Editor research: upstream and its Asciidoctor wrapper are source-to-SVG tools,
+not native graphical components. ProtoViz provides a useful configurable field
+model but uses its own syntax. Framegram's nested bit-field rows and
+[BinTV](https://github.com/tomerfry/binteractiview)'s synchronized structure/byte
+highlighting suggest future linked field selection; BinTV interprets Construct,
+not Bytefield, and is not a component to embed. No editor code was copied.
+For this non-priority editor, source/highlighting/live preview/errors is the
+baseline; priority native drawing work remains WireViz, WaveDrom, Mermaid and
+Excalidraw.
+
+Review fixtures `packet.bytefield`, `packet.edn` and `bytefield.md` are in the
+user's `type_testing/md_extensions/` folder. The repository keeps the authored
+standalone source and embedded Markdown under `docs/examples/diagrams/`.
+
+Architecture comparison against `before-next-diagram-family` reduces duplication
+by 0.04 percentage points and average CCN by 0.01. Maximum CCN increases from
+195 to 274 inside the unmodified minified upstream ClojureScript bundle (`ca`),
+not application Rust. The dispatch match adds its required format case. Original
+runtime license texts and their duplication are retained. The 12-line shared
+shape of independent GoAT/Bytefield failure-case tests verifies the same public
+error contract with different inputs; replacing those explicit assertions with
+a trivial generic wrapper would obscure rather than simplify them. Interpreter
+thread ownership and evaluation remain separate cohesive methods; no new Rust
+production hotspot, cache, global runtime or file-save owner is introduced.
+
+Bytefield validation: 49 core diagram tests, 63 render diagram tests, ten card
+preview tests, three file-strip tests and the native-extension viewer test pass.
+Both real-host worker suites (including licenses and relocation) pass. Strict
+all-targets Clippy across core/render/studios/both desktop hosts passes with
+`-D warnings`; both desktop binaries build successfully. Final private native
+runs pass in light and dark themes, covering actual field-color pixels in the
+strip, popout, source/live preview and Markdown, error display and unchanged
+source hashes. The harness now scrolls to the source affordance after checking
+artwork because a legitimate tall diagram can place that control below the
+viewport. Earlier attempts exposed a singular/plural harness check and an
+executable replacement during overlapping development builds; the final runs
+use the completed build without overlapping compilation.

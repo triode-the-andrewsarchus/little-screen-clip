@@ -810,6 +810,7 @@ mod tests {
             "drawing.noml",
             "schema.dbml",
             "diagram.goat",
+            "packet.bytefield",
             "drawing.excalidraw",
             "drawing.excalidraw.json",
             "DRAWING.PIKCHR",

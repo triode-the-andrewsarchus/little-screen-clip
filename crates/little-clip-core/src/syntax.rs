@@ -331,6 +331,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "nomnoml" | "noml" => Some("nomnoml"),
         "dbml" => Some("dbml"),
         "goat" => Some("goat"),
+        "bytefield" => Some("bytefield"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -463,6 +464,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "nomnoml" => "Nomnoml",
         "dbml" => "DBML",
         "goat" => "GoAT",
+        "bytefield" => "Bytefield",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -603,11 +605,15 @@ pub const DBML_SUBLIME_SYNTAX: &str = include_str!("syntax/dbml.sublime-syntax")
 /// Fixed-grid ASCII and Unicode diagram highlighting.
 pub const GOAT_SUBLIME_SYNTAX: &str = include_str!("syntax/goat.sublime-syntax");
 
+/// Bytefield's Clojure drawing forms and data literals.
+pub const BYTEFIELD_SUBLIME_SYNTAX: &str = include_str!("syntax/bytefield.sublime-syntax");
+
 /// Shared native diagram grammars used by both screen and desktop source views.
 pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     NOMNOML_SUBLIME_SYNTAX,
     DBML_SUBLIME_SYNTAX,
     GOAT_SUBLIME_SYNTAX,
+    BYTEFIELD_SUBLIME_SYNTAX,
     PIKCHR_SUBLIME_SYNTAX,
     SVGBOB_SUBLIME_SYNTAX,
     LINI_SUBLIME_SYNTAX,

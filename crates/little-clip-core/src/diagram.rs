@@ -30,6 +30,7 @@ pub enum Format {
     Nomnoml,
     Dbml,
     Goat,
+    Bytefield,
     Math,
     MathInline,
 }
@@ -55,6 +56,7 @@ impl Format {
             "nomnoml" | "noml" => Some(Self::Nomnoml),
             "dbml" => Some(Self::Dbml),
             "goat" => Some(Self::Goat),
+            "bytefield" => Some(Self::Bytefield),
             _ => None,
         }
     }
@@ -107,6 +109,7 @@ impl Format {
             "nomnoml" | "noml" => Some(Self::Nomnoml),
             "dbml" => Some(Self::Dbml),
             "goat" => Some(Self::Goat),
+            "bytefield" => Some(Self::Bytefield),
             _ => None,
         }
     }
@@ -136,6 +139,7 @@ impl Format {
                         .starts_with('<')
             })
             .or_else(|| match extension.to_ascii_lowercase().as_str() {
+                "edn" => bytefield_signature(source).then_some(Self::Bytefield),
                 "mmd" => mermaid_signature(source).then_some(Self::Mermaid),
                 "dot" => dot_signature(source).then_some(Self::Graphviz),
                 "xml" => bpmn_signature(source).then_some(Self::Bpmn),
@@ -170,6 +174,7 @@ impl Format {
             (Self::D2, d2_signature),
             (Self::Svgbob, svgbob_signature),
             (Self::Goat, goat_signature),
+            (Self::Bytefield, bytefield_signature),
         ];
         signatures
             .iter()
@@ -194,6 +199,7 @@ impl Format {
             Self::Nomnoml => Some("nomnoml"),
             Self::Dbml => Some("dbml"),
             Self::Goat => Some("goat"),
+            Self::Bytefield => Some("bytefield"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -214,6 +220,7 @@ impl Format {
             Self::Nomnoml => "Nomnoml",
             Self::Dbml => "DBML",
             Self::Goat => "GoAT",
+            Self::Bytefield => "Bytefield",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
@@ -321,6 +328,58 @@ fn d2_signature(source: &str) -> bool {
             .lines()
             .skip(1)
             .any(|line| line.contains("->") || line.contains("shape:"))
+}
+
+fn bytefield_signature(source: &str) -> bool {
+    if source.len() > 32 * 1024 {
+        return false;
+    }
+    let source = source.trim_start_matches('\u{feff}').trim_start();
+    let first = source
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with(';'));
+    if !first.is_some_and(|line| line.starts_with('(')) {
+        return false;
+    }
+    // Only actual list heads are hints. Mentions in strings, comments, prose,
+    // Markdown or generic EDN maps must not claim a diagram preview.
+    let (mut quoted, mut escaped, mut comment, mut drawing) = (false, false, false, false);
+    let mut chars = source.chars().peekable();
+    while let Some(c) = chars.next() {
+        if comment {
+            comment = c != '\n';
+        } else if escaped {
+            escaped = false;
+        } else if quoted {
+            match c {
+                '\\' => escaped = true,
+                '"' => quoted = false,
+                _ => {}
+            }
+        } else {
+            match c {
+                ';' => comment = true,
+                '"' => quoted = true,
+                '(' => {
+                    let name: String = chars
+                        .by_ref()
+                        .take_while(|c| !c.is_whitespace() && *c != ')')
+                        .collect();
+                    drawing |= matches!(
+                        name.as_str(),
+                        "draw-box"
+                            | "draw-boxes"
+                            | "draw-related-boxes"
+                            | "draw-column-headers"
+                            | "draw-gap"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    drawing && !quoted
 }
 
 fn goat_signature(source: &str) -> bool {
@@ -548,6 +607,47 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bytefield_signatures_disambiguate_clojure_data_without_claiming_quoted_examples() {
+        assert_eq!(Format::from_extension("bytefield"), Some(Format::Bytefield));
+        assert_eq!(Format::from_extension("edn"), None);
+        assert_eq!(Format::from_source_extension("clj", "(draw-box 0)"), None);
+        assert_eq!(Format::from_language("bytefield"), Some(Format::Bytefield));
+        for source in [
+            "(draw-box 0)",
+            ";; packet\n(def boxes-per-row 4)\n(draw-column-headers)",
+            "(doseq [v (range 4)] (draw-box v))",
+        ] {
+            assert_eq!(
+                Format::from_snippet(source),
+                Some(Format::Bytefield),
+                "{source}"
+            );
+            assert_eq!(
+                Format::from_source_extension("edn", source),
+                Some(Format::Bytefield)
+            );
+            assert_eq!(
+                Format::from_source_path(Path::new("packet.bytefield"), source),
+                Some(Format::Bytefield)
+            );
+        }
+        for source in [
+            "{:message \"(draw-box 0)\"}",
+            ";; (draw-box 0)",
+            "(println \"(draw-box 0)\")",
+            "(def x 42)",
+            "# Packet\n```bytefield\n(draw-box 0)\n```",
+        ] {
+            assert_eq!(Format::from_snippet(source), None, "{source}");
+            assert_eq!(
+                Format::from_source_extension("edn", source),
+                None,
+                "{source}"
+            );
+        }
+    }
+
     #[test]
     fn goat_signatures_use_complete_frames_without_stealing_square_boxes_or_markdown() {
         assert_eq!(Format::from_extension("GOAT"), Some(Format::Goat));

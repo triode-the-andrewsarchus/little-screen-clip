@@ -133,3 +133,12 @@ engine and native SVG/font/raster handling. Tabs are reported rather than
 silently expanded; use spaces for the authored character grid. `.goat` files open
 highlighted source/live preview with rendered list strips and hover popouts.
 Building requires Go 1.25+; deployments keep the versioned companion executable.
+
+### Bytefield
+
+`packet.bytefield` and `bytefield.md` show a colored message header, related
+bytes and a variable-length payload. The same source can use upstream's `.edn`
+suffix; ordinary EDN maps are not classified as diagrams. Helpers, maps, loops
+allowed by upstream's termination-safe preset and custom attributes remain part
+of the original DSL. The source editor exposes errors and previews without
+flattening helper-generated output into fabricated source calls.
