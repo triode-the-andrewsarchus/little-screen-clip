@@ -2844,6 +2844,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "document-svg-drawio"
+version = "2.0.2"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "quick-xml 0.41.0",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6250,6 +6261,7 @@ dependencies = [
  "d2-rs-wasm",
  "data-url",
  "dbml-rs",
+ "document-svg-drawio",
  "excalidraw-render",
  "fontdue",
  "graphviz-pure",

@@ -30,13 +30,12 @@ use shapes::*;
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::io::Read;
-use std::path::Path;
 
 use base64::Engine;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use crate::convert::{ConvertOptions, PageConsumer, read_limited_file};
+use crate::convert::{ConvertOptions, PageConsumer};
 use crate::error::{Error, Result};
 use crate::ir::{
     ClipPath, GradientStop, IDENTITY, LineCap, LineJoin, LinearGradient, Matrix, Node, Page, Paint,
@@ -72,12 +71,16 @@ const MAX_PARENT_DEPTH: usize = 64;
 const MAX_IMAGE_CHARS: usize = 16 * 1024 * 1024;
 
 pub(crate) fn convert(
-    path: &Path,
+    bytes: &[u8],
     options: &ConvertOptions,
     sink: &mut dyn PageConsumer,
 ) -> Result<Vec<String>> {
-    let bytes = read_limited_file(path, options.max_input_bytes, "drawio file")?;
-    let (diagrams, root) = split_diagrams(&bytes, options)?;
+    if bytes.len() as u64 > options.max_input_bytes {
+        return Err(Error::LimitExceeded(
+            "drawio input exceeds source budget".into(),
+        ));
+    }
+    let (diagrams, root) = split_diagrams(bytes, options)?;
     if diagrams.is_empty() {
         // Naming what the file actually is saves the caller from guessing: a
         // shape library and a template index are both XML a draw.io user has
@@ -87,7 +90,7 @@ pub(crate) fn convert(
                 "input is a draw.io shape library, not a diagram; it holds shapes to place, not pages to convert".into(),
             ),
             "shapes" => Error::Unsupported(
-                "input is a draw.io shape library (<shapes>), not a diagram; pass it via --stencils".into(),
+                "input is a draw.io shape library (<shapes>), not a diagram; external stencil libraries are not loaded".into(),
             ),
             "" => Error::InvalidInput(
                 "input has no XML root element; expected an mxfile with at least one diagram, or a bare mxGraphModel".into(),
@@ -842,7 +845,6 @@ fn load_stencils(
     library: &mut stencil::Library,
     options: &ConvertOptions,
 ) -> Result<()> {
-    let mut wanted = std::collections::HashSet::new();
     for cell in &model.cells {
         let Some(declared) = cell.style.get("shape") else {
             continue;
@@ -853,22 +855,9 @@ fn load_stencils(
                 let xml = decode_inline_stencil(payload, options)?;
                 library.insert_inline(&key, &xml, options.max_xml_events)?;
             }
-        } else if !declared.is_empty() {
-            wanted.insert(declared.to_ascii_lowercase());
         }
     }
-    // A tile names the glyph it carries in the style rather than in the shape.
-    for cell in &model.cells {
-        for key in ["resicon", "gricon", "network2icon"] {
-            if let Some(name) = cell.style.get(key).filter(|value| !value.is_empty()) {
-                wanted.insert(name.to_ascii_lowercase());
-            }
-        }
-    }
-    if wanted.is_empty() || options.stencil_paths.is_empty() {
-        return Ok(());
-    }
-    library.load(&options.stencil_paths, &wanted, options.max_xml_events)
+    Ok(())
 }
 
 /// The payload of a `shape=stencil(<data>)` style, which is how a diagram

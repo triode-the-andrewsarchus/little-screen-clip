@@ -7,25 +7,19 @@
 //! Azure, GCP or BPMN icon exactly as the editor draws it, instead of standing
 //! a labelled rectangle in its place.
 //!
-//! The libraries themselves are not shipped here. They come from the caller, as
-//! files or directories of draw.io's own `stencils`, or from the diagram when it
-//! carries a shape inline as `shape=stencil(<data>)`.
+//! The libraries themselves are not shipped here. Shapes may be carried
+//! inline as `shape=stencil(<data>)`. External library loading is disabled.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-use crate::convert::read_limited_file;
 use crate::error::{Error, Result};
 use crate::ooxml::{attribute, local_name};
 
 use super::{Rect, ellipse_path, n, parse_color, rectangle_path, rounded_rect_path};
 
-/// Upper bound on one library file, so a stray large file cannot be read into
-/// memory whole.
-const MAX_LIBRARY_BYTES: u64 = 64 * 1024 * 1024;
 /// Upper bound on the drawing operations one shape may hold.
 const MAX_OPERATIONS: usize = 200_000;
 
@@ -119,48 +113,6 @@ impl Library {
         self.shapes.get(name)
     }
 
-    /// Read the shapes named in `wanted` out of the given files and
-    /// directories, ignoring everything else they hold.
-    ///
-    /// A library file runs to megabytes and holds thousands of shapes, so only
-    /// the ones a diagram actually asks for are kept.
-    pub(crate) fn load(
-        &mut self,
-        sources: &[PathBuf],
-        wanted: &HashSet<String>,
-        max_events: usize,
-    ) -> Result<()> {
-        let mut outstanding = wanted
-            .iter()
-            .filter(|name| !self.shapes.contains_key(*name))
-            .cloned()
-            .collect::<HashSet<_>>();
-        if outstanding.is_empty() {
-            return Ok(());
-        }
-        for source in sources {
-            for file in library_files(source)? {
-                let metadata = std::fs::metadata(&file)?;
-                if metadata.len() > MAX_LIBRARY_BYTES {
-                    return Err(Error::LimitExceeded(format!(
-                        "stencil library {} is {} bytes; maximum is {MAX_LIBRARY_BYTES} bytes",
-                        file.display(),
-                        metadata.len()
-                    )));
-                }
-                let bytes = read_limited_file(&file, MAX_LIBRARY_BYTES, "stencil library")?;
-                self.read_set(&bytes, &outstanding, max_events)?;
-                // A whole shape set runs to megabytes, and a diagram usually
-                // draws from one of them; there is no reason to read the rest.
-                outstanding.retain(|name| !self.shapes.contains_key(name));
-                if outstanding.is_empty() {
-                    return Ok(());
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Parse one `shape=stencil(...)` payload, which carries a single shape.
     pub(crate) fn insert_inline(
         &mut self,
@@ -176,49 +128,6 @@ impl Library {
         }
         Ok(())
     }
-
-    fn read_set(
-        &mut self,
-        bytes: &[u8],
-        wanted: &HashSet<String>,
-        max_events: usize,
-    ) -> Result<()> {
-        for (key, stencil) in parse_library(bytes, wanted, max_events, false)? {
-            self.shapes.entry(key).or_insert(stencil);
-        }
-        Ok(())
-    }
-}
-
-/// The XML files a source names: the file itself, or the files directly inside
-/// a directory.
-fn library_files(source: &Path) -> Result<Vec<PathBuf>> {
-    let metadata = std::fs::metadata(source)?;
-    if metadata.is_file() {
-        return Ok(vec![source.to_path_buf()]);
-    }
-    if !metadata.is_dir() {
-        return Err(Error::InvalidInput(format!(
-            "{} is neither a stencil file nor a directory of them",
-            source.display()
-        )));
-    }
-    let mut files = Vec::new();
-    for entry in std::fs::read_dir(source)? {
-        let path = entry?.path();
-        if path.is_file()
-            && path
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| value.eq_ignore_ascii_case("xml"))
-        {
-            files.push(path);
-        }
-    }
-    // A directory listing has no order of its own; the output must not depend
-    // on which file the file system happened to hand back first.
-    files.sort();
-    Ok(files)
 }
 
 /// The name a style uses for a shape: the library's name, then the shape's own,

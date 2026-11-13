@@ -1,0 +1,15 @@
+[package]
+name = "document-svg-drawio"
+version = "2.0.2"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+repository = "https://github.com/ryusui-hiro/document-svg"
+description = "Focused memory-only native draw.io renderer from document-svg"
+
+[dependencies]
+base64 = "0.22"
+flate2 = "1.1"
+quick-xml = "0.41"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
