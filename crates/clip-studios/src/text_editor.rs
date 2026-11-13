@@ -25,7 +25,7 @@ pub struct TextSession {
     editor: Option<Editor>,
     diagram: Option<(
         little_clip_core::diagram::Format,
-        crate::diagram_preview::Preview,
+        Box<crate::diagram_preview::Preview>,
     )>,
 }
 #[derive(Default)]
@@ -735,7 +735,7 @@ impl Editor {
         syntax_format: Option<little_clip_core::diagram::Format>,
         diagram: Option<&mut (
             little_clip_core::diagram::Format,
-            crate::diagram_preview::Preview,
+            Box<crate::diagram_preview::Preview>,
         )>,
     ) {
         let source_id = self.id;

@@ -1538,3 +1538,11 @@ result handling and independent coordinate admission at the model/renderer
 boundaries; introducing a new cross-domain abstraction for them would add more
 coupling. Pre-existing upstream documentation/backend clones and reordered
 members of unchanged Python cycles are not new implementations.
+
+### Viewer state size check
+
+- [x] Keep the optional per-session diagram preview behind one owned box.
+  Adding preview state had pushed the containing text viewer over Clippy's enum
+  size threshold. This keeps cache growth inside its existing session owner,
+  without changing viewer dispatch, navigation or save ownership. The 25 shared
+  text-editor tests pass; strict all-target Clippy for both desktop hosts passes.
