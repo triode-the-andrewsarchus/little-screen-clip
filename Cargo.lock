@@ -6109,6 +6109,7 @@ dependencies = [
  "midly",
  "mime_guess",
  "ncw",
+ "oneyaml",
  "oxideav-pcx",
  "percent-encoding",
  "quick-xml 0.41.0",
@@ -7556,6 +7557,32 @@ name = "oneshot"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "269bca4c2591a28585d6bf10d9ed0332b7d76900a1b02bec41bdc3a2cdcda107"
+
+[[package]]
+name = "oneyaml"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ff6e9f0429e7ba672c23393e9858db9eeaa09bd50e09627d26392260b79dc52"
+dependencies = [
+ "oneyaml-core",
+ "oneyaml-syntax",
+ "serde",
+]
+
+[[package]]
+name = "oneyaml-core"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32033f3f469a9ca234efff2014831be57cdbeec9c7a6eaaf4c4a99da6926048f"
+
+[[package]]
+name = "oneyaml-syntax"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77a98f84c10562ad8079585cb170bc9566860fe063baf0a3ce52f03346be8c9e"
+dependencies = [
+ "oneyaml-core",
+]
 
 [[package]]
 name = "openssl"
