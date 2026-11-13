@@ -1,0 +1,25 @@
+{
+  "repository": "https://github.com/zebreus/symbolator",
+  "commit": "e7ea5f8e55f037f4ce48025d2cbb493646d13fe4",
+  "url": "https://codeload.github.com/zebreus/symbolator/tar.gz/e7ea5f8e55f037f4ce48025d2cbb493646d13fe4",
+  "archive_sha256": "00c810f77ce2f05482caf9548b29fed1606d0979c64df02b208c66d1e1e343eb",
+  "files": [
+    "LICENSE",
+    "README.md",
+    "hdlparse/__init__.py",
+    "hdlparse/minilexer.py",
+    "hdlparse/verilog_parser.py",
+    "hdlparse/vhdl_parser.py",
+    "nucanvas/__init__.py",
+    "nucanvas/cairo_backend.py",
+    "nucanvas/color/__init__.py",
+    "nucanvas/color/sinebow.py",
+    "nucanvas/nucanvas.py",
+    "nucanvas/shapes.py",
+    "nucanvas/svg_backend.py",
+    "pyproject.toml",
+    "symbolator/__init__.py",
+    "symbolator/__main__.py",
+    "symbolator/symbolator.py"
+  ]
+}
