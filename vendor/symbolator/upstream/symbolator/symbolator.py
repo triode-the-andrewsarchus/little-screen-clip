@@ -12,7 +12,6 @@ import textwrap
 from typing import Any, Iterator, List, Type
 
 from nucanvas import DrawStyle, NuCanvas
-from nucanvas.cairo_backend import CairoSurface
 from nucanvas.svg_backend import SvgSurface
 from nucanvas.shapes import PathShape, OvalShape
 import nucanvas.color.sinebow as sinebow
@@ -761,6 +760,7 @@ def main():
             if args.format == "svg":
                 surf = SvgSurface(fname, style, padding=5, scale=args.scale)
             else:
+                from nucanvas.cairo_backend import CairoSurface
                 surf = CairoSurface(fname, style, padding=5, scale=args.scale)
 
             nc.set_surface(surf)

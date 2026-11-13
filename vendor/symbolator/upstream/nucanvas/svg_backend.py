@@ -3,6 +3,7 @@
 # Distributed under the terms of the MIT license
 
 
+import contextlib
 import io
 import os
 import math
@@ -10,7 +11,6 @@ import io
 import xml.etree.ElementTree as ET
 
 from .shapes import *
-from .cairo_backend import CairoSurface
 
 #################################
 # SVG objects
@@ -203,7 +203,8 @@ width="{}" height="{}" viewBox="{}" version="1.1">
                 bbox = s.bbox
                 r = canvas.create_rectangle(*bbox, line_color=(255, 0, 0, 127), fill=(0, 255, 0, 90))
 
-        with io.open(self.fname, 'w', encoding='utf-8') as fh:
+        with (contextlib.nullcontext(self.fname) if hasattr(self.fname, 'write') else
+              io.open(self.fname, 'w', encoding='utf-8')) as fh:
             self.fh = fh
             fh.write(SvgSurface.svg_header.format(int(W * self.scale), int(H * self.scale),
                                                   vbox, font_styles, markers))
@@ -214,6 +215,7 @@ width="{}" height="{}" viewBox="{}" version="1.1">
             fh.write('</svg>')
 
     def text_bbox(self, text, font_params, spacing=0):
+        from .cairo_backend import CairoSurface
         return CairoSurface.cairo_text_bbox(text, font_params, spacing, self.scale)
 
     @staticmethod

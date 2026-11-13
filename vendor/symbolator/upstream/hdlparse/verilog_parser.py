@@ -21,7 +21,7 @@ verilog_tokens = {
     'module': [
         (r'parameter\s*(signed|integer|realtime|real|time)?\s*(\[[^]]+\])?', 'parameter_start', 'parameters'),
         (
-            r'^[\(\s]*(input|inout|output)\s+(reg|supply0|supply1|tri|triand|trior|tri0|tri1|wire|wand|wor)?'
+            r'\b(input|inout|output)\s+(reg|supply0|supply1|tri|triand|trior|tri0|tri1|wire|wand|wor)?'
             r'\s*(signed)?\s*((\[[^]]+\])+)?',
             'module_port_start', 'module_port'),
         (r'\bendmodule\b', 'end_module', '#pop'),
