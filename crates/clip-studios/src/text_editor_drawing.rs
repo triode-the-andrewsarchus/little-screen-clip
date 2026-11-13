@@ -17,9 +17,12 @@ use std::{
 
 mod canvas;
 mod connections;
+mod resize;
+mod text;
 use crate::diagram_preview::Camera;
-use canvas::Gesture;
+use canvas::{Gesture, distance};
 use connections::{Connections, Lines, group_id};
+use text::{Action, TextDraft};
 
 struct Update {
     source: String,
@@ -33,7 +36,7 @@ struct RetainedMove {
     lines: Arc<Lines>,
 }
 struct PendingEdit {
-    change: Change,
+    change: Action,
     started: Instant,
 }
 
@@ -57,6 +60,10 @@ pub(crate) struct DrawingEditor {
     lines: Arc<Lines>,
     connections: Connections,
     style: Style,
+    text_draft: Option<TextDraft>,
+    text_selection: Option<String>,
+    resize_available: bool,
+    text_notice: Option<String>,
     focus: Option<egui::Id>,
 }
 impl DrawingEditor {
@@ -97,6 +104,9 @@ impl DrawingEditor {
             self.ghost = None;
             self.retained_move = None;
             self.parse_error = None;
+            self.text_draft = None;
+            self.text_selection = None;
+            self.text_notice = None;
             return accepted.then_some(Poll::Replaced);
         }
         if self
@@ -212,13 +222,13 @@ impl DrawingEditor {
         ));
     }
 
-    fn queue(&mut self, change: Change) {
+    fn queue(&mut self, change: impl Into<Action>) {
         if self.busy() || self.model.is_none() || self.pending.is_some() {
             return;
         }
         self.edit_error = None;
         self.queued = Some(PendingEdit {
-            change,
+            change: change.into(),
             started: Instant::now(),
         });
         self.start_edit();
@@ -242,6 +252,7 @@ impl DrawingEditor {
         let frame = preview.native_frame(ui, Format::Excalidraw, source);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 4.0, Color32::WHITE);
+        self.resize_available = frame.as_ref().is_some_and(|frame| frame.vector.is_some());
         if let Some(frame) = frame {
             if !self.camera.fitted {
                 self.camera.fit(frame.layout, rect);
@@ -261,7 +272,7 @@ impl DrawingEditor {
             if ready {
                 self.interact(ui, &response, rect);
             }
-            let motion = self.vector_motion(ui.ctx());
+            let motion = self.vector_motion(ui.ctx(), frame.layout.origin);
             if let Some(error) = frame.paint(ui, rect, image, motion, tint) {
                 self.parse_error = Some(error);
             }
@@ -271,6 +282,7 @@ impl DrawingEditor {
             }
         }
         self.keyboard(ui, &response);
+        self.text_controls(ui);
         self.footer(ui);
         egui::ScrollArea::vertical()
             .id_source("drawing_notices")
@@ -279,7 +291,11 @@ impl DrawingEditor {
             .show(ui, |ui| preview.status_ui(ui, Format::Excalidraw));
     }
 
-    fn vector_motion(&mut self, ctx: &egui::Context) -> clip_ui::vectors::svg::Changes {
+    fn vector_motion(
+        &mut self,
+        ctx: &egui::Context,
+        origin: [f64; 2],
+    ) -> clip_ui::vectors::svg::Changes {
         let mut changes = clip_ui::vectors::svg::Changes::default();
         let retained = self.retained_move.as_ref();
         let gesture = self
@@ -291,6 +307,19 @@ impl DrawingEditor {
             .map(|retained| &retained.model)
             .or(self.model.as_ref());
         let lines = retained.map_or(&self.lines, |retained| &retained.lines);
+        if let (Some(Gesture::Resize { id, current, .. }), Some(model)) = (gesture, model) {
+            let model = model.clone();
+            let lines = lines.clone();
+            let id = id.clone();
+            let current = *current;
+            match self.resize_motion(ctx, &model, &lines, &id, current, origin) {
+                Ok(changes) => return changes,
+                Err(error) => {
+                    self.edit_error = Some(error);
+                    return changes;
+                }
+            }
+        }
         if let (
             Some(Gesture::Move {
                 start,
@@ -303,13 +332,9 @@ impl DrawingEditor {
             let delta = [current[0] - start[0], current[1] - start[1]];
             match model.movement(ids, delta) {
                 Ok(movement) => {
-                    changes.translations = movement
-                        .offsets
-                        .into_iter()
-                        .map(|(id, [x, y])| (group_id("element", &id), [x as f32, y as f32]))
-                        .collect();
-                    changes.replacements =
-                        self.connections.update(ctx, model, lines, movement.paths);
+                    let model = model.clone();
+                    let lines = lines.clone();
+                    changes = self.movement_artwork(ctx, &model, &lines, movement);
                 }
                 Err(error) => self.edit_error = Some(error.to_string()),
             }
@@ -321,7 +346,13 @@ impl DrawingEditor {
 
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.tool, None, "Select");
+            if ui
+                .selectable_value(&mut self.tool, None, "Select")
+                .changed()
+            {
+                self.text_draft = None;
+                self.text_selection = None;
+            }
             for kind in TOOLS {
                 let label = match kind {
                     Kind::Rectangle => "Box",
@@ -333,7 +364,24 @@ impl DrawingEditor {
                     .changed()
                 {
                     self.selected.clear();
+                    self.text_draft = None;
+                    self.text_selection = None;
                 }
+            }
+            if ui
+                .selectable_value(&mut self.tool, Some(Kind::Text), "Text")
+                .changed()
+            {
+                self.selected.clear();
+                self.text_draft = None;
+            }
+            if ui
+                .small_button("Add label")
+                .on_hover_text("Add a label to a selected rectangle that has no label")
+                .clicked()
+                && let Some(id) = self.selected.first().cloned()
+            {
+                self.new_text([0.0; 2], Some(id));
             }
             if ui
                 .add(
@@ -404,19 +452,35 @@ impl DrawingEditor {
         if let Some(error) = self
             .parse_error
             .as_ref()
+            .or(self.edit_error.as_ref())
             .or(self.connections.error.as_ref())
         {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+        if let Some(notice) = &self.text_notice {
+            ui.small(notice);
+        }
+        if let (Some(model), Some(id)) = (&self.model, self.selected.first())
+            && let Some(item) = model.items.iter().find(|item| &item.id == id)
+        {
+            if let Err(error) = model.resize(id, item.bounds) {
+                ui.small(format!("Resize: {error}"));
+            } else if !self.resize_available {
+                ui.small(
+                    "Resize needs native vector artwork; use Source for this effect fallback.",
+                );
+            }
+        }
         if self.busy() {
             ui.small("Applying gesture…");
         } else {
-            ui.small("Click to select · Shift adds to selection · drag to draw or move · wheel zooms · middle-drag pans · Delete removes");
+            ui.small("Click to select · Shift adds to selection · drag to draw or move · corner handles resize · wheel zooms · middle-drag pans · Delete removes");
         }
     }
 }
 
-fn edit_source(model: Arc<Scene>, change: Change) -> Result<Update, String> {
+fn edit_source(model: Arc<Scene>, change: Action) -> Result<Update, String> {
+    let change = change.resolve(&model)?;
     if let Some(source) = model.apply(change).map_err(|error| error.to_string())? {
         let scene = Arc::new(Scene::parse(&source).map_err(|error| error.to_string())?);
         let lines = Arc::new(little_clip_render::diagram::retained::drawing_lines(
@@ -455,7 +519,7 @@ pub(crate) fn delayed_edit(
         move |_| {
             wait.recv_timeout(Duration::from_secs(2))
                 .map_err(|error| error.to_string())?;
-            edit_source(worker_model, worker_change)
+            edit_source(worker_model, worker_change.into())
         },
     );
     (
@@ -464,7 +528,7 @@ pub(crate) fn delayed_edit(
             model: Some(model),
             pending: Some(task),
             queued: Some(PendingEdit {
-                change,
+                change: change.into(),
                 started: Instant::now(),
             }),
             ..Default::default()

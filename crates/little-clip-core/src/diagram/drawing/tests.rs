@@ -292,3 +292,281 @@ fn live_movement_matches_committed_bound_endpoints_and_labels() {
         assert_eq!(scene.source(), original.to_string());
     }
 }
+
+fn text_content(text: &str, width: f64, height: f64) -> TextContent {
+    TextContent::plain(
+        text,
+        Number::from_f64(width).unwrap(),
+        Number::from_f64(height).unwrap(),
+    )
+}
+
+#[test]
+fn text_replacement_preserves_fonts_bindings_resources_and_opaque_neighbours() {
+    let original = fixture();
+    let edited = apply(
+        &original,
+        Change::Text {
+            id: "capture-label".into(),
+            content: text_content("New label", 100.0, 30.0),
+        },
+    );
+    let label = item(&edited, "capture-label");
+    assert_eq!(label["text"], json!("New label"));
+    assert_eq!(label["originalText"], json!("New label"));
+    for key in [
+        "containerId",
+        "fontFamily",
+        "fontSize",
+        "lineHeight",
+        "textAlign",
+        "verticalAlign",
+    ] {
+        assert_eq!(label[key], item(&original, "capture-label")[key]);
+    }
+    assert_eq!(item(&edited, "capture"), item(&original, "capture"));
+    assert_eq!(edited["files"], original["files"]);
+    assert_eq!(edited["future"], original["future"]);
+    assert_eq!(
+        edited["elements"].as_array().unwrap().last(),
+        Some(&json!(17))
+    );
+    let scene = Scene::parse(&original.to_string()).unwrap();
+    assert!(
+        scene
+            .apply(Change::Text {
+                id: "capture-label".into(),
+                content: text_content("Too wide", 500.0, 30.0)
+            })
+            .is_err()
+    );
+    assert!(
+        scene
+            .apply(Change::Text {
+                id: "capture-label".into(),
+                content: text_content("Capture", 500.0, 30.0)
+            })
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(scene.source(), original.to_string());
+}
+
+#[test]
+fn text_creation_keeps_existing_records_and_maintains_reciprocal_new_label_identity() {
+    let source = r#"{"type":"excalidraw","version":2,"elements":[{"id":"box","type":"rectangle","x":0,"y":0,"width":200,"height":100},{"future":true}],"files":{"opaque":{"future":17}}}"#;
+    let scene = Scene::parse(source).unwrap();
+    let change = Change::CreateText(TextCreation {
+        id: "label".into(),
+        position: [50.0, 35.0],
+        content: text_content("Label", 100.0, 30.0),
+        font: TextStyle::default(),
+        style: Style::default(),
+        container: Some("box".into()),
+    });
+    let value: Value = serde_json::from_str(&scene.apply(change).unwrap().unwrap()).unwrap();
+    assert_eq!(item(&value, "label")["containerId"], json!("box"));
+    assert_eq!(
+        item(&value, "box")["boundElements"],
+        json!([{"id":"label","type":"text"}])
+    );
+    assert_eq!(value["elements"][1], json!({"future":true}));
+    assert_eq!(
+        value["files"],
+        serde_json::from_str::<Value>(source).unwrap()["files"]
+    );
+    assert!(
+        Scene::parse(&value.to_string())
+            .unwrap()
+            .text_info("box")
+            .unwrap()
+            .is_some()
+    );
+    let created = apply(
+        &value,
+        Change::CreateText(TextCreation {
+            id: "free-text".into(),
+            position: [-50.0, 120.0],
+            content: text_content("Unbound", 100.0, 30.0),
+            font: TextStyle::default(),
+            style: Style::default(),
+            container: None,
+        }),
+    );
+    assert!(item(&created, "free-text")["containerId"].is_null());
+}
+
+#[test]
+fn rectangular_resize_keeps_label_anchor_and_attached_arrow_gap_and_other_endpoint() {
+    let original = fixture();
+    let scene = Scene::parse(&original.to_string()).unwrap();
+    let bounds = Bounds {
+        x: 0.0,
+        y: 40.0,
+        width: 220.0,
+        height: 130.0,
+        angle: 0.0,
+    };
+    let plan = scene.resize("capture", bounds).unwrap();
+    assert_eq!(plan.movement.paths["connection"].origin, [222.0, 105.0]);
+    let resized = apply(
+        &original,
+        Change::Resize {
+            id: "capture".into(),
+            bounds,
+        },
+    );
+    assert_eq!(item(&resized, "capture")["width"], json!(220.0));
+    assert_eq!(
+        item(&resized, "capture-label"),
+        item(&original, "capture-label")
+    );
+    let arrow = item(&resized, "connection");
+    assert_eq!(arrow["x"], json!(222.0));
+    assert_eq!(arrow["y"], json!(105.0));
+    assert_eq!(arrow["points"][1], json!([76.0, -10.0]));
+    for key in ["startBinding", "endBinding"] {
+        assert_eq!(arrow[key], item(&original, "connection")[key]);
+    }
+    assert_eq!(item(&resized, "explore"), item(&original, "explore"));
+    assert_eq!(resized["future"], original["future"]);
+}
+
+#[test]
+fn image_crop_flip_assets_and_freehand_pressures_survive_resize() {
+    let mut original = fixture();
+    let image = original["elements"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|value| value["id"] == "embedded-image")
+        .unwrap();
+    image["crop"] =
+        json!({"x":0.1,"y":0.2,"width":0.7,"height":0.6,"naturalWidth":200,"naturalHeight":100});
+    image["scale"] = json!([-1, 1]);
+    let resized = apply(
+        &original,
+        Change::Resize {
+            id: "embedded-image".into(),
+            bounds: Bounds {
+                x: 300.0,
+                y: 180.0,
+                width: 256.0,
+                height: 192.0,
+                angle: 0.0,
+            },
+        },
+    );
+    for key in ["crop", "scale", "fileId", "status"] {
+        assert_eq!(
+            item(&resized, "embedded-image")[key],
+            item(&original, "embedded-image")[key]
+        );
+    }
+    assert_eq!(resized["files"], original["files"]);
+    let resized = apply(
+        &original,
+        Change::Resize {
+            id: "stroke".into(),
+            bounds: Bounds {
+                x: 0.0,
+                y: 205.0,
+                width: 300.0,
+                height: 90.0,
+                angle: 0.0,
+            },
+        },
+    );
+    for (new, old) in item(&resized, "stroke")["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(item(&original, "stroke")["points"].as_array().unwrap())
+    {
+        assert_eq!(new[0].as_f64(), Some(old[0].as_f64().unwrap() * 2.0));
+        assert_eq!(new[1].as_f64(), Some(old[1].as_f64().unwrap() * 2.0));
+    }
+    assert_eq!(
+        item(&resized, "stroke")["pressures"],
+        item(&original, "stroke")["pressures"]
+    );
+}
+
+#[test]
+fn proportional_text_resize_updates_font_once_and_refuses_unsupported_operations_atomically() {
+    let original = fixture();
+    let resized = apply(
+        &original,
+        Change::Resize {
+            id: "caption".into(),
+            bounds: Bounds {
+                x: 0.0,
+                y: 285.0,
+                width: 740.0,
+                height: 60.0,
+                angle: 0.0,
+            },
+        },
+    );
+    assert_eq!(item(&resized, "caption")["fontSize"], json!(48.0));
+    assert_eq!(
+        item(&resized, "caption")["text"],
+        item(&original, "caption")["text"]
+    );
+    assert_eq!(item(&resized, "caption")["version"], json!(2));
+    let source = original.to_string();
+    let scene = Scene::parse(&source).unwrap();
+    for (id, bounds) in [
+        (
+            "caption",
+            Bounds {
+                x: 0.0,
+                y: 285.0,
+                width: 740.0,
+                height: 30.0,
+                angle: 0.0,
+            },
+        ),
+        (
+            "connection",
+            Bounds {
+                x: 182.0,
+                y: 95.0,
+                width: 150.0,
+                height: 20.0,
+                angle: 0.0,
+            },
+        ),
+        (
+            "explore",
+            Bounds {
+                x: 300.0,
+                y: 40.0,
+                width: 200.0,
+                height: 120.0,
+                angle: 0.0,
+            },
+        ),
+        (
+            "capture",
+            Bounds {
+                x: 0.0,
+                y: 40.0,
+                width: 10.0,
+                height: 10.0,
+                angle: 0.0,
+            },
+        ),
+    ] {
+        assert!(
+            scene
+                .apply(Change::Resize {
+                    id: id.into(),
+                    bounds
+                })
+                .is_err(),
+            "{id}"
+        );
+    }
+    assert_eq!(scene.source(), source);
+}

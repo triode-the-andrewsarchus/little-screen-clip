@@ -32,15 +32,7 @@ impl Scene {
             id.as_str().into(),
             timestamp().into(),
         )?;
-        for (key, value) in [
-            (element::X, bounds.x),
-            (element::Y, bounds.y),
-            (element::WIDTH, bounds.width),
-            (element::HEIGHT, bounds.height),
-            (element::ANGLE, bounds.angle),
-        ] {
-            shape.set(key, Number::from_f64(value)?)?;
-        }
+        set_bounds(&mut shape, bounds)?;
         style.apply(&mut shape)?;
         shape.set_raw(
             "seed",
@@ -61,21 +53,43 @@ impl Scene {
         by: [f64; 2],
     ) -> Result<(), Error> {
         let movement = self.movement(ids, by)?;
+        self.apply_movement(document, &movement)
+    }
+
+    pub(super) fn apply_movement(
+        &self,
+        document: &mut Document,
+        movement: &Movement,
+    ) -> Result<(), Error> {
         for item in &self.items {
-            if let Some(delta) = movement.offsets.get(&item.id) {
-                move_to(
-                    document,
-                    item,
-                    [item.bounds.x + delta[0], item.bounds.y + delta[1]],
-                )?;
+            let path = movement.paths.get(&item.id);
+            if path.is_none() && movement.offsets.get(&item.id) == Some(&[0.0; 2]) {
+                continue;
             }
-            if let Some(path) = movement.paths.get(&item.id) {
-                edit(document, item.index, |shape| {
-                    shape.set(element::X, Number::from_f64(path.origin[0])?)?;
-                    shape.set(element::Y, Number::from_f64(path.origin[1])?)?;
-                    set_path(shape, path.points.clone())
-                })?;
+            let position = path.map(|path| path.origin).or_else(|| {
+                movement
+                    .offsets
+                    .get(&item.id)
+                    .map(|[x, y]| [item.bounds.x + x, item.bounds.y + y])
+            });
+            let Some(position) = position else {
+                continue;
+            };
+            if position
+                .into_iter()
+                .any(|v| !v.is_finite() || v.abs() > MAX_COORDINATE)
+            {
+                return Err(invalid("Element exceeds the canvas coordinate limits"));
             }
+            edit(document, item.index, |shape| {
+                for (key, value) in [(element::X, position[0]), (element::Y, position[1])] {
+                    shape.set(key, Number::from_f64(value)?)?;
+                }
+                if let Some(path) = path {
+                    set_path(shape, path.points.clone())?;
+                }
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -157,7 +171,7 @@ impl Scene {
         self.stretch_arrow(movement, arrow, value, base, endpoint_delta)
     }
 
-    fn stretch_arrow(
+    pub(super) fn stretch_arrow(
         &self,
         movement: &mut Movement,
         arrow: &Item,
@@ -291,10 +305,22 @@ fn arrow_container<'a>(value: &Value, items: &'a [Item]) -> Option<&'a Item> {
         .iter()
         .find(|item| item.id == id && item.kind == Kind::Arrow)
 }
-fn binding<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+pub(super) fn set_bounds(shape: &mut Element, bounds: Bounds) -> Result<(), Error> {
+    for (key, value) in [
+        (element::X, bounds.x),
+        (element::Y, bounds.y),
+        (element::WIDTH, bounds.width),
+        (element::HEIGHT, bounds.height),
+        (element::ANGLE, bounds.angle),
+    ] {
+        shape.set(key, Number::from_f64(value)?)?;
+    }
+    Ok(())
+}
+pub(super) fn binding<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key)?.get("elementId")?.as_str()
 }
-fn points(value: &Value) -> Result<Vec<[f64; 2]>, Error> {
+pub(super) fn points(value: &Value) -> Result<Vec<[f64; 2]>, Error> {
     let points = value
         .get("points")
         .and_then(Value::as_array)
@@ -307,7 +333,10 @@ fn points(value: &Value) -> Result<Vec<[f64; 2]>, Error> {
         .map(|value| read_point(value).ok_or_else(|| invalid("Invalid arrow point")))
         .collect()
 }
-fn set_path(shape: &mut Element, points: Vec<[f64; 2]>) -> Result<(), Error> {
+pub(super) fn set_path(shape: &mut Element, points: Vec<[f64; 2]>) -> Result<(), Error> {
+    shape.set_path(path_values(points)?)
+}
+pub(super) fn path_values(points: Vec<[f64; 2]>) -> Result<Vec<[Number; 2]>, Error> {
     if !(2..=16_384).contains(&points.len())
         || points
             .iter()
@@ -316,22 +345,8 @@ fn set_path(shape: &mut Element, points: Vec<[f64; 2]>) -> Result<(), Error> {
     {
         return Err(invalid("Stroke exceeds the canvas limits"));
     }
-    shape.set_path(
-        points
-            .into_iter()
-            .map(|[x, y]| Ok([Number::from_f64(x)?, Number::from_f64(y)?]))
-            .collect::<Result<_, Error>>()?,
-    )
-}
-fn move_to(document: &mut Document, item: &Item, position: [f64; 2]) -> Result<(), Error> {
-    if position
+    points
         .into_iter()
-        .any(|v| !v.is_finite() || v.abs() > MAX_COORDINATE)
-    {
-        return Err(invalid("Element exceeds the canvas coordinate limits"));
-    }
-    edit(document, item.index, |shape| {
-        shape.set(element::X, Number::from_f64(position[0])?)?;
-        shape.set(element::Y, Number::from_f64(position[1])?)
-    })
+        .map(|[x, y]| Ok([Number::from_f64(x)?, Number::from_f64(y)?]))
+        .collect()
 }

@@ -6,6 +6,14 @@ use little_clip_render::diagram::DrawingLayout;
 
 #[derive(Clone)]
 pub(super) enum Gesture {
+    Resize {
+        id: String,
+        original: Bounds,
+        current: Bounds,
+        corner: usize,
+        proportional: bool,
+        grab: [f64; 2],
+    },
     Move {
         start: [f64; 2],
         current: [f64; 2],
@@ -26,6 +34,21 @@ pub(super) enum Gesture {
 impl Gesture {
     fn update(&mut self, point: [f64; 2], spacing: f64) {
         match self {
+            Self::Resize {
+                original,
+                current,
+                corner,
+                proportional,
+                grab,
+                ..
+            } => {
+                *current = super::resize::resized(
+                    *original,
+                    [point[0] + grab[0], point[1] + grab[1]],
+                    *corner,
+                    *proportional,
+                )
+            }
             Self::Move { current, .. } | Self::Marquee { current, .. } => *current = point,
             Self::Draw {
                 current,
@@ -94,6 +117,8 @@ impl DrawingEditor {
                 self.retained_move = None;
                 self.selected.clear();
                 self.tool = None;
+                self.text_draft = None;
+                self.text_selection = None;
             }
             let delete = ui.input_mut(|input| {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
@@ -109,6 +134,25 @@ impl DrawingEditor {
         }
     }
     fn begin(&mut self, model: &Scene, point: [f64; 2], shift: bool) {
+        if let Some((id, original, corner, proportional)) = self.resize_handle(model, point) {
+            self.gesture = Some(Gesture::Resize {
+                id,
+                original,
+                current: original,
+                corner,
+                proportional,
+                grab: {
+                    let anchor = super::resize::corners(original)[corner];
+                    [anchor[0] - point[0], anchor[1] - point[1]]
+                },
+            });
+            return;
+        }
+        if self.tool == Some(Kind::Text) {
+            self.new_text(point, None);
+            self.gesture = None;
+            return;
+        }
         if let Some(kind) = &self.tool {
             self.gesture = Some(Gesture::Draw {
                 start: point,
@@ -124,6 +168,8 @@ impl DrawingEditor {
             .rev()
             .find(|item| hit(item, point, 6.0 / self.camera.scale))
         {
+            self.text_selection = None;
+            self.text_draft = None;
             if shift && self.selected.contains(&item.id) {
                 self.selected.retain(|id| id != &item.id);
                 return;
@@ -147,6 +193,8 @@ impl DrawingEditor {
                 Err(error) => self.edit_error = Some(error.to_string()),
             }
         } else {
+            self.text_selection = None;
+            self.text_draft = None;
             if !shift {
                 self.selected.clear();
             }
@@ -161,6 +209,24 @@ impl DrawingEditor {
         self.ghost = Some(gesture.clone());
         self.retained_move = None;
         match gesture {
+            Gesture::Resize {
+                ref id,
+                original,
+                current,
+                ..
+            } => {
+                if original != current {
+                    self.retained_move = self.model.as_ref().map(|model| super::RetainedMove {
+                        gesture: gesture.clone(),
+                        model: model.clone(),
+                        lines: self.lines.clone(),
+                    });
+                    self.queue(Change::Resize {
+                        id: id.clone(),
+                        bounds: current,
+                    });
+                }
+            }
             Gesture::Move {
                 start,
                 current,
@@ -270,7 +336,10 @@ impl DrawingEditor {
                 if !self.selected.contains(&item.id) {
                     continue;
                 }
-                let b = item.bounds;
+                let b = match self.gesture.as_ref().or(self.ghost.as_ref()) {
+                    Some(Gesture::Resize { id, current, .. }) if id == &item.id => *current,
+                    _ => item.bounds,
+                };
                 let corners = [
                     [0.0, 0.0],
                     [b.width, 0.0],
@@ -290,6 +359,7 @@ impl DrawingEditor {
                 ));
             }
         }
+        self.paint_resize_handles(painter, rect, accent);
         match self.gesture.as_ref().or(self.ghost.as_ref()) {
             Some(Gesture::Marquee { start, current, .. }) => {
                 let area = Rect::from_two_pos(
@@ -356,7 +426,7 @@ impl DrawingEditor {
 fn inside(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
     (0..2).all(|i| p[i] >= a[i].min(b[i]) && p[i] <= a[i].max(b[i]))
 }
-fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
+pub(super) fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 fn hit(item: &Item, point: [f64; 2], tolerance: f64) -> bool {

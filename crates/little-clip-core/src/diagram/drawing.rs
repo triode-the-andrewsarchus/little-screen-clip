@@ -1,10 +1,15 @@
 //! Bounded drawing snapshots and semantic edits; no rendering or file I/O.
-use excalidraw_document::{Document, Element, Number, Profile, element};
+use excalidraw_document::{Document, Element, Profile, element};
 pub use excalidraw_document::{ElementKind as Kind, Error};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 mod edits;
+mod resize;
+mod text;
+pub use excalidraw_document::{Number, TextContent};
+pub use resize::ResizePlan;
+pub use text::{TextCreation, TextInfo, TextStyle};
 
 const MAX_ELEMENTS: usize = 2048;
 const MAX_COORDINATE: f64 = 1e9;
@@ -236,6 +241,15 @@ impl Paint {
 /// A single gesture or inspector change. Applying it never changes the snapshot.
 #[derive(Clone, Debug)]
 pub enum Change {
+    Text {
+        id: String,
+        content: TextContent,
+    },
+    CreateText(TextCreation),
+    Resize {
+        id: String,
+        bounds: Bounds,
+    },
     Move {
         ids: Vec<String>,
         by: [f64; 2],
@@ -316,6 +330,9 @@ impl Scene {
     pub fn apply(&self, change: Change) -> Result<Option<String>, Error> {
         let mut next = self.document.clone();
         match change {
+            Change::Text { id, content } => self.replace_text(&mut next, &id, content)?,
+            Change::CreateText(creation) => self.create_text(&mut next, creation)?,
+            Change::Resize { id, bounds } => self.resize_items(&mut next, &id, bounds)?,
             Change::Move { ids, by } => self.move_items(&mut next, &ids, by)?,
             Change::Paint { ids, paint } => {
                 for index in self.selection(&ids)? {
