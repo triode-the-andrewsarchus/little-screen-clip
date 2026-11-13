@@ -2499,7 +2499,12 @@ Further qualification found correctness work that must precede host integration:
   ordered selection and the shared static renderer.
 - [x] Correct native static relationship routing so orthogonal edges follow the
   actual layout direction and sibling axis, keeping arrowheads outside nodes.
-- [ ] Qualify deployment view behavior and additional DSL forms.
+- [x] Resolve deployment instances to correctly typed model elements with unique
+  placement identities, retaining per-instance and infrastructure metadata.
+- [ ] Resolve deployment environment/scope/selection, render deployed instances
+  and their relationships, and qualify additional DSL forms.
+- [ ] Implement deployment-group relationship constraints; explicit diagnostics
+  currently reject them rather than silently ignoring their meaning.
 
 The format checkbox remains open while these and host integration are pending.
 
@@ -2676,3 +2681,41 @@ algorithm. The initial test geometry check was simplified to this fixture's
 actual sibling corridor; no new test hotspot remains. Existing routing/renderer
 patterns account for remaining short clone warnings. Host integration and
 other view/grammar qualification remain pending.
+
+
+### Structurizr deployment placement identities
+
+Each container/software-system placement now has its own identity, including
+repeated placements of the same declaration on different hosts. Instance targets
+must resolve to the correct actual model type; missing or mismatched references
+fail instead of receiving deterministic placeholder IDs. Bare deployment nodes
+are built after static declarations, so valid source order no longer changes
+reference resolution. Instance tags inherit the base type, retain additional
+tags, and carry the appropriate instance tag. Per-placement descriptions,
+properties and health-check metadata survive without executing any checks.
+Unnamed software-system instances and infrastructure technology/inline tags now
+parse, and infrastructure properties are retained.
+
+The optional instance header's first string is a deployment-group constraint,
+not a description. Nonempty constraints and group declarations now report an
+explicit unsupported-feature error instead of changing the meaning of a preview;
+relationship-group support remains tracked separately. Empty-group headers can
+supply ordinary inline tags and descriptions can be authored in the body.
+
+Four new parser/model regressions cover repeated placements and exact explicit
+relationship endpoints, references preceding their declarations, instance and
+infrastructure metadata, inherited type tags, inert health checks, wrong/missing
+target types and unsupported-group diagnostics. All 167 unit/integration tests
+and one core rustdoc test pass; strict all-target Clippy for the shared renderer
+passes. Deployment environment/view rendering is still pending, so this is not
+yet exposed through file or Markdown routes.
+
+Architecture comparison against `before-structurizr-deployment` removes one clone
+group, with rounded duplication, maximum complexity and cycle count unchanged.
+Instance conversion shares reference validation and health-check translation
+instead of maintaining two copies. The existing workspace builder gains the
+required static-before-deployment ordering (+4 CCN), and the element-body parser
+gains the missing unnamed instance branch (+2); neither adds a new mechanism.
+Remaining clone flags include existing model/parser declarations and the two
+corresponding optional instance-description fields. They do not justify merging
+the distinct serialized container/software-system instance types.

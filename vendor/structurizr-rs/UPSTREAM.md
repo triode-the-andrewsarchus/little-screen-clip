@@ -49,3 +49,9 @@ commits, separate from this pristine import.
 - Pass actual layout direction into the existing orthogonal router, select the
   correct sibling axis and keep simple sibling routes outside nodes. Consolidate
   private SVG forwarding methods; add end-to-end attachment and corridor tests.
+
+- Give each deployed instance a unique placement identity, require correctly
+  typed existing model references, and defer bare deployment construction until
+  static declarations exist. Preserve instance descriptions, type/inline tags,
+  properties and inert health checks, plus infrastructure technology/properties.
+  Diagnose unsupported deployment groups instead of silently dropping them.

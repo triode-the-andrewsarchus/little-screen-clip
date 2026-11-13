@@ -428,6 +428,8 @@ impl HealthCheck {
 pub struct ContainerInstance {
     pub id: ElementId,
     pub container_id: ElementId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default)]
     pub instance_id: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -443,6 +445,8 @@ pub struct ContainerInstance {
 pub struct SoftwareSystemInstance {
     pub id: ElementId,
     pub software_system_id: ElementId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default)]
     pub instance_id: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

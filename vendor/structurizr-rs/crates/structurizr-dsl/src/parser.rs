@@ -640,14 +640,23 @@ impl Parser {
 
         // For custom elements: name, optional metadata, description and tags
         // For others: name, description, technology (optional)
-        let (description, technology) = if kind == ElementKind::CustomElement {
+        let (description, technology) = if matches!(kind, ElementKind::ContainerInstance | ElementKind::SoftwareSystemInstance) {
+            let groups = self.maybe_string().unwrap_or_default();
+            if !groups.is_empty() {
+                return Err(Error::Parse(ParseError {
+                    message: "Deployment groups are not yet supported by the native preview".into(),
+                    location: self.current().map(|token| token.location),
+                }));
+            }
+            (None, None)
+        } else if kind == ElementKind::CustomElement {
             let metadata = self.maybe_string();
             let desc = self.maybe_string(); // description is optional
             (desc, metadata)
         } else {
             let desc = self.maybe_string();
             // Technology is the 3rd string for Container/Component/DeploymentNode
-            let tech = if matches!(kind, ElementKind::Container | ElementKind::Component | ElementKind::DeploymentNode) {
+            let tech = if matches!(kind, ElementKind::Container | ElementKind::Component | ElementKind::DeploymentNode | ElementKind::InfrastructureNode) {
                 self.maybe_string()
             } else {
                 None
@@ -657,7 +666,7 @@ impl Parser {
 
         // For DeploymentNode: parse inline tags (4th) and instances (5th)
         // Syntax: deploymentNode <name> [description] [technology] [tags] [instances] { ... }
-        let (inline_tags, instances) = if matches!(kind, ElementKind::DeploymentNode | ElementKind::CustomElement) {
+        let (inline_tags, instances) = if matches!(kind, ElementKind::DeploymentNode | ElementKind::InfrastructureNode | ElementKind::CustomElement | ElementKind::ContainerInstance | ElementKind::SoftwareSystemInstance) {
             let tags_str = self.maybe_string();
             let instances_str = if kind == ElementKind::DeploymentNode {
                 self.maybe_string_or_number()
@@ -767,6 +776,11 @@ impl Parser {
                 Some(TokenKind::ContainerInstance) if element.kind == ElementKind::DeploymentNode => {
                     self.advance();
                     let child = self.parse_element(ElementKind::ContainerInstance, None)?;
+                    element.children.push(child);
+                }
+                Some(TokenKind::SoftwareSystemInstance) if element.kind == ElementKind::DeploymentNode => {
+                    self.advance();
+                    let child = self.parse_element(ElementKind::SoftwareSystemInstance, None)?;
                     element.children.push(child);
                 }
                 // Identifier could be child element with identifier or relationship
@@ -1066,11 +1080,10 @@ impl Parser {
                     children.push(element);
                 }
                 Some(TokenKind::DeploymentGroup) => {
-                    // DeploymentGroup is parsed as identifier = deploymentGroup "name"
-                    // For now, skip this case - it will be handled in identifier parsing
-                    self.advance();
-                    let _name = self.expect_string()?;
-                    // TODO: Store deployment group references for later use
+                    return Err(Error::Parse(ParseError {
+                        message: "Deployment groups are not yet supported by the native preview".into(),
+                        location: self.current().map(|token| token.location),
+                    }));
                 }
                 Some(TokenKind::Identifier(id)) => {
                     let id = id.clone();
@@ -1088,9 +1101,10 @@ impl Parser {
                                 children.push(element);
                             }
                             Some(TokenKind::DeploymentGroup) => {
-                                self.advance();
-                                let _name = self.expect_string()?;
-                                // TODO: Store deployment group with identifier
+                                return Err(Error::Parse(ParseError {
+                                    message: "Deployment groups are not yet supported by the native preview".into(),
+                                    location: self.current().map(|token| token.location),
+                                }));
                             }
                             _ => {
                                 return Err(Error::Parse(ParseError {
@@ -2878,7 +2892,9 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
     // Process model
     if let Some(model_node) = ast.model {
         for element in &model_node.elements {
-            build_element(&mut workspace, element, &mut identifiers)?;
+            if element.kind != ElementKind::DeploymentNode {
+                build_element(&mut workspace, element, &mut identifiers)?;
+            }
         }
 
         // Process enterprise elements (marked as internal)
@@ -2902,11 +2918,17 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
             build_group(&mut workspace, group, &mut identifiers)?;
         }
 
+        for element in &model_node.elements {
+            if element.kind == ElementKind::DeploymentNode {
+                build_element(&mut workspace, element, &mut identifiers)?;
+            }
+        }
+
         // Build deployment environments
         for env in &model_node.deployment_environments {
             for child in &env.children {
                 if child.kind == ElementKind::DeploymentNode {
-                    let mut node = build_deployment_node(child, &mut identifiers)?;
+                    let mut node = build_deployment_node(child, workspace.model(), &mut identifiers)?;
                     node.environment = Some(env.name.clone());
 
                     // Register the node's identifier
@@ -3226,7 +3248,7 @@ fn build_element(
             id
         }
         ElementKind::DeploymentNode => {
-            let node = build_deployment_node(element, identifiers)?;
+            let node = build_deployment_node(element, workspace.model(), identifiers)?;
             let id = node.id();
             workspace.model_mut().deployment_nodes.push(node);
             id
@@ -3326,6 +3348,7 @@ fn build_container(
 
 fn build_deployment_node(
     element: &ElementNode,
+    model: &Model,
     identifiers: &mut HashMap<String, ElementId>,
 ) -> Result<DeploymentNode> {
     let mut node = DeploymentNode::new(&element.name);
@@ -3361,7 +3384,7 @@ fn build_deployment_node(
     for child in &element.children {
         match child.kind {
             ElementKind::DeploymentNode => {
-                let child_node = build_deployment_node(child, identifiers)?;
+                let child_node = build_deployment_node(child, model, identifiers)?;
                 node.children.push(child_node);
             }
             ElementKind::InfrastructureNode => {
@@ -3377,77 +3400,99 @@ fn build_deployment_node(
                         infra.properties.tags.push(tag.clone());
                     }
                 }
+                infra.properties.properties = child.properties.clone();
                 if let Some(ref id) = child.identifier {
                     identifiers.insert(id.clone(), infra.id());
                 }
                 node.infrastructure_nodes.push(infra);
             }
-            ElementKind::ContainerInstance => {
-                // The "name" here is actually the identifier of the container being instantiated
-                // We need to look it up in identifiers, but it might not be resolved yet
-                // For now, create a placeholder using a dummy ID
-                let container_id = identifiers.get(&child.name).copied().unwrap_or_else(|| {
-                    // Create a placeholder ID based on the name
-                    ElementId::from_name(&child.name)
-                });
-                // Convert health check nodes to health checks
-                let health_checks: Vec<HealthCheck> = child.health_checks.iter().map(|hc| {
-                    let mut check = HealthCheck::new(&hc.name, &hc.url);
-                    if let Some(interval) = hc.interval {
-                        check = check.with_interval(interval);
-                    }
-                    if let Some(timeout) = hc.timeout {
-                        check = check.with_timeout(timeout);
-                    }
-                    check
-                }).collect();
-                let instance = ContainerInstance {
-                    id: ElementId::from_name(&format!("{}Instance", child.name)),
-                    container_id,
-                    instance_id: 1,
-                    tags: child.tags.clone(),
-                    properties: child.properties.clone(),
-                    health_checks,
-                };
-                if let Some(ref id) = child.identifier {
-                    identifiers.insert(id.clone(), instance.id);
-                }
-                node.container_instances.push(instance);
-            }
-            ElementKind::SoftwareSystemInstance => {
-                // The "name" here is the identifier of the software system being instantiated
-                let system_id = identifiers.get(&child.name).copied().unwrap_or_else(|| {
-                    ElementId::from_name(&child.name)
-                });
-                // Convert health check nodes to health checks
-                let health_checks: Vec<HealthCheck> = child.health_checks.iter().map(|hc| {
-                    let mut check = HealthCheck::new(&hc.name, &hc.url);
-                    if let Some(interval) = hc.interval {
-                        check = check.with_interval(interval);
-                    }
-                    if let Some(timeout) = hc.timeout {
-                        check = check.with_timeout(timeout);
-                    }
-                    check
-                }).collect();
-                let instance = SoftwareSystemInstance {
-                    id: ElementId::from_name(&format!("{}Instance", child.name)),
-                    software_system_id: system_id,
-                    instance_id: 1,
-                    tags: child.tags.clone(),
-                    properties: child.properties.clone(),
-                    health_checks,
-                };
-                if let Some(ref id) = child.identifier {
-                    identifiers.insert(id.clone(), instance.id);
-                }
-                node.software_system_instances.push(instance);
+            ElementKind::ContainerInstance | ElementKind::SoftwareSystemInstance => {
+                build_deployment_instance(&mut node, child, model, identifiers)?;
             }
             _ => {}
         }
     }
 
     Ok(node)
+}
+
+/// Resolve an instance to a real, correctly typed declaration. Each placement
+/// has its own identity even when multiple nodes instantiate the same element.
+fn build_deployment_instance(
+    node: &mut DeploymentNode,
+    child: &ElementNode,
+    model: &Model,
+    identifiers: &mut HashMap<String, ElementId>,
+) -> Result<()> {
+    let base_id = *identifiers
+        .get(&child.name)
+        .ok_or_else(|| Error::UndefinedIdentifier(child.name.clone()))?;
+    let base = model
+        .find_element(base_id)
+        .ok_or_else(|| Error::UndefinedIdentifier(child.name.clone()))?;
+    let is_container = match (child.kind, base) {
+        (ElementKind::ContainerInstance, ElementRef::Container(_)) => true,
+        (ElementKind::SoftwareSystemInstance, ElementRef::SoftwareSystem(_)) => false,
+        _ => {
+            return Err(Error::Parse(ParseError {
+                message: format!(
+                    "Invalid model type for deployment instance '{}'",
+                    child.name
+                ),
+                location: None,
+            }))
+        }
+    };
+    let id = ElementId::new();
+    let mut tags = base.properties().tags.clone();
+    tags.push(
+        if is_container {
+            "Container Instance"
+        } else {
+            "Software System Instance"
+        }
+        .into(),
+    );
+    tags.extend(child.tags.iter().cloned());
+    let health_checks = child
+        .health_checks
+        .iter()
+        .map(|source| {
+            let mut check = HealthCheck::new(&source.name, &source.url);
+            if let Some(interval) = source.interval {
+                check.interval = interval;
+            }
+            if let Some(timeout) = source.timeout {
+                check.timeout = timeout;
+            }
+            check
+        })
+        .collect();
+    if is_container {
+        node.container_instances.push(ContainerInstance {
+            id,
+            container_id: base_id,
+            instance_id: 1,
+            description: child.description.clone(),
+            tags,
+            properties: child.properties.clone(),
+            health_checks,
+        });
+    } else {
+        node.software_system_instances.push(SoftwareSystemInstance {
+            id,
+            software_system_id: base_id,
+            instance_id: 1,
+            description: child.description.clone(),
+            tags,
+            properties: child.properties.clone(),
+            health_checks,
+        });
+    }
+    if let Some(name) = &child.identifier {
+        identifiers.insert(name.clone(), id);
+    }
+    Ok(())
 }
 
 fn build_relationship(
