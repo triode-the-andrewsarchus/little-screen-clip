@@ -1220,7 +1220,7 @@ that goal is marked complete. The user reaffirmed this scope on 2026-11-13:
   icon tools and contextual style/selection controls. Text and resize remain
   essential; the reference's AI tools, Mermaid conversion and web embeds are
   outside the requested scope.
-- [ ] Render standalone diagram strips in the file-manager list, with enlarged
+- [x] Render standalone diagram strips in the file-manager list, with enlarged
   rendered hover previews. WaveDrom should prioritize the actual waveforms over
   decorative heading text. Preserve useful scale, clip vertically when needed,
   and reuse existing cache admission, revision checks and hidden-row retirement.
@@ -1546,3 +1546,43 @@ members of unchanged Python cycles are not new implementations.
   size threshold. This keeps cache growth inside its existing session owner,
   without changing viewer dispatch, navigation or save ownership. The 25 shared
   text-editor tests pass; strict all-target Clippy for both desktop hosts passes.
+
+### Initial rendered diagram strips ready for review
+
+Standalone formats recognized by the shared diagram registry now render in the
+file-manager list. The visible text-row worker reads a bounded complete source
+from its existing guarded file handle, retaining the ordinary text summary as a
+fallback. The same row cache owns the rendered pixels and supplies an enlarged
+hover popout; no second per-format cache or UI-thread decoder was introduced.
+Source revisions, context changes, hidden-row retirement and cancellation retain
+their existing owners. Source identity is checked before and after rendering.
+
+Short diagrams fit their row; tall diagrams preserve a bounded readable slice,
+and the larger popout remains vertically clipped. Timing strips use a smaller
+scale to expose more lanes. WaveDrom title text is omitted only from the passive
+preview copy; lane names, groups, time ticks and editable source remain intact.
+Invalid renders retain the syntax minimap, show an alert marker, and disclose the
+rendering failure alongside the source excerpt on hover. Ordinary JSON/XML and
+Markdown keep their existing conservative classification. Diagram clicks do not
+invent source-line correspondence from image coordinates.
+
+Validation: three diagram-strip tests cover classification/fallback/source
+budgets, title suppression with time ticks retained, and stale-source rejection.
+All 12 text-strip tests pass; the 25 shared text-editor tests pass for the compact
+preview-owner change. Both desktop binaries build and strict all-target Clippy
+passes. Private light/dark scenarios verify rendered timing/flowchart rows,
+normal row height, enlarged hover content, invalid-source diagnostics and exact
+source-byte preservation. Raster previews are sampled smoothly while syntax
+minimaps retain their existing nearest sampling.
+
+Architecture review moved diagram admission/diagnostics into the diagram strip
+module, leaving text loading below the hotspot threshold. Row and strip hover
+now share one dispatch point, ready for rendered Markdown hover. No new hotspot
+or clone group was introduced, maximum complexity/cycle count is unchanged, and
+measured duplication decreased slightly. Reported clones in the already-present
+text editor/row declarations are unchanged; reordered members of existing Python
+cycles are not new cycles.
+
+Review the existing files in `/home/vega/Documents/type_testing/md_extensions/`.
+Rendered Markdown hover at the selected source position remains pending and is
+still required before the active goal can be completed.

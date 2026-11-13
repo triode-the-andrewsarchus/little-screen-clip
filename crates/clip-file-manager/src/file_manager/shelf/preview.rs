@@ -463,11 +463,12 @@ impl Previews {
         {
             Arc::make_mut(current).inherit_retained_provenance(previous);
         }
-        let options = if data.document.is_some() || data.midi_document.is_some() {
-            egui::TextureOptions::NEAREST
-        } else {
-            egui::TextureOptions::LINEAR
-        };
+        let options =
+            if data.document.is_some() && !data.rendered_diagram || data.midi_document.is_some() {
+                egui::TextureOptions::NEAREST
+            } else {
+                egui::TextureOptions::LINEAR
+            };
         let texture = data
             .image
             .as_ref()
@@ -1118,6 +1119,9 @@ fn document_preview(path: &Path, token: &AtomicBool) -> Data {
     let mut data = Data::new(display_path(path), "Text".into(), Icon::Text);
     match super::super::text_strip::load(path, token) {
         Ok(document) => {
+            if let Some(diagram) = &document.diagram {
+                diagram.render(&mut data, token);
+            }
             data.document = Some(document);
         }
         Err(error) if error == "Binary file" || error == "Unrecognized non-UTF-8 file" => {

@@ -568,6 +568,7 @@ impl EntryPreviews {
             .and_then(|point| {
                 self.listing(entry)
                     .and_then(|ready| ready.data.document.as_ref())
+                    .filter(|document| document.diagram.is_none())
                     .map(|document| {
                         let fraction = ((point.x - strip.left()) / strip.width()).clamp(0.0, 1.0);
                         // Source lines progress horizontally, including blank lines.
@@ -581,14 +582,15 @@ impl EntryPreviews {
                 .ctx()
                 .pointer_hover_pos()
                 .is_some_and(|point| !preview_rect.contains(point))
-            && let Some(document) = self
-                .listing(entry)
-                .and_then(|ready| ready.data.document.clone())
+            && self
+                .cache
+                .get(id)
+                .is_some_and(|ready| ready.data.document.is_some())
         {
             egui::show_tooltip_at_pointer(
                 ui.ctx(),
                 egui::Id::new(("text_strip_hover", &entry.path)),
-                |ui| document.excerpt_ui(ui, 0.0, usize::MAX, palette),
+                |ui| self.text_hover(ui, id, 0.0, usize::MAX, palette),
             );
         }
         clicked_line
@@ -619,6 +621,11 @@ impl EntryPreviews {
             );
             return rect;
         };
+        if let Some(ready) = self.cache.get(id)
+            && super::diagram_strip::show(ui, rect, id, ready)
+        {
+            return rect;
+        }
         let rect = document.metadata.as_ref().map_or(rect, |metadata| {
             metadata.show(ui, rect, egui::Id::new(("frontmatter_strip", id)), palette)
         });
@@ -631,6 +638,16 @@ impl EntryPreviews {
             colors,
         };
         self.paint_raster(ui, rect, id, (width, height, colors.to_vec()), source);
+        if document.diagram.is_some() {
+            crate::icons::Icon::Alert.paint(
+                ui.painter(),
+                egui::Rect::from_min_size(
+                    rect.right_top() + egui::vec2(-18.0, 2.0),
+                    egui::vec2(16.0, 16.0),
+                ),
+                ui.visuals().error_fg_color,
+            );
+        }
         let hovered = super::ui::preview_hovered(ui, rect);
         if hovered {
             let point = ui.ctx().pointer_hover_pos().unwrap_or(rect.min);
@@ -645,10 +662,25 @@ impl EntryPreviews {
             egui::show_tooltip_at_pointer(
                 ui.ctx(),
                 egui::Id::new(("text_strip_hover", id)),
-                |ui| document.excerpt_ui(ui, fraction, width as usize, palette),
+                |ui| self.text_hover(ui, id, fraction, width as usize, palette),
             );
         }
         rect
+    }
+    fn text_hover(
+        &self,
+        ui: &mut egui::Ui,
+        id: uuid::Uuid,
+        fraction: f32,
+        width: usize,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
+        if let Some(ready) = self.cache.get(id)
+            && !super::diagram_strip::hover(ui, ready)
+            && let Some(document) = &ready.data.document
+        {
+            document.excerpt_ui(ui, fraction, width, palette);
+        }
     }
     pub fn show(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
         self.show_inner(ui, rect, entry, false);

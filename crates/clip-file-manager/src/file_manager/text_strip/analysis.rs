@@ -30,10 +30,19 @@ pub(in crate::file_manager) fn load(
     if shape.lossy && !known_text(path) {
         return Err("Unrecognized non-UTF-8 file".into());
     }
-    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let neutral =
         bytes > 16 * 1024 * 1024 || shape.lines > 250_000 || shape.longest > stream::LINE_LIMIT;
     let (mut document, syntax) = prepare(path, &shape, neutral);
+    document.diagram = super::super::diagram_strip::Document::read(
+        path,
+        &mut file,
+        bytes,
+        cancelled,
+        &source,
+        shape.lossy,
+        &mut document.note,
+    )?;
+    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     summarize(&mut document, file, syntax, neutral, cancelled)?;
     source.check()?;
     Ok(Arc::new(document))
@@ -98,6 +107,7 @@ fn prepare(
             (false, true) => "Lossy UTF-8 preview".into(),
             _ => String::new(),
         },
+        diagram: None,
         metadata: (little_clip_core::syntax::map_extension_to_language(&extension) == Some("md")
             && little_clip_core::diagram::Format::from_source_extension(&extension, prefix)
                 .is_none())

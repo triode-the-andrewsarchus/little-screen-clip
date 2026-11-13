@@ -78,6 +78,7 @@ pub(in crate::file_manager) struct Document {
     pub badge: String,
     pub note: String,
     pub metadata: Option<metadata::Summary>,
+    pub diagram: Option<super::diagram_strip::Document>,
     columns: usize,
     bins: Vec<Bin>,
 }
