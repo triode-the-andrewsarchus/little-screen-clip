@@ -100,7 +100,8 @@ workflow remain in place. The nested inspected workspace is retained as
 Two added host regressions count actual outlined colored placement/link shapes,
 check rendered blue PNG pixels, narrow the selection to one API placement, keep
 an empty selection empty and reject invalid members/scopes/environments. Image
-view rejection has an explicit regression. The targeted host run is pending the
-serialized Cargo window; native GUI/Markdown acceptance remains with the primary
+view rejection has an explicit regression. All seven Structurizr host tests
+passed in the combined 108-test diagram suite (`cargo test -p little-clip-render
+-j4 --lib diagram::`). Native GUI/Markdown acceptance remains with the primary
 integration pass. This change does not claim image-view support, full styling
 parity, graphical editing or new deployment DSL semantics.

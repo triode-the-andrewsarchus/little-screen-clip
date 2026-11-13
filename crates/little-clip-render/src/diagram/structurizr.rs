@@ -17,9 +17,6 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
         warnings.push("External themes are not loaded; using local and built-in styles".into());
     }
     let views = workspace.views();
-    if !views.deployment_views.is_empty() {
-        return Err("Deployment views are not supported in this Structurizr preview".into());
-    }
     if !views.image_views.is_empty() {
         return Err(
             "Structurizr image views are not supported; external image sources are not loaded"
@@ -65,6 +62,12 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
                 .iter()
                 .map(|view| (renderer.render_dynamic(&workspace, view), &view.properties)),
         )
+        .chain(views.deployment_views.iter().map(|view| {
+            (
+                renderer.render_deployment(&workspace, view),
+                &view.properties,
+            )
+        }))
         .chain(
             views
                 .filtered_views
@@ -198,6 +201,83 @@ mod tests {
         }
     }
 
+    fn painted_paths(svg: &str, attribute: &str, color: &str) -> usize {
+        roxmltree::Document::parse(svg)
+            .unwrap()
+            .descendants()
+            .filter(|node| {
+                matches!(node.tag_name().name(), "path" | "rect")
+                    && node.attribute(attribute) == Some(color)
+            })
+            .count()
+    }
+
+    #[test]
+    fn deployment_pages_render_selected_placements_links_and_native_rasters() {
+        let source = include_str!("../../../../docs/examples/diagrams/deployment.structurizr");
+        let (full, warnings) = svg(source).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(!full.contains("<text"));
+        assert_eq!(
+            painted_paths(&full, "fill", "#295f98"),
+            3,
+            "two API placements and a database must be painted"
+        );
+        assert_eq!(
+            painted_paths(&full, "stroke", "#a91f72"),
+            4,
+            "both replicated SQL links, gateway and self link must be painted"
+        );
+        let selected = source.replace("include * autoLayout lr", "include apiA autoLayout lr");
+        let (selected, warnings) = svg(&selected).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(painted_paths(&selected, "fill", "#295f98"), 1);
+        assert_eq!(
+            painted_paths(&selected, "stroke", "#a91f72"),
+            1,
+            "only the selected API self link survives"
+        );
+        let rendered = super::super::render_inline(
+            little_clip_core::diagram::Format::Structurizr,
+            source,
+            None,
+        )
+        .unwrap();
+        assert!(rendered.warnings.is_empty(), "{:?}", rendered.warnings);
+        let image = image::load_from_memory(&rendered.png).unwrap().to_rgba8();
+        assert!(
+            image
+                .pixels()
+                .filter(|p| p[3] > 200 && p[0] == 0x29 && p[1] == 0x5f && p[2] == 0x98)
+                .count()
+                > 1000
+        );
+    }
+
+    #[test]
+    fn empty_deployment_selection_stays_empty_and_invalid_membership_reports_errors() {
+        let source = include_str!("../../../../docs/examples/diagrams/deployment.structurizr");
+        let empty = source.replace("include * autoLayout lr", "exclude * autoLayout lr");
+        let (empty, warnings) = svg(&empty).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(painted_paths(&empty, "fill", "#295f98"), 0);
+        assert_eq!(painted_paths(&empty, "stroke", "#a91f72"), 0);
+        for invalid in [
+            source.replace("include * autoLayout lr", "include missing autoLayout lr"),
+            source.replace("deployment shop prod", "deployment api prod"),
+            source.replace("deployment shop prod", "deployment shop missing"),
+            source.replace("include * autoLayout lr", "include shop autoLayout lr"),
+        ] {
+            assert!(
+                svg(&invalid).is_err(),
+                "invalid deployment selection was accepted: {invalid}"
+            );
+        }
+        let error = svg(r#"workspace { views { image * "Remote" { svg "file:///etc/passwd" } } }"#)
+            .unwrap_err();
+        assert!(error.contains("image views are not supported"), "{error}");
+    }
+
     #[test]
     fn page_titles_are_escaped_and_large_view_sets_are_bounded() {
         let properties = ViewProperties::new("<Work & flow>");
@@ -231,7 +311,7 @@ mod tests {
     #[test]
     fn unsupported_views_execution_and_ambiguous_keys_report_errors() {
         for source in [
-            r#"workspace { model { deploymentEnvironment "Prod" {} } views { deployment * "Prod" "Runtime" { include * } } }"#,
+            r#"workspace { views { image * "Remote" { svg "file:///etc/passwd" } } }"#,
             r#"workspace { !include "/etc/passwd" }"#,
             r#"workspace { model {} views { systemLandscape "Same" {} systemLandscape "Same" {} } }"#,
             r#"workspace { model { app = softwareSystem "Library" } views { systemContext missing "Wrong" { include * } } }"#,
