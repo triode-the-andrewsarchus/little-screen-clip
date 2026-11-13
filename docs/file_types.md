@@ -214,7 +214,7 @@
       - [x] Embedded LaTeX math blocks (`$...$`, `$$...$$`) — native bounded rendering, text baselines, transparent theme colors and diagnostics in both previews
       - [ ] Inline diagram block rendering (Kroki-compatible)
         - [x] Mermaid (`mermaid`, `mmd`) — compiled native renderer, bounded helper, large/small previews
-        - [ ] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`)
+        - [x] PlantUML and C4-PlantUML (`plantuml`, `puml`, `c4plantuml`) — native Rust renderer, bundled C4/themes, outlined previews and source/live editor; external includes refused
         - [x] D2 (`d2`) — native flat-board previews, Dagre/ELK/TALA, `.d2` highlighted source/live preview and diagnostics
         - [x] Graphviz DOT (`graphviz`, `dot`) — compiled Rust renderer, all eight layout engines, bounded multi-graph previews
         - [ ] DBML database markup (`dbml`) — native tables/columns/enums/relationships and source/live previews; newer partials/records/optional relations pending
@@ -548,7 +548,7 @@
     - [x] `.bpmn`, `.bpmn2` — BPMN 2.0 XML with highlighted source, live preview, diagnostics and guarded saves
     - [ ] `.structurizr`, `.dsl` — Structurizr architecture DSL (May need disambiguation with generic DSL scripts and Lingvo dictionary files on `.dsl`)
   - [ ] Diagram as code (declarative architecture, flow, and schema DSLs)
-    - [ ] `.puml`, `.plantuml`, `.iuml` — PlantUML / C4-PlantUML diagram
+    - [x] `.puml`, `.plantuml`, `.pu`, `.iuml` — native PlantUML / bundled C4 previews and highlighted source/live editor; external includes refused
     - [x] `.mmd`, `.mermaid` — native Mermaid source/live-preview editor with diagnostics and guarded saves; `.mmd` requires a Mermaid header so ordinary MultiMarkdown stays Markdown; graphical editing pending
     - [ ] `.d2` — Terrastruct D2 diagram (May need disambiguation with Diablo II game data files on `.d2`)
     - [x] `.dot`, `.gv`, `.graphviz` — native DOT source/live-preview editor with diagnostics and guarded saves; `.dot` requires a graph header to avoid claiming legacy Word templates; graphical manipulation pending

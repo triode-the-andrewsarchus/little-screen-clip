@@ -38,7 +38,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | Front matter | [frontmatter](https://crates.io/crates/frontmatter) 0.4.0; [frontmatter-gen](https://crates.io/crates/frontmatter-gen) 0.0.12; [mdbook-frontmatter-fix](https://crates.io/crates/mdbook-frontmatter-fix) 0.4.0 | Pending comparison / editor research |
 | LaTeX math | Mathra 1.12.0; latex-rust 2.1.1 / 3.0.3; retex-svg 1.9.0; KaTeX; MathLive editor reference | Native Mathra selected; inline/display previews implemented in both viewers; structured graphical editing pending |
 | Mermaid | Merman 0.10.0; mermaid-rs-renderer 0.3.1; ariel-rs 0.4 | Selected Merman; native source/live previews implemented; parser-backed graphical editing pending |
-| PlantUML / C4 | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [plantuml_encoding](https://crates.io/crates/plantuml_encoding) 2.0.3; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
+| PlantUML / C4 | plantuml-core 0.5.4; puml 0.2.6; plantuml-little 1.2026.2-4; Omaspec | Native plantuml-core selected with shared Graphviz and bundled-only resolver; representative family, C4 sprite, host and native visual checks pass; extended compatibility qualification pending |
 | D2 | d2-rs 0.1.7 pipeline; d2-render 0.1.0; graphs-tui 0.4.0; official Go D2 | Native compiler/layout and scene renderer integrated; flat-board Markdown/standalone previews and highlighted guarded saves implemented; graphical editing/board selection pending |
 | Graphviz DOT | graphviz-pure 1.2.0; layout-rs 0.1.3; graphviz-rust 0.9.9 | Native Graphviz port selected; source/live preview and bounded multi-graph rendering implemented; graphical manipulation pending |
 | DBML | dbml-rs 1.0.1, dbml-language-server, dbml_diff_mysql, sea-orm-dbml | Native parser/Graphviz adapter and shared source/list routes implemented; newer syntax and graphical editing pending |
@@ -2247,3 +2247,91 @@ viewer/test clones are also flagged because their files changed. No new Rust
 parser/renderer hotspot, dependency cycle, cache, runtime dependency, generic
 factory or file owner is introduced. The native parser/renderer growth is the
 actual requested language/model/presentation, not a second diagram pipeline.
+
+## PlantUML and C4 native implementation
+
+Compared [plantuml-core 0.5.4](https://github.com/bjornharrtell/plantuml-rs),
+[puml 0.2.6](https://github.com/alliecatowo/puml) and
+[plantuml-little 1.2026.2-4](https://github.com/Actrium/plantuml-little), including
+actual crate sources, license notices and preprocessor/resource APIs. All three
+have native Rust implementations; PlantUML encoding/Markdown wrapper crates do
+not themselves supply a renderer. plantuml-little's default native backend adds
+graphviz-anywhere's prebuilt native library; its reference-test mode uses a
+Node/wasm backend. puml has a rich normalized scene and language-service model,
+but its default local include path reads files; disabling its URL feature alone
+does not prevent those reads. Its source-correspondence API remains a useful
+future reference.
+
+Choose plantuml-core: no filesystem/network/command I/O in its production core,
+a replaceable resolver with a bundled-only implementation, bundled C4 macros
+and themes, and the same pure-Rust Graphviz family already used here. The
+upstream reports a broad reference corpus; our selection additionally exercises
+sequence, class, state, activity, mindmap, JSON, Salt and C4 inputs rather than
+relying on those claims. Its MIT notice explicitly selects upstream PlantUML's
+MIT option; C4's original MIT notice and theme authors/licenses are retained.
+No GPL-only Java artifact, browser, Node process or JVM is introduced.
+
+The pristine 0.5.4 crate (repository revision
+`e4806bd9daa7d9542d219d05788cef60a0846f24`) was imported before modifications.
+Small local changes were separately committed: share Graphviz 1.2.0 instead of
+adding its pinned 1.1.0 copy; expose render warnings through an additive report
+API; add checked block splitting without changing the original permissive API.
+The shared-version check compiles, and Cargo.lock contains only Graphviz 1.2.0.
+This also lets the adapter apply the existing no-file-loading Graphviz policy
+before any layout. Original includes between C4 files were already rewritten to
+bundled resources by the upstream crate; that provenance is recorded there.
+
+- [x] Share `plantuml`, `puml` and `c4plantuml` fences, explicit closed-block
+  clipboard hints, `.puml/.plantuml/.pu/.iuml` files, source/live preview/errors,
+  strips and enlarged hover through the existing owners.
+- [x] Support bare UML fence bodies through preview-only wrappers. Explicit
+  unfinished blocks remain errors; source and save bytes are never rewritten.
+- [x] Compose all complete diagram blocks (up to sixteen), refuse unfinished or
+  superseded blocks, and retain warning banners and diagnostics.
+- [x] Use only bundled stdlib/themes. External file/URL includes and missing
+  bundled libraries produce errors, with no environment or filesystem resolver.
+- [x] Keep C4's bounded embedded raster sprites in both outlined SVG and final
+  PNG. The final raster stage previously used the default blocked-image policy;
+  a comparison against deliberately blocked output now verifies real sprite
+  pixels survive. Linked images remain excluded by the shared image resolver.
+- [x] Retain 256 KiB source, 2 MiB SVG, structural/raster and disposable-process
+  memory/CPU/wall-clock limits, including for programmable preprocessing.
+- [x] Finish real-host, warnings-as-errors and native light/dark validation.
+- [ ] Extend compatibility qualification beyond the representative family corpus;
+  unsupported upstream diagram kinds/syntax remain visible errors, not fabricated
+  fallback diagrams. Bundled stdlib coverage currently supplies C4, not every
+  third-party PlantUML macro package; external includes are deliberately refused.
+
+Editor research: [Omaspec](https://github.com/enhapu-afk/omaspec) is a native MIT
+application with linked source/diagram editing, layout hints stored as comments,
+model simulation and diagram comparisons. It uses iced/scrive, so its widgets
+cannot be dropped into this egui host. Those source-preserving interactions are
+useful design references, especially for future Mermaid editing; no editor code
+was imported. plantuml-rs also has a VS Code source/preview extension. The
+initial standalone baseline here remains the shared highlighted source, live
+native preview and errors, preserving existing history and guarded saves.
+
+Authored review files `sequence.puml`, `architecture.puml` and `plantuml.md` are
+in `type_testing/md_extensions/` and `docs/examples/diagrams/`.
+
+PlantUML validation: 56 shared core diagram tests, 15 syntax tests, 71 render
+diagram tests, ten card previews, three strip tests, native-extension routing,
+and both real-host worker suites pass. The file-manager worker suite additionally
+checks programmable preprocessor rejection: the empty infinite `!while` is
+reported by the native engine as `Infinite loop? (line 2)` before the outer
+resource limits are needed. No artifact is published. Strict all-targets Clippy
+across core/render/studios/both hosts and final builds pass without warnings.
+Both native themes pass sequence and C4 strips, hover, source/errors and Markdown
+checks while preserving fixture hashes. The C4 acceptance predicate uses its
+larger person-background fill; the smaller system node has fewer than 500 solid
+color pixels in a 66-pixel strip, despite correct rendering.
+
+The architecture comparison includes the original port: approximately 97,000
+measured LOC and its pre-existing clone groups, increasing global duplication
+by 0.79 percentage points while leaving maximum CCN 274 unchanged. Imported
+parser/layout families explain the new upstream hotspots. The local adapter
+reuses the process, resolver, font, SVG and cache mechanisms; the two required
+dispatch branches add format selection and embedded-raster policy. No additional
+application cache, save owner, browser/runtime process or second Graphviz copy
+is introduced. Existing lookup-table and touched-file clones remain; unchanged
+acceptance helpers' graph centrality shifts are not source-code regressions.

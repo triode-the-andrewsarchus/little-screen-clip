@@ -156,7 +156,7 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
         Some(Format::Wavedrom) => 0.25,
         // Component overviews need their relations and compartments visible.
         // Cropping the top can show only titles or the outer paper margin.
-        Some(Format::Wireviz | Format::Nomnoml | Format::Dbml | Format::Erd) => {
+        Some(Format::Wireviz | Format::Nomnoml | Format::Dbml | Format::Erd | Format::Plantuml) => {
             rect.height() / texture.size_vec2().y
         }
         _ => 0.5,
@@ -254,6 +254,11 @@ mod tests {
             ("packet.edn", "(draw-box 0)", Format::Bytefield),
             ("schema.er", "[Person]\n*name", Format::Erd),
             ("schema.erd", "[Person]\n*name", Format::Erd),
+            (
+                "sequence.puml",
+                "@startuml\nAlice -> Bob\n@enduml",
+                Format::Plantuml,
+            ),
             (
                 "drawing.excalidraw.json",
                 "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}",

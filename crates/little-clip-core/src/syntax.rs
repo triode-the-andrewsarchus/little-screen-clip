@@ -333,6 +333,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "goat" => Some("goat"),
         "bytefield" => Some("bytefield"),
         "er" | "erd" => Some("erd"),
+        "plantuml" | "puml" | "pu" | "iuml" | "c4plantuml" => Some("plantuml"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -467,6 +468,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "goat" => "GoAT",
         "bytefield" => "Bytefield",
         "erd" => "Erd",
+        "plantuml" => "PlantUML",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -613,6 +615,9 @@ pub const BYTEFIELD_SUBLIME_SYNTAX: &str = include_str!("syntax/bytefield.sublim
 /// Erd schema names, keys, options and participation syntax.
 pub const ERD_SUBLIME_SYNTAX: &str = include_str!("syntax/erd.sublime-syntax");
 
+/// PlantUML directives, entities, messages and preprocessing forms.
+pub const PLANTUML_SUBLIME_SYNTAX: &str = include_str!("syntax/plantuml.sublime-syntax");
+
 /// Shared native diagram grammars used by both screen and desktop source views.
 pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     NOMNOML_SUBLIME_SYNTAX,
@@ -620,6 +625,7 @@ pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     GOAT_SUBLIME_SYNTAX,
     BYTEFIELD_SUBLIME_SYNTAX,
     ERD_SUBLIME_SYNTAX,
+    PLANTUML_SUBLIME_SYNTAX,
     PIKCHR_SUBLIME_SYNTAX,
     SVGBOB_SUBLIME_SYNTAX,
     LINI_SUBLIME_SYNTAX,

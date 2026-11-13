@@ -149,3 +149,12 @@ flattening helper-generated output into fabricated source calls.
 colors, a graph title and explicit minimum/maximum relationship labels. `.erd`
 also opens this language; Eclipse ERMaster XML with that suffix remains XML.
 These previews use the original bracket/entity syntax, not Rusterd's separate DSL.
+
+### PlantUML and C4
+
+`sequence.puml` shows native sequence messages and activation; `architecture.puml`
+uses the bundled C4 library, including its person sprite. `plantuml.md` embeds
+both. The source editor also accepts bare UML bodies, while a started but
+unfinished diagram reports an error. Local/network includes are not loaded;
+inline shared source or use the bundled C4 library. Multiple complete diagram
+blocks render together, up to the common sixteen-plane preview budget.

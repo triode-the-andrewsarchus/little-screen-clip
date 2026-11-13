@@ -48,6 +48,22 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
             true,
         ),
         ("erd", "[A]\nA 1--1 Missing", false),
+        (
+            "plantuml",
+            include_str!("../../../../docs/examples/diagrams/sequence.puml"),
+            true,
+        ),
+        (
+            "plantuml",
+            include_str!("../../../../docs/examples/diagrams/architecture.puml"),
+            true,
+        ),
+        (
+            "plantuml",
+            "@startuml\n!include /etc/passwd\nA -> B\n@enduml",
+            false,
+        ),
+        ("plantuml", "@startuml\nA -> B", false),
         ("bytefield", "(slurp \"/etc/passwd\")", false),
         ("nomnoml", "#import: /etc/passwd\n[A]", false),
         (

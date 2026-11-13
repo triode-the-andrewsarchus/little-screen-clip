@@ -40,6 +40,9 @@ fn diagram_license_notices_are_available_without_host_startup() {
     assert!(notices.contains("The Go Authors"));
     assert!(notices.contains("Bytefield-SVG 1.11.0"));
     assert!(notices.contains("Erd compatibility grammar"));
+    assert!(notices.contains("Native PlantUML renderer"));
+    assert!(notices.contains("plantuml-rs contributors"));
+    assert!(notices.contains("Ricardo Niepel"));
     assert!(notices.contains("d18075d205583458b477cdcb7fe8bb41ec092cf9"));
     assert!(notices.contains("Eclipse Public License - v 1.0"));
     assert!(notices.contains("811552e58e93d1106cb634ddeec1f68db4e6371f9edc56cf1787b82202478e80"));
@@ -116,4 +119,30 @@ fn relocated_application_uses_its_bundled_goat_companion() {
     let rendered = run().unwrap();
     assert!(rendered.svg.contains("<path"));
     assert!(rendered.png.len() > 500);
+}
+
+#[test]
+fn diagram_worker_bounds_plantuml_preprocessor_execution() {
+    let started = std::time::Instant::now();
+    let output = CommandRequest::new(env!("CARGO_BIN_EXE_clip-file-manager"))
+        .arg("--internal-diagram-worker")
+        .stdin_bytes(serde_json::to_vec(&serde_json::json!({"format":"plantuml", "source":"@startuml\n!while 1\n!endwhile\nAlice -> Bob\n@enduml"})).unwrap())
+        .resource_limit(rustix::process::Resource::As, 2 * 1024 * 1024 * 1024)
+        .resource_limit(rustix::process::Resource::Cpu, 6)
+        .timeout(Duration::from_secs(8))
+        .max_output_bytes(8 * 1024 * 1024)
+        .own_process_group()
+        .die_with_parent()
+        .run();
+    if let Ok(output) = output
+        && output.status.success()
+    {
+        let result: Result<little_clip_render::diagram::Rendered, String> =
+            serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            result.is_err(),
+            "an infinite preprocessor must never publish an artifact"
+        );
+    }
+    assert!(started.elapsed() < Duration::from_secs(11));
 }

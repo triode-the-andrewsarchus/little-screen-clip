@@ -29,6 +29,7 @@ mod lini;
 mod math;
 mod mermaid;
 mod nomnoml;
+mod plantuml;
 mod script;
 mod wavedrom;
 mod wireviz;
@@ -233,6 +234,9 @@ pub fn run_worker_cli() -> bool {
             include_str!("../../../vendor/goat/LICENSE"),
             include_str!("../third_party/bytefield-notices.md"),
             include_str!("../third_party/erd-notices.md"),
+            include_str!("../third_party/plantuml-notices.md"),
+            include_str!("../../../vendor/plantuml-core/LICENSE"),
+            include_str!("../../../vendor/plantuml-core/stdlib/c4/LICENSE"),
             include_str!("../../../vendor/erd-reference/UNLICENSE"),
             include_str!("../../../vendor/bytefield-svg/LICENSE"),
             include_str!("../../../vendor/bytefield-svg/licenses/sci-LICENSE"),
@@ -350,6 +354,7 @@ fn render_inline(
         Format::Goat => goat::svg(source)?,
         Format::Bytefield => bytefield::svg(source)?,
         Format::Erd => erd::svg(source)?,
+        Format::Plantuml => plantuml::svg(source)?,
         Format::Wireviz => wireviz::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
@@ -374,7 +379,12 @@ fn render_inline(
             (svgbob::to_svg(source), Vec::new())
         }
     };
-    let mut rendered = rasterize_svg(svg, math_layout.is_none(), ImagePolicy::Block)?;
+    let images = if format == Format::Plantuml {
+        ImagePolicy::EmbeddedRaster
+    } else {
+        ImagePolicy::Block
+    };
+    let mut rendered = rasterize_svg(svg, math_layout.is_none(), images)?;
     rendered.math = math_layout;
     rendered.warnings.extend(warnings);
     rendered.warnings = bounded_warnings(rendered.warnings);
@@ -659,6 +669,8 @@ mod tests {
     #[test]
     fn markdown_files_and_raw_diagram_files_use_the_screen_diagram_route() {
         use little_clip_core::{ClipItem, ClipPayload, SlotManager};
+        const PUML: &str = include_str!("../../../docs/examples/diagrams/sequence.puml");
+        const C4: &str = include_str!("../../../docs/examples/diagrams/architecture.puml");
         const ERD: &str = include_str!("../../../docs/examples/diagrams/people.er");
         const BYTEFIELD: &str = include_str!("../../../docs/examples/diagrams/packet.bytefield");
         const GOAT: &str = include_str!("../../../docs/examples/diagrams/pipeline.goat");
@@ -689,6 +701,15 @@ mod tests {
                 "```nomnoml\n[Source] -> [Preview]\n```",
                 Format::Nomnoml,
                 "[Source] -> [Preview]\n",
+            ),
+            ("", PUML, Format::Plantuml, PUML),
+            ("puml", PUML, Format::Plantuml, PUML),
+            ("", C4, Format::Plantuml, C4),
+            (
+                "md",
+                "```c4plantuml\n@startuml\nA -> B\n@enduml\n```",
+                Format::Plantuml,
+                "@startuml\nA -> B\n@enduml\n",
             ),
             ("", ERD, Format::Erd, ERD),
             ("er", ERD, Format::Erd, ERD),

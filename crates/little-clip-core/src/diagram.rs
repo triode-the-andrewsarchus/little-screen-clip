@@ -35,6 +35,7 @@ pub enum Format {
     Goat,
     Bytefield,
     Erd,
+    Plantuml,
     Math,
     MathInline,
 }
@@ -62,6 +63,7 @@ impl Format {
             "goat" => Some(Self::Goat),
             "bytefield" => Some(Self::Bytefield),
             "erd" | "er" => Some(Self::Erd),
+            "plantuml" | "puml" | "c4plantuml" => Some(Self::Plantuml),
             _ => None,
         }
     }
@@ -116,6 +118,7 @@ impl Format {
             "goat" => Some(Self::Goat),
             "bytefield" => Some(Self::Bytefield),
             "erd" | "er" => Some(Self::Erd),
+            "plantuml" | "puml" | "pu" | "iuml" => Some(Self::Plantuml),
             _ => None,
         }
     }
@@ -184,6 +187,7 @@ impl Format {
             (Self::Goat, goat_signature),
             (Self::Bytefield, bytefield_signature),
             (Self::Erd, erd_signature),
+            (Self::Plantuml, plantuml_signature),
         ];
         signatures
             .iter()
@@ -210,6 +214,7 @@ impl Format {
             Self::Goat => Some("goat"),
             Self::Bytefield => Some("bytefield"),
             Self::Erd => Some("er"),
+            Self::Plantuml => Some("puml"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -232,6 +237,7 @@ impl Format {
             Self::Goat => "GoAT",
             Self::Bytefield => "Bytefield",
             Self::Erd => "Erd",
+            Self::Plantuml => "PlantUML",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
@@ -339,6 +345,41 @@ fn d2_signature(source: &str) -> bool {
             .lines()
             .skip(1)
             .any(|line| line.contains("->") || line.contains("shape:"))
+}
+
+fn plantuml_signature(source: &str) -> bool {
+    if source.len() > 32 * 1024 {
+        return false;
+    }
+    let Some(first) = source
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('\''))
+    else {
+        return false;
+    };
+    let start = first.split_whitespace().next().unwrap_or_default();
+    let Some(kind) = start.strip_prefix("@start") else {
+        return false;
+    };
+    matches!(
+        kind,
+        "uml"
+            | "mindmap"
+            | "wbs"
+            | "gantt"
+            | "json"
+            | "yaml"
+            | "salt"
+            | "chen"
+            | "ebnf"
+            | "timing"
+            | "chart"
+            | "packet"
+            | "hcl"
+    ) && source
+        .lines()
+        .any(|line| line.trim() == format!("@end{kind}"))
 }
 
 fn erd_signature(source: &str) -> bool {
@@ -626,6 +667,32 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn plantuml_aliases_and_complete_clipboard_blocks_share_the_native_format() {
+        for language in ["plantuml", "puml", "c4plantuml"] {
+            assert_eq!(Format::from_language(language), Some(Format::Plantuml));
+        }
+        for extension in ["plantuml", "puml", "pu", "iuml"] {
+            assert_eq!(Format::from_extension(extension), Some(Format::Plantuml));
+        }
+        for kind in ["uml", "json", "mindmap", "salt"] {
+            let source = format!("@start{kind}\ncontent\n@end{kind}");
+            assert_eq!(Format::from_snippet(&source), Some(Format::Plantuml));
+            assert_eq!(
+                Format::from_snippet(&format!("```plantuml\n{source}\n```")),
+                None
+            );
+        }
+        for source in [
+            "@startuml\nAlice -> Bob",
+            "Alice -> Bob",
+            "A prose note mentions @startuml",
+            "@startumlSuffix\n@endumlSuffix",
+        ] {
+            assert_eq!(Format::from_snippet(source), None, "{source}");
+        }
+    }
+
     #[test]
     fn erd_routes_canonical_schemas_and_keeps_er_master_xml_and_markdown_separate() {
         let schema = "[Person]\n*name\n[Place]\n*id\nPerson *--1 Place\n";
