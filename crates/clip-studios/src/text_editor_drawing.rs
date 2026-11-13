@@ -244,7 +244,7 @@ impl DrawingEditor {
     ) {
         self.prepare_model(source);
         self.toolbar(ui, palette);
-        let height = (ui.available_height() - 110.0).max(80.0);
+        let height = (ui.available_height() - 116.0).max(80.0);
         ui.horizontal_top(|ui| {
             let sidebar = (ui.available_width() * 0.28).clamp(180.0, 216.0);
             ui.allocate_ui_with_layout(
@@ -276,12 +276,14 @@ impl DrawingEditor {
             );
         });
         self.navigation(ui, palette);
-        self.footer(ui);
         egui::ScrollArea::vertical()
             .id_source("drawing_notices")
             .min_scrolled_height(0.0)
             .max_height(64.0)
-            .show(ui, |ui| preview.status_ui(ui, Format::Excalidraw));
+            .show(ui, |ui| {
+                self.footer(ui);
+                preview.status_ui(ui, Format::Excalidraw);
+            });
     }
 
     fn canvas_ui(
