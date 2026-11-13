@@ -35,33 +35,34 @@ impl Pixels {
         format: Format,
     ) -> Result<Self, String> {
         let mut geometry = None;
-        let vector = if matches!(
+        let prepared = if matches!(
             format,
             Format::Excalidraw | Format::Wireviz | Format::Mermaid
         ) {
-            match little_clip_render::diagram::retained::prepare(&rendered.svg).and_then(
-                |prepared| {
-                    if matches!(format, Format::Wireviz | Format::Mermaid) {
-                        geometry = Some(Arc::new(clip_ui::vectors::svg::Geometry::from_tree(
-                            &prepared.tree,
-                            if format == Format::Mermaid {
-                                "graph-0-clip-mermaid-"
-                            } else {
-                                "graph-0-"
-                            },
-                        )));
-                    }
-                    clip_ui::vectors::svg::Scene::new(prepared.tree, prepared.images)
-                },
-            ) {
+            little_clip_render::diagram::retained::prepare(&rendered.svg)
+        } else {
+            little_clip_render::diagram::retained::prepare_preview(&rendered.svg)
+        };
+        let vector = {
+            match prepared.and_then(|prepared| {
+                if matches!(format, Format::Wireviz | Format::Mermaid) {
+                    geometry = Some(Arc::new(clip_ui::vectors::svg::Geometry::from_tree(
+                        &prepared.tree,
+                        if format == Format::Mermaid {
+                            "graph-0-clip-mermaid-"
+                        } else {
+                            "graph-0-"
+                        },
+                    )));
+                }
+                clip_ui::vectors::svg::Scene::new(prepared.tree, prepared.images)
+            }) {
                 Ok(scene) => Some(scene),
                 Err(error) => {
                     rendered.warnings.push(error);
                     None
                 }
             }
-        } else {
-            None
         };
         let mut reader = image::ImageReader::with_format(
             std::io::Cursor::new(&rendered.png),
@@ -226,7 +227,11 @@ impl Preview {
                     self.warnings = pixels.warnings;
                     self.artwork = pixels.artwork;
                     self.prepared_at = Some(Instant::now());
-                    self.aspect = Some(pixels.image.size[0] as f32 / pixels.image.size[1] as f32);
+                    let size = self.artwork.vector.as_ref().map_or_else(
+                        || egui::vec2(pixels.image.size[0] as f32, pixels.image.size[1] as f32),
+                        |scene| scene.size(),
+                    );
+                    self.aspect = Some(size.x / size.y);
                     self.texture = Some(ui.ctx().load_texture(
                         "native diagram",
                         pixels.image,
@@ -322,9 +327,7 @@ impl Preview {
         source: &str,
         id: egui::Id,
     ) -> egui::Response {
-        if let Some(texture) = &self.texture {
-            egui::Image::new(texture).paint_at(ui, rect);
-        }
+        self.paint_artwork(ui, rect, rect);
         ui.interact(rect, id, egui::Sense::click())
             .on_hover_ui(|ui| {
                 ui.monospace(source.chars().take(2048).collect::<String>());
@@ -394,15 +397,30 @@ impl Preview {
         self.prepare(ui, format, source, None);
         ui.painter().rect_filled(rect, 4.0, egui::Color32::WHITE);
         if let Some(texture) = &self.texture {
-            let size = texture.size_vec2();
+            let size = self
+                .artwork
+                .vector
+                .as_ref()
+                .map_or_else(|| texture.size_vec2(), |scene| scene.size());
             let scale = (rect.width() / size.x).min(rect.height() / size.y);
             let image = egui::Rect::from_center_size(rect.center(), size * scale);
-            egui::Image::new(texture).paint_at(ui, image);
+            self.paint_artwork(ui, rect, image);
         }
         if format == Format::Mermaid && self.texture.is_some() {
             ui.ctx().request_repaint_after(Duration::from_secs(60));
         }
         self.status_ui(ui, format);
+    }
+
+    fn paint_artwork(&self, ui: &egui::Ui, rect: egui::Rect, image: egui::Rect) {
+        if let Some(scene) = &self.artwork.vector
+            && scene.paint(ui, rect, image, Default::default()).is_ok()
+        {
+            return;
+        }
+        if let Some(texture) = &self.texture {
+            egui::Image::new(texture).paint_at(ui, image);
+        }
     }
 
     pub(crate) fn status_ui(&self, ui: &mut egui::Ui, format: Format) {
@@ -425,6 +443,37 @@ impl Preview {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn passive_formats_prepare_vectors_at_logical_size_independent_of_thumbnail_pixels() {
+        for format in [
+            Format::Pikchr,
+            Format::Svgbob,
+            Format::Wavedrom,
+            Format::Dbml,
+            Format::Math,
+        ] {
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::RgbaImage::new(10, 8)
+                .write_to(&mut png, image::ImageFormat::Png)
+                .unwrap();
+            let pixels = Pixels::from_rendered(little_clip_render::diagram::Rendered {
+                svg: r#"<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><path d="M1 2C4 8 10 3 40 50" fill="none" stroke="black"/></svg>"#.into(),
+                png: png.into_inner(), width: 10, height: 8,
+                warnings: Vec::new(), math: None, drawing: None,
+            }, format).unwrap();
+            assert_eq!(
+                pixels.artwork.vector.unwrap().size(),
+                egui::vec2(1000.0, 800.0)
+            );
+            assert_eq!(
+                pixels.image.size,
+                [10, 8],
+                "fallback pixels must not set vector resolution"
+            );
+            assert!(pixels.warnings.is_empty());
+        }
+    }
+
     #[test]
     fn raster_effect_fallback_retains_mermaid_semantic_hit_geometry() {
         let mut png = std::io::Cursor::new(Vec::new());

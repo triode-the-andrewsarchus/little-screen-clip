@@ -81,6 +81,11 @@ impl Geometry {
 }
 
 impl Scene {
+    /// Logical SVG dimensions, independent of fallback raster resolution.
+    pub fn size(&self) -> egui::Vec2 {
+        egui::vec2(self.tree.size().width(), self.tree.size().height())
+    }
+
     /// Collects semantic bounds from this scene's canonical source tree.
     pub fn geometry(&self, prefix: &str) -> Geometry {
         Geometry::from_tree(&self.tree, prefix)
@@ -167,14 +172,12 @@ fn validate_group(
     group: &usvg::Group,
     images: &HashMap<usize, Arc<image::RgbaImage>>,
 ) -> Result<(), String> {
-    if group.mask().is_some()
-        || !group.filters().is_empty()
-        || group.blend_mode() != usvg::BlendMode::Normal
-    {
+    if group.mask().is_some() || group.blend_mode() != usvg::BlendMode::Normal {
         return Err(
             "This drawing's masks, filters or blend effects still use the raster preview.".into(),
         );
     }
+    shadow(group)?;
     for node in group.children() {
         match node {
             usvg::Node::Group(child) => validate_group(child, images)?,
@@ -203,6 +206,26 @@ fn validate_group(
         }
     }
     Ok(())
+}
+
+// The canonical Mermaid exporter uses one hard drop shadow. Capture just its
+// source alpha at the current device scale, then paint the original vectors;
+// never replace an entire diagram with its small thumbnail to retain a shadow.
+// Other filter graphs stay explicit fallbacks until their SVG semantics exist.
+fn shadow(group: &usvg::Group) -> Result<Option<&usvg::filter::DropShadow>, String> {
+    if group.filters().is_empty() {
+        return Ok(None);
+    }
+    if let [filter] = group.filters()
+        && let [primitive] = filter.primitives()
+        && let usvg::filter::Kind::DropShadow(shadow) = primitive.kind()
+        && *shadow.input() == usvg::filter::Input::SourceGraphic
+        && shadow.std_dev_x().get() == 0.0
+        && shadow.std_dev_y().get() == 0.0
+    {
+        return Ok(Some(shadow));
+    }
+    Err("This SVG filter graph still uses the raster preview.".into())
 }
 
 fn validate_brush(paint: &usvg::Paint) -> Result<(), String> {
@@ -297,11 +320,7 @@ impl Cached {
         let captured = !layer
             || canvas.begin_layer(&vg::LayerEffects::new().with_opacity(group.opacity().get()));
         let result = if captured {
-            if let Some(replacement) = motion.replacements.get(group.id()) {
-                self.replacement(canvas, replacement)
-            } else {
-                self.children(canvas, group, scene, motion)
-            }
+            self.filtered_contents(canvas, group, scene, motion)
         } else {
             Err("Native SVG opacity layer allocation failed.".into())
         };
@@ -310,6 +329,72 @@ impl Cached {
         }
         canvas.restore();
         result
+    }
+
+    fn contents(
+        &mut self,
+        canvas: &mut Canvas<OpenGl>,
+        group: &usvg::Group,
+        scene: &Scene,
+        motion: &Changes,
+    ) -> Result<(), String> {
+        if let Some(replacement) = motion.replacements.get(group.id()) {
+            self.replacement(canvas, replacement)
+        } else {
+            self.children(canvas, group, scene, motion)
+        }
+    }
+
+    fn filtered_contents(
+        &mut self,
+        canvas: &mut Canvas<OpenGl>,
+        group: &usvg::Group,
+        scene: &Scene,
+        motion: &Changes,
+    ) -> Result<(), String> {
+        if let Some(shadow) = shadow(group)? {
+            let bounds = group.filters()[0].rect();
+            let mut clip = Path::new();
+            clip.rect(bounds.x(), bounds.y(), bounds.width(), bounds.height());
+            canvas.clip_paths(&[(&clip, FillRule::NonZero)]);
+            let color = shadow.color();
+            let matrix = vg::ImageFilter::ColorMatrix {
+                matrix: [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    f32::from(color.red) / 255.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    f32::from(color.green) / 255.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    f32::from(color.blue) / 255.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    shadow.opacity().get(),
+                    0.0,
+                ],
+            };
+            canvas.save();
+            canvas.translate(shadow.dx(), shadow.dy());
+            let captured = canvas.begin_layer(&vg::LayerEffects::new().with_filters(&[matrix]));
+            let result = if captured {
+                self.contents(canvas, group, scene, motion)
+            } else {
+                Err("Native SVG shadow layer allocation failed.".into())
+            };
+            canvas.end_layer();
+            canvas.restore();
+            result?;
+        }
+        self.contents(canvas, group, scene, motion)
     }
 
     fn replacement(
@@ -588,6 +673,22 @@ mod tests {
             egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(30.0, 36.0))
         );
         assert!(Scene::new(tree, HashMap::new()).is_err());
+    }
+
+    #[test]
+    fn mermaid_hard_shadows_retain_native_geometry_and_filter_bounds() {
+        for (blur, supported) in [(0, true), (3, false)] {
+            let source = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><defs><filter id="shadow" x="0" y="0" width="100" height="80" filterUnits="userSpaceOnUse"><feDropShadow dx="4" dy="4" stdDeviation="{blur}" flood-opacity="0.06"/></filter></defs><g id="node" filter="url(#shadow)"><path d="M10 10h40v30h-40Z" fill="#abcdef"/></g></svg>"##
+            );
+            let tree = usvg::Tree::from_str(&source, &usvg::Options::default()).unwrap();
+            let result = Scene::new(tree, HashMap::new());
+            assert_eq!(result.is_ok(), supported);
+            if let Ok(scene) = result {
+                assert_eq!(scene.size(), egui::vec2(100.0, 80.0));
+                assert!(scene.tree.node_by_id("node").is_some());
+            }
+        }
     }
 
     #[test]

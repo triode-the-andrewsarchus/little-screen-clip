@@ -131,11 +131,23 @@ impl Document {
                 )
                 .ok_or("Diagram preview pixels unavailable")?;
                 self.guard.check()?;
-                Ok((image, rendered.warnings))
+                let mut warnings = rendered.warnings;
+                let vector =
+                    match little_clip_render::diagram::retained::prepare_preview(&rendered.svg)
+                        .and_then(|svg| clip_ui::vectors::svg::Scene::new(svg.tree, svg.images))
+                    {
+                        Ok(scene) => Some(scene),
+                        Err(error) => {
+                            warnings.push(error);
+                            None
+                        }
+                    };
+                Ok((image, vector, warnings))
             });
         match rendered {
-            Ok((image, warnings)) => {
+            Ok((image, vector, warnings)) => {
                 data.image = Some(image);
+                data.diagram_vector = vector;
                 data.rendered_diagram = true;
                 data.detail = warnings.join("\n");
             }
@@ -190,7 +202,7 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
         ) => rect.height() / texture.size_vec2().y,
         _ => 0.5,
     };
-    paint(ui, rect, texture, scale);
+    paint(ui, rect, ready, texture, scale);
     if super::ui::preview_hovered(ui, rect) {
         egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new(("diagram_strip_hover", id)), |ui| {
             hover(ui, ready);
@@ -218,17 +230,21 @@ pub(super) fn hover(ui: &mut egui::Ui, ready: &Ready) -> bool {
     let screen = ui.ctx().screen_rect();
     let width = (screen.width() - 40.0).clamp(160.0, 960.0);
     let max_height = (screen.height() * 0.6).clamp(100.0, 640.0);
-    let scale = (width / texture.size_vec2().x).min(1.0);
-    let size = egui::vec2(
-        texture.size_vec2().x * scale,
-        (texture.size_vec2().y * scale).min(max_height),
-    );
+    let original = texture.size_vec2();
+    let scale = (width / original.x).min(1.0);
+    let size = egui::vec2(original.x * scale, (original.y * scale).min(max_height));
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    paint(ui, rect, texture, 1.0);
+    paint(ui, rect, ready, texture, 1.0);
     true
 }
 
-fn paint(ui: &egui::Ui, rect: egui::Rect, texture: &egui::TextureHandle, max_scale: f32) {
+fn paint(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    ready: &Ready,
+    texture: &egui::TextureHandle,
+    max_scale: f32,
+) {
     let original = texture.size_vec2();
     let mut scale = (rect.width() / original.x).min(max_scale);
     // Fit short diagrams completely; tall ones keep readable artwork and crop
@@ -246,6 +262,11 @@ fn paint(ui: &egui::Ui, rect: egui::Rect, texture: &egui::TextureHandle, max_sca
     );
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
     painter.rect_filled(rect, 3.0, egui::Color32::WHITE);
+    if let Some(scene) = &ready.data.diagram_vector
+        && scene.paint(ui, rect, image, Default::default()).is_ok()
+    {
+        return;
+    }
     painter.image(
         texture.id(),
         image,

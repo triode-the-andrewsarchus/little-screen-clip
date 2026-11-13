@@ -28,6 +28,22 @@ pub struct Svg {
 /// Returns an error for oversized/invalid SVG, unoutlined text, unavailable
 /// images, or a retained scene exceeding the structure/geometry budgets.
 pub fn prepare(svg: &str) -> Result<Svg, String> {
+    prepare_viewport(svg, true)
+}
+
+/// Prepares a passive vector preview while retaining the export's viewport crop.
+///
+/// Unlike an interactive drawing plane, an ordinary document or thumbnail must
+/// not expose artwork outside an authored root viewport.
+///
+/// # Errors
+///
+/// Returns the same resource, geometry and outlined-text errors as [`prepare`].
+pub fn prepare_preview(svg: &str) -> Result<Svg, String> {
+    prepare_viewport(svg, false)
+}
+
+fn prepare_viewport(svg: &str, expand_export_planes: bool) -> Result<Svg, String> {
     let document = super::svg_document(svg)?;
     if document.descendants().any(|node| node.has_tag_name("text")) {
         return Err("Interactive diagram SVG must contain native text outlines.".into());
@@ -41,7 +57,11 @@ pub fn prepare(svg: &str) -> Result<Svg, String> {
         image_href_resolver: resolver,
         ..Default::default()
     };
-    let interactive = interactive_planes(&document);
+    let interactive = if expand_export_planes {
+        interactive_planes(&document)
+    } else {
+        Cow::Borrowed(svg)
+    };
     let tree =
         usvg_vector::Tree::from_str(&interactive, &options).map_err(|error| error.to_string())?;
     if tree.size().width() > 16_384.0 || tree.size().height() > 16_384.0 {
@@ -298,6 +318,13 @@ mod tests {
             "the authored nested SVG and frame retain their crops"
         );
         assert!(prepared.tree.root().abs_bounding_box().width() >= 140.0);
+    }
+
+    #[test]
+    fn passive_previews_keep_the_export_crop_that_an_editor_can_expand() {
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><g><svg width="100" height="100" overflow="hidden"><path d="M0 0h140v20H0Z"/></svg></g></svg>"#;
+        assert_eq!(prepare_preview(source).unwrap().tree.clip_paths().len(), 1);
+        assert!(prepare(source).unwrap().tree.clip_paths().is_empty());
     }
 
     #[test]
