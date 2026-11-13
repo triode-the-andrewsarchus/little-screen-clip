@@ -558,7 +558,7 @@
     - [x] `.pikchr` — native Pikchr previews, highlighted source/live preview/errors and guarded saves
     - [ ] `.diag`, `.blockdiag`, `.seqdiag`, `.actdiag`, `.nwdiag`, `.packetdiag`, `.rackdiag` — BlockDiag family diagram (May need disambiguation with system diagnostic log files on `.diag`)
   - [ ] Hardware, electrical, and packet layout diagrams
-    - [ ] `.bytefield`, `.bf` — Bytefield-SVG network/binary packet layout (May need disambiguation with Brainfuck source files on `.bf`)
+    - [x] `.bytefield`, recognized `.edn` / `.bf` — canonical Bytefield-SVG packet layouts; ordinary Brainfuck `.bf` sources retain code presentation
     - [x] `.json`/`.json5` with distinctive WaveJSON content, `.wavejson`, `.wavedrom` — WaveDrom timing/register/logic diagrams (source editor and basic signal-cell painter; advanced operations stay in source)
     - [ ] `.wireviz`, `.wire.yaml`, `.wire.yml` — WireViz cable and wiring harness diagram (conventional compound extension for YAML)
       - [x] Initial native pin/wire/shield/loop/mating previews, Markdown fences, conservative generic YAML/clipboard inference, source/live-preview editor and rendered list strips
@@ -566,12 +566,14 @@
       - [ ] Graphical harness editing with source-preserving circuit transactions
         - [x] Backend pin-label and wire-color transactions, reference repair, circuit/alias guards and lossless source tests
         - [ ] Native inspector, pin/conductor interactions and connect/disconnect transactions
-    - [ ] `.sym` — Symbolator circuit component pinout diagram (May need disambiguation with compiler debug symbol files on `.sym`)
+    - [x] `.symbolator`, `*.symbolator.v`, `*.symbolator.vhd`, `*.symbolator.vhdl` — explicit HDL interface symbol previews and source/live editing; generic HDL files retain code presentation
+    - [ ] `.sym` — ambiguous symbol/debug/CAD files; no canonical Symbolator source association is assumed
   - [ ] ASCII-art and text-to-vector diagram tools
     - [ ] `.ditaa` — Ditaa ASCII art diagram
-    - [ ] `.bob`, `.svgbob` — Svgbob ASCII-to-SVG diagram (May need disambiguation with BOB raytracer / CAD files on `.bob`)
+    - [x] `.svgbob`, recognized `.bob` — native SVG previews and highlighted source/live editing; other BOB raytracer/CAD text remains ordinary text
       - [x] `.svgbob` — native previews, highlighted source/live preview/errors and guarded saves
-      - [ ] `.bob` content disambiguation and graphical cell editing
+      - [x] Conservative `.bob` content disambiguation
+      - [ ] Graphical cell editing
     - [x] `.bytefield` — explicit Bytefield source association; upstream `.edn` uses conservative drawing-content detection; native previews and highlighted source/live editor
     - [x] `.goat` — GoAT ASCII/Unicode diagram; highlighted source/live preview, list strips and enlarged hover
     - [x] `.lini` — native highlighted source/live-preview editor with diagnostics and guarded saves; graphical manipulation pending

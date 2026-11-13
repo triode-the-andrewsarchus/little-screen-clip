@@ -45,6 +45,8 @@ impl Document {
                         | "dsl"
                         | "diag"
                         | "tex"
+                        | "bf"
+                        | "bob"
                 )
             });
         if explicit.is_none() && !ambiguous {
@@ -279,6 +281,14 @@ mod tests {
             ("shape.goat", ".----.\n| hi |\n'----'", Format::Goat),
             ("packet.bytefield", "(draw-box 0)", Format::Bytefield),
             ("packet.edn", "(draw-box 0)", Format::Bytefield),
+            ("packet.bf", "(draw-box 0)", Format::Bytefield),
+            ("drawing.bob", "+---+\n| a |\n+---+", Format::Svgbob),
+            ("graph.diag", "blockdiag { a -> b; }", Format::Blockdiag),
+            (
+                "drawing.tex",
+                r"\begin{tikzpicture}\draw (0,0)--(1,1);\end{tikzpicture}",
+                Format::Tikz,
+            ),
             (
                 "architecture.dsl",
                 r#"workspace { model { app = softwareSystem "Library" } }"#,
@@ -316,6 +326,9 @@ mod tests {
                 r#"<Database xmlns="http://schemas.microsoft.com/linqtosql/dbml/2007"/>"#,
             ),
             ("notes.txt", "digraph { A -> B }"),
+            ("program.bf", "+++++[>+++++<-]>."),
+            ("scene.bob", "sphere { radius 1 }"),
+            ("system.diag", "Diagnostics: graph ready"),
         ] {
             assert!(load(name, source).diagram.is_none(), "{name}");
         }

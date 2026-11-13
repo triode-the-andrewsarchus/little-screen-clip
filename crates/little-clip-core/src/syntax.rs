@@ -349,7 +349,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "symbolator" => Some("symbolator"),
         "pgf" | "pgfplots" => Some("tikz"),
         "uxf" => Some("umlet"),
-        "dsl" | "diag" => Some("txt"),
+        "dsl" | "diag" | "bob" => Some("txt"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),

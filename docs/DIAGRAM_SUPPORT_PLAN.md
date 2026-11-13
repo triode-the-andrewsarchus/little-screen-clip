@@ -2960,3 +2960,15 @@ Twenty-nine core model/edit tests, four renderer tests and strict core/render
 Clippy pass. See [the compatibility review](diagrams/wireviz-compatibility.md).
 The normal application rebuild/native review is pending; template instances and
 connect/disconnect transactions remain separate tracked work.
+
+### Ambiguous standalone source suffixes
+
+- [x] Recognize actual SvgBob drawings inside `.bob` and actual Bytefield forms
+  inside `.bf`, retaining ordinary BOB/Brainfuck source as text.
+- [x] Admit those source-qualified formats to the existing row/hover reader.
+- [x] Correct the Symbolator catalog association: use explicit `.symbolator` or
+  `*.symbolator.v[hd[l]]` names; generic `.sym` debug/CAD files are not claimed.
+
+Seventy-one shared core diagram tests and four file-manager diagram tests pass,
+including actual guarded row classification for `.bob`, `.bf`, `.diag` and `.tex`.
+Source-aware classification does not add a graphical ASCII cell editor.

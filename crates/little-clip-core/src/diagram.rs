@@ -219,7 +219,8 @@ impl Format {
                 "dsl" => structurizr_signature(source).then_some(Self::Structurizr),
                 "tex" => tikz_signature(source).then_some(Self::Tikz),
                 "diag" => blockdiag_format(source),
-                "edn" => bytefield_signature(source).then_some(Self::Bytefield),
+                "edn" | "bf" => bytefield_signature(source).then_some(Self::Bytefield),
+                "bob" => svgbob_signature(source).then_some(Self::Svgbob),
                 "mmd" => mermaid_signature(source).then_some(Self::Mermaid),
                 "dot" => dot_signature(source).then_some(Self::Graphviz),
                 "xml" => {
@@ -956,6 +957,34 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ambiguous_ascii_and_packet_suffixes_keep_unrelated_sources_as_text() {
+        let ascii = "+--------+\n| Source |\n+--------+\n";
+        assert_eq!(Format::from_path(Path::new("diagram.bob")), None);
+        assert_eq!(
+            Format::from_source_path(Path::new("diagram.bob"), ascii),
+            Some(Format::Svgbob)
+        );
+        assert_eq!(
+            Format::from_source_path(Path::new("scene.bob"), "sphere { radius 1 }"),
+            None
+        );
+        assert_eq!(Format::from_path(Path::new("program.bf")), None);
+        assert_eq!(
+            Format::from_source_path(Path::new("program.bf"), "+++++[>+++++<-]>."),
+            None
+        );
+        assert_eq!(
+            Format::from_source_path(Path::new("packet.bf"), "(draw-column-headers) (draw-box 0)"),
+            Some(Format::Bytefield)
+        );
+        assert_eq!(Format::from_path(Path::new("symbols.sym")), None);
+        assert_eq!(
+            Format::from_source_path(Path::new("symbols.sym"), "0001:00000000 PublicSymbol"),
+            None
+        );
+    }
+
     #[test]
     fn extended_diagram_sources_share_fences_paths_and_conservative_hints() {
         for (language, name) in [
