@@ -22,6 +22,7 @@ mod gcode;
 mod geography;
 mod image_strip;
 mod mail;
+mod markdown_hover;
 mod material_strip;
 mod media;
 mod midi_input;

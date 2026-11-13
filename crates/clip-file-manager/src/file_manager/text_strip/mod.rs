@@ -79,6 +79,7 @@ pub(in crate::file_manager) struct Document {
     pub note: String,
     pub metadata: Option<metadata::Summary>,
     pub diagram: Option<super::diagram_strip::Document>,
+    pub markdown: Option<crate::file_source::FileSource>,
     columns: usize,
     bins: Vec<Bin>,
 }
@@ -94,6 +95,9 @@ struct ExcerptLine {
 }
 
 impl Document {
+    pub(super) fn hover_line(&self, fraction: f32, width: usize) -> usize {
+        self.bins[self.display_range(fraction, width).start].start as usize + 1
+    }
     fn display_range(&self, fraction: f32, width: usize) -> std::ops::Range<usize> {
         let columns = width.max(1).min(self.bins.len());
         let x = ((fraction.clamp(0.0, 1.0) * columns as f32) as usize).min(columns - 1);

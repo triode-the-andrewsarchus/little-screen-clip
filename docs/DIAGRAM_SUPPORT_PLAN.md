@@ -1230,7 +1230,7 @@ that goal is marked complete. The user reaffirmed this scope on 2026-11-13:
   minimap. Prioritize supplied Hugo fields (`title`, `date`, `draft`, `tags`,
   categories and related dates/weight) without increasing row height. Do not
   infer publication state or project timezone from those fields.
-- [ ] Replace Markdown's syntax-only hover excerpt with a rendered view at the
+- [x] Replace Markdown's syntax-only hover excerpt with a rendered view at the
   hovered source position, including equations and diagrams. Preserve useful
   source-position mapping and bounded work for large documents. Verify hovering
   different positions in a long Markdown file reaches the corresponding rendered
@@ -1596,9 +1596,10 @@ still required before the active goal can be completed.
   equations cover all consumed physical lines. An equation's trailing paragraph
   may share that range. BOM and CRLF positions remain relative to the original
   source, including explicit incomplete-equation ranges.
-- [ ] Use those ranges to prepare bounded hover excerpts around the selected
+- [x] Use those ranges to prepare bounded hover excerpts around the selected
   source position, preserving complete diagram/math blocks and retiring hidden
-  preview jobs. The parser foundation alone does not complete rendered hover.
+  preview jobs. The completed hover integration below supplies the presentation;
+  the parser foundation alone was not a completion claim.
 
 Validation: the 15 render Markdown tests and nine shared studio Markdown tests
 pass. New cases verify exact Unicode/front-matter/fence/CRLF/multiline-math
@@ -1610,3 +1611,46 @@ The framing state owns an unfinished display equation's source start alongside
 its accumulated text. This removes a parallel per-line start/reset condition
 from the body parser; adding correspondence does not add another grammar branch.
 The architecture check's reordered Python-cycle members are unchanged cycles.
+
+### Rendered Markdown hover at the selected source position
+
+The text strip now requests a guarded, worker-prepared Markdown excerpt for the
+hovered line. It uses the original native element ranges and the shared studio
+Markdown presentation, including equation/diagram preview ownership. Fenced
+blocks stay complete; incomplete fences/equations, unavailable sources and
+budget failures retain the highlighted source excerpt with an explicit error.
+Loading shows a compact pending state rather than flashing syntax-highlighted
+content as if it were the completed rendered view.
+
+The selector keeps a nearby heading but excludes preceding large blocks or
+metadata tables that would hide the selected content. Diagram fences keep their
+complete source and their native renderer limits. Ordinary excerpts bound bytes
+and span count. The input limit is 2 MiB, matching the existing full text viewer;
+larger files disclose that limit and retain their selected source excerpt,
+rather than silently showing a prefix as though it were the requested position.
+Indentation uses one shared bounded rule for ordinary and mathematical lists.
+
+The existing one-hover cache admits the preparation job and retires replaced,
+hidden, navigation and context-invalidated requests. The host owns only the
+active excerpt's native view and drops its math/diagram jobs with it. Reads use
+the captured ordinary FileSource identity, guarded open and checks before result
+publication; no source parsing or file reading was added to the UI callback.
+
+Validation: 13 shared studio Markdown tests, 15 render Markdown tests, three
+file-manager Markdown tests and three matching workbench tests pass. Coverage
+includes source-position selection, complete diagrams/equations, front-matter
+body visibility, incomplete/oversized/cancelled input and replaced source
+identity. Strict all-target Clippy for both desktop hosts and studios passes.
+Private light/dark scenarios verify the actual rendered first/last sections,
+complete diagram popouts, incomplete-fence fallback and unchanged file bytes.
+The acceptance helper can reject loading/failure states; loading no longer
+contains the source text that initially allowed a false positive. Screenshots
+were inspected to confirm styled output rather than trusting matching words.
+
+Architecture review reports no new maximum-complexity or cycle increase and a
+small duplication decrease. Text-row loading adds one explicit eligibility
+condition (CCN 14 to 16) to keep ambiguous diagram files out of Markdown
+presentation; this is necessary classification, not duplicated parsing. The
+remainder reuses the existing hover cache, parser, native renderer and preview
+lifecycles. Existing declaration clones and reordered Python-cycle members are
+unchanged.

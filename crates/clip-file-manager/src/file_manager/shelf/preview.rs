@@ -41,6 +41,10 @@ pub(in crate::file_manager) enum Source {
     },
     Music(PathBuf, bool),
     Text(PathBuf),
+    Markdown {
+        source: crate::file_source::FileSource,
+        line: usize,
+    },
     System(PathBuf),
     Binary(PathBuf),
     Font(PathBuf),
@@ -123,6 +127,7 @@ impl Source {
             | Self::StudioPhoto { .. }
             | Self::Blend(_) => (gallery_preview_jobs(), 4, 15),
             Self::Text(_)
+            | Self::Markdown { .. }
             | Self::Font(_)
             | Self::Subtitle(_)
             | Self::Notebook(_)
@@ -258,6 +263,9 @@ impl Source {
                 data
             }
             Source::Text(path) => document_preview(&path, token),
+            Source::Markdown { source, line } => {
+                super::super::markdown_hover::load(source, line, token)
+            }
             Source::TextRaster {
                 document,
                 width,
@@ -297,11 +305,13 @@ impl HoverRaster {
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
     }
-    pub fn retain(&mut self, keep: impl Fn(uuid::Uuid) -> bool) {
-        if !self.seen || self.key.is_some_and(|(source, _, _, _)| !keep(source)) {
+    pub fn retain(&mut self, keep: impl Fn(uuid::Uuid) -> bool) -> bool {
+        let retired = !self.seen || self.key.is_some_and(|(source, _, _, _)| !keep(source));
+        if retired {
             self.clear();
         }
         self.seen = false;
+        retired
     }
     pub fn request(
         &mut self,

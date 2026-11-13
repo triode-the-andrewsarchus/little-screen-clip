@@ -32,7 +32,7 @@ pub(in crate::file_manager) fn load(
     }
     let neutral =
         bytes > 16 * 1024 * 1024 || shape.lines > 250_000 || shape.longest > stream::LINE_LIMIT;
-    let (mut document, syntax) = prepare(path, &shape, neutral);
+    let (mut document, syntax, markdown) = prepare(path, &shape, neutral);
     document.diagram = super::super::diagram_strip::Document::read(
         path,
         &mut file,
@@ -42,6 +42,7 @@ pub(in crate::file_manager) fn load(
         shape.lossy,
         &mut document.note,
     )?;
+    document.markdown = (markdown && document.diagram.is_none()).then(|| source.clone());
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     summarize(&mut document, file, syntax, neutral, cancelled)?;
     source.check()?;
@@ -52,7 +53,7 @@ fn prepare(
     path: &Path,
     shape: &stream::Shape,
     neutral: bool,
-) -> (Document, &'static syntect::parsing::SyntaxReference) {
+) -> (Document, &'static syntect::parsing::SyntaxReference, bool) {
     let filename = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -81,6 +82,8 @@ fn prepare(
         })
         .unwrap_or_else(|| crate::text_preview::find_syntax(detected));
     let bins = shape.lines.clamp(1, BINS as u64) as usize;
+    let markdown = little_clip_core::syntax::map_extension_to_language(&extension) == Some("md")
+        && little_clip_core::diagram::Format::from_source_extension(&extension, prefix).is_none();
     let document = Document {
         lines: shape.lines,
         language: if syntax.name == "Configuration" {
@@ -108,11 +111,10 @@ fn prepare(
             _ => String::new(),
         },
         diagram: None,
-        metadata: (little_clip_core::syntax::map_extension_to_language(&extension) == Some("md")
-            && little_clip_core::diagram::Format::from_source_extension(&extension, prefix)
-                .is_none())
-        .then(|| super::metadata::Summary::parse(&shape.prefix))
-        .flatten(),
+        markdown: None,
+        metadata: markdown
+            .then(|| super::metadata::Summary::parse(&shape.prefix))
+            .flatten(),
         columns: COLUMNS,
         bins: (0..bins)
             .map(|_| Bin {
@@ -123,7 +125,7 @@ fn prepare(
             })
             .collect(),
     };
-    (document, syntax)
+    (document, syntax, markdown)
 }
 
 fn summarize(

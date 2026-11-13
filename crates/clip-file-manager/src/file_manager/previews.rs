@@ -33,6 +33,7 @@ pub(super) struct EntryPreviews {
     rasters: Previews,
     raster_sizes: BTreeMap<uuid::Uuid, (RasterCacheKey, uuid::Uuid)>,
     image_hover: super::image_strip::Hover,
+    markdown_hover: super::markdown_hover::Hover,
     scenes: super::scene_strip::Previews,
     materials: super::material_strip::Previews,
     pdf_pages: super::pdf_strip::Pages,
@@ -108,6 +109,7 @@ impl EntryPreviews {
         self.rasters.poll(ctx);
         self.pdf_pages.poll(ctx);
         self.image_hover.poll(ctx);
+        self.markdown_hover.poll(ctx);
         self.scenes.poll(ctx);
         self.materials.poll(ctx);
         let now = std::time::Instant::now();
@@ -197,6 +199,7 @@ impl EntryPreviews {
             .retain(&self.identities.values().map(|(_, id)| *id).collect());
         let ids: BTreeSet<_> = self.identities.values().map(|(_, id)| *id).collect();
         self.materials.retain(&ids);
+        self.markdown_hover.retain(&ids);
         self.system_refresh.retain(|id, _| ids.contains(id));
         self.raster_sizes.retain(|id, _| ids.contains(id));
         self.rasters
@@ -244,6 +247,7 @@ impl EntryPreviews {
         self.cache.clear();
         self.pdf_pages.clear();
         self.image_hover.clear();
+        self.markdown_hover.clear();
         self.scenes.clear();
         self.materials.clear();
         self.identities.clear();
@@ -668,19 +672,35 @@ impl EntryPreviews {
         rect
     }
     fn text_hover(
-        &self,
+        &mut self,
         ui: &mut egui::Ui,
         id: uuid::Uuid,
         fraction: f32,
         width: usize,
         palette: &little_clip_core::palette::AppPalette,
     ) {
-        if let Some(ready) = self.cache.get(id)
-            && !super::diagram_strip::hover(ui, ready)
-            && let Some(document) = &ready.data.document
-        {
-            document.excerpt_ui(ui, fraction, width, palette);
+        let Some(ready) = self.cache.get(id) else {
+            return;
+        };
+        if super::diagram_strip::hover(ui, ready) {
+            return;
         }
+        let Some(document) = ready.data.document.clone() else {
+            return;
+        };
+        if let Some(source) = &document.markdown
+            && self.markdown_hover.show(
+                ui,
+                id,
+                source,
+                document.hover_line(fraction, width),
+                &self.context,
+                palette,
+            )
+        {
+            return;
+        }
+        document.excerpt_ui(ui, fraction, width, palette);
     }
     pub fn show(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
         self.show_inner(ui, rect, entry, false);

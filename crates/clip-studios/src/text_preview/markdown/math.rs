@@ -63,7 +63,7 @@ pub(super) fn show_line(
             });
         }
         MarkdownLine::Bullet { indent, .. } if *indent > 0 => {
-            let padding = (*indent as f32 * 16.0).min((ui.available_width() - 32.0).max(0.0));
+            let padding = super::list_indent(ui, *indent);
             ui.horizontal_top(|ui| {
                 ui.add_space(padding);
                 ui.vertical(|ui| show_spans(ui, spans, size, color, &prefix, block, previews));

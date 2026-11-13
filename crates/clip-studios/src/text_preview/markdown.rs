@@ -1,3 +1,5 @@
+mod excerpt;
+pub use excerpt::{MarkdownExcerptData, MarkdownExcerptView};
 mod math;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum PreviewKey {
@@ -111,6 +113,10 @@ fn render_blocks(
     }
 }
 
+fn list_indent(ui: &egui::Ui, depth: usize) -> f32 {
+    (depth as f32 * 16.0).min((ui.available_width() - 32.0).max(0.0))
+}
+
 fn quote_frame(palette: &AppPalette) -> egui::Frame {
     egui::Frame::none()
         .fill(hex_to_c32(&palette.colors.surface_recessed))
@@ -163,7 +169,7 @@ fn render_markdown_element(ui: &mut egui::Ui, line: &MarkdownLine, palette: &App
         }
         MarkdownLine::Bullet { indent, spans } => {
             ui.horizontal_wrapped(|ui| {
-                ui.add_space(*indent as f32 * 16.0);
+                ui.add_space(list_indent(ui, *indent));
                 ui.label(egui::RichText::new("•").size(BODY_FONT_SIZE).color(
                     crate::ui_ext::contrast_text_c32_on(
                         ui.visuals().panel_fill,

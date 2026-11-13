@@ -4,7 +4,9 @@
 //! toggleable line-wrapping, line numbers gutter, regex find toolbar, and external editor escape hatches.
 
 mod markdown;
-pub use markdown::render_lines as render_markdown_lines;
+pub use markdown::{
+    MarkdownExcerptData, MarkdownExcerptView, render_lines as render_markdown_lines,
+};
 mod minimap;
 mod raw_code;
 mod search;
