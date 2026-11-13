@@ -11,6 +11,16 @@ pub(crate) struct Camera {
 }
 
 impl Camera {
+    /// Keeps a pending Fit request until its current-source layout arrives.
+    /// Stale frames retain the existing camera mapping during replacement.
+    pub fn fit_if_ready(&mut self, layout: DrawingLayout, rect: Rect, fresh: bool) {
+        if !self.fitted && (fresh || self.scale < MIN_SCALE) {
+            self.fit(layout, rect);
+            // A first stale image still needs a finite display mapping. Its
+            // temporary fit must not consume the pending current-source fit.
+            self.fitted = fresh;
+        }
+    }
     pub fn zoom_percent(&self) -> f64 {
         self.scale * 100.0
     }
@@ -84,6 +94,55 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn first_stale_image_has_a_finite_mapping_without_consuming_fit() {
+        let rect = Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(800.0, 400.0));
+        let layout = DrawingLayout {
+            origin: [1000.0, 500.0],
+            size: [100.0, 80.0],
+        };
+        let mut camera = Camera::default();
+        camera.fit_if_ready(layout, rect, false);
+        assert!(!camera.fitted);
+        assert!(rect.contains_rect(camera.image_rect(layout, rect)));
+        assert!(
+            camera
+                .world(rect.center(), rect)
+                .iter()
+                .all(|value| value.is_finite())
+        );
+        camera.fit_if_ready(layout, rect, true);
+        assert!(camera.fitted);
+    }
+
+    #[test]
+    fn pending_fit_retains_stale_mapping_and_consumes_only_one_fresh_layout() {
+        let rect = Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(800.0, 400.0));
+        let old = DrawingLayout {
+            origin: [1000.0, 500.0],
+            size: [100.0, 80.0],
+        };
+        let next = DrawingLayout {
+            origin: [0.0; 2],
+            size: [700.0, 200.0],
+        };
+        let mut camera = Camera::default();
+        camera.fit(old, rect);
+        let mapping = camera.image_rect(old, rect);
+        camera.fitted = false;
+        for stale in [old, next] {
+            camera.fit_if_ready(stale, rect, false);
+            assert!(!camera.fitted);
+            assert_eq!(camera.image_rect(old, rect), mapping);
+        }
+        camera.fit_if_ready(next, rect, true);
+        assert!(camera.fitted);
+        assert!(rect.contains_rect(camera.image_rect(next, rect)));
+        let mapping = camera.image_rect(next, rect);
+        camera.fit_if_ready(old, rect, true);
+        assert_eq!(camera.image_rect(next, rect), mapping);
+    }
+
     #[test]
     fn fit_keeps_a_large_native_diagram_inside_the_viewport() {
         let rect = Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(800.0, 400.0));

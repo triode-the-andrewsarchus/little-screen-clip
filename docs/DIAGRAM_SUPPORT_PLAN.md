@@ -2972,3 +2972,16 @@ connect/disconnect transactions remain separate tracked work.
 Seventy-one shared core diagram tests and four file-manager diagram tests pass,
 including actual guarded row classification for `.bob`, `.bf`, `.diag` and `.tex`.
 Source-aware classification does not add a graphical ASCII cell editor.
+
+### Native editor review fixes
+
+- [x] Keep rejected drawing text drafts after validation, measurement or timeout
+  failure without overwriting newer input, selections or source revisions.
+- [x] Preserve Fit requests during stale frames consistently in Drawing, WireViz
+  and Mermaid. The existing shared Camera now owns the transition; its first
+  stale image gets a finite temporary mapping without consuming the request.
+  Middle-button fit follows the same policy.
+
+Forty-eight editor and seven preview/camera tests pass. The common policy also
+removes duplicated client branches; no new camera state/cache/lifecycle owner
+was introduced. Final native scenarios will run against the next linked hosts.

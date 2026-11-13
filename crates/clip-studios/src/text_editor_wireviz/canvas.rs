@@ -27,12 +27,11 @@ impl WireEditor {
             );
             return;
         };
-        if !self.camera.fitted {
-            self.camera.fit(frame.layout, rect);
-        }
+        self.camera.fit_if_ready(frame.layout, rect, frame.fresh);
         self.camera.input(ui, response, rect);
         if response.double_clicked_by(egui::PointerButton::Middle) {
-            self.camera.fit(frame.layout, rect);
+            self.camera.fitted = false;
+            self.camera.fit_if_ready(frame.layout, rect, frame.fresh);
         }
         let image = self.camera.image_rect(frame.layout, rect);
         self.canvas_notice = frame.paint(ui, rect, image, Changes::default(), Color32::WHITE);

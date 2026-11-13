@@ -383,9 +383,7 @@ impl MermaidEditor {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 4.0, Color32::WHITE);
         let Some(frame) = frame else { return };
-        if !self.camera.fitted && frame.fresh {
-            self.camera.fit(frame.layout, rect);
-        }
+        self.camera.fit_if_ready(frame.layout, rect, frame.fresh);
         self.camera.input(ui, response, rect);
         let image = self.camera.image_rect(frame.layout, rect);
         self.paint_notice = frame.paint(ui, rect, image, Default::default(), Color32::WHITE);

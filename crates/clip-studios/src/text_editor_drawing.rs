@@ -252,9 +252,7 @@ impl DrawingEditor {
         painter.rect_filled(rect, 4.0, Color32::WHITE);
         self.resize_available = frame.as_ref().is_some_and(|frame| frame.vector.is_some());
         if let Some(frame) = frame {
-            if !self.camera.fitted {
-                self.camera.fit(frame.layout, rect);
-            }
+            self.camera.fit_if_ready(frame.layout, rect, frame.fresh);
             self.camera.input(ui, &response, rect);
             let image = self.camera.image_rect(frame.layout, rect);
             let tint = if frame.fresh {
@@ -276,7 +274,8 @@ impl DrawingEditor {
             }
             self.paint_feedback(&painter, rect, palette);
             if response.double_clicked_by(egui::PointerButton::Middle) {
-                self.camera.fit(frame.layout, rect);
+                self.camera.fitted = false;
+                self.camera.fit_if_ready(frame.layout, rect, frame.fresh);
             }
         }
         self.keyboard(ui, &response);
