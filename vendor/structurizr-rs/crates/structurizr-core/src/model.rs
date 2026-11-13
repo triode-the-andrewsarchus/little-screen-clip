@@ -688,12 +688,19 @@ impl Model {
 
     /// Find an element by its ID across all element types.
     pub fn find_element(&self, id: ElementId) -> Option<ElementRef<'_>> {
-        if let Some(element) = self.architecture_elements().find(|element| element.id() == id) {
+        if let Some(element) = self
+            .architecture_elements()
+            .chain(self.custom_elements.iter().map(ElementRef::CustomElement))
+            .find(|element| element.id() == id)
+        {
             return Some(element);
         }
 
         // Check deployment nodes
-        fn find_in_deployment_nodes(nodes: &[DeploymentNode], id: ElementId) -> Option<ElementRef<'_>> {
+        fn find_in_deployment_nodes(
+            nodes: &[DeploymentNode],
+            id: ElementId,
+        ) -> Option<ElementRef<'_>> {
             for node in nodes {
                 if node.id() == id {
                     return Some(ElementRef::DeploymentNode(node));
@@ -707,6 +714,8 @@ impl Model {
 
         find_in_deployment_nodes(&self.deployment_nodes, id)
     }
+
+
 }
 
 /// A reference to any model element.
@@ -717,6 +726,7 @@ pub enum ElementRef<'a> {
     Container(&'a Container),
     Component(&'a Component),
     DeploymentNode(&'a DeploymentNode),
+    CustomElement(&'a CustomElement),
 }
 
 impl<'a> ElementRef<'a> {
@@ -728,6 +738,7 @@ impl<'a> ElementRef<'a> {
             ElementRef::Container(element) => &element.properties,
             ElementRef::Component(element) => &element.properties,
             ElementRef::DeploymentNode(element) => &element.properties,
+            ElementRef::CustomElement(element) => &element.properties,
         }
     }
 

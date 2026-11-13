@@ -40,3 +40,8 @@ commits, separate from this pristine import.
   technology selection and replies; preserve explicit/parallel ordering and
   shared annotations. Render model styles and self-call loops, reject corrupt
   bindings, and report overflowing numeric tokens. Add end-to-end regressions.
+
+- Preserve custom views and canonical `element` declarations, optional metadata,
+  tags/properties, ordered selection and annotations. Add custom core lookup and
+  share the static renderer, removing the separate layout and unused traversal.
+  Reject C4/custom mixtures and cover actual SVG membership/edge selection.

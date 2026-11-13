@@ -549,7 +549,7 @@ impl Parser {
                     let enterprise = self.parse_enterprise()?;
                     model.enterprise = Some(enterprise);
                 }
-                Some(TokenKind::CustomElement) => {
+                Some(TokenKind::CustomElement | TokenKind::Element) => {
                     self.advance();
                     let element = self.parse_element(ElementKind::CustomElement, None)?;
                     model.elements.push(element);
@@ -587,7 +587,7 @@ impl Parser {
                                 let element = self.parse_element(ElementKind::DeploymentNode, Some(id))?;
                                 model.elements.push(element);
                             }
-                            Some(TokenKind::CustomElement) => {
+                            Some(TokenKind::CustomElement | TokenKind::Element) => {
                                 self.advance();
                                 let element = self.parse_element(ElementKind::CustomElement, Some(id))?;
                                 model.elements.push(element);
@@ -638,12 +638,12 @@ impl Parser {
             self.expect_string()?
         };
 
-        // For customElement: name, metadata (as technology), description
+        // For custom elements: name, optional metadata, description and tags
         // For others: name, description, technology (optional)
         let (description, technology) = if kind == ElementKind::CustomElement {
-            let metadata = self.expect_string()?; // metadata is required for customElement
+            let metadata = self.maybe_string();
             let desc = self.maybe_string(); // description is optional
-            (desc, Some(metadata))
+            (desc, metadata)
         } else {
             let desc = self.maybe_string();
             // Technology is the 3rd string for Container/Component/DeploymentNode
@@ -657,9 +657,13 @@ impl Parser {
 
         // For DeploymentNode: parse inline tags (4th) and instances (5th)
         // Syntax: deploymentNode <name> [description] [technology] [tags] [instances] { ... }
-        let (inline_tags, instances) = if kind == ElementKind::DeploymentNode {
+        let (inline_tags, instances) = if matches!(kind, ElementKind::DeploymentNode | ElementKind::CustomElement) {
             let tags_str = self.maybe_string();
-            let instances_str = self.maybe_string_or_number();
+            let instances_str = if kind == ElementKind::DeploymentNode {
+                self.maybe_string_or_number()
+            } else {
+                None
+            };
             (tags_str, instances_str)
         } else {
             (None, None)
@@ -2494,6 +2498,9 @@ fn apply_constants_to_views(mut views: ViewsNode, constants: &HashMap<String, St
     for view in &mut views.dynamic {
         apply_constants_to_view_properties(&mut view.properties, constants);
     }
+    for view in &mut views.custom {
+        apply_constants_to_view_properties(&mut view.properties, constants);
+    }
     for view in &mut views.deployment {
         apply_constants_to_view_properties(&mut view.properties, constants);
     }
@@ -2558,6 +2565,7 @@ enum ViewType {
     SystemContext,
     Container,
     Component,
+    Custom,
 }
 
 /// Whether an explicitly named element is valid at this view's abstraction level.
@@ -2568,6 +2576,7 @@ fn static_view_allows(
     element: ElementRef<'_>,
 ) -> bool {
     match kind {
+        ViewType::Custom => matches!(element, ElementRef::CustomElement(_)),
         ViewType::SystemLandscape | ViewType::SystemContext => matches!(
             element,
             ElementRef::Person(_) | ElementRef::SoftwareSystem(_)
@@ -2596,6 +2605,7 @@ fn default_static_elements(
 ) -> Result<HashSet<ElementId>> {
     let focused = scope.and_then(|id| model.find_element(id));
     let seeds: HashSet<_> = match (kind, focused) {
+        (ViewType::Custom, _) => model.custom_elements.iter().map(|element| element.id()).collect(),
         (ViewType::SystemLandscape, _) => model
             .architecture_elements()
             .filter(|element| {
@@ -2737,6 +2747,7 @@ fn resolve_static_selection(
     }
     let elements = model
         .architecture_elements()
+        .chain(model.custom_elements.iter().map(ElementRef::CustomElement))
         .filter(|element| selected.contains(&element.id()))
         .map(|element| ElementView::new(element.id()))
         .collect();
@@ -3139,6 +3150,18 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
             }
         }
 
+        for view in views_node.custom {
+            let properties = build_static_properties(
+                workspace.model(),
+                ViewType::Custom,
+                None,
+                view.properties,
+                &identifiers,
+                "Custom".into(),
+            )?;
+            workspace.views_mut().custom_views.push(CustomView { properties });
+        }
+
         // Process image views
         for view in views_node.image {
             // Resolve element identifier to element ID
@@ -3210,11 +3233,13 @@ fn build_element(
         }
         ElementKind::CustomElement => {
             // For customElement, the technology field holds the metadata type
-            let metadata = element.technology.clone().unwrap_or_else(|| "Custom".to_string());
+            let metadata = element.technology.clone().unwrap_or_default();
             let mut custom = CustomElement::new(&element.name, metadata);
             if let Some(ref desc) = element.description {
                 custom = custom.with_description(desc);
             }
+            custom.properties.tags.extend(element.tags.iter().cloned());
+            custom.properties.properties = element.properties.clone();
             let id = custom.id();
             workspace.model_mut().custom_elements.push(custom);
             id

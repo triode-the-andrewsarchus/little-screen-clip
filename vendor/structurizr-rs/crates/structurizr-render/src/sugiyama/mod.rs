@@ -42,6 +42,8 @@ pub enum ViewType {
     Deployment,
     /// Filtered view - derived from another view
     Filtered,
+    /// Custom view - shows non-C4 model elements.
+    Custom,
 }
 
 pub use graph::{LayeredEdge, LayeredGraph, LayeredNode};
@@ -187,7 +189,7 @@ impl SugiyamaConfig {
             // Deployment views: top-to-bottom for showing infrastructure layers
             ViewType::Deployment => AutoLayoutDirection::TopBottom,
             // Filtered views: default to top-to-bottom
-            ViewType::Filtered => AutoLayoutDirection::TopBottom,
+            ViewType::Filtered | ViewType::Custom => AutoLayoutDirection::TopBottom,
         };
 
         // Adjust spacing based on layout direction for better aesthetics

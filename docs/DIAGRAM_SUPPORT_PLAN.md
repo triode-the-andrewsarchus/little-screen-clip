@@ -2495,7 +2495,11 @@ Further qualification found correctness work that must precede host integration:
   selector expressions instead of silently omitting them.
 - [x] Qualify dynamic interactions, model relationship binding, replies and
   parallel/explicit ordering; preserve annotations and diagnose invalid scopes.
-- [ ] Qualify deployment/custom view behavior and additional DSL forms.
+- [x] Preserve custom views and canonical custom elements through model lookup,
+  ordered selection and the shared static renderer.
+- [ ] Correct native static relationship routing: left-to-right orthogonal edges
+  currently use top/bottom attachment points, which can hide arrowheads under nodes.
+- [ ] Qualify deployment view behavior and additional DSL forms.
 
 The format checkbox remains open while these and host integration are pending.
 
@@ -2607,3 +2611,36 @@ was introduced.
 This backend fix is separate from static selection corrections. Deployment and
 custom views, remaining DSL compatibility, host routing and native UI acceptance
 are still pending; the full format checkbox remains open.
+
+
+### Structurizr custom view preservation
+
+The canonical `element` model declaration now works alongside the imported
+`customElement` alias. Optional metadata, descriptions, inline/body tags and
+properties reach the common model; custom identities participate in core lookup.
+Custom views are no longer discarded during workspace construction. They reuse
+the existing ordered selection and static layout/drawing pipeline, including
+empty/disconnected selections, resolved relationship selection, annotations,
+styles and auto layout. Only custom elements are permitted; C4/custom abstraction
+mixes report errors. The obsolete second element-details traversal and separate
+custom layout implementation were removed.
+
+Four end-to-end parser/SVG regressions check canonical and alias syntax, optional
+metadata, actual painted IDs/relationship paths, style/description propagation,
+exclusion/re-inclusion, empty views, invalid members and corrupt runtime views.
+The existing upstream test was corrected to use actual custom elements rather
+than people/software systems. All 161 unit/integration tests and one core rustdoc
+test pass. Strict all-target Clippy for the shared application renderer passes.
+Native SVG inspection confirms disconnected membership, descriptions and tags;
+it also exposed an existing shared orthogonal-routing defect, tracked above for
+a separate correction. This is backend preparation, not a host support claim.
+
+Architecture comparison against `before-structurizr-custom` removes two clone
+groups and lowers duplication by 0.01 percentage points. Maximum complexity and
+cycle count are unchanged. The existing workspace builder gains the required
+custom-view loop/fallible selection (+2 CCN); the dedicated custom layout and
+duplicate model traversal are removed rather than adding another framework.
+Raw clone warnings concern touched files: all six core, 28 parser and 13 renderer
+baseline fragments remain byte-identical. The new tests account for the small
+net measured line increase. Remaining grammar, deployment, routing and host UI
+acceptance stay open.

@@ -1059,87 +1059,9 @@ impl SvgRenderer {
         }
     }
 
-    /// Render a custom view to SVG.
-    /// Custom views show user-defined elements without type constraints.
-    pub fn render_custom(
-        &self,
-        workspace: &Workspace,
-        view: &CustomView,
-    ) -> Result<String> {
-        let model = workspace.model();
-        let styles = workspace.styles();
-
-        let mut element_ids: Vec<String> = Vec::new();
-        let mut elements_info: Vec<ElementInfo> = Vec::new();
-
-        // Custom views explicitly list the elements to include
-        for element_view in &view.properties.elements {
-            let element_id = element_view.id;
-
-            // Find the element in the model
-            if let Some((name, element_type, tags, technology)) = self.find_element_details(model, element_id) {
-                element_ids.push(element_id.to_string());
-                elements_info.push(ElementInfo {
-                    id: element_id,
-                    name,
-                    description: None, // Custom views typically don't show descriptions
-                    element_type,
-                    technology,
-                    tags,
-                });
-            }
-        }
-
-        // Filter relationships to only include those between visible elements
-        let visible_ids: std::collections::HashSet<_> = element_ids.iter().collect();
-        let filtered_relationships: Vec<_> = model
-            .relationships
-            .iter()
-            .filter(|r| {
-                visible_ids.contains(&r.source_id.to_string()) &&
-                visible_ids.contains(&r.destination_id.to_string())
-            })
-            .cloned()
-            .collect();
-
-        let edges: Vec<LayoutEdge> = filtered_relationships
-            .iter()
-            .map(|r| LayoutEdge {
-                source: r.source_id.to_string(),
-                target: r.destination_id.to_string(),
-            })
-            .collect();
-
-        // Compute layout - custom views default to TopBottom unless DSL specifies otherwise
-        let layout = GridLayout::for_view_type(
-            ViewType::Filtered, // Custom views use filtered default (TopBottom)
-            view.properties.auto_layout.as_ref(),
-        );
-
-        // Prepare node sizes for Sugiyama
-        let node_sizes: Vec<(String, Size)> = element_ids.iter()
-            .map(|id| (id.clone(), Size::default()))
-            .collect();
-
-        // Use Sugiyama with proper normalization
-        let sugiyama_result = layout.layout_sugiyama(&element_ids, &node_sizes, &edges);
-
-        // Convert sugiyama::LayoutNode to layout::LayoutNode
-        let mut nodes: Vec<LayoutNode> = sugiyama_result.nodes
-            .into_iter()
-            .map(|n| LayoutNode {
-                id: n.id,
-                position: crate::layout::Position { x: n.position.x, y: n.position.y },
-                size: Size { width: n.size.width, height: n.size.height },
-                rank: n.rank,
-            })
-            .collect();
-
-        // Apply any explicit positions from the view (from saved .positions.json)
-        let explicit_positions = extract_explicit_positions(&view.properties);
-        apply_explicit_positions(&mut nodes, &explicit_positions);
-
-        self.render_svg(&nodes, &elements_info, &filtered_relationships, &model.groups, styles)
+    /// Render a custom view using the shared resolved-selection layout pipeline.
+    pub fn render_custom(&self, workspace: &Workspace, view: &CustomView) -> Result<String> {
+        self.render_static(workspace, &view.properties, ViewType::Custom, None)
     }
 
     /// Render an image view to SVG.
@@ -1209,89 +1131,6 @@ impl SvgRenderer {
         svg.push_str("</svg>\n");
 
         Ok(svg)
-    }
-
-    /// Find detailed element information including technology.
-    fn find_element_details(&self, model: &structurizr_core::model::Model, id: ElementId) -> Option<(String, ElementType, Vec<String>, Option<String>)> {
-        // Check people
-        for person in &model.people {
-            if person.id() == id {
-                return Some((
-                    person.name().to_string(),
-                    ElementType::Person,
-                    person.properties.tags.clone(),
-                    None,
-                ));
-            }
-        }
-
-        // Check software systems and their children
-        for system in &model.software_systems {
-            if system.id() == id {
-                return Some((
-                    system.name().to_string(),
-                    ElementType::SoftwareSystem,
-                    system.properties.tags.clone(),
-                    None,
-                ));
-            }
-
-            for container in &system.containers {
-                if container.id() == id {
-                    return Some((
-                        container.name().to_string(),
-                        ElementType::Container,
-                        container.properties.tags.clone(),
-                        container.technology.clone(),
-                    ));
-                }
-
-                for component in &container.components {
-                    if component.id() == id {
-                        return Some((
-                            component.name().to_string(),
-                            ElementType::Component,
-                            component.properties.tags.clone(),
-                            component.technology.clone(),
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Check deployment nodes
-        fn search_deployment_nodes(nodes: &[DeploymentNode], id: ElementId) -> Option<(String, ElementType, Vec<String>, Option<String>)> {
-            for node in nodes {
-                if node.id() == id {
-                    return Some((
-                        node.name().to_string(),
-                        ElementType::DeploymentNode,
-                        node.properties.tags.clone(),
-                        node.technology.clone(),
-                    ));
-                }
-
-                // Check infrastructure nodes
-                for infra in &node.infrastructure_nodes {
-                    if infra.id() == id {
-                        return Some((
-                            infra.properties.name.clone(),
-                            ElementType::InfrastructureNode,
-                            infra.properties.tags.clone(),
-                            infra.technology.clone(),
-                        ));
-                    }
-                }
-
-                // Recurse into children
-                if let Some(result) = search_deployment_nodes(&node.children, id) {
-                    return Some(result);
-                }
-            }
-            None
-        }
-
-        search_deployment_nodes(&model.deployment_nodes, id)
     }
 
     /// Find element information by ID.
@@ -1865,6 +1704,7 @@ impl SvgRenderer {
                     ElementType::ExternalSystem => "External System",
                     ElementType::DeploymentNode => "Deployment Node",
                     ElementType::InfrastructureNode => "Infrastructure Node",
+                    ElementType::Custom => "Element",
                 };
 
                 unique_elements.push(LegendElementEntry {
@@ -2217,6 +2057,7 @@ impl SvgRenderer {
                 ElementType::ExternalSystem => "[External System]",
                 ElementType::DeploymentNode => "[Deployment Node]",
                 ElementType::InfrastructureNode => "[Infrastructure Node]",
+                ElementType::Custom => "[Element]",
             };
             svg.push_str(&format!(
                 r#"    <text x="{:.0}" y="{:.0}" text-anchor="middle" font-family="Arial, sans-serif" font-size="{}" fill="{}">{}</text>"#,
@@ -2273,6 +2114,7 @@ enum ElementType {
     ExternalSystem,
     DeploymentNode,
     InfrastructureNode,
+    Custom,
 }
 
 impl ElementType {
@@ -2286,6 +2128,7 @@ impl ElementType {
             ElementType::ExternalSystem => ElementKind::External,
             ElementType::DeploymentNode => ElementKind::DeploymentNode,
             ElementType::InfrastructureNode => ElementKind::InfrastructureNode,
+            ElementType::Custom => ElementKind::External,
         }
     }
 }
@@ -2312,7 +2155,16 @@ impl ElementInfo {
         let element = model
             .find_element(id)
             .ok_or_else(|| crate::error::Error::ElementNotFound(id.to_string()))?;
+        if kind == ViewType::Custom && !matches!(element, ElementRef::CustomElement(_)) {
+            return Err(crate::error::Error::Render(
+                "Only custom elements are permitted in a custom view".into(),
+            ));
+        }
         let (element_type, technology) = match element {
+            ElementRef::CustomElement(custom) if kind == ViewType::Custom => (
+                ElementType::Custom,
+                (!custom.metadata.is_empty()).then(|| custom.metadata.clone()),
+            ),
             ElementRef::Person(_) => (ElementType::Person, None),
             ElementRef::SoftwareSystem(_) => {
                 let internal = kind == ViewType::SystemLandscape || Some(id) == scope;
@@ -2347,6 +2199,8 @@ impl ElementInfo {
             tags: properties.tags.clone(),
         })
     }
+
+
 }
 
 /// Entry in the legend for an element type.
@@ -2524,14 +2378,15 @@ mod tests {
         let model = workspace.model_mut();
 
         // Add elements
-        let person_id = model.add_person("User", "A user");
-        let system_id = model.add_software_system("System", "The system");
-        model.add_relationship(person_id, system_id, "Uses", None);
+        let person_id = model.add_custom_element("User", "Role", "A user");
+        let system_id = model.add_custom_element("System", "Service", "The system");
+        let relationship = model.add_relationship(person_id, system_id, "Uses", None);
 
         // Create custom view with explicit elements
         let mut custom_view = CustomView::new("custom");
         custom_view.properties.add_element(person_id);
         custom_view.properties.add_element(system_id);
+        custom_view.properties.add_relationship(relationship);
 
         let renderer = SvgRenderer::default();
         let svg = renderer.render_custom(&workspace, &custom_view).unwrap();
