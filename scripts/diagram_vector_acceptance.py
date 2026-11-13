@@ -17,7 +17,7 @@ def color_bounds(path, color=(208, 235, 255)):
         pixels, marked = image.load(), mask.load()
         count = 0
         for y in range(280, image.height - 50):
-            for x in range(250, image.width - 20):
+            for x in range(100, image.width - 20):
                 if all(abs(a - b) <= 3 for a, b in zip(pixels[x, y], color)):
                     marked[x, y] = 255
                     count += 1
@@ -41,7 +41,7 @@ def exercise(session, root):
     green_before, _ = color_bounds(session.output / "03-loaded.png", (211, 249, 216))
     x, y = before[0] + 15, (before[1] + before[3]) // 2
     drag = subprocess.Popen(
-        [str(session.pointer), "drag-held", "1280", "800", str(x), str(y), str(x + 60), str(y + 35)],
+        [str(session.pointer), "drag-held", "1280", "800", str(x), str(y), str(x - 200), str(y + 35)],
         env=session.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     try:
@@ -51,7 +51,9 @@ def exercise(session, root):
         during, _ = color_bounds(session.output / "04-held-artwork.png")
         green_during, _ = color_bounds(session.output / "04-held-artwork.png", (211, 249, 216))
         assert all(abs(a - b) <= 2 for a, b in zip(green_before, green_during)), "moving one object must leave the other artwork in place"
-        assert all(abs((b - a) - delta) <= 3 for a, b, delta in zip(before, during, (60, 35, 60, 35))), (before, during)
+        # This crosses the original export plane's left edge while remaining
+        # inside the editor widget. Export dimensions must not clip the artwork.
+        assert all(abs((b - a) - delta) <= 3 for a, b, delta in zip(before, during, (-200, 35, -200, 35))), (before, during)
         assert path.read_text() == SOURCE, "a held gesture cannot mutate the source file"
     finally:
         drag.communicate("release\n", timeout=12)

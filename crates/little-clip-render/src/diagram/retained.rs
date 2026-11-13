@@ -6,6 +6,7 @@
 
 use super::images;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     sync::{Arc, atomic::Ordering},
 };
@@ -40,7 +41,9 @@ pub fn prepare(svg: &str) -> Result<Svg, String> {
         image_href_resolver: resolver,
         ..Default::default()
     };
-    let tree = usvg_vector::Tree::from_str(svg, &options).map_err(|error| error.to_string())?;
+    let interactive = interactive_planes(&document);
+    let tree =
+        usvg_vector::Tree::from_str(&interactive, &options).map_err(|error| error.to_string())?;
     if tree.size().width() > 16_384.0 || tree.size().height() > 16_384.0 {
         return Err("Interactive diagram dimensions exceed 16384 pixels.".into());
     }
@@ -66,6 +69,47 @@ pub fn prepare(svg: &str) -> Result<Svg, String> {
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     );
     Ok(Svg { tree, images })
+}
+
+fn interactive_planes<'a>(document: &roxmltree::Document<'a>) -> Cow<'a, str> {
+    let source = document.input_text();
+    let mut edits = Vec::new();
+    // compose_svg nests each normalized export SVG inside a direct layout
+    // group. Its dimensions place the initial artwork; they are not an editor
+    // boundary. Deeper SVGs and all authored clip paths keep their own crops.
+    for plane in document
+        .root_element()
+        .children()
+        .filter(|node| node.has_tag_name("g"))
+        .flat_map(|node| node.children())
+        .filter(|node| node.has_tag_name("svg"))
+    {
+        if let Some(overflow) = plane.attribute_node("overflow") {
+            edits.push((overflow.range_value(), "visible"));
+        } else {
+            let position = plane
+                .attributes()
+                .map(|attribute| attribute.range().end)
+                .max()
+                .unwrap_or_else(|| {
+                    let start = plane.range().start + 1;
+                    let end = source[start..]
+                        .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+                        .unwrap_or(plane.tag_name().name().len());
+                    start + end
+                });
+            edits.push((position..position, " overflow=\"visible\""));
+        }
+    }
+    if edits.is_empty() {
+        return Cow::Borrowed(source);
+    }
+    let mut interactive = source.to_owned();
+    // Reverse document order retains the original byte positions.
+    for (range, value) in edits.into_iter().rev() {
+        interactive.replace_range(range, value);
+    }
+    Cow::Owned(interactive)
 }
 
 #[derive(Default)]
@@ -123,12 +167,34 @@ mod tests {
                     .sum::<usize>()
         }
         assert_eq!(objects(prepared.tree.root()), 8);
+        assert_eq!(
+            prepared.tree.clip_paths().len(),
+            1,
+            "only the authored image crop remains; the export plane must not clip editing"
+        );
         assert_eq!(prepared.images.len(), 1);
         assert!(prepared.images.values().any(|image| {
             image
                 .pixels()
                 .any(|pixel| pixel[2] > 120 && pixel[1] > 70 && pixel[0] < 90)
         }));
+    }
+
+    #[test]
+    fn drawing_export_bounds_are_not_editor_bounds_but_authored_svg_crops_remain() {
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><g><svg width="100" height="100" overflow="hidden"><path d="M0 0h140v20H0Z"/><g id="authored"><svg width="10" height="10" overflow="hidden"><path d="M0 0h30v30H0Z"/></svg></g><defs><clipPath id="frame"><path d="M0 0h20v20H0Z"/></clipPath></defs><g clip-path="url(#frame)"><path d="M0 0h60v60H0Z"/></g></svg></g></svg>"#;
+        let prepared = prepare(source).unwrap();
+        assert_eq!(
+            prepared.tree.size().width(),
+            100.0,
+            "initial placement still uses the export's logical size"
+        );
+        assert_eq!(
+            prepared.tree.clip_paths().len(),
+            2,
+            "the authored nested SVG and frame retain their crops"
+        );
+        assert!(prepared.tree.root().abs_bounding_box().width() >= 140.0);
     }
 
     #[test]
