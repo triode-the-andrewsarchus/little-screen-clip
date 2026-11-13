@@ -45,3 +45,7 @@ commits, separate from this pristine import.
   tags/properties, ordered selection and annotations. Add custom core lookup and
   share the static renderer, removing the separate layout and unused traversal.
   Reject C4/custom mixtures and cover actual SVG membership/edge selection.
+
+- Pass actual layout direction into the existing orthogonal router, select the
+  correct sibling axis and keep simple sibling routes outside nodes. Consolidate
+  private SVG forwarding methods; add end-to-end attachment and corridor tests.

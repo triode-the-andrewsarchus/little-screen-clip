@@ -2497,8 +2497,8 @@ Further qualification found correctness work that must precede host integration:
   parallel/explicit ordering; preserve annotations and diagnose invalid scopes.
 - [x] Preserve custom views and canonical custom elements through model lookup,
   ordered selection and the shared static renderer.
-- [ ] Correct native static relationship routing: left-to-right orthogonal edges
-  currently use top/bottom attachment points, which can hide arrowheads under nodes.
+- [x] Correct native static relationship routing so orthogonal edges follow the
+  actual layout direction and sibling axis, keeping arrowheads outside nodes.
 - [ ] Qualify deployment view behavior and additional DSL forms.
 
 The format checkbox remains open while these and host integration are pending.
@@ -2644,3 +2644,35 @@ Raw clone warnings concern touched files: all six core, 28 parser and 13 rendere
 baseline fragments remain byte-identical. The new tests account for the small
 net measured line increase. Remaining grammar, deployment, routing and host UI
 acceptance stay open.
+
+
+### Structurizr layout-aware orthogonal routing
+
+The shared SVG renderer now passes the actual layout direction to the existing
+orthogonal router. Previously every static/custom/deployment layout routed as
+though it were top-to-bottom, so horizontal diagrams could hide arrowheads
+under destination nodes. Same-rank siblings in horizontal layouts now use facing
+top/bottom ports; simple fallback routing keeps them in the gap between nodes.
+The existing obstacle-aware pathfinder is retained. Two private forwarding
+methods were removed, and the drawing function obtains styles/groups from the
+workspace already owned by its caller.
+
+A new parser-to-SVG regression checks eight static/custom combinations across
+left/right/top/bottom directions, exact attachment coordinates, orthogonal
+segments and the arrow's exterior approach. A router regression checks both
+horizontal directions, reversed siblings and simple/obstacle-aware routing;
+all segments remain in the sibling gap. All 163 unit/integration tests and one
+core rustdoc test pass, as does strict all-target shared-renderer Clippy. The
+same authored SVG was rendered before/after and inspected: the arrowhead hidden
+under the destination before this fix is visible afterward.
+
+Architecture comparison against `before-structurizr-routing` removes two clone
+groups; rounded duplication, maximum complexity and cycle count are unchanged.
+Raw classification reports `render_svg` growing from CCN 1 to 39 because the
+former forwarding method now owns `render_svg_with_options`'s existing body:
+baseline evidence confirms that body already had CCN 39 and 350 measured lines,
+identical to the consolidated body. It is not a newly introduced drawing
+algorithm. The initial test geometry check was simplified to this fixture's
+actual sibling corridor; no new test hotspot remains. Existing routing/renderer
+patterns account for remaining short clone warnings. Host integration and
+other view/grammar qualification remain pending.

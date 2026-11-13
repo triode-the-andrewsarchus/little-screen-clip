@@ -10,7 +10,7 @@ fn color_to_marker_id(color: &str) -> String {
 }
 
 use structurizr_core::model::{ElementId, DeploymentNode};
-use structurizr_core::style::{IconPosition, Routing, Styles};
+use structurizr_core::style::{IconPosition, Routing};
 use structurizr_core::view::{
     ComponentView, ContainerView, CustomView, DeploymentView, DynamicView,
     FilteredView, FilterMode, ImageView, SystemContextView, SystemLandscapeView,
@@ -612,12 +612,12 @@ impl SvgRenderer {
         } else {
             None
         };
-        self.render_svg_with_active_element(
+        self.render_svg(
             &nodes,
             &elements,
             &relationships,
-            &model.groups,
-            workspace.styles(),
+            workspace,
+            layout.direction,
             active,
         )
     }
@@ -672,8 +672,6 @@ impl SvgRenderer {
         view: &DeploymentView,
     ) -> Result<String> {
         let model = workspace.model();
-        let styles = workspace.styles();
-
         let mut element_ids: Vec<String> = Vec::new();
         let mut elements_info: Vec<ElementInfo> = Vec::new();
 
@@ -764,7 +762,7 @@ impl SvgRenderer {
         let explicit_positions = extract_explicit_positions(&view.properties);
         apply_explicit_positions(&mut nodes, &explicit_positions);
 
-        self.render_svg(&nodes, &elements_info, &model.relationships, &model.groups, styles)
+        self.render_svg(&nodes, &elements_info, &model.relationships, workspace, layout.direction, None)
     }
 
     /// Render a dynamic view to SVG.
@@ -1168,34 +1166,13 @@ impl SvgRenderer {
         nodes: &[LayoutNode],
         elements: &[ElementInfo],
         relationships: &[structurizr_core::model::Relationship],
-        groups: &[structurizr_core::model::Group],
-        styles: Option<&Styles>,
-    ) -> Result<String> {
-        self.render_svg_with_options(nodes, elements, relationships, groups, styles, self.show_legend, None)
-    }
-
-    fn render_svg_with_active_element(
-        &self,
-        nodes: &[LayoutNode],
-        elements: &[ElementInfo],
-        relationships: &[structurizr_core::model::Relationship],
-        groups: &[structurizr_core::model::Group],
-        styles: Option<&Styles>,
+        workspace: &Workspace,
+        direction: structurizr_core::view::AutoLayoutDirection,
         active_element_id: Option<ElementId>,
     ) -> Result<String> {
-        self.render_svg_with_options(nodes, elements, relationships, groups, styles, self.show_legend, active_element_id)
-    }
-
-    fn render_svg_with_options(
-        &self,
-        nodes: &[LayoutNode],
-        elements: &[ElementInfo],
-        relationships: &[structurizr_core::model::Relationship],
-        groups: &[structurizr_core::model::Group],
-        styles: Option<&Styles>,
-        show_legend: bool,
-        active_element_id: Option<ElementId>,
-    ) -> Result<String> {
+        let groups = &workspace.model().groups;
+        let styles = workspace.styles();
+        let show_legend = self.show_legend;
         let mut svg = String::new();
         let style_resolver = StyleResolver::new(styles);
 
@@ -1314,9 +1291,7 @@ impl SvgRenderer {
 
         // Create orthogonal router with A* pathfinding enabled
         // Pass nodes so the router can build an obstacle grid for pathfinding
-        let orthogonal_config = OrthogonalConfig::for_direction(
-            structurizr_core::view::AutoLayoutDirection::TopBottom
-        );
+        let orthogonal_config = OrthogonalConfig::for_direction(direction);
         let orthogonal_router = OrthogonalRouter::with_nodes(orthogonal_config, nodes);
 
         // Pre-compute edge indices for port distribution

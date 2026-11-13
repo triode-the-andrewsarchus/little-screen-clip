@@ -352,14 +352,24 @@ impl OrthogonalRouter {
         source: &LayoutNode,
         target: &LayoutNode,
     ) -> (PortSide, PortSide) {
-        // Get center positions (cy values reserved for future use)
+        // Same-rank siblings lie across the layout axis, not along it.
         let src_cx = source.position.x + source.size.width / 2.0;
-        let _src_cy = source.position.y + source.size.height / 2.0;
+        let src_cy = source.position.y + source.size.height / 2.0;
         let tgt_cx = target.position.x + target.size.width / 2.0;
-        let _tgt_cy = target.position.y + target.size.height / 2.0;
+        let tgt_cy = target.position.y + target.size.height / 2.0;
 
         // Same layer (sibling relationship)
         if source.rank == target.rank {
+            if matches!(
+                self.config.direction,
+                AutoLayoutDirection::LeftRight | AutoLayoutDirection::RightLeft
+            ) {
+                return if src_cy < tgt_cy {
+                    (PortSide::Bottom, PortSide::Top)
+                } else {
+                    (PortSide::Top, PortSide::Bottom)
+                };
+            }
             if src_cx < tgt_cx {
                 return (PortSide::Right, PortSide::Left);
             } else {
@@ -460,8 +470,8 @@ impl OrthogonalRouter {
 
         // Route based on relative positions and port sides
         // These methods add waypoints ending at the target clearance point
-        if source.rank == target.rank {
-            // Same-layer routing (sibling relationship)
+        if source.rank == target.rank && matches!(source_port.side, PortSide::Left | PortSide::Right) {
+            // Horizontal sibling ports use an outside routing channel.
             self.route_same_layer(&mut waypoints, source, target, source_port, target_port);
         } else {
             // Different-layer routing
@@ -786,6 +796,53 @@ mod tests {
             }
         } else {
             panic!("Expected Orthogonal path");
+        }
+    }
+
+    #[test]
+    fn horizontal_layout_siblings_use_facing_vertical_ports_without_crossing_nodes() {
+        for direction in [
+            AutoLayoutDirection::LeftRight,
+            AutoLayoutDirection::RightLeft,
+        ] {
+            for reverse in [false, true] {
+                let top = make_node("top", 0.0, 0.0, 0);
+                let bottom = make_node("bottom", 0.0, 200.0, 0);
+                let (source, target) = if reverse {
+                    (&bottom, &top)
+                } else {
+                    (&top, &bottom)
+                };
+                let nodes = vec![top.clone(), bottom.clone()];
+                for router in [
+                    OrthogonalRouter::new(OrthogonalConfig::simple(direction)),
+                    OrthogonalRouter::with_nodes(
+                        OrthogonalConfig::for_direction(direction),
+                        &nodes,
+                    ),
+                ] {
+                    let EdgePath::Orthogonal { waypoints } =
+                        router.route_edge(source, target, 0, 1, 0, 1)
+                    else {
+                        panic!("Expected orthogonal path");
+                    };
+                    let (start_y, end_y) = if reverse {
+                        (200.0, 50.0)
+                    } else {
+                        (50.0, 200.0)
+                    };
+                    let first = waypoints.first().unwrap();
+                    let last = waypoints.last().unwrap();
+                    assert_eq!((first.x, first.y), (50.0, start_y));
+                    assert_eq!((last.x, last.y), (50.0, end_y));
+                    // With these aligned siblings, the entire route belongs in
+                    // the gap between the top node's bottom and lower node's top.
+                    assert!(waypoints.iter().all(|point| (50.0..=200.0).contains(&point.y)));
+                    for pair in waypoints.windows(2) {
+                        assert!(pair[0].x == pair[1].x || pair[0].y == pair[1].y);
+                    }
+                }
+            }
         }
     }
 
