@@ -43,7 +43,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | Bytefield | [bytefield](https://crates.io/crates/bytefield) 0.1.0; [wiry-core](https://crates.io/crates/wiry-core) 0.1.0; [wiry-capture](https://crates.io/crates/wiry-capture) 0.1.0 | Pending comparison / editor research |
 | Ditaa | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [ansicht](https://crates.io/crates/ansicht) 0.1.0; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
 | Erd | [rusterd](https://crates.io/crates/rusterd) 0.3.1; [erd_rs](https://crates.io/crates/erd_rs) 0.1.0; [fastbreak](https://crates.io/crates/fastbreak) 0.5.0 | Pending comparison / editor research |
-| Nomnoml | [silica](https://crates.io/crates/silica) 0.0.1; [squaredb](https://crates.io/crates/squaredb) 0.2.0 | Pending comparison / editor research |
+| Nomnoml | Canonical Nomnoml 1.7.0 with Graphre 0.1.3; crates.io hits silica/squaredb inspected and unrelated | Hostless SVG prototype works; pristine MIT engines imported separately; renderer/editor integration pending |
 | Pikchr | [pikchr](https://crates.io/crates/pikchr) 0.1.4; [pikchr-rs](https://crates.io/crates/pikchr-rs) 0.1.0; [pikchr-sys](https://crates.io/crates/pikchr-sys) 0.1.1 | Selected pikchr-rs; source/live previews implemented; direct manipulation pending |
 | Svgbob | [svgbob](https://crates.io/crates/svgbob) 0.7.6; [mdbook-svgbob](https://crates.io/crates/mdbook-svgbob) 0.3.1; [mdbook-svgbob2](https://crates.io/crates/mdbook-svgbob2) 0.3.0 | Selected original SvgBob; source/live previews implemented; cell editor and .bob disambiguation pending |
 | GoAT | [aasvg](https://crates.io/crates/aasvg) 1.0.0; [formulaa](https://crates.io/crates/formulaa) 0.1.0 | Pending comparison / editor research |
@@ -52,7 +52,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | UMLet | No direct crates.io match; compare upstream implementation and format specification. | Pending comparison / editor research |
 | Vega / Vega-Lite | [vega](https://crates.io/crates/vega) 0.0.1; [vega-view](https://crates.io/crates/vega-view) 0.1.0; [encdr](https://crates.io/crates/encdr) 0.9.0 | Pending comparison / editor research |
 | WireViz | [wirebug](https://crates.io/crates/wirebug) 0.1.0 | Pending comparison / editor research |
-| Symbolator | [tui-piechart](https://crates.io/crates/tui-piechart) 1.4.2; [raptorq](https://crates.io/crates/raptorq) 2.0.1; [qrcode-generator](https://crates.io/crates/qrcode-generator) 6.1.2 | Pending comparison / editor research |
+| Symbolator | No verified native candidate yet; compare canonical Symbolator with HDL parser libraries | Pending compatibility, license and editor research; unrelated graphics crates are not format implementations |
 
 Additional promising Mermaid alternatives: [mermaid-rs-renderer](https://github.com/1jehuang/mermaid-rs-renderer), [merman](https://docs.rs/merman/latest/merman/) and [ariel-rs](https://docs.rs/ariel-rs/latest/ariel_rs/). Compare typed models/source correspondence, compatibility, dependencies and bounded execution, rather than advertised benchmarks alone.
 
@@ -1097,3 +1097,73 @@ the shared editor changes
 pointer and keyboard input on an isolated desktop; they do not prove the pending
 text/resize functionality or full format coverage. No Cargo job or source change
 was needed for this checkpoint while the user's scratch-worktree build ran.
+
+## WireViz source-preserving editor research
+
+Published sources inspected on 2026-11-12, before adding a dependency:
+
+| Candidate | Source findings | Fit |
+| --- | --- | --- |
+| [yaml-edit 0.3.6](https://github.com/jelmer/yaml-edit) | Apache-2.0; Rowan syntax tree, byte ranges, direct mapping/sequence edits, anchor-aware mutations; parser nesting ceiling 256; Rust 1.70 | Strong direct-edit candidate. Recovered trees must not authorize semantic edits without validation. |
+| [yaml-edit-rp 0.3.1](https://github.com/roberts-pumpurs/yaml-edit) | Apache-2.0; source-preserving fork, also Rowan 0.16 | Compare concrete failing fixtures before preferring the fork to current upstream; the package description alone does not establish which fixes remain missing upstream. |
+| [yaml-serde-edit 0.1.1](https://github.com/bldr-project/yaml-serde-edit) | MIT/Apache-2.0; depends on older yaml-edit 0.2 and serde_norway; value-diff layer may rebuild unsupported edits | Rebuilding can discard comments and anchors away from the requested edit. Avoid automatic fallback for graphical authoring; its disk-writing layer also duplicates FileSource. |
+| [oneyaml 1.2.0](https://github.com/recursive-ai-oss/oneyaml-rust) | MIT/Apache-2.0; one semantic/syntax interpretation, node spans, retained text, configurable resource limits, atomic patches; writes through aliases or merged keys are refused | Promising first prototype for explicit transactions. New implementation with limited production history; verify refusal, rollback and preservation using actual WireViz structures before selecting it. |
+| [yamled 0.0.13](https://github.com/victor-software-house/yamled) | MIT; published Rust requirement 1.99.1 | Does not fit the installed 1.98.1 toolchain. Do not raise the project toolchain for this candidate. |
+
+These findings are source review, not executed compatibility tests. Compare
+oneyaml and yaml-edit with comments, quoted numeric pin identities, flow and
+block sequences, BOM/CRLF, aliases/merge keys, malformed input, duplicate keys,
+oversized expansion and failed multi-step edit rollback. A graphical edit must
+either preserve unrelated source or refuse visibly. No library may write files
+itself; the existing source editor owns all saves and accepted completions.
+
+Wirebug's public `Design`/`Instance`/`Connector`/`Wire` IR and harness SVG renderer
+are potential reuse points, but its package unconditionally includes server,
+LSP, PDF and a second raster stack. Its `.wb` parser is not a WireViz YAML parser.
+Compare a minimal licensed renderer extraction with generating bounded DOT
+tables/ports through our existing native Graphviz adapter. Do not add the whole
+server stack merely to obtain harness drawing, or translate GPL WireViz Python
+code into the application. Any extraction still needs a pristine import commit
+before local modifications.
+
+The [WireViz syntax specification](https://github.com/wireviz/WireViz/blob/master/docs/syntax.md)
+also makes clear that `connections` is more than a list of endpoint pairs:
+parallel pin/wire lists, ascending and descending ranges, named/unnamed template
+instances, shields, connector loops and mating arrows affect the real circuit.
+The adapter must model those semantics, enforce expansion budgets and report
+unsupported operations. Local images and Graphviz tweaks must not escape the
+guarded resource policy. Generic `.yml`/`.yaml` files require a strong structural
+signature before opening a harness editor; a filename alone is insufficient.
+
+## Nomnoml renderer selection checkpoint
+
+The published `silica` 0.0.1 is a bare-metal OS library, and `squaredb` 0.2.0 is
+an HTTP database whose README merely mentions Nomnoml. Neither is a renderer.
+Compared these search results with the canonical MIT Nomnoml 1.7.0 and its MIT
+Graphre 0.1.3 layout dependency. The canonical SVG entrypoint works without a
+document, filesystem or module loader, making reuse of our bounded QuickJS
+adapter preferable to an independent partial language implementation. This is
+an embedded interpreter, not a browser or an installed Node dependency.
+
+A development-only Node VM prototype loaded the trusted release bundles into an
+empty context, then passed diagram text as a function argument. It produced a
+135×328 SVG, rejected an unclosed node with a line/column diagnostic, and escaped
+markup labels. Node was only the research harness. Crucially, direct `renderSvg`
+silently ignores `#import`; the application adapter must refuse imports visibly.
+The server text measurer also uses character-width estimates when no canvas is
+provided, so mixed-script layout requires explicit validation/diagnostics.
+
+A second development probe linked the already-built rquickjs-sys 0.14.0 QuickJS
+archive directly. With 128 MiB heap, 512 KiB stack and an interrupt deadline, it
+produced byte-identical SVG. This verifies interpreter compatibility without
+another Cargo build; application-worker and raster validation still remain.
+
+The pristine release bundles/licenses were committed before integration changes.
+Their hashes, archive URLs and intended restricted entrypoint are recorded in
+[`vendor/nomnoml/README.integration.md`](../vendor/nomnoml/README.integration.md).
+The official web editor provides source and live preview; its DOM UI is not an
+embeddable native graphical editor. Use the existing shared
+source editor as the baseline and investigate source-linked direct operations
+after the higher-priority graphical editors. Format routing, syntax highlighting,
+Markdown/standalone rendering, clipboard recognition and actual bounded-worker
+validation are still pending; the import is not a format-support completion.
