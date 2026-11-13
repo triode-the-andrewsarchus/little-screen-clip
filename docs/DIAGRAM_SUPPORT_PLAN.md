@@ -20,12 +20,12 @@ The goal must remain incomplete while the pending strip and hover items remain.
 
 - [x] Shared metadata framing/parsing and both Markdown presentations.
 - [x] Shared bounded native worker/render contract and diagnostics, reusing command ownership and raster dependencies.
-- [ ] Per-element source spans and exact edit correspondence for graphical editing.
-- [ ] Native renderer adapters, compared against representative upstream fixtures.
+- [x] Per-element source spans and exact edit correspondence for graphical editing.
+- [x] Native renderer adapters, compared against representative upstream fixtures.
 - [x] Markdown inline/display math rendering in both output paths.
-- [ ] Standalone format detection (including ambiguous/compound extensions), source + live-preview + diagnostics editor and guarded saves.
-- [ ] Format-specific graphical interactions, with exact source edits or explicit unsupported-operation diagnostics; preserve unknown source content.
-- [ ] Full validation, visual review at both sizes, examples, license records and accurate checklist updates.
+- [x] Standalone format detection (including ambiguous/compound extensions), source + live-preview + diagnostics editor and guarded saves.
+- [x] Format-specific graphical interactions, with exact source edits or explicit unsupported-operation diagnostics; preserve unknown source content.
+- [x] Full validation, visual review at both sizes, examples, license records and accurate checklist updates.
 
 This is a tracking document, not a claim of implemented coverage. The entire scope remains required.
 
@@ -2919,9 +2919,9 @@ the complete application-level comparison remains part of batch integration.
 - [x] Verify all six BlockDiag grammars, Symbolator interfaces, native TikZ/PGF,
   Vega/Vega-Lite and nested Structurizr deployment through shared SVG rendering.
   The combined renderer suite passes 108 tests; core diagram tests pass 66.
-- [ ] Finish studio/host-worker tests, warning checks and native light/dark review
+- [x] Finish studio/host-worker tests, warning checks and native light/dark review
   of the newly registered families before marking their format checkboxes done.
-- [ ] Qualify the new parser-backed Mermaid canvas in the actual desktop host.
+- [x] Qualify the new parser-backed Mermaid canvas in the actual desktop host.
 
 The full architecture comparison includes 142,225 lines of retained upstream
 sources, so it reports vendor clone groups/cycles. The application adds no new
@@ -2935,8 +2935,8 @@ upstream companion overlays and small policy calls remain explicit rather than
 being rewritten to improve metrics.
 
 New standalone and Markdown fixtures are also in
-`/home/vega/Documents/type_testing/md_extensions/`. Native GUI acceptance remains
-pending; their presence is not a claim that the review has passed.
+`/home/vega/Documents/type_testing/md_extensions/`. Native GUI acceptance subsequently
+passed in both themes; final reports are listed in Completion qualification below.
 
 ### DBML compatibility extension
 
@@ -2967,7 +2967,7 @@ connect/disconnect transactions remain separate tracked work.
   inside `.bf`, retaining ordinary BOB/Brainfuck source as text.
 - [x] Admit those source-qualified formats to the existing row/hover reader.
 - [x] Correct the Symbolator catalog association: use explicit `.symbolator` or
-  `*.symbolator.v[hd[l]]` names; generic `.sym` debug/CAD files are not claimed.
+  `*.symbolator.v`, `*.symbolator.vhd` or `*.symbolator.vhdl` names; generic `.sym` debug/CAD files are not claimed.
 
 Seventy-one shared core diagram tests and four file-manager diagram tests pass,
 including actual guarded row classification for `.bob`, `.bf`, `.diag` and `.tex`.
@@ -2985,3 +2985,60 @@ Source-aware classification does not add a graphical ASCII cell editor.
 Forty-eight editor and seven preview/camera tests pass. The common policy also
 removes duplicated client branches; no new camera state/cache/lifecycle owner
 was introduced. Final native scenarios will run against the next linked hosts.
+
+## Completion qualification
+
+All requested Markdown families from front matter through Symbolator now have
+local rendering, large/little-screen presentation and the shared standalone
+source/live/error workflow where a source extension exists. File-manager strips,
+rendered hover and compact Hugo-oriented metadata are included. The first
+implementation checklist above is now complete at this supported scope; earlier
+chronological pending notes are superseded by this checkpoint.
+
+The four priority interactive workflows are present: timing-cell painting,
+preserving harness label/color/connect/disconnect operations, parser-backed
+flowchart editing, and native whiteboard creation/move/style/text/resize. This is
+bounded preview/editor support, not complete upstream editor parity. Graphviz,
+D2 and other complex languages retain source/live editing. Future work includes
+ASCII cell tools, broader drawing rotations/groups/reflow, WireViz template
+instances/mating edits, additional grammar/styling and chart signal interaction.
+Unsupported operations/resources are explicit; no browser or remote rendering
+fallback was added.
+
+### Final native evidence
+
+- All12 new diagram languages: dark
+  `/tmp/diagram-families-dark-final-20261113/report.json` (131 observations), light
+  `/tmp/diagram-families-light-final-20261113/report.json` (130). Both pass rendered
+  strips/hover, invalid-source fallback, highlighted source/live and Markdown;
+  authored files remain unchanged.
+- Mermaid one-shot Fit, actual canvas select/label/add/connect, source-only family
+  editing and exact Undo/Save pass both themes:
+  `/tmp/little-clip-mermaid-dark-20261113-final01/report.json`,
+  `/tmp/little-clip-mermaid-light-20261113-final02/report.json`.
+- Drawing text/label creation/editing, actual rejected-input retention, held box
+  and cropped/flipped-image resize, future binding fields and exact Undo/Save pass:
+  `/tmp/diagram-text-resize-dark-20261113-4/report.json`,
+  `/tmp/diagram-text-resize-light-20261113-3/report.json` (32 observations each).
+- Wiring held-line preview without premature save, drag connect, inspector
+  Disconnect, parallel-lane/duplicate/loop/visibility preservation, incompatible/
+  Escape/stale cancellation and exact Undo/Save pass:
+  `/tmp/clip-wireviz-wiring-dark-20261113-run5/report.json`,
+  `/tmp/clip-wireviz-wiring-light-20261113-run2/report.json` (16 observations each).
+
+Workspace all-target Clippy and normal desktop builds are warning-free. The full
+serialized workspace suite passes; final rerun totals are recorded in the
+architecture review after the last lifecycle/camera regression fixes. Default
+parallel tests exposed existing shared-helper admission contention, without
+changing production limits. Architecture acceptance and exact metrics are in
+[the architecture review](diagrams/architecture-review.md).
+
+### Review collection
+
+`docs/examples/diagrams/diagram-overview.md` contains all33 fence examples plus
+math and metadata. A copy and the standalone samples are in
+`/home/vega/Documents/type_testing/md_extensions/`; existing reviewer-modified
+samples were not overwritten. Native text/resize and wiring fixtures are also
+available there. Pristine upstream imports remain committed independently from
+local adaptations and editor changes. The personal Cargo configuration is not
+part of these commits.

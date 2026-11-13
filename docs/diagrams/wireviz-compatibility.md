@@ -216,3 +216,16 @@ The new renderer test applies a parallel disconnect plus a shield connection and
 verifies native SVG terminal hit groups. Studio tests exercise primary-button
 press/release, outside/incompatible cancellation and changed model/source. No
 application binary rebuild or native GUI acceptance was performed for this patch.
+
+
+### Native wiring qualification
+
+Both rebuilt native scenarios pass with the same final script:
+`/tmp/clip-wireviz-wiring-dark-20261113-run5/report.json` and
+`/tmp/clip-wireviz-wiring-light-20261113-run2/report.json`. Each captures16
+observations plus saved-source/proof artifacts. Actual held connection pixels
+appear before release without premature writes; Save changes link count8→9,
+Disconnect9→8, and a middle parallel-lane cut8→7. Duplicate links, loops, other
+lanes, opaque values and singleton visibility remain exact. Incompatible,
+Escape and stale-held cancellation pass; every Undo/Save restores exact bytes.
+Earlier pending-GUI notes are superseded; mating and template limits remain.

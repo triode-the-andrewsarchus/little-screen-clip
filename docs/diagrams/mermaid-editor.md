@@ -37,7 +37,9 @@ execution remains pending at this checkpoint.
 - [x] Keep an explicit Fit request pending while previous-source geometry is
   still displayed. The existing camera flag is consumed only by a fresh frame;
   a stale-to-fresh egui regression passes in the shared editor suite.
-- [ ] Repeat one-shot Fit in the native scenario after the next rebuild.
+- [x] Repeat one-shot Fit in both rebuilt native themes: dark `final01` and
+  light `final02` under `/tmp/little-clip-mermaid-*-20261113-*/report.json` pass
+  all18 scenario screenshots without retrying Fit.
 
 The freshness condition raises the existing canvas CCN from 15 to 16. It is the
 required stale/current-source distinction, without a new state owner or

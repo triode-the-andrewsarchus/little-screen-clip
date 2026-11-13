@@ -24,8 +24,8 @@ rather than pretending to transform unsupported raster artwork.
 
 Focused core, renderer and studio tests and strict library Clippy pass. They
 cover nonzero export origins, no-op preservation, bindings and nonzero-origin
-freehand paths. The native text/resize scenario is prepared; actual light/dark
-GUI qualification remains pending after the host rebuild.
+freehand paths. The native text/resize scenario now passes actual light/dark GUI qualification
+against rebuilt hosts.
 
 ## Validation follow-ups
 
@@ -34,4 +34,7 @@ GUI qualification remains pending after the host rebuild.
   newer drafts, selections and source revisions remain protected. Forty-eight
   editor tests and strict studio library Clippy pass, including rejected-draft,
   timeout, cancellation and no-op lifecycle cases.
-- [ ] Qualify text/resize and rejected-label recovery in the actual rebuilt UI.
+- [x] Qualify text/resize and rejected-label recovery in both rebuilt themes.
+  `/tmp/diagram-text-resize-dark-20261113-4/report.json` and
+  `/tmp/diagram-text-resize-light-20261113-3/report.json` pass32 observations each,
+  with actual held artwork, source/metadata preservation and exact Undo/Save.
