@@ -8,6 +8,14 @@ Every item under Markdown in `file_types.md`, from front matter through Symbolat
 
 Preserve FileSource identity checks, atomic save/Save As semantics, accepted write completion, preview cancellation and per-host lifecycle. Rendering must not resolve arbitrary network URLs, include files, execute diagram directives or read unguarded resources. Enforce input, complexity, output and raster budgets. Unknown/unsupported syntax must remain inspectable with a diagnostic, never silently treated as fully supported.
 
+File-manager list presentation is also a completion requirement of this active
+goal: rendered standalone diagram strips with enlarged rendered hover popouts,
+compact Hugo-oriented front-matter fields beside the text minimap, and rendered
+Markdown hover at the hovered source position. These are not deferred polish or
+optional follow-up. The detailed acceptance checklist is under
+[Desktop review requirements](#desktop-review-requirements-vectors-and-browser-strips).
+The goal must remain incomplete while the pending strip and hover items remain.
+
 ## Implementation sequence
 
 - [x] Shared metadata framing/parsing and both Markdown presentations.
@@ -1197,8 +1205,9 @@ preview corrections take priority over adding that adapter.
 
 ## Desktop review requirements: vectors and browser strips
 
-The user's review identified two gaps in the current implementation. These are
-required follow-up work, alongside the remaining format coverage:
+The user's review identified the following requirements. They are part of the
+active goal, alongside the remaining format coverage, and must be completed before
+that goal is marked complete. The user reaffirmed this scope on 2026-11-13:
 
 - [ ] Replace the editor's raster-image canvas with direct antialiased vector
   drawing. Curves, handwritten strokes and outlined glyphs must remain crisp
@@ -1215,13 +1224,18 @@ required follow-up work, alongside the remaining format coverage:
   rendered hover previews. WaveDrom should prioritize the actual waveforms over
   decorative heading text. Preserve useful scale, clip vertically when needed,
   and reuse existing cache admission, revision checks and hidden-row retirement.
+  Verify timing diagrams and representative other supported families in actual
+  list rows and hover popouts, including oversized diagrams and failed rendering.
 - [x] Give Markdown front matter a compact metadata area beside a smaller text
   minimap. Prioritize supplied Hugo fields (`title`, `date`, `draft`, `tags`,
   categories and related dates/weight) without increasing row height. Do not
   infer publication state or project timezone from those fields.
 - [ ] Replace Markdown's syntax-only hover excerpt with a rendered view at the
   hovered source position, including equations and diagrams. Preserve useful
-  source-position mapping and bounded work for large documents.
+  source-position mapping and bounded work for large documents. Verify hovering
+  different positions in a long Markdown file reaches the corresponding rendered
+  content, rather than always showing the document's beginning; retain an
+  inspectable fallback when a fragment cannot render.
 
 The [Hugo front-matter reference](https://gohugo.io/content-management/front-matter/)
 confirms the reserved page fields, taxonomy arrays and unquoted TOML datetimes.
