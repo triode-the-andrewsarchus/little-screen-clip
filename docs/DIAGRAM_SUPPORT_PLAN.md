@@ -1118,12 +1118,34 @@ Published sources inspected on 2026-11-12, before adding a dependency:
 | [oneyaml 1.2.0](https://github.com/recursive-ai-oss/oneyaml-rust) | MIT/Apache-2.0; one semantic/syntax interpretation, node spans, retained text, configurable resource limits, atomic patches; writes through aliases or merged keys are refused | Promising first prototype for explicit transactions. New implementation with limited production history; verify refusal, rollback and preservation using actual WireViz structures before selecting it. |
 | [yamled 0.0.13](https://github.com/victor-software-house/yamled) | MIT; published Rust requirement 1.99.1 | Does not fit the installed 1.98.1 toolchain. Do not raise the project toolchain for this candidate. |
 
-These findings are source review, not executed compatibility tests. Compare
-oneyaml and yaml-edit with comments, quoted numeric pin identities, flow and
-block sequences, BOM/CRLF, aliases/merge keys, malformed input, duplicate keys,
-oversized expansion and failed multi-step edit rollback. A graphical edit must
-either preserve unrelated source or refuse visibly. No library may write files
-itself; the existing source editor owns all saves and accepted completions.
+The initial source review is now supplemented by an executed, pinned comparison
+in [`scripts/diagram_research/wireviz_yaml`](../scripts/diagram_research/wireviz_yaml/README.md).
+Both candidates preserve unrelated bytes when replacing an existing pin-label
+literal in block and flow lists, including comments, BOM/CRLF, quoted numeric
+pin IDs and designators containing `/`, `.` and `~`. Both reject the malformed
+and excessively nested fixtures. `oneyaml` additionally rejects semantic
+duplicate keys and oversized alias expansion, refuses writes through aliases
+and merged keys, and restores the exact source after a failed multi-step patch.
+`yaml-edit` accepts the duplicate-key fixture, so it would need another semantic
+validation layer. Select `oneyaml` for the next harness-model prototype, with
+tighter application budgets; this does not yet establish full WireViz support.
+
+One important counterexample remains an application responsibility: changing
+an anchor definition is allowed and changes other alias users. Concrete-source
+preservation alone cannot authorize a graphical transaction. Compare the parsed
+result against the intended semantic delta and refuse changes to unrelated
+connectors, wires or connections. A pin-label rename also needs connection
+reference handling; changing a label literal alone is not a valid circuit edit.
+
+The executed compatibility fixture preserves quoted `"01"` as a string and
+resolves unquoted `01`, `NO` and `ON` according to the explicitly selected YAML
+1.1 preset. Use consistent scalar rules for reads and edits rather than silently
+switching to YAML 1.2 identities. Unknown custom tags remain tagged values and
+must not be treated as ordinary component mappings. Multiple documents are
+refused. A graphical edit must either preserve unrelated source and semantics
+or refuse visibly. No library may write files itself; the existing source
+editor owns all saves and accepted completions. Parser/edit probes do not
+replace connection-expansion, renderer, UI or guarded-save acceptance tests.
 
 Wirebug's public `Design`/`Instance`/`Connector`/`Wire` IR and harness SVG renderer
 are potential reuse points, but its package unconditionally includes server,
