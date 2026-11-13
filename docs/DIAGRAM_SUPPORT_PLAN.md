@@ -1187,6 +1187,14 @@ preview corrections take priority over adding that adapter.
   gesture feedback without discarding accepted edits. All eight drawing-related
   studio tests pass, including actual input with stale preview pixels.
 
+## Front-matter date correction
+
+- [x] Represent unquoted TOML dates/times as ISO strings in the shared metadata
+  model, including nested tables and arrays. The former Serde conversion exposed
+  TOML's private datetime carrier object instead. All six core metadata tests
+  pass, retaining existing source offsets, malformed-input and resource-limit
+  coverage; the file-manager's cross-format page-summary test passes too.
+
 ## Desktop review requirements: vectors and browser strips
 
 The user's review identified two gaps in the current implementation. These are
