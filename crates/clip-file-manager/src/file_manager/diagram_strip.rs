@@ -249,6 +249,7 @@ mod tests {
             ("uml.nomnoml", "[Source] -> [Preview]", Format::Nomnoml),
             ("draft.noml", "[Unclosed", Format::Nomnoml),
             ("schema.dbml", "Table users { id int }", Format::Dbml),
+            ("shape.goat", ".----.\n| hi |\n'----'", Format::Goat),
             (
                 "drawing.excalidraw.json",
                 "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}",

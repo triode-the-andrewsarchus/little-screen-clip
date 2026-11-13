@@ -1,0 +1,8 @@
+%YAML 1.2
+---
+name: GoAT
+file_extensions: [goat]
+scope: source.goat
+contexts:
+  main:
+    - include: scope:source.svgbob

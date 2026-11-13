@@ -2011,3 +2011,67 @@ builds pass. Architecture clone-group and maximum-complexity counts are unchange
 the report flags the existing language/extension lookup tables and reordered
 members of untouched Python cycles. No new cache, parser runtime or renderer is
 introduced for this classification fix.
+
+## GoAT selection and integration
+
+Compared the native Rust [aasvg 1.0.0](https://github.com/bearcove/aasvg-rs), its
+current Dodeca source, existing SvgBob 0.7.6 and upstream
+[GoAT 0.5.1](https://github.com/blampe/goat). `formulaa` is a TUI math editor rather
+than an ASCII diagram parser. aasvg is a related Markdeep port; common ancestry
+is not evidence of equivalent geometry. A standalone Rust probe and pinned Go
+CLI comparison covered hello-world, overlaps, line decorations, hollow circles
+and the complicated diagram. The line-decoration case differed materially:
+Rust emitted 11 arrow polygons and six text elements, versus GoAT's 15 arrows and
+no text. Other cases differed too, including preservation of leading indentation.
+
+Select the actual upstream ASCII/UTF-8 libraries through a compiled, data-only
+companion. Vendored sources/licenses were committed pristine before integration;
+the small application adapter lives separately. Builds now require Go 1.25+;
+end users need only the shipped static companion, not Go or an installed GoAT.
+The build is offline and CGO-free, with pinned local module replacements and no
+toolchain downloads. The build/deployment/provenance details are recorded in
+[`scripts/goat-renderer/README.md`](../scripts/goat-renderer/README.md).
+
+- [x] Share guarded file/Markdown/clipboard rendering, source editor, live preview,
+  diagnostics, list strips and enlarged hover without a second preview cache.
+- [x] Use the upstream ASCII grammar and Unicode box frontend; box-drawing glyphs
+  select the latter. Preserve authored whitespace; report tabs and budget failures
+  instead of silently changing grid alignment.
+- [x] Bound source, rows/columns, generated SVG, process lifetime and transport.
+  Go gets a soft GC target in addition to the existing hard child limits. No
+  filenames, external stylesheets, imports or arbitrary CLI arguments are exposed.
+- [x] Outline fonts and block images through the shared native SVG composer.
+- [x] Verify offline helper tests, original marker semantics, real host workers,
+  license availability and relocated sibling-companion discovery.
+- [ ] Explore source-linked ASCII grid editing after the priority graphical editors.
+
+Reviewed [MonoSketch](https://github.com/tuanchauict/MonoSketch) (Apache-2.0) and
+[ASCIIFlow](https://github.com/lewish/asciiflow) as graphical editing references.
+Their cell-grid rectangles, line/arrow tools and text selection are relevant, but
+their browser applications are not native egui components. No browser UI or engine
+is embedded. The baseline remains highlighted source with immediate rendering and
+errors; a future cell editor must preserve the shared history/save lifecycle.
+
+`pipeline.goat`, `unicode.goat` and `goat.md` are authored review fixtures, also
+copied to `/home/vega/Documents/type_testing/md_extensions/`. Closed rounded or
+Unicode frames provide conservative clipboard hints; shared square-box syntax
+retains its existing SvgBob hint. Fenced Markdown is never inferred as raw GoAT.
+
+Architecture measurement includes the imported upstream GoAT/CSS packages and
+their existing duplication. The application adds one compiled renderer adapter
+and its build/transport glue, reusing CommandRequest, native SVG composition and
+all source/cache owners. The additional exhaustive renderer dispatch case is
+necessary format-catalog growth. Original third-party license duplication is
+retained for correct attribution rather than changed to influence metrics.
+
+Validation: offline Go helper tests passed, as did the 48 core diagram tests,
+61 render diagram tests and both desktop hosts' worker integration tests. The
+relocated-companion test passes. Both desktop binaries build successfully; strict
+Clippy across core, render, studios and both hosts' all-targets passes without
+warnings. The native dark-theme acceptance run passed all 22 observations for
+Nomnoml, DBML and GoAT strips, hover, source/errors and embedded Markdown.
+Final architecture comparison retains maximum CCN 195 and reduces duplication
+by 0.06 percentage points. The imported upstream sources account for the new
+algorithm hotspots/clone groups; the shared Go adapter test XML counter removes
+the newly introduced local test duplication. Existing catalog/lookup tables and
+untouched viewer clones remain, along with original license texts.

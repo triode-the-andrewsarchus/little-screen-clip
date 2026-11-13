@@ -11,6 +11,7 @@ EXAMPLES = Path(__file__).resolve().parents[1] / "docs/examples/diagrams"
 FAMILIES = {
     "nomnoml": ("Nomnoml", "pipeline.nomnoml", (144, 238, 144), "[Broken"),
     "dbml": ("DBML", "schema.dbml", (34, 56, 77), "Table broken {"),
+    "goat": ("GoAT", "pipeline.goat", (17, 17, 17), "a\tb"),
 }
 
 

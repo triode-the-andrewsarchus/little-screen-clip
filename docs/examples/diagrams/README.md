@@ -124,3 +124,12 @@ open highlighted source/live preview; standalone strips show the whole schema.
 Unsupported newer DBML constructs report errors, and metadata not drawn in the
 initial diagram has visible limitations. Partials, records and optional relationship
 operators remain compatibility work.
+
+## GoAT ASCII and box drawing
+
+[GoAT examples](goat.md) embed `pipeline.goat`. `unicode.goat` exercises the
+separate upstream Unicode-box frontend. Both use the compiled, bundled GoAT
+engine and native SVG/font/raster handling. Tabs are reported rather than
+silently expanded; use spaces for the authored character grid. `.goat` files open
+highlighted source/live preview with rendered list strips and hover popouts.
+Building requires Go 1.25+; deployments keep the versioned companion executable.

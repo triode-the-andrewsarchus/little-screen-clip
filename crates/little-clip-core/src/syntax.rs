@@ -330,6 +330,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "wireviz" => Some("wireviz"),
         "nomnoml" | "noml" => Some("nomnoml"),
         "dbml" => Some("dbml"),
+        "goat" => Some("goat"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -461,6 +462,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "wireviz" => "WireViz",
         "nomnoml" => "Nomnoml",
         "dbml" => "DBML",
+        "goat" => "GoAT",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -598,10 +600,14 @@ pub const NOMNOML_SUBLIME_SYNTAX: &str = include_str!("syntax/nomnoml.sublime-sy
 /// Database schema declarations and inert SQL expressions.
 pub const DBML_SUBLIME_SYNTAX: &str = include_str!("syntax/dbml.sublime-syntax");
 
+/// Fixed-grid ASCII and Unicode diagram highlighting.
+pub const GOAT_SUBLIME_SYNTAX: &str = include_str!("syntax/goat.sublime-syntax");
+
 /// Shared native diagram grammars used by both screen and desktop source views.
 pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
     NOMNOML_SUBLIME_SYNTAX,
     DBML_SUBLIME_SYNTAX,
+    GOAT_SUBLIME_SYNTAX,
     PIKCHR_SUBLIME_SYNTAX,
     SVGBOB_SUBLIME_SYNTAX,
     LINI_SUBLIME_SYNTAX,

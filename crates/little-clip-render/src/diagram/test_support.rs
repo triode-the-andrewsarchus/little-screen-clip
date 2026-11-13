@@ -29,6 +29,17 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
             true,
         ),
         ("dbml", "Table broken {", false),
+        (
+            "goat",
+            include_str!("../../../../docs/examples/diagrams/pipeline.goat"),
+            true,
+        ),
+        (
+            "goat",
+            include_str!("../../../../docs/examples/diagrams/unicode.goat"),
+            true,
+        ),
+        ("goat", "a\tb", false),
         ("nomnoml", "#import: /etc/passwd\n[A]", false),
         (
             "wireviz",

@@ -29,6 +29,7 @@ pub enum Format {
     Wireviz,
     Nomnoml,
     Dbml,
+    Goat,
     Math,
     MathInline,
 }
@@ -53,6 +54,7 @@ impl Format {
             "wireviz" => Some(Self::Wireviz),
             "nomnoml" | "noml" => Some(Self::Nomnoml),
             "dbml" => Some(Self::Dbml),
+            "goat" => Some(Self::Goat),
             _ => None,
         }
     }
@@ -104,6 +106,7 @@ impl Format {
             "wireviz" => Some(Self::Wireviz),
             "nomnoml" | "noml" => Some(Self::Nomnoml),
             "dbml" => Some(Self::Dbml),
+            "goat" => Some(Self::Goat),
             _ => None,
         }
     }
@@ -166,6 +169,7 @@ impl Format {
             (Self::Lini, lini_signature),
             (Self::D2, d2_signature),
             (Self::Svgbob, svgbob_signature),
+            (Self::Goat, goat_signature),
         ];
         signatures
             .iter()
@@ -189,6 +193,7 @@ impl Format {
             Self::Wireviz => Some("wireviz"),
             Self::Nomnoml => Some("nomnoml"),
             Self::Dbml => Some("dbml"),
+            Self::Goat => Some("goat"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -208,6 +213,7 @@ impl Format {
             Self::Wireviz => "WireViz",
             Self::Nomnoml => "Nomnoml",
             Self::Dbml => "DBML",
+            Self::Goat => "GoAT",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
@@ -315,6 +321,44 @@ fn d2_signature(source: &str) -> bool {
             .lines()
             .skip(1)
             .any(|line| line.contains("->") || line.contains("shape:"))
+}
+
+fn goat_signature(source: &str) -> bool {
+    if source.len() > 32 * 1024 {
+        return false;
+    }
+    // Shared square boxes retain the SvgBob hint. Closed rounded/Unicode
+    // frames provide a conservative GoAT hint without claiming prose or fences.
+    let lines = source
+        .trim()
+        .lines()
+        .take(129)
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    if lines.len() < 3 || lines.len() > 128 {
+        return false;
+    }
+    let top = lines[0];
+    let bottom = lines[lines.len() - 1];
+    let corners = (
+        top.chars().next(),
+        top.chars().last(),
+        bottom.chars().next(),
+        bottom.chars().last(),
+    );
+    let frame = match corners {
+        (Some('.'), Some('.'), Some('\''), Some('\'')) => top.contains('-') && bottom.contains('-'),
+        (Some('╭' | '┌'), Some('╮' | '┐'), Some('╰' | '└'), Some('╯' | '┘')) => {
+            top.contains('─') && bottom.contains('─')
+        }
+        _ => false,
+    };
+    frame
+        && lines
+            .iter()
+            .skip(1)
+            .take(lines.len() - 2)
+            .any(|line| line.contains('|') || line.contains('│'))
 }
 
 fn svgbob_signature(source: &str) -> bool {
@@ -504,6 +548,28 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn goat_signatures_use_complete_frames_without_stealing_square_boxes_or_markdown() {
+        assert_eq!(Format::from_extension("GOAT"), Some(Format::Goat));
+        assert_eq!(Format::from_language("goat"), Some(Format::Goat));
+        assert_eq!(Format::Goat.source_extension(), Some("goat"));
+        for source in [".----.\n| hi |\n'----'", "╭────╮\n│ hi │\n╰────╯"]
+        {
+            assert_eq!(Format::from_snippet(source), Some(Format::Goat));
+            assert_eq!(
+                Format::from_snippet(&format!("```goat\n{source}\n```")),
+                None
+            );
+        }
+        assert_eq!(
+            Format::from_snippet("+----+\n| hi |\n+----+"),
+            Some(Format::Svgbob)
+        );
+        for source in [".----.", "...\nwords\n'---'", "ordinary text"] {
+            assert_eq!(Format::from_snippet(source), None);
+        }
+    }
+
     #[test]
     fn fenced_markdown_keeps_its_document_route_instead_of_a_raw_diagram_hint() {
         for (language, body) in [

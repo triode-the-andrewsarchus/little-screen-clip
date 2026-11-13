@@ -414,6 +414,7 @@ fn failed_clipboard_diagrams_remain_readable_highlighted_text() {
         ("wireviz", "WireViz"),
         ("nomnoml", "Nomnoml"),
         ("dbml", "DBML"),
+        ("goat", "GoAT"),
     ] {
         assert_eq!(find_syntax(language).name, expected);
     }

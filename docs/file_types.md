@@ -230,7 +230,7 @@
         - [x] Nomnoml UML diagrams (`nomnoml`) — pinned upstream renderer in bounded embedded QuickJS, native SVG/raster previews and diagnostics
         - [x] Pikchr diagrams (`pikchr`) — compiled Rust renderer, bounded native helper, large/small previews
         - [x] Svgbob ASCII art diagrams (`svgbob`) — native SVG/raster output, large/small previews
-        - [ ] GoAT ASCII diagrams (`goat`)
+        - [x] GoAT ASCII diagrams (`goat`) — pinned upstream ASCII/Unicode rendering through a bundled static helper; native SVG composition, bounded large/small previews
         - [x] Lini text diagrams (`lini`) — original Rust compiler, static SVG, large/small previews and visible warnings
         - [ ] TikZ / PGF diagrams (`tikz`, `pgf`)
         - [ ] UMLet diagrams (`umlet`)
@@ -572,7 +572,7 @@
     - [ ] `.bob`, `.svgbob` — Svgbob ASCII-to-SVG diagram (May need disambiguation with BOB raytracer / CAD files on `.bob`)
       - [x] `.svgbob` — native previews, highlighted source/live preview/errors and guarded saves
       - [ ] `.bob` content disambiguation and graphical cell editing
-    - [ ] `.goat` — GoAT ASCII diagram
+    - [x] `.goat` — GoAT ASCII/Unicode diagram; highlighted source/live preview, list strips and enlarged hover
     - [x] `.lini` — native highlighted source/live-preview editor with diagnostics and guarded saves; graphical manipulation pending
   - [ ] Scientific and statistical charting specifications
     - [ ] `.vg.json`, `.vega` — Vega visualization specification (conventional compound extension for JSON)

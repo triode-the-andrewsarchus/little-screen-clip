@@ -809,6 +809,7 @@ mod tests {
             "drawing.nomnoml",
             "drawing.noml",
             "schema.dbml",
+            "diagram.goat",
             "drawing.excalidraw",
             "drawing.excalidraw.json",
             "DRAWING.PIKCHR",
