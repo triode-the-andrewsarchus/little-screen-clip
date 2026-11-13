@@ -8,6 +8,7 @@ saved fixture bytes prove every edit and exact shared-session undo.
 from pathlib import Path
 
 from diagram_vector_acceptance import color_bounds
+from constellation_pitch_acceptance import control as isolated_control
 from file_manager_acceptance import (
     application_arguments,
     media_fixture_directory,
@@ -36,14 +37,18 @@ def open_fixture(session, name, shot):
 
 def canvas_observation(session, name, expected):
     """Wait for colored canonical SVG artwork, rather than source text matches."""
+    # Fit once, including immediately after Save while rendering may be pending.
+    # Production retains that request until current-source geometry arrives.
+    session.click(241, 260)
     def rendered():
-        session.observe(name, ["Flowchart editor", *expected], timeout_seconds=45)
+        session.observe(name, ["Flowchart editor"], timeout_seconds=45)
         try:
             color_bounds(session.output / f"{name}.png")
             color_bounds(session.output / f"{name}.png", (211, 249, 216))
-            return True
         except AssertionError:
             return False
+        session.observe(name, ["Flowchart editor", *expected], timeout_seconds=45)
+        return True
     wait_for(rendered, "both authored Mermaid nodes rendered on the native canvas")
 
 
@@ -92,16 +97,25 @@ def add_and_connect(session, path):
     # native canvas in the harness's fixed 1280 x 800 client.
     _, y = session.word("06-label-undone", "step", minimum_y=250)
     replace_field(session, 1040, y + 27, "Review")
-    session.observe("07-add-ready", ["Review", "Add node"])
-    control(session, "07-add-ready", "Add", minimum_y=y + 35)
+    session.click(430, 300)  # Remove the text caret before OCR of the entered label.
+    session.observe("07-add-ready", ["Review", "Add step"])
+    # Light-theme OCR omits this bordered button even in the inspector crop;
+    # the screenshot records the visible control and saved bytes prove its action.
+    session.click(973, 398)
     added = SOURCE + b'node_1["Review"];\n'
     save_exact(session, path, added, "Add node appends one ordinary Mermaid declaration")
     canvas_observation(session, "08-node-added", ["Review", "Publish"])
 
     select_blue_node(session, "08-node-added")
-    session.observe("09-connect-source", ["Apply label", "Connect to node"])
-    control(session, "09-connect-source", "Connect", minimum_y=300)
-    session.observe("10-connect-destination", ["Connect from prepare", "Review"])
+    # One normal inspector scroll reveals Connect below the label fields.
+    # The existing isolated-control locator handles its pale light-theme border.
+    private.run_checked([str(session.pointer), "scroll", "1280", "800",
+                         "1100", "600", "150"], env=session.env)
+    session.observe("09-connect-source", ["Connection label"])
+    session.click(*isolated_control(session, "09-connect-source", "Connect",
+                                   (930, 284, 1180, 654)))
+    session.scroll_to_visible("10-connect-destination", ["Connect from prepare"],
+                              position=(1100, 600))
     # Review occurs on the canvas before the inspector's node list. Selecting
     # its rendered label exercises actual renderer geometry hit testing.
     control(session, "10-connect-destination", "Review", minimum_y=300)
@@ -121,15 +135,18 @@ def source_only_family(session, root):
                     "Graphical editing currently supports Mermaid flowcharts"], timeout_seconds=45)
     # Unsupported graphical families retain the normal highlighted source
     # editor and live preview. Use its actual source field and shared Save.
-    point = session.word("15-sequence-source", "sequenceDiagram", tree=True)
     changed = SEQUENCE.replace(b"Hello", b"Welcome")
-    replace_field(session, point[0] + 20, point[1], changed.decode())
+    # The highlighted keyword's OCR case differs by theme; target its visible
+    # source field directly in the fixed private studio, then prove saved bytes.
+    replace_field(session, 200, 294, changed.decode())
     path = root / "b-sequence.mermaid"
     save_exact(session, path, changed, "unsupported graphical family remains source editable")
     session.observe("16-sequence-edited", ["Welcome", "Graphical editing currently supports"])
     # Leave text-field undo explicitly and invoke the visible shared Undo
     # button, whose saved transaction restores the exact original source.
-    control(session, "16-sequence-edited", "Undo")
+    # Full-window OCR omits this small bordered control in dark mode. Its
+    # visible position follows the two-line source-only notice in this fixture.
+    session.click(125, 747)
     save_exact(session, path, SEQUENCE, "source-only family shares exact source Undo and Save")
     session.observe("17-sequence-restored", ["Hello", "Graphical editing currently supports"])
 
@@ -137,9 +154,11 @@ def source_only_family(session, root):
 def exercise(session, root):
     path = root / "a-flowchart.mermaid"
     open_fixture(session, path.name, "00")
-    session.observe("01-source-and-preview", ["Flowchart editor", "Source", "Prepare", "Publish"],
+    session.observe("01-source-and-preview", ["Flowchart editor", "Prepare", "Publish"],
                     timeout_seconds=45)
-    control(session, "01-source-and-preview", "Source")
+    # OCR merges the checked glyph with "Source". This visible checkbox has
+    # the same fixed toolbar position in both themes on the private client.
+    session.click(277, 260)
     canvas_observation(session, "02-canvas", ["Prepare", "Publish"])
     label_edit(session, path)
     add_and_connect(session, path)

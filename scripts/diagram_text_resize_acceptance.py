@@ -124,15 +124,37 @@ def undo_exact(session, path, screen, expected, shot):
 
 def replace_text(session, shot, value):
     session.observe(shot, ["Drawing text", "Apply text"])
-    apply = (session.word(shot, "Apply", minimum_y=280, required=False, last=True) or
-             isolated_control(session, shot, "Apply", (700, 280, 1180, 650)))
+    apply = (session.word(shot, "Apply", minimum_y=160, required=False, last=True) or
+             isolated_control(session, shot, "Apply", (800, 140, 1180, 430)))
     # The three-row native TextEdit lies immediately above its Apply button.
     session.click(apply[0] + 120, apply[1] - 40)
     session.key("a", "ctrl")
     private.run_checked(["wtype", value], env=session.env)
+    # Defocus the field before OCR: its caret can turn a final 'e' into 'd'
+    # in light appearance. The form heading leaves the exact draft intact.
+    session.click(apply[0] + 120, apply[1] - 116)
     session.observe(shot + "-entered", [value, "Apply text"])
     # The form remains at its user-owned position while this field is edited.
     session.click(apply[0] + 8, apply[1])
+    return apply
+
+
+def text_artwork(session, shot, bounds, previous=None):
+    # Handwritten Excalifont N is sometimes recognized as W by OCR. Verify
+    # actual dark glyphs in the source-proven text bounds instead; the source
+    # assertions below establish exact text content and element identity.
+    result = []
+    def visible():
+        artwork(session, shot)
+        with Image.open(session.output / f"{shot}.png").convert("RGB") as image:
+            ink = [max(pixel) < 120 for pixel in image.crop(bounds).get_flattened_data()]
+        if sum(ink) > 150 and (previous is None or
+                              sum(a != b for a, b in zip(ink, previous)) > 80):
+            result[:] = ink
+            return True
+        return False
+    wait_for(visible, "native glyph artwork appears or changes in the saved text bounds")
+    return result
 
 
 def text_edits(session, path, blue):
@@ -149,7 +171,9 @@ def text_edits(session, path, blue):
     new_text = next(entry for entry in created["elements"] if entry["id"] not in initial_ids)
     assert new_text["type"] == "text" and new_text["text"] == "Native note"
     assert new_text["originalText"] == "Native note" and new_text.get("containerId") is None
-    artwork(session, "05-text-created", ["Native note"])
+    text_bounds = (*screen(new_text["x"], new_text["y"]),
+                   *screen(new_text["x"] + new_text["width"], new_text["y"] + new_text["height"]))
+    created_ink = text_artwork(session, "05-text-created", text_bounds)
     # Click the actual outlined text, with its saved source position as evidence.
     session.click(*screen(new_text["x"] + 10, new_text["y"] + new_text["height"] / 2))
     replace_text(session, "06-edit-text", "Edited note")
@@ -157,7 +181,7 @@ def text_edits(session, path, blue):
         lambda doc: element(doc, new_text["id"])["text"] == "Edited note",
         "Text editing updates the same source element")
     assert element(edited, new_text["id"])["originalText"] == "Edited note"
-    artwork(session, "07-text-edited", ["Edited note"])
+    text_artwork(session, "07-text-edited", text_bounds, created_ink)
     undo_exact(session, path, screen, created_bytes, "08-text-edit-undone")
     undo_exact(session, path, screen, SOURCE, "09-text-create-undone")
 
@@ -168,7 +192,7 @@ def label_binding(session, path, blue):
     session.observe("10-label-target", ["Add label", "Pencil"])
     control(session, "10-label-target", "label")
     replace_text(session, "11-add-label", "Bound label")
-    _, labelled = save_document(session, path,
+    labelled_bytes, labelled = save_document(session, path,
         lambda doc: len(element(doc, "capture")["boundElements"]) == 2,
         "A new label is added without dropping existing arrow reference metadata")
     refs = element(labelled, "capture")["boundElements"]
@@ -176,6 +200,23 @@ def label_binding(session, path, blue):
     label = element(labelled, label_ref["id"])
     assert label["containerId"] == "capture" and label["text"] == "Bound label"
     artwork(session, "12-label-bound", ["Bound label"])
+    # Reject a real over-wide bound replacement, then prove its exact typed
+    # input survives. Clipboard reads stay on this run's private Wayland socket.
+    session.click(*screen(label["x"] + 10, label["y"] + label["height"] / 2))
+    rejected = "Oversized replacement label text"
+    apply = replace_text(session, "12a-label-too-wide", rejected)
+    session.observe("12b-label-rejected", [rejected, "does not fit its container", "Apply text"])
+    assert path.read_bytes() == labelled_bytes, "a rejected label cannot change the source"
+    session.click(apply[0] + 120, apply[1] - 40)
+    session.key("a", "ctrl")
+    session.key("c", "ctrl")
+    copied = private.run_checked(["wl-paste", "--no-newline"], env=session.env)
+    assert copied == rejected, "rejected acceptance must retain exact entered draft text"
+    replace_text(session, "12c-label-recover", "Safe label")
+    save_document(session, path,
+        lambda doc: element(doc, label["id"])["text"] == "Safe label",
+        "The retained failed draft can be corrected and accepted")
+    undo_exact(session, path, screen, labelled_bytes, "12d-correction-undone")
     undo_exact(session, path, screen, SOURCE, "13-label-undone")
 
 
@@ -220,12 +261,6 @@ def resize_box(session, path, blue, green):
     undo_exact(session, path, screen, SOURCE, "16-resize-undone")
 
 
-def colorful_pixels(path, bounds):
-    with Image.open(path).convert("RGB") as image:
-        crop = image.crop(tuple(round(value) for value in bounds))
-        return sum(max(pixel) - min(pixel) > 70 for pixel in crop.get_flattened_data())
-
-
 def resize_cropped_image(session, path, blue):
     scale, screen = mapping(blue)
     image = element(ORIGINAL, "embedded-image")
@@ -235,12 +270,18 @@ def resize_cropped_image(session, path, blue):
     start = screen(image["x"] + image["width"], image["y"] + image["height"])
     end = (start[0] + 24, start[1] + 18)
     top_left = screen(image["x"], image["y"])
-    area = (*top_left, end[0] - 2, end[1] - 2)
-    before = colorful_pixels(session.output / "17-image-selected.png", area)
-    assert before > 1000, "the authored cropped/flipped raster is visible"
+    # Probe well inside newly exposed right/bottom strips. Counting saturation
+    # over the whole ROI also counts cyan selection borders, whose position
+    # changes during resize and is not evidence of raster artwork.
+    strips = [(start[0] + 12, (top_left[1] + start[1]) // 2),
+              ((top_left[0] + start[0]) // 2, start[1] + 9)]
+    with Image.open(session.output / "17-image-selected.png").convert("RGB") as before:
+        assert all(min(before.getpixel(point)) > 240 for point in strips), strips
     with held_drag(session, start, end, "18-image-resize-held", path, SOURCE):
-        during = colorful_pixels(session.output / "18-image-resize-held.png", area)
-        assert during > before * 1.15, (before, during)
+        with Image.open(session.output / "18-image-resize-held.png").convert("RGB") as held:
+            for point in strips:
+                pixel = held.getpixel(point)
+                assert max(pixel) - min(pixel) > 40 and min(pixel) < 220, (point, pixel)
     _, resized = save_document(session, path,
         lambda doc: element(doc, "embedded-image")["width"] > image["width"] + 5,
         "Resized image preserves its authored crop, flip, resource and file identity")

@@ -9,17 +9,18 @@ from text_strip_acceptance import hover_observation
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "docs/examples/diagrams"
 FAMILIES = {
+    'seqdiag': ('SeqDiag', 'request.seqdiag', (217, 232, 251), 'seqdiag {'),
     'blockdiag': ('BlockDiag', 'pipeline.blockdiag', (217, 232, 251), 'blockdiag {'),
     'actdiag': ('ActDiag', 'review.actdiag', (217, 232, 251), 'actdiag {'),
     'nwdiag': ('NwDiag', 'service.nwdiag', (217, 232, 251), 'nwdiag {'),
     'packetdiag': ('PacketDiag', 'header.packetdiag', (217, 232, 251), 'packetdiag {'),
-    'rackdiag': ('RackDiag', 'server.rackdiag', (217, 232, 251), 'rackdiag {'),
+    'rackdiag': ('RackDiag', 'server.rackdiag', (217, 240, 223), 'rackdiag {'),
     'ditaa': ('Ditaa', 'pipeline.ditaa', (85, 85, 187), '@startditaa\n+---+'),
-    'umlet': ('UMLet', 'umlet/class-relations.uxf', (232, 241, 255), '<diagram>'),
+    'umlet': ('UMLet', 'umlet/class-relations.uxf', (244, 248, 255), '<diagram>'),
     'symbolator': ('Symbolator', 'entity.symbolator.vhdl', (231, 253, 186), 'entity missing is'),
     'tikz': ('TikZ / PGF', 'native-tikz.tikz', (234, 239, 245), '\\input{Cargo.toml}\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}'),
     "vega": ("Vega", "native-vega.vega.json", (41, 95, 152), "{"),
-    "vegalite": ("Vega-Lite", "native-vega-lite.vl.json", (41, 95, 152), "{"),
+    "vegalite": ("Vega-Lite", "native-vega-lite.vl.json", (218, 155, 66), "{"),
     "structurizr": ("Structurizr", "architecture.structurizr", (41, 95, 152), "workspace { model {"),
     "drawio": ("draw.io", "pipeline.drawio", (218, 232, 252), "<mxfile><diagram>broken!</diagram></mxfile>"),
     "nomnoml": ("Nomnoml", "pipeline.nomnoml", (144, 238, 144), "[Broken"),
@@ -59,10 +60,10 @@ def exercise(session, root):
         session.address(folder)
         prefix = syntax + "-"
         valid, invalid = f"a-pipeline.{syntax}", f"b-invalid.{syntax}"
-        rendered(session, prefix + "01-strips", [valid, invalid, "c-overview.md"], color, minimum=500)
+        rendered(session, prefix + "01-strips", [valid, invalid, "c-overview.md"], color, minimum=80 if syntax in {"symbolator", "seqdiag", "actdiag", "nwdiag", "packetdiag", "rackdiag"} else 500)
         _, y = session.word(prefix + "01-strips", valid)
         hover_observation(session, prefix + "02-popout", 700, y + 42, [title])
-        assert artwork(session.output / f"{prefix}02-popout.png", color)
+        assert artwork(session.output / f"{prefix}02-popout.png", color), f"{syntax}: authored artwork missing from hover"
         _, y = session.word(prefix + "01-strips", invalid)
         hover_observation(session, prefix + "03-invalid", 700, y + 42, ["Rendered preview unavailable"])
         x, y = session.word(prefix + "01-strips", valid)

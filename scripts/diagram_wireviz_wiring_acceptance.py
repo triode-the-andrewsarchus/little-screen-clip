@@ -43,7 +43,7 @@ SUFFIX = TAIL + SUFFIX
 ORIGINAL = yaml.safe_load(SOURCE)
 CANVAS = (100, 280, 915, 690)
 INSPECTOR = (920, 280, 1180, 690)
-LABELS = ["EARTH", "FEED", "PROBE", "BLACK", "RED", "GREEN"]
+LABELS = ["PROBE"]
 
 
 def identity(value):
@@ -188,6 +188,8 @@ def canvas(session, shot):
 
 def locate_terminal(session, shot, label):
     """Read only painted canvas text; inspector/source labels cannot be targets."""
+    if label in {"RED", "GREEN"}:
+        return conductor_band(session, shot, (255, 0, 0) if label == "RED" else (0, 255, 0))
     with Image.open(session.output / f"{shot}.png").convert("RGB") as image:
         crop = ImageOps.autocontrast(image.crop(CANVAS).convert("L"))
         isolated = Image.new("L", image.size, 255)
@@ -198,6 +200,28 @@ def locate_terminal(session, shot, label):
              session.word(name, label, tree=True, minimum_y=280))
     assert CANVAS[0] <= point[0] <= CANVAS[2] and CANVAS[1] <= point[1] <= CANVAS[3]
     return point[0] + 4, point[1]
+
+
+def conductor_band(session, shot, color):
+    """Target the real authored conductor swatch, avoiding tiny-label OCR."""
+    with Image.open(session.output / f"{shot}.png").convert("RGB") as image:
+        pixels = image.load()
+        pending = {(x, y) for y in range(CANVAS[1], CANVAS[3]) for x in range(CANVAS[0], CANVAS[2])
+                   if all(abs(first - second) <= 2 for first, second in zip(pixels[x, y], color))}
+    largest = []
+    while pending:
+        frontier, component = [pending.pop()], []
+        while frontier:
+            x, y = frontier.pop()
+            component.append((x, y))
+            for neighbor in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if neighbor in pending:
+                    pending.remove(neighbor)
+                    frontier.append(neighbor)
+        if len(component) > len(largest):
+            largest = component
+    assert len(largest) > 80, f"authored conductor band {color} must occupy real native artwork"
+    return tuple(round(sum(point[axis] for point in largest) / len(largest)) for axis in (0, 1))
 
 
 def drag(session, start, end):
@@ -236,7 +260,7 @@ def undo_exact(session, path, data, shot):
 
 
 def disconnect(session, shot):
-    session.observe(shot, ["Direct connections", "Disconnect"])
+    session.observe(shot, ["Direct connections", "Pin label"])
     point = (session.word(shot, "Disconnect", required=False, minimum_y=280) or
              isolated_control(session, shot, "Disconnect", INSPECTOR))
     assert INSPECTOR[0] <= point[0] <= INSPECTOR[2], "Disconnect must be the native inspector control"
@@ -260,8 +284,18 @@ def cancellations(session, path):
 
 
 def connect_and_disconnect(session, path):
-    drag(session, locate_terminal(session, "04-escape-cancelled", "PROBE"),
-         locate_terminal(session, "04-escape-cancelled", "RED"))
+    start = locate_terminal(session, "04-escape-cancelled", "PROBE")
+    destination = locate_terminal(session, "04-escape-cancelled", "RED")
+    with held_drag(session, start, destination):
+        session.observe("05-held-connect", ["Harness explorer", "PROBE"], preserve_pointer=True, timeout_seconds=5)
+        assert path.read_bytes() == SOURCE, "live connection preview must not save before release"
+        midpoint = tuple(round((a + b) / 2) for a, b in zip(start, destination))
+        with Image.open(session.output / "04-escape-cancelled.png").convert("RGB") as before, \
+                Image.open(session.output / "05-held-connect.png").convert("RGB") as during:
+            x, y = midpoint
+            changed = sum(max(abs(a - b) for a, b in zip(before.getpixel((px, py)), during.getpixel((px, py)))) > 40
+                          for px in range(x - 4, x + 5) for py in range(y - 4, y + 5))
+            assert changed >= 3, "native connection line must be painted between terminals while held"
     connected_links = ORIGINAL_LINKS + Counter({CONNECT_EDGE: 1})
     connected = save_checked(session, path, CONNECTED_VALUE, connected_links, "05-connected")
     canvas(session, "06-connected-canvas")

@@ -28,6 +28,7 @@ blockdiag {
 ```seqdiag
 seqdiag {
   default_fontsize = 14;
+  browser [color = "#d9e8fb"];
   browser -> service [label = "GET /preview"];
   service -> cache [label = "Find source"];
   service <-- cache [label = "Cached diagram"];
@@ -96,7 +97,7 @@ rackdiag {
     1: Switch [color = "#d9e8fb"];
     3: Render [2U, color = "#d9f0df"];
     6: Storage [3U];
-    10: Backup [2U];
+    10: Backup [2U, color = "#d9f0df"];
   }
 }
 ```
