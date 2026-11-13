@@ -26,9 +26,13 @@ pub struct Geometry {
     pub size: egui::Vec2,
     pub groups: HashMap<String, egui::Rect>,
 }
-/// Per-frame translations and ready replacement geometry for named SVG groups.
+/// Per-frame transforms and ready replacement geometry for named SVG groups.
 #[derive(Clone, Default)]
 pub struct Changes {
+    /// Local affine coefficients `[a, b, c, d, e, f]`: `x' = ax + cy + e`,
+    /// `y' = bx + dy + f`. Applied after the canonical group transform, before
+    /// clipping and any additional local translation or replacement artwork.
+    pub transforms: HashMap<String, [f32; 6]>,
     pub translations: HashMap<String, [f32; 2]>,
     pub replacements: HashMap<String, Replacement>,
 }
@@ -133,6 +137,14 @@ impl Scene {
         image_rect: egui::Rect,
         motion: Changes,
     ) -> Result<(), String> {
+        if motion
+            .transforms
+            .values()
+            .flatten()
+            .any(|coefficient| !coefficient.is_finite())
+        {
+            return Err("Native drawing transforms must have finite coefficients.".into());
+        }
         let scene = self.clone();
         super::paint_with(ui, rect, move |canvas, scenes| {
             let cached = scenes
@@ -272,6 +284,9 @@ impl Cached {
     ) -> Result<(), String> {
         canvas.save();
         apply_transform(canvas, group.transform());
+        if let Some(coefficients) = motion.transforms.get(group.id()) {
+            canvas.set_transform(&Transform2D(*coefficients));
+        }
         if let Some([x, y]) = motion.translations.get(group.id()) {
             canvas.translate(*x, *y);
         }
