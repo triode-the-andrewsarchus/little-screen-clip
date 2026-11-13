@@ -42,12 +42,16 @@
     - [x] `.hdr`
     - [x] `.heic`, `.heif`
       - [ ] ISOBMFF metadata items (`meta` box, EXIF, XMP), auxiliary depth maps, and burst sequences
+    - [ ] `.bpg` — Better Portable Graphics (HEVC intra-frame image encoding, 8 to 14-bit depth, RGB/YCbCr, alpha channel, animation, and embedded EXIF/XMP/ICC metadata)
     - [x] `.ico`
     - [x] `.jpg`, `.jpeg`
       - [ ] EXIF, IPTC, and XMP metadata blocks (camera settings, timestamps, GPS geolocation)
       - [ ] Embedded ICC color profile (`APP2`) and embedded thumbnail extraction
+      - [ ] AI generation metadata (prompts, seeds, parameters in EXIF UserComment, IPTC, or XMP packets)
     - [x] `.png`, `.apng`
-      - [ ] Textual metadata chunks (`tEXt`, `zTXt`, `iTXt`, including AI generation prompts/parameters)
+      - [ ] Textual metadata chunks (`tEXt`, `zTXt`, `iTXt`, including AI generation prompts, seeds, and generation parameters)
+      - [ ] AI character cards (`chara` and `ccv3` JSON metadata chunks; extract character definitions, personality, and worldbook metadata)
+      - [ ] ComfyUI-generated images (workflow JSON and prompt graph extraction; node layout and connection visualization)
       - [ ] Embedded ICC color profile (`iCCP`) and EXIF chunk (`eXIf`)
       - [ ] Animation control metadata chunks (`acTL`, `fcTL`)
     - [x] `.pnm`, `.pbm`, `.pgm`, `.ppm`
@@ -62,6 +66,7 @@
       - [ ] Multi-page image directories (IFDs)
     - [x] `.webp` — still and animated
       - [ ] EXIF, XMP, and ICC profile chunks
+      - [ ] AI generation metadata (prompts, seeds, and parameters in EXIF or XMP chunks)
       - [ ] Animation frame timing and canvas size metadata
     - [x] `.jxl` — JPEG XL still images (codestream and container, RGB/grayscale/alpha, 8/16-bit and float); shared photo previews and Image Studio edits with raster export; original JPEG XL bytes preserved (no JPEG XL encoder or animation playback)
     - [x] `.jp2`, `.j2k`, `.jpf` — JPEG 2000 still images: JP2-compatible containers and raw codestreams (also `.jpg2`, `.j2c`, `.jpc`); shared photo/color strips and Image Studio with 8-bit display and raster export, preserving originals
@@ -82,6 +87,9 @@
     - [x] `.kra` — Krita saved composites in shared photo/color previews and Image Studio, with raster edits/export and original archive preservation (no native layer editing, KRA writer or KRZ support)
       - [x] Document properties (`maindoc.xml`: canvas dimensions, color space/profile, selectable layer/group tree, visibility, opacity, blend identifiers and source offsets)
       - [x] Embedded thumbnail (`preview.png`) and full-resolution saved canvas (`mergedimage.png`); bounded ZIP/XML/PNG reading without following layer references
+    - [ ] `.ora` — OpenRaster layer-aware image document
+      - [ ] Stack composition (`stack.xml`: canvas dimensions, layer/group tree, visibility, opacity, blend modes, and composite offsets)
+      - [ ] Embedded full-resolution preview (`mergedimage.png`) and thumbnail (`Thumbnails/thumbnail.png`)
     - [ ] `.afphoto`, `.afdesign`, `.afpub` — Serif Affinity suite (Photo, Designer, Publisher)
       - [ ] Compound document properties and embedded thumbnail preview
     - [ ] `.pxd`, `.pxm` — Pixelmator / Pixelmator Pro document
@@ -91,6 +99,7 @@
     - [ ] `.drm` — Procreate Dreams animation project
     - [ ] `.heics`, `.heifs` — HEIC / HEIF image sequence
     - [ ] `.icc`, `.icm` — ICC color profile / Image Color Matching profile
+    - [ ] `.cube` — 3D LUT (Look-Up Table) color grading transform (Adobe Premiere, DaVinci Resolve, Blender; `LUT_3D_SIZE` dimensions, domain bounds, 3D RGB lattice transform values, and swatch/histogram preview)
     - [x] `.jfif` — JPEG File Interchange Format; photo/list previews, Image Studio editing and quality-controlled JPEG export
     - [ ] `.jxr`, `.wdp` — JPEG XR / Windows Media Photo
     - [ ] `.ktx`, `.ktx2` — Khronos Texture format (ASTC/BCn and Basis Universal)
@@ -100,6 +109,9 @@
     - [ ] `.sgi`, `.rgb` — Silicon Graphics Image
     - [x] `.svgz` — gzip-compressed SVG; bounded photo/list previews and Image Studio editing with raster export (requires `rsvg-convert`; preserves compressed originals, limits expanded XML to 64 MiB)
     - [ ] `.xpm`, `.xbm` — X11 pixmap / bitmap
+    - [ ] `.aseprite`, `.ase` — Aseprite animated pixel art sprite (canvas dimensions, color depth, layers, frame timing, animation tags, embedded color palette, and user slices)
+    - [ ] `.gpl` — GIMP / Krita / Aseprite color palette (palette name, column count, RGB color channels, and color labels)
+    - [ ] `.ase` — Adobe Swatch Exchange color palette (RGB, CMYK, Lab, and grayscale swatch definitions and color groups; distinguish from Aseprite sprites)
 - [ ] Fonts
   - [x] `.ttf`, `.ttc` — TrueType font / collection; interactive specimens, character coverage, collection faces, and list strips
     - [ ] Naming table metadata (`name` table: family, subfamily, designer, license, version)
@@ -168,15 +180,21 @@
     - [ ] Vorbis comments, embedded cover art (`METADATA_BLOCK_PICTURE`), and cue sheets
   - [x] `.mp3`
     - [ ] ID3v1, ID3v2.3, ID3v2.4 tags (title, artist, album, track, cover art, replaygain) and APEv2 tags
+    - [ ] Colored waveform and frequency spectrum preview
   - [x] `.oga`, `.ogg`, `.opus` — Vorbis and mono/stereo Opus; Audio Studio, waveform strips, playback and region export
     - [ ] Vorbis comments and Opus identification / comment headers
   - [x] `.wav`, `.wave`
     - [ ] RIFF `INFO` list chunk, Broadcast Wave Format (`bext`) timecodes/metadata, and embedded ID3 chunks
+    - [ ] Broadcast Wave `iXML` production, track, and scene metadata
+    - [ ] WAV cue/region metadata (`cue` points, `LIST/adtl` chunks: `labl`, `note`, `ltxt`)
+    - [ ] WAV sampler metadata (`smpl` chunk loops, sample release/sustain points, and root notes)
+  - [ ] `.cue` — Optical disc cue sheet (track layout, start/index positions, pregap duration, CD-Text metadata [title, performer], and companion binary/audio file references)
   - [ ] `.ac3`
   - [ ] `.ape`
   - [ ] `.mpc`
   - [ ] `.tta`
   - [ ] `.wv`
+  - [ ] `.dsf`, `.dff` — Direct Stream Digital audio (1-bit Delta-Sigma DSD64/128/256/512 stream, sampling rate, channel count, DSD chunk header, ID3v2 metadata chunk, album art, and DoP/PCM waveform rendering)
   - [x] `.xwma`, `.xwm` — RIFF xWMA Windows Media audio; guarded format-specific float-PCM preparation, mono/stereo waveform and spectral analysis, seeking, Music/Audio Studio playback, guarded rename and export to standard audio formats. Encoding back to xWMA is unavailable; input and PCM budgets match WMA.
   - [x] `.wma` — guarded FFmpeg float-PCM preparation shared by waveform previews, spectral analysis, seeking, Music playback and Audio Studio; source metadata/renaming and existing audio exports retain the original file
     - [ ] Encrypted/DRM streams and sources larger than 512 MiB encoded / 256 MiB decoded PCM (bounded worker decode, no silent truncation)
@@ -196,6 +214,7 @@
     - [ ] XMP metadata stream (`/Metadata`)
     - [ ] Table of contents / bookmark outline hierarchy (`/Outlines`)
     - [ ] Embedded file attachments (`/EmbeddedFiles`)
+    - [ ] `.fdf`, `.xfdf` — Forms Data Format / XML Forms Data Format (submitted PDF form field values, key-value data, annotations, and referenced target PDF file)
   - [x] `.ics` — bounded read-only event agenda, clickable event strips, overlap timeline, event properties, source preview and guarded rename
     - [x] VCALENDAR properties (`PRODID`, `VERSION`, `CALSCALE`, `X-WR-CALNAME`)
     - [x] Separate all-day, UTC, floating and declared-TZID coordinates; exclusive ends, supported durations and cancellation state
@@ -256,10 +275,13 @@
       - [ ] Front matter parsing (YAML, TOML) and exported component / layout metadata
     - [ ] `.parquet` — Apache Parquet columnar storage
       - [ ] File metadata footer (schema, row group counts, creator string, key-value metadata dictionaries)
+    - [ ] `.arrow`, `.feather` — Apache Arrow IPC stream and Feather columnar tables (schema definitions, record batches, dictionary encodings, compression codecs, and metadata dictionaries)
     - [ ] `.raml` — RESTful API Modeling Language
+    - [ ] OpenAPI / Swagger (`openapi.yaml`, `openapi.json`, `swagger.yaml`, `swagger.json`) — RESTful API specifications (API info, paths, HTTP operations, request/response schemas, parameters, and security definitions)
     - [x] `.sqlite`, `.sqlite3`, `.db`, `.db3` — read-only bounded SQLite snapshot browser with clickable schema strips, table selection, 200-row paging, shared virtualized grid, declared columns/foreign keys and guarded rename
       - [x] Database schema definitions, `PRAGMA user_version` and `PRAGMA application_id`
       - [ ] Live WAL/journal merging, complete table row counts, query console, evaluated views/virtual/generated columns and database editing (checkpointed main file only; 128 MiB input, 512 objects, first 32 ordinary columns per page)
+    - [ ] `.duckdb`, `.ddb` — DuckDB analytical database (table definitions, columnar schema types, view catalog, and row count statistics)
     - [ ] `.styl`, `.stylus` — Stylus stylesheet
     - [ ] `.ttl`, `.n3`, `.nq`, `.nt` — RDF semantic data formats (Turtle, Notation3, N-Quads, N-Triples)
     - [ ] `.webmanifest`, `.webapp` — Web App Manifest
@@ -382,6 +404,7 @@
       - [x] `.hlsl` — HLSL
       - [x] `.metal` — Metal Shading Language
       - [ ] `.wgsl` — WebGPU Shading Language
+      - [ ] `.fs`, `.vs` (ISF) — Interactive Shader Format for real-time video synthesis and VJ effects (GLSL shader with embedded JSON header: inputs, parameter sliders, color uniforms, audio FFT textures, and multi-pass rendering)
     - [ ] Visual and node-based programming
       - [ ] `.pd` — Pure Data patch
       - [ ] `.maxpat` — Max/MSP patch
@@ -394,6 +417,7 @@
     - [ ] Other programming formats and environments
       - [x] `.tex` — TeX / LaTeX
         - [ ] Document preamble parsing (`\title`, `\author`, `\date`, `\documentclass`, package imports)
+      - [ ] `.typ` — Typst document source (markup syntax, function calls, style definitions, heading hierarchy outline, and math formula rendering)
       - [ ] Tasker task/profile export (format varies)
       - [ ] Tool-specific visual project formats for tooll.io (no stable extension)
       - [ ] `.vi` — LabVIEW virtual instrument
@@ -403,8 +427,13 @@
   - [x] `.doc`
   - [x] `.docx`
     - [ ] OPC core, extended, and custom document properties (`docProps/core.xml`, `docProps/app.xml`: title, author, edit duration, revision)
+  - [ ] `.docm`, `.dotx`, `.dotm` — Microsoft Word macro-enabled documents and templates (OPC package inspection, VBA macro project presence, and template layout)
   - [x] `.odt`
     - [ ] OpenDocument meta properties (`meta.xml`: title, creator, creation date, statistics)
+  - [ ] `.ott`, `.odm` — OpenDocument text template and master document
+  - [ ] `.odg`, `.otg` — OpenDocument drawing and drawing template (LibreOffice / OpenOffice Draw vector illustrations, flowcharts, and diagrams)
+  - [ ] `.wpd` — Corel WordPerfect document (file format version, document body text, formatting codes, and metadata headers)
+  - [ ] `.gdoc`, `.gsheet`, `.gslides`, `.gform`, `.gdraw` — Google Drive desktop synchronized document shortcuts (JSON pointer metadata: cloud document URL, doc ID, resource key, and owning user email)
   - [x] `.rtf`
   - [x] `.epub` — bounded EPUB 2/3 reflowed reader with chapter selection, local raster illustrations, adjustable text size, clickable list chapter strips and guarded container renaming; original publication stays unchanged
     - [x] OPF package title, creators, cover resource and explicit spine order; local cover preview
@@ -417,6 +446,8 @@
   - [ ] `.djvu`, `.djv` — scanned-document format
   - [x] `.ppt`, `.pptx`, `.odp`
     - [ ] Presentation properties, slide titles, and presentation notes
+  - [ ] `.pptm`, `.potx`, `.potm`, `.ppsx`, `.pps`, `.otp` — Microsoft PowerPoint macro presentations, slide templates, slide show executables, and OpenDocument presentation templates
+  - [ ] `.mpp` — Microsoft Project plan (task hierarchy outline, Gantt chart milestones, start/finish dates, dependencies, percent complete, and resource allocations)
   - [ ] `.pages` — Apple Pages document
   - [ ] `.key` — Apple Keynote presentation (May need disambiguation with cryptographic private keys)
   - [ ] `.one`, `.onepkg` — Microsoft OneNote notebook / package
@@ -426,6 +457,7 @@
   - [ ] `.chm` — Compiled HTML Help
   - [ ] `.mht`, `.mhtml` — MIME HTML web archive
   - [ ] `.ris` — Research Information Systems bibliography format
+  - [ ] `.bib` — BibTeX bibliography database (entry types `@article`, `@book`, `@inproceedings`, `@techreport`; citation keys, authors, titles, journal/conference metadata, DOIs, and abstracts)
   - [ ] UI/UX design, publishing, and visual canvases
     - [ ] `.fig` — Figma offline design file
       - [ ] Canvas node hierarchy, frame count, component definitions, and style catalog
@@ -438,12 +470,18 @@
       - [ ] Embedded XMP packet (title, page count, document geometry, fonts, swatches)
     - [ ] `.canvas` — Obsidian visual canvas
       - [ ] Node count (cards, markdown notes, files), edge / connector count, group count
+    - [ ] `.xmind` — XMind mind-map workbook (topic hierarchy, central topic, subtopic branches, sheet navigation, notes, and relationship connectors)
 - [ ] Spreadsheets
   - [x] `.csv`
   - [x] `.ods`
   - [x] `.tsv`
   - [x] `.xls`, `.xlsx`, `.xlsb`
     - [ ] Workbook metadata, sheet names, and author properties
+  - [ ] `.xlsm`, `.xltx`, `.xltm`, `.xlam` — Microsoft Excel macro-enabled workbooks, templates, and add-ins (VBA project stream presence, sheet/table previews without executing macro code)
+  - [ ] `.ots` — OpenDocument spreadsheet template
+  - [ ] `.ofx`, `.qfx`, `.qbo` — Open Financial Exchange / Quicken / QuickBooks financial data (bank and credit card transaction statements, account balances, and date ranges)
+  - [ ] `.iif` — Intuit Interchange Format (QuickBooks plain-text tab-delimited transaction, chart of accounts, and invoice import/export)
+  - [ ] `.accdb`, `.mdb` — Microsoft Access database (Jet / ACE database engine header, table catalogs, column data types, row counts, and relationship definitions)
   - [ ] `.numbers` — Apple Numbers spreadsheet
 - [ ] 3D and CAD
   - [ ] Mesh models
@@ -451,9 +489,11 @@
     - [x] `.gltf`
       - [ ] Asset metadata (`asset.copyright`, `asset.generator`, `asset.version`)
       - [ ] Khronos extension declarations (`extensionsUsed`, `extensionsRequired`)
+    - [ ] `.vrm` — VRM 3D humanoid avatar (glTF-based; humanoid bone mapping, blend shape / facial expression morphs, spring bone secondary animation physics, and avatar license metadata)
     - [x] `.obj`
     - [x] `.stl`
       - [ ] Solid header title / 80-byte binary header text
+    - [ ] `.ply` — Polygon File Format / Stanford Triangle (3D polygonal mesh geometry, vertex colors/normals, and point clouds; distinct from Gaussian splat PLY)
     - [ ] `.wrl` — VRML model (Low Priority)
     - [ ] `.x3d` — X3D model (Low Priority)
     - [ ] `.3ds`
@@ -468,6 +508,8 @@
     - [ ] `.usda` — Universal Scene Description ASCII
       - [ ] Layer metadata (`metersPerUnit`, `upAxis`, `defaultPrim`, `doc`, `comment`)
     - [ ] `.blend`
+    - [ ] `.bvh` — Biovision Hierarchy motion capture animation (skeleton joint hierarchy, root offsets, motion frame count, frame timing, and rotational channel curves)
+    - [ ] `.abc` — Alembic 3D animation cache (HDF5 or Ogawa binary container: animated point clouds, mesh deformations, camera tracks, transformations, and bounding box hierarchy)
     - [ ] `.mtl` — Wavefront Material Template Library (companion to `.obj`)
     - [ ] `.x_t`, `.x_b` — Parasolid CAD model (text / binary)
     - [ ] `.jt` — Siemens JT lightweight CAD visualization (ISO 14306)
@@ -495,6 +537,11 @@
         - [ ] LAS header (point count, bounding box X/Y/Z, coordinate reference system, GPS time range, return breakdown)
       - [ ] `.e57` — ASTM E57 3D imaging and point cloud standard
         - [ ] XML metadata header (coordinate system, camera calibrations, point count), binary scan streams
+    - [ ] Photogrammetry and Structure from Motion (SfM)
+      - [ ] COLMAP reconstruction data (`cameras.bin`/`cameras.txt`, `images.bin`/`images.txt`, `points3D.bin`/`points3D.txt`; camera poses, intrinsics, extrinsics, and sparse/dense reconstruction data)
+    - [ ] Robotics and simulation description
+      - [ ] `.urdf` — Unified Robot Description Format (XML kinematic link trees, joint limits, visual/collision mesh references, and inertial tensors)
+      - [ ] `.sdf` — Simulation Description Format (multi-body physics, robot models, sensor attachments, and world environments for Gazebo)
   - [ ] Gaussian splats
     - [x] `.glb` — Gaussian splat extension
     - [x] `.ply` — Gaussian PLY
@@ -515,8 +562,11 @@
       - [ ] Embedded document summary, sheet parameters, layer definitions
     - [ ] `.cir`, `.sp`, `.spice` — SPICE circuit simulation netlist
       - [ ] Subcircuit definitions, node count, component count, analysis directives
+    - [ ] `.raw`, `.plt` — SPICE / LTspice simulation output waveforms (transient timing, AC frequency sweep, and DC operating point response curves)
     - [ ] `.gbr`, `.ger` — Gerber PCB fabrication layer
       - [ ] RS-274X header attributes (layer type, copper thickness, polarity, units)
+    - [ ] `.gbrjob` — KiCad Gerber Job specification (JSON board outline dimensions, multi-layer stackup [copper, dielectric, solder mask colors, silkscreen thicknesses], finish type, and layer-to-file mapping)
+    - [ ] `.pos` — Pick and place / component centroid file for automated surface-mount assembly (RefDes, package, layer [Top/Bottom], X/Y coordinates, and rotation angle)
     - [ ] `.drl`, `.xln` — Excellon drill file
       - [ ] Tool count, hole count, coordinates format
     - [ ] `.plt`, `.hpgl` — plotter / HPGL
@@ -525,7 +575,7 @@
     - [ ] Core model metadata (designer, license, title)
     - [ ] Slicer project settings (`Metadata/model_settings.config`, plate previews `Metadata/plate_*.png`, filament type/color, estimated print time, filament length/mass)
   - [ ] `.amf` — Additive Manufacturing Format
-  - [x] `.gcode` — read-only program-coordinate toolpaths with XY/XZ/YZ projections, travel/extrusion colors, progress scrubbing, source-line selection, pan/zoom, bounded clickable folder previews and guarded rename
+  - [x] `.gcode`, `.gco` — read-only program-coordinate toolpaths with XY/XZ/YZ projections, travel/extrusion colors, progress scrubbing, source-line selection, pan/zoom, bounded clickable folder previews and guarded rename
     - [ ] Machine simulation, macros, subprograms, rotary axes, cutter compensation, canned cycles and non-XY arcs. Literal G0/G1/G2/G3, G20/G21, G90/G91, G92 and M82/M83 are interpreted; unsupported instructions stop a clearly qualified partial preview. Initial origin is assumed zero; homing paths are omitted. Input: 16 MiB / 500,000 lines / 200,000 drawing intervals. No machine connection or command execution.
     - [ ] Slicer generator comments (slicer name/version, print time, filament used, layer height, nozzle/bed temperatures, layer count)
   - [ ] Resin (SLA / DLP / LCD) 3D printing sliced packages
@@ -587,6 +637,8 @@
   - [ ] Digital Audio Workstation (DAW) projects
     - [ ] `.als` — Ableton Live Set (GZIP-compressed XML)
       - [ ] Ableton version, tempo (BPM), time signature, track count, audio clip references, plugin devices
+    - [ ] `.amxd` — Ableton Max for Live device (embedded Max/MSP patcher JSON, UI control definitions, exposed parameter IDs, MIDI/audio/instrument category)
+    - [ ] `.adv`, `.adg`, `.alp` — Ableton device presets, racks, and packs (single device preset XML/gzip, multi-device instrument/effect racks, and compressed Live pack project packages)
     - [ ] `.flp` — FL Studio Project (chunk-based binary)
       - [ ] Project title, tempo (BPM), pattern count, channel rack plugins, sample references
     - [ ] `.rpp` — Cockos REAPER Project (plain text S-expression)
@@ -595,16 +647,30 @@
       - [ ] Project bundle settings, track count, tempo, markers
     - [ ] `.bwproject` — Bitwig Studio project package
       - [ ] Metadata JSON, tempo, track count, sample references
+    - [ ] `.dawproject` — DAWproject open DAW project exchange format (project tracks, timeline clips, automation curves, mixer channels, and embedded/referenced audio)
   - [ ] Tracker modules
+    - [ ] `.mod` — Amiga ProTracker / Ultimate Soundtracker module (4/8-channel layout, instrument sample headers, pattern rows, and song arrangement)
+    - [ ] `.it` — Impulse Tracker module (instrument sample envelopes, 64-channel matrix, panning/volume effects, and pattern data)
     - [ ] `.s3m` — Scream Tracker 3 module
     - [ ] `.xm` — FastTracker 2 extended module
+  - [ ] Chiptune and video game sound formats
+    - [ ] `.nsf`, `.nsfe` — NES Sound Format (6502 audio driver code, 2A03 sound channels, expansion audio chips [VRC6, VRC7, FDS, MMC5, Sunsoft 5B], track count, and track titles)
+    - [ ] `.spc` — SNES sound file (Sony SPC700 DSP memory snapshot, 8-channel ADPCM registers, and ID666 tag metadata)
+    - [ ] `.vgm`, `.vgz` — Video Game Music log (uncompressed / gzipped sample-accurate sound chip register dumps: Yamaha YM2612/YM2151, SN76489 PSG, sound chip clock rates)
+    - [ ] `.sid` — Commodore 64 SID tune (MOS 6581/8580 SID register writes, 6510 machine code, author/released/copyright metadata, and speed/clock mode)
   - [ ] Synthesizer presets and patches
     - [ ] `.sysx` — MIDI System Exclusive preset dump
     - [ ] `.pgm` — MIDI program-change / synth patch bank (extension conflicts with supported PGM grayscale images)
-    - [ ] `.pd` — Pure Data patch
+    - [ ] `.pd` — Pure Data patch (objects, signal/control connection wires, subpatches/abstractions, and canvas layout rendering)
+    - [ ] `.vcv`, `.vcvs`, `.vcvss` — VCV Rack patch (module layout, parameters, and multi-colored patch cable topology)
     - [ ] `.pj8` — synthesizer patch (device-specific)
+    - [ ] `.vstpreset` — Steinberg VST3 audio plugin preset (plugin class ID, parameter chunk XML/binary, bank names, and preset state)
+    - [ ] `.clap` — Clever Audio Plugin (plugin binary bundle descriptor metadata, audio/note event ports, polyphonic parameter automation, and latency reporting)
+    - [ ] `.lv2` — LV2 audio plugin bundle (Turtle RDF `manifest.ttl` ontology, audio/control/MIDI atom port definitions, presets, and GUI extensions)
+    - [ ] `.wt` — Synthesizer wavetable (single-cycle 2048-sample waveform collections for wavetable oscillators)
+    - [ ] `.dsp` — Faust functional audio stream DSP code (block-diagram algebra, signal routing, UI control declarations, and sample-rate equations)
   - [ ] Samplers and multisample instruments
-    - [x] `.dspreset` / `.dslibrary` — DecentSampler inherited sample maps and explicit external/archive-member audition; effects and scripts stay inert
+    - [x] `.dspreset` / `.dslibrary` — DecentSampler inherited sample maps, instrument regions, articulations, and explicit external/archive-member audition; effects and scripts stay inert
     - [x] `.multisample` — Bitwig/PreSonus ZIP/XML mappings, ranges and lazy embedded audio audition
     - [x] `.exs` — positively identified Logic binary sample maps via the separate native helper; ordinary Elixir scripts keep text handling
     - [x] `.xrni` — Renoise ZIP/XML source maps, indexed embedded samples and slice-alias intervals; raw-source audition, without phrases/DSP
@@ -615,33 +681,41 @@
       - [ ] Full synthesizer/modulator processing, ROM samples and compressed SF3. Input: 256 MiB; 256 presets, 8,192 regions, 65,536 records/table and a bounded interpretation budget. Linked stereo sample channels are inspected/auditioned individually.
     - [x] `.sfz` — literal SFZ v1/v2/ARIA region maps with global/master/group inheritance, guarded includes/defines, note names, sample references and raw-sample audition; bounded clickable folder maps and guarded rename
       - [ ] DSP, keyswitch/round-robin/trigger synthesis, generated/embedded samples and advanced preprocessing. Uninterpreted opcodes remain inspectable. Input/expanded text: 16 MiB; 32 include files, 128 defines, 8 variable-expansion levels and 8,192 regions; inherited display metadata is capped at 16 MiB. Audition is explicit, capped at 10 seconds / 2 million interleaved samples, and stops on selection/navigation.
+    - [ ] `.dls` — Downloadable Sounds instrument bank (DLS Level 1/2 multisample mappings, key/velocity regions, articulations, and embedded RIFF wave pool)
+    - [ ] Shared multisample instrument model (unified representation of key ranges, velocity layers, root notes, sample regions, loops, and articulations across SF2, SFZ, DLS, DecentSampler, EXS24, Bitwig multisample, and Kontakt; interactive piano-roll and Tonnetz harmonic lattice exploration)
   - [ ] Scales
     - [ ] .scala
 - [ ] Radio, RF, and embedded-device captures
-  - [ ] E-ink note devices
-    - [ ] `.note`
+  - [ ] E-ink and pen-tablet note devices
+    - [ ] `.note` — Supernote notebook (vector strokes, page templates, page thumbnails, handwritten notes, and text recognizer metadata)
+    - [ ] `.xopp`, `.xoj` — Xournal++ handwritten notebook (gzipped XML vector strokes, pen pressure/colors, page layers, text annotations, and embedded/referenced PDF backgrounds)
     - [ ] `.mark`
     - [ ] `.rm`
     - [ ] `.lines`
   - [ ] NanoVNA
-    - [ ] `.s1p`, `.s2p` — Touchstone network parameter data
+    - [ ] `.s1p`, `.s2p`, `.sNp` — Touchstone N-port network parameter data (S-parameters, RF frequency response plots, and interactive Smith chart rendering)
   - [ ] Sigrok and logic analyzers
     - [ ] `.sr` — sigrok session
-    - [ ] `.sal` — Saleae Logic capture
+    - [ ] `.sal` — Saleae Logic capture (digital signal timing waveforms, multichannel state traces, and protocol annotations)
+    - [ ] `.vcd` — Value Change Dump (IEEE 1364 digital simulation and logic analyzer trace format: timescale, scope hierarchy, digital wire/reg states, transition timing, and waveform viewer)
   - [ ] Signal analysis
     - [ ] `.vcfd` — VCF dump
-    - [ ] `.sigmf-*` — SigMF data and metadata sidecars
+    - [ ] `.sigmf-meta`, `.sigmf-data`, `.sigmf-*` — SigMF signal metadata and binary samples (center frequency, sample rate, data format, IQ waterfall spectrogram, and time-domain preview)
+    - [ ] `.grc` — GNU Radio Companion flowgraph (XML/YAML flowgraph topology, DSP block hierarchies [sources, sinks, filters, modulators, FFT], sample rates, variables, and bus connections)
+    - [ ] `.urh` — Universal Radio Hacker project (signal capture configurations, demodulation parameters, message protocol decodings, and participant tables)
     - [ ] `.wfm` — oscilloscope waveform
     - [ ] `.chirp` — CHIRP radio configuration
     - [ ] `.icf` — Icom radio configuration
   - [ ] Sub-GHz, NFC, infrared, and access tokens
-    - [ ] `.sub` — Flipper Zero Sub-GHz capture
+    - [ ] `.sub` — Flipper Zero Sub-GHz capture (protocol parameters, frequency, modulation, and RF pulse-train timing visualization)
     - [ ] `.nfc`
     - [ ] `.rfid`
     - [ ] `.trace`, `.pm3` — Proxmark trace/capture
-    - [ ] `.ir` — Flipper Zero infrared capture
+    - [ ] `.mfd`, `.eml` — Mifare Classic (1K/4K) and EM410x RFID card dumps (card UID, sector trailer keys, access conditions, data blocks, and Proxmark/Flipper emulation data)
+    - [ ] `.ir` — Flipper Zero infrared capture (protocol parameters, address/command codes, and raw IR pulse timing visualization)
     - [ ] `.ibtn` — Flipper Zero iButton data
   - [ ] CAN bus logs (SavvyCAN-compatible families; CSV deliberately omitted because it is already listed under spreadsheets)
+    - [ ] `.dbc` — CAN database file (CAN message definitions, signal start bit/length, endianness, multiplexing, scaling factors, offsets, min/max bounds, and physical engineering units)
     - [ ] `.asc` — Vector CANalyzer ASCII (May need disambiguation with ASCII-armored PGP keys)
     - [ ] `.avc`, `.evc`, `.qcc` — CAN-DO logs
     - [ ] `.blf` — Vector CANalyzer binary
@@ -649,18 +723,37 @@
     - [ ] `.crt`, `.crtd` — CRTD / OVMS (May need disambiguation with X.509 certificates)
     - [ ] `.trc` — IXXAT / PCAN trace
     - [ ] `.trace` — Vector CANalyzer trace (same extension as Proxmark trace)
+  - [ ] Firmware, memory maps, and hardware descriptions
+    - [ ] `.hex` — Intel HEX firmware memory dump (record types, base address offsets, memory map, and Flash/ROM allocation)
+    - [ ] `.srec`, `.s19`, `.s28`, `.s37` — Motorola S-record firmware format (header, 16/24/32-bit address data records, termination, and Flash/ROM allocation)
+    - [ ] `.uf2` — USB Flashing Format (UF2 blocks, target family ID, block sequence, and flash memory layout)
+    - [ ] `.svd` — CMSIS-SVD (System View Description) XML; microcontroller peripheral registers, field bitmasks, and memory-mapped address spaces
+    - [ ] `.bit`, `.svf` — FPGA bitstream binaries (Xilinx, Altera, Lattice) and Serial Vector Format (JTAG testing and programming vectors)
+    - [ ] `.bin` — raw firmware binaries and extensionless ROM images (memory layout inspection, interrupt vector tables across ARM Cortex-M/RISC-V/AVR/x86, and string/entropy analysis)
+    - [ ] `.dts`, `.dtsi` — Device Tree Source / include (node hierarchy, properties, phandles, bus addresses, and peripheral bindings)
+    - [ ] `.dtb` — Compiled Device Tree blob (FDT header, memory reservation block, device node structure, and string table)
+    - [ ] `.map` — Toolchain linker memory map (GNU ld, LLVM lld, Keil, IAR); Flash/RAM memory sections, symbol addresses, segment sizes, and cross-reference tables (distinguish from JS/CSS source maps)
+    - [ ] `openocd.cfg` — OpenOCD JTAG / SWD target configuration (interface drivers, transport protocols [swd/jtag], target architecture, Flash memory banks, and GDB server ports)
+    - [ ] `keymap.json`, `vial.json`, `.vil` — QMK / VIA / Vial keyboard layout definitions (switch matrix row/col wiring, layer definitions, keycode bindings, rotary encoder mappings, tap-dance macros, and binary/JSON backup state)
 - [ ] Networking and messages
   - [ ] `.pcap`
   - [ ] `.pcapng`
     - [ ] Capture file comments, interface descriptions, hardware/OS metadata, and packet timestamps
+    - [ ] Packet traffic flow visualization, conversation timelines, protocol hierarchy breakdown, and timing waterfall
   - [x] `.eml` — saved MIME email; decoded address/date/subject headers, inert reflowed HTML or plain-text alternatives, attachment metadata/chips, original-source preview and guarded container rename
     - [x] 16 MiB input, 32 MIME nesting levels, 1,024 parts and two encoded-message nesting levels; actual truncation/decoding/structure failures are disclosed
     - [ ] Full HTML/CSS layout, remote/inline image rendering, attachment extraction/editing, sending, and encrypted-message decryption/signature verification
   - [ ] `.msg` — Microsoft Outlook saved message
     - [ ] Internet message headers (From, To, Cc, Bcc, Subject, Date, Message-ID, In-Reply-To)
     - [ ] Attachment metadata and extraction
+  - [ ] `winmail.dat` — Microsoft Outlook TNEF attachment (Transport Neutral Encapsulation Format; extraction of wrapped MAPI message properties, rich-text body, and encapsulated PDF/Word attachments)
+  - [ ] `.pst`, `.ost` — Microsoft Outlook Personal Storage Table and Offline Storage Table (folder trees [Inbox, Sent, Archive], message count, sender/subject indices, and unread flags)
+  - [ ] `.oft` — Microsoft Outlook email template
+  - [ ] `.vcf` — vCard electronic business card / contact (vCard 2.1/3.0/4.0 name, organization, job title, phone numbers, email addresses, postal addresses, and embedded base64 photo; distinguish from genomic Variant Call Format)
   - [ ] `.mbox` — mbox email mailbox archive
     - [ ] `From ` separator lines and per-message header indices
+  - [ ] `.har` — HTTP Archive (HAR 1.2 JSON; network request/response waterfall, timing metrics, HTTP headers, cookies, query parameters, and payload inspection)
+  - [ ] `.warc` — Web ARChive (ISO 28500; crawl archive records `warcinfo`/`request`/`response`, target URIs, timestamps, HTTP headers, and raw payload data)
 - [ ] Security, cryptography, and certificates
   - [ ] `.pem` — Privacy-Enhanced Mail (PEM) certificate or key
   - [ ] `.der` — Distinguished Encoding Rules (DER) binary certificate or key
@@ -675,6 +768,8 @@
   - [ ] `.pgp`, `.sig` — PGP encrypted file / detached signature
   - [ ] `.asc` — ASCII-armored PGP key / signature (May need disambiguation with Vector CANalyzer ASCII logs)
     - [ ] PGP armor headers (Version, Comment, Hash), Key ID, user IDs, validity/expiration dates
+  - [ ] `.age` — Age file encryption format (age-encryption.org; recipient stanzas, public key types, scrypt work parameters, and encrypted payload envelope)
+  - [ ] WireGuard VPN configuration (`wg0.conf`, `.conf`) — `[Interface]` parameters (`PrivateKey`, `Address`, `ListenPort`) and `[Peer]` blocks (`PublicKey`, `Endpoint`, `AllowedIPs`, `PersistentKeepalive`)
 - [ ] Sewing, embroidery, and cutting machines
   - [ ] Machine embroidery stitch formats
     - [ ] `.dst` — Tajima
@@ -711,6 +806,8 @@
     - [ ] Node/way/relation metadata (OSM tags, user, changeset, timestamp, version)
   - [ ] `.mvt` — Mapbox Vector Tile
   - [ ] `.gml` — Geography Markup Language
+  - [ ] `.gpkg` — OGC GeoPackage (SQLite-based geospatial container; vector spatial feature tables, geometry column definitions, spatial reference systems, and raster tile pyramids)
+  - [ ] `.shp`, `.shx`, `.dbf`, `.prj` — ESRI Shapefile geospatial vector dataset (feature geometries [points, lines, polygons], spatial shape index, dBase attribute table, and projection coordinate reference system)
 - [ ] Genealogy
   - [ ] `.ged` — GEDCOM genealogy data
   - [ ] `.gdz` — genealogy database/archive
@@ -733,6 +830,13 @@
     - [ ] MATLAB version string, endianness, workspace variable names, variable dimensions, array data types
   - [ ] `.nb` — Wolfram Mathematica Notebook
     - [ ] Cell count, evaluation state, front-end version
+  - [ ] `zarr.json`, `.zarr` — Zarr N-dimensional array storage (chunked, compressed multidimensional array storage: JSON metadata, array shape, chunk sizes, compressor codec [blosc/zstd], and data types)
+  - [ ] `.grib`, `.grb2` — GRIB / GRIB2 weather and meteorological grid data (WMO meteorological/oceanographic grid data: parameter tables, forecast time, vertical level, and lat/lon coordinate matrices)
+- [ ] Machine learning, neural networks, and AI models
+  - [ ] `.safetensors` — Hugging Face SafeTensors model weights (header JSON parsing: tensor names, shapes, data types, parameter counts, and embedded metadata; memory-mapped preview without full tensor loading)
+  - [ ] `.gguf` — GGUF (llama.cpp / Ollama) quantized language models (model architecture, context length, parameter scale, quantization type `Q4_K_M`/`Q8_0`/etc., tensor info, and tokenizer vocabulary)
+  - [ ] `.onnx` — Open Neural Network Exchange (computation graph topology, input/output tensors, operator nodes, and opset version)
+  - [ ] `.tflite` — TensorFlow Lite model (flatbuffer schema, operator types, input/output tensors, and quantization parameters)
 - [ ] Medical imaging and data
   - [ ] `.dcm` — DICOM medical imaging (CT, MRI, ultrasound)
     - [ ] DICOM dataset tags (Patient Name, Patient ID, Study Date, Modality, Series Description, Manufacturer, Image Position/Orientation)
@@ -811,23 +915,40 @@
     - [ ] `.ulx` — Glulx interactive fiction VM story file
     - [ ] `.blorb`, `.blb` — Blorb interactive fiction resource container
     - [ ] `.gam` — TADS interactive fiction story file
+  - [ ] Retro video game ROMs and cartridge dumps (Low Priority)
+    - [ ] `.nes` — Nintendo Entertainment System / Famicom ROM (iNES / NES 2.0 header: PRG/CHR ROM sizes, mapper ID number, mirroring mode, battery-backed RAM flags)
+    - [ ] `.sfc`, `.smc` — Super Nintendo / Super Famicom cartridge ROM (internal header, game title, ROM makeup, chipset, checksum, and legacy copier SMC header detection)
+    - [ ] `.gb`, `.gbc` — Game Boy / Game Boy Color cartridge ROM (cartridge title, licensee code, MBC mapper type, ROM/RAM size, CGB color mode flag, and Nintendo logo validation check)
+    - [ ] `.gba` — Game Boy Advance cartridge ROM (header checksum, game title, game code, maker code, entrypoint, and save-chip type identification)
+    - [ ] `.nds` — Nintendo DS cartridge ROM (arm9/arm7 binary offsets, entrypoint addresses, ROM title, game code, and embedded icon/banner preview extraction)
+    - [ ] `.z64`, `.n64`, `.v64` — Nintendo 64 cartridge ROM (byte-order detection [Big-endian `.z64`, Little-endian `.n64`, Byte-swapped `.v64`], internal header title, media format, and CRC checksums)
 - [ ] Executables and compiled binaries
   - [ ] `.apk` — Android application package
     - [ ] Android manifest metadata (`AndroidManifest.xml`: package name, version, permissions, min/target SDK)
+  - [ ] `.dex` — Android Dalvik / ART executable (header magic, checksum, string IDs, type IDs, method IDs, class definitions, and bytecode structures)
   - [ ] `.class` — Java bytecode class
-  - [ ] `.dll` — Windows dynamic-link library
-  - [ ] `.elf` — Executable and Linkable Format binary (extension is optional)
-  - [ ] `.exe` — Windows executable
+  - [ ] `.elf`, `.so` — Executable and Linkable Format binary / shared library (extension is optional; ELF header, program headers, section headers, symbol tables `.symtab` / `.dynsym`, dynamic linking tags, relocations, and imports/exports)
+  - [ ] `.exe`, `.dll` — Windows Portable Executable (PE/COFF; DOS/PE headers, optional header, section table, import address table IAT, export table, and embedded resources)
+  - [ ] Mach-O binaries (extensionless, `.dylib`, `.bundle`) — macOS/iOS executable structure (Mach-O header, load commands `LC_SEGMENT` / `LC_LOAD_DYLIB`, sections, symbol tables, and code signature slices)
   - [ ] `.jar`, `.war`, `.ear` — Java application/archive / Web Archive / Enterprise Archive
     - [ ] JAR manifest metadata (`META-INF/MANIFEST.MF`: Main-Class, Implementation-Version, Bundle-SymbolicName)
   - [ ] `.o` — Unix object file
   - [ ] `.obj` — Windows/COFF object file (extension conflicts with supported Wavefront OBJ meshes)
-  - [ ] `.so` — ELF shared object library
+  - [ ] Reverse engineering databases and crash dumps
+    - [ ] `.bndb` — Binary Ninja database (disassembly analysis, function prototypes, variable and type propagation, structs, comments, and cross-references)
+    - [ ] `.gpr`, `.rep/` — Ghidra project and repository (project XML metadata, program databases, data type archives, symbols, and version tracking; distinguished from GoPro RAW `.gpr`)
+    - [ ] `.idb`, `.i64` — IDA Pro 32-bit and 64-bit database (disassembly listings, segment definitions, type libraries, flirt signatures, and annotations)
+    - [ ] `.dmp`, `.mdmp` — Windows Minidump crash capture (minidump header, stream directory, system info, exception records, thread execution contexts, loaded modules, and stack memory dumps)
+  - [ ] Generic binary and unrecognized file previews
+    - [ ] Byte-class distribution visualizations (ASCII/printable, zero/null, whitespace, high-entropy/compressed/encrypted, control bytes)
+    - [ ] Byte entropy maps and sliding-window entropy profiles
+    - [ ] Hash-based identifiers and cryptographic digest fingerprinting (SHA-256, BLAKE3, MD5)
 - [ ] System packages, disk images, and virtualization
   - [ ] `.deb` — Debian software package
     - [ ] Debian control metadata (Package, Version, Architecture, Maintainer, Depends, Description)
   - [ ] `.rpm` — Red Hat package
     - [ ] RPM header tags (Name, Version, Release, Architecture, Summary, License, Vendor)
+  - [ ] `.pkg.tar.zst`, `.pkg.tar.xz` — Arch Linux software package (Zstandard/XZ tarball, `.PKGINFO` metadata [pkgname, pkgver, pkgdesc, url, license, arch, depends], `.BUILDINFO`, and install scripts)
   - [ ] `.msi` — Windows Installer package
   - [ ] `.appx`, `.msix` — Windows App package
   - [ ] `.crx` — Google Chrome extension
@@ -836,10 +957,14 @@
   - [ ] `.iso` — ISO 9660 optical disc image
     - [ ] Volume descriptors (volume identifier, system identifier, publisher, preparer, timestamps)
   - [ ] `.img` — raw disk image (May need disambiguation with GEM bitmap images)
+  - [ ] `.chd` — Compressed Hunks of Data (MAME / RetroArch lossless compressed optical disc and hard-drive image; media type, hunk size, compression codec, SHA-1 checksum, and track metadata)
   - [ ] `.vdi` — VirtualBox disk image
   - [ ] `.vmdk` — VMware virtual disk image
   - [ ] `.vbox` — VirtualBox virtual machine settings
   - [ ] `.ova`, `.ovf` — Open Virtualization Format archive and package
+  - [ ] `.qcow2` — QEMU Copy-On-Write disk image v2/v3 (virtual disk size, allocated cluster count, backing file chain, cluster size, compression, encryption flag, and internal snapshot table)
+  - [ ] `.squashfs`, `.sqfs` — SquashFS compressed read-only filesystem (superblock stats, compression algorithm [zstd, xz, gzip], inode counts, and directory tree preview without full extraction)
+  - [ ] `.AppImage` — AppImage self-contained Linux application bundle (embedded SquashFS partition inspection, desktop integration metadata, and application icon extraction)
   - [ ] `.torrent` — BitTorrent metainfo file
     - [ ] Torrent metainfo dictionary (name, piece length, announce list, creation date, created by, comment)
 - [ ] Archives
@@ -852,4 +977,124 @@
   - [ ] `.xz`
   - [ ] `.zip`
     - [ ] Central directory file comments and archive comment metadata
+    - [ ] Content-based recognition of ZIP-derived application formats by internal members (e.g. EPUB, CBZ, APK, JAR, OOXML, XMind, KRA, 3MF) rather than treating them solely as generic archives
   - [ ] `.zst`
+- [ ] Development, build, and package formats
+  - [ ] Build systems, recipes, and automation
+    - [ ] `Makefile`, `GNUmakefile`, `makefile` — Make build targets, variables, prerequisite graphs, and rule definitions
+    - [ ] `Justfile`, `justfile` — Just command runner recipes, attributes, parameters, and dependencies
+    - [ ] `Taskfile`, `Taskfile.yml` — Task runner definitions, task namespaces, dependencies, and shell commands
+      - [ ] Normalized task definition abstraction across Make, Just, Taskfile, and similar command runners
+    - [ ] `Dockerfile`, `Containerfile` — Container build stages (`FROM`, `RUN`, `COPY`, `CMD`), multi-stage build structure, and environment declarations
+    - [ ] `Jenkinsfile` — Jenkins CI/CD pipeline declarations (stages, steps, post actions, agent specifications)
+    - [ ] `PKGBUILD` — Arch Linux package build recipes (`pkgname`, `pkgver`, `pkgrel`, dependencies, sources, and build/package functions)
+    - [ ] `APKBUILD` — Alpine Linux package recipes (package metadata, depends, makedepends, build/package steps)
+    - [ ] `BUILD`, `BUILD.bazel`, `WORKSPACE`, `MODULE.bazel` — Bazel build rules, target labels, workspace dependencies, and Bzlmod module specs
+    - [ ] `CMakeLists.txt` — CMake project definition, target definitions (`add_executable`, `add_library`), dependencies, and include directories
+    - [ ] `meson.build`, `meson_options.txt` — Meson build definitions, project options, dependencies, and target declarations
+    - [ ] `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, `compose.yaml` — Docker / Compose multi-container application definitions (services, image/build specifications, port forwards, volume mounts, networks, and environment)
+    - [ ] GitHub Actions workflows (`.github/workflows/*.yml`, `.github/workflows/*.yaml`) — CI/CD workflow triggers (`on:` events), job dependency graphs, step definitions, and action runners
+  - [ ] Dependency manifests and lockfiles
+    - [ ] `package.json`, `package-lock.json` — npm package manifest and lockfile (scripts, dependencies, devDependencies, peerDependencies, exact version resolutions, and integrity hashes)
+    - [ ] `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `bun.lockb` — pnpm, Yarn, and Bun package lockfiles (resolved package trees, version specs, and integrity checksums)
+    - [ ] `pyproject.toml`, `poetry.lock`, `Pipfile`, `Pipfile.lock`, `requirements.txt` — Python packaging and dependency locks (PEP 518/621 build systems, tool metadata, pinned package hashes, and dependency trees)
+    - [ ] `Cargo.lock` — Cargo package lockfile (exact package versions, checksums, source registry, and dependency trees)
+    - [ ] `Gemfile`, `Gemfile.lock` — Ruby Bundler dependencies, version constraints, source gems, and locked resolution tree
+    - [ ] `Podfile`, `Podfile.lock` — CocoaPods iOS/macOS pod dependencies, target definitions, and resolved lockfile
+    - [ ] `Rakefile` — Ruby Rake task definitions, namespaces, and file tasks
+    - [ ] `go.mod`, `go.sum` — Go module declarations, direct/indirect dependencies, go version directive, and module SHA-256 checksums
+    - [ ] `flake.nix`, `flake.lock`, `default.nix`, `shell.nix` — Nix flake inputs/outputs, locked revision pins, derivation expressions, and dev shells
+  - [ ] Development environment and package manifests
+    - [ ] `Brewfile` — Homebrew bundle formulas, casks, taps, and App Store targets
+    - [ ] `Tiltfile` — Tilt multi-service local Kubernetes/container development environment definitions
+    - [ ] `Procfile` — Honcho / Foreman / Heroku process type declarations (`web`, `worker`, etc.)
+    - [ ] `Vagrantfile` — Vagrant virtual machine configurations, box providers, port forwards, and provisioners
+    - [ ] `MANIFEST`, `MANIFEST.in` — Python source distribution package file inclusion/exclusion manifests
+    - [ ] Kubernetes manifests and Helm charts (`k8s.yaml`, Helm `Chart.yaml`, `values.yaml`) — Kubernetes resource configurations (API version, resource kinds [`Deployment`, `Service`, `ConfigMap`, `Ingress`, `StatefulSet`], container specs, volume mounts, resource quotas, and Helm chart parameters)
+    - [ ] Postman collections (`.postman_collection.json`) — Postman API collection v2/v2.1 (collection metadata, folder hierarchy, HTTP requests, headers, body templates, URL parameters, and test scripts)
+    - [ ] Bruno API collections (`.bru`) — Bruno plain-text, Git-friendly API request definitions (HTTP method, URL, headers, auth, body templates, and test scripts)
+    - [ ] Insomnia collections (`insomnia.json`, `.insomnia`) — Insomnia workspace and request collection exports (v4 JSON, environment configurations, and authentication settings)
+- [ ] Git, SSH, and configuration formats
+  - [ ] Git configuration and repository attributes
+    - [ ] `.gitignore` — Git file exclusion pattern rules, negated patterns, and path matching
+    - [ ] `.gitattributes` — Git file attributes (diff drivers, line-ending filters, merge strategies, LFS tracking)
+    - [ ] `.gitmodules` — Git submodule paths, repository URLs, and branch tracking
+    - [ ] `.gitconfig` — Git user and system configuration (aliases, remotes, credentials, signing keys)
+  - [ ] Git internal repository state (under `.git/`)
+    - [ ] `.git/HEAD` — Symbolic reference to current branch or detached commit SHA
+    - [ ] `.git/index` — Binary staging index (staged file paths, modes, SHA-1/SHA-256 hashes, timestamps, and stage flags)
+    - [ ] `.git/packed-refs` — Flat list of packed reference names and target commit hashes
+    - [ ] `.git/FETCH_HEAD` — Remote tracking heads from the most recent fetch
+    - [ ] `.git/ORIG_HEAD` — Previous HEAD commit pointer for rollback and undo operations
+    - [ ] `.git/COMMIT_EDITMSG` — Recent commit message draft / template
+    - [ ] `.git/config` — Repository-specific configuration (remote URLs, fetch refspecs, branch tracking)
+    - [ ] `.git/description` — GitWeb / repository description string
+  - [ ] SSH keys, authorized hosts, and identities
+    - [ ] `authorized_keys` — SSH public keys authorized for server login (key type, base64 key data, options, comment)
+    - [ ] `known_hosts` — Known remote host public key records and hashed host fingerprints
+    - [ ] `.ssh/config` — OpenSSH client configuration (`Host` blocks, `HostName`, `User`, `IdentityFile`, proxy jumps)
+    - [ ] `sshd_config` — OpenSSH server configuration (`Port`, `ListenAddress`, `AuthMethods`, `Subsystem`)
+    - [ ] `id_rsa`, `id_ed25519`, `id_ecdsa` — SSH private keys (identity matching and metadata without caching sensitive private key material)
+    - [ ] `id_*.pub` — SSH public keys (key type, base64 key, comment)
+    - [ ] `authorized_principals` — SSH certificate principals allowed for authentication
+    - [ ] Key identity pairing (non-destructive, zero-cache fingerprint matching between public keys and private key files)
+  - [ ] Credentials, tokens, and server configurations
+    - [ ] `.netrc`, `netrc` — Machine authentication credentials (`machine`, `login`, `password`, `account`)
+    - [ ] `.git-credentials` — Git credential storage helper URLs and authentication records
+    - [ ] `.env`, `.env.local`, `.env.production` — Environment variable configurations (key-value pairs, comments, exports)
+    - [ ] `.npmrc`, `.yarnrc`, `.pypirc` — Package manager configuration files (registry endpoints, scope auth tokens, index URLs)
+    - [ ] `Caddyfile` — Caddy HTTP server configuration (site addresses, directives, reverse proxies, TLS policies)
+- [ ] System configuration and named system records
+  - [ ] Filesystem and encrypted volume tables
+    - [ ] `fstab`, `mtab` — Filesystem mount configurations and currently mounted filesystems (device, mountpoint, fstype, options, dump/pass)
+    - [ ] `crypttab` — Encrypted block device mapping table (target name, source device, keyfile, cryptsetup options)
+  - [ ] User accounts, groups, and privileges
+    - [ ] `passwd`, `group` — User account records and group membership lists
+    - [ ] `shadow`, `gshadow` — Protected user and group authentication records (salted hashes, expiration parameters)
+    - [ ] `sudoers` — Sudo privilege specification, user aliases, command aliases, and execution rules
+  - [ ] Hostname and name resolution
+    - [ ] `hosts`, `hostname` — Static IP-to-host mappings and system hostname
+    - [ ] `resolv.conf`, `nsswitch.conf` — DNS resolver nameservers/search domains and Name Service Switch database lookup orders
+  - [ ] System identity, banners, and scheduled jobs
+    - [ ] `os-release` — Operating system identification fields (`NAME`, `VERSION_ID`, `PRETTY_NAME`, `ID_LIKE`)
+    - [ ] `machine-id` — Unique system installation identifier
+    - [ ] `issue`, `motd` — Pre-login terminal banner and Message of the Day
+    - [ ] `modules`, `modules-load` — Kernel modules to load at system boot
+    - [ ] `environment` — System-wide environment variable assignments
+    - [ ] `inittab` — SysV init default runlevel and terminal spawn table
+    - [ ] `crontab` — Cron scheduled job tables (minute, hour, dom, month, dow, command)
+    - [ ] `adjtime` — Hardware RTC clock calibration and UTC/local offset parameters
+  - [ ] Desktop integration and service specifications
+    - [ ] `.desktop` — XDG Desktop Entry (application name, localized titles, `Exec` command line, `Icon`, `Categories`, `MimeType` associations, and desktop action items)
+    - [ ] `.service`, `.timer`, `.socket`, `.mount`, `.target`, `.path` — Systemd unit definitions (unit description, dependency graphs `After`/`Requires`/`Wants`, execution paths, environment files, and calendar timer triggers)
+    - [ ] `.rules` — Udev hardware rules (subsystem matches, USB `idVendor`/`idProduct`, kernel attribute selectors, device permissions, and symlink declarations)
+    - [ ] `mimeapps.list` — XDG desktop default MIME type associations and application handler overrides
+  - [ ] Cloud and automated machine provisioning
+    - [ ] `user-data`, `cloud-config`, `cloud-init.yaml` — Cloud-Init VM provisioning configurations (`#cloud-config` YAML: users, SSH authorized keys, package installation, write_files, and runcmd directives)
+    - [ ] `.ign` — Ignition machine configuration (JSON machine provisioning format for Fedora CoreOS / Flatcar: early-boot storage partitioning, filesystem formatting, and systemd units)
+  - [ ] System debugging, profiling traces, and crash dumps
+    - [ ] `core`, `core.*` — Linux ELF core dump files (crashing signal, process ID, faulting memory address, register state dump, loaded shared libraries, and thread stack callchains)
+    - [ ] `perf.data` — Linux `perf` record performance profiling data (sampled hardware/software events, CPU instruction pointers, symbol resolution, and callchain graphs)
+    - [ ] `.pprof` — Google / Go pprof profile dump (gzipped protocol buffer; CPU execution samples, memory heap allocations, goroutine stacks, and mutex contention)
+    - [ ] `.etl` — Windows Performance Analyzer / Event Trace Log (Event Tracing for Windows [ETW] session trace; CPU execution sampling, DPC/ISR analysis, thread context switches, disk I/O, system calls, and kernel provider events)
+    - [ ] `.pftrace`, `.perfetto-trace` — Android / Linux Perfetto system trace (Protobuf trace packets: CPU scheduling ftrace events, Android atrace slices, RSS memory, system calls, and GPU frequency counters)
+    - [ ] `trace.json`, `.trace` — Chrome DevTools Performance trace (Trace Event Format JSON: timeline tracks, process/thread IDs, phases `B`/`E`/`X`, V8 compile/eval events, and layout/raster slices)
+    - [ ] `.bpf.o` — eBPF bytecode object file (ELF sections `kprobe/`, `tracepoint/`, `xdp`, `cgroup/`, BTF debug symbols, and relocation records)
+  - [ ] Shell startup configurations
+    - [ ] `profile`, `bashrc`, `zshrc`, `zprofile` — Shell initialization scripts, environment variable exports, aliases, and shell options
+  - [ ] Standard project documentation and metadata files
+    - [ ] `README` — Project overview, installation, usage, and quick start documentation
+    - [ ] `LICENSE`, `COPYING` — Open source license terms and copyright notices
+    - [ ] `NOTICE` — Third-party software notices and attribution statements
+    - [ ] `AUTHORS`, `CONTRIBUTORS` — Project authors and contributor attribution rosters
+    - [ ] `CHANGELOG`, `NEWS`, `HISTORY` — Release notes, version history, and bugfix/feature summaries
+    - [ ] `TODO`, `FIXME` — Task notes, future work, and pending implementation reminders
+- [ ] Boot, kernel, and firmware image formats
+  - [ ] `limine.conf`, `limine.cfg` — Limine bootloader configuration (boot entries, kernel/initramfs paths, boot protocols [linux, chainload, limine], cmdline arguments, timeout, and graphics modes)
+  - [ ] `bzImage` — Linux kernel compressed boot image (x86 bootloader protocol header, setup code, and compressed payload)
+  - [ ] `vmlinuz` — Compressed Linux kernel executable
+  - [ ] `vmlinux` — Raw uncompressed Linux kernel ELF executable (kernel symbols, section layout, and built-in drivers)
+  - [ ] `initrd`, `initramfs` — Initial RAM filesystem archives (cpio / gzip / xz / zstd compressed early root filesystems)
+  - [ ] `Image`, `zImage`, `uImage` — ARM / RISC-V / U-Boot kernel image variants (U-Boot 64-byte legacy header, payload architecture, entry points)
+  - [ ] `MLO`, `SPL`, `u-boot` — First-stage bootloaders and Secondary Program Loaders (SoC header, boot partition offsets, U-Boot environment)
+  - [ ] `System.map` — Linux kernel symbol table (symbol addresses, symbol types, and function names for kernel debugging)
