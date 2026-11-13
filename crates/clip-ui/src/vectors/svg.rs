@@ -109,7 +109,7 @@ impl Scene {
         {
             return Err("Native SVG raster assets exceed the preview budget.".into());
         }
-        validate_group(tree.root(), &images)?;
+        validate_group(tree.root(), &images, 0)?;
         let clips = tree
             .clip_paths()
             .iter()
@@ -171,16 +171,24 @@ impl Scene {
 fn validate_group(
     group: &usvg::Group,
     images: &HashMap<usize, Arc<image::RgbaImage>>,
+    shadow_depth: u8,
 ) -> Result<(), String> {
     if group.mask().is_some() || group.blend_mode() != usvg::BlendMode::Normal {
         return Err(
             "This drawing's masks, filters or blend effects still use the raster preview.".into(),
         );
     }
-    shadow(group)?;
+    // A hard shadow paints source alpha and source artwork. Bound nesting so
+    // an authored chain cannot multiply UI-thread work exponentially.
+    let shadow_depth = shadow_depth + u8::from(shadow(group)?.is_some());
+    if shadow_depth > 2 {
+        return Err(
+            "Nested shadows exceed the native preview budget; using the raster preview.".into(),
+        );
+    }
     for node in group.children() {
         match node {
-            usvg::Node::Group(child) => validate_group(child, images)?,
+            usvg::Node::Group(child) => validate_group(child, images, shadow_depth)?,
             usvg::Node::Path(path) => {
                 for paint in [
                     path.fill().map(|fill| fill.paint()),
@@ -687,6 +695,23 @@ mod tests {
             if let Ok(scene) = result {
                 assert_eq!(scene.size(), egui::vec2(100.0, 80.0));
                 assert!(scene.tree.node_by_id("node").is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn nested_shadow_work_is_bounded_before_reaching_the_ui_thread() {
+        for depth in [2, 3, 20] {
+            let source = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><defs><filter id="s"><feDropShadow dx="2" dy="2" stdDeviation="0"/></filter></defs>{}<path d="M10 10h40v30h-40Z"/>{}</svg>"##,
+                r##"<g filter="url(#s)">"##.repeat(depth),
+                "</g>".repeat(depth)
+            );
+            let tree = usvg::Tree::from_str(&source, &usvg::Options::default()).unwrap();
+            let scene = Scene::new(tree, HashMap::new());
+            assert_eq!(scene.is_ok(), depth <= 2);
+            if let Err(error) = scene {
+                assert!(error.contains("Nested shadows"));
             }
         }
     }
