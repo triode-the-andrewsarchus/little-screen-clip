@@ -1,0 +1,146 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/structurizr-core",
+    "crates/structurizr-dsl",
+    "crates/structurizr-render",
+    "crates/structurizr-export",
+    "crates/structurizr-web",
+    "crates/structurizr-scripting",
+    "crates/structurizr-mcp",
+    "crates/structurizr-config",
+    "crates/structurizr-github",
+    "crates/structurizr-analysis",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["structurizr-rs contributors"]
+repository = "https://github.com/structurizr/structurizr-rs"
+description = "A Rust implementation of Structurizr Lite for C4 model architecture diagrams"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Web framework
+axum = { version = "0.7", features = ["macros", "ws"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Parsing
+pest = "2.7"
+pest_derive = "2.7"
+
+# UUID generation
+uuid = { version = "1.0", features = ["v4", "v5", "serde"] }
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# File watching
+notify = "6.0"
+
+# Search
+tantivy = "0.22"
+
+# CLI
+clap = { version = "4.0", features = ["derive"] }
+
+# Testing
+pretty_assertions = "1.0"
+
+# Regex (lite version for simple patterns)
+regex-lite = "0.1"
+
+# Markdown parsing (GitHub Flavored Markdown)
+comrak = "0.31"
+
+# Lua scripting runtime (vendored to avoid system dependency)
+mlua = { version = "0.10", features = ["lua54", "serialize", "send", "vendored"] }
+
+# WASM runtime for plugins
+wasmtime = "27"
+
+# TOML parsing for plugin manifests
+toml = "0.8"
+
+# Glob for finding plugin files
+glob = "0.3"
+
+# Internal crates
+structurizr-core = { path = "crates/structurizr-core" }
+structurizr-dsl = { path = "crates/structurizr-dsl" }
+structurizr-render = { path = "crates/structurizr-render" }
+structurizr-export = { path = "crates/structurizr-export" }
+structurizr-web = { path = "crates/structurizr-web" }
+structurizr-scripting = { path = "crates/structurizr-scripting" }
+structurizr-mcp = { path = "crates/structurizr-mcp" }
+structurizr-config = { path = "crates/structurizr-config" }
+structurizr-github = { path = "crates/structurizr-github" }
+structurizr-analysis = { path = "crates/structurizr-analysis" }
+
+# GitHub API client
+octocrab = "0.41"
+
+# SQLite for caching
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Secure secret storage
+secrecy = "0.10"
+
+[package]
+name = "structurizr-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[[bin]]
+name = "structurizr"
+path = "src/main.rs"
+
+[features]
+default = ["scripting", "mcp-all"]
+# Enable script execution in DSL files (!script lua/groovy directives)
+scripting = ["structurizr-dsl/scripting"]
+# Enable MCP server for AI assistant integration
+mcp = ["dep:structurizr-mcp", "structurizr-web/mcp-proxy"]
+# Enable WebSocket transport for MCP server
+mcp-websocket = ["mcp", "structurizr-mcp/websocket"]
+# Enable Streamable HTTP transport for MCP server
+mcp-http = ["mcp", "structurizr-mcp/http"]
+# Enable all MCP transports
+mcp-all = ["mcp", "mcp-websocket", "mcp-http"]
+# Enable automatic plugin building on server startup
+auto-build-plugins = ["structurizr-scripting/auto-build-plugins"]
+
+[dependencies]
+structurizr-core.workspace = true
+structurizr-dsl.workspace = true
+structurizr-render.workspace = true
+structurizr-export.workspace = true
+structurizr-web.workspace = true
+structurizr-scripting.workspace = true
+structurizr-mcp = { workspace = true, optional = true }
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
