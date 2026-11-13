@@ -10,6 +10,7 @@ mod attributes;
 pub mod colors;
 mod connections;
 pub mod edits;
+mod presentation;
 
 const MAX_SOURCE: usize = 256 * 1024;
 const MAX_COMPONENTS: usize = 256;
@@ -51,6 +52,11 @@ pub struct Connector {
     pub notes: Option<String>,
     pub pins: Vec<Pin>,
     pub simple: bool,
+    pub show_name: bool,
+    pub show_pincount: bool,
+    pub hide_disconnected_pins: bool,
+    pub background: Option<[u8; 3]>,
+    pub title_background: Option<[u8; 3]>,
     /// Definitions are displayed only when referenced by a connection set.
     pub used: bool,
 }
@@ -95,6 +101,11 @@ pub struct Cable {
     pub wires: Vec<Wire>,
     pub shield: Option<String>,
     pub bundle: bool,
+    pub show_name: bool,
+    pub show_wirecount: bool,
+    pub show_wirenumbers: bool,
+    pub background: Option<[u8; 3]>,
+    pub title_background: Option<[u8; 3]>,
     pub used: bool,
 }
 impl Cable {
@@ -208,6 +219,8 @@ pub struct Harness {
     pub connectors: Vec<Connector>,
     pub cables: Vec<Cable>,
     pub links: Vec<Link>,
+    /// Optional authored paper color; absent values keep the native default.
+    pub background: Option<[u8; 3]>,
     /// Resource omissions and unused definitions, never omitted electrical links.
     pub warnings: Vec<String>,
 }
@@ -232,8 +245,7 @@ pub struct Harness {
 ///
 /// # Errors
 /// Returns syntax, duplicate-key, resource-budget, ambiguous endpoint or
-/// unsupported-feature errors. Template expansion and automatic cable color
-/// codes are not implemented yet and are explicitly refused.
+/// unsupported-feature errors. Template instance expansion remains unsupported.
 pub fn parse(source: &str) -> Result<Harness, String> {
     let (_, value) = document(source)?;
     model(&value)

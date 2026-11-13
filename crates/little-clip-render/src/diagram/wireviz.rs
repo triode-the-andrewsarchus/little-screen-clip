@@ -1,9 +1,9 @@
 //! Harness tables and conductor paths laid out by the existing native engine.
 use super::graphviz::label;
 use little_clip_core::diagram::wireviz::{
-    self, Cable, Conductor, Connector, Direction, Endpoint, Harness, Link, LinkKind, PinId,
+    self, Cable, Conductor, Connector, Direction, Endpoint, Harness, Link, LinkKind, Pin, PinId,
 };
-use std::fmt::Write;
+use std::{collections::HashSet, fmt::Write};
 
 pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
     let harness = wireviz::parse(source)?;
@@ -14,11 +14,23 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
 }
 
 fn dot(harness: &Harness) -> Result<String, String> {
+    let visible: HashSet<_> = harness
+        .links
+        .iter()
+        .flat_map(|link| link.endpoints)
+        .collect();
     let visible_rows: usize = harness
         .connectors
         .iter()
-        .filter(|c| c.used)
-        .map(|c| c.pins.len())
+        .enumerate()
+        .filter(|(_, c)| c.used)
+        .map(|(index, c)| {
+            if c.simple {
+                1
+            } else {
+                visible_pins(c, index, &visible).count()
+            }
+        })
         .sum::<usize>()
         + harness
             .cables
@@ -26,7 +38,7 @@ fn dot(harness: &Harness) -> Result<String, String> {
             .filter(|c| c.used)
             .map(|c| c.wires.len() + usize::from(c.shield.is_some()))
             .sum::<usize>();
-    if visible_rows == 0 {
+    if !harness.connectors.iter().any(|c| c.used) && !harness.cables.iter().any(|c| c.used) {
         return Err("No components are included in WireViz connections".into());
     }
     if visible_rows > 1024 || harness.links.len() > 4096 {
@@ -35,16 +47,20 @@ fn dot(harness: &Harness) -> Result<String, String> {
     let mut dot = String::from(
         "digraph harness { graph [rankdir=LR bgcolor=white nodesep=0.45 ranksep=0.7]; node [shape=plain fontname=Helvetica fontsize=12]; edge [dir=none color=\"#607485\" penwidth=2];\n",
     );
+    if let Some(background) = harness.background {
+        writeln!(dot, "graph [bgcolor=\"{}\"];", rgb(background)).unwrap();
+    }
     for (index, connector) in harness
         .connectors
         .iter()
         .enumerate()
         .filter(|(_, c)| c.used)
     {
-        let table = connector_table(connector, index)?;
+        let table = connector_table(connector, index, &visible)?;
         writeln!(
             dot,
-            "c{index} [id=\"wireviz-connector-{index}\" label=<{table}>];"
+            "c{index} [id=\"wireviz-connector-{index}\" fontcolor=\"{}\" label=<{table}>];",
+            foreground(connector.background.unwrap_or([244, 247, 250]))
         )
         .unwrap();
     }
@@ -52,7 +68,8 @@ fn dot(harness: &Harness) -> Result<String, String> {
         let table = cable_table(cable, index)?;
         writeln!(
             dot,
-            "w{index} [id=\"wireviz-cable-{index}\" label=<{table}>];"
+            "w{index} [id=\"wireviz-cable-{index}\" fontcolor=\"{}\" label=<{table}>];",
+            foreground(cable.background.unwrap_or([244, 247, 250]))
         )
         .unwrap();
     }
@@ -66,29 +83,59 @@ fn dot(harness: &Harness) -> Result<String, String> {
     Ok(dot)
 }
 
-fn connector_table(connector: &Connector, index: usize) -> Result<String, String> {
+fn connector_table(
+    connector: &Connector,
+    index: usize,
+    visible: &HashSet<Endpoint>,
+) -> Result<String, String> {
     let mut table = header(
-        &connector.name,
+        connector.show_name.then_some(connector.name.as_str()),
         connector.description.as_deref(),
-        connector.pins.len(),
-        "pins",
+        connector
+            .show_pincount
+            .then_some((connector.pins.len(), "pins")),
+        connector.background,
+        connector.title_background,
+        false,
     );
-    for (pin, value) in connector.pins.iter().enumerate() {
-        let id = match &value.id {
-            PinId::Number(n) => n.to_string(),
-            PinId::Text(s) => s.clone(),
-        };
-        row(
-            &mut table,
-            &format!("p{pin}"),
-            &id,
-            value.label.as_deref(),
-            value.color.as_deref(),
-            &format!("wireviz-pin-{index}-{pin}"),
-        )?;
+    if !connector.simple {
+        for (pin, value) in visible_pins(connector, index, visible) {
+            let id = match &value.id {
+                PinId::Number(n) => n.to_string(),
+                PinId::Text(s) => s.clone(),
+            };
+            row(
+                &mut table,
+                &format!("p{pin}"),
+                Some(&id),
+                value.label.as_deref(),
+                value.color.as_deref(),
+                &format!("wireviz-pin-{index}-{pin}"),
+            )?;
+        }
     }
     footer(&mut table, connector.notes.as_deref());
-    Ok(table)
+    if connector.simple {
+        Ok(format!(
+            "<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\"><TR><TD PORT=\"p0\" ID=\"wireviz-pin-{index}-0\" TITLE=\"Terminal\">{table}</TD></TR></TABLE>"
+        ))
+    } else {
+        Ok(table)
+    }
+}
+
+fn visible_pins<'a>(
+    connector: &'a Connector,
+    index: usize,
+    visible: &'a HashSet<Endpoint>,
+) -> impl Iterator<Item = (usize, &'a Pin)> + 'a {
+    connector.pins.iter().enumerate().filter(move |(pin, _)| {
+        !connector.hide_disconnected_pins
+            || visible.contains(&Endpoint::Pin {
+                connector: index,
+                pin: *pin,
+            })
+    })
 }
 
 fn cable_table(cable: &Cable, index: usize) -> Result<String, String> {
@@ -98,16 +145,19 @@ fn cable_table(cable: &Cable, index: usize) -> Result<String, String> {
         "wires"
     };
     let mut table = header(
-        &cable.name,
+        cable.show_name.then_some(cable.name.as_str()),
         cable.description.as_deref(),
-        cable.wires.len(),
-        kind,
+        cable.show_wirecount.then_some((cable.wires.len(), kind)),
+        cable.background,
+        cable.title_background,
+        cable.bundle,
     );
     for (wire, value) in cable.wires.iter().enumerate() {
+        let number = (wire + 1).to_string();
         row(
             &mut table,
             &format!("p{wire}"),
-            &(wire + 1).to_string(),
+            cable.show_wirenumbers.then_some(number.as_str()),
             value.label.as_deref(),
             value.color.as_deref(),
             &format!("wireviz-wire-{index}-{wire}"),
@@ -117,7 +167,7 @@ fn cable_table(cable: &Cable, index: usize) -> Result<String, String> {
         row(
             &mut table,
             "s",
-            "s",
+            Some("s"),
             Some("Shield"),
             Some(color),
             &format!("wireviz-shield-{index}"),
@@ -154,11 +204,31 @@ fn write_link(
     Ok(())
 }
 
-fn header(name: &str, description: Option<&str>, count: usize, kind: &str) -> String {
+fn header(
+    name: Option<&str>,
+    description: Option<&str>,
+    count: Option<(usize, &str)>,
+    background: Option<[u8; 3]>,
+    title_background: Option<[u8; 3]>,
+    dashed: bool,
+) -> String {
+    let body = rgb(background.unwrap_or([244, 247, 250]));
+    let title_color = title_background.unwrap_or([34, 56, 77]);
+    let title = rgb(title_color);
     let mut table = format!(
-        "<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"6\" COLOR=\"#748899\" BGCOLOR=\"#f4f7fa\"><TR><TD BGCOLOR=\"#22384d\" ALIGN=\"LEFT\"><FONT COLOR=\"white\"><B>{}</B> | {count} {kind}</FONT></TD></TR>",
-        label(name)
+        "<TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"6\" COLOR=\"#748899\" BGCOLOR=\"{body}\" STYLE=\"{}\">",
+        if dashed { "DASHED" } else { "SOLID" }
     );
+    let mut parts = Vec::new();
+    if let Some(name) = name {
+        parts.push(label(name));
+    }
+    if let Some((count, kind)) = count {
+        parts.push(format!("{count} {kind}"));
+    }
+    if !parts.is_empty() {
+        write!(table, "<TR><TD BGCOLOR=\"{title}\" ALIGN=\"LEFT\"><FONT COLOR=\"{}\"><B>{}</B></FONT></TD></TR>", foreground(title_color), parts.join(" | ")).unwrap();
+    }
     if let Some(description) = description {
         write!(
             table,
@@ -170,15 +240,33 @@ fn header(name: &str, description: Option<&str>, count: usize, kind: &str) -> St
     table
 }
 
+fn foreground([r, g, b]: [u8; 3]) -> &'static str {
+    if little_clip_core::palette::contrast_ratio((r, g, b), (0, 0, 0))
+        >= little_clip_core::palette::contrast_ratio((r, g, b), (255, 255, 255))
+    {
+        "#000000"
+    } else {
+        "#ffffff"
+    }
+}
+
 fn row(
     table: &mut String,
     port: &str,
-    number: &str,
+    number: Option<&str>,
     name: Option<&str>,
     color: Option<&str>,
     id: &str,
 ) -> Result<(), String> {
-    write!(table, "<TR><TD PORT=\"{port}\" ID=\"{id}\" TITLE=\"Terminal\" ALIGN=\"LEFT\"><TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"3\"><TR><TD WIDTH=\"24\" ALIGN=\"LEFT\"><B>{}</B></TD>", label(number)).unwrap();
+    write!(table, "<TR><TD PORT=\"{port}\" ID=\"{id}\" TITLE=\"Terminal\" ALIGN=\"LEFT\"><TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"3\"><TR>").unwrap();
+    if let Some(number) = number {
+        write!(
+            table,
+            "<TD WIDTH=\"24\" ALIGN=\"LEFT\"><B>{}</B></TD>",
+            label(number)
+        )
+        .unwrap();
+    }
     if let Some(color) = color {
         for band in wireviz::colors::bands(color)? {
             write!(table, "<TD WIDTH=\"12\" BGCOLOR=\"{}\"></TD>", rgb(band)).unwrap();
@@ -201,6 +289,9 @@ fn footer(table: &mut String, notes: Option<&str>) {
             label(notes)
         )
         .unwrap();
+    }
+    if !table.contains("<TR>") {
+        table.push_str("<TR><TD> </TD></TR>");
     }
     table.push_str("</TABLE>");
 }
@@ -293,5 +384,63 @@ mod tests {
         assert!(svg(&source).is_ok());
         assert!(svg(&SOURCE.replace("[WH, GNYE]", "['#000000\"; image=x', GN]")).is_err());
         assert!(svg(&SOURCE.replace("connections:", "unused_connections:")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+
+    #[test]
+    fn hidden_pins_keep_connected_and_looped_ports_and_simple_rows_stay_selectable() {
+        let source = "connectors:\n  C: {pincount: 4, hide_disconnected_pins: true, loops: [[3,4]]}\n  S: {style: simple, type: Terminal}\ncables:\n  HIDE_BUNDLE_NAME: {wirecount: 1, category: bundle, color_code: BW, show_name: false, show_wirecount: false}\nconnections:\n  - [{C: 2}, {HIDE_BUNDLE_NAME: 1}, S]\n";
+        let harness = wireviz::parse(source).unwrap();
+        let dot = dot(&harness).unwrap();
+        assert!(!dot.contains("wireviz-pin-0-0"));
+        for id in [
+            "wireviz-pin-0-1",
+            "wireviz-pin-0-2",
+            "wireviz-pin-0-3",
+            "wireviz-pin-1-0",
+        ] {
+            assert!(dot.contains(id), "{id}");
+        }
+        assert!(!dot.contains("HIDE_BUNDLE_NAME"));
+        assert!(dot.contains("STYLE=\"DASHED\""));
+        let (svg, warnings) = svg(source).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(svg.contains("stroke-dasharray"));
+        let prepared = super::super::retained::prepare(&svg).unwrap();
+        assert!(
+            prepared
+                .tree
+                .node_by_id("graph-0-a_wireviz-pin-0-0")
+                .is_none()
+        );
+        assert!(
+            prepared
+                .tree
+                .node_by_id("graph-0-a_wireviz-pin-1-0")
+                .is_some()
+        );
+        assert_eq!(
+            harness.links,
+            wireviz::parse(&source.replace(
+                "hide_disconnected_pins: true",
+                "hide_disconnected_pins: false"
+            ))
+            .unwrap()
+            .links
+        );
+    }
+
+    #[test]
+    fn authored_backgrounds_are_safe_real_colors_and_all_hidden_pins_keep_a_component() {
+        let source = "connectors:\n  C: {pincount: 2, show_name: false, show_pincount: false, hide_disconnected_pins: true, bgcolor_title: YE}\noptions: {bgcolor: '#123456', bgcolor_connector: '#654321'}\nconnections:\n  - [C]\n";
+        let (svg, warnings) = svg(source).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(svg.contains("#123456") && svg.contains("#654321"));
+        assert!(!svg.contains("wireviz-pin-0-0"));
+        assert!(svg.contains("wireviz-connector-0"));
     }
 }

@@ -86,9 +86,81 @@ pub fn bands(source: &str) -> Result<Vec<[u8; 3]>, String> {
         .collect()
 }
 
+/// Expands one standard cable color sequence to a bounded conductor count.
+///
+/// The DIN sequence follows LAPP's published DIN 47100 chart (positions 1–60).
+/// Other sequences encode the published WireViz scheme names and pair order.
+/// This contains format data, not a translated upstream implementation.
+///
+/// # Errors
+/// Rejects an unknown scheme or a count outside the harness conductor budget.
+pub fn palette(code: &str, count: usize) -> Result<Vec<String>, String> {
+    if count == 0 || count > super::MAX_PINS {
+        return Err(format!(
+            "Palette conductor count must be between 1 and {}",
+            super::MAX_PINS
+        ));
+    }
+    const DIN: &str = "WH BN GN YE GY PK BU RD BK VT GYPK RDBU WHGN BNGN WHYE YEBN WHGY GYBN WHPK PKBN WHBU BNBU WHRD BNRD WHBK BNBK GYGN YEGY PKGN YEPK GNBU YEBU GNRD YERD GNBK YEBK GYBU PKBU GYRD PKRD GYBK PKBK BUBK RDBK WHBNBK YEGNBK GYPKBK RDBUBK WHGNBK BNGNBK WHYEBK YEBNBK WHGYBK GYBNBK WHPKBK PKBNBK WHBUBK BNBUBK WHRDBK BNRDBK";
+    let sequence = match code {
+        "DIN" => DIN,
+        "IEC" => "BN RD OG YE GN BU VT GY WH BK",
+        "BW" => "BK WH",
+        "T568A" => "WHGN GN WHOG BU WHBU OG WHBN BN",
+        "T568B" => "WHOG OG WHGN BU WHBU GN WHBN BN",
+        "TEL" | "TELALT" => {
+            return Ok((0..count)
+                .map(|index| telephone(code, index % 50))
+                .collect());
+        }
+        _ => return Err(format!("Unknown WireViz color_code {code:?}")),
+    };
+    let sequence: Vec<_> = sequence.split_ascii_whitespace().collect();
+    Ok((0..count)
+        .map(|index| sequence[index % sequence.len()].to_owned())
+        .collect())
+}
+
+fn telephone(code: &str, index: usize) -> String {
+    let major = ["WH", "RD", "BK", "YE", "VT"][index / 10];
+    let minor = ["BU", "OG", "GN", "BN", "SL"][(index % 10) / 2];
+    if code == "TELALT" && index < 10 && index % 2 == 1 {
+        minor.into()
+    } else if (code == "TEL") == index.is_multiple_of(2) {
+        format!("{minor}{major}")
+    } else {
+        format!("{major}{minor}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn standard_palettes_wrap_at_their_actual_boundaries() {
+        for (code, length, first, last) in [
+            ("DIN", 60, "WH", "BNRDBK"),
+            ("IEC", 10, "BN", "BK"),
+            ("BW", 2, "BK", "WH"),
+            ("TEL", 50, "BUWH", "VTSL"),
+            ("TELALT", 50, "WHBU", "SLVT"),
+            ("T568A", 8, "WHGN", "BN"),
+            ("T568B", 8, "WHOG", "BN"),
+        ] {
+            let colors = palette(code, length + 1).unwrap();
+            assert_eq!(colors[0], first, "{code}");
+            assert_eq!(colors[length - 1], last, "{code}");
+            assert_eq!(colors[length], first, "{code}");
+            assert!(colors.iter().all(|color| bands(color).is_ok()));
+        }
+        assert_eq!(palette("DIN", 45).unwrap()[44], "WHBNBK");
+        assert_eq!(palette("TELALT", 12).unwrap()[1], "BU");
+        assert_eq!(palette("TELALT", 12).unwrap()[10], "RDBU");
+        assert_eq!(palette("TELALT", 12).unwrap()[11], "BURD");
+        for (code, count) in [("unknown", 3), ("IEC", 0), ("DIN", 513)] {
+            assert!(palette(code, count).is_err());
+        }
+    }
     #[test]
     fn resolves_all_standard_colors_and_striped_rgb_bands() {
         for (name, color) in COLORS {

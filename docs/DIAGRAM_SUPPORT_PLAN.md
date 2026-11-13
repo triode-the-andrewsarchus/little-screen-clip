@@ -2948,3 +2948,15 @@ the earlier partials/records/optional-operator limitation; module imports and
 further upstream syntax remain explicitly unsupported. See
 [the comparison and qualification](diagrams/dbml-research.md). Shared host rebuild
 and native GUI review of the modern fixture remain part of this integration pass.
+
+### WireViz palettes and presentation
+
+- [x] Infer pin counts from pin colors, resolve the seven canonical palettes with
+  explicit-color precedence, and preserve palette declarations during color edits.
+- [x] Render simple connectors, disconnected-pin visibility, bundle style,
+  name/count/number visibility and safe authored backgrounds with stable terminal IDs.
+
+Twenty-nine core model/edit tests, four renderer tests and strict core/render
+Clippy pass. See [the compatibility review](diagrams/wireviz-compatibility.md).
+The normal application rebuild/native review is pending; template instances and
+connect/disconnect transactions remain separate tracked work.

@@ -312,3 +312,19 @@ fn rewrites_only_references_that_the_edit_would_invalidate_or_make_ambiguous() {
         editor.harness().links
     );
 }
+
+#[test]
+fn editing_one_palette_conductor_materializes_colors_and_preserves_palette_source() {
+    let source = "# Keep palette declaration.\nconnectors:\n  J: {pincount: 1}\ncables:\n  W: {wirecount: 3, color_code: IEC} # keep comment\nconnections:\n  - [{J: 1}, {W: BN}]\n";
+    let editor = Editable::parse(source).unwrap();
+    let updated = editor.apply(source, color(0, None)).unwrap();
+    assert!(updated.contains("color_code: IEC"));
+    assert!(updated.contains("# Keep palette declaration."));
+    assert!(updated.contains("# keep comment"));
+    let after = super::super::parse(&updated).unwrap();
+    assert_eq!(after.links, editor.harness().links);
+    assert_eq!(after.cables[0].wires[0].color, None);
+    assert_eq!(after.cables[0].wires[1].color.as_deref(), Some("RD"));
+    assert_eq!(after.cables[0].wires[2].color.as_deref(), Some("OG"));
+    assert_eq!(source, editor.source);
+}

@@ -267,7 +267,7 @@ fn rejects_ambiguous_definitions_and_inconsistent_terminal_lists() {
         ("pincount: 3", "pincount: 513"),
         ("pincount: 3", "pincount: 2\n    pins: [1]"),
         ("wirecount: 3", "wirecount: true"),
-        ("colors: [BK, RD]", "colors: [BK, RD]\n    color_code: DIN"),
+        ("colors: [BK, RD]", "colors: []\n    color_code: UNKNOWN"),
         ("W1:\n", "X1:\n"),
     ] {
         assert!(parse(&HARNESS.replace(from, to)).is_err(), "{from} -> {to}");
@@ -323,5 +323,79 @@ fn bounds_source_nesting_alias_expansion_and_total_links() {
         parse(&format!("connectors:\n{definitions}connections: []\n"))
             .unwrap_err()
             .contains("component budget")
+    );
+}
+
+#[test]
+fn infers_pincolors_and_resolves_selected_palettes_without_changing_source() {
+    let source = "connectors:\n  C: {pincolors: [RD, BU]}\ncables:\n  W: {wirecount: 3, color_code: IEC}\nconnections:\n  - [{C: [1, 2]}, {W: [1, 3]}]\n";
+    let before = source.to_owned();
+    let harness = parse(source).unwrap();
+    assert_eq!(harness.connectors[0].pins.len(), 2);
+    assert_eq!(harness.connectors[0].pins[1].color.as_deref(), Some("BU"));
+    assert_eq!(
+        harness.cables[0]
+            .wires
+            .iter()
+            .map(|wire| wire.color.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("BN"), Some("RD"), Some("OG")]
+    );
+    assert_eq!(source, before);
+    let explicit =
+        parse(&source.replace("color_code: IEC", "color_code: UNKNOWN, colors: [GN]")).unwrap();
+    assert!(
+        explicit.cables[0]
+            .wires
+            .iter()
+            .all(|wire| wire.color.as_deref() == Some("GN"))
+    );
+    assert!(
+        parse(&source.replace("color_code: IEC", "color_code: UNKNOWN"))
+            .unwrap_err()
+            .contains("color_code")
+    );
+}
+
+#[test]
+fn presentation_defaults_overrides_and_omissions_are_explicit() {
+    let source = "connectors:\n  S: {style: simple}\n  C: {pincount: 2, show_name: false, hide_disconnected_pins: true, bgcolor_title: '#123456'}\ncables:\n  B: {category: bundle, colors: [RD, BU]}\noptions: {bgcolor: BK, bgcolor_node: GY, bgcolor_bundle: WH}\nconnections:\n  - [S]\n  - [C]\n  - [B]\n";
+    let h = parse(source).unwrap();
+    assert!(!h.connectors[0].show_name && !h.connectors[0].show_pincount);
+    assert!(!h.connectors[1].show_name && h.connectors[1].hide_disconnected_pins);
+    assert_eq!(h.connectors[1].title_background, Some([0x12, 0x34, 0x56]));
+    assert_eq!(h.connectors[1].background, Some([153; 3]));
+    assert!(!h.cables[0].show_wirenumbers && h.cables[0].show_wirecount);
+    assert_eq!(h.cables[0].background, Some([255; 3]));
+    assert_eq!(h.background, Some([0; 3]));
+    assert!(h.warnings.is_empty());
+    for (from, to, message) in [
+        ("show_name: false", "show_name: 'false'", "boolean"),
+        ("bgcolor: BK", "bgcolor: GNYE", "solid"),
+        ("bgcolor: BK", "bgcolor: 'red; image=x'", "color"),
+    ] {
+        assert!(
+            parse(&source.replace(from, to))
+                .unwrap_err()
+                .to_lowercase()
+                .contains(message)
+        );
+    }
+    let omitted = parse(&source.replace(
+        "bgcolor: BK",
+        "fontname: Unavailable, color_mode: HEX, bgcolor: BK",
+    ))
+    .unwrap();
+    assert!(
+        omitted
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("font"))
+    );
+    assert!(
+        omitted
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("color-name"))
     );
 }

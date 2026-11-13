@@ -34,6 +34,18 @@ pub(super) fn read(root: &Mapping) -> Result<Harness, String> {
         return Err("WireViz needs connector or cable definitions".into());
     }
     let mut warnings = Vec::new();
+    let backgrounds = presentation::read(root, &mut warnings)?;
+    for connector in &mut connectors {
+        connector.background = connector.background.or(backgrounds.connector);
+    }
+    for cable in &mut cables {
+        cable.background = cable.background.or(if cable.bundle {
+            backgrounds.bundle
+        } else {
+            backgrounds.cable
+        });
+    }
+    presentation::omissions(root, &mut warnings);
     if root.get_str("tweak").is_some() {
         warnings.push("Graphviz tweaks are not executed by the native harness preview".into());
     }
@@ -52,6 +64,7 @@ pub(super) fn read(root: &Mapping) -> Result<Harness, String> {
         connectors,
         cables,
         links: Vec::new(),
+        background: backgrounds.graph,
         warnings,
     })
 }
@@ -87,6 +100,11 @@ fn connector(name: &str, attrs: &Mapping) -> Result<Connector, String> {
         notes: text(attrs, "notes")?,
         pins: connector_pins(name, attrs, simple)?,
         simple,
+        show_name: presentation::flag(attrs, "show_name", !simple && !name.starts_with("__"))?,
+        show_pincount: presentation::flag(attrs, "show_pincount", !simple)?,
+        hide_disconnected_pins: presentation::flag(attrs, "hide_disconnected_pins", false)?,
+        background: presentation::color(attrs, "bgcolor")?,
+        title_background: presentation::color(attrs, "bgcolor_title")?,
         used: false,
     })
 }
@@ -94,16 +112,16 @@ fn connector(name: &str, attrs: &Mapping) -> Result<Connector, String> {
 fn connector_pins(name: &str, attrs: &Mapping, simple: bool) -> Result<Vec<Pin>, String> {
     let ids = list(attrs, "pins")?;
     let labels = list(attrs, "pinlabels")?;
+    let colors = list(attrs, "pincolors")?;
     let inferred = if !ids.is_empty() {
-        ids.len()
+        ids.len().max(labels.len()).max(colors.len())
     } else {
-        labels.len().max(usize::from(simple))
+        labels.len().max(colors.len()).max(usize::from(simple))
     };
     let count = count(attrs, "pincount", inferred)?;
     if (!ids.is_empty() && ids.len() != count) || labels.len() > count || (simple && count != 1) {
         return Err(format!("Inconsistent pin count on {name}"));
     }
-    let colors = list(attrs, "pincolors")?;
     if colors.len() > count {
         return Err(format!("Too many pin colors on {name}"));
     }
@@ -137,13 +155,21 @@ fn numbered_pins(
 }
 
 fn cable(name: &str, attrs: &Mapping) -> Result<Cable, String> {
-    if attrs.get_str("color_code").is_some() {
-        return Err(format!(
-            "Automatic color_code palettes are not implemented yet ({name}); use explicit colors"
-        ));
-    }
-    let colors = list(attrs, "colors")?;
-    let count = count(attrs, "wirecount", colors.len())?;
+    let explicit = list(attrs, "colors")?;
+    let count = count(attrs, "wirecount", explicit.len())?;
+    let generated;
+    let colors = if explicit.is_empty() {
+        generated = match text(attrs, "color_code")? {
+            Some(code) => colors::palette(&code, count)?
+                .into_iter()
+                .map(Value::from)
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
+        generated.as_slice()
+    } else {
+        explicit
+    };
     let labels = list(attrs, "wirelabels")?;
     if labels.len() > count {
         return Err(format!("Too many wire labels on {name}"));
@@ -172,6 +198,11 @@ fn cable(name: &str, attrs: &Mapping) -> Result<Cable, String> {
         wires,
         shield: shield(attrs)?,
         bundle,
+        show_name: presentation::flag(attrs, "show_name", !name.starts_with("__"))?,
+        show_wirecount: presentation::flag(attrs, "show_wirecount", true)?,
+        show_wirenumbers: presentation::flag(attrs, "show_wirenumbers", !bundle)?,
+        background: presentation::color(attrs, "bgcolor")?,
+        title_background: presentation::color(attrs, "bgcolor_title")?,
         used: false,
     })
 }

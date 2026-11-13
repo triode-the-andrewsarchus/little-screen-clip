@@ -1,0 +1,38 @@
+# Native palette and visibility example; untouched source remains authoritative.
+connectors:
+  INPUT:
+    pincolors: [RD, BU, GN, YE, BK]
+    pinlabels: [SIGNAL_A, SIGNAL_B, LOOP_A, LOOP_B, SPARE]
+    hide_disconnected_pins: true
+    loops: [[3, 4]]
+    bgcolor_title: '#174f68'
+  OUTPUT:
+    pincount: 4
+    pinlabels: [SIGNAL_A, SIGNAL_B, RETURN_A, RETURN_B]
+  SPLICE_A:
+    style: simple
+    type: Splice A
+  SPLICE_B:
+    style: simple
+    type: Splice B
+cables:
+  CABLE:
+    wirecount: 8
+    color_code: T568B
+    show_wirenumbers: false
+  BUNDLE:
+    wirecount: 2
+    category: bundle
+    color_code: BW
+    bgcolor_title: '#5a365d'
+options:
+  bgcolor: WH
+  bgcolor_node: '#f4f7fa'
+  bgcolor_bundle: '#eee8f2'
+connections:
+  - - INPUT: [1, 2]
+    - CABLE: [1, 2]
+    - OUTPUT: [1, 2]
+  - - OUTPUT: [3, 4]
+    - BUNDLE: [1, 2]
+    - [SPLICE_A, SPLICE_B]
