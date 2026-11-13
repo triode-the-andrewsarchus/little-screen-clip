@@ -559,7 +559,8 @@ impl EntryPreviews {
             egui::pos2(row.right() - 6.0, icon.bottom()),
         );
         ui.painter().rect_filled(strip, 3.0, colors.recessed);
-        self.text_strip(ui, strip, entry, palette);
+        let preview_rect = strip;
+        let strip = self.text_strip(ui, strip, entry, palette);
         let clicked_line = ui
             .ctx()
             .pointer_interact_pos()
@@ -579,7 +580,7 @@ impl EntryPreviews {
             && ui
                 .ctx()
                 .pointer_hover_pos()
-                .is_some_and(|point| !strip.contains(point))
+                .is_some_and(|point| !preview_rect.contains(point))
             && let Some(document) = self
                 .listing(entry)
                 .and_then(|ready| ready.data.document.clone())
@@ -598,7 +599,7 @@ impl EntryPreviews {
         rect: egui::Rect,
         entry: &Entry,
         palette: &little_clip_core::palette::AppPalette,
-    ) {
+    ) -> egui::Rect {
         let id = self.identity(entry);
         let Some(document) = self
             .cache
@@ -616,8 +617,11 @@ impl EntryPreviews {
                 egui::FontId::proportional(14.0),
                 ui.visuals().weak_text_color(),
             );
-            return;
+            return rect;
         };
+        let rect = document.metadata.as_ref().map_or(rect, |metadata| {
+            metadata.show(ui, rect, egui::Id::new(("frontmatter_strip", id)), palette)
+        });
         let (width, height) = raster_dimensions(ui, rect);
         let colors = super::text_strip::palette_colors(palette);
         let source = Source::TextRaster {
@@ -644,6 +648,7 @@ impl EntryPreviews {
                 |ui| document.excerpt_ui(ui, fraction, width as usize, palette),
             );
         }
+        rect
     }
     pub fn show(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
         self.show_inner(ui, rect, entry, false);

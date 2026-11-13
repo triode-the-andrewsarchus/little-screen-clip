@@ -1215,7 +1215,7 @@ required follow-up work, alongside the remaining format coverage:
   rendered hover previews. WaveDrom should prioritize the actual waveforms over
   decorative heading text. Preserve useful scale, clip vertically when needed,
   and reuse existing cache admission, revision checks and hidden-row retirement.
-- [ ] Give Markdown front matter a compact metadata area beside a smaller text
+- [x] Give Markdown front matter a compact metadata area beside a smaller text
   minimap. Prioritize supplied Hugo fields (`title`, `date`, `draft`, `tags`,
   categories and related dates/weight) without increasing row height. Do not
   infer publication state or project timezone from those fields.
@@ -1236,3 +1236,31 @@ already use eframe's OpenGL backend and expose its function loader at creation.
 Evaluate retaining the native renderer's vector paths/glyphs with per-element
 identity, and a host-owned GPU lifetime, rather than repeatedly increasing a
 cached PNG's resolution. No backend has been integrated at this checkpoint.
+
+### Compact page metadata checkpoint
+
+Page summaries now reuse the text-strip read worker and cache. They prioritize
+title/date/draft/tags, then categories, publication/modification dates and weight;
+unfamiliar metadata falls back to bounded field summaries. Empty metadata does
+not consume strip space. Narrow rows retain the full minimap; wider rows reserve
+a bounded metadata area without changing their height. Click and hover source
+positions use the remaining minimap rectangle. No publication status is inferred.
+
+The scanner retains a bounded metadata prefix while language detection keeps its
+original 8 KiB window. Source identity checks and cancellation remain with the
+existing two-pass reader; there is no additional file reader or preview cache.
+
+Validation: all 12 file-manager text-strip tests and six core metadata tests pass.
+The native browser acceptance script passes in light and dark appearance, showing
+YAML, typed TOML and JSON page fields with and without the Shelf dock and checking
+that passive previews leave all source bytes unchanged. Final reports are under
+`/tmp/diagram-browser-frontmatter-{light,dark}-3/`. The debug file-manager build,
+workspace formatting and strict all-target Clippy for core, studios and file
+manager pass. Five additional review fixtures exercise Hugo fields and Markdown
+hover positions. Rendered diagram strips and rendered Markdown hover remain pending.
+
+Architecture comparison adds the metadata presenter and desktop test while
+keeping maximum complexity, clone-group count and dependency-cycle count
+unchanged; duplication falls slightly. The reported new/resolved Python cycle
+is the same untouched cycle with its members reordered, and the touched preview
+clone windows retain existing raster/cache handling. No new hotspot is reported.

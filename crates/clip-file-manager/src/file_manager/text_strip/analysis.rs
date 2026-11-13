@@ -53,7 +53,10 @@ fn prepare(
         .and_then(|extension| extension.to_str())
         .unwrap_or(filename.trim_start_matches('.'))
         .to_ascii_lowercase();
-    let detected = little_clip_core::syntax::detect_language(&shape.prefix, Some(&extension));
+    let prefix = &shape.prefix[..shape
+        .prefix
+        .floor_char_boundary(shape.prefix.len().min(8192))];
+    let detected = little_clip_core::syntax::detect_language(prefix, Some(&extension));
     let syntax = SYNTAX_SET
         .find_syntax_by_extension(filename)
         .or_else(|| SYNTAX_SET.find_syntax_by_extension(&extension))
@@ -95,6 +98,11 @@ fn prepare(
             (false, true) => "Lossy UTF-8 preview".into(),
             _ => String::new(),
         },
+        metadata: (little_clip_core::syntax::map_extension_to_language(&extension) == Some("md")
+            && little_clip_core::diagram::Format::from_source_extension(&extension, prefix)
+                .is_none())
+        .then(|| super::metadata::Summary::parse(&shape.prefix))
+        .flatten(),
         columns: COLUMNS,
         bins: (0..bins)
             .map(|_| Bin {

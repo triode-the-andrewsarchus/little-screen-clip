@@ -1,5 +1,6 @@
 //! Bounded, whole-document summaries for passive horizontal file previews.
 mod analysis;
+mod metadata;
 mod raster;
 mod stream;
 #[cfg(test)]
@@ -76,6 +77,7 @@ pub(in crate::file_manager) struct Document {
     pub language: String,
     pub badge: String,
     pub note: String,
+    pub metadata: Option<metadata::Summary>,
     columns: usize,
     bins: Vec<Bin>,
 }
