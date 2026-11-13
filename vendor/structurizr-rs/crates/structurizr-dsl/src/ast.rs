@@ -182,6 +182,7 @@ pub struct GroupNode {
 /// A deployment environment containing deployment nodes and groups.
 #[derive(Debug, Clone)]
 pub struct DeploymentEnvironmentNode {
+    pub relationships: Vec<RelationshipNode>,
     pub identifier: Option<String>,
     pub name: String,
     pub children: Vec<ElementNode>,

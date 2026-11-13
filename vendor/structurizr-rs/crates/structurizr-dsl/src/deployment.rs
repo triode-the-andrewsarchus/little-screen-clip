@@ -263,3 +263,55 @@ fn validate_abstraction(
     }
     Ok(())
 }
+
+/// Replicate declared static links between placements in the same environment.
+/// Group constraints are rejected during parsing until their semantics exist.
+/// Bound expansion before publishing any of the generated relationships.
+pub(crate) fn replicate_relationships(model: &mut Model) -> Result<()> {
+    const MAX_RELATIONSHIPS: usize = 16_384;
+    let entries = model.deployment_elements();
+    let mut placements: HashMap<ElementId, Vec<(&str, ElementId)>> = HashMap::new();
+    for entry in &entries {
+        if let Some(base) = entry.element.base_id() {
+            placements
+                .entry(base)
+                .or_default()
+                .push((entry.environment, entry.element.id()));
+        }
+    }
+    let authored: HashSet<_> = model
+        .relationships
+        .iter()
+        .map(|relationship| (relationship.source_id, relationship.destination_id))
+        .collect();
+    let mut generated = Vec::new();
+    for relationship in &model.relationships {
+        let Some(sources) = placements.get(&relationship.source_id) else {
+            continue;
+        };
+        let Some(destinations) = placements.get(&relationship.destination_id) else {
+            continue;
+        };
+        for &(source_environment, source) in sources {
+            for &(destination_environment, destination) in destinations {
+                if source_environment != destination_environment
+                    || authored.contains(&(source, destination))
+                {
+                    continue;
+                }
+                if model.relationships.len() + generated.len() >= MAX_RELATIONSHIPS {
+                    return Err(invalid(
+                        "Deployment relationship budget exceeded (16384 links)",
+                    ));
+                }
+                let mut instance_link = relationship.clone();
+                instance_link.id = ElementId::new();
+                instance_link.source_id = source;
+                instance_link.destination_id = destination;
+                generated.push(instance_link);
+            }
+        }
+    }
+    model.relationships.extend(generated);
+    Ok(())
+}

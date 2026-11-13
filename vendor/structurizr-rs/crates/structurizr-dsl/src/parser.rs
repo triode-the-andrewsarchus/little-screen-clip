@@ -1069,6 +1069,7 @@ impl Parser {
         self.expect(TokenKind::OpenBrace)?;
 
         let mut children = Vec::new();
+        let mut relationships = Vec::new();
 
         loop {
             self.skip_newlines_and_comments();
@@ -1117,9 +1118,12 @@ impl Parser {
                                 }));
                             }
                         }
+                    } else if self.check(&TokenKind::Arrow) {
+                        self.advance();
+                        relationships.push(self.parse_relationship(id)?);
                     } else {
                         return Err(Error::Parse(ParseError {
-                            message: "Expected '=' after identifier in deploymentEnvironment".to_string(),
+                            message: "Expected '=' or '->' after identifier in deploymentEnvironment".to_string(),
                             location: self.current().map(|t| t.location),
                         }));
                     }
@@ -1139,7 +1143,7 @@ impl Parser {
             }
         }
 
-        Ok(DeploymentEnvironmentNode { identifier, name, children })
+        Ok(DeploymentEnvironmentNode { identifier, name, children, relationships })
     }
 
     fn parse_views(&mut self) -> Result<ViewsNode> {
@@ -2951,20 +2955,13 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
             }
         }
 
-        // Build relationships after all elements exist
-        for rel in &model_node.relationships {
-            build_relationship(&mut workspace, rel, &identifiers)?;
-        }
-
-        // Also process relationships defined inside elements
-        for element in &model_node.elements {
-            build_element_relationships(&mut workspace, element, &identifiers)?;
-        }
+        build_model_relationships(&mut workspace, &model_node, &identifiers)?;
 
         // Step 6: Generate implied relationships if enabled
         if implied_relationships_enabled {
             generate_implied_relationships(&mut workspace);
         }
+        crate::deployment::replicate_relationships(workspace.model_mut())?;
     }
 
     // Process views
@@ -3492,27 +3489,53 @@ fn build_relationship(
     Ok(())
 }
 
+/// Build every authored relationship only after all placement identifiers exist.
+fn build_model_relationships(
+    workspace: &mut Workspace,
+    model: &ModelNode,
+    identifiers: &HashMap<String, ElementId>,
+) -> Result<()> {
+    let relationships = model.relationships.iter().chain(
+        model.deployment_environments.iter().flat_map(|environment| &environment.relationships),
+    );
+    for relationship in relationships {
+        build_relationship(workspace, relationship, identifiers)?;
+    }
+    let elements = model.elements.iter()
+        .chain(model.enterprise.iter().flat_map(|enterprise| &enterprise.elements))
+        .chain(model.deployment_environments.iter().flat_map(|environment| &environment.children));
+    for element in elements {
+        build_element_relationships(workspace, element, identifiers)?;
+    }
+    let groups = model.groups.iter()
+        .chain(model.enterprise.iter().flat_map(|enterprise| &enterprise.groups));
+    for group in groups {
+        build_group_relationships(workspace, group, identifiers)?;
+    }
+    Ok(())
+}
+
+fn build_group_relationships(
+    workspace: &mut Workspace,
+    group: &GroupNode,
+    identifiers: &HashMap<String, ElementId>,
+) -> Result<()> {
+    for element in &group.elements {
+        build_element_relationships(workspace, element, identifiers)?;
+    }
+    for nested in &group.groups {
+        build_group_relationships(workspace, nested, identifiers)?;
+    }
+    Ok(())
+}
+
 fn build_element_relationships(
     workspace: &mut Workspace,
     element: &ElementNode,
     identifiers: &HashMap<String, ElementId>,
 ) -> Result<()> {
-    // Process relationships defined inside this element
-    // The relationship's source is stored in rel.source, not the element's identifier
     for rel in &element.relationships {
-        if let Some(&source_id) = identifiers.get(&rel.source) {
-            if let Some(&dest_id) = identifiers.get(&rel.destination) {
-                workspace.model_mut().add_relationship_with_metadata(
-                    source_id,
-                    dest_id,
-                    rel.description.clone().unwrap_or_default(),
-                    rel.technology.clone(),
-                    rel.tags.clone(),
-                    rel.properties.clone(),
-                    rel.perspectives.clone(),
-                );
-            }
-        }
+        build_relationship(workspace, rel, identifiers)?;
     }
 
     // Recurse into children

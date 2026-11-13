@@ -61,3 +61,8 @@ commits, separate from this pristine import.
   branch/leaf selections, parent closure, empty views, annotations and exact
   selected relationships. Diagnose instance abstraction conflicts and cover
   wildcard branch/previous-selection behavior with regression tests.
+
+- Replicate model relationships between same-environment placements with metadata,
+  explicit-link precedence and a 16384-link expansion budget. Retain authored
+  environment/nested/grouped relationships through shared checked builders;
+  report unknown nested endpoints instead of silently dropping links.

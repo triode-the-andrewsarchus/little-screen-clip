@@ -2503,8 +2503,10 @@ Further qualification found correctness work that must precede host integration:
   placement identities, retaining per-instance and infrastructure metadata.
 - [x] Resolve deployment environments/aliases, scopes and ordered selections
   through one shared containment/placement inventory.
+- [x] Replicate static links between same-environment placements with preserved
+  metadata, explicit-link precedence and a bounded expansion budget.
 - [ ] Make deployment rendering consume resolved placements/relationships,
-  preserve containment, replicate static instance links and qualify additional DSL forms.
+  preserve containment and qualify additional DSL forms.
 - [ ] Implement deployment-group relationship constraints; explicit diagnostics
   currently reject them rather than silently ignoring their meaning.
 
@@ -2764,3 +2766,36 @@ required environment-alias arm (+1); new inventory/selection functions remain
 below the hotspot threshold. Of 27 baseline parser clone fragments, 26 remain
 byte-identical; the old deployment construction is removed. Host rendering is
 still pending and the format checkbox stays open.
+
+
+### Structurizr deployed relationships
+
+Static model relationships now replicate to the actual placements of their
+endpoints within the same environment. Multiple declarations retain their own
+descriptions, technologies, tags and properties; explicit placement-pair links
+retain precedence. Self relationships are preserved. Replication is independent
+of whether containment-based implied relationships are enabled, and it never
+connects placements across environments. A 16,384 total-link budget rejects
+expansion before publishing generated results, preventing compact source from
+creating an unbounded instance-pair graph. Deployment-group constraints remain
+explicitly unsupported rather than receiving unconstrained replication.
+
+Relationships authored in deployment environments and nested deployment nodes
+are now processed. Model, enterprise and group roots share the same checked
+relationship builders, after all identifiers exist. Unknown nested endpoints
+fail instead of silently disappearing. The environment grammar accepts explicit
+relationship statements using its existing relationship parser.
+
+Five new regressions verify instance-pair counts and environments, independent
+placement IDs, metadata preservation, explicit overrides, nested/grouped links,
+unknown endpoints, multiple technologies, self links and the expansion limit.
+All 179 unit/integration tests plus one core rustdoc test pass; strict all-target
+Clippy for the application's shared renderer passes. Rendering/host integration
+are still pending, so the full format checkbox remains open.
+
+Architecture comparison against `before-structurizr-instance-links` leaves clone
+count, rounded duplication, maximum complexity and cycles unchanged. The first
+relationship traversal duplicated loops across model containers; it was replaced
+by shared iterator chains, removing that new hotspot. The remaining new parser
+entity warning is the required environment declaration-versus-relationship arm,
+which reuses the existing parser. No new reader, preview worker or cache exists.
