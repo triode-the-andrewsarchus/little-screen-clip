@@ -7,8 +7,7 @@
             [clojure.pprint :as pprint]
             [clojure.set :as set]
             [clojure.string :as str]
-            [sci.core :as sci]
-            [sci.interrupt :as interrupt])
+            [sci.core :as sci])
   (:require-macros [org.deepsymmetry.bytefield.macros :refer [self-bind-symbols]]))
 
 
@@ -936,13 +935,6 @@
        (xml/emit-tag (concat [:svg attrs] body))
        (xml/emit (apply svg/svg attrs body))))))
 
-(defn limit-execution
-  "Prevents infinite loops, recursion, etc."
-  [n]
-  (let [counter (atom 0)]
-    (fn [] (when (> (swap! counter inc) n)
-             (interrupt/interrupt!)))))
-
 (defn generate
   "Accepts Clojure-based diagram specification string and returns the
   corresponding SVG string. `options` is a JavaScript object holding
@@ -955,19 +947,18 @@
   ([source options]
    (binding [*globals* (atom (build-vars))]
      (let [env  (atom {})
-           opts {:features     #{:cljs}
-                 :interrupt-fn (limit-execution 100000)
-                 :env          env
-                 :classes      {'Math   js/Math
-                                'String js/String}
-                 :namespaces   {'user           (merge diagram-bindings @*globals*)
-                                'analemma.svg   svg-bindings
-                                'analemma.xml   xml-bindings
-                                'clojure.set    set-bindings
-                                'clojure.string string-bindings}
-                 :ns-aliases   {'svg 'analemma.svg
-                                'xml 'analemma.xml
-                                'str 'clojure.string}}]
+           opts {:preset      :termination-safe
+                 :realize-max 10000
+                 :env         env
+                 :classes     {'Math   js/Math
+                               'String js/String}
+                 :namespaces  {'user           (merge diagram-bindings @*globals*)
+                               'analemma.svg   svg-bindings
+                               'analemma.xml   xml-bindings
+                               'clojure.set    set-bindings
+                               'clojure.string string-bindings}}]
+       (sci/eval-string "(require '[analemma.xml :as xml])" opts)
+       (sci/eval-string "(require '[analemma.svg :as svg])" opts)
        (sci/eval-string source opts)
        (when (pos? (:column @@('diagram-state @*globals*)))
          (next-row)))  ; Finish off the last row.
