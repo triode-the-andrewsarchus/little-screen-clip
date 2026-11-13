@@ -70,17 +70,8 @@ workspace "E-Commerce Platform" "An example with all directives" {
         .find(|r| r.technology == Some("REST/HTTPS".to_string()));
     assert!(rel_with_api.is_some(), "Should have relationship with REST/HTTPS technology");
 
-    // Test implied relationships
-    // Original: customer->webapp, webapp->database, webapp->payment
-    // Implied: customer->database, customer->payment
-    // Original: admin->webapp (already covered)
-    // Implied: admin->database, admin->payment
-    // Total: 4 original + 4 implied = 8
-    assert_eq!(
-        workspace.model().relationships.len(),
-        8,
-        "Should have 4 original + 4 implied relationships"
-    );
+    // These are all root-level elements; graph reachability is not containment.
+    assert_eq!(workspace.model().relationships.len(), 4);
 
     // Test docs and adrs properties
     assert_eq!(
@@ -144,20 +135,12 @@ workspace {
 
     let workspace = parse(dsl).unwrap();
 
-    // Original: A->B, B->C, C->D (3 relationships)
-    // Implied from A->B and B->C: A->C
-    // Implied from B->C and C->D: B->D
-    // Implied from A->C and C->D: A->D (using the previously implied A->C)
-    // Note: The simple implementation may not catch all transitive relations in one pass
-    // But at minimum we should have: 3 original + 2 first-level implied = 5
-    assert!(
-        workspace.model().relationships.len() >= 5,
-        "Should have at least 5 relationships (3 original + 2 implied)"
-    );
+    // No containment exists in this model, so no ancestor links can be implied.
+    assert_eq!(workspace.model().relationships.len(), 3);
 }
 
 #[test]
-fn test_no_implied_relationships_by_default() {
+fn graph_chains_do_not_create_implied_relationships() {
     let dsl = r##"
 workspace {
     model {

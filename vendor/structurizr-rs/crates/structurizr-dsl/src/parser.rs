@@ -4,7 +4,7 @@
 //!
 //! This extraction parses self-contained memory inputs and never executes scripts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use structurizr_core::prelude::*;
 
@@ -428,8 +428,16 @@ impl Parser {
                 }
                 Some(TokenKind::DirectiveImpliedRelationships) => {
                     self.advance();
-                    let enabled = self.expect_identifier()?;
-                    let enabled = enabled.to_lowercase() != "false" && enabled.to_lowercase() != "off";
+                    let location = self.current().map(|token| token.location);
+                    let strategy = self.expect_identifier()?;
+                    let enabled = match strategy.to_ascii_lowercase().as_str() {
+                        "true" | "on" => true,
+                        "false" | "off" => false,
+                        _ => return Err(Error::Parse(ParseError {
+                            message: "Unsupported implied relationship strategy; use true or false".into(),
+                            location,
+                        })),
+                    };
                     workspace.directives.push(Directive::ImpliedRelationships(enabled));
                 }
                 Some(TokenKind::DirectiveConst) => {
@@ -2473,51 +2481,42 @@ fn apply_constants_to_view_properties(props: &mut ViewPropertiesNode, constants:
     }
 }
 
-/// Generate implied relationships based on existing relationships.
-/// If A->B and B->C exist, create A->C.
+/// Lift relationship endpoints through containment without inventing transitive edges.
 fn generate_implied_relationships(workspace: &mut Workspace) {
-    let mut implied_relationships = Vec::new();
-    let relationships = &workspace.model.relationships;
-
-    // Build a map of element -> destinations
-    let mut outgoing: HashMap<ElementId, Vec<ElementId>> = HashMap::new();
-    for rel in relationships {
-        outgoing.entry(rel.source_id)
-            .or_insert_with(Vec::new)
-            .push(rel.destination_id);
-    }
-
-    // Find implied relationships
-    for rel in relationships {
-        // For each relationship A->B
-        let a = rel.source_id;
-        let b = rel.destination_id;
-
-        // Check if B->C exists
-        if let Some(b_destinations) = outgoing.get(&b) {
-            for &c in b_destinations {
-                // Check if A->C already exists
-                let exists = relationships.iter().any(|r| {
-                    r.source_id == a && r.destination_id == c
-                });
-
-                if !exists && a != c {
-                    // Create implied relationship A->C
-                    implied_relationships.push((a, c));
+    let model = workspace.model();
+    let mut pairs: HashSet<_> = model
+        .relationships
+        .iter()
+        .map(|relationship| (relationship.source_id, relationship.destination_id))
+        .collect();
+    let mut implied = Vec::new();
+    for relationship in &model.relationships {
+        let sources: Vec<_> = std::iter::once(relationship.source_id)
+            .chain(model.ancestor_ids(relationship.source_id))
+            .collect();
+        let destinations: Vec<_> = std::iter::once(relationship.destination_id)
+            .chain(model.ancestor_ids(relationship.destination_id))
+            .collect();
+        for &source in &sources {
+            for &destination in &destinations {
+                // Self/containment edges are not valid implied cross-element links.
+                // Reserve all explicit pairs before deriving any ancestors: an
+                // authored relationship wins regardless of statement order.
+                if sources.contains(&destination)
+                    || destinations.contains(&source)
+                    || !pairs.insert((source, destination))
+                {
+                    continue;
                 }
+                let mut lifted = relationship.clone();
+                lifted.id = ElementId::new();
+                lifted.source_id = source;
+                lifted.destination_id = destination;
+                implied.push(lifted);
             }
         }
     }
-
-    // Add implied relationships to the workspace
-    for (source, dest) in implied_relationships {
-        workspace.model_mut().add_relationship(
-            source,
-            dest,
-            String::new(), // Empty description for implied relationships
-            None,
-        );
-    }
+    workspace.model_mut().relationships.extend(implied);
 }
 
 /// View type for element resolution.
@@ -2649,7 +2648,7 @@ fn build_workspace(mut ast: WorkspaceNode) -> Result<Workspace> {
     }
 
     // Step 3: Check for !impliedRelationships directive
-    let mut implied_relationships_enabled = false;
+    let mut implied_relationships_enabled = true;
     for directive in &ast.directives {
         if let Directive::ImpliedRelationships(enabled) = directive {
             implied_relationships_enabled = *enabled;
@@ -3719,8 +3718,8 @@ workspace "Test" {
 }
 "#;
         let workspace = parse(dsl).unwrap();
-        // Should have 3 relationships: A->B, B->C, and implied A->C
-        assert_eq!(workspace.model().relationships.len(), 3);
+        // A graph chain does not create a transitive A->C relationship.
+        assert_eq!(workspace.model().relationships.len(), 2);
     }
 
     #[test]

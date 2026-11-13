@@ -652,6 +652,25 @@ impl Model {
         id
     }
 
+    /// Return static architecture ancestors, nearest first, excluding the element itself.
+    pub fn ancestor_ids(&self, id: ElementId) -> Vec<ElementId> {
+        for system in &self.software_systems {
+            for container in &system.containers {
+                if container.id() == id {
+                    return vec![system.id()];
+                }
+                if container
+                    .components
+                    .iter()
+                    .any(|component| component.id() == id)
+                {
+                    return vec![container.id(), system.id()];
+                }
+            }
+        }
+        Vec::new()
+    }
+
     /// Find an element by its ID across all element types.
     pub fn find_element(&self, id: ElementId) -> Option<ElementRef<'_>> {
         // Check people

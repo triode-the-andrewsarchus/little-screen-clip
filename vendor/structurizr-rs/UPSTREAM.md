@@ -26,3 +26,7 @@ commits, separate from this pristine import.
 - Keep native models, validation, navigation, layout and SVG drawing code.
 - Reproduce standard MIT terms in `LICENSE-MIT` with upstream's declared
   contributor attribution; these terms were not a separate file upstream.
+
+- Correct implied relationships to lift containment endpoints, enabled by
+  default, rather than calculate transitive graph reachability. Preserve explicit
+  pairs and relationship metadata; reject unsupported Java strategy names.

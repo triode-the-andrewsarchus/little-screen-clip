@@ -2482,7 +2482,7 @@ The reported reordered Python cycle is unchanged.
 
 Further qualification found correctness work that must precede host integration:
 
-- [ ] Replace transitive graph closure with actual containment-based implied
+- [x] Replace transitive graph closure with actual containment-based implied
   relationships, enabled by default and respecting explicit endpoint pairs.
   The [official rule](https://docs.structurizr.com/dsl/implied-relationships)
   lifts endpoints through their containing architecture elements; unrelated
@@ -2495,3 +2495,25 @@ Further qualification found correctness work that must precede host integration:
   expressions rather than silently ignoring them.
 
 The format checkbox remains open while these and host integration are pending.
+
+### Structurizr implied-relationship model correction
+
+The parser now derives parent endpoint combinations, with implied relationships
+enabled by default. It never infers direct links from graph reachability.
+Explicit endpoint pairs are retained, inferred pairs are deduplicated, and
+derived links retain their original description/technology/tags. `false` retains
+only authored model edges. Unsupported Java strategy names report an error.
+A shared core containment query owns the ancestor traversal for later view
+scoping work; no second DSL parser was introduced.
+
+Three focused regressions cover default/true/false, component/container/system
+ancestor combinations, no transitive dependency shortcuts, explicit pair
+precedence and unsupported strategy diagnostics. All model/DSL/renderer tests
+still pass (144 unit/integration tests plus the core rustdoc test). Earlier upstream expectations
+of transitive closure were corrected rather than preserved as the specification.
+Architecture review finds no excessive complexity in the added containment or
+derivation logic; the import's maximum complexity and clone counts are unchanged.
+
+Renderer-side selection and edge projection are still pending: they must consume
+the resolved model faithfully, including when implied relationships are disabled.
+This is not yet exposed as a supported file or Markdown fence.
