@@ -201,6 +201,23 @@ fn is_ditaa(s: &str) -> bool {
 
 /// Splits the source into diagram blocks (`BlockUmlBuilder`).
 pub fn split_blocks(text: &str, config: &[String]) -> Vec<Vec<StringLocated>> {
+    split_blocks_status(text, config).0
+}
+
+/// Rejects unfinished or superseded blocks instead of silently omitting them.
+pub fn split_complete_blocks(
+    text: &str,
+    config: &[String],
+) -> Result<Vec<Vec<StringLocated>>, String> {
+    let (blocks, incomplete) = split_blocks_status(text, config);
+    if incomplete {
+        Err("An @start diagram block is missing its matching @end directive".into())
+    } else {
+        Ok(blocks)
+    }
+}
+
+fn split_blocks_status(text: &str, config: &[String]) -> (Vec<Vec<StringLocated>>, bool) {
     let raw = read_lines(text);
     let mut reader = SourceReader {
         raw,
@@ -212,6 +229,7 @@ pub fn split_blocks(text: &str, config: &[String]) -> Vec<Vec<StringLocated>> {
     let mut pending: std::collections::VecDeque<StringLocated> = std::collections::VecDeque::new();
     let mut blocks: Vec<Vec<StringLocated>> = Vec::new();
     let mut current: Option<Vec<StringLocated>> = None;
+    let mut incomplete = false;
     let append_re = regex::Regex::new(r"(?i)^\W*[@\\](append|a)\b").expect("valid");
     let mut paused = false;
     loop {
@@ -233,6 +251,7 @@ pub fn split_blocks(text: &str, config: &[String]) -> Vec<Vec<StringLocated>> {
             break;
         };
         if is_start_directive(s.string()) {
+            incomplete |= current.is_some();
             current = Some(Vec::new());
             paused = false;
         }
@@ -268,7 +287,7 @@ pub fn split_blocks(text: &str, config: &[String]) -> Vec<Vec<StringLocated>> {
             reader.paused = false;
         }
     }
-    blocks
+    (blocks, incomplete || current.is_some())
 }
 
 /// Removes a leading `---` YAML header after the start line (`removeYamlHeader`).
