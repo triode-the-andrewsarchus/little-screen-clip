@@ -1,6 +1,4 @@
 //! Canonical WaveJSON layout in a bounded, hostless embedded interpreter.
-use rquickjs::{CatchResultExt, Context, Function, Runtime};
-use std::time::{Duration, Instant};
 
 const ENGINE: &str = include_str!("../../../../vendor/wavedrom/wavedrom.unpkg.js");
 const SKINS: &[&str] = &[
@@ -36,35 +34,13 @@ pub(super) fn svg(source: &str) -> Result<(String, Vec<String>), String> {
     let value = little_clip_core::diagram::wavejson::parse(source)
         .map_err(|error| error.chars().take(2048).collect::<String>())?;
     let input = serde_json::to_string(&value).map_err(|error| error.to_string())?;
-    let runtime = Runtime::new().map_err(|error| error.to_string())?;
-    runtime.set_memory_limit(128 * 1024 * 1024);
-    runtime.set_max_stack_size(512 * 1024);
-    let started = Instant::now();
-    runtime.set_interrupt_handler(Some(Box::new(move || {
-        started.elapsed() > Duration::from_secs(3)
-    })));
-    // No module loader, QuickJS libc, filesystem, network, DOM, or script-visible host bindings
-    // are installed. Only trusted bundled code is evaluated. Source is parsed as
-    // Rust JSON5 data and passed as a function argument, never evaluated as code.
-    let context = Context::full(&runtime).map_err(|error| error.to_string())?;
-    let svg: String = context.with(|context| {
-        (|| -> rquickjs::Result<String> {
-            context.eval::<(), _>(ENGINE)?;
-            for skin in SKINS {
-                context.eval::<(), _>(*skin)?;
-            }
-            context.eval::<(), _>(BRIDGE)?;
-            let render: Function = context.globals().get("__renderWave")?;
-            render.call((input.as_str(),))
-        })()
-        .catch(&context)
-        .map_err(|error| {
-            format!(
-                "WaveDrom: {}",
-                error.to_string().chars().take(2048).collect::<String>()
-            )
-        })
-    })?;
+    let svg = super::script::Program {
+        name: "WaveDrom",
+        scripts: &[ENGINE, SKINS[0], SKINS[1], SKINS[2], SKINS[3], SKINS[4]],
+        bridge: BRIDGE,
+        entry: "__renderWave",
+    }
+    .call(&input)?;
     // Outline generated SVG, isolating references and discarding executable or
     // unsupported SVG content before it can become an exportable artifact.
     super::compose_svg(

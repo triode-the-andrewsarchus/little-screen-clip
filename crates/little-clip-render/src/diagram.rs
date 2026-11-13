@@ -24,6 +24,8 @@ use images::Policy as ImagePolicy;
 mod lini;
 mod math;
 mod mermaid;
+mod nomnoml;
+mod script;
 mod wavedrom;
 mod wireviz;
 
@@ -223,6 +225,8 @@ pub fn run_worker_cli() -> bool {
             include_str!("../third_party/excalidraw-document-LICENSE-MIT.txt"),
             include_str!("../third_party/excalidraw-document-LICENSE-APACHE.txt"),
             include_str!("../../../vendor/wavedrom/LICENSE"),
+            include_str!("../../../vendor/nomnoml/LICENSE"),
+            include_str!("../../../vendor/graphre/LICENSE"),
             include_str!("../third_party/wavedrom-onml-LICENSE"),
             include_str!("../third_party/wavedrom-tspan-LICENSE"),
             include_str!("../third_party/wavedrom-logidrom-LICENSE.md"),
@@ -324,6 +328,7 @@ fn render_inline(
             (svg, Vec::new())
         }
         Format::Wavedrom => wavedrom::svg(source)?,
+        Format::Nomnoml => nomnoml::svg(source)?,
         Format::Wireviz => wireviz::svg(source)?,
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
@@ -636,6 +641,24 @@ mod tests {
         const HARNESS: &str = include_str!("../../../docs/examples/diagrams/harness.wireviz");
         let directory = tempfile::tempdir().unwrap();
         for (extension, content, format, source) in [
+            (
+                "",
+                "[Source] -> [Preview]",
+                Format::Nomnoml,
+                "[Source] -> [Preview]",
+            ),
+            (
+                "nomnoml",
+                "[Source] -> [Preview]",
+                Format::Nomnoml,
+                "[Source] -> [Preview]",
+            ),
+            (
+                "md",
+                "```nomnoml\n[Source] -> [Preview]\n```",
+                Format::Nomnoml,
+                "[Source] -> [Preview]\n",
+            ),
             ("", HARNESS, Format::Wireviz, HARNESS),
             ("wireviz", HARNESS, Format::Wireviz, HARNESS),
             ("wire.yaml", HARNESS, Format::Wireviz, HARNESS),

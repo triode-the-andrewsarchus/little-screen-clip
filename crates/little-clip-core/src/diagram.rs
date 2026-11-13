@@ -27,6 +27,7 @@ pub enum Format {
     Wavedrom,
     Excalidraw,
     Wireviz,
+    Nomnoml,
     Math,
     MathInline,
 }
@@ -49,6 +50,7 @@ impl Format {
             "wavedrom" | "wavejson" => Some(Self::Wavedrom),
             "excalidraw" => Some(Self::Excalidraw),
             "wireviz" => Some(Self::Wireviz),
+            "nomnoml" | "noml" => Some(Self::Nomnoml),
             _ => None,
         }
     }
@@ -96,6 +98,7 @@ impl Format {
             "wavedrom" | "wavejson" => Some(Self::Wavedrom),
             "excalidraw" => Some(Self::Excalidraw),
             "wireviz" => Some(Self::Wireviz),
+            "nomnoml" | "noml" => Some(Self::Nomnoml),
             _ => None,
         }
     }
@@ -148,6 +151,7 @@ impl Format {
             (Self::Wavedrom, wavejson::signature),
             (Self::Excalidraw, excalidraw_signature),
             (Self::Wireviz, wireviz::signature),
+            (Self::Nomnoml, nomnoml_signature),
             (Self::Pikchr, pikchr_signature),
             (Self::Lini, lini_signature),
             (Self::D2, d2_signature),
@@ -173,6 +177,7 @@ impl Format {
             Self::Wavedrom => Some("json5"),
             Self::Excalidraw => Some("excalidraw"),
             Self::Wireviz => Some("wireviz"),
+            Self::Nomnoml => Some("nomnoml"),
             Self::Math | Self::MathInline => None,
         }
     }
@@ -190,6 +195,7 @@ impl Format {
             Self::Wavedrom => "WaveDrom",
             Self::Excalidraw => "Excalidraw",
             Self::Wireviz => "WireViz",
+            Self::Nomnoml => "Nomnoml",
             Self::Math | Self::MathInline => "LaTeX math",
         }
     }
@@ -207,6 +213,38 @@ fn excalidraw_signature(source: &str) -> bool {
                     .is_some_and(serde_json::Value::is_array)
         },
     )
+}
+
+fn nomnoml_signature(source: &str) -> bool {
+    // Distinctive bracket-to-bracket relations only. Bare [labels], Markdown
+    // links, checkboxes and style directives alone remain ordinary text.
+    if source.len() > 32 * 1024 {
+        return false;
+    }
+    source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .any(|line| {
+            let Some((left, rest)) = line.split_once(']') else {
+                return false;
+            };
+            if !left.trim_start().starts_with('[') {
+                return false;
+            }
+            let Some((relation, right)) = rest.split_once('[') else {
+                return false;
+            };
+            let relation = relation.trim();
+            !relation.is_empty()
+                && relation.contains('-')
+                && relation.chars().all(|c| {
+                    matches!(
+                        c,
+                        '-' | '<' | '>' | ':' | 'o' | '+' | '_' | '(' | ')' | ' ' | '\t'
+                    )
+                })
+                && right.contains(']')
+        })
 }
 
 fn pikchr_signature(source: &str) -> bool {
@@ -421,6 +459,30 @@ fn mermaid_signature(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nomnoml_names_and_distinctive_relations_route_without_claiming_markdown_links() {
+        for extension in ["nomnoml", "noml", "NOMNOML"] {
+            assert_eq!(Format::from_extension(extension), Some(Format::Nomnoml));
+            assert_eq!(Format::from_language(extension), Some(Format::Nomnoml));
+        }
+        assert_eq!(Format::Nomnoml.source_extension(), Some("nomnoml"));
+        for source in [
+            "[Source] -> [Preview]",
+            "// example\n[<actor>User] -:> [System]",
+        ] {
+            assert_eq!(Format::from_snippet(source), Some(Format::Nomnoml));
+        }
+        for source in [
+            "[text](url) -> [other](url)",
+            "- [x] a task",
+            "[single label]",
+            "// [A] -> [B]",
+            "#direction: right",
+        ] {
+            assert_eq!(Format::from_snippet(source), None, "{source}");
+        }
+    }
+
     #[test]
     fn drawing_signatures_do_not_claim_ordinary_json_or_incomplete_clipboard_data() {
         let source = r#"{"type":"excalidraw","version":2,"elements":[]}"#;

@@ -1389,6 +1389,50 @@ and the interpreter hostless and bounded. Canonical WaveDrom is already active;
 Nomnoml/Graphre integration is still pending. The native canvas and file-manager
 preview corrections take priority over adding that adapter.
 
+### Integrated Nomnoml rendering
+
+- [x] Route `nomnoml`/`noml` fences and `.nomnoml`/`.noml` files through the shared
+  renderer, source editor, live preview and diagnostics.
+- [x] Render browser strips and enlarged hover through the existing row cache;
+  fit component overviews vertically so paper margins do not hide the diagram.
+- [x] Recognize distinctive bracket-to-bracket relations in clipboard text while
+  leaving bare labels, checkboxes, Markdown links and directives alone as text.
+- [x] Add source highlighting and Markdown/little-screen routing fixtures.
+- [ ] Explore source-linked direct editing after the priority graphical editors.
+
+The application calls the unmodified Nomnoml 1.7.0 and Graphre 0.1.3 releases
+already imported separately. No new dependency, browser, installed Node runtime
+or process integration is needed. Nomnoml and WaveDrom share one small interpreter
+boundary: a fresh runtime per call, 128 MiB heap, 512 KiB stack, a three-second
+interrupt deadline and a 2 MiB generated-SVG limit. Only trusted bundled scripts
+are evaluated; source arrives as a string argument without host bindings, module
+loading, filesystem, network or DOM access. Existing disposable workers retain
+their outer process/resource limits, cancellation and native SVG/raster path.
+
+The adapter parses before layout, visibly refuses imports and empty figures,
+and bounds nested components, relations, text and non-finite/excessive layout
+values. It supports upstream classifiers, compartments, nested graphs, relation
+styles and custom styles. Native SVG composition outlines labels with the shared
+bundled fonts and blocks image resources. Upstream server layout uses estimated
+character widths; custom-font and mixed-script inputs disclose this limitation
+rather than claiming exact browser font measurement. This is also how the
+upstream command-line SVG renderer lays out text without a canvas.
+
+`pipeline.nomnoml` and `nomnoml.md` are authored review fixtures, also copied to
+`/home/vega/Documents/type_testing/md_extensions/`. Bundled license output now
+includes both original MIT notices. The pristine vendor bundles remain unchanged.
+
+Validation: 45 core diagram tests, 53 renderer/diagram tests and 16 syntax tests
+pass. Real worker protocol and license tests pass in both desktop applications,
+alongside the standalone viewer-routing test. Strict all-targets Clippy on the
+affected crates and both desktop builds pass. Private native light/dark
+acceptance verifies normal-height overview strips, painted node artwork in hover
+and source/Markdown views, invalid-source diagnostics and exact source retention.
+Architecture measurements show no additional clone groups, unchanged maximum
+complexity/cycle count and removal of the old WaveDrom wrapper hotspot. Reported
+clones are pre-existing extension tables and viewer tests in touched files; the
+paired Python cycle reports contain the same unchanged members reordered.
+
 ## Canvas interaction corrections
 
 - [x] Select ellipses and diamonds by their actual rotated geometry rather than

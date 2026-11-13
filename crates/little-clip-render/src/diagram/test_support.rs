@@ -21,6 +21,9 @@ pub fn assert_worker(executable: impl AsRef<OsStr>) {
         ),
         ("svgbob", "+----+\n|Hi! |\n+----+", true),
         ("graphviz", "digraph { a -> b }", true),
+        ("nomnoml", "[Source] -> [Preview]", true),
+        ("nomnoml", "[Unclosed", false),
+        ("nomnoml", "#import: /etc/passwd\n[A]", false),
         (
             "wireviz",
             include_str!("../../../../docs/examples/diagrams/harness.wireviz"),

@@ -322,6 +322,7 @@ pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
         "wavejson" | "wavedrom" => Some("wavejson"),
         "excalidraw" => Some("excalidraw"),
         "wireviz" => Some("wireviz"),
+        "nomnoml" | "noml" => Some("nomnoml"),
         "pikchr" => Some("pikchr"),
         "svgbob" => Some("svgbob"),
         "sql" => Some("sql"),
@@ -451,6 +452,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
         "wavejson" | "wavedrom" => "WaveDrom",
         "excalidraw" => "Excalidraw",
         "wireviz" => "WireViz",
+        "nomnoml" => "Nomnoml",
         "sql" => "SQL",
         "xml" => "XML",
         "go" => "Go",
@@ -582,8 +584,12 @@ pub const WAVEDROM_SUBLIME_SYNTAX: &str = include_str!("syntax/wavedrom.sublime-
 /// JSON highlighting for native drawing sources.
 pub const EXCALIDRAW_SUBLIME_SYNTAX: &str = include_str!("syntax/excalidraw.sublime-syntax");
 
+/// Nomnoml classifiers, relations, comments and layout directives.
+pub const NOMNOML_SUBLIME_SYNTAX: &str = include_str!("syntax/nomnoml.sublime-syntax");
+
 /// Shared native diagram grammars used by both screen and desktop source views.
 pub const DIAGRAM_SYNTAX_DEFINITIONS: &[&str] = &[
+    NOMNOML_SUBLIME_SYNTAX,
     PIKCHR_SUBLIME_SYNTAX,
     SVGBOB_SUBLIME_SYNTAX,
     LINI_SUBLIME_SYNTAX,

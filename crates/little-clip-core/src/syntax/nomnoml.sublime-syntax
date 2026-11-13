@@ -1,0 +1,19 @@
+%YAML 1.2
+---
+name: Nomnoml
+file_extensions: [nomnoml, noml]
+scope: source.nomnoml
+contexts:
+  main:
+    - match: '^\s*//.*$'
+      scope: comment.line.nomnoml
+    - match: '^\s*#[^:]+:'
+      scope: keyword.control.nomnoml
+    - match: '<[^>\n]+>'
+      scope: entity.name.type.nomnoml
+    - match: '\\.'
+      scope: constant.character.escape.nomnoml
+    - match: '[\[\]|;]'
+      scope: punctuation.section.nomnoml
+    - match: '[<>:o+_()-]*--?[<>:o+_()-]*'
+      scope: keyword.operator.nomnoml

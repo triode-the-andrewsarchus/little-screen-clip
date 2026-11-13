@@ -227,7 +227,7 @@
         - [ ] Bytefield packet layouts (`bytefield`)
         - [ ] Ditaa ASCII art diagrams (`ditaa`)
         - [ ] Erd entity-relationship diagrams (`erd`)
-        - [ ] Nomnoml UML diagrams (`nomnoml`)
+        - [x] Nomnoml UML diagrams (`nomnoml`) — pinned upstream renderer in bounded embedded QuickJS, native SVG/raster previews and diagnostics
         - [x] Pikchr diagrams (`pikchr`) — compiled Rust renderer, bounded native helper, large/small previews
         - [x] Svgbob ASCII art diagrams (`svgbob`) — native SVG/raster output, large/small previews
         - [ ] GoAT ASCII diagrams (`goat`)
@@ -554,7 +554,7 @@
     - [x] `.dot`, `.gv`, `.graphviz` — native DOT source/live-preview editor with diagnostics and guarded saves; `.dot` requires a graph header to avoid claiming legacy Word templates; graphical manipulation pending
     - [ ] `.dbml` — Database Markup Language (May need disambiguation with Microsoft LINQ to SQL database mapping files on `.dbml`)
     - [ ] `.erd` — BurntSushi entity-relationship diagram (May need disambiguation with Eclipse ERMaster files on `.erd`)
-    - [ ] `.nomnoml` — Nomnoml UML diagram
+    - [x] `.nomnoml`, `.noml` — Nomnoml UML diagram; highlighted source/live preview, rendered list strips and enlarged hover
     - [x] `.pikchr` — native Pikchr previews, highlighted source/live preview/errors and guarded saves
     - [ ] `.diag`, `.blockdiag`, `.seqdiag`, `.actdiag`, `.nwdiag`, `.packetdiag`, `.rackdiag` — BlockDiag family diagram (May need disambiguation with system diagnostic log files on `.diag`)
   - [ ] Hardware, electrical, and packet layout diagrams

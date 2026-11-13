@@ -154,9 +154,9 @@ pub(super) fn show(ui: &mut egui::Ui, rect: egui::Rect, id: uuid::Uuid, ready: &
         .map(|diagram| diagram.format);
     let scale = match format {
         Some(Format::Wavedrom) => 0.25,
-        // A harness is an overview of paths between components. Cropping its
-        // top would show only connector titles and hide all electrical links.
-        Some(Format::Wireviz) => rect.height() / texture.size_vec2().y,
+        // Component overviews need their relations and compartments visible.
+        // Cropping the top can show only titles or the outer paper margin.
+        Some(Format::Wireviz | Format::Nomnoml) => rect.height() / texture.size_vec2().y,
         _ => 0.5,
     };
     paint(ui, rect, texture, scale);
@@ -244,6 +244,8 @@ mod tests {
                 Format::Wavedrom,
             ),
             ("flow.mmd", "flowchart LR\n A --> B", Format::Mermaid),
+            ("uml.nomnoml", "[Source] -> [Preview]", Format::Nomnoml),
+            ("draft.noml", "[Unclosed", Format::Nomnoml),
             (
                 "drawing.excalidraw.json",
                 "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}",

@@ -99,3 +99,18 @@ drag a lane; use Undo/Redo or Ctrl+Z/Ctrl+Shift+Z while the canvas is focused.
 The source and rendered timing stay linked, including comments and unrelated
 properties. Gaps/subcycles, adding lanes and editing bus labels/arcs still use
 the highlighted source editor.
+
+## UML compartments
+
+[Nomnoml example](nomnoml.md) embeds `pipeline.nomnoml`. Both `.nomnoml` and
+`.noml` open highlighted source with a live native preview. Classifiers,
+compartments, nested diagrams and custom styles use the pinned upstream renderer
+in the existing embedded interpreter. No browser or installed JavaScript runtime
+is needed. Imports are refused visibly; mixed-script/custom-font layouts disclose
+upstream estimated text metrics. Browser strips show the whole diagram height.
+
+```nomnoml
+#direction: right
+[Source|+read()] -> [Worker|+render()]
+[Worker] -> [Preview|+inspect()]
+```
