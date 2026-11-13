@@ -1,71 +1,8 @@
 use super::*;
+#[cfg(test)]
+use egui::Pos2;
+#[cfg(test)]
 use little_clip_render::diagram::DrawingLayout;
-
-#[derive(Default)]
-pub(super) struct Camera {
-    pub fitted: bool,
-    center: [f64; 2],
-    scale: f64,
-}
-impl Camera {
-    pub fn zoom_percent(&self) -> f64 {
-        self.scale * 100.0
-    }
-    pub fn fit(&mut self, layout: DrawingLayout, rect: Rect) {
-        self.center = [
-            layout.origin[0] + layout.size[0] / 2.0,
-            layout.origin[1] + layout.size[1] / 2.0,
-        ];
-        self.scale = ((f64::from(rect.width()) / layout.size[0])
-            .min(f64::from(rect.height()) / layout.size[1])
-            * 0.92)
-            .clamp(0.1, 8.0);
-        self.fitted = true;
-    }
-    pub fn screen(&self, point: [f64; 2], rect: Rect) -> Pos2 {
-        rect.center()
-            + egui::vec2(
-                ((point[0] - self.center[0]) * self.scale) as f32,
-                ((point[1] - self.center[1]) * self.scale) as f32,
-            )
-    }
-    pub fn world(&self, point: Pos2, rect: Rect) -> [f64; 2] {
-        [
-            self.center[0] + f64::from(point.x - rect.center().x) / self.scale,
-            self.center[1] + f64::from(point.y - rect.center().y) / self.scale,
-        ]
-    }
-    pub fn image_rect(&self, layout: DrawingLayout, rect: Rect) -> Rect {
-        Rect::from_min_size(
-            self.screen(layout.origin, rect),
-            egui::vec2(
-                (layout.size[0] * self.scale) as f32,
-                (layout.size[1] * self.scale) as f32,
-            ),
-        )
-    }
-    pub fn input(&mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect) {
-        if response.hovered() {
-            let scroll = ui.input(|input| input.raw_scroll_delta.y);
-            if scroll != 0.0
-                && let Some(pointer) = ui.input(|input| input.pointer.hover_pos())
-            {
-                let before = self.world(pointer, rect);
-                self.scale = (self.scale * (f64::from(scroll) * 0.003).exp()).clamp(0.1, 16.0);
-                let after = self.world(pointer, rect);
-                self.center = [
-                    self.center[0] + before[0] - after[0],
-                    self.center[1] + before[1] - after[1],
-                ];
-            }
-        }
-        if response.dragged_by(egui::PointerButton::Middle) {
-            let delta = ui.input(|input| input.pointer.delta());
-            self.center[0] -= f64::from(delta.x) / self.scale;
-            self.center[1] -= f64::from(delta.y) / self.scale;
-        }
-    }
-}
 
 #[derive(Clone)]
 pub(super) enum Gesture {
@@ -495,7 +432,12 @@ mod tests {
         let frame = |editor: &mut DrawingEditor, preview: &mut Preview, events| {
             ui_frame(&ctx, events, |ui| {
                 editor.show(ui, source, preview, &AppPalette::default());
-                assert!(!preview.drawing_frame(ui, source).unwrap().fresh);
+                assert!(
+                    !preview
+                        .native_frame(ui, Format::Excalidraw, source)
+                        .unwrap()
+                        .fresh
+                );
             });
         };
         frame(&mut editor, &mut preview, Vec::new());

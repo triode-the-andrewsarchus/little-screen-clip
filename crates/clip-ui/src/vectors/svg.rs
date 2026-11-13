@@ -20,6 +20,12 @@ pub struct Scene {
     images: HashMap<usize, Arc<image::RgbaImage>>,
     clips: HashMap<usize, ClipPaths>,
 }
+
+/// Worker-derived source-space geometry for named SVG groups.
+pub struct Geometry {
+    pub size: egui::Vec2,
+    pub groups: HashMap<String, egui::Rect>,
+}
 /// Per-frame translations and ready replacement geometry for named SVG groups.
 #[derive(Clone, Default)]
 pub struct Changes {
@@ -35,6 +41,38 @@ pub struct Replacement {
 }
 
 impl Scene {
+    /// Collects transformed bounds for groups with a semantic ID prefix.
+    ///
+    /// Call once during worker preparation; the UI can then hit-test cached
+    /// rectangles without traversing or reparsing SVG. Bounds share the source
+    /// coordinate system used by [`Self::paint`].
+    pub fn geometry(&self, prefix: &str) -> Geometry {
+        let mut groups = HashMap::new();
+        let mut pending = vec![self.tree.root()];
+        while let Some(group) = pending.pop() {
+            if !group.id().is_empty() && group.id().starts_with(prefix) {
+                let bounds = group.abs_bounding_box();
+                groups.insert(
+                    group.id().to_owned(),
+                    egui::Rect::from_min_max(
+                        egui::pos2(bounds.left(), bounds.top()),
+                        egui::pos2(bounds.right(), bounds.bottom()),
+                    ),
+                );
+            }
+            pending.extend(group.children().iter().filter_map(|node| {
+                if let usvg::Node::Group(group) = node {
+                    Some(group.as_ref())
+                } else {
+                    None
+                }
+            }));
+        }
+        Geometry {
+            size: egui::vec2(self.tree.size().width(), self.tree.size().height()),
+            groups,
+        }
+    }
     /// Adopts a canonical, outlined tree and its admitted decoded PNG assets.
     ///
     /// # Errors
@@ -503,6 +541,19 @@ fn brush(paint: &usvg::Paint, opacity: f32) -> Paint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn semantic_geometry_keeps_nested_transforms_in_the_painted_coordinate_system() {
+        let tree = usvg::Tree::from_str(r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><g id="terminal-one" transform="translate(10 20) scale(2)"><path d="M0 0h10v8h-10Z"/></g><g id="other"><path d="M50 50h10v8h-10Z"/></g></svg>"#, &usvg::Options::default()).unwrap();
+        let scene = Scene::new(tree, HashMap::new()).unwrap();
+        let geometry = scene.geometry("terminal-");
+        assert_eq!(geometry.size, egui::vec2(100.0, 80.0));
+        assert_eq!(geometry.groups.len(), 1);
+        assert_eq!(
+            geometry.groups["terminal-one"],
+            egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(30.0, 36.0))
+        );
+    }
 
     #[test]
     fn unsupported_effects_select_an_explicit_fallback_instead_of_disappearing() {

@@ -1,6 +1,6 @@
 //! Native whiteboard interaction, owning only derived in-memory editing work.
 use crate::diagram_preview::Preview;
-use egui::{Color32, Pos2, Rect, Vec2};
+use egui::{Color32, Rect, Vec2};
 use little_clip_core::{
     BackgroundJobs, JobError,
     diagram::{
@@ -17,7 +17,8 @@ use std::{
 
 mod canvas;
 mod connections;
-use canvas::{Camera, Gesture};
+use crate::diagram_preview::Camera;
+use canvas::Gesture;
 use connections::{Connections, Lines, group_id};
 
 struct Update {
@@ -36,11 +37,7 @@ struct PendingEdit {
     started: Instant,
 }
 
-pub(crate) enum Poll {
-    Changed(String),
-    Replaced,
-    Failed,
-}
+use crate::diagram_preview::GraphicalUpdate as Poll;
 
 #[derive(Default)]
 pub(crate) struct DrawingEditor {
@@ -242,7 +239,7 @@ impl DrawingEditor {
         );
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         self.focus = Some(response.id);
-        let frame = preview.drawing_frame(ui, source);
+        let frame = preview.native_frame(ui, Format::Excalidraw, source);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 4.0, Color32::WHITE);
         if let Some(frame) = frame {
@@ -264,20 +261,9 @@ impl DrawingEditor {
             if ready {
                 self.interact(ui, &response, rect);
             }
-            let vector = frame
-                .vector
-                .as_ref()
-                .map(|scene| scene.paint(ui, rect, image, self.vector_motion(ui.ctx())));
-            if let Some(Err(error)) = &vector {
-                self.parse_error = Some(error.clone());
-            }
-            if !matches!(vector, Some(Ok(()))) {
-                painter.image(
-                    frame.texture,
-                    image,
-                    Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                    tint,
-                );
+            let motion = self.vector_motion(ui.ctx());
+            if let Some(error) = frame.paint(ui, rect, image, motion, tint) {
+                self.parse_error = Some(error);
             }
             self.paint_feedback(&painter, rect, palette);
             if response.double_clicked_by(egui::PointerButton::Middle) {

@@ -1308,6 +1308,47 @@ contain identical pre-existing Python members in a different order; none of
 those Python files changed. No new rendering backend, file writer or undo owner
 is added for these transactions.
 
+### Initial native harness inspector
+
+- [x] Click rendered pin, conductor and shield rows using worker-prepared SVG
+  geometry, and highlight the actual connected terminals and inspect their path.
+- [x] Apply pin labels and individual wire colors through the source-preserving
+  transactions above, including swatches, custom colors and clearing a color.
+- [x] Share the source editor's undo, guarded saves and accepted-operation close
+  lifecycle. Quick Save/Undo commands retain their order while edits are pending;
+  failed or superseded edits cannot save an older source.
+- [x] Render retained vectors with pointer-centered zoom, middle-button pan and
+  Fit. The optional source split shares the same source and history.
+- [ ] Add connect/disconnect gestures and further compatibility, including
+  templates and generated color palettes. This remains initial support rather
+  than complete compatibility; the format checklist stays open.
+
+Generated terminal IDs are presentation metadata only: no external links are
+introduced. The renderer supplies named geometry and vector artwork together;
+old geometry cannot authorize clicks against a newer source. Both model parsing
+and edits run on existing bounded jobs. The inspector has no additional file
+writer or undo stack, and whole-connector mating does not invent pin connectivity.
+
+The whiteboard and harness views now share camera transforms and vector/fallback
+painting. Worker/UI artwork metadata and source-editor initialization are also
+centralized. Architecture measurements show unchanged maximum complexity and
+cycle count, lower duplication percentage and two additional small clone groups.
+Those groups are the format-specific model-job admission/setup (different result
+models and lifecycles); introducing a generic editor job framework for them would
+add more machinery than it removes. Other flagged clones are existing test
+fixtures/polling, while the reported Python cycle has the same members reordered.
+
+Validation: 37 targeted studio/preview/vector/renderer tests pass, including
+shared save/undo ordering and failed/stale edit delivery. Both desktop debug
+binaries build; strict all-targets Clippy for the affected crates, workspace
+formatting and whitespace checks pass. Native light/dark acceptance exercises
+strips, enlarged hover, pin selection, pin-label edits with shield-reference
+repair, wire-color selection, guarded saves, exact-source undo, 1600% vector zoom,
+Fit and Markdown embedding. Acceptance fixtures end byte-for-byte unchanged.
+The existing native whiteboard acceptance also passes: filled artwork and bound
+arrows follow a held drag across the original export boundary, with guarded
+save, exact-source undo and 1600% zoom preserved.
+
 ## Nomnoml renderer selection checkpoint
 
 The published `silica` 0.0.1 is a bare-metal OS library, and `squaredb` 0.2.0 is

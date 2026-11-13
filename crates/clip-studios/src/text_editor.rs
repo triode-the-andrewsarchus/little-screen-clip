@@ -17,6 +17,8 @@ enum Mode {
     Edit,
     Diagram,
 }
+use crate::diagram_preview::GraphicalUpdate;
+
 /// Owns a guarded UTF-8 source editor and its live previews.
 pub struct TextSession {
     pub preview: TextPreviewState,
@@ -61,6 +63,7 @@ struct Editor {
     text: String,
     timing: Option<Box<crate::text_editor_wave::WaveEditor>>,
     drawing: Option<Box<crate::text_editor_drawing::DrawingEditor>>,
+    harness: Option<Box<crate::text_editor_wireviz::WireEditor>>,
     after_gesture: Vec<AfterGesture>,
     saved: String,
     source: Option<FileSource>,
@@ -94,24 +97,7 @@ impl TextSession {
                         || "edited.txt".into(),
                         |extension| format!("edited.{extension}"),
                     );
-                Editor {
-                    id: egui::Id::new(uuid::Uuid::new_v4()),
-                    timing: Default::default(),
-                    drawing: Default::default(),
-                    after_gesture: Vec::new(),
-                    saved: text.clone(),
-                    text,
-                    source: Some(source),
-                    path: path.to_path_buf(),
-                    name,
-                    save_as: false,
-                    directory: little_clip_core::path_address::display_path(
-                        path.parent().unwrap_or(Path::new(".")),
-                    ),
-                    error: None,
-                    config: config.clone(),
-                    pending: None,
-                }
+                Editor::new(text, Some(source), path.to_path_buf(), name, config)
             })
         } else {
             None
@@ -158,24 +144,13 @@ impl TextSession {
             close: Some(Default::default()),
             mode: Mode::Diagram,
             diagram: Some((format, Default::default())),
-            editor: Some(Editor {
-                id: egui::Id::new(uuid::Uuid::new_v4()),
-                timing: Default::default(),
-                drawing: Default::default(),
-                after_gesture: Vec::new(),
-                text: content.as_str().to_owned(),
-                saved: content.as_str().to_owned(),
-                source: None,
-                path: PathBuf::from(format!("clipboard.{extension}")),
-                name: format!("clipboard.{extension}"),
-                save_as: false,
-                directory: little_clip_core::path_address::display_path(
-                    &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-                ),
-                error: None,
-                config: config.clone(),
-                pending: None,
-            }),
+            editor: Some(Editor::new(
+                content.as_str().to_owned(),
+                None,
+                PathBuf::from(format!("clipboard.{extension}")),
+                format!("clipboard.{extension}"),
+                config,
+            )),
         })
     }
 
@@ -271,6 +246,10 @@ impl TextSession {
                             .drawing
                             .as_ref()
                             .is_some_and(|drawing| drawing.failed())
+                        || editor
+                            .harness
+                            .as_ref()
+                            .is_some_and(|harness| harness.failed())
                 })
             {
                 self.close = Some(Default::default());
@@ -361,20 +340,11 @@ impl TextSession {
             if let Some(mode) = TabBar::new("file_text_modes", self.mode, &tabs, palette).show(ui) {
                 self.mode = mode;
             }
-            if self.mode != Mode::Diagram
-                && let Some(timing) = &mut editor.timing
-            {
-                timing.suspend();
-            }
-            if self.mode != Mode::Diagram
-                && let Some(drawing) = &mut editor.drawing
-            {
-                drawing.suspend();
-            }
-            if self.mode != Mode::Diagram
-                && let Some((_, preview)) = &mut self.diagram
-            {
-                preview.suspend();
+            if self.mode != Mode::Diagram {
+                editor.suspend_graphics();
+                if let Some((_, preview)) = &mut self.diagram {
+                    preview.suspend();
+                }
             }
             if matches!(self.mode, Mode::Edit | Mode::Diagram) {
                 self.preview.cancel_diagram_previews();
@@ -416,6 +386,37 @@ impl TextSession {
     }
 }
 impl Editor {
+    fn new(
+        text: String,
+        source: Option<FileSource>,
+        path: PathBuf,
+        name: String,
+        config: &little_clip_core::AppConfig,
+    ) -> Self {
+        let directory = if source.is_some() {
+            path.parent().unwrap_or(Path::new(".")).to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
+        Self {
+            id: egui::Id::new(uuid::Uuid::new_v4()),
+            timing: None,
+            drawing: None,
+            harness: None,
+            after_gesture: Vec::new(),
+            saved: text.clone(),
+            text,
+            source,
+            path,
+            name,
+            save_as: false,
+            directory: little_clip_core::path_address::display_path(&directory),
+            error: None,
+            config: config.clone(),
+            pending: None,
+        }
+    }
+
     fn apply_graphical_edit(&mut self, ctx: &egui::Context, id: egui::Id, text: String) {
         let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
         let cursor = state.cursor.char_range().unwrap_or_default();
@@ -522,21 +523,19 @@ impl Editor {
         }
     }
     fn poll(&mut self, ctx: &egui::Context) -> Option<TextPreviewState> {
-        let update = self
-            .drawing
-            .as_mut()
-            .and_then(|drawing| drawing.poll(ctx, &self.text));
-        match update {
-            Some(crate::text_editor_drawing::Poll::Changed(text)) => {
-                self.apply_graphical_edit(ctx, self.id, text)
+        let updates = [
+            self.drawing
+                .as_mut()
+                .and_then(|drawing| drawing.poll(ctx, &self.text)),
+            self.harness
+                .as_mut()
+                .and_then(|harness| harness.poll(ctx, &self.text)),
+        ];
+        for update in updates.into_iter().flatten() {
+            match update {
+                GraphicalUpdate::Changed(text) => self.apply_graphical_edit(ctx, self.id, text),
+                GraphicalUpdate::Replaced | GraphicalUpdate::Failed => self.after_gesture.clear(),
             }
-            Some(
-                crate::text_editor_drawing::Poll::Replaced
-                | crate::text_editor_drawing::Poll::Failed,
-            ) => {
-                self.after_gesture.clear();
-            }
-            None => {}
         }
         if !self.graphic_busy() {
             for action in std::mem::take(&mut self.after_gesture) {
@@ -605,8 +604,21 @@ impl Editor {
         self.pending = Some(receiver);
     }
 
+    fn suspend_graphics(&mut self) {
+        if let Some(timing) = &mut self.timing {
+            timing.suspend();
+        }
+        if let Some(drawing) = &mut self.drawing {
+            drawing.suspend();
+        }
+        if let Some(harness) = &mut self.harness {
+            harness.suspend();
+        }
+    }
+
     fn graphic_busy(&self) -> bool {
         self.drawing.as_ref().is_some_and(|drawing| drawing.busy())
+            || self.harness.as_ref().is_some_and(|harness| harness.busy())
     }
 
     fn request_save(&mut self) {
@@ -708,6 +720,26 @@ impl Editor {
                 .show(ui, &self.text, preview, palette);
             return;
         }
+        if format == Format::Wireviz {
+            let show_source = self.harness.get_or_insert_default().toolbar(ui, palette);
+            if show_source {
+                ui.columns(2, |columns| {
+                    self.source_ui(&mut columns[0], palette, Some(format), source_id);
+                    self.harness.as_mut().unwrap().show(
+                        &mut columns[1],
+                        &self.text,
+                        preview,
+                        palette,
+                    );
+                });
+            } else {
+                self.harness
+                    .as_mut()
+                    .unwrap()
+                    .show(ui, &self.text, preview, palette);
+            }
+            return;
+        }
         ui.columns(2, |columns| {
             self.source_ui(&mut columns[0], palette, Some(format), source_id);
             egui::ScrollArea::vertical()
@@ -795,7 +827,7 @@ impl Editor {
         } else {
             self.source_ui(ui, palette, syntax_format, source_id);
         }
-        if syntax_format == Some(Format::Wavedrom) {
+        if matches!(syntax_format, Some(Format::Wavedrom | Format::Wireviz)) {
             self.history_ui(ui, source_id, palette);
         }
         self.save_as_ui(ui, palette);
@@ -878,96 +910,161 @@ mod tests {
     }
 
     #[test]
-    fn drawing_gestures_preserve_the_order_of_quick_save_and_undo_commands() {
+    fn graphical_edits_preserve_the_order_of_quick_save_and_undo_commands() {
         let directory = tempfile::tempdir().unwrap();
-        let original = "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n";
-        for save_first in [true, false] {
-            let path = directory
-                .path()
-                .join(format!("canvas-{save_first}.excalidraw"));
-            std::fs::write(&path, original).unwrap();
-            let mut session = TextSession::load(&path, &Default::default()).unwrap();
-            let (drawing, release) =
-                crate::text_editor_drawing::delayed_edit(original, drawing_gesture());
-            session.editor.as_mut().unwrap().drawing = Some(drawing);
-            assert!(session.busy());
-            assert!(!session.request_close());
-            let editor = session.editor.as_mut().unwrap();
-            if save_first {
-                editor.request_save();
+        for (original, extension, harness) in [
+            (
+                "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n",
+                "excalidraw",
+                false,
+            ),
+            (
+                include_str!("../../../docs/examples/diagrams/harness.wireviz"),
+                "wireviz",
+                true,
+            ),
+        ] {
+            for save_first in [true, false] {
+                let path = directory
+                    .path()
+                    .join(format!("canvas-{harness}-{save_first}.{extension}"));
+                std::fs::write(&path, original).unwrap();
+                let mut session = TextSession::load(&path, &Default::default()).unwrap();
+                let release = if harness {
+                    let (harness, release) = crate::text_editor_wireviz::delayed_edit(
+                        original,
+                        little_clip_core::diagram::wireviz::edits::Edit::PinLabel {
+                            connector: 0,
+                            pin: 0,
+                            label: "GROUND".into(),
+                        },
+                    );
+                    session.editor.as_mut().unwrap().harness = Some(harness);
+                    release
+                } else {
+                    let (drawing, release) =
+                        crate::text_editor_drawing::delayed_edit(original, drawing_gesture());
+                    session.editor.as_mut().unwrap().drawing = Some(drawing);
+                    release
+                };
+                assert!(session.busy());
+                assert!(!session.request_close());
+                let editor = session.editor.as_mut().unwrap();
+                if save_first {
+                    editor.request_save();
+                }
+                editor.after_gesture.push(AfterGesture::Undo);
+                if !save_first {
+                    editor.request_save();
+                }
+                assert!(
+                    editor.pending.is_none(),
+                    "save must wait for the accepted gesture"
+                );
+                release.send(()).unwrap();
+                let ctx = egui::Context::default();
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while editor.graphic_busy() || editor.pending.is_some() {
+                    editor.poll(&ctx);
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(editor.error.is_none(), "{:?}", editor.error);
+                assert!(!editor.drawing.as_ref().is_some_and(|e| e.failed()));
+                assert!(!editor.harness.as_ref().is_some_and(|e| e.failed()));
+                assert_eq!(
+                    editor.text, original,
+                    "undo restores the exact original bytes"
+                );
+                let saved = std::fs::read_to_string(&path).unwrap();
+                if harness {
+                    let saved = little_clip_core::diagram::wireviz::parse(&saved).unwrap();
+                    assert_eq!(
+                        saved.connectors[0].pins[0].label.as_deref(),
+                        Some(if save_first { "GROUND" } else { "RETURN" })
+                    );
+                } else {
+                    let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
+                    assert_eq!(
+                        saved["elements"].as_array().unwrap().len(),
+                        usize::from(save_first)
+                    );
+                }
+                assert_eq!(editor.text != editor.saved, save_first);
             }
-            editor.after_gesture.push(AfterGesture::Undo);
-            if !save_first {
-                editor.request_save();
-            }
-            assert!(
-                editor.pending.is_none(),
-                "save must wait for the accepted gesture"
-            );
-            release.send(()).unwrap();
-            let ctx = egui::Context::default();
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while editor.graphic_busy() || editor.pending.is_some() {
-                editor.poll(&ctx);
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            assert!(editor.error.is_none(), "{:?}", editor.error);
-            assert!(!editor.drawing.as_ref().unwrap().failed());
-            assert_eq!(
-                editor.text, original,
-                "undo restores the exact original bytes"
-            );
-            let saved = std::fs::read_to_string(&path).unwrap();
-            let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
-            assert_eq!(
-                saved["elements"].as_array().unwrap().len(),
-                usize::from(save_first)
-            );
-            assert_eq!(editor.text != editor.saved, save_first);
         }
     }
 
     #[test]
-    fn failed_or_superseded_drawing_gestures_never_save_an_older_source() {
+    fn failed_or_superseded_graphical_edits_never_save_an_older_source() {
         let directory = tempfile::tempdir().unwrap();
-        let original = "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}";
-        for superseded in [false, true] {
-            let path = directory
-                .path()
-                .join(format!("canvas-{superseded}.excalidraw"));
-            std::fs::write(&path, original).unwrap();
-            let mut session = TextSession::load(&path, &Default::default()).unwrap();
-            let change = if superseded {
-                drawing_gesture()
-            } else {
-                little_clip_core::diagram::drawing::Change::Move {
-                    ids: vec!["missing".into()],
-                    by: [10.0, 0.0],
+        for (original, extension, is_harness) in [
+            (
+                "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}",
+                "excalidraw",
+                false,
+            ),
+            (
+                include_str!("../../../docs/examples/diagrams/harness.wireviz"),
+                "wireviz",
+                true,
+            ),
+        ] {
+            for superseded in [false, true] {
+                let path = directory
+                    .path()
+                    .join(format!("canvas-{is_harness}-{superseded}.{extension}"));
+                std::fs::write(&path, original).unwrap();
+                let mut session = TextSession::load(&path, &Default::default()).unwrap();
+                let editor = session.editor.as_mut().unwrap();
+                let release = if is_harness {
+                    let (harness, release) = crate::text_editor_wireviz::delayed_edit(
+                        original,
+                        little_clip_core::diagram::wireviz::edits::Edit::PinLabel {
+                            connector: if superseded { 0 } else { 999 },
+                            pin: 0,
+                            label: "GROUND".into(),
+                        },
+                    );
+                    editor.harness = Some(harness);
+                    release
+                } else {
+                    let change = if superseded {
+                        drawing_gesture()
+                    } else {
+                        little_clip_core::diagram::drawing::Change::Move {
+                            ids: vec!["missing".into()],
+                            by: [10.0, 0.0],
+                        }
+                    };
+                    let (drawing, release) =
+                        crate::text_editor_drawing::delayed_edit(original, change);
+                    editor.drawing = Some(drawing);
+                    release
+                };
+                editor.request_save();
+                if superseded {
+                    editor.text = "manual source changes".into();
                 }
-            };
-            let (drawing, release) = crate::text_editor_drawing::delayed_edit(original, change);
-            let editor = session.editor.as_mut().unwrap();
-            editor.drawing = Some(drawing);
-            editor.request_save();
-            if superseded {
-                editor.text = "manual source changes".into();
-            }
-            release.send(()).unwrap();
-            let ctx = egui::Context::default();
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while editor.graphic_busy() {
-                editor.poll(&ctx);
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            assert!(editor.pending.is_none());
-            assert!(editor.after_gesture.is_empty());
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-            if superseded {
-                assert_eq!(editor.text, "manual source changes");
-            } else {
-                assert!(editor.drawing.as_ref().unwrap().failed());
+                release.send(()).unwrap();
+                let ctx = egui::Context::default();
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while editor.graphic_busy() {
+                    editor.poll(&ctx);
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(editor.pending.is_none());
+                assert!(editor.after_gesture.is_empty());
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+                if superseded {
+                    assert_eq!(editor.text, "manual source changes");
+                } else {
+                    assert!(
+                        editor.drawing.as_ref().is_some_and(|e| e.failed())
+                            || editor.harness.as_ref().is_some_and(|e| e.failed())
+                    );
+                }
             }
         }
     }

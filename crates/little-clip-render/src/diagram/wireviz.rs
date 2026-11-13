@@ -41,7 +41,7 @@ fn dot(harness: &Harness) -> Result<String, String> {
         .enumerate()
         .filter(|(_, c)| c.used)
     {
-        let table = connector_table(connector)?;
+        let table = connector_table(connector, index)?;
         writeln!(
             dot,
             "c{index} [id=\"wireviz-connector-{index}\" label=<{table}>];"
@@ -49,7 +49,7 @@ fn dot(harness: &Harness) -> Result<String, String> {
         .unwrap();
     }
     for (index, cable) in harness.cables.iter().enumerate().filter(|(_, c)| c.used) {
-        let table = cable_table(cable)?;
+        let table = cable_table(cable, index)?;
         writeln!(
             dot,
             "w{index} [id=\"wireviz-cable-{index}\" label=<{table}>];"
@@ -66,7 +66,7 @@ fn dot(harness: &Harness) -> Result<String, String> {
     Ok(dot)
 }
 
-fn connector_table(connector: &Connector) -> Result<String, String> {
+fn connector_table(connector: &Connector, index: usize) -> Result<String, String> {
     let mut table = header(
         &connector.name,
         connector.description.as_deref(),
@@ -84,13 +84,14 @@ fn connector_table(connector: &Connector) -> Result<String, String> {
             &id,
             value.label.as_deref(),
             value.color.as_deref(),
+            &format!("wireviz-pin-{index}-{pin}"),
         )?;
     }
     footer(&mut table, connector.notes.as_deref());
     Ok(table)
 }
 
-fn cable_table(cable: &Cable) -> Result<String, String> {
+fn cable_table(cable: &Cable, index: usize) -> Result<String, String> {
     let kind = if cable.bundle {
         "bundle wires"
     } else {
@@ -109,10 +110,18 @@ fn cable_table(cable: &Cable) -> Result<String, String> {
             &(wire + 1).to_string(),
             value.label.as_deref(),
             value.color.as_deref(),
+            &format!("wireviz-wire-{index}-{wire}"),
         )?;
     }
     if let Some(color) = &cable.shield {
-        row(&mut table, "s", "s", Some("Shield"), Some(color))?;
+        row(
+            &mut table,
+            "s",
+            "s",
+            Some("Shield"),
+            Some(color),
+            &format!("wireviz-shield-{index}"),
+        )?;
     }
     footer(&mut table, cable.notes.as_deref());
     Ok(table)
@@ -167,8 +176,9 @@ fn row(
     number: &str,
     name: Option<&str>,
     color: Option<&str>,
+    id: &str,
 ) -> Result<(), String> {
-    write!(table, "<TR><TD PORT=\"{port}\" ALIGN=\"LEFT\"><TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"3\"><TR><TD WIDTH=\"24\" ALIGN=\"LEFT\"><B>{}</B></TD>", label(number)).unwrap();
+    write!(table, "<TR><TD PORT=\"{port}\" ID=\"{id}\" TITLE=\"Terminal\" ALIGN=\"LEFT\"><TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"3\"><TR><TD WIDTH=\"24\" ALIGN=\"LEFT\"><B>{}</B></TD>", label(number)).unwrap();
     if let Some(color) = color {
         for band in wireviz::colors::bands(color)? {
             write!(table, "<TD WIDTH=\"12\" BGCOLOR=\"{}\"></TD>", rgb(band)).unwrap();
@@ -255,6 +265,18 @@ mod tests {
         assert!(svg.contains("wireviz-connector-0"));
         assert!(svg.contains("wireviz-link-4"));
         assert!(!svg.contains("<text"));
+        let prepared = super::super::retained::prepare(&svg).unwrap();
+        let pin = prepared
+            .tree
+            .node_by_id("graph-0-a_wireviz-pin-0-0")
+            .expect("semantic pin group survives outlining");
+        assert!(pin.abs_bounding_box().width() > 0.0);
+        assert!(
+            prepared
+                .tree
+                .node_by_id("graph-0-a_wireviz-shield-0")
+                .is_some()
+        );
         for color in ["#ffffff", "#00ff00", "#ffff00"] {
             assert!(svg.contains(color), "{color}");
         }

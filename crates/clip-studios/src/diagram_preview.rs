@@ -4,13 +4,27 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+mod camera;
+pub(crate) use camera::Camera;
 
-struct Pixels {
-    image: egui::ColorImage,
-    warnings: Vec<String>,
+/// Delivery from a graphical source transaction to the session's undo owner.
+pub(crate) enum GraphicalUpdate {
+    Changed(String),
+    Replaced,
+    Failed,
+}
+
+#[derive(Default)]
+struct Artwork {
     math: Option<little_clip_render::diagram::MathLayout>,
     drawing: Option<little_clip_render::diagram::DrawingLayout>,
     vector: Option<Arc<clip_ui::vectors::svg::Scene>>,
+    geometry: Option<Arc<clip_ui::vectors::svg::Geometry>>,
+}
+struct Pixels {
+    image: egui::ColorImage,
+    warnings: Vec<String>,
+    artwork: Artwork,
 }
 
 impl Pixels {
@@ -20,7 +34,7 @@ impl Pixels {
         mut rendered: little_clip_render::diagram::Rendered,
         format: Format,
     ) -> Result<Self, String> {
-        let vector = if format == Format::Excalidraw {
+        let vector = if matches!(format, Format::Excalidraw | Format::Wireviz) {
             match little_clip_render::diagram::retained::prepare(&rendered.svg).and_then(
                 |prepared| clip_ui::vectors::svg::Scene::new(prepared.tree, prepared.images),
             ) {
@@ -33,6 +47,13 @@ impl Pixels {
         } else {
             None
         };
+        let geometry = (format == Format::Wireviz)
+            .then(|| {
+                vector
+                    .as_ref()
+                    .map(|scene| Arc::new(scene.geometry("graph-0-")))
+            })
+            .flatten();
         let mut reader = image::ImageReader::with_format(
             std::io::Cursor::new(&rendered.png),
             image::ImageFormat::Png,
@@ -53,19 +74,49 @@ impl Pixels {
         Ok(Pixels {
             image: pixels,
             warnings: rendered.warnings,
-            math: rendered.math,
-            drawing: rendered.drawing,
-            vector,
+            artwork: Artwork {
+                math: rendered.math,
+                drawing: rendered.drawing,
+                vector,
+                geometry,
+            },
         })
     }
 }
 
 /// The last canonical drawing image, with explicit source freshness.
-pub(crate) struct DrawingFrame {
+pub(crate) struct NativeFrame {
     pub texture: egui::TextureId,
     pub layout: little_clip_render::diagram::DrawingLayout,
     pub fresh: bool,
     pub vector: Option<Arc<clip_ui::vectors::svg::Scene>>,
+    pub geometry: Option<Arc<clip_ui::vectors::svg::Geometry>>,
+}
+impl NativeFrame {
+    /// Paints ready vectors, retaining the bounded raster as an explicit fallback.
+    pub(crate) fn paint(
+        &self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        image: egui::Rect,
+        changes: clip_ui::vectors::svg::Changes,
+        tint: egui::Color32,
+    ) -> Option<String> {
+        let result = self
+            .vector
+            .as_ref()
+            .map(|scene| scene.paint(ui, rect, image, changes));
+        if matches!(result, Some(Ok(()))) {
+            return None;
+        }
+        ui.painter_at(rect).image(
+            self.texture,
+            image,
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            tint,
+        );
+        result.and_then(Result::err)
+    }
 }
 
 /// Owns debouncing, cancellation and the last valid image for one diagram source.
@@ -76,9 +127,7 @@ pub struct Preview {
     due: Option<Instant>,
     texture: Option<egui::TextureHandle>,
     aspect: Option<f32>,
-    math: Option<little_clip_render::diagram::MathLayout>,
-    drawing: Option<little_clip_render::diagram::DrawingLayout>,
-    vector: Option<Arc<clip_ui::vectors::svg::Scene>>,
+    artwork: Artwork,
     prepared_at: Option<Instant>,
     error: Option<String>,
     warnings: Vec<String>,
@@ -94,10 +143,13 @@ impl Preview {
                 egui::ColorImage::new([2, 2], egui::Color32::WHITE),
                 egui::TextureOptions::LINEAR,
             )),
-            drawing: Some(little_clip_render::diagram::DrawingLayout {
-                origin: [0.0; 2],
-                size: [100.0; 2],
-            }),
+            artwork: Artwork {
+                drawing: Some(little_clip_render::diagram::DrawingLayout {
+                    origin: [0.0; 2],
+                    size: [100.0; 2],
+                }),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -116,7 +168,10 @@ impl Preview {
         (
             Self {
                 texture: Some(texture),
-                math: Some(layout),
+                artwork: Artwork {
+                    math: Some(layout),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             id,
@@ -127,7 +182,7 @@ impl Preview {
     pub fn suspend(&mut self) {
         let pending = self.pending.take().is_some();
         let texture = self.texture.take().is_some();
-        let vector = self.vector.take().is_some();
+        let vector = self.artwork.vector.take().is_some();
         if pending || texture || vector {
             self.due = Some(Instant::now());
             self.stale = true;
@@ -160,9 +215,7 @@ impl Preview {
             match result {
                 Ok(Ok(pixels)) => {
                     self.warnings = pixels.warnings;
-                    self.math = pixels.math;
-                    self.drawing = pixels.drawing;
-                    self.vector = pixels.vector;
+                    self.artwork = pixels.artwork;
                     self.prepared_at = Some(Instant::now());
                     self.aspect = Some(pixels.image.size[0] as f32 / pixels.image.size[1] as f32);
                     self.texture = Some(ui.ctx().load_texture(
@@ -250,7 +303,7 @@ impl Preview {
     }
 
     pub(crate) fn math_layout(&self) -> Option<little_clip_render::diagram::MathLayout> {
-        self.math
+        self.artwork.math
     }
 
     pub(crate) fn paint_math(
@@ -286,13 +339,35 @@ impl Preview {
 
     /// Prepares the same native image used by passive previews. Canvas hit tests
     /// must use `fresh`; an old texture never authorizes editing newer source.
-    pub(crate) fn drawing_frame(&mut self, ui: &egui::Ui, source: &str) -> Option<DrawingFrame> {
-        self.prepare(ui, Format::Excalidraw, source, None);
-        Some(DrawingFrame {
-            texture: self.texture.as_ref()?.id(),
-            layout: self.drawing?,
+    pub(crate) fn native_frame(
+        &mut self,
+        ui: &egui::Ui,
+        format: Format,
+        source: &str,
+    ) -> Option<NativeFrame> {
+        self.prepare(ui, format, source, None);
+        let texture = self.texture.as_ref()?;
+        let layout = match format {
+            Format::Excalidraw => self.artwork.drawing?,
+            Format::Wireviz => {
+                let size = self
+                    .artwork
+                    .geometry
+                    .as_ref()
+                    .map_or_else(|| texture.size_vec2(), |g| g.size);
+                little_clip_render::diagram::DrawingLayout {
+                    origin: [0.0; 2],
+                    size: [f64::from(size.x), f64::from(size.y)],
+                }
+            }
+            _ => return None,
+        };
+        Some(NativeFrame {
+            texture: texture.id(),
+            layout,
             fresh: !self.stale,
-            vector: self.vector.clone(),
+            vector: self.artwork.vector.clone(),
+            geometry: self.artwork.geometry.clone(),
         })
     }
 
@@ -347,8 +422,15 @@ mod tests {
         let mut preview = Preview::drawing_fixture(&ctx, "old source");
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(preview.drawing_frame(ui, "old source").unwrap().fresh);
-                let old = preview.drawing_frame(ui, "new source").unwrap();
+                assert!(
+                    preview
+                        .native_frame(ui, Format::Excalidraw, "old source")
+                        .unwrap()
+                        .fresh
+                );
+                let old = preview
+                    .native_frame(ui, Format::Excalidraw, "new source")
+                    .unwrap();
                 assert!(!old.fresh);
                 assert_eq!(old.layout.size, [100.0; 2]);
             });
@@ -362,9 +444,7 @@ mod tests {
             Ok(Pixels {
                 image: egui::ColorImage::example(),
                 warnings: Vec::new(),
-                math: None,
-                drawing: None,
-                vector: None,
+                artwork: Artwork::default(),
             })
         });
         let token = task.token.clone();
