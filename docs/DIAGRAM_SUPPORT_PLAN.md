@@ -46,7 +46,7 @@ Initial crates.io search, 2026-11-12. Candidates below require API/source/licens
 | draw.io | [drawio-exporter](https://crates.io/crates/drawio-exporter) 1.6.0; [flowchart-mcp-server](https://crates.io/crates/flowchart-mcp-server) 0.1.0; [drawio-lc](https://crates.io/crates/drawio-lc) 0.4.0 | Pending comparison / editor research |
 | Excalidraw | excalidraw-render 0.1.0; excalidraw-document 0.2.0; gpui-excalidraw 0.1.9; excalidraw-image 0.2.0 | Native SVG renderer and preserving graphical transactions integrated; initial drawing/selection/movement canvas works; text editing and resize handles pending |
 | WaveDrom | Canonical 3.8.0; native wavedrom 0.1.0 and current Rust main; WavePaint graphical reference | Canonical engine embedded without a browser; timing/register/logic source previews integrated; direct timing painting and lane naming integrated; advanced operations stay in source |
-| Structurizr | [oak-structurizr](https://crates.io/crates/oak-structurizr) 0.0.11; [dendryform-export](https://crates.io/crates/dendryform-export) 0.1.0; [cadastre](https://crates.io/crates/cadastre) 0.4.0 | Pending comparison / editor research |
+| Structurizr | oak-structurizr; dendryform-export; Cadastre; tree-sitter; StructurizrX; structurizr-rs | Native candidates probed; selected memory-only libraries prepared; host integration pending (qualification below) |
 | BlockDiag / SeqDiag / ActDiag / NwDiag / PacketDiag / RackDiag | [xio_job_to_blockdiag](https://crates.io/crates/xio_job_to_blockdiag) 0.8.0 | Pending comparison / editor research |
 | Bytefield | Canonical Bytefield-SVG 1.11/1.12; ProtoViz; Framegram; unrelated native bitfield crates | Pin canonical 1.11 after differential helper-function regression; bounded hostless rendering, shared Markdown/clipboard/source/list paths implemented |
 | Ditaa | [mdbook-plantuml](https://crates.io/crates/mdbook-plantuml) 2.0.0; [ansicht](https://crates.io/crates/ansicht) 0.1.0; [plantuml-little](https://crates.io/crates/plantuml-little) 1.2026.2-4 | Pending comparison / editor research |
@@ -2409,3 +2409,89 @@ and unchanged source hashes. Screenshot inspection caught an initially missing
 editor grammar-name mapping; the final XML colors are verified by both the
 shared source-editor test and screenshots. Examples `pipeline.drawio` and
 `drawio.md` are in `docs/examples/diagrams/` and the user's review folder.
+
+## Structurizr library qualification and native preparation
+
+Rechecked the earlier registry candidates: `oak-structurizr` is a syntax parser,
+`dendryform-export` is a Structurizr DSL exporter. Cadastre remains a secondary
+registry candidate; it was not selected over the two compiled native libraries. Also investigated the native tree-sitter/LSP project
+[`tree-sitter-structurizr`](https://github.com/sinon/tree-sitter-structurizr),
+which supplies editor-oriented syntax rather than computed views/rendering.
+A search result for `junix/diagram-ast-parser` was unavailable at its repository
+URL, so its claims were not used as implementation evidence.
+
+Two source-level native candidates were actually compiled and probed:
+
+- [`StructurizrX`](https://github.com/pomali/structurizrx), Apache-2.0,
+  revision `6dae3d8b0870cc7f4ee6faffd8eb18d7b122e3e4`: useful identifier/source
+  locations, clear documentation and attractive static SVGs. Four common static
+  views render. However, the probe parsed an additional dynamic view and silently
+  left it out of the four-page output. An unknown view keyword was also accepted,
+  and the tested left-to-right container view still laid out vertically.
+- [`structurizr-rs`](https://github.com/Helms-AI/structurizr-rs), MIT as declared
+  in its workspace manifest, revision
+  `59a5c4a93bfcb11e501d81a06cd4492c01f1f890`: native models, DSL, styles,
+  layout, navigation/edit-history types and SVG drawing. The same four static
+  views plus the dynamic view produce five SVGs, unknown identifiers/keywords
+  fail, and requested layout direction is honored. This broader renderer is the
+  selected foundation. The pristine selected source is committed before patches;
+  preserved metadata records the upstream license declaration and authors.
+
+The official [Structurizr feature documentation](https://docs.structurizr.com/features)
+explains that its graphical editor adjusts manual layout; the architecture model
+is authored as code. Both inspected Rust frontends are web viewers, rather than
+an egui editor that can be embedded here. The selected native model/layout APIs
+are useful for later direct interaction, while the existing source/live-preview
+studio remains the initial integration path. No browser/server/Java runtime is
+needed or imported.
+
+The selected parser accepted an unfinished outer workspace in the probe. Local
+preparation now uses its existing lexer to check complete braces, excessive
+nesting and trailing content before recursive descent. Strings and comments do
+not participate in brace depth. Memory inputs have 256 KiB / 16,384-token /
+64-level limits. External workspace extension/includes and scripts/plugins fail
+instead of being silently omitted. Documentation paths remain inert metadata.
+All filesystem access, include resolution, theme downloads/caches and execution
+features are removed from the selected libraries, together with HTTP and unused
+Pest dependencies. Native JSON serialization remains; compatibility with the
+canonical Structurizr JSON schema has not been established and is not claimed.
+
+Validation of this preparation: 16 core-model tests, 28 DSL unit tests,
+six directive tests, three new preview-boundary tests, 88 native renderer tests
+and one core rustdoc test pass. Coverage includes static/dynamic/deployment,
+filtered/custom/image renderers, lexer-aware brace handling, malformed/trailing
+input and source/token/depth limits. The three libraries also check against the
+application workspace without compiler warnings. Only one small SHA-1 dependency
+is added for the upstream stable UUID implementation; HTTP dependencies are not
+retained. Both candidate probes share the existing target directory rather than
+creating another build cache.
+
+- [x] Research and compare syntax-only/export-only and native render candidates.
+- [x] Compile both native candidates and compare actual view/error behavior.
+- [x] Import pristine selected libraries separately from local adaptation.
+- [x] Adapt and test a bounded, memory-only parser/rendering foundation.
+- [ ] Integrate native Markdown/little-screen/file/clipboard routes and source UI.
+- [ ] Validate rendered strips, hover, editor, errors and Markdown in both themes.
+
+Architecture review of this import/adaptation reports roughly 15,942 added
+lines, all in the selected upstream libraries and their preview-boundary tests.
+Maximum complexity is unchanged; total duplication changes by 0.02 percentage
+points. The 138 additional clone groups and parser/renderer hotspots are in the
+upstream implementation, not a second application preview/cache/layout system.
+The reported reordered Python cycle is unchanged.
+
+Further qualification found correctness work that must precede host integration:
+
+- [ ] Replace transitive graph closure with actual containment-based implied
+  relationships, enabled by default and respecting explicit endpoint pairs.
+  The [official rule](https://docs.structurizr.com/dsl/implied-relationships)
+  lifts endpoints through their containing architecture elements; unrelated
+  A→B→C edges must not invent an A→C relationship.
+- [ ] Retain explicitly selected disconnected elements and preserve empty
+  selections; do not confuse wildcard scope with global graph connectivity.
+  Check context/container/component scope against the
+  [official include rules](https://docs.structurizr.com/dsl/language#include).
+- [ ] Qualify filtered/component/deployment behavior and disclose unsupported
+  expressions rather than silently ignoring them.
+
+The format checkbox remains open while these and host integration are pending.

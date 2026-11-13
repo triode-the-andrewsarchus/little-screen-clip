@@ -54,6 +54,9 @@ quick-xml = "0.41"
 dbml-rs = "=1.0.1"
 plantuml-core = "=0.5.4"
 document-svg-drawio = { path = "../../vendor/document-svg-drawio" }
+structurizr-core = { path = "../../vendor/structurizr-rs/crates/structurizr-core" }
+structurizr-dsl = { path = "../../vendor/structurizr-rs/crates/structurizr-dsl" }
+structurizr-render = { path = "../../vendor/structurizr-rs/crates/structurizr-render" }
 
 [dev-dependencies]
 tempfile = "3.27"

@@ -31,7 +31,7 @@ pub mod validation;
 pub mod serializer;
 
 pub use error::{Error, Result, ParseError};
-pub use parser::{parse, parse_with_base_path};
+pub use parser::parse;
 pub use validation::{
     validate_workspace, validate_workspace_with_config, Severity, ValidationConfig,
     ValidationIssue, ValidationResult,

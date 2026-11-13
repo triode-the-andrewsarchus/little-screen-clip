@@ -6,7 +6,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 
 use crate::error::Result;
 use crate::model::Model;
@@ -293,20 +292,6 @@ impl Workspace {
     /// Get a reference to the styles.
     pub fn styles(&self) -> Option<&Styles> {
         self.configuration.as_ref().map(|c| &c.styles)
-    }
-
-    /// Load a workspace from a JSON file.
-    pub fn from_json_file(path: impl AsRef<Path>) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let workspace = serde_json::from_str(&content)?;
-        Ok(workspace)
-    }
-
-    /// Save the workspace to a JSON file.
-    pub fn to_json_file(&self, path: impl AsRef<Path>) -> Result<()> {
-        let content = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, content)?;
-        Ok(())
     }
 
     /// Serialize the workspace to JSON.

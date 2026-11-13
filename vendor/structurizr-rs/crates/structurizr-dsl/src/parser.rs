@@ -2,10 +2,7 @@
 //!
 //! Parses tokens into an AST and then converts to a Workspace.
 //!
-//! # Scripting Support
-//!
-//! When the `scripting` feature is enabled, `!script` directives are executed
-//! after the workspace is built. Scripts can modify the workspace programmatically.
+//! This extraction parses self-contained memory inputs and never executes scripts.
 
 use std::collections::HashMap;
 
@@ -15,203 +12,79 @@ use crate::ast::*;
 use crate::error::{Error, ParseError, Result};
 use crate::lexer::{Lexer, Token, TokenKind};
 
-#[cfg(feature = "scripting")]
-use structurizr_scripting::{ScriptEngine, ScriptLanguage, ScriptConfig};
-
-#[cfg(feature = "scripting")]
-use structurizr_scripting::PluginEngine;
-
-/// Parse a DSL string into a Workspace.
+/// Parse a self-contained workspace without filesystem, network or execution capabilities.
+///
+/// Includes, workspace extension, scripts and plugins fail rather than becoming
+/// silently incomplete previews. Documentation paths remain inert model metadata.
 pub fn parse(input: &str) -> Result<Workspace> {
-    parse_with_base_path(input, None)
-}
-
-/// Parse a DSL string into a Workspace with a base path for resolving includes.
-pub fn parse_with_base_path(input: &str, base_path: Option<&std::path::Path>) -> Result<Workspace> {
-    let mut lexer = Lexer::new(input);
-    let tokens = lexer.tokenize()?;
-    let mut parser = Parser::with_source(tokens, input.to_string());
-    let mut ast = parser.parse_workspace()?;
-
-    // Process !include directives
-    if let Some(base) = base_path {
-        ast = process_includes(ast, base)?;
-    }
-
-    // Extract script directives before building
-    let scripts: Vec<_> = ast.directives.iter()
-        .filter_map(|d| match d {
-            Directive::Script(s) => Some(s.clone()),
-            _ => None,
+    let ast = parse_to_ast(input)?;
+    if ast.extends.is_some()
+        || ast.directives.iter().any(|directive| {
+            matches!(
+                directive,
+                Directive::Include(_)
+                    | Directive::Extend(_)
+                    | Directive::Script(_)
+                    | Directive::Plugin(_)
+            )
         })
-        .collect();
-
-    // Extract plugin directives before building
-    let plugins: Vec<_> = ast.directives.iter()
-        .filter_map(|d| match d {
-            Directive::Plugin(p) => Some(p.clone()),
-            _ => None,
-        })
-        .collect();
-
-    // Mutable when scripting feature is enabled (scripts/plugins can modify workspace)
-    #[allow(unused_mut)]
-    let mut workspace = build_workspace(ast)?;
-
-    // Execute scripts when scripting feature is enabled
-    #[cfg(feature = "scripting")]
     {
-        execute_scripts(&mut workspace, &scripts, base_path)?;
-    }
-
-    // Execute plugins when scripting feature is enabled
-    #[cfg(feature = "scripting")]
-    {
-        execute_plugins(&mut workspace, &plugins, base_path)?;
-    }
-
-    // Warn about scripts when feature is not enabled (but don't fail)
-    #[cfg(not(feature = "scripting"))]
-    if !scripts.is_empty() {
-        eprintln!("Warning: !script directives found but scripting feature is not enabled");
-        eprintln!("Scripts will be skipped. Enable 'scripting' feature to execute scripts.");
-    }
-
-    // Warn about plugins when feature is not enabled (but don't fail)
-    #[cfg(not(feature = "scripting"))]
-    if !plugins.is_empty() {
-        eprintln!("Warning: !plugin directives found but scripting feature is not enabled");
-        eprintln!("Plugins will be skipped. Enable 'scripting' feature to execute plugins.");
-    }
-
-    Ok(workspace)
-}
-
-/// Execute script directives against a workspace.
-#[cfg(feature = "scripting")]
-fn execute_scripts(
-    workspace: &mut Workspace,
-    scripts: &[ScriptDirective],
-    base_path: Option<&std::path::Path>,
-) -> Result<()> {
-    if scripts.is_empty() {
-        return Ok(());
-    }
-
-    // Create a script engine with the base path for resolving script files
-    let config = ScriptConfig::new()
-        .with_base_path(base_path.map(|p| p.to_path_buf()).unwrap_or_default());
-    let engine = ScriptEngine::new(config)
-        .map_err(|e| Error::Parse(ParseError {
-            message: format!("Failed to create script engine: {}", e),
+        return Err(Error::Parse(ParseError {
+            message: "Preview requires a self-contained workspace; includes, extends, scripts and plugins are not loaded".into(),
             location: None,
-        }))?;
-
-    for script in scripts {
-        if let Some(ref content) = script.content {
-            // Inline script
-            let lang = script.language.as_deref().unwrap_or("lua");
-            let language = match lang.to_lowercase().as_str() {
-                "lua" => ScriptLanguage::Lua,
-                "groovy" => ScriptLanguage::Groovy,
-                "kotlin" => ScriptLanguage::Kotlin,
-                _ => {
-                    return Err(Error::Parse(ParseError {
-                        message: format!("Unsupported script language: {}", lang),
-                        location: None,
-                    }));
-                }
-            };
-            engine.execute(workspace, content, language)
-                .map_err(|e| Error::Parse(ParseError {
-                    message: format!("Script execution error: {}", e),
-                    location: None,
-                }))?;
-        } else if let Some(ref file_path) = script.file_path {
-            // External script file
-            let path = std::path::Path::new(file_path);
-            let full_path = if path.is_absolute() {
-                path.to_path_buf()
-            } else if let Some(base) = base_path {
-                base.join(path)
-            } else {
-                path.to_path_buf()
-            };
-
-            engine.execute_file(workspace, &full_path, None)
-                .map_err(|e| Error::Parse(ParseError {
-                    message: format!("Script file execution error ({}): {}", file_path, e),
-                    location: None,
-                }))?;
-        }
+        }));
     }
-
-    Ok(())
-}
-
-/// Execute plugin directives against a workspace.
-#[cfg(feature = "scripting")]
-fn execute_plugins(
-    workspace: &mut Workspace,
-    plugins: &[String],
-    base_path: Option<&std::path::Path>,
-) -> Result<()> {
-    if plugins.is_empty() {
-        return Ok(());
-    }
-
-    // Create a plugin engine
-    let engine = PluginEngine::new()
-        .map_err(|e| Error::Parse(ParseError {
-            message: format!("Failed to create plugin engine: {}", e),
-            location: None,
-        }))?;
-
-    for plugin_path in plugins {
-        let path = std::path::Path::new(plugin_path);
-
-        // Resolve the path relative to workspace if not absolute
-        let full_path = if path.is_absolute() {
-            path.to_path_buf()
-        } else if let Some(base) = base_path {
-            base.join(path)
-        } else {
-            path.to_path_buf()
-        };
-
-        // Check if this is a directory (plugin.toml inside) or direct path
-        let manifest_path = if full_path.is_dir() {
-            full_path.join("plugin.toml")
-        } else if full_path.file_name().map(|n| n == "plugin.toml").unwrap_or(false) {
-            full_path.clone()
-        } else {
-            // Assume it's a directory path, try adding plugin.toml
-            full_path.join("plugin.toml")
-        };
-
-        if !manifest_path.exists() {
-            return Err(Error::Parse(ParseError {
-                message: format!("Plugin manifest not found: {}", manifest_path.display()),
-                location: None,
-            }));
-        }
-
-        engine.execute_plugin(&manifest_path, workspace)
-            .map_err(|e| Error::Parse(ParseError {
-                message: format!("Plugin execution error ({}): {}", plugin_path, e),
-                location: None,
-            }))?;
-    }
-
-    Ok(())
+    build_workspace(ast)
 }
 
 /// Parse a DSL string into an AST (for testing/debugging).
 pub fn parse_to_ast(input: &str) -> Result<WorkspaceNode> {
     let mut lexer = Lexer::new(input);
     let tokens = lexer.tokenize()?;
+    // Use lexer tokens rather than source characters: braces in labels and
+    // comments are data. Bound recursion before recursive descent begins.
+    const MAX_DEPTH: usize = 64;
+    let mut braces = Vec::new();
+    for token in &tokens {
+        match token.kind {
+            TokenKind::OpenBrace => {
+                if braces.len() == MAX_DEPTH {
+                    return Err(Error::Lexer {
+                        message: "Nesting exceeds the preview depth budget".into(),
+                        location: token.location,
+                    });
+                }
+                braces.push(token.location);
+            }
+            TokenKind::CloseBrace => {
+                if braces.pop().is_none() {
+                    return Err(Error::Lexer {
+                        message: "Unexpected closing brace".into(),
+                        location: token.location,
+                    });
+                }
+            }
+            TokenKind::Eof => {
+                if let Some(location) = braces.pop() {
+                    return Err(Error::Lexer {
+                        message: "Unclosed block".into(),
+                        location,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
     let mut parser = Parser::with_source(tokens, input.to_string());
-    parser.parse_workspace()
+    let workspace = parser.parse_workspace()?;
+    parser.skip_newlines_and_comments();
+    if !matches!(parser.current_kind(), Some(TokenKind::Eof) | None) {
+        return Err(Error::Parse(ParseError {
+            message: "Unexpected content after workspace".into(),
+            location: parser.current().map(|token| token.location),
+        }));
+    }
+    Ok(workspace)
 }
 
 /// Parser state.
@@ -2475,76 +2348,6 @@ impl Parser {
 
         Ok(terminology)
     }
-}
-
-/// Process !include directives in the AST by reading and merging included files.
-fn process_includes(mut ast: WorkspaceNode, base_path: &std::path::Path) -> Result<WorkspaceNode> {
-    let mut included_model_nodes = Vec::new();
-    let mut included_views_nodes = Vec::new();
-
-    // Find all !include directives
-    for directive in &ast.directives {
-        if let Directive::Include(path) = directive {
-            let include_path = base_path.join(path);
-            let content = std::fs::read_to_string(&include_path)
-                .map_err(|e| Error::Io(e))?;
-
-            // Parse the included file as an AST
-            let parent_dir = include_path.parent().unwrap_or(base_path);
-            let mut lexer = Lexer::new(&content);
-            let tokens = lexer.tokenize()?;
-            let mut parser = Parser::new(tokens);
-            let mut included_ast = parser.parse_workspace()?;
-
-            // Recursively process includes in the included file
-            included_ast = process_includes(included_ast, parent_dir)?;
-
-            // Collect model and views from included AST
-            if let Some(model) = included_ast.model {
-                included_model_nodes.push(model);
-            }
-            if let Some(views) = included_ast.views {
-                included_views_nodes.push(views);
-            }
-        }
-    }
-
-    // Merge included model nodes into the main AST
-    if !included_model_nodes.is_empty() {
-        let mut main_model = ast.model.take().unwrap_or_default();
-        for included_model in included_model_nodes {
-            main_model.elements.extend(included_model.elements);
-            main_model.relationships.extend(included_model.relationships);
-            main_model.groups.extend(included_model.groups);
-        }
-        ast.model = Some(main_model);
-    }
-
-    // Merge included views nodes into the main AST
-    if !included_views_nodes.is_empty() {
-        let mut main_views = ast.views.take().unwrap_or_default();
-        for included_views in included_views_nodes {
-            main_views.system_landscape.extend(included_views.system_landscape);
-            main_views.system_context.extend(included_views.system_context);
-            main_views.container.extend(included_views.container);
-            main_views.component.extend(included_views.component);
-            main_views.dynamic.extend(included_views.dynamic);
-            main_views.deployment.extend(included_views.deployment);
-            main_views.filtered.extend(included_views.filtered);
-            main_views.custom.extend(included_views.custom);
-            main_views.themes.extend(included_views.themes);
-            // Merge styles if present
-            if main_views.styles.is_none() {
-                main_views.styles = included_views.styles;
-            }
-        }
-        ast.views = Some(main_views);
-    }
-
-    // Remove !include directives from the final AST
-    ast.directives.retain(|d| !matches!(d, Directive::Include(_)));
-
-    Ok(ast)
 }
 
 /// Substitute constants in a string using the provided constants map.

@@ -12,3 +12,17 @@ Web/server/MCP/scripting/GitHub/code-analysis applications are not imported.
 The original workspace manifest is retained as `Cargo.toml.upstream`, rather
 than resolving its unrelated applications. Local adaptations are subsequent
 commits, separate from this pristine import.
+
+## Local changes
+
+- Focused Cargo workspace resolves only these three native libraries.
+- Remove unused Pest dependencies and HTTP/theme/cache dependencies.
+- Remove all filesystem reads/writes, include resolution and script/plugin
+  execution. Model JSON serialization and inert documentation references remain.
+- Reject execution-dependent/external workspace declarations instead of
+  silently presenting a partially evaluated model.
+- Add source/token/nesting budgets, complete-brace and trailing-input checks,
+  using the original lexer rather than another DSL grammar.
+- Keep native models, validation, navigation, layout and SVG drawing code.
+- Reproduce standard MIT terms in `LICENSE-MIT` with upstream's declared
+  contributor attribution; these terms were not a separate file upstream.

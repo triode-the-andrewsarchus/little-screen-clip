@@ -131,18 +131,31 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Tokenize a bounded preview source.
     pub fn tokenize(&mut self) -> Result<Vec<Token>> {
+        const MAX_SOURCE_BYTES: usize = 256 * 1024;
+        const MAX_TOKENS: usize = 16_384;
+        if self.input.len() > MAX_SOURCE_BYTES {
+            return Err(Error::Lexer {
+                message: "Source exceeds the preview byte budget".into(),
+                location: self.current_location(),
+            });
+        }
         let mut tokens = Vec::new();
-
         loop {
             let token = self.next_token()?;
             let is_eof = token.kind == TokenKind::Eof;
             tokens.push(token);
+            if tokens.len() > MAX_TOKENS {
+                return Err(Error::Lexer {
+                    message: "Source exceeds the preview token budget".into(),
+                    location: self.current_location(),
+                });
+            }
             if is_eof {
                 break;
             }
         }
-
         Ok(tokens)
     }
 

@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["vendor/excalidraw-render", "vendor/spark/rust", "vendor/dbml-rs", "vendor/plantuml-core", "vendor/document-svg-drawio"]
+exclude = ["vendor/excalidraw-render", "vendor/spark/rust", "vendor/dbml-rs", "vendor/plantuml-core", "vendor/document-svg-drawio", "vendor/structurizr-rs"]
 resolver = "2"
 members = [
     "crates/little-clip-core",
