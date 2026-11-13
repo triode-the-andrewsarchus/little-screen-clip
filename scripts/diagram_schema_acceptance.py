@@ -32,7 +32,9 @@ def rendered(session, name, expected, color, minimum=200):
 
 
 def exercise(session, root):
-    session.observe("00-families", list(FAMILIES))
+    # Family filenames are verified inside each addressed folder below. The
+    # initial light-theme folder labels are ambiguous to OCR (nomnoml/momnoml).
+    session.observe("00-families", [f"{len(FAMILIES)} folders"])
     session.click(647, 160)  # Collapse Shelf once in the fixed private viewport.
     for syntax, (title, example, color, _) in FAMILIES.items():
         folder = root / syntax

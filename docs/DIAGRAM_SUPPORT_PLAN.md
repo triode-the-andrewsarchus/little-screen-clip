@@ -2075,3 +2075,8 @@ by 0.06 percentage points. The imported upstream sources account for the new
 algorithm hotspots/clone groups; the shared Go adapter test XML counter removes
 the newly introduced local test duplication. Existing catalog/lookup tables and
 untouched viewer clones remain, along with original license texts.
+
+The final light-theme run also passed all 22 observations. Its first attempt
+failed on OCR of the initial folder names despite a correct rendered list; the
+harness now checks the initial folder count, then still verifies each family's
+actual filenames, artwork, popout and editor after directly addressing its folder.
