@@ -49,10 +49,19 @@ enum Delivery {
     },
 }
 
+enum AfterGesture {
+    Save,
+    SaveTo(PathBuf),
+    Undo,
+    Redo,
+}
+
 struct Editor {
     id: egui::Id,
     text: String,
     timing: Option<Box<crate::text_editor_wave::WaveEditor>>,
+    drawing: Option<Box<crate::text_editor_drawing::DrawingEditor>>,
+    after_gesture: Vec<AfterGesture>,
     saved: String,
     source: Option<FileSource>,
     path: PathBuf,
@@ -88,6 +97,8 @@ impl TextSession {
                 Editor {
                     id: egui::Id::new(uuid::Uuid::new_v4()),
                     timing: Default::default(),
+                    drawing: Default::default(),
+                    after_gesture: Vec::new(),
                     saved: text.clone(),
                     text,
                     source: Some(source),
@@ -150,6 +161,8 @@ impl TextSession {
             editor: Some(Editor {
                 id: egui::Id::new(uuid::Uuid::new_v4()),
                 timing: Default::default(),
+                drawing: Default::default(),
+                after_gesture: Vec::new(),
                 text: content.as_str().to_owned(),
                 saved: content.as_str().to_owned(),
                 source: None,
@@ -229,7 +242,7 @@ impl TextSession {
     pub fn busy(&self) -> bool {
         self.editor
             .as_ref()
-            .is_some_and(|editor| editor.pending.is_some())
+            .is_some_and(|editor| editor.pending.is_some() || editor.graphic_busy())
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette, close: &mut bool) {
         let was_busy = self.busy();
@@ -252,10 +265,13 @@ impl TextSession {
             // when the original clipboard source itself had no unsaved changes.
             if was_busy
                 && !self.busy()
-                && self
-                    .editor
-                    .as_ref()
-                    .is_some_and(|editor| editor.error.is_some())
+                && self.editor.as_ref().is_some_and(|editor| {
+                    editor.error.is_some()
+                        || editor
+                            .drawing
+                            .as_ref()
+                            .is_some_and(|drawing| drawing.failed())
+                })
             {
                 self.close = Some(Default::default());
                 *close = false;
@@ -351,6 +367,11 @@ impl TextSession {
                 timing.suspend();
             }
             if self.mode != Mode::Diagram
+                && let Some(drawing) = &mut editor.drawing
+            {
+                drawing.suspend();
+            }
+            if self.mode != Mode::Diagram
                 && let Some((_, preview)) = &mut self.diagram
             {
                 preview.suspend();
@@ -410,20 +431,50 @@ impl Editor {
         state.store(ctx, id);
         ctx.request_repaint();
     }
-    fn history_ui(&mut self, ui: &mut egui::Ui, id: egui::Id, palette: &AppPalette) {
-        let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) else {
-            return;
-        };
-        let cursor = state.cursor.char_range().unwrap_or_default();
-        let current = (cursor, self.text.clone());
+    fn history_step(&mut self, ctx: &egui::Context, id: egui::Id, redo: bool) {
+        let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+        let current = (
+            state.cursor.char_range().unwrap_or_default(),
+            self.text.clone(),
+        );
         let mut history = state.undoer();
-        let mut next = None;
-        let (undo_key, redo_key) = if ui.ctx().wants_keyboard_input() {
+        let next = if redo {
+            history.redo(&current)
+        } else {
+            history.undo(&current)
+        }
+        .cloned();
+        if let Some((cursor, text)) = next {
+            self.text = text;
+            state.cursor.set_char_range(Some(cursor));
+            ctx.request_repaint();
+        }
+        state.set_undoer(history);
+        state.store(ctx, id);
+    }
+    fn history_ui(&mut self, ui: &mut egui::Ui, id: egui::Id, palette: &AppPalette) {
+        let state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        let current = (
+            state.cursor.char_range().unwrap_or_default(),
+            self.text.clone(),
+        );
+        let history = state.undoer();
+        let canvas_focused = self
+            .drawing
+            .as_ref()
+            .is_some_and(|drawing| drawing.has_focus(ui.ctx()));
+        // egui's wants_keyboard_input includes buttons and canvas widgets.
+        // Only an actual text editor (or the naming dialog) owns text undo.
+        let text_focused = ui
+            .ctx()
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
+        let (mut undo, mut redo) = if self.save_as || text_focused && !canvas_focused {
             (false, false)
         } else {
             ui.input_mut(|input| {
-                // Logical modifier matching permits extra Shift, so consume
-                // the more specific redo chord before ordinary undo.
+                // Match the more specific redo chord first; logical modifier
+                // matching permits extra Shift on an ordinary undo shortcut.
                 let redo = input.consume_shortcut(&egui::KeyboardShortcut::new(
                     egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
                     egui::Key::Z,
@@ -439,37 +490,64 @@ impl Editor {
                 (undo, redo)
             })
         };
+        let busy = self.graphic_busy();
         ui.horizontal(|ui| {
-            if ui
+            undo |= ui
                 .add_enabled(
-                    history.has_undo(&current),
+                    !busy && history.has_undo(&current),
                     ButtonRole::Secondary.button("Undo", palette),
                 )
-                .clicked()
-                || undo_key
-            {
-                next = history.undo(&current).cloned();
-            }
-            if ui
+                .clicked();
+            redo |= ui
                 .add_enabled(
-                    history.has_redo(&current),
+                    !busy && history.has_redo(&current),
                     ButtonRole::Secondary.button("Redo", palette),
                 )
-                .clicked()
-                || redo_key
-            {
-                next = history.redo(&current).cloned();
-            }
+                .clicked();
         });
-        if let Some((cursor, text)) = next {
-            self.text = text;
-            state.cursor.set_char_range(Some(cursor));
-            ui.ctx().request_repaint();
+        if busy {
+            if undo {
+                self.after_gesture.push(AfterGesture::Undo);
+            }
+            if redo {
+                self.after_gesture.push(AfterGesture::Redo);
+            }
+        } else {
+            if undo {
+                self.history_step(ui.ctx(), id, false);
+            }
+            if redo {
+                self.history_step(ui.ctx(), id, true);
+            }
         }
-        state.set_undoer(history);
-        state.store(ui.ctx(), id);
     }
     fn poll(&mut self, ctx: &egui::Context) -> Option<TextPreviewState> {
+        let update = self
+            .drawing
+            .as_mut()
+            .and_then(|drawing| drawing.poll(ctx, &self.text));
+        match update {
+            Some(crate::text_editor_drawing::Poll::Changed(text)) => {
+                self.apply_graphical_edit(ctx, self.id, text)
+            }
+            Some(
+                crate::text_editor_drawing::Poll::Replaced
+                | crate::text_editor_drawing::Poll::Failed,
+            ) => {
+                self.after_gesture.clear();
+            }
+            None => {}
+        }
+        if !self.graphic_busy() {
+            for action in std::mem::take(&mut self.after_gesture) {
+                match action {
+                    AfterGesture::Save => self.request_save(),
+                    AfterGesture::SaveTo(path) => self.save(path),
+                    AfterGesture::Undo => self.history_step(ctx, self.id, false),
+                    AfterGesture::Redo => self.history_step(ctx, self.id, true),
+                }
+            }
+        }
         let receiver = self.pending.as_ref()?;
         let Some(result) = little_clip_core::jobs::task::poll(receiver, None).map(|result| {
             result
@@ -527,7 +605,15 @@ impl Editor {
         self.pending = Some(receiver);
     }
 
+    fn graphic_busy(&self) -> bool {
+        self.drawing.as_ref().is_some_and(|drawing| drawing.busy())
+    }
+
     fn request_save(&mut self) {
+        if self.graphic_busy() {
+            self.after_gesture.push(AfterGesture::Save);
+            return;
+        }
         if self.source.is_some() {
             self.save(self.path.clone());
         } else {
@@ -536,6 +622,10 @@ impl Editor {
     }
 
     fn save(&mut self, path: PathBuf) {
+        if self.graphic_busy() {
+            self.after_gesture.push(AfterGesture::SaveTo(path));
+            return;
+        }
         if self.pending.is_some() {
             return;
         }
@@ -612,6 +702,12 @@ impl Editor {
         preview: &mut crate::diagram_preview::Preview,
         source_id: egui::Id,
     ) {
+        if format == Format::Excalidraw {
+            self.drawing
+                .get_or_insert_default()
+                .show(ui, &self.text, preview, palette);
+            return;
+        }
         ui.columns(2, |columns| {
             self.source_ui(&mut columns[0], palette, Some(format), source_id);
             egui::ScrollArea::vertical()
@@ -646,7 +742,7 @@ impl Editor {
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
-                    self.pending.is_none(),
+                    self.pending.is_none() && !self.graphic_busy(),
                     ButtonRole::Primary.button("Save", palette),
                 )
                 .clicked()
@@ -654,14 +750,17 @@ impl Editor {
                 self.request_save();
             }
             if ui
-                .add(ButtonRole::Secondary.button("Save As…", palette))
+                .add_enabled(
+                    !self.graphic_busy(),
+                    ButtonRole::Secondary.button("Save As…", palette),
+                )
                 .clicked()
             {
                 self.save_as = true;
             }
             if ui
                 .add_enabled(
-                    self.pending.is_none(),
+                    self.pending.is_none() && !self.graphic_busy(),
                     ButtonRole::Secondary.button("Copy source", palette),
                 )
                 .clicked()
@@ -677,6 +776,10 @@ impl Editor {
             if self.pending.is_some() {
                 ui.spinner();
             }
+            if syntax_format == Some(Format::Excalidraw) {
+                ui.separator();
+                self.history_ui(ui, source_id, palette);
+            }
         });
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::S)) {
             self.request_save();
@@ -684,14 +787,21 @@ impl Editor {
         if let Some(error) = &self.error {
             ui.label(error);
         }
+        if let Some(error) = self.drawing.as_ref().and_then(|drawing| drawing.error()) {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
         if let Some((format, preview)) = diagram {
             self.diagram_ui(ui, palette, *format, preview, source_id);
         } else {
             self.source_ui(ui, palette, syntax_format, source_id);
         }
-        if syntax_format == Some(little_clip_core::diagram::Format::Wavedrom) {
+        if syntax_format == Some(Format::Wavedrom) {
             self.history_ui(ui, source_id, palette);
         }
+        self.save_as_ui(ui, palette);
+    }
+
+    fn save_as_ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         if self.save_as {
             egui::Window::new("Save source to a new file")
                 .collapsible(false)
@@ -750,6 +860,118 @@ pub fn hold_clipboard_copy_for_test(session: &mut TextSession) -> mpsc::Sender<(
 mod tests {
     use super::*;
 
+    fn drawing_gesture() -> little_clip_core::diagram::drawing::Change {
+        use little_clip_core::diagram::drawing::{Bounds, Change, Kind, Style};
+        Change::Create {
+            id: "new-box".into(),
+            kind: Kind::Rectangle,
+            bounds: Bounds {
+                x: 20.0,
+                y: 30.0,
+                width: 80.0,
+                height: 50.0,
+                angle: 0.0,
+            },
+            points: Vec::new(),
+            style: Style::default(),
+        }
+    }
+
+    #[test]
+    fn drawing_gestures_preserve_the_order_of_quick_save_and_undo_commands() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n";
+        for save_first in [true, false] {
+            let path = directory
+                .path()
+                .join(format!("canvas-{save_first}.excalidraw"));
+            std::fs::write(&path, original).unwrap();
+            let mut session = TextSession::load(&path, &Default::default()).unwrap();
+            let (drawing, release) =
+                crate::text_editor_drawing::delayed_edit(original, drawing_gesture());
+            session.editor.as_mut().unwrap().drawing = Some(drawing);
+            assert!(session.busy());
+            assert!(!session.request_close());
+            let editor = session.editor.as_mut().unwrap();
+            if save_first {
+                editor.request_save();
+            }
+            editor.after_gesture.push(AfterGesture::Undo);
+            if !save_first {
+                editor.request_save();
+            }
+            assert!(
+                editor.pending.is_none(),
+                "save must wait for the accepted gesture"
+            );
+            release.send(()).unwrap();
+            let ctx = egui::Context::default();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while editor.graphic_busy() || editor.pending.is_some() {
+                editor.poll(&ctx);
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(editor.error.is_none(), "{:?}", editor.error);
+            assert!(!editor.drawing.as_ref().unwrap().failed());
+            assert_eq!(
+                editor.text, original,
+                "undo restores the exact original bytes"
+            );
+            let saved = std::fs::read_to_string(&path).unwrap();
+            let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
+            assert_eq!(
+                saved["elements"].as_array().unwrap().len(),
+                usize::from(save_first)
+            );
+            assert_eq!(editor.text != editor.saved, save_first);
+        }
+    }
+
+    #[test]
+    fn failed_or_superseded_drawing_gestures_never_save_an_older_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = "{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}";
+        for superseded in [false, true] {
+            let path = directory
+                .path()
+                .join(format!("canvas-{superseded}.excalidraw"));
+            std::fs::write(&path, original).unwrap();
+            let mut session = TextSession::load(&path, &Default::default()).unwrap();
+            let change = if superseded {
+                drawing_gesture()
+            } else {
+                little_clip_core::diagram::drawing::Change::Move {
+                    ids: vec!["missing".into()],
+                    by: [10.0, 0.0],
+                }
+            };
+            let (drawing, release) = crate::text_editor_drawing::delayed_edit(original, change);
+            let editor = session.editor.as_mut().unwrap();
+            editor.drawing = Some(drawing);
+            editor.request_save();
+            if superseded {
+                editor.text = "manual source changes".into();
+            }
+            release.send(()).unwrap();
+            let ctx = egui::Context::default();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while editor.graphic_busy() {
+                editor.poll(&ctx);
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(editor.pending.is_none());
+            assert!(editor.after_gesture.is_empty());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            if superseded {
+                assert_eq!(editor.text, "manual source changes");
+            } else {
+                assert!(editor.drawing.as_ref().unwrap().failed());
+            }
+        }
+    }
+
     fn wait_for_save(editor: &mut Editor, ctx: &egui::Context) {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while editor.pending.is_some() {
@@ -781,6 +1003,53 @@ mod tests {
         let original = history.undo(&painted).unwrap().clone();
         assert_eq!(original.1, "original");
         assert_eq!(history.redo(&original).unwrap().1, "painted");
+    }
+
+    #[test]
+    fn drawing_canvas_focus_routes_undo_to_shared_history_and_text_fields_keep_their_own_keys() {
+        let ctx = egui::Context::default();
+        let mut session = clipboard_graph("original");
+        let editor = session.editor.as_mut().unwrap();
+        editor.apply_graphical_edit(&ctx, editor.id, "painted".into());
+        let canvas = egui::Id::new("focused drawing fixture");
+        editor.drawing = Some(crate::text_editor_drawing::focused_fixture(canvas));
+        egui::text_edit::TextEditState::default().store(&ctx, egui::Id::new("a text field"));
+        for (focus, expected) in [
+            (egui::Id::new("a text field"), "painted"),
+            (canvas, "original"),
+        ] {
+            let modifiers = egui::Modifiers {
+                ctrl: true,
+                command: true,
+                ..Default::default()
+            };
+            let _ = ctx.run(
+                egui::RawInput {
+                    modifiers,
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Z,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.interact(
+                            ui.available_rect_before_wrap(),
+                            focus,
+                            egui::Sense::click_and_drag(),
+                        );
+                        ctx.memory_mut(|memory| memory.request_focus(focus));
+                        assert!(ctx.wants_keyboard_input());
+                        editor.history_ui(ui, editor.id, &Default::default());
+                    });
+                },
+            );
+            assert_eq!(editor.text, expected);
+        }
     }
 
     #[test]

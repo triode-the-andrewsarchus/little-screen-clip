@@ -1015,3 +1015,45 @@ Eight model tests pass for connected movement, mixed group styles, arrow labels,
 tombstones/resources, no-op and failed-gesture behavior, native path creation,
 budgets and rotated coordinate correspondence. Canvas UI work is in progress;
 this model checkpoint does not claim completed graphical editor support.
+
+
+## First native whiteboard canvas
+
+A first egui canvas is now wired into the existing source session. It supports
+basic shape/arrow/line/freehand creation, click/Shift/marquee selection, moving
+compositions, stroke/fill/width controls, deletion, pan, cursor-anchored zoom and
+fit. The canonical image still comes from the native renderer; gesture feedback
+uses source-space geometry. Cached pixels are explicitly stale after source
+changes and cannot authorize hit testing against a newer draft.
+
+Model preparation and semantic source edits run through the existing bounded
+jobs. Accepted gestures keep their session owner across tab changes. Save, Save
+As and shared-history commands issued during a gesture are replayed in order
+after its source revision arrives; failed or superseded edits never save an older
+source. The source editor's TextEdit undoer owns graphical and textual revisions.
+Keyboard routing distinguishes text-field focus from canvas/button focus, because
+egui's wants_keyboard_input also includes non-text widgets.
+
+Targeted tests pass for stale geometry, captured pointer release outside the
+canvas, camera precision, focus-aware history, both Save/Undo orderings, and
+failure/supersession. The private desktop acceptance script
+`diagram_drawing_acceptance.py` passed a real draw/save/undo/save sequence in the
+light theme, retaining assets and restoring the exact original source bytes.
+The first two acceptance attempts needed OCR targeting adjustments; the next
+caught the canvas-focus undo issue, which is now covered by a regression test.
+Text creation/editing, resize handles and further interaction polish remain
+outstanding; this is an initial reviewable canvas, not completed editor coverage.
+
+### GPUI reference follow-up
+
+The published gpui-excalidraw 0.1.9 sources (MIT, revision
+2641e1b9c00b51e5e8329094a7d88cd1223ed630) separate a framework-independent core
+from GPUI widgets. `core/binding.rs`, `collision.rs`, `transform.rs` and the UI's
+resize/text-commit interaction are useful references for the next controls.
+Its internal linear/freehand points are absolute, unlike our native relative
+points. Its core text-width helper estimates character advances; actual painting
+uses GPUI shaping. Those shortcuts are not a replacement for canonical font
+measurement. Its typed scene and binding schema also require review before
+adapting algorithms to the preserving 0.18.1 document profile. No GPUI source or
+assets have been copied into this implementation. Any future extraction must
+retain the original MIT license and be committed pristine before adaptation.

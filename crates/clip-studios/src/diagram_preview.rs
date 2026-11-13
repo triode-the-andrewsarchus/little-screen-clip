@@ -6,6 +6,14 @@ struct Pixels {
     image: egui::ColorImage,
     warnings: Vec<String>,
     math: Option<little_clip_render::diagram::MathLayout>,
+    drawing: Option<little_clip_render::diagram::DrawingLayout>,
+}
+
+/// The last canonical drawing image, with explicit source freshness.
+pub(crate) struct DrawingFrame {
+    pub texture: egui::TextureId,
+    pub layout: little_clip_render::diagram::DrawingLayout,
+    pub fresh: bool,
 }
 
 /// Owns debouncing, cancellation and the last valid image for one diagram source.
@@ -17,12 +25,30 @@ pub struct Preview {
     texture: Option<egui::TextureHandle>,
     aspect: Option<f32>,
     math: Option<little_clip_render::diagram::MathLayout>,
+    drawing: Option<little_clip_render::diagram::DrawingLayout>,
     prepared_at: Option<Instant>,
     error: Option<String>,
     warnings: Vec<String>,
     stale: bool,
 }
 impl Preview {
+    #[cfg(test)]
+    pub(crate) fn drawing_fixture(ctx: &egui::Context, source: &str) -> Self {
+        Self {
+            source: Some((Format::Excalidraw, source.into(), None)),
+            texture: Some(ctx.load_texture(
+                "drawing fixture",
+                egui::ColorImage::new([2, 2], egui::Color32::WHITE),
+                egui::TextureOptions::LINEAR,
+            )),
+            drawing: Some(little_clip_render::diagram::DrawingLayout {
+                origin: [0.0; 2],
+                size: [100.0; 2],
+            }),
+            ..Default::default()
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn equation_fixture(
         ctx: &egui::Context,
@@ -81,6 +107,7 @@ impl Preview {
                 Ok(Ok(pixels)) => {
                     self.warnings = pixels.warnings;
                     self.math = pixels.math;
+                    self.drawing = pixels.drawing;
                     self.prepared_at = Some(Instant::now());
                     self.aspect = Some(pixels.image.size[0] as f32 / pixels.image.size[1] as f32);
                     self.texture = Some(ui.ctx().load_texture(
@@ -160,6 +187,7 @@ impl Preview {
                         image: pixels,
                         warnings: rendered.warnings,
                         math: rendered.math,
+                        drawing: rendered.drawing,
                     })
                 },
             ));
@@ -223,6 +251,17 @@ impl Preview {
         self.error.as_deref()
     }
 
+    /// Prepares the same native image used by passive previews. Canvas hit tests
+    /// must use `fresh`; an old texture never authorizes editing newer source.
+    pub(crate) fn drawing_frame(&mut self, ui: &egui::Ui, source: &str) -> Option<DrawingFrame> {
+        self.prepare(ui, Format::Excalidraw, source, None);
+        Some(DrawingFrame {
+            texture: self.texture.as_ref()?.id(),
+            layout: self.drawing?,
+            fresh: !self.stale,
+        })
+    }
+
     /// Shows a live preview without parsing, decoding or waiting on the UI thread.
     pub fn show(&mut self, ui: &mut egui::Ui, format: Format, source: &str) {
         let width = ui.available_width().clamp(1.0, 1536.0);
@@ -245,6 +284,10 @@ impl Preview {
         if format == Format::Mermaid && self.texture.is_some() {
             ui.ctx().request_repaint_after(Duration::from_secs(60));
         }
+        self.status_ui(ui, format);
+    }
+
+    pub(crate) fn status_ui(&self, ui: &mut egui::Ui, format: Format) {
         if self.pending.is_some() || self.due.is_some() {
             ui.label(format!("Rendering {}…", format.name()));
             ui.ctx().request_repaint_after(Duration::from_millis(30));
@@ -265,6 +308,20 @@ impl Preview {
 mod tests {
     use super::*;
     #[test]
+    fn drawing_revisions_keep_old_pixels_but_disable_old_geometry_for_new_source() {
+        let ctx = egui::Context::default();
+        let mut preview = Preview::drawing_fixture(&ctx, "old source");
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(preview.drawing_frame(ui, "old source").unwrap().fresh);
+                let old = preview.drawing_frame(ui, "new source").unwrap();
+                assert!(!old.fresh);
+                assert_eq!(old.layout.size, [100.0; 2]);
+            });
+        });
+        preview.suspend();
+    }
+    #[test]
     fn source_revisions_cancel_pending_work_and_keep_the_new_source() {
         let jobs = BackgroundJobs::new(1, 2);
         let task = Task::start(&jobs, Duration::from_secs(2), |_| {
@@ -272,6 +329,7 @@ mod tests {
                 image: egui::ColorImage::example(),
                 warnings: Vec::new(),
                 math: None,
+                drawing: None,
             })
         });
         let token = task.token.clone();
