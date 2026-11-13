@@ -5,6 +5,7 @@
 //! thread-safe drawing input; the GPU renderer never leaves its UI thread.
 
 pub use femtovg;
+pub mod svg;
 
 use egui_glow::glow::{self, HasContext};
 use femtovg::{Canvas, LayerEffects, renderer::OpenGl};
@@ -29,6 +30,7 @@ const OFFSCREEN_HOST: u8 = 2;
 const LAYER_FAILURE: u8 = 3;
 const GL_FAILURE: u8 = 4;
 const RETIRED: u8 = 5;
+const ARTWORK_FAILURE: u8 = 6;
 
 fn key() -> egui::Id {
     egui::Id::new("clip_ui_native_vector_runtime")
@@ -55,6 +57,9 @@ impl Handle {
             }
             LAYER_FAILURE => Some("The native vector layer could not be allocated."),
             GL_FAILURE => Some("OpenGL reported an error while painting native vectors."),
+            ARTWORK_FAILURE => {
+                Some("Native vector artwork could not be painted; see the application log.")
+            }
             _ => Some("The native vector renderer has been retired."),
         }
     }
@@ -63,6 +68,7 @@ impl Handle {
 struct Entry {
     canvas: Option<Canvas<OpenGl>>,
     context: Weak<glow::Context>,
+    scenes: HashMap<u64, svg::Cached>,
 }
 impl Drop for Entry {
     fn drop(&mut self) {
@@ -124,6 +130,7 @@ impl Runtime {
                 Entry {
                     canvas: Some(canvas),
                     context: Arc::downgrade(gl),
+                    scenes: HashMap::new(),
                 },
             );
         });
@@ -213,6 +220,20 @@ pub fn paint(
     rect: egui::Rect,
     draw: impl Fn(&mut Canvas<OpenGl>) + Send + Sync + 'static,
 ) -> Result<(), String> {
+    paint_with(ui, rect, move |canvas, _| {
+        draw(canvas);
+        Ok(())
+    })
+}
+
+fn paint_with(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    draw: impl Fn(&mut Canvas<OpenGl>, &mut HashMap<u64, svg::Cached>) -> Result<(), String>
+    + Send
+    + Sync
+    + 'static,
+) -> Result<(), String> {
     let handle = ui
         .ctx()
         .data(|data| data.get_temp::<Handle>(key()))
@@ -250,7 +271,7 @@ pub fn paint(
                         return;
                     }
                     if let Some(canvas) = entry.canvas.as_mut() {
-                        paint_frame(canvas, &info, rect, &draw, &handle);
+                        paint_frame(canvas, &info, rect, &draw, &mut entry.scenes, &handle);
                     }
                     // SAFETY: this callback is running on the owning current
                     // context (verified above). egui restores its program, VAO,
@@ -278,7 +299,8 @@ fn paint_frame(
     canvas: &mut Canvas<OpenGl>,
     info: &egui::PaintCallbackInfo,
     rect: egui::Rect,
-    draw: &impl Fn(&mut Canvas<OpenGl>),
+    draw: &impl Fn(&mut Canvas<OpenGl>, &mut HashMap<u64, svg::Cached>) -> Result<(), String>,
+    scenes: &mut HashMap<u64, svg::Cached>,
     handle: &Handle,
 ) {
     canvas.set_size(
@@ -287,13 +309,24 @@ fn paint_frame(
         info.pixels_per_point,
     );
     canvas.reset();
+    scenes.retain(|_, cached| {
+        if cached.alive() {
+            true
+        } else {
+            cached.release(canvas);
+            false
+        }
+    });
     canvas.scale(info.pixels_per_point, info.pixels_per_point);
     let clip = rect.intersect(info.clip_rect);
     canvas.scissor(clip.left(), clip.top(), clip.width(), clip.height());
     // The private layer supplies stencil without changing host surface options.
     let captured = canvas.begin_layer(&LayerEffects::new());
     if captured {
-        draw(canvas);
+        if let Err(error) = draw(canvas, scenes) {
+            tracing::error!(%error, "Native vector artwork failed");
+            handle.fail(ARTWORK_FAILURE);
+        }
     } else {
         handle.fail(LAYER_FAILURE);
     }

@@ -19,6 +19,7 @@ mod excalidraw;
 mod fonts;
 mod graphviz;
 mod images;
+pub mod retained;
 use images::Policy as ImagePolicy;
 mod lini;
 mod math;

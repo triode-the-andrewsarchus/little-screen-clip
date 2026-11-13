@@ -48,6 +48,7 @@ pub(crate) struct DrawingEditor {
     selected: Vec<String>,
     gesture: Option<Gesture>,
     ghost: Option<Gesture>,
+    retained_move: Option<Gesture>,
     style: Style,
     focus: Option<egui::Id>,
 }
@@ -85,6 +86,7 @@ impl DrawingEditor {
             self.model = None;
             self.gesture = None;
             self.ghost = None;
+            self.retained_move = None;
             self.parse_error = None;
             return accepted.then_some(Poll::Replaced);
         }
@@ -95,6 +97,8 @@ impl DrawingEditor {
         {
             self.pending = None;
             self.queued = None;
+            self.ghost = None;
+            self.retained_move = None;
             self.edit_error =
                 Some("The canvas edit timed out; the source was kept unchanged.".into());
             return Some(Poll::Failed);
@@ -145,6 +149,7 @@ impl DrawingEditor {
         if self.busy() {
             self.queued = None;
             self.ghost = None;
+            self.retained_move = None;
             self.edit_error = Some(error);
             Some(Poll::Failed)
         } else {
@@ -235,18 +240,28 @@ impl DrawingEditor {
             } else {
                 Color32::from_white_alpha(120)
             };
-            painter.image(
-                frame.texture,
-                image,
-                Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                tint,
-            );
             let ready = frame.fresh && self.model.is_some() && !self.busy();
             if frame.fresh && !self.busy() {
                 self.ghost = None;
+                self.retained_move = None;
             }
             if ready {
                 self.interact(ui, &response, rect);
+            }
+            let vector = frame
+                .vector
+                .as_ref()
+                .map(|scene| scene.paint(ui, rect, image, self.vector_motion()));
+            if let Some(Err(error)) = &vector {
+                self.parse_error = Some(error.clone());
+            }
+            if !matches!(vector, Some(Ok(()))) {
+                painter.image(
+                    frame.texture,
+                    image,
+                    Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    tint,
+                );
             }
             self.paint_feedback(&painter, rect, palette);
             if response.double_clicked_by(egui::PointerButton::Middle) {
@@ -260,6 +275,34 @@ impl DrawingEditor {
             .min_scrolled_height(0.0)
             .max_height(64.0)
             .show(ui, |ui| preview.status_ui(ui, Format::Excalidraw));
+    }
+
+    fn vector_motion(&self) -> std::collections::HashMap<String, [f32; 2]> {
+        let mut motion = std::collections::HashMap::new();
+        if let Some(Gesture::Move {
+            start,
+            current,
+            ids,
+        }) = self
+            .gesture
+            .as_ref()
+            .or(self.ghost.as_ref())
+            .or(self.retained_move.as_ref())
+        {
+            let delta = [
+                (current[0] - start[0]) as f32,
+                (current[1] - start[1]) as f32,
+            ];
+            for id in ids {
+                let encoded = id
+                    .as_bytes()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                motion.insert(format!("graph-0-drawing-element-{encoded}"), delta);
+            }
+        }
+        motion
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
@@ -287,6 +330,9 @@ impl DrawingEditor {
                 .clicked()
             {
                 self.camera.fitted = false;
+            }
+            if self.camera.fitted {
+                ui.small(format!("{:.0}%", self.camera.zoom_percent()));
             }
             ui.separator();
             for (label, color) in [

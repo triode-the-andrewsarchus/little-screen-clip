@@ -8,6 +8,9 @@ pub(super) struct Camera {
     scale: f64,
 }
 impl Camera {
+    pub fn zoom_percent(&self) -> f64 {
+        self.scale * 100.0
+    }
     pub fn fit(&mut self, layout: DrawingLayout, rect: Rect) {
         self.center = [
             layout.origin[0] + layout.size[0] / 2.0,
@@ -151,6 +154,7 @@ impl DrawingEditor {
                 response.request_focus();
                 self.gesture = None;
                 self.ghost = None;
+                self.retained_move = None;
                 self.selected.clear();
                 self.tool = None;
             }
@@ -218,6 +222,7 @@ impl DrawingEditor {
     }
     fn finish(&mut self, model: &Scene, gesture: Gesture) {
         self.ghost = Some(gesture.clone());
+        self.retained_move = None;
         match gesture {
             Gesture::Move {
                 start,
@@ -225,6 +230,13 @@ impl DrawingEditor {
                 ids,
             } => {
                 if distance(start, current) * self.camera.scale >= 2.0 {
+                    // Keep the old vector scene in place through source/model
+                    // publication until the replacement scene arrives.
+                    self.retained_move = Some(Gesture::Move {
+                        start,
+                        current,
+                        ids: ids.clone(),
+                    });
                     self.queue(Change::Move {
                         ids,
                         by: [current[0] - start[0], current[1] - start[1]],

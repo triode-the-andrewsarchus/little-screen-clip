@@ -1392,7 +1392,75 @@ would add another optional-owner/logging wrapper or bring eframe's windowing
 dependency into the shared widget API. Existing fixture clone windows and
 reordered untouched Python cycles do not represent new application mechanisms.
 
-The renderer's next consumer is the retained drawing scene. Reuse render's
-existing bounded SVG parsing, native glyph outlining and embedded-image policy;
-consume its non-Send usvg tree on a worker into data-only geometry rather than
-adding a second SVG resolver, font shaper or image admission path to widgets.
+### Retained drawing artwork
+
+The drawing canvas now uses FemtoVG for retained paths, outlined handwriting,
+ordinary fills/strokes, gradients, embedded images, clip paths and group opacity.
+Zoom tessellates at the current camera scale, and moving an object translates
+its actual artwork and bound text before the gesture is released. The camera
+reports its zoom percentage. Source mutation remains one accepted operation per
+gesture, with the same guarded saves and text undo history. A committed movement
+retains its visual translation until the replacement scene arrives, independently
+of selection feedback using the newly committed model.
+
+The existing renderer still owns canonical SVG normalization, native glyph
+outlining, image admission and bounded source/structure limits. Investigation
+found that usvg 0.49, already used by the native drawing dependency, owns a
+thread-safe tree. Retained preparation uses that tree instead of inventing a
+second geometry interchange format. The existing usvg 0.37 normalization/raster
+path remains unchanged. Both parser-version adapters call the same image decoder
+and budget; retained preparation keeps its decoded pixels for UI-thread upload.
+Neither adapter opens external image paths or discovers fonts.
+
+Retained preparation rejects unoutlined text, unavailable images, excessive
+source/depth and expanded geometry, including a small `<use>` document whose
+expanded tree exceeds the node budget. It retains all eight source object
+identities and the embedded raster in the real drawing fixture. GPU path/clip
+caches stay in the context owner. They hold only weak scene ownership and release
+expired image resources during current-context painting. Clip geometry is
+resolved on its worker and converted once into cached native paths, rather than
+being rewalked and rebuilt for every pointer frame.
+
+Masks, filters, non-normal blend modes, repeating gradients, patterns and nested
+clip unions still select the existing raster preview with a visible notice.
+They are not silently omitted. This is an initial native drawing pass, not
+completion of the broader editor parity requirements above.
+
+Validation at this checkpoint:
+
+- Renderer library: 83 tests pass; one existing native-compute GPU test is ignored.
+- Shared UI library: all 34 tests pass, including explicit unsupported-effect
+  fallback and independent renderer lifetime checks.
+- Strict all-target Clippy passes for render, UI and studios; formatting passes.
+- Native light/dark file-manager scenarios verify filled movement while the
+  pointer remains held, the other object staying stationary, no file mutation
+  before release, guarded save, exact source/asset undo, and 1600% zoom.
+  Screenshots show crisp outlined glyphs at that zoom. The private runner uses
+  software OpenGL, so this does not establish parity across hardware drivers.
+
+The private pointer helper has a bounded held-drag protocol, released by input,
+EOF or timeout. The drawing scenarios share fixture/bootstrap/opening code.
+Architecture comparison leaves maximum complexity and dependency-cycle count
+unchanged. Scheduling no longer also contains the derived-artifact preparation
+pipeline, and clip compilation replaces duplicated validation/render traversal.
+The remaining SVG clone is only the seven-line typed signature of the group and
+child traversal methods. The existing private C input test's main function adds
+three branches for the held-drag command; its wait/release protocol is separate.
+Reordered members of untouched Python cycles do not introduce new cycles.
+
+Follow-up from the user's first native review, to be fixed in separate commits:
+
+- [ ] Remove export-viewport clipping from the interactive canvas. Dragging past
+  the old drawing bounds must remain visible, while authored frame/image clips
+  remain intentional.
+- [ ] Update bound arrows during pointer movement, including endpoint and label
+  geometry, instead of waiting for the source operation to finish.
+
+During this work, a serialized cleanup removed 323 superseded hashed debug/test
+executables. It retained the newest two per target, top-level application and
+example hardlinks, running executable identities, and every dependency library.
+Reported repository usage fell from about 279 GiB to 127 GiB; free filesystem
+space rose to about 127 GiB at cleanup completion. The discarded executable
+variants are not all regenerated by an ordinary next build. The removal manifest
+is `/tmp/little-clip-debug-executable-cleanup-20261113.json`. No source or personal
+build settings were changed by that cleanup.

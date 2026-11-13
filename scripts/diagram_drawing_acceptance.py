@@ -14,13 +14,18 @@ from file_manager_acceptance import (
 SOURCE = (Path(__file__).resolve().parents[1] / "docs/examples/diagrams/drawing.excalidraw").read_text()
 
 
-def exercise(session, root):
+def open_drawing(session, root):
     path = root / "a-drawing.excalidraw"
     session.observe("01-folder", [path.name])
     x, y = session.word("01-folder", path.name)
     session.click(x + 20, y)
     session.key("Return")
     session.observe("02-canvas", ["Diagram", "Pencil", "Box"])
+    return path
+
+
+def exercise(session, root):
+    path = open_drawing(session, root)
     x, y = session.word("02-canvas", "Box", tree=True)
     session.click(x, y)
     # Private runner fixes the native client at 1280×800. This is within the
@@ -43,12 +48,12 @@ def exercise(session, root):
     session.observe("04-undone", ["Pencil", "Redo"])
 
 
-def main():
+def run_scenario(exercise, scope):
     args = application_arguments(__doc__, Path("target/debug/clip-file-manager"))
     output, root = media_fixture_directory(args)
     (root / "a-drawing.excalidraw").write_text(SOURCE)
-    return run_application_acceptance(args, output, root, exercise, "native whiteboard canvas")
+    return run_application_acceptance(args, output, root, exercise, scope)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_scenario(exercise, "native whiteboard canvas"))

@@ -1,12 +1,63 @@
 //! Native diagram preview ownership shared by document and source editors.
 use little_clip_core::{BackgroundJobs, diagram::Format, jobs::task::Task};
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 struct Pixels {
     image: egui::ColorImage,
     warnings: Vec<String>,
     math: Option<little_clip_render::diagram::MathLayout>,
     drawing: Option<little_clip_render::diagram::DrawingLayout>,
+    vector: Option<Arc<clip_ui::vectors::svg::Scene>>,
+}
+
+impl Pixels {
+    // Both derived representations share one bounded preparation job. The UI
+    // only receives ready pixels/geometry, never a decoder or source resolver.
+    fn from_rendered(
+        mut rendered: little_clip_render::diagram::Rendered,
+        format: Format,
+    ) -> Result<Self, String> {
+        let vector = if format == Format::Excalidraw {
+            match little_clip_render::diagram::retained::prepare(&rendered.svg).and_then(
+                |prepared| clip_ui::vectors::svg::Scene::new(prepared.tree, prepared.images),
+            ) {
+                Ok(scene) => Some(scene),
+                Err(error) => {
+                    rendered.warnings.push(error);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let mut reader = image::ImageReader::with_format(
+            std::io::Cursor::new(&rendered.png),
+            image::ImageFormat::Png,
+        );
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(1536);
+        limits.max_image_height = Some(1024);
+        limits.max_alloc = Some(8 * 1024 * 1024);
+        reader.limits(limits);
+        let image = reader
+            .decode()
+            .map_err(|error| error.to_string())?
+            .to_rgba8();
+        let pixels = egui::ColorImage::from_rgba_unmultiplied(
+            [image.width() as usize, image.height() as usize],
+            image.as_raw(),
+        );
+        Ok(Pixels {
+            image: pixels,
+            warnings: rendered.warnings,
+            math: rendered.math,
+            drawing: rendered.drawing,
+            vector,
+        })
+    }
 }
 
 /// The last canonical drawing image, with explicit source freshness.
@@ -14,6 +65,7 @@ pub(crate) struct DrawingFrame {
     pub texture: egui::TextureId,
     pub layout: little_clip_render::diagram::DrawingLayout,
     pub fresh: bool,
+    pub vector: Option<Arc<clip_ui::vectors::svg::Scene>>,
 }
 
 /// Owns debouncing, cancellation and the last valid image for one diagram source.
@@ -26,6 +78,7 @@ pub struct Preview {
     aspect: Option<f32>,
     math: Option<little_clip_render::diagram::MathLayout>,
     drawing: Option<little_clip_render::diagram::DrawingLayout>,
+    vector: Option<Arc<clip_ui::vectors::svg::Scene>>,
     prepared_at: Option<Instant>,
     error: Option<String>,
     warnings: Vec<String>,
@@ -74,7 +127,8 @@ impl Preview {
     pub fn suspend(&mut self) {
         let pending = self.pending.take().is_some();
         let texture = self.texture.take().is_some();
-        if pending || texture {
+        let vector = self.vector.take().is_some();
+        if pending || texture || vector {
             self.due = Some(Instant::now());
             self.stale = true;
         }
@@ -108,6 +162,7 @@ impl Preview {
                     self.warnings = pixels.warnings;
                     self.math = pixels.math;
                     self.drawing = pixels.drawing;
+                    self.vector = pixels.vector;
                     self.prepared_at = Some(Instant::now());
                     self.aspect = Some(pixels.image.size[0] as f32 / pixels.image.size[1] as f32);
                     self.texture = Some(ui.ctx().load_texture(
@@ -166,29 +221,7 @@ impl Preview {
                     } else {
                         little_clip_render::diagram::render(format, &source, cancelled)?
                     };
-                    let mut reader = image::ImageReader::with_format(
-                        std::io::Cursor::new(&rendered.png),
-                        image::ImageFormat::Png,
-                    );
-                    let mut limits = image::Limits::default();
-                    limits.max_image_width = Some(1536);
-                    limits.max_image_height = Some(1024);
-                    limits.max_alloc = Some(8 * 1024 * 1024);
-                    reader.limits(limits);
-                    let image = reader
-                        .decode()
-                        .map_err(|error| error.to_string())?
-                        .to_rgba8();
-                    let pixels = egui::ColorImage::from_rgba_unmultiplied(
-                        [image.width() as usize, image.height() as usize],
-                        image.as_raw(),
-                    );
-                    Ok(Pixels {
-                        image: pixels,
-                        warnings: rendered.warnings,
-                        math: rendered.math,
-                        drawing: rendered.drawing,
-                    })
+                    Pixels::from_rendered(rendered, format)
                 },
             ));
         }
@@ -259,6 +292,7 @@ impl Preview {
             texture: self.texture.as_ref()?.id(),
             layout: self.drawing?,
             fresh: !self.stale,
+            vector: self.vector.clone(),
         })
     }
 
@@ -330,6 +364,7 @@ mod tests {
                 warnings: Vec::new(),
                 math: None,
                 drawing: None,
+                vector: None,
             })
         });
         let token = task.token.clone();

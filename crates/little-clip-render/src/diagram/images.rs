@@ -2,9 +2,10 @@
 use image::{ImageFormat, ImageReader};
 use resvg::usvg::{ImageHrefResolver, ImageKind};
 use std::{
+    collections::HashMap,
     io::Cursor,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -30,7 +31,9 @@ pub(super) fn resolver(policy: Policy) -> (ImageHrefResolver, Arc<Budget>) {
         ImageHrefResolver {
             resolve_data: Box::new(move |mime, data, _| {
                 let image = (policy == Policy::EmbeddedRaster)
-                    .then(|| decode(mime, &data, &data_budget))
+                    .then(|| {
+                        decode(mime, &data, &data_budget).map(|image| ImageKind::PNG(image.png))
+                    })
                     .flatten();
                 if image.is_none() {
                     data_budget.rejected.store(true, Ordering::Relaxed);
@@ -45,6 +48,46 @@ pub(super) fn resolver(policy: Policy) -> (ImageHrefResolver, Arc<Budget>) {
         budget,
     )
 }
+// Adapt the same admission policy to the thread-safe retained tree, keeping
+// its already-decoded pixels so the UI never decodes a raster during painting.
+pub(super) struct RetainedImages {
+    pub resolver: usvg_vector::ImageHrefResolver<'static>,
+    pub budget: Arc<Budget>,
+    pub rasters: Arc<Mutex<HashMap<usize, Arc<image::RgbaImage>>>>,
+}
+
+pub(super) fn retained_resolver() -> RetainedImages {
+    let budget = Arc::new(Budget::default());
+    let rasters = Arc::new(Mutex::new(HashMap::new()));
+    let data_budget = budget.clone();
+    let path_budget = budget.clone();
+    let decoded = rasters.clone();
+    let resolver = usvg_vector::ImageHrefResolver {
+        resolve_data: Box::new(move |mime, bytes, _| {
+            if let Some(image) = decode(mime, &bytes, &data_budget) {
+                let key = Arc::as_ptr(&image.png) as usize;
+                decoded
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(key, image.pixels);
+                Some(usvg_vector::ImageKind::PNG(image.png))
+            } else {
+                data_budget.rejected.store(true, Ordering::Relaxed);
+                None
+            }
+        }),
+        resolve_string: Box::new(move |_, _| {
+            path_budget.rejected.store(true, Ordering::Relaxed);
+            None
+        }),
+    };
+    RetainedImages {
+        resolver,
+        budget,
+        rasters,
+    }
+}
+
 // usvg may reject a malformed data URL before calling either resolver.
 // Retain that omission in our diagnostics instead of silently dropping it.
 pub(super) fn invalid_declarations(document: &roxmltree::Document<'_>) -> bool {
@@ -61,7 +104,12 @@ pub(super) fn invalid_declarations(document: &roxmltree::Document<'_>) -> bool {
         })
 }
 
-fn decode(mime: &str, bytes: &[u8], budget: &Budget) -> Option<ImageKind> {
+pub(super) struct DecodedImage {
+    pub png: Arc<Vec<u8>>,
+    pub pixels: Arc<image::RgbaImage>,
+}
+
+pub(super) fn decode(mime: &str, bytes: &[u8], budget: &Budget) -> Option<DecodedImage> {
     let format = match mime {
         "image/png" => ImageFormat::Png,
         "image/jpeg" | "image/jpg" => ImageFormat::Jpeg,
@@ -100,7 +148,10 @@ fn decode(mime: &str, bytes: &[u8], budget: &Budget) -> Option<ImageKind> {
     if output.len() > MAX_BYTES {
         return None;
     }
-    Some(ImageKind::PNG(Arc::new(output)))
+    Some(DecodedImage {
+        png: Arc::new(output),
+        pixels: Arc::new(image),
+    })
 }
 
 #[cfg(test)]
