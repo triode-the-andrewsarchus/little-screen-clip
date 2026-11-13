@@ -228,9 +228,23 @@ fn excalidraw_signature(source: &str) -> bool {
 }
 
 fn dbml_signature(source: &str) -> bool {
-    // Table declarations distinguish DBML from SQL/prose without claiming
-    // generic enum declarations in Rust or C++. Parsing can still fail later.
-    source.len() <= 32 * 1024
+    if source.len() > 32 * 1024 {
+        return false;
+    }
+    // The document itself must start as DBML, not merely contain a table in a
+    // Markdown fence or quoted example. Generic enum declarations remain text.
+    let first = source
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("//"));
+    let starts_dbml = first.is_some_and(|line| {
+        let keyword = line.split_whitespace().next().unwrap_or_default();
+        matches!(
+            keyword.to_ascii_lowercase().as_str(),
+            "table" | "project" | "enum" | "tablegroup" | "tablepartial"
+        ) && line.contains('{')
+    });
+    starts_dbml
         && source.lines().take(32).any(|line| {
             let Some((keyword, rest)) = line.trim_start().split_once(char::is_whitespace) else {
                 return false;
@@ -240,35 +254,42 @@ fn dbml_signature(source: &str) -> bool {
 }
 
 fn nomnoml_signature(source: &str) -> bool {
-    // Distinctive bracket-to-bracket relations only. Bare [labels], Markdown
-    // links, checkboxes and style directives alone remain ordinary text.
     if source.len() > 32 * 1024 {
         return false;
     }
-    source
+    // Skip only source comments and compact #key: directives, preserving
+    // ordinary Markdown headings and fences as document framing.
+    let first = source
         .lines()
-        .filter(|line| !line.trim_start().starts_with("//"))
-        .any(|line| {
-            let Some((left, rest)) = line.split_once(']') else {
-                return false;
-            };
-            if !left.trim_start().starts_with('[') {
-                return false;
-            }
-            let Some((relation, right)) = rest.split_once('[') else {
-                return false;
-            };
-            let relation = relation.trim();
-            !relation.is_empty()
-                && relation.contains('-')
-                && relation.chars().all(|c| {
-                    matches!(
-                        c,
-                        '-' | '<' | '>' | ':' | 'o' | '+' | '_' | '(' | ')' | ' ' | '\t'
-                    )
-                })
-                && right.contains(']')
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("//"))
+        .find(|line| !line.starts_with('#') || line.starts_with("# ") || !line.contains(':'));
+    first.is_some_and(|line| {
+        line.starts_with('[')
+            && (nomnoml_relation(line) || line.ends_with(']') || line.ends_with('|') || line == "[")
+    }) && source.lines().any(nomnoml_relation)
+}
+
+fn nomnoml_relation(line: &str) -> bool {
+    let Some((left, rest)) = line.split_once(']') else {
+        return false;
+    };
+    if !left.trim_start().starts_with('[') {
+        return false;
+    }
+    let Some((relation, right)) = rest.split_once('[') else {
+        return false;
+    };
+    let relation = relation.trim();
+    !relation.is_empty()
+        && relation.contains('-')
+        && relation.chars().all(|c| {
+            matches!(
+                c,
+                '-' | '<' | '>' | ':' | 'o' | '+' | '_' | '(' | ')' | ' ' | '\t'
+            )
         })
+        && right.contains(']')
 }
 
 fn pikchr_signature(source: &str) -> bool {
@@ -484,10 +505,39 @@ fn mermaid_signature(source: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn fenced_markdown_keeps_its_document_route_instead_of_a_raw_diagram_hint() {
+        for (language, body) in [
+            ("nomnoml", "[Source] -> [Preview]"),
+            ("dbml", "Table users { id int [pk] }"),
+        ] {
+            for prefix in [
+                "",
+                "# Schema overview\n\n",
+                "Here is the design.\n\n",
+                "[Reference](https://example.com)\n\n",
+                "---\ntitle: Schema\n---\n\n",
+            ] {
+                let source = format!("{prefix}```{language}\n{body}\n```\n");
+                assert_eq!(Format::from_snippet(&source), None, "{source}");
+                assert!(
+                    matches!(crate::ClipItem::from_text(source.clone()).payload, crate::ClipPayload::Markdown(text) if text == source)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn dbml_files_fences_and_table_snippets_do_not_claim_generic_enum_source() {
         assert_eq!(Format::from_extension("DBML"), Some(Format::Dbml));
         assert_eq!(Format::from_language("dbml"), Some(Format::Dbml));
         assert_eq!(Format::Dbml.source_extension(), Some("dbml"));
+        assert_eq!(
+            Format::from_snippet(
+                "// Schema\nProject sample { database_type: 'PostgreSQL' }\nTable users { id int }"
+            ),
+            Some(Format::Dbml)
+        );
+
         let mapping = "\u{feff} <?xml version='1.0'?><Database xmlns='http://schemas.microsoft.com/linqtosql/dbml/2007'/>";
         assert_eq!(
             Format::from_source_path(Path::new("legacy.DBML"), mapping),
@@ -521,6 +571,11 @@ mod tests {
             assert_eq!(Format::from_language(extension), Some(Format::Nomnoml));
         }
         assert_eq!(Format::Nomnoml.source_extension(), Some("nomnoml"));
+        assert_eq!(
+            Format::from_snippet("// Figure\n#direction: right\n[Source] -> [Preview]"),
+            Some(Format::Nomnoml)
+        );
+
         for source in [
             "[Source] -> [Preview]",
             "// example\n[<actor>User] -:> [System]",

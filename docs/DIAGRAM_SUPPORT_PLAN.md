@@ -1989,3 +1989,25 @@ Microsoft LINQ-to-SQL `.dbml` XML is explicitly excluded from diagram inference
 and keeps XML highlighting; malformed XML drafts are excluded too. The shared
 extension/source dispatch is now a direct per-extension match, retaining the
 existing Mermaid/DOT/BPMN/JSON/YAML classification tests.
+
+### Clipboard Markdown framing correction
+
+- [x] Require DBML/Nomnoml snippet candidates to begin as their source language,
+  rather than finding a table or relation somewhere inside a Markdown document.
+  Leading source comments, compact Nomnoml directives and DBML project blocks
+  remain recognized. Markdown headings, link/prose introductions, front matter
+  and fenced blocks keep their document route and exact clipboard bytes.
+
+A regression reproduced the original fenced-Nomnoml misclassification before the
+fix. Core classification tests now verify both languages and the resulting
+Markdown payload, while the little-screen route test verifies prepared artwork
+for copied whole Markdown documents as well as standalone sources/files. This
+changes only best-effort clipboard inference; explicit files and fence languages
+retain their existing parser/rendering behavior.
+
+Validation: all 47 core diagram tests, the expanded little-screen route test,
+strict core/render all-targets Clippy, workspace formatting and final desktop
+builds pass. Architecture clone-group and maximum-complexity counts are unchanged;
+the report flags the existing language/extension lookup tables and reordered
+members of untouched Python cycles. No new cache, parser runtime or renderer is
+introduced for this classification fix.

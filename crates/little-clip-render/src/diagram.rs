@@ -664,8 +664,20 @@ mod tests {
                 Format::Nomnoml,
                 "[Source] -> [Preview]\n",
             ),
+            (
+                "",
+                "```nomnoml\n[Source] -> [Preview]\n```",
+                Format::Nomnoml,
+                "[Source] -> [Preview]\n",
+            ),
             ("", SCHEMA, Format::Dbml, SCHEMA),
             ("dbml", SCHEMA, Format::Dbml, SCHEMA),
+            (
+                "",
+                include_str!("../../../docs/examples/diagrams/dbml.md"),
+                Format::Dbml,
+                SCHEMA,
+            ),
             (
                 "md",
                 include_str!("../../../docs/examples/diagrams/dbml.md"),
