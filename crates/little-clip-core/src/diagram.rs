@@ -10,6 +10,9 @@ pub mod drawing;
 /// Bounded harness data shared by WireViz previews and direct editing.
 pub mod wireviz;
 
+/// Erd schema syntax and authored token locations.
+pub mod erd;
+
 /// Maximum decoded UTF-8 source size for an explicit native drawing.
 pub const MAX_DRAWING_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 
