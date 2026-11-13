@@ -82,14 +82,7 @@ impl WireEditor {
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         for (target, bounds) in hits {
             if self.connected.contains(&target) || hover == Some(target) {
-                let a = self
-                    .camera
-                    .screen([f64::from(bounds.left()), f64::from(bounds.top())], rect);
-                let b = self.camera.screen(
-                    [f64::from(bounds.right()), f64::from(bounds.bottom())],
-                    rect,
-                );
-                let bounds = Rect::from_two_pos(a, b);
+                let bounds = self.camera.screen_rect(bounds, rect);
                 let selected = self.selected == Some(target);
                 painter.rect_filled(
                     bounds,

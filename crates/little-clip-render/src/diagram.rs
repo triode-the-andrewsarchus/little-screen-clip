@@ -411,7 +411,7 @@ fn render_inline(
         Format::Bpmn => bpmn::svg(source)?,
         Format::Graphviz => graphviz::svg(source)?,
         Format::Lini => lini::svg(source)?,
-        Format::Mermaid => (mermaid::svg(source)?, Vec::new()),
+        Format::Mermaid => mermaid::svg(source)?,
         Format::Pikchr => (
             pikchr_rs::pikchr(
                 source,

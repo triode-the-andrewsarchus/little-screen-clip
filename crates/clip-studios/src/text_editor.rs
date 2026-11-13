@@ -18,6 +18,7 @@ enum Mode {
     Diagram,
 }
 use crate::diagram_preview::GraphicalUpdate;
+mod mermaid;
 
 /// Owns a guarded UTF-8 source editor and its live previews.
 pub struct TextSession {
@@ -64,6 +65,7 @@ struct Editor {
     timing: Option<Box<crate::text_editor_wave::WaveEditor>>,
     drawing: Option<Box<crate::text_editor_drawing::DrawingEditor>>,
     harness: Option<Box<crate::text_editor_wireviz::WireEditor>>,
+    mermaid: Option<Box<mermaid::MermaidEditor>>,
     after_gesture: Vec<AfterGesture>,
     saved: String,
     source: Option<FileSource>,
@@ -250,6 +252,10 @@ impl TextSession {
                             .harness
                             .as_ref()
                             .is_some_and(|harness| harness.failed())
+                        || editor
+                            .mermaid
+                            .as_ref()
+                            .is_some_and(|mermaid| mermaid.failed())
                 })
             {
                 self.close = Some(Default::default());
@@ -403,6 +409,7 @@ impl Editor {
             timing: None,
             drawing: None,
             harness: None,
+            mermaid: None,
             after_gesture: Vec::new(),
             saved: text.clone(),
             text,
@@ -463,7 +470,11 @@ impl Editor {
         let canvas_focused = self
             .drawing
             .as_ref()
-            .is_some_and(|drawing| drawing.has_focus(ui.ctx()));
+            .is_some_and(|drawing| drawing.has_focus(ui.ctx()))
+            || self
+                .mermaid
+                .as_ref()
+                .is_some_and(|mermaid| mermaid.has_focus(ui.ctx()));
         // egui's wants_keyboard_input includes buttons and canvas widgets.
         // Only an actual text editor (or the naming dialog) owns text undo.
         let text_focused = ui
@@ -530,6 +541,9 @@ impl Editor {
             self.harness
                 .as_mut()
                 .and_then(|harness| harness.poll(ctx, &self.text)),
+            self.mermaid
+                .as_mut()
+                .and_then(|mermaid| mermaid.poll(ctx, &self.text)),
         ];
         for update in updates.into_iter().flatten() {
             match update {
@@ -614,11 +628,15 @@ impl Editor {
         if let Some(harness) = &mut self.harness {
             harness.suspend();
         }
+        if let Some(mermaid) = &mut self.mermaid {
+            mermaid.suspend();
+        }
     }
 
     fn graphic_busy(&self) -> bool {
         self.drawing.as_ref().is_some_and(|drawing| drawing.busy())
             || self.harness.as_ref().is_some_and(|harness| harness.busy())
+            || self.mermaid.as_ref().is_some_and(|mermaid| mermaid.busy())
     }
 
     fn request_save(&mut self) {
@@ -718,6 +736,26 @@ impl Editor {
             self.drawing
                 .get_or_insert_default()
                 .show(ui, &self.text, preview, palette);
+            return;
+        }
+        if format == Format::Mermaid {
+            let show_source = self.mermaid.get_or_insert_default().toolbar(ui, palette);
+            if show_source {
+                ui.columns(2, |columns| {
+                    self.source_ui(&mut columns[0], palette, Some(format), source_id);
+                    self.mermaid.as_mut().unwrap().show(
+                        &mut columns[1],
+                        &self.text,
+                        preview,
+                        palette,
+                    );
+                });
+            } else {
+                self.mermaid
+                    .as_mut()
+                    .unwrap()
+                    .show(ui, &self.text, preview, palette);
+            }
             return;
         }
         if format == Format::Wireviz {
@@ -822,12 +860,18 @@ impl Editor {
         if let Some(error) = self.drawing.as_ref().and_then(|drawing| drawing.error()) {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+        if let Some(error) = self.mermaid.as_ref().and_then(|mermaid| mermaid.error()) {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
         if let Some((format, preview)) = diagram {
             self.diagram_ui(ui, palette, *format, preview, source_id);
         } else {
             self.source_ui(ui, palette, syntax_format, source_id);
         }
-        if matches!(syntax_format, Some(Format::Wavedrom | Format::Wireviz)) {
+        if matches!(
+            syntax_format,
+            Some(Format::Wavedrom | Format::Wireviz | Format::Mermaid)
+        ) {
             self.history_ui(ui, source_id, palette);
         }
         self.save_as_ui(ui, palette);
@@ -1687,5 +1731,54 @@ mod tests {
         wait_for_save(editor, &ctx);
         assert!(editor.error.is_some());
         assert_eq!(std::fs::read_to_string(existing).unwrap(), "preserved");
+    }
+    #[test]
+    fn mermaid_gestures_share_exact_undo_and_accepted_save_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = "\u{feff}flowchart LR\r\n  %% keep source\r\n  A[Old]\r\n";
+        for save_first in [true, false] {
+            let path = directory.path().join(format!("mermaid-{save_first}.mmd"));
+            std::fs::write(&path, original).unwrap();
+            let mut session = TextSession::load(&path, &Default::default()).unwrap();
+            let (mermaid, release) = super::mermaid::delayed_edit(
+                original,
+                little_clip_core::diagram::mermaid::Change::NodeLabel {
+                    id: "A".into(),
+                    label: "New".into(),
+                },
+            );
+            session.editor.as_mut().unwrap().mermaid = Some(mermaid);
+            assert!(session.busy());
+            assert!(!session.request_close());
+            let editor = session.editor.as_mut().unwrap();
+            if save_first {
+                editor.request_save();
+            }
+            editor.after_gesture.push(AfterGesture::Undo);
+            if !save_first {
+                editor.request_save();
+            }
+            assert!(editor.pending.is_none());
+            release.send(()).unwrap();
+            let ctx = egui::Context::default();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while editor.graphic_busy() || editor.pending.is_some() {
+                editor.poll(&ctx);
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(editor.text, original);
+            assert!(editor.error.is_none(), "{:?}", editor.error);
+            assert!(!editor.mermaid.as_ref().unwrap().failed());
+            let saved = std::fs::read_to_string(path).unwrap();
+            assert_eq!(
+                saved,
+                if save_first {
+                    original.replace("A[Old]", "A[\"New\"]")
+                } else {
+                    original.into()
+                }
+            );
+        }
     }
 }

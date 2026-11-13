@@ -6161,6 +6161,8 @@ dependencies = [
  "libheif-rs",
  "lopdf 0.38.0",
  "mail-parser",
+ "merman-core",
+ "merman-model",
  "midly",
  "mime_guess",
  "ncw",

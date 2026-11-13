@@ -13,6 +13,9 @@ pub mod wireviz;
 /// Erd schema syntax and authored token locations.
 pub mod erd;
 
+/// Parser-backed flowchart facts and source-preserving edits.
+pub mod mermaid;
+
 /// Maximum decoded UTF-8 source size for an explicit native drawing.
 pub const MAX_DRAWING_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 

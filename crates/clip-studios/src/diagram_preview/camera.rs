@@ -32,6 +32,16 @@ impl Camera {
                 ((point[1] - self.center[1]) * self.scale) as f32,
             )
     }
+    /// Maps worker-derived source bounds through the same camera as the artwork.
+    pub fn screen_rect(&self, bounds: Rect, rect: Rect) -> Rect {
+        Rect::from_two_pos(
+            self.screen([f64::from(bounds.left()), f64::from(bounds.top())], rect),
+            self.screen(
+                [f64::from(bounds.right()), f64::from(bounds.bottom())],
+                rect,
+            ),
+        )
+    }
     pub fn world(&self, point: Pos2, rect: Rect) -> [f64; 2] {
         [
             self.center[0] + f64::from(point.x - rect.center().x) / self.scale,

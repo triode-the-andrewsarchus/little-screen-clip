@@ -34,7 +34,10 @@ impl Pixels {
         mut rendered: little_clip_render::diagram::Rendered,
         format: Format,
     ) -> Result<Self, String> {
-        let vector = if matches!(format, Format::Excalidraw | Format::Wireviz) {
+        let vector = if matches!(
+            format,
+            Format::Excalidraw | Format::Wireviz | Format::Mermaid
+        ) {
             match little_clip_render::diagram::retained::prepare(&rendered.svg).and_then(
                 |prepared| clip_ui::vectors::svg::Scene::new(prepared.tree, prepared.images),
             ) {
@@ -47,11 +50,15 @@ impl Pixels {
         } else {
             None
         };
-        let geometry = (format == Format::Wireviz)
+        let geometry = matches!(format, Format::Wireviz | Format::Mermaid)
             .then(|| {
-                vector
-                    .as_ref()
-                    .map(|scene| Arc::new(scene.geometry("graph-0-")))
+                vector.as_ref().map(|scene| {
+                    Arc::new(scene.geometry(if format == Format::Mermaid {
+                        "graph-0-clip-mermaid-"
+                    } else {
+                        "graph-0-"
+                    }))
+                })
             })
             .flatten();
         let mut reader = image::ImageReader::with_format(
@@ -349,7 +356,7 @@ impl Preview {
         let texture = self.texture.as_ref()?;
         let layout = match format {
             Format::Excalidraw => self.artwork.drawing?,
-            Format::Wireviz => {
+            Format::Wireviz | Format::Mermaid => {
                 let size = self
                     .artwork
                     .geometry
