@@ -336,12 +336,12 @@ pub fn analyze(schema_block: &SchemaBlock) -> AnalyzerResult<AnalyzedIndexer> {
                 match type_name {
                   ColumnTypeName::Bit
                   | ColumnTypeName::Char
-                  if matches!(col.r#type.args[0], Value::Integer(len) if val.len() as i64 != len) => {
+                  if matches!(col.r#type.args.first(), Some(Value::Integer(len)) if val.chars().count() as i64 != *len) => {
                     throw_err(err.clone(), &span_range, input)?;
                   }
                   ColumnTypeName::Varbit
                   | ColumnTypeName::VarChar
-                  if matches!(col.r#type.args[0], Value::Integer(cap) if val.len() as i64 > cap) => {
+                  if matches!(col.r#type.args.first(), Some(Value::Integer(cap)) if val.chars().count() as i64 > *cap) => {
                     throw_err(err.clone(), &span_range, input)?;
                   }
                   _ => ()
@@ -417,4 +417,21 @@ pub fn analyze(schema_block: &SchemaBlock) -> AnalyzerResult<AnalyzedIndexer> {
   }
 
   Ok(AnalyzedIndexer { indexed_refs, indexer })
+}
+
+#[cfg(test)]
+mod preview_regressions {
+  #[test]
+  fn string_defaults_allow_unspecified_lengths_and_count_characters() {
+    for ty in ["varchar", "char", "varbit", "bit"] {
+      let source = alloc::format!("Table sample {{ value {ty} [default: '1'] }}");
+      assert!(crate::parse_dbml(&source).is_ok(), "{source}");
+    }
+    for ty in ["varchar(1)", "char(1)"] {
+      let source = alloc::format!("Table sample {{ value {ty} [default: '界'] }}");
+      assert!(crate::parse_dbml(&source).is_ok(), "{source}");
+      let source = alloc::format!("Table sample {{ value {ty} [default: 'ab'] }}");
+      assert!(crate::parse_dbml(&source).is_err(), "{source}");
+    }
+  }
 }

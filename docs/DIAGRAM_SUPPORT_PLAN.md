@@ -1904,3 +1904,37 @@ presentation; this is necessary classification, not duplicated parsing. The
 remainder reuses the existing hover cache, parser, native renderer and preview
 lifecycles. Existing declaration clones and reordered Python-cycle members are
 unchanged.
+
+## DBML parser selection and compatibility probe
+
+Compared published [`dbml-rs` 1.0.1](https://github.com/apskhem/dbml-rs),
+[`dbml-language-server` 0.1.2](https://github.com/kamal-hamza/dbml-language-server)
+and [`dbml-mermaid`](https://github.com/notpeter/dbml-mermaid) at
+`63bd9d43b12d10a93f2c88bb88d4bda72fac4630`. The first is MIT/Apache-2.0,
+preserves source ranges and validates references; the LSP package pulls in
+server/runtime dependencies, while the dependency-free Mermaid converter silently
+skips non-table/ref blocks. Select the native parser with the existing native
+Graphviz engine rather than writing another grammar or installing a runtime.
+
+The official [DBML syntax](https://dbml.dbdiagram.io/docs/) now includes partials,
+records and optional relationship operators not accepted by this parser release.
+Those remain explicit compatibility work: never strip them or silently render a
+partial schema. Full-source parsing must fail visibly for unsupported syntax.
+
+Reviewed [DBML Editor](https://github.com/alswl/dbml-editor) (MIT, AntV X6 + Monaco
++ upstream JS parser) and [erd-editor](https://github.com/dineug/erd-editor) as
+interaction alternatives. They are browser applications rather than embeddable
+egui editors. Table/column selection and source-linked relationship editing are
+useful future interactions; highlighted source/live preview remains the initial
+baseline. No browser UI code has been copied.
+
+- [x] Import pristine parser source separately before modifications.
+- [x] Fix an upstream analyzer panic on valid bare string types with defaults;
+  bound checks use optional length arguments and count Unicode characters.
+  The focused parser regression and four native renderer probes pass.
+- [ ] Finish file/Markdown/clipboard routing and native strip/editor validation.
+- [ ] Expand modern DBML syntax compatibility and investigate direct editing.
+
+The vendored integration record gives the upstream revision, published checksum
+and exact patch. Original licenses remain intact. Parser expressions/defaults are
+text; no SQL or database access is performed.
