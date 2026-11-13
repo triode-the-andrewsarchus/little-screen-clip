@@ -1,5 +1,5 @@
 //! Shared resource boundary for trusted diagram bundles and data-only calls.
-use rquickjs::{CatchResultExt, Context, Function, Runtime};
+use rquickjs::{CatchResultExt, Context, Ctx, Exception, Function, Runtime, promise::MaybePromise};
 use std::time::{Duration, Instant};
 
 pub(super) struct Program<'a> {
@@ -44,7 +44,7 @@ impl Program<'_> {
                 }
                 context.eval::<(), _>(self.bridge)?;
                 let render: Function = context.globals().get(self.entry)?;
-                render.call((input,))
+                finish_output(&context, render.call((input,))?, started)
             })()
             .catch(&context)
             .map_err(|error| {
@@ -63,6 +63,35 @@ impl Program<'_> {
         }
         Ok(output)
     }
+}
+
+/// Settle synchronous or asynchronous output inside the same isolated runtime.
+fn finish_output<'js>(
+    context: &Ctx<'js>,
+    output: MaybePromise<'js>,
+    started: Instant,
+) -> rquickjs::Result<String> {
+    // Canonical chart engines finish through promises even with inline data.
+    // Drive only interpreter jobs: no event loop, timers or host hooks. The job
+    // cap also bounds microtasks that yield before the bytecode interrupt fires.
+    for _ in 0..50_000 {
+        if let Some(result) = output.result::<String>() {
+            return result;
+        }
+        if started.elapsed() > Duration::from_secs(3) {
+            return Err(Exception::throw_message(
+                context,
+                "render deadline exceeded",
+            ));
+        }
+        if !context.execute_pending_job() {
+            return Err(rquickjs::Error::WouldBlock);
+        }
+    }
+    Err(Exception::throw_message(
+        context,
+        "render microtask budget exceeded",
+    ))
 }
 
 #[cfg(test)]
@@ -101,5 +130,43 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(6));
         program.bridge = "globalThis.render = () => 'x'.repeat(2097153);";
         assert!(program.call("").unwrap_err().contains("budget"));
+        program.bridge = "globalThis.render = async () => 'x'.repeat(2097153);";
+        assert!(program.call("").unwrap_err().contains("budget"));
+    }
+
+    #[test]
+    fn asynchronous_calls_keep_data_arguments_and_propagate_errors_without_a_host() {
+        let mut program = Program {
+            name: "async fixture",
+            stack_bytes: 512 * 1024,
+            scripts: &[],
+            entry: "render",
+            bridge: "globalThis.render = async input => { await Promise.resolve(); return input; };",
+        };
+        assert_eq!(
+            program.call("throw Error('data')").unwrap(),
+            "throw Error('data')"
+        );
+        program.bridge = "globalThis.render = async () => { throw Error('invalid series'); };";
+        assert!(program.call("").unwrap_err().contains("invalid series"));
+        program.bridge = "globalThis.render = () => new Promise(() => {});";
+        assert!(
+            program.call("").is_err(),
+            "no external host can settle this promise"
+        );
+    }
+
+    #[test]
+    fn infinitely_replenished_microtasks_cannot_bypass_render_limits() {
+        let program = Program {
+            name: "microtask fixture",
+            stack_bytes: 512 * 1024,
+            scripts: &[],
+            entry: "render",
+            bridge: "globalThis.render = () => { const pump = () => { Promise.resolve().then(pump); }; pump(); return new Promise(() => {}); };",
+        };
+        let started = Instant::now();
+        assert!(program.call("").unwrap_err().contains("microtask budget"));
+        assert!(started.elapsed() < Duration::from_secs(6));
     }
 }

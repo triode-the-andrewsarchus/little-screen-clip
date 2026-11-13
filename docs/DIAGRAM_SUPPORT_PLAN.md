@@ -2882,3 +2882,31 @@ committed correctness fix above. All three baseline source-editor clone fragment
 and all three viewer fragments remain byte-identical; remaining warnings concern
 those touched declarations. This change extends the existing registry/worker/
 composer/session mechanisms instead of creating parallel preview infrastructure.
+
+
+### Parallel family implementation and bounded asynchronous rendering
+
+The user authorized three GPT-6.1 Sol workers for the independent BlockDiag
+family, Ditaa and Vega/Vega-Lite adapters. Ownership excludes shared registries,
+manifests and preview infrastructure; the primary agent retains those integration
+points and serializes Cargo validation against the existing target directory.
+Pristine canonical engines and dependency license inventories are committed
+separately from local adapters. Their candidate comparisons and implementation
+notes live under `docs/diagrams/`; support remains unchecked until host integration
+and native validation complete.
+
+Vega's public headless SVG API returns a promise. The existing hostless QuickJS
+Program now accepts synchronous strings or promises without installing a browser,
+DOM, event loop, filesystem, network or timers. The same three-second deadline,
+128 MiB interpreter budget and output limit apply. Promise jobs also have a
+50,000-job limit, so an endlessly replenished microtask queue cannot bypass the
+bytecode interrupt. A pending promise without runnable jobs fails immediately;
+rejections propagate through the existing diagnostic boundary.
+
+Four interpreter tests pass, including data-only arguments across asynchronous
+settlement, rejected/stalled promises, nonterminating code, infinitely
+replenished microtasks and synchronous/asynchronous oversized output. Strict
+all-target shared-renderer Clippy passes. Scoped measurement reports zero clones
+and maximum CCN 13; separating evaluation from promise settlement removes the
+initial CCN-17 implementation. Single-file cycle measurement is unavailable;
+the complete application-level comparison remains part of batch integration.
