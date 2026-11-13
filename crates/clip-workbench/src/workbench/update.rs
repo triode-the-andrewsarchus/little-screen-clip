@@ -1,6 +1,16 @@
 use super::*;
 
 impl eframe::App for WorkbenchApp {
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if let (Some(runtime), Some(gl)) = (&mut self.vector_runtime, gl) {
+            // SAFETY: eframe retains this application's current context through
+            // on_exit. Runtime checks the identity before releasing GPU objects.
+            if let Err(error) = unsafe { runtime.destroy(gl) } {
+                tracing::error!(%error, "Native vector cleanup failed");
+            }
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply the fixed appearance to egui on the first frame or mode changes.
         if !self.appearance_applied {

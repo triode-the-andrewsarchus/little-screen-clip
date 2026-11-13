@@ -629,6 +629,7 @@ impl Drop for TextPreviewLoadJob {
 }
 
 struct WorkbenchApp {
+    vector_runtime: Option<clip_ui::vectors::Runtime>,
     state: Arc<SlotManager>,
     state_rx: Receiver<Result<Arc<SlotManager>, String>>,
     state_loaded: bool,
@@ -1226,7 +1227,19 @@ pub fn run_workbench() -> Result<(), eframe::Error> {
         Box::new(move |cc| {
             ui_ext::configure_workbench_style(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Box::new(WorkbenchApp::new(
+            let vector_runtime =
+                cc.gl
+                    .as_ref()
+                    .zip(cc.get_proc_address)
+                    .and_then(|(gl, loader)| {
+                        // SAFETY: eframe invokes its creator with this window's context
+                        // current. Its matching loader is used only here, and on_exit
+                        // releases the UI-thread runtime before eframe destroys the context.
+                        unsafe { clip_ui::vectors::Runtime::install(&cc.egui_ctx, gl, loader) }
+                    .map_err(|error| tracing::warn!(%error, "Native vector initialization failed"))
+                    .ok()
+                    });
+            let mut app = WorkbenchApp::new(
                 cc.egui_ctx.clone(),
                 is_diff,
                 is_binary_diff,
@@ -1240,7 +1253,9 @@ pub fn run_workbench() -> Result<(), eframe::Error> {
                 open_component_gallery,
                 start_node_machine,
                 start_auto_actions,
-            ))
+            );
+            app.vector_runtime = vector_runtime;
+            Box::new(app)
         }),
     )
 }

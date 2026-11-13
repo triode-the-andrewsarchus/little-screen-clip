@@ -80,6 +80,7 @@ impl WorkbenchApp {
         };
 
         let mut app = Self {
+            vector_runtime: None,
             state,
             state_rx,
             state_loaded: false,

@@ -67,6 +67,7 @@ impl DropDestination {
 }
 
 struct FileManagerApp {
+    vector_runtime: Option<clip_ui::vectors::Runtime>,
     browser: FileManager,
     viewers: super::viewers::Viewers,
     external: super::external::Launcher,
@@ -80,6 +81,18 @@ struct FileManagerApp {
 impl FileManagerApp {
     fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         let ctx = &cc.egui_ctx;
+        let vector_runtime = cc
+            .gl
+            .as_ref()
+            .zip(cc.get_proc_address)
+            .and_then(|(gl, loader)| {
+                // SAFETY: eframe invokes its creator with this window's context
+                // current. Its matching loader is used only here, and on_exit
+                // releases the UI-thread runtime before eframe destroys the context.
+                unsafe { clip_ui::vectors::Runtime::install(ctx, gl, loader) }
+                    .map_err(|error| tracing::warn!(%error, "Native vector initialization failed"))
+                    .ok()
+            });
         let config = AppConfig::load();
         let palette = ui_appearance::palette(config.workbench.appearance);
         ui_ext::configure_workbench_style(ctx);
@@ -116,6 +129,7 @@ impl FileManagerApp {
             browser.navigate(path, Navigation::New);
         }
         Self {
+            vector_runtime,
             browser,
             viewers: super::viewers::Viewers::new(config),
             pad_studio: None,
@@ -636,6 +650,16 @@ impl FileManagerApp {
 }
 
 impl eframe::App for FileManagerApp {
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if let (Some(runtime), Some(gl)) = (&mut self.vector_runtime, gl) {
+            // SAFETY: eframe retains this application's current context through
+            // on_exit. Runtime checks the identity before releasing GPU objects.
+            if let Err(error) = unsafe { runtime.destroy(gl) } {
+                tracing::error!(%error, "Native vector cleanup failed");
+            }
+        }
+    }
+
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         if let Some(native) = &mut self.native {
             native.raw_input(ctx, input);

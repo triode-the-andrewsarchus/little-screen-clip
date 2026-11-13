@@ -1365,3 +1365,34 @@ composition surface rather than treating a borrowed FBO as disposable.
 Architecture comparison reports no new clone groups or hotspot, with maximum
 complexity and cycle count unchanged and slightly lower duplication. Its sole
 reported cycle change is the same untouched Python cycle with reordered members.
+
+### Desktop host lifecycle
+
+File manager and workbench now install their own shared vector runtime from
+eframe's creation context and release it in `App::on_exit`, before eframe
+destroys its painter/context. Workbench fixtures retain a headless `None`
+owner. Initialization and cleanup failures are logged; an unavailable renderer
+cannot silently acquire a different context. Application navigation and studio
+state remain independently owned by their existing hosts.
+
+Both desktop binaries build, all-target checks and strict Clippy pass, and
+formatting passes. The private file-manager drawing scenario passes creation,
+guarded save, exact source undo and clean close. The private workbench scenario
+passes fixed/centered sizing, singleton focus and Escape dismissal with exit
+status zero. An initial gallery run used the popup-close assertion even though
+Escape intentionally returns that viewer to the palette; the ordinary popup
+run verifies actual application exit instead. Neither application reports a
+native-vector initialization or cleanup failure in these runs.
+
+The cumulative architecture comparison keeps maximum complexity and cycle
+count unchanged. Its one new clone is the explicit exit-hook adapter in the two
+independent `eframe::App` implementations. These short host-owned safety
+boundaries deliberately repeat the same cleanup contract; extracting them
+would add another optional-owner/logging wrapper or bring eframe's windowing
+dependency into the shared widget API. Existing fixture clone windows and
+reordered untouched Python cycles do not represent new application mechanisms.
+
+The renderer's next consumer is the retained drawing scene. Reuse render's
+existing bounded SVG parsing, native glyph outlining and embedded-image policy;
+consume its non-Send usvg tree on a worker into data-only geometry rather than
+adding a second SVG resolver, font shaper or image admission path to widgets.
