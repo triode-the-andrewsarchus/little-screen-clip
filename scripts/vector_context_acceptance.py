@@ -33,13 +33,13 @@ def exercise(session, _root):
     session.observe("05-restored", ["Zoom 100%", "Overlay clicks 2"])
     session.close()
     log = (session.output / "files.log").read_text()
-    match = re.search(r"VECTOR_PROBE frames=(\d+) gl_errors=(\d+) layer_failures=(\d+) released=(\w+)", log)
+    match = re.search(r"VECTOR_PROBE frames=(\d+) gl_errors=(\d+) renderer_failures=(\d+) released=(\w+)", log)
     assert match, "probe must report native rendering and current-context cleanup"
     frames, errors, layers, released = match.groups()
     assert int(frames) >= 8, "exercise must paint repeated native vector frames"
     assert int(errors) == 0 and int(layers) == 0 and released == "true", match.group()
     (session.output / "vector-context.json").write_text(json.dumps({
-        "frames": int(frames), "gl_errors": int(errors), "layer_failures": int(layers),
+        "frames": int(frames), "gl_errors": int(errors), "renderer_failures": int(layers),
         "released": released == "true", "zoom_percent": 1600,
         "overlay_clicks": 2, "resized": True,
     }, indent=2))

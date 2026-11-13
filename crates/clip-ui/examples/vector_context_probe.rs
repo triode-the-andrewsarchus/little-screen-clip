@@ -1,30 +1,26 @@
 //! Development gate for sharing eframe's current GL context with native vectors.
-use eframe::{egui, glow::HasContext};
-use femtovg::{Canvas, Color, FillRule, LayerEffects, Paint, Path, renderer::OpenGl};
-use std::{
-    cell::RefCell,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
+use clip_ui::vectors::{
+    self, Runtime,
+    femtovg::{Canvas, Color, FillRule, Paint, Path, renderer::OpenGl},
 };
-
-thread_local! {
-    // GPU objects stay on their creating UI thread, never inside a Send callback.
-    static CANVAS: RefCell<Option<Canvas<OpenGl>>> = const { RefCell::new(None) };
-}
+use eframe::{egui, glow::HasContext};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 #[derive(Default)]
 struct Metrics {
     frames: AtomicU64,
     gl_errors: AtomicU64,
-    layer_failures: AtomicU64,
+    renderer_failures: AtomicU64,
     released: AtomicBool,
 }
 
 struct Probe {
     metrics: Arc<Metrics>,
     error: Option<String>,
+    runtime: Option<Runtime>,
     zoom: f32,
     pan: egui::Vec2,
     clicks: u32,
@@ -43,9 +39,10 @@ impl Probe {
         );
         cc.egui_ctx.set_pixels_per_point(1.4);
         let initialized = (|| {
-            if cc.gl.is_none() {
-                return Err("eframe did not supply an OpenGL context".into());
-            }
+            let gl = cc
+                .gl
+                .as_ref()
+                .ok_or("eframe did not supply an OpenGL context")?;
             let loader = cc
                 .get_proc_address
                 .ok_or("eframe did not supply its GL function loader")?;
@@ -53,16 +50,16 @@ impl Probe {
             // context current. Its loader supplies functions for that context.
             // The renderer is used only by this thread's paint callbacks and is
             // destroyed in on_exit before eframe destroys the owning context.
-            let renderer = unsafe { OpenGl::new_from_function_cstr(loader) }
-                .map_err(|error| format!("Cannot initialize native vectors: {error}"))?;
-            let mut canvas = Canvas::new(renderer).map_err(|error| error.to_string())?;
-            canvas.set_clip_mask_budget(16 * 1024 * 1024);
-            CANVAS.with(|slot| *slot.borrow_mut() = Some(canvas));
-            Ok::<(), String>(())
+            unsafe { Runtime::install(&cc.egui_ctx, gl, loader) }
         })();
+        let (runtime, error) = match initialized {
+            Ok(runtime) => (Some(runtime), None),
+            Err(error) => (None, Some(error)),
+        };
         Self {
             metrics,
-            error: initialized.err(),
+            error,
+            runtime,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             clicks: 0,
@@ -81,70 +78,22 @@ impl Probe {
         let metrics = self.metrics.clone();
         let zoom = self.zoom;
         let pan = self.pan;
-        ui.painter_at(rect)
-            .add(egui::Shape::Callback(egui::PaintCallback {
-                // FemtoVG uses full-frame coordinates. The existing egui clip
-                // rectangle still bounds this widget; surrounding UI is untouched.
-                rect: ui.ctx().screen_rect(),
-                callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
-                    CANVAS.with(|slot| {
-                        if let Some(canvas) = slot.borrow_mut().as_mut() {
-                            paint_vectors(canvas, &info, rect, zoom, pan, &metrics);
-                        }
-                    });
-                    // SAFETY: the callback runs on eframe's current GL context.
-                    // Offscreen clip/layer targets must not escape into egui or
-                    // the next frame. egui restores its own program/VAO/blend
-                    // state, but its callback contract requires us to restore
-                    // the framebuffer explicitly.
-                    unsafe {
-                        painter.gl().bind_framebuffer(
-                            eframe::glow::FRAMEBUFFER,
-                            painter.intermediate_fbo(),
-                        );
-                        painter.gl().disable(eframe::glow::STENCIL_TEST);
-                    }
-                    // SAFETY: egui invokes this callback with its owning context
-                    // current. This checks that both function tables used that same
-                    // context without invalid GL operations; it creates no handles.
-                    if unsafe { painter.gl().get_error() } != 0 {
-                        metrics.gl_errors.fetch_add(1, Ordering::Relaxed);
-                    }
-                })),
-            }));
+        if let Err(error) = vectors::paint(ui, rect, move |canvas| {
+            paint_vectors(canvas, rect, zoom, pan);
+            metrics.frames.fetch_add(1, Ordering::Relaxed);
+        }) {
+            self.error = Some(error);
+        }
     }
 }
 
-fn paint_vectors(
-    canvas: &mut Canvas<OpenGl>,
-    info: &egui::PaintCallbackInfo,
-    rect: egui::Rect,
-    zoom: f32,
-    pan: egui::Vec2,
-    metrics: &Metrics,
-) {
-    canvas.set_size(
-        info.screen_size_px[0],
-        info.screen_size_px[1],
-        info.pixels_per_point,
-    );
-    canvas.reset();
-    canvas.scale(info.pixels_per_point, info.pixels_per_point);
-    let clip = rect.intersect(info.clip_rect);
-    canvas.scissor(clip.left(), clip.top(), clip.width(), clip.height());
-    // Capture has its own stencil attachment. This does not require changing
-    // eframe's window framebuffer or clearing any of egui's surrounding UI.
-    if !canvas.begin_layer(&LayerEffects::new()) {
-        metrics.layer_failures.fetch_add(1, Ordering::Relaxed);
-        canvas.end_layer();
-        return;
-    }
+fn paint_vectors(canvas: &mut Canvas<OpenGl>, rect: egui::Rect, zoom: f32, pan: egui::Vec2) {
     let mut viewport = Path::new();
     viewport.rounded_rect(
-        clip.left() + 6.0,
-        clip.top() + 6.0,
-        (clip.width() - 12.0).max(1.0),
-        (clip.height() - 12.0).max(1.0),
+        rect.left() + 6.0,
+        rect.top() + 6.0,
+        (rect.width() - 12.0).max(1.0),
+        (rect.height() - 12.0).max(1.0),
         18.0,
     );
     canvas.clip_path(&viewport, FillRule::NonZero);
@@ -172,9 +121,6 @@ fn paint_vectors(
         &curve,
         &Paint::color(Color::rgb(25, 113, 194)).with_line_width(3.0),
     );
-    canvas.end_layer();
-    canvas.flush();
-    metrics.frames.fetch_add(1, Ordering::Relaxed);
 }
 
 impl eframe::App for Probe {
@@ -225,9 +171,18 @@ impl eframe::App for Probe {
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
-        let released = CANVAS.with(|slot| slot.borrow_mut().take().is_some());
-        self.metrics.released.store(released, Ordering::Relaxed);
         if let Some(gl) = gl {
+            if let Some(runtime) = &mut self.runtime {
+                if let Some(error) = runtime.error() {
+                    eprintln!("Vector callback failed: {error}");
+                    self.metrics
+                        .renderer_failures
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                // SAFETY: eframe's exit hook retains the owning current context.
+                let released = unsafe { runtime.destroy(gl) }.is_ok();
+                self.metrics.released.store(released, Ordering::Relaxed);
+            }
             // SAFETY: eframe's exit hook retains the owning current GL context;
             // the renderer above is dropped before this final validation read.
             if unsafe { gl.get_error() } != 0 {
@@ -253,10 +208,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let frames = metrics.frames.load(Ordering::Relaxed);
     let errors = metrics.gl_errors.load(Ordering::Relaxed);
-    let layers = metrics.layer_failures.load(Ordering::Relaxed);
+    let layers = metrics.renderer_failures.load(Ordering::Relaxed);
     let released = metrics.released.load(Ordering::Relaxed);
     println!(
-        "VECTOR_PROBE frames={frames} gl_errors={errors} layer_failures={layers} released={released}"
+        "VECTOR_PROBE frames={frames} gl_errors={errors} renderer_failures={layers} released={released}"
     );
     if frames == 0 || errors != 0 || layers != 0 || !released {
         return Err("native vector context validation failed".into());

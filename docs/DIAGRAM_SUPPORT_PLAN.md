@@ -1337,3 +1337,31 @@ framebuffer target. The current example owns one native window, so it does not
 establish a multi-context registry. SVG preparation, per-object live transforms,
 glyph/image fidelity and the actual studio integration remain pending. The
 editor still paints its existing raster preview at this checkpoint.
+
+### Shared runtime extraction
+
+`clip-ui::vectors` now owns the validated callback protocol. Each egui host has
+an independent registration and UI-thread renderer; callbacks verify the
+painter's actual context identity before touching GPU resources. The first
+failure remains visible and stops later native callbacks. Explicit destruction
+checks the owning context and removes only that host's registration. A missed
+exit hook or panic never attempts GL deletion without a current-context
+guarantee; its last-resort fallback leaves reclamation to native context teardown.
+
+The test application uses this shared implementation, replacing its private
+renderer registry and callback code. Light/dark desktop scenarios pass, as do
+two lifecycle tests covering stale owners, independent contexts, sticky errors
+and rejected callbacks. Strict all-target UI Clippy and UI doctests pass.
+FemtoVG is now a shared UI dependency, still with text/image loaders disabled.
+The applications' host hooks and the actual retained SVG scene remain the next
+integration steps; no production drawing canvas has switched renderers yet.
+
+This backend intentionally refuses an unexpected host-owned offscreen FBO:
+FemtoVG's external-framebuffer adapter takes ownership, so handing it egui's
+borrowed target would risk deleting that target. Current native egui glow uses
+the window framebuffer. A future offscreen host needs an explicitly owned
+composition surface rather than treating a borrowed FBO as disposable.
+
+Architecture comparison reports no new clone groups or hotspot, with maximum
+complexity and cycle count unchanged and slightly lower duplication. Its sole
+reported cycle change is the same untouched Python cycle with reordered members.
